@@ -3,6 +3,7 @@
 
 pub mod error;
 pub mod pgctl;
+pub mod ports;
 pub mod rt;
 
 pub use error::{CoreError, Result};
