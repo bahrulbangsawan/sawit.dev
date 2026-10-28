@@ -21,14 +21,25 @@ pengelola server Postgres, penjelajah & grid database, editor SQL, editor teks p
   **macOS Keychain** (tidak pernah di file). TLS mengikuti `sslmode` di URL (`disable`/`prefer`/`require`
   seperti libpq; `verify-full` memeriksa sertifikat terhadap trust store sistem), koneksi yang putus
   disambung ulang otomatis, dan pooler (PgBouncer, Supavisor, Neon) didukung. Pohon database → schema →
-  tabel/view → kolom & tipe; tabel tanpa izin SELECT diberi ikon gembok.
+  tabel/view → kolom & tipe (virtual, lancar untuk ribuan tabel); tabel tanpa izin SELECT dinonaktifkan dengan
+  tooltip. Query yang berjalan bisa dibatalkan (tombol Batal) di editor SQL dan tabel.
 - **Tabel read-only berhalaman** — 50 baris per halaman (pertama/sebelumnya/berikutnya/terakhir), diurutkan
   menurut primary key sehingga halaman stabil, lewat koneksi read-only terpisah. Halaman pertama tampil
   sebelum jumlah baris selesai dihitung; hitungan dibatasi 3 detik lalu memakai estimasi (`±`).
 - **Editor SQL** — ⌘↩ menjalankan teks terpilih atau seluruh isi; hasil, error (dengan DETAIL/HINT), durasi;
   maksimal 10.000 baris ditampilkan (dibaca secara streaming, sisanya tidak ditampung di memori).
-- **Editor teks** — `pgdesk <folder>` atau ikon folder untuk membuka proyek; pohon file, tab bergaya Zed,
-  highlighting (syntect), ⌘S simpan atomik, penanda belum tersimpan; file biner / >5 MB tidak dibuka sebagai teks.
+- **Editor teks** — `pgdesk <folder>` atau ikon folder untuk membuka proyek. Pohon file virtual (ikon per jenis,
+  ikut berubah saat file dibuat/dihapus dari terminal), highlighting ±200 bahasa (syntect; Dockerfile, Makefile,
+  Vue, Svelte, Kotlin, dll.), soft wrap tanpa scroll horizontal, tanpa scrollbar, toolbar gaya Zed (breadcrumb,
+  `Ln, Col`, bahasa). ⌘S simpan atomik (symlink tetap symlink), file yang berubah di disk dimuat ulang (atau
+  diperingatkan bila ada perubahan belum disimpan).
+- **Formatter (⇧⌘I)** — Prettier untuk JS/TS/JSON/CSS/SCSS/Less/HTML/Vue/Markdown/YAML/GraphQL; sql-formatter
+  (dialek PostgreSQL) untuk SQL, Taplo untuk TOML, rustfmt, gofmt, Ruff, shfmt, clang-format untuk lainnya.
+  Memakai salinan di `node_modules/.bin` proyek bila ada (versi dan config proyek berlaku), lalu `PATH`, lalu
+  `npx`/`bunx`. Satu langkah undo.
+- **Pratinjau & viewer** — Markdown, HTML dan SVG: Kode / Berdampingan / Pratinjau dengan pratinjau langsung
+  (gambar relatif dan tabel ikut tampil). Gambar (PNG/JPEG/WebP/GIF/HEIC/AVIF…; pas atau 100%), PDF (halaman
+  dirender sesuai layar dengan CoreGraphics, zoom 50–300%), video (AVPlayer, dengan suara; Spasi, seek, mute).
 - **Tab** — klik kanan untuk Close, Close Others (⌥⌘T), Close Left/Right (⌘K E / ⌘K T), Close Clean (⌘K U),
   Close All (⌘K W), Make Tab Read-Only, Pin Tab (⌘K ⇧↩); ⌘W menutup tab aktif. Tutup massal tidak menyentuh
   tab yang di-pin atau belum disimpan; menutup file yang belum disimpan meminta konfirmasi. Tab Server bisa
