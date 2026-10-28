@@ -14,11 +14,20 @@ pub struct AppPaths {
 }
 
 impl AppPaths {
+    /// `$PGDESK_HOME` if set (development/tests), else
     /// `~/Library/Application Support/pgdesk`.
     pub fn default_macos() -> AppPaths {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| "/tmp".into());
+        AppPaths::resolve(std::env::var_os("PGDESK_HOME"), std::env::var_os("HOME"))
+    }
+
+    pub fn resolve(
+        override_root: Option<std::ffi::OsString>,
+        home: Option<std::ffi::OsString>,
+    ) -> AppPaths {
+        if let Some(root) = override_root.filter(|r| !r.is_empty()) {
+            return AppPaths { root: root.into() };
+        }
+        let home = home.map(PathBuf::from).unwrap_or_else(|| "/tmp".into());
         AppPaths {
             root: home.join("Library/Application Support/pgdesk"),
         }
@@ -171,6 +180,15 @@ pub fn validate_name(name: &str) -> Result<()> {
     }
 }
 
+/// Reads an uncommented `port = N` from a postgresql.conf.
+pub fn parse_conf_port(conf: &str) -> Option<u16> {
+    conf.lines().find_map(|line| {
+        let line = line.split('#').next()?.trim();
+        let (key, value) = line.split_once('=')?;
+        (key.trim() == "port").then(|| value.trim().parse().ok())?
+    })
+}
+
 /// macOS limits Unix socket paths to 103 bytes; longer ones make the server fail to start.
 pub fn validate_socket_dir(dir: &Path, port: u16) -> Result<()> {
     let socket = dir.join(format!(".s.PGSQL.{port}"));
@@ -303,6 +321,32 @@ mod tests {
             vec![BindAddr::LoopbackV4, BindAddr::LoopbackV6]
         );
         assert_eq!(ListenScope::All.listen_addresses(), "*");
+    }
+
+    #[test]
+    fn conf_port_ignores_comments() {
+        assert_eq!(
+            parse_conf_port("#port = 5432\nport = 5440 # x\n"),
+            Some(5440)
+        );
+        assert_eq!(parse_conf_port("#port = 5432\n"), None);
+        assert_eq!(parse_conf_port("port = 'abc'\n"), None);
+    }
+
+    #[test]
+    fn app_paths_resolve_override_then_home() {
+        let paths = AppPaths::resolve(Some("/custom".into()), Some("/Users/u".into()));
+        assert_eq!(paths.root, Path::new("/custom"));
+        let paths = AppPaths::resolve(None, Some("/Users/u".into()));
+        assert_eq!(
+            paths.root,
+            Path::new("/Users/u/Library/Application Support/pgdesk")
+        );
+        let paths = AppPaths::resolve(Some("".into()), Some("/Users/u".into()));
+        assert_eq!(
+            paths.root,
+            Path::new("/Users/u/Library/Application Support/pgdesk")
+        );
     }
 
     #[test]

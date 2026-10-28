@@ -106,7 +106,7 @@ fn subdirs(dir: &Path, filter: impl Fn(&str) -> bool) -> Vec<PathBuf> {
 }
 
 /// Directories that contain both `pg_ctl` and `initdb`, deduplicated by
-/// canonical path. Earlier sources win: managed, Homebrew, Postgres.app, PATH.
+/// the canonical path of their `pg_ctl`. Earlier sources win: managed, Homebrew, Postgres.app, PATH.
 pub fn candidate_bin_dirs(roots: &SearchRoots) -> Vec<(PathBuf, BinarySource)> {
     let mut candidates = Vec::new();
     for d in subdirs(&roots.managed, |n| !n.starts_with('.')) {
@@ -133,7 +133,12 @@ pub fn candidate_bin_dirs(roots: &SearchRoots) -> Vec<(PathBuf, BinarySource)> {
     candidates
         .into_iter()
         .filter(|(dir, _)| dir.join("pg_ctl").is_file() && dir.join("initdb").is_file())
-        .filter(|(dir, _)| seen.insert(dir.canonicalize().unwrap_or_else(|_| dir.clone())))
+        // Key on the real pg_ctl file: PATH dirs like /opt/homebrew/bin hold
+        // per-file symlinks into the Cellar, so the directories differ.
+        .filter(|(dir, _)| {
+            let pg_ctl = dir.join("pg_ctl");
+            seen.insert(pg_ctl.canonicalize().unwrap_or(pg_ctl))
+        })
         .collect()
 }
 
@@ -244,6 +249,30 @@ mod tests {
                 BinarySource::PostgresApp
             ]
         );
+    }
+
+    #[test]
+    fn path_dir_with_symlinked_tools_is_deduplicated() {
+        // Homebrew's /opt/homebrew/bin holds symlinks to the Cellar binaries.
+        let root = tempfile::tempdir().unwrap();
+        let r = root.path();
+        let real = r.join("brew/Cellar/postgresql@16/16.14/bin");
+        fake_bin(&real, true);
+        fs::create_dir_all(r.join("brew/opt/postgresql@16")).unwrap();
+        std::os::unix::fs::symlink(&real, r.join("brew/opt/postgresql@16/bin")).unwrap();
+        fs::create_dir_all(r.join("brew/bin")).unwrap();
+        for tool in ["pg_ctl", "initdb"] {
+            std::os::unix::fs::symlink(real.join(tool), r.join("brew/bin").join(tool)).unwrap();
+        }
+        let roots = SearchRoots {
+            brew_prefix: Some(r.join("brew")),
+            postgres_app: r.join("none"),
+            path_dirs: vec![r.join("brew/bin")],
+            managed: r.join("none"),
+        };
+        let found = candidate_bin_dirs(&roots);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].1, BinarySource::Homebrew);
     }
 
     #[tokio::test]
