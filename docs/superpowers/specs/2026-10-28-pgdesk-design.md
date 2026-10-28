@@ -15,6 +15,28 @@ Permintaan lanjutan pengguna (verbatim intinya):
 - "untuk project tanstack saya kedepannya tidak perlu menginstall docker atau hal lain"
 - "Pastikan ini paling ringan dibanding yang lain."
 
+## Perluasan cakupan (2026-10-29)
+
+Pengguna: "Saya ingin pgdesk ini juga punya text editor", "is that possible the terminal are running
+https://herdr.dev/? ... i need text editor + GUI Postgresql. Selama ini saya menggunakan zed + herdr + docker.
+Itu sangat berat, saya ingin all in one aja. Untuk design, please gunakan zed design." dan "Jangan stop,
+lanjut sampai selesai semuanya".
+
+Jadi PG Desk = **satu jendela all-in-one** menggantikan Zed + herdr + Docker untuk alur kerja pengguna:
+- **Editor teks** (tahap E): pohon file proyek, tab file, editor kode `gpui-component` (`InputState::code_editor`,
+  tree-sitter untuk sql/ts/tsx/js/json/md/toml/rust/css/html), simpan (Cmd-S), indikator belum tersimpan.
+  Bukan IDE: tanpa LSP, tanpa debugger, tanpa git UI di cakupan ini **[keputusan saya]**.
+- **Terminal** (tahap T): emulator terminal sungguhan di panel bawah (PTY + `alacritty_terminal`, seperti Zed),
+  cukup lengkap untuk menjalankan TUI **herdr** (alt-screen, 256/truecolor, mouse, resize, bracketed paste).
+  herdr dijalankan sebagai program biasa di terminal (`herdr` di PATH); PG Desk tidak membundel herdr.
+- **Desain gaya Zed**: tata letak Zed (title bar ringkas, panel kiri, area tab tengah, dock bawah, status bar),
+  palet dari tema resmi Zed "One Dark" (diambil dari `zed-industries/zed` `assets/themes/one/one.json`),
+  ukuran teks UI kecil dan padat seperti Zed.
+
+Peta urutan kerja baru **[keputusan saya]**: Tahap 1 (server) → Shell Zed-style + Terminal (risiko teknis tertinggi,
+dibuktikan lebih awal) → Editor teks → Tahap 2 (koneksi & skema) → Tahap 3 (grid) → Tahap 4 (editor SQL, memakai
+editor yang sama) → Tahap 5 (MCP + `.env`).
+
 ## Sasaran
 
 1. **Pengelola server**: daftar instance (nama, versi, port, data dir, status); start/stop/restart via
