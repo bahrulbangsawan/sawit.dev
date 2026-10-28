@@ -17,6 +17,7 @@ pub mod pdf;
 pub mod pgctl;
 pub mod ports;
 pub mod probe;
+pub mod prompts;
 pub mod rt;
 pub mod terminal;
 

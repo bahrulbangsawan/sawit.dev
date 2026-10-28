@@ -17,6 +17,7 @@ use crate::editor::{FileEditor, FileEditorEvent};
 use crate::files::{FilesEvent, FilesPanel};
 use crate::layout::{Area, Layout};
 use crate::mcp_page::McpPage;
+use crate::prompts::{PromptStore, PromptStoreEvent, PromptView, PromptsEvent, PromptsPanel};
 use crate::servers::{ServerDetail, ServerList, ServerStore, ShowServerTab};
 use crate::tabs::{CloseOp, TabFlags, active_after, to_close};
 use crate::terminal::TerminalPanel;
@@ -61,6 +62,7 @@ enum SidebarTab {
     Servers,
     Files,
     Database,
+    Prompts,
 }
 
 #[derive(Clone)]
@@ -91,6 +93,8 @@ pub struct Workspace {
     files: Entity<FilesPanel>,
     db: Entity<DbStore>,
     db_panel: Entity<DatabasePanel>,
+    prompt_store: Entity<PromptStore>,
+    prompts_panel: Entity<PromptsPanel>,
     sql_count: usize,
     terminal: Entity<TerminalPanel>,
     sidebar: SidebarTab,
@@ -113,6 +117,8 @@ impl Workspace {
         let terminal = cx.new(TerminalPanel::new);
         let db = cx.new(DbStore::new);
         let db_panel = cx.new(|cx| DatabasePanel::new(db.clone(), servers.clone(), window, cx));
+        let prompt_store = cx.new(PromptStore::new);
+        let prompts_panel = cx.new(|cx| PromptsPanel::new(prompt_store.clone(), window, cx));
         let subscriptions =
             vec![
                 cx.observe(&servers, |_, _, cx| cx.notify()),
@@ -151,6 +157,42 @@ impl Workspace {
                 cx.subscribe_in(&db_panel, window, |this, _, event: &DbEvent, window, cx| {
                     this.on_db_event(event, window, cx)
                 }),
+                cx.subscribe_in(
+                    &prompts_panel,
+                    window,
+                    |this, _, PromptsEvent::Open(id), window, cx| {
+                        this.open_prompt(id.clone(), window, cx)
+                    },
+                ),
+                // Prompt tabs follow renames and close when deleted.
+                cx.observe(&prompt_store, |this, store, cx| {
+                    let library = &store.read(cx).library;
+                    for tab in &mut this.tabs {
+                        if let PaneItem::Other { key, title, .. } = &mut tab.item
+                            && let Some(id) = key.strip_prefix("prompt\u{0}")
+                            && let Some(p) = library.get(id)
+                        {
+                            let name = if p.title.trim().is_empty() {
+                                "(tanpa judul)"
+                            } else {
+                                p.title.as_str()
+                            };
+                            if title.as_ref() != name {
+                                *title = name.to_string().into();
+                            }
+                        }
+                    }
+                    cx.notify();
+                }),
+                cx.subscribe(&prompt_store, |this, _, event: &PromptStoreEvent, cx| {
+                    let PromptStoreEvent::Removed(id) = event;
+                    let key = format!("prompt\u{0}{id}");
+                    if let Some(ix) = this.tabs.iter().position(
+                        |t| matches!(&t.item, PaneItem::Other { key: k, .. } if k.as_ref() == key),
+                    ) {
+                        this.remove_tabs(&[ix], cx);
+                    }
+                }),
             ];
         Self {
             server_list: cx.new(|cx| ServerList::new(servers.clone(), cx)),
@@ -159,6 +201,8 @@ impl Workspace {
             files,
             db,
             db_panel,
+            prompt_store,
+            prompts_panel,
             sql_count: 0,
             terminal,
             sidebar: SidebarTab::Servers,
@@ -590,6 +634,19 @@ impl Workspace {
                     cx.notify();
                 })),
             )
+            .child(
+                tab(
+                    "side-prompts",
+                    Icon::new(Lucide::MessageSquareText),
+                    "Prompt",
+                    SidebarTab::Prompts,
+                    current,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.sidebar = SidebarTab::Prompts;
+                    cx.notify();
+                })),
+            )
     }
 
     fn render_sidebar(&self) -> AnyElement {
@@ -597,6 +654,7 @@ impl Workspace {
             SidebarTab::Servers => self.server_list.clone().into_any_element(),
             SidebarTab::Files => self.files.clone().into_any_element(),
             SidebarTab::Database => self.db_panel.clone().into_any_element(),
+            SidebarTab::Prompts => self.prompts_panel.clone().into_any_element(),
         }
     }
 
@@ -775,6 +833,33 @@ impl Workspace {
 impl Workspace {
     fn toggle_area(&mut self, area: Area, cx: &mut Context<Self>) {
         self.layout.toggle(area);
+        cx.notify();
+    }
+
+    /// Opens a saved prompt in its own tab (one per prompt).
+    fn open_prompt(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let key: SharedString = format!("prompt\u{0}{id}").into();
+        if let Some(ix) = self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
+        {
+            self.active = ix;
+        } else {
+            let store = self.prompt_store.clone();
+            let view = cx.new(|cx| PromptView::new(id, store, window, cx));
+            let title = view.read(cx).title(cx).into();
+            self.push_tab(PaneItem::Other {
+                view: view.into(),
+                key,
+                title,
+                icon: Lucide::MessageSquareText,
+                file: None,
+            });
+        }
+        if !self.layout.center {
+            self.layout.toggle(Area::Center);
+        }
         cx.notify();
     }
 

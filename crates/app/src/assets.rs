@@ -37,7 +37,13 @@ gpui_kit::assets::icon_assets!(
         File,
         Plug,
         Copy,
-        Bot
+        Bot,
+        MessageSquareText,
+        Star,
+        Check,
+        CopyPlus,
+        Trash,
+        Tag
     ]
 );
 
