@@ -249,6 +249,13 @@ impl ServerDetail {
                 Some((_, BinaryChoice::Download { .. }))
             );
 
+        let data_root = {
+            let root = self.store.read(cx).paths.root.display().to_string();
+            match std::env::var("HOME") {
+                Ok(home) if root.starts_with(&home) => root.replacen(&home, "~", 1),
+                _ => root,
+            }
+        };
         v_flex()
             .p_4()
             .gap_3()
@@ -258,7 +265,10 @@ impl ServerDetail {
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child("Dibuat di ~/Library/Application Support/pgdesk, hanya mendengarkan localhost, user `postgres` tanpa password."),
+                    .child(format!(
+                        "Dibuat di {}, hanya mendengarkan localhost, user `postgres` tanpa password.",
+                        data_root
+                    )),
             )
             .child(field("Nama", Input::new(&self.name_input)))
             .child(field("Port", Input::new(&self.port_input)))

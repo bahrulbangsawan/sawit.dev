@@ -91,6 +91,8 @@ pub struct Workspace {
     tabs: Vec<Tab>,
     active: usize,
     layout: Layout,
+    /// A table/SQL tab asked for while its connection was being re-made.
+    pending_db: Option<DbEvent>,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -119,6 +121,24 @@ impl Workspace {
                         }
                     }
                 }),
+                cx.observe_in(&db, window, |this, db, window, cx| {
+                    let ready = match &this.pending_db {
+                        Some(DbEvent::OpenTable { profile, .. } | DbEvent::OpenSql { profile }) => {
+                            let store = db.read(cx);
+                            if store.connecting.contains(profile) {
+                                return;
+                            }
+                            store.is_connected(profile)
+                        }
+                        None => return,
+                    };
+                    // Replay once connected; drop it if reconnecting failed.
+                    if let Some(event) = this.pending_db.take()
+                        && ready
+                    {
+                        this.on_db_event(&event, window, cx);
+                    }
+                }),
                 cx.subscribe_in(&db_panel, window, |this, _, event: &DbEvent, window, cx| {
                     this.on_db_event(event, window, cx)
                 }),
@@ -139,6 +159,7 @@ impl Workspace {
             }],
             active: 0,
             layout: Layout::default(),
+            pending_db: None,
             focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         }
@@ -208,6 +229,27 @@ impl Workspace {
         }
     }
 
+    /// The profile's (read-only) client, or `None` after starting a
+    /// reconnect when the old connection died.
+    fn live_client(
+        &self,
+        profile: &str,
+        read_only: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<std::sync::Arc<tokio_postgres::Client>> {
+        let store = self.db.read(cx);
+        if !store.is_connected(profile) {
+            self.db.update(cx, |s, cx| s.connect(profile, cx));
+            return None;
+        }
+        let clients = if read_only {
+            &store.ro_clients
+        } else {
+            &store.clients
+        };
+        clients.get(profile).cloned()
+    }
+
     fn on_db_event(&mut self, event: &DbEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
             DbEvent::OpenTable {
@@ -227,7 +269,8 @@ impl Workspace {
                     cx.notify();
                     return;
                 }
-                let Some(client) = self.db.read(cx).ro_clients.get(profile).cloned() else {
+                let Some(client) = self.live_client(profile, true, cx) else {
+                    self.pending_db = Some(event.clone());
                     return;
                 };
                 let title: SharedString = format!("{schema}.{table}").into();
@@ -237,7 +280,8 @@ impl Workspace {
                 self.open_item(view.into(), key, title, cx);
             }
             DbEvent::OpenSql { profile } => {
-                let Some(client) = self.db.read(cx).clients.get(profile).cloned() else {
+                let Some(client) = self.live_client(profile, false, cx) else {
+                    self.pending_db = Some(event.clone());
                     return;
                 };
                 self.sql_count += 1;

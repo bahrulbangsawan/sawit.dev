@@ -49,6 +49,13 @@ impl DbStore {
         }
     }
 
+    /// Connected and the connection is still alive (a dropped network link
+    /// or a server restart closes it; it is then reconnected on next use).
+    pub fn is_connected(&self, name: &str) -> bool {
+        let alive = |m: &HashMap<String, Arc<Client>>| m.get(name).is_some_and(|c| !c.is_closed());
+        alive(&self.clients) && alive(&self.ro_clients)
+    }
+
     pub fn profile(&self, name: &str) -> Option<&ConnProfile> {
         self.profiles.items.iter().find(|p| p.name == name)
     }
@@ -131,7 +138,11 @@ impl DbStore {
 
     /// Reloads the schema tree of a connected profile.
     pub fn refresh(&mut self, name: &str, cx: &mut Context<Self>) -> Task<()> {
-        let Some(client) = self.clients.get(name).cloned() else {
+        let Some(client) = self
+            .is_connected(name)
+            .then(|| self.clients.get(name).cloned())
+            .flatten()
+        else {
             self.connect(name, cx);
             return Task::ready(());
         };

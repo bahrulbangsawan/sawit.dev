@@ -14,6 +14,7 @@ use pgdesk_core::db::{ConnProfile, RelKind};
 use super::store::DbStore;
 use crate::servers::ServerStore;
 
+#[derive(Clone)]
 pub enum DbEvent {
     OpenTable {
         profile: String,
@@ -164,7 +165,7 @@ impl Render for DatabasePanel {
         for (pix, profile) in store.profiles.items.iter().enumerate() {
             let name = profile.name.clone();
             let open = self.expanded.contains(&name);
-            let connected = store.clients.contains_key(&name);
+            let connected = store.is_connected(&name);
             let connecting = store.connecting.contains(&name);
             let color = if connected {
                 cx.theme().success
@@ -222,7 +223,7 @@ impl Render for DatabasePanel {
                             })),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        let connected = this.store.read(cx).clients.contains_key(&n4);
+                        let connected = this.store.read(cx).is_connected(&n4);
                         if !connected {
                             this.store.update(cx, |s, cx| s.connect(&n4, cx));
                             this.expanded.insert(n4.clone());
@@ -251,35 +252,39 @@ impl Render for DatabasePanel {
             let Some(schemas) = store.schemas.get(&name) else {
                 continue;
             };
-            for (six, schema) in schemas.iter().enumerate() {
+            for schema in schemas {
                 let skey = format!("{name}\u{0}{}", schema.name);
                 // `public` starts open; a click flips whatever the default was.
                 let sopen = (schema.name == "public") != self.expanded.contains(&skey);
                 let k = skey.clone();
                 rows.push(
-                    row(("db-schema", pix * 1000 + six), 1, cx)
-                        .child(
-                            Icon::new(if sopen {
-                                IconName::FolderOpen
-                            } else {
-                                IconName::Folder
-                            })
-                            .xsmall(),
-                        )
-                        .child(div().truncate().child(schema.name.clone()))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(schema.relations.len().to_string()),
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| this.toggle(k.clone(), cx)))
-                        .into_any_element(),
+                    row(
+                        ElementId::Name(format!("db-schema\u{0}{skey}").into()),
+                        1,
+                        cx,
+                    )
+                    .child(
+                        Icon::new(if sopen {
+                            IconName::FolderOpen
+                        } else {
+                            IconName::Folder
+                        })
+                        .xsmall(),
+                    )
+                    .child(div().truncate().child(schema.name.clone()))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(schema.relations.len().to_string()),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(k.clone(), cx)))
+                    .into_any_element(),
                 );
                 if !sopen {
                     continue;
                 }
-                for (rix, rel) in schema.relations.iter().enumerate() {
+                for rel in &schema.relations {
                     let rkey = format!("{skey}\u{0}{}", rel.name);
                     let ropen = self.expanded.contains(&rkey);
                     let icon = match rel.kind {
@@ -289,11 +294,12 @@ impl Render for DatabasePanel {
                     let (profile_name, schema_name, table_name) =
                         (name.clone(), schema.name.clone(), rel.name.clone());
                     let toggle_key = rkey.clone();
-                    let id = pix * 1_000_000 + six * 1000 + rix;
+                    let id = |part: &str| ElementId::Name(format!("{part}\u{0}{rkey}").into());
+                    let dim = !rel.readable;
                     rows.push(
-                        row(("db-rel", id), 2, cx)
+                        row(id("db-rel"), 2, cx)
                             .child(
-                                Button::new(("db-rel-toggle", id))
+                                Button::new(id("db-rel-toggle"))
                                     .ghost()
                                     .xsmall()
                                     .icon(if ropen {
@@ -307,7 +313,29 @@ impl Render for DatabasePanel {
                                     })),
                             )
                             .child(icon.xsmall().text_color(cx.theme().muted_foreground))
-                            .child(div().truncate().child(rel.name.clone()))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .when(dim, |el| el.text_color(cx.theme().muted_foreground))
+                                    .child(rel.name.clone()),
+                            )
+                            .when(dim, |el| {
+                                el.child(
+                                    div()
+                                        .id(id("db-rel-locked"))
+                                        .child(
+                                            Icon::new(Lucide::Lock)
+                                                .xsmall()
+                                                .text_color(cx.theme().muted_foreground),
+                                        )
+                                        .tooltip(|window, cx| {
+                                            gpui_kit::component::tooltip::Tooltip::new(
+                                                "Role ini tidak punya izin SELECT",
+                                            )
+                                            .build(window, cx)
+                                        }),
+                                )
+                            })
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 cx.emit(DbEvent::OpenTable {
                                     profile: profile_name.clone(),
@@ -320,7 +348,7 @@ impl Render for DatabasePanel {
                     if ropen {
                         for (cix, col) in rel.columns.iter().enumerate() {
                             rows.push(
-                                row(("db-col", id * 1000 + cix), 4, cx)
+                                row(id(&format!("db-col{cix}")), 4, cx)
                                     .child(div().truncate().child(col.name.clone()))
                                     .child(
                                         div()

@@ -256,6 +256,8 @@ impl Render for TableView {
             .child(div().flex_1())
             .child(if busy {
                 "memuat…".to_string()
+            } else if self.error.is_some() {
+                String::new()
             } else {
                 pager.label()
             })
