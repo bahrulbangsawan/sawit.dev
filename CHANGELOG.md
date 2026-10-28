@@ -3,6 +3,12 @@
 Every change to PG Desk, by version. Each push to `main` is a new release: the patch version is bumped and
 its section is written automatically by `.githooks/pre-push` (`scripts/release.sh`) from the commit messages.
 
+## [0.0.2] - 2026-10-29
+
+### Other
+
+- rebuild any release tag by hand (workflow_dispatch)
+
 ## [0.0.1] - 2026-10-29
 
 ### Features
