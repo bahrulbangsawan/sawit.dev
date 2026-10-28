@@ -263,6 +263,8 @@ impl FileEditor {
             let mut state = EditorState::new(window, cx)
                 .language(language)
                 .line_number(true)
+                // No fold column: keeps the gutter tight to the numbers.
+                .folding(false)
                 .indent_guides(true)
                 .tab_size(TabSize {
                     tab_size: 2,
@@ -436,13 +438,15 @@ impl FileEditor {
         let crumbs = breadcrumb(&self.path, self.root.as_deref());
         let last = crumbs.len().saturating_sub(1);
         let cursor = self.state.as_ref().map(|s| s.read(cx).cursor_position());
-        let mode_button = |id: &'static str, label: &'static str, mode: ViewMode, current| {
-            Button::new(id)
-                .ghost()
-                .xsmall()
-                .label(label)
-                .selected(current == mode)
-        };
+        let mode_button =
+            |id: &'static str, icon: Lucide, tooltip: &'static str, mode: ViewMode, current| {
+                Button::new(id)
+                    .ghost()
+                    .xsmall()
+                    .icon(icon)
+                    .tooltip(tooltip)
+                    .selected(current == mode)
+            };
         h_flex()
             .h(px(28.))
             .px_3()
@@ -476,23 +480,34 @@ impl FileEditor {
                     h_flex()
                         .gap_0p5()
                         .child(
-                            mode_button("mode-code", "Kode", ViewMode::Code, current).on_click(
-                                cx.listener(|this, _, _, cx| this.set_mode(ViewMode::Code, cx)),
-                            ),
-                        )
-                        .child(
-                            mode_button("mode-split", "Berdampingan", ViewMode::Split, current)
+                            mode_button("mode-code", Lucide::Code, "Kode", ViewMode::Code, current)
                                 .on_click(
-                                    cx.listener(|this, _, _, cx| {
-                                        this.set_mode(ViewMode::Split, cx)
-                                    }),
+                                    cx.listener(|this, _, _, cx| this.set_mode(ViewMode::Code, cx)),
                                 ),
                         )
                         .child(
-                            mode_button("mode-preview", "Pratinjau", ViewMode::Preview, current)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.set_mode(ViewMode::Preview, cx)
-                                })),
+                            mode_button(
+                                "mode-split",
+                                Lucide::Columns2,
+                                "Berdampingan",
+                                ViewMode::Split,
+                                current,
+                            )
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.set_mode(ViewMode::Split, cx)),
+                            ),
+                        )
+                        .child(
+                            mode_button(
+                                "mode-preview",
+                                Lucide::Eye,
+                                "Pratinjau",
+                                ViewMode::Preview,
+                                current,
+                            )
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.set_mode(ViewMode::Preview, cx)),
+                            ),
                         ),
                 )
             })

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/core", "crates/app", "crates/mcp"]
+exclude = ["vendor"]
 
 [workspace.package]
 edition = "2024"
@@ -24,3 +25,7 @@ debug = false
 lto = "thin"
 strip = true
 codegen-units = 1
+
+# Left-aligned, compact editor line numbers; see vendor/gpui-base/PGDESK_PATCH.md.
+[patch.crates-io]
+gpui-base = { path = "vendor/gpui-base" }
