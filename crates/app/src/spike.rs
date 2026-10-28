@@ -113,9 +113,8 @@ impl Spike {
     fn run(&mut self, sql: &'static str, cx: &mut Context<Self>) {
         self.status = format!("loading: {sql}").into();
         cx.notify();
-        let url = std::env::var("PGDESK_SPIKE_URL").unwrap_or_else(|_| {
-            "host=localhost port=55432 user=postgres dbname=postgres".into()
-        });
+        let url = std::env::var("PGDESK_SPIKE_URL")
+            .unwrap_or_else(|_| "host=localhost port=55432 user=postgres dbname=postgres".into());
         let rx = cx.global::<Rt>().0.spawn(async move {
             let started = Instant::now();
             let (client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
@@ -182,9 +181,7 @@ impl Render for Spike {
                             })),
                     )
                     .child(Button::new("run-slow").label("Run slow (3 s)").on_click(
-                        cx.listener(|this, _, _, cx| {
-                            this.run("SELECT pg_sleep(3), version()", cx)
-                        }),
+                        cx.listener(|this, _, _, cx| this.run("SELECT pg_sleep(3), version()", cx)),
                     ))
                     .child(format!(
                         "status: {} · clicks: {} · ui ticks: {}",
