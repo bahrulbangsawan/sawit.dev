@@ -22,9 +22,71 @@ debug = "line-tables-only"
 debug = false
 
 [profile.release]
-lto = "thin"
+lto = "fat"
 strip = true
 codegen-units = 1
+
+# Cold paths only (downloading Postgres, TLS/HTTP handshakes, config files,
+# decoding an image once when opened): optimise for size. Rendering, editing,
+# highlighting, the terminal and the database protocol keep opt-level 3.
+[profile.release.package.postgresql_archive]
+opt-level = "s"
+[profile.release.package.reqwest]
+opt-level = "s"
+[profile.release.package.hyper]
+opt-level = "s"
+[profile.release.package.hyper-util]
+opt-level = "s"
+[profile.release.package.h2]
+opt-level = "s"
+[profile.release.package.http]
+opt-level = "s"
+[profile.release.package.rustls]
+opt-level = "s"
+[profile.release.package.rustls-webpki]
+opt-level = "s"
+[profile.release.package.tokio-rustls]
+opt-level = "s"
+[profile.release.package.tokio-postgres-rustls]
+opt-level = "s"
+[profile.release.package.rustls-native-certs]
+opt-level = "s"
+[profile.release.package.image]
+opt-level = "s"
+[profile.release.package.exr]
+opt-level = "s"
+[profile.release.package.tiff]
+opt-level = "s"
+[profile.release.package.gif]
+opt-level = "s"
+[profile.release.package.zune-jpeg]
+opt-level = "s"
+[profile.release.package.zune-inflate]
+opt-level = "s"
+[profile.release.package.png]
+opt-level = "s"
+[profile.release.package.image-webp]
+opt-level = "s"
+[profile.release.package.half]
+opt-level = "s"
+[profile.release.package.tar]
+opt-level = "s"
+[profile.release.package.flate2]
+opt-level = "s"
+[profile.release.package.lsp-types]
+opt-level = "s"
+[profile.release.package.serde_json]
+opt-level = "s"
+[profile.release.package.toml]
+opt-level = "s"
+[profile.release.package.toml_edit]
+opt-level = "s"
+[profile.release.package.chrono]
+opt-level = "s"
+[profile.release.package.security-framework]
+opt-level = "s"
+[profile.release.package.objc2-av-foundation]
+opt-level = "s"
 
 # Left-aligned, compact editor line numbers; see vendor/gpui-base/PGDESK_PATCH.md.
 [patch.crates-io]

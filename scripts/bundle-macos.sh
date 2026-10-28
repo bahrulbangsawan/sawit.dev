@@ -2,9 +2,15 @@
 # Builds "PG Desk.app" (with icon) next to the binaries:
 #   scripts/bundle-macos.sh          # release build → target/release/PG Desk.app
 #   scripts/bundle-macos.sh debug    # reuse a debug build
+#   scripts/bundle-macos.sh --dmg    # release build + compressed PG-Desk.dmg
 set -eu
 cd "$(dirname "$0")/.."
 
+dmg=no
+if [ "${1:-}" = --dmg ]; then
+    dmg=yes
+    shift
+fi
 profile=${1:-release}
 if [ "$profile" = release ]; then
     cargo build --release -p pgdesk -p pgdesk-mcp
@@ -37,4 +43,15 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+if [ "$dmg" = yes ]; then
+    # LZMA-compressed (ULMO), with an /Applications link to drag onto.
+    stage="$out/dmg"
+    rm -rf "$stage" "$out/PG-Desk.dmg"
+    mkdir -p "$stage"
+    cp -R "$app" "$stage/"
+    ln -s /Applications "$stage/Applications"
+    hdiutil create -quiet -volname "PG Desk" -srcfolder "$stage" -format ULMO "$out/PG-Desk.dmg"
+    rm -rf "$stage"
+    echo "$out/PG-Desk.dmg"
+fi
 echo "$app"
