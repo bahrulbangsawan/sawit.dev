@@ -23,7 +23,15 @@ gpui_kit::assets::icon_assets!(
         ChevronsRight,
         Pin,
         PanelTop,
-        WandSparkles
+        WandSparkles,
+        Image,
+        FileText,
+        Film,
+        Minus,
+        Play,
+        Pause,
+        Volume2,
+        VolumeX
     ]
 );
 

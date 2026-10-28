@@ -8,6 +8,7 @@ mod servers;
 mod tabs;
 mod terminal;
 mod theme;
+mod viewers;
 mod workspace;
 
 use gpui_kit::component::TitleBar;

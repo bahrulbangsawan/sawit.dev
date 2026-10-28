@@ -19,6 +19,8 @@ use crate::layout::{Area, Layout};
 use crate::servers::{ServerDetail, ServerList, ServerStore, ShowServerTab};
 use crate::tabs::{CloseOp, TabFlags, active_after, to_close};
 use crate::terminal::TerminalPanel;
+use crate::viewers::{ImageView, PdfView, VideoView};
+use pgdesk_core::files::{FileKind, classify};
 
 actions!(
     workspace,
@@ -75,6 +77,7 @@ enum PaneItem {
         /// Identity for "already open?" checks.
         key: SharedString,
         title: SharedString,
+        icon: Lucide,
     },
 }
 
@@ -172,6 +175,42 @@ impl Workspace {
     }
 
     pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let viewer = match classify(&path) {
+            FileKind::Image => Some(Lucide::Image),
+            FileKind::Pdf => Some(Lucide::FileText),
+            FileKind::Video => Some(Lucide::Film),
+            _ => None,
+        };
+        if let Some(icon) = viewer {
+            let key: SharedString = format!("file\u{0}{}", path.display()).into();
+            if let Some(ix) = self
+                .tabs
+                .iter()
+                .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
+            {
+                self.active = ix;
+                cx.notify();
+                return;
+            }
+            let title: SharedString = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+                .into();
+            let view: AnyView = match classify(&path) {
+                FileKind::Image => cx.new(|cx| ImageView::new(path, cx)).into(),
+                FileKind::Pdf => cx.new(|cx| PdfView::new(path, cx)).into(),
+                _ => cx.new(|cx| VideoView::new(path, window, cx)).into(),
+            };
+            self.push_tab(PaneItem::Other {
+                view,
+                key,
+                title,
+                icon,
+            });
+            cx.notify();
+            return;
+        }
         if let Some(ix) = self
             .tabs
             .iter()
@@ -196,7 +235,12 @@ impl Workspace {
         title: SharedString,
         cx: &mut Context<Self>,
     ) {
-        self.push_tab(PaneItem::Other { view, key, title });
+        self.push_tab(PaneItem::Other {
+            view,
+            key,
+            title,
+            icon: Lucide::Table,
+        });
         cx.notify();
     }
 
@@ -567,8 +611,8 @@ impl Workspace {
                             Some(e.read_only),
                         )
                     }
-                    PaneItem::Other { title, .. } => {
-                        (Icon::new(Lucide::Table), title.to_string(), false, None)
+                    PaneItem::Other { title, icon, .. } => {
+                        (Icon::new(*icon), title.to_string(), false, None)
                     }
                 };
                 let weak = weak.clone();
