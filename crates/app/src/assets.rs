@@ -34,7 +34,9 @@ gpui_kit::assets::icon_assets!(
         VolumeX,
         Code,
         Columns2,
-        File
+        File,
+        Plug,
+        Copy
     ]
 );
 

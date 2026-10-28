@@ -4,6 +4,7 @@ mod editor;
 mod file_icons;
 mod files;
 mod layout;
+mod mcp_page;
 mod rt;
 mod servers;
 mod tabs;

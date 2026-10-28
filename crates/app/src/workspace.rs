@@ -16,6 +16,7 @@ use crate::db::{DatabasePanel, DbEvent, DbStore, SqlView, TableView};
 use crate::editor::{FileEditor, FileEditorEvent};
 use crate::files::{FilesEvent, FilesPanel};
 use crate::layout::{Area, Layout};
+use crate::mcp_page::McpPage;
 use crate::servers::{ServerDetail, ServerList, ServerStore, ShowServerTab};
 use crate::tabs::{CloseOp, TabFlags, active_after, to_close};
 use crate::terminal::TerminalPanel;
@@ -777,6 +778,28 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Shows the MCP install page (one tab).
+    fn open_mcp_page(&mut self, cx: &mut Context<Self>) {
+        let key: SharedString = "mcp".into();
+        if let Some(ix) = self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
+        {
+            self.active = ix;
+        } else {
+            let view = cx.new(McpPage::new);
+            self.push_tab(PaneItem::Other {
+                view: view.into(),
+                key,
+                title: "MCP".into(),
+                icon: Lucide::Plug,
+                file: None,
+            });
+        }
+        cx.notify();
+    }
+
     fn render_layout_toggles(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let l = self.layout;
         let toggle = |id: &'static str, icon: Lucide, tooltip: &'static str, on: bool| {
@@ -789,6 +812,16 @@ impl Workspace {
         };
         h_flex()
             .gap_0p5()
+            .child(
+                Button::new("open-mcp")
+                    .ghost()
+                    .xsmall()
+                    .icon(Lucide::Plug)
+                    .label("MCP")
+                    .tooltip("Pasang server MCP ke Claude, Codex, dll.")
+                    .on_click(cx.listener(|this, _, _, cx| this.open_mcp_page(cx))),
+            )
+            .child(div().w(px(6.)))
             .child(
                 toggle(
                     "toggle-sidebar",
