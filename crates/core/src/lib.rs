@@ -11,6 +11,7 @@ pub mod files;
 pub mod format;
 pub mod instances;
 pub mod owners;
+pub mod pdf;
 pub mod pgctl;
 pub mod ports;
 pub mod probe;

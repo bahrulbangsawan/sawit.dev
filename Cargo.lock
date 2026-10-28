@@ -4764,6 +4764,8 @@ version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "futures",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
  "postgresql_archive",
  "rustls",
  "rustls-native-certs",
