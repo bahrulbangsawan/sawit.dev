@@ -12,6 +12,8 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::changelog_page::ChangelogPage;
+use crate::cli::{CliStatus, cli_status};
 use crate::db::{DatabasePanel, DbEvent, DbStore, SqlView, TableView};
 use crate::editor::{FileEditor, FileEditorEvent};
 use crate::files::{FilesEvent, FilesPanel};
@@ -21,8 +23,10 @@ use crate::prompts::{PromptStore, PromptStoreEvent, PromptView, PromptsEvent, Pr
 use crate::servers::{ServerDetail, ServerList, ServerStore, ShowServerTab};
 use crate::tabs::{CloseOp, TabFlags, active_after, to_close};
 use crate::terminal::TerminalPanel;
+use crate::update::{Updater, updater};
 use crate::viewers::{ImageView, PdfView, VideoView};
 use pgdesk_core::files::{FileKind, classify};
+use pgdesk_core::update::Version;
 
 actions!(
     workspace,
@@ -106,6 +110,8 @@ pub struct Workspace {
     scrolled_to: Option<usize>,
     /// A table/SQL tab asked for while its connection was being re-made.
     pending_db: Option<DbEvent>,
+    cli_status: Entity<CliStatus>,
+    updater: Entity<Updater>,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -119,9 +125,13 @@ impl Workspace {
         let db_panel = cx.new(|cx| DatabasePanel::new(db.clone(), servers.clone(), window, cx));
         let prompt_store = cx.new(PromptStore::new);
         let prompts_panel = cx.new(|cx| PromptsPanel::new(prompt_store.clone(), window, cx));
+        let cli_status = cli_status(cx);
+        let updater = updater(cx);
         let subscriptions =
             vec![
                 cx.observe(&servers, |_, _, cx| cx.notify()),
+                cx.observe(&cli_status, |_, _, cx| cx.notify()),
+                cx.observe(&updater, |_, _, cx| cx.notify()),
                 cx.subscribe(&servers, |this, _, _: &ShowServerTab, cx| {
                     this.show_server_tab();
                     cx.notify();
@@ -173,7 +183,7 @@ impl Workspace {
                             && let Some(p) = library.get(id)
                         {
                             let name = if p.title.trim().is_empty() {
-                                "(tanpa judul)"
+                                "(untitled)"
                             } else {
                                 p.title.as_str()
                             };
@@ -216,6 +226,8 @@ impl Workspace {
             scrolled_to: None,
             pending_db: None,
             focus: cx.focus_handle(),
+            cli_status,
+            updater,
             _subscriptions: subscriptions,
         }
     }
@@ -224,6 +236,43 @@ impl Workspace {
         self.files.update(cx, |f, cx| f.set_root(root, cx));
         self.sidebar = SidebarTab::Files;
         cx.notify();
+    }
+
+    /// The project folder, if one is open.
+    pub fn root(&self, cx: &App) -> Option<PathBuf> {
+        self.files.read(cx).root.clone()
+    }
+
+    /// Files shown in tabs (editors and viewers), for `pgdesk --wait`.
+    pub fn open_files(&self, cx: &App) -> Vec<PathBuf> {
+        self.tabs
+            .iter()
+            .filter_map(|t| match &t.item {
+                PaneItem::File(e) => Some(e.read(cx).path.clone()),
+                PaneItem::Other { file, .. } => file.clone(),
+                PaneItem::Server => None,
+            })
+            .collect()
+    }
+
+    /// Opens `path` (from the CLI) with the cursor on a 1-based line and
+    /// column, bringing the tabs back if they were hidden.
+    pub fn open_file_at(
+        &mut self,
+        path: PathBuf,
+        position: Option<(u32, u32)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.layout.center {
+            self.layout.toggle(Area::Center);
+        }
+        self.open_file(path, window, cx);
+        if let Some((line, column)) = position
+            && let Some(PaneItem::File(editor)) = self.tabs.get(self.active).map(|t| t.item.clone())
+        {
+            editor.update(cx, |e, cx| e.go_to(line, column, window, cx));
+        }
     }
 
     pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -447,9 +496,9 @@ impl Workspace {
         let name = editor.read(cx).title();
         let answer = window.prompt(
             PromptLevel::Warning,
-            &format!("Simpan perubahan pada {name}?"),
-            Some("Perubahan akan hilang jika tidak disimpan."),
-            &["Simpan", "Jangan simpan", "Batal"],
+            &format!("Save changes to {name}?"),
+            Some("Your changes will be lost if you don't save them."),
+            &["Save", "Don't Save", "Cancel"],
             cx,
         );
         cx.spawn(async move |this, cx| {
@@ -727,7 +776,7 @@ impl Workspace {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::Pin)
-                            .tooltip("Lepas pin")
+                            .tooltip("Unpin")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
                                 this.toggle_pin(ix, cx);
@@ -737,7 +786,7 @@ impl Workspace {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::X)
-                            .tooltip("Tutup (⌘W)")
+                            .tooltip("Close (⌘W)")
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
                                 this.close(CloseOp::This, ix, window, cx);
@@ -789,8 +838,8 @@ impl Workspace {
                 .gap_1()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child("Tidak ada tab yang terbuka.")
-                .child("Pilih server, file, atau tabel di panel kiri.")
+                .child("No open tabs.")
+                .child("Pick a server, file or table in the left panel.")
                 .into_any_element(),
         }
     }
@@ -824,7 +873,7 @@ impl Workspace {
                     } else {
                         cx.theme().muted_foreground
                     }))
-                    .child(format!("{running}/{total} instance berjalan")),
+                    .child(format!("{running}/{total} instances running")),
             )
             .child(div().truncate().child(project))
     }
@@ -863,6 +912,28 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Shows the version & changelog page (one tab).
+    fn open_changelog_page(&mut self, cx: &mut Context<Self>) {
+        let key: SharedString = "changelog".into();
+        if let Some(ix) = self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
+        {
+            self.active = ix;
+        } else {
+            let view = cx.new(ChangelogPage::new);
+            self.push_tab(PaneItem::Other {
+                view: view.into(),
+                key,
+                title: "Changelog".into(),
+                icon: Lucide::ScrollText,
+                file: None,
+            });
+        }
+        cx.notify();
+    }
+
     /// Shows the MCP install page (one tab).
     fn open_mcp_page(&mut self, cx: &mut Context<Self>) {
         let key: SharedString = "mcp".into();
@@ -895,15 +966,48 @@ impl Workspace {
                 .tooltip(tooltip)
                 .selected(on)
         };
+        let pending = self.updater.read(cx).pending().map(|r| r.version);
         h_flex()
             .gap_0p5()
+            .children(pending.map(|v| {
+                Button::new("restart-update")
+                    .primary()
+                    .xsmall()
+                    .icon(Lucide::Download)
+                    .label("Restart for Update")
+                    .tooltip(format!("Install PG Desk {v} and relaunch"))
+                    .on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.updater.update(cx, |u, cx| u.restart(cx))
+                        }),
+                    )
+            }))
+            .child(
+                Button::new("open-changelog")
+                    .ghost()
+                    .xsmall()
+                    .label(format!("v{}", Version::current()))
+                    .tooltip("Version & changelog")
+                    .on_click(cx.listener(|this, _, _, cx| this.open_changelog_page(cx))),
+            )
+            .when(!self.cli_status.read(cx).installed, |el| {
+                el.child(
+                    Button::new("install-cli")
+                        .ghost()
+                        .xsmall()
+                        .icon(Lucide::SquareTerminal)
+                        .label("Install CLI")
+                        .tooltip("Install the `pgdesk` command to open folders from a terminal")
+                        .on_click(|_, _, cx| crate::cli::install_cli(cx)),
+                )
+            })
             .child(
                 Button::new("open-mcp")
                     .ghost()
                     .xsmall()
                     .icon(Lucide::Plug)
                     .label("MCP")
-                    .tooltip("Pasang server MCP ke Claude, Codex, dll.")
+                    .tooltip("Install the MCP server into Claude, Codex, etc.")
                     .on_click(cx.listener(|this, _, _, cx| this.open_mcp_page(cx))),
             )
             .child(div().w(px(6.)))
@@ -920,7 +1024,7 @@ impl Workspace {
                 toggle(
                     "toggle-center",
                     Lucide::PanelTop,
-                    "Tab & tabel (⇧⌘J)",
+                    "Tabs & tables (⇧⌘J)",
                     l.center,
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_area(Area::Center, cx))),

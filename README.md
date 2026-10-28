@@ -1,144 +1,325 @@
-<p align="center"><img src="assets/logo/pgdesk.svg" width="128" alt="PG Desk"></p>
+<p align="center"><img src="assets/logo/pgdesk.svg" width="112" alt="PG Desk"></p>
 
-# PG Desk
+<h1 align="center">PG Desk</h1>
 
-Aplikasi desktop macOS (Apple Silicon) all-in-one untuk development lokal dengan PostgreSQL, **tanpa Docker**:
-pengelola server Postgres, penjelajah & grid database, editor SQL, editor teks proyek, dan terminal
-(yang sanggup menjalankan [herdr](https://herdr.dev)). Dibangun dengan Rust + [GPUI](https://gpui.rs)
-(`gpui-kit` 0.8.1), tampilan mengikuti Zed (palet resmi "One Dark").
+<p align="center">
+  <b>Postgres, an editor, and a terminal in one native macOS app, without Docker.</b><br>
+  Run a local PostgreSQL server, browse data, write SQL, edit project code, and open a terminal
+  from a single window.
+</p>
 
-## Fitur
+<p align="center">
+  <img alt="macOS Apple Silicon" src="https://img.shields.io/badge/macOS-Apple%20Silicon-282c34?logo=apple&logoColor=white">
+  <img alt="Rust 1.99.1" src="https://img.shields.io/badge/Rust-1.99.1-282c34?logo=rust&logoColor=white">
+  <img alt="GPUI" src="https://img.shields.io/badge/UI-GPUI-61afef">
+  <img alt="PostgreSQL 16–18" src="https://img.shields.io/badge/PostgreSQL-16%20%7C%2017%20%7C%2018-336791?logo=postgresql&logoColor=white">
+  <img alt="No Docker" src="https://img.shields.io/badge/Docker-not%20needed-98c379">
+</p>
 
-- **Server** — daftar instance (nama, versi, port, data dir, status), start/stop/restart via `pg_ctl`,
-  log live. Binary Postgres dari Homebrew / Postgres.app / `PATH` dideteksi otomatis, atau **diunduh oleh
-  PG Desk** (PostgreSQL 16/17/18) sehingga proyek tidak butuh Docker maupun Homebrew. Data dir yang sudah ada
-  (mis. cluster Homebrew) bisa ditambahkan.
-- **Deteksi konflik port sebelum start** — siapa yang mendengarkan port itu (proses lain, Homebrew service,
-  container Docker beserta namanya, Postgres.app, instance PG Desk lain), termasuk kasus *membayangi*:
-  satu proses bind `127.0.0.1:5433` sementara yang lain bind `*:5433`, sehingga klien diam-diam sampai ke
-  database yang salah. Start ditahan dengan penjelasan; konflik di alamat yang sama tidak bisa dipaksa.
-- **Database** — koneksi dari `DATABASE_URL`, file `.env`, atau instance PG Desk yang berjalan; password di
-  **macOS Keychain** (tidak pernah di file). TLS mengikuti `sslmode` di URL (`disable`/`prefer`/`require`
-  seperti libpq; `verify-full` memeriksa sertifikat terhadap trust store sistem), koneksi yang putus
-  disambung ulang otomatis, dan pooler (PgBouncer, Supavisor, Neon) didukung. Pohon database → schema →
-  tabel/view → kolom & tipe (virtual, lancar untuk ribuan tabel); tabel tanpa izin SELECT dinonaktifkan dengan
-  tooltip. Query yang berjalan bisa dibatalkan (tombol Batal) di editor SQL dan tabel.
-- **Tabel read-only berhalaman** — 50 baris per halaman (pertama/sebelumnya/berikutnya/terakhir), diurutkan
-  menurut primary key sehingga halaman stabil, lewat koneksi read-only terpisah. Halaman pertama tampil
-  sebelum jumlah baris selesai dihitung; hitungan dibatasi 3 detik lalu memakai estimasi (`±`).
-- **Editor SQL** — ⌘↩ menjalankan teks terpilih atau seluruh isi; hasil, error (dengan DETAIL/HINT), durasi;
-  maksimal 10.000 baris ditampilkan (dibaca secara streaming, sisanya tidak ditampung di memori).
-- **Editor teks** — `pgdesk <folder>` atau ikon folder untuk membuka proyek. Pohon file virtual (ikon per jenis,
-  ikut berubah saat file dibuat/dihapus dari terminal), highlighting ±200 bahasa (syntect; Dockerfile, Makefile,
-  Vue, Svelte, Kotlin, dll.), soft wrap tanpa scroll horizontal, tanpa scrollbar, toolbar gaya Zed (breadcrumb,
-  `Ln, Col`, bahasa). ⌘S simpan atomik (symlink tetap symlink), file yang berubah di disk dimuat ulang (atau
-  diperingatkan bila ada perubahan belum disimpan).
-- **Formatter (⇧⌘I)** — Prettier untuk JS/TS/JSON/CSS/SCSS/Less/HTML/Vue/Markdown/YAML/GraphQL; sql-formatter
-  (dialek PostgreSQL) untuk SQL, Taplo untuk TOML, rustfmt, gofmt, Ruff, shfmt, clang-format untuk lainnya.
-  Memakai salinan di `node_modules/.bin` proyek bila ada (versi dan config proyek berlaku), lalu `PATH`, lalu
-  `npx`/`bunx`. Satu langkah undo.
-- **Pratinjau & viewer** — Markdown, HTML dan SVG: Kode / Berdampingan / Pratinjau dengan pratinjau langsung
-  (gambar relatif dan tabel ikut tampil). Gambar (PNG/JPEG/WebP/GIF/HEIC/AVIF…; pas atau 100%), PDF (halaman
-  dirender sesuai layar dengan CoreGraphics, zoom 50–300%), video (AVPlayer, dengan suara; Spasi, seek, mute).
-- **Tab** — klik kanan untuk Close, Close Others (⌥⌘T), Close Left/Right (⌘K E / ⌘K T), Close Clean (⌘K U),
-  Close All (⌘K W), Make Tab Read-Only, Pin Tab (⌘K ⇧↩); ⌘W menutup tab aktif. Tutup massal tidak menyentuh
-  tab yang di-pin atau belum disimpan; menutup file yang belum disimpan meminta konfirmasi. Tab Server bisa
-  ditutup dan muncul lagi saat server dipilih.
-- **Layout** — tombol di title bar atau ⌘B (sidebar), ⌘J (terminal/herdr), ⇧⌘J (area tab & tabel).
-- **Terminal** — dock bawah dengan tab; shell login atau **herdr** (tombol `herdr` bila terpasang). Emulasi
-  lengkap via `alacritty_terminal`: warna 256/truecolor, alt-screen, mouse SGR, bracketed paste, resize.
-- **MCP** — biner `pgdesk-mcp` (stdio) untuk agent AI: `list_instances`, `start_instance`, `stop_instance`,
-  `list_connections`, `describe_schema`, `query` (**selalu read-only**, ≤500 baris), `write_env`.
-- **Integrasi proyek (TanStack dll.)** — tombol `.env` pada instance (atau tool MCP `write_env`) menulis
-  `DATABASE_URL=postgres://postgres@localhost:<port>/postgres` ke `.env` proyek.
+<p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#build--run">Build</a> ·
+  <a href="#mcp-for-ai-agents">MCP</a> ·
+  <a href="#keyboard-shortcuts">Shortcuts</a> ·
+  <a href="#architecture--key-decisions">Architecture</a>
+</p>
 
-## Build & jalankan
+<p align="center">
+  <img src="docs/media/demo.gif" alt="PG Desk demo: server, port conflict detection, table, SQL editor, code editor, terminal, and Markdown preview" width="100%">
+  <br>
+  <sub>▶︎ <a href="docs/media/demo.mp4">Watch the demo video (MP4, 40 seconds)</a>: server → port conflict → table → SQL → code + terminal → Markdown preview</sub>
+</p>
 
-Prasyarat: Rust (versi dikunci di `rust-toolchain.toml` = 1.99.1; rustup memasangnya otomatis) dan
-Xcode **Command Line Tools** saja — Xcode penuh tidak perlu karena shader Metal dikompilasi saat runtime
-(`runtime_shaders`). Docker dan Homebrew tidak diperlukan.
+---
+
+## Overview
+
+PG Desk is built for local development with PostgreSQL. This work usually needs Docker Desktop,
+a database client, an editor, and a terminal as separate apps. In PG Desk they all live in a single
+**24 MB** Rust binary that uses **±67 MB of memory** when idle. The UI is GPU-rendered with
+[GPUI](https://gpui.rs), and its look follows Zed (the "One Dark" palette).
+
+<p align="center">
+  <img src="docs/media/editor-terminal.png" alt="Code editor with a file tree, TSX highlighting, and a terminal running psql" width="100%">
+</p>
+
+| | |
+|---|---|
+| 🐘 **Postgres without Docker** | Use binaries from Homebrew, Postgres.app, or `PATH`, or let PG Desk download PostgreSQL 16/17/18. |
+| 🛡️ **Port conflicts prevented** | Before starting, PG Desk checks for processes already using the port, including Docker containers. |
+| 🔍 **Safe data browsing** | The table grid uses a separate read-only connection. Passwords are stored in the macOS Keychain. |
+| ✍️ **Full editor** | Highlighting for ±200 languages, formatters, Markdown/HTML/SVG preview, and image, PDF, and video viewers. |
+| 🖥️ **A real terminal** | Full `alacritty_terminal` emulation, and it can run [herdr](https://herdr.dev). |
+| 🤖 **Ready for AI agents** | The `pgdesk-mcp` MCP server: queries are always read-only, plus tools to start/stop instances and write `.env`. |
+
+## Features
+
+### Local PostgreSQL servers
+
+<img src="docs/media/servers.png" alt="Server list with status, port, and live log" width="100%">
+
+- A list of instances with name, version, port, data dir, and status. It has **Start / Stop / Restart**
+  buttons (via `pg_ctl`) and a **live log**.
+- Postgres binaries from Homebrew, Postgres.app, or `PATH` are **detected automatically**. They can also be
+  **downloaded by PG Desk** (PostgreSQL 16/17/18), so a project needs neither Docker nor Homebrew.
+- Existing data dirs (e.g. a Homebrew cluster) can be added.
+- The **`.env`** button writes `DATABASE_URL=postgres://postgres@localhost:<port>/postgres` to the project's `.env`,
+  so TanStack, Next.js, Rails, and other apps connect right away.
+- New instances listen only on `localhost`, with the `postgres` superuser and `trust` authentication
+  (local use only).
+
+### Port conflict detection before start
+
+<img src="docs/media/port-conflict.png" alt="Warning: port 55434 is shadowed by another process, start is blocked" width="100%">
+
+Before starting, PG Desk checks who is already listening on the port: another process, a Homebrew service,
+a Docker container (with its name), Postgres.app, or another PG Desk instance. It also catches the hardest
+case to track down, a **shadowed** port: one process binds `127.0.0.1:5433` while another binds
+`*:5433`, so clients silently connect to the wrong database. Start is blocked and the cause is
+explained. A conflict on the same address cannot be forced.
+
+### Database & table browser
+
+<img src="docs/media/table-grid.png" alt="Schema tree and table grid for shop.orders, 18,500 rows, page 1 of 370" width="100%">
+
+- **Connections** from `DATABASE_URL`, a `.env` file, or a running PG Desk instance. Passwords are stored in the
+  **macOS Keychain**, never in a file.
+- **TLS** follows the `sslmode` in the URL: `disable`/`prefer`/`require` behave like libpq, and
+  `verify-full` checks the certificate against the system trust store. Dropped connections reconnect
+  automatically. Poolers (PgBouncer, Supavisor, Neon) are supported.
+- **Tree** of database → schema → table/view → columns & types. The tree is virtual and stays smooth with
+  thousands of tables. Tables without `SELECT` permission are disabled and get a tooltip.
+- **Paged read-only grid**: 50 rows per page, ordered by primary key so pages stay stable,
+  over a separate read-only connection. The first page shows before the row count finishes.
+  Counting is capped at 3 seconds; after that an estimate (`±`) is used.
+
+### SQL editor
+
+<img src="docs/media/sql-editor.png" alt="SQL editor with an aggregation query and result table, 3.2 ms, 7 rows" width="100%">
+
+- <kbd>⌘</kbd><kbd>↩</kbd> runs the selected text, or the whole editor if nothing is selected.
+- Shows results, duration, and errors with `DETAIL`/`HINT`.
+- At most 10,000 rows are shown. Results are streamed; remaining rows are not held in memory.
+- A running query can be cancelled with the **Cancel** button, in both the SQL editor and the table.
+
+### Project code editor
+
+- Open a project with `pgdesk <folder>` or the folder icon. See [The `pgdesk` command](#the-pgdesk-command).
+- **Virtual file tree** with per-file-type icons. The tree updates when files are created or deleted
+  from the terminal.
+- **Highlighting for ±200 languages** (syntect), including Dockerfile, Makefile, Vue, Svelte, Kotlin, and more.
+- Soft wrap without horizontal scrolling, Zed-style toolbar (breadcrumb, `Ln, Col`, language).
+- <kbd>⌘</kbd><kbd>S</kbd> saves atomically (symlinks stay symlinks). Files changed on disk are
+  reloaded; if there are unsaved changes, PG Desk shows a warning.
+- **Formatter** <kbd>⇧</kbd><kbd>⌘</kbd><kbd>I</kbd>:
+  - Prettier for JS/TS/JSON/CSS/SCSS/Less/HTML/Vue/Markdown/YAML/GraphQL.
+  - sql-formatter (PostgreSQL dialect) for SQL.
+  - Taplo for TOML; rustfmt, gofmt, Ruff, shfmt, and clang-format for other languages.
+  - A copy in the project's `node_modules/.bin` is used first (the project's version and config apply), then
+    `PATH`, then `npx`/`bunx`.
+  - Formatting can be reverted with a single undo.
+
+### Previews & viewers
+
+<img src="docs/media/markdown-preview.png" alt="README.md in split mode: Markdown source and a preview with images, code blocks, and tables" width="100%">
+
+- **Markdown, HTML, and SVG**: Code / Split / Preview modes with a live preview. Relative
+  images and tables are shown too.
+- **Images** in PNG/JPEG/WebP/GIF/HEIC/AVIF and more, with fit-to-screen or 100% mode.
+- **PDF** rendered to fit the screen with CoreGraphics, zoom 50–300%.
+- **Video** via AVPlayer, with sound. <kbd>Space</kbd> to play/pause, plus seek and mute.
+
+### Terminal
+
+- Bottom dock with tabs. It can open a login shell or **herdr** (the `herdr` button appears when herdr is installed).
+- Full emulation via `alacritty_terminal`: 256/truecolor, alt-screen, SGR mouse, bracketed paste,
+  and resize.
+
+### Tabs & layout
+
+- Right-click a tab for Close, Close Others, Close Left/Right, Close Clean, Close All, Make Tab
+  Read-Only, and Pin Tab.
+- Bulk close leaves pinned and unsaved tabs alone. Closing an unsaved file
+  asks for confirmation.
+- The Server tab can be closed, and it reappears when a server is selected.
+- The sidebar, terminal, and tab area can be hidden or shown from the title bar buttons or
+  with shortcuts (see below).
+
+## Keyboard shortcuts
+
+| Action | Shortcut |
+|---|---|
+| Run SQL (selection or all) | <kbd>⌘</kbd><kbd>↩</kbd> |
+| Save file | <kbd>⌘</kbd><kbd>S</kbd> |
+| Format document | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>I</kbd> |
+| Sidebar | <kbd>⌘</kbd><kbd>B</kbd> |
+| Terminal / herdr | <kbd>⌘</kbd><kbd>J</kbd> |
+| Tab & table area | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>J</kbd> |
+| Close active tab | <kbd>⌘</kbd><kbd>W</kbd> |
+| Close Others | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>T</kbd> |
+| Close Left / Close Right | <kbd>⌘</kbd><kbd>K</kbd> <kbd>E</kbd> / <kbd>⌘</kbd><kbd>K</kbd> <kbd>T</kbd> |
+| Close Clean (tabs without changes) | <kbd>⌘</kbd><kbd>K</kbd> <kbd>U</kbd> |
+| Close All | <kbd>⌘</kbd><kbd>K</kbd> <kbd>W</kbd> |
+| Pin Tab | <kbd>⌘</kbd><kbd>K</kbd> <kbd>⇧</kbd><kbd>↩</kbd> |
+
+## Build & run
+
+Prerequisites:
+
+- Rust. The version is pinned in `rust-toolchain.toml` (1.99.1) and installed automatically by rustup.
+- Xcode **Command Line Tools** only. Full Xcode is not needed because Metal shaders are compiled at runtime
+  (`runtime_shaders`).
+- Docker and Homebrew are not required.
 
 ```bash
-cargo run -p pgdesk                 # aplikasi
-cargo run -p pgdesk -- ~/code/app   # langsung membuka folder proyek
-cargo build --release               # target/release/pgdesk dan target/release/pgdesk-mcp
-scripts/bundle-macos.sh             # target/release/PG Desk.app (dengan ikon) untuk /Applications
+cargo run -p pgdesk -- --foreground             # the app, with logs in the terminal
+cargo run -p pgdesk -- --foreground ~/code/app  # open a project folder directly
+cargo build --release               # target/release/pgdesk and target/release/pgdesk-mcp
+scripts/bundle-macos.sh             # target/release/PG Desk.app (with icon) for /Applications
 ```
 
-Data aplikasi: `~/Library/Application Support/pgdesk/` (`instances.toml`, `profiles.toml`, `clusters/`,
-`logs/`, `bin/` untuk binary unduhan, `run/` untuk socket). Set `PGDESK_HOME=/path` untuk memakai folder lain
-(development/test).
+App data is stored in `~/Library/Application Support/pgdesk/`:
 
-Instance baru hanya mendengarkan `localhost`, superuser `postgres`, autentikasi `trust` (lokal saja).
+- `instances.toml` and `profiles.toml`
+- `clusters/` and `logs/`
+- `bin/` for downloaded binaries
+- `run/` for sockets
+- `pgdesk.sock`, where the `pgdesk` command talks to the running app
 
-### MCP
+Set `PGDESK_HOME=/path` to use a different folder (development/test).
+
+## The `pgdesk` command
+
+Like `zed`, PG Desk can be opened from the terminal. Install the command with the **Install CLI** button in the title bar
+(shown only while the command is not installed) or the **PG Desk → Install ‘pgdesk’ Command in PATH…** menu item.
+Both create a symlink `/usr/local/bin/pgdesk` to the app and ask for an admin password if that folder is owned by
+root.
+
+```bash
+pgdesk                    # open/activate PG Desk
+pgdesk .                  # open this folder as a project
+pgdesk src/main.rs:42:5   # open a file at line 42, column 5 (grep/rustc output format is also accepted)
+pgdesk new.sql           # a file that doesn't exist opens empty; ⌘S creates it
+pgdesk -n ~/code/other     # always in a new window
+pgdesk -r ~/code/other     # replace the project in the frontmost window
+ls -la | pgdesk -         # open stdin as a file
+git config --global core.editor "pgdesk --wait"   # wait until the file tab is closed
+```
+
+- If PG Desk is already running, paths are sent to it over a Unix socket and the command returns right away.
+  If not, PG Desk is launched first, detached from the terminal.
+- A folder that is already open is just focused. A new folder fills a window that has no project yet, or
+  opens a new window. Files go to the window whose project contains them, or to the frontmost window.
+- `--wait` returns after all opened files are closed (or the app quits).
+- `--foreground` runs the app in that terminal itself (for debugging). `pgdesk --help` lists
+  all options.
+
+## MCP for AI agents
+
+The `pgdesk-mcp` binary (stdio) gives AI agents access to local instances and databases:
+
+| Tool | Purpose |
+|---|---|
+| `list_instances` | List instances with status, port, and `DATABASE_URL` |
+| `start_instance` / `stop_instance` | Start an instance (refused with an explanation if the port is in use) or stop it |
+| `list_connections` | List instances and saved connections usable by `describe_schema`/`query` |
+| `describe_schema` | Schemas, tables, views, and columns |
+| `query` | Run SQL, **always read-only**, up to 500 rows |
+| `write_env` | Write `DATABASE_URL` to the project's `.env` |
 
 ```bash
 claude mcp add pgdesk -- /path/to/target/release/pgdesk-mcp
 ```
 
+## Versions, changelog & updates
+
+- Versions start at **0.0.1** and bump one patch on **every push to `main`**. The history is in
+  [`CHANGELOG.md`](CHANGELOG.md) and on the **Changelog** page in the app (click the version label in the title bar).
+- PG Desk checks [GitHub Releases](https://github.com/bahrulbangsawan/pgdesk/releases) on launch and
+  every 4 hours. New versions download in the background. Once ready, a **Restart for Update** button appears in the
+  title bar: the app quits, `PG Desk.app` is replaced, and it reopens. Builds from `cargo` only
+  open the releases page.
+
+Release flow (enable once per clone with `git config core.hooksPath .githooks`):
+
+1. `git push` to `main` runs `.githooks/pre-push` → `scripts/release.sh`: the version in `Cargo.toml`
+   is bumped (the first release stays 0.0.1), a new `CHANGELOG.md` section is written from commit messages
+   (grouped as `feat`/`fix`/`perf`/other), then a `chore(release): vX` commit and a `vX` tag are created.
+2. After that push finishes, the release commit and tag are pushed too (log in `.git/pgdesk-release.log`).
+3. The tag triggers `.github/workflows/release.yml`: the app is built on a macOS runner and published as a
+   GitHub Release (`PG-Desk-X-macos-arm64.zip` for the updater, `PG-Desk.dmg`, notes from `CHANGELOG.md`).
+
 ## Test
 
 ```bash
-cargo test --workspace                    # unit + integrasi (memulai cluster Postgres sementara bila ada binary)
-cargo test --workspace -- --include-ignored   # + unduh binary sungguhan & Keychain
+cargo test --workspace                    # unit + integration (starts a temporary Postgres cluster if binaries are available)
+cargo test --workspace -- --include-ignored   # + real binary download & Keychain
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Test integrasi memakai binary Postgres yang ditemukan (Homebrew/Postgres.app/PATH/unduhan) dan dilewati
-dengan pesan bila tidak ada.
+Integration tests use whichever Postgres binaries are found (Homebrew, Postgres.app, `PATH`, or downloaded).
+If no binaries are found, the tests are skipped with a message.
 
-## Arsitektur & keputusan utama
+## Architecture & key decisions
 
 ```
-crates/core   pgdesk-core — tanpa GPUI, dites dengan cargo test biasa
-  ports, owners, probe   lsof/ps/docker → analisis konflik & penjelasan
-  pgctl, control         status/initdb/start/stop/restart + tail log
-  binaries, download     deteksi binary + unduh via postgresql_archive
-  instances              registry TOML, path aplikasi, validasi
-  db                     profil, DATABASE_URL/.env, Keychain, skema, paging, SQL, read-only
-  files                  daftar folder, baca aman, simpan atomik
-  terminal               PTY + alacritty_terminal → snapshot, encoding keyboard/mouse
-  rt                     runtime Tokio di thread sendiri
-crates/app    pgdesk — UI GPUI saja (menggambar & meneruskan input)
-crates/mcp    pgdesk-mcp — server MCP stdio di atas core
+crates/core   pgdesk-core — no GPUI, tested with plain cargo test
+  ports, owners, probe   lsof/ps/docker → conflict analysis & explanation
+  pgctl, control         status/initdb/start/stop/restart + log tail
+  binaries, download     binary detection + download via postgresql_archive
+  instances              TOML registry, app paths, validation
+  db                     profiles, DATABASE_URL/.env, Keychain, schema, paging, SQL, read-only
+  files                  folder listing, safe reads, atomic saves
+  terminal               PTY + alacritty_terminal → snapshot, keyboard/mouse encoding
+  rt                     Tokio runtime on its own thread
+crates/app    pgdesk — GPUI UI only (draws & forwards input)
+crates/mcp    pgdesk-mcp — stdio MCP server on top of core
 ```
 
-| Keputusan | Alasan |
+<details>
+<summary><b>Technical decisions and their reasons</b></summary>
+
+| Decision | Reason |
 |---|---|
-| `gpui-kit =0.8.1` (bukan `gpui` 0.2.2 di crates.io) | gpui-component 0.8.1 dibangun di atas snapshot `gpui-pre =0.3.10`; gpui-kit mengunci set yang cocok. Semua API dicocokkan dengan source tag `v0.8.1` (catatan: `docs/notes/gpui-kit-0.8.1-api.md`). |
-| Rust 1.99.1 dikunci | `gpui-pre-macos 0.3.10` memakai API yang belum stabil di 1.97. |
-| Tokio di thread terpisah + channel `futures` | Thread UI tidak pernah menunggu I/O; hasil di-await di `cx.spawn`. Terbukti di spike: 29 tick UI & 33 frame selama query 3 detik. |
-| `tokio-postgres` (bukan `sqlx`) | Lebih ringan, `simple_query_raw` untuk SQL bebas secara streaming. |
-| `postgresql_archive` (bukan `postgresql_embedded`) | Hanya butuh unduh+ekstrak; `postgresql_embedded` membawa `sqlx` dan mengatur siklus hidup sendiri. |
-| `lsof -F` + `ps` + `docker ps` | Tanpa root; wildcard IPv6 dianggap dual-stack (ragu → peringatkan). |
-| PATH dari login shell saat start | Aplikasi yang dibuka dari Finder mendapat PATH minimal; tanpa ini `docker`/`brew`/`herdr` tidak ditemukan. |
-| Terminal: `alacritty_terminal` + canvas | Seperti terminal Zed; core menghasilkan snapshot, app hanya menggambar. Variabel `HERDR_*`/`TMUX`/`ZELLIJ*` dari proses induk dibuang agar herdr tidak menolak "nested". |
-| Highlighting: syntect | ±200 bahasa dengan ukuran kecil, tanpa grammar tree-sitter per bahasa. |
-| Keychain via `security-framework` | Target macOS; lebih kecil dari `keyring` 4.x. |
-| Ikon: hanya yang dipakai | Bundle penuh Lucide menambah ±1 MiB. |
-| TLS: rustls + `ring` | `ring` sudah ada untuk unduhan binary, jadi tidak menambah pustaka kripto kedua. |
-| Logo: SVG buatan tangan | Gajah (PostgreSQL) dari dua lingkaran, satu kurva telinga, satu goresan belalai, di atas kursor prompt (editor + terminal); warna One Dark. `assets/logo/`. |
+| `gpui-kit =0.8.1` (not `gpui` 0.2.2 on crates.io) | gpui-component 0.8.1 is built on the `gpui-pre =0.3.10` snapshot; gpui-kit pins the matching set. All APIs were checked against the `v0.8.1` tag source (notes: `docs/notes/gpui-kit-0.8.1-api.md`). |
+| Rust 1.99.1 pinned | `gpui-pre-macos 0.3.10` uses APIs that are not stable in 1.97. |
+| Tokio on a separate thread + `futures` channels | The UI thread never waits on I/O; results are awaited in `cx.spawn`. Proven in a spike: 29 UI ticks & 33 frames during a 3-second query. |
+| `tokio-postgres` (not `sqlx`) | Lighter, with `simple_query_raw` for streaming free-form SQL. |
+| `postgresql_archive` (not `postgresql_embedded`) | Only download+extract is needed; `postgresql_embedded` pulls in `sqlx` and manages its own lifecycle. |
+| `lsof -F` + `ps` + `docker ps` | No root needed; an IPv6 wildcard is treated as dual-stack (when in doubt, warn). |
+| PATH from the login shell at startup | Apps opened from Finder get a minimal PATH; without this, `docker`/`brew`/`herdr` are not found. |
+| Terminal: `alacritty_terminal` + canvas | Like Zed's terminal; core produces snapshots, the app only draws. `HERDR_*`/`TMUX`/`ZELLIJ*` variables from the parent process are dropped so herdr doesn't refuse to run as "nested". |
+| Highlighting: syntect | ±200 languages at a small size, without a tree-sitter grammar per language. |
+| Keychain via `security-framework` | macOS target; smaller than `keyring` 4.x. |
+| Icons: only the ones used | The full Lucide bundle adds ±1 MiB. |
+| TLS: rustls + `ring` | `ring` is already there for binary downloads, so no second crypto library is added. |
+| Logo: hand-made SVG | An elephant (PostgreSQL) from two circles, one ear curve, and one trunk stroke, above a prompt cursor (editor + terminal); One Dark colors. `assets/logo/`. |
 
-## Ukuran & memori
+</details>
 
-Diukur di MacBook Apple Silicon (macOS 26.6), build release (`lto = "thin"`, `strip`):
+## Size & memory
+
+Measured on an Apple Silicon MacBook (macOS 26.6), release build (`lto = "thin"`, `strip`):
 
 | | |
 |---|---|
-| `pgdesk` | 24,0 MB (satu file, tanpa runtime JVM/Chromium/Node) |
-| `pgdesk-mcp` | 4,5 MB (termasuk TLS) |
-| Memori diam (1 jendela, 1 tab terminal, 10 detik setelah buka) | RSS 85 MB · physical footprint 67 MB (puncak 115 MB saat startup) |
-| Build release bersih | ±4 menit |
+| `pgdesk` | 24.0 MB (single file, no JVM/Chromium/Node runtime) |
+| `pgdesk-mcp` | 4.5 MB (including TLS) |
+| Idle memory (1 window, 1 terminal tab, 10 seconds after launch) | RSS 85 MB · physical footprint 67 MB (peak 115 MB during startup) |
+| Clean release build | ±4 minutes |
 
-Angka aplikasi lain tidak dicantumkan karena belum diukur di mesin yang sama.
+Figures for other apps are not listed because they have not been measured on the same machine.
 
-## Batasan yang diketahui
+## Known limitations
 
-- macOS saja (Keychain, `lsof`, Postgres.app). 
-- Grid read-only; edit data lewat editor SQL.
-- Paging memakai `OFFSET/LIMIT`; tabel tanpa primary key (dan view) memakai urutan fisik, stabil selama
-  datanya tidak berubah.
-- Pada pooler mode transaction, setelan sesi (`SET`) tidak dijamin bertahan; browser tabel tetap hanya
-  menjalankan `SELECT`.
-- Terminal belum mendukung seleksi teks dengan mouse untuk disalin (program di dalamnya, mis. herdr, tetap menerima mouse).
+- macOS only (depends on Keychain, `lsof`, and Postgres.app).
+- The grid is read-only; data is edited through the SQL editor.
+- Paging uses `OFFSET/LIMIT`. Tables without a primary key (and views) use physical order, which is stable
+  as long as the data doesn't change.
+- With transaction-mode poolers, session settings (`SET`) are not guaranteed to persist. The table browser still only
+  runs `SELECT`.
+- The terminal does not yet support mouse text selection for copying. Programs inside it (e.g. herdr)
+  still receive mouse input.
+
+<sub>Screenshots and video in `docs/media/` were recorded from a release build with demo data (separate `PGDESK_HOME`,
+Homebrew PostgreSQL 16 cluster).</sub>

@@ -2,6 +2,7 @@
 //! queries. Must not depend on GPUI so it can be tested with plain `cargo test`.
 
 pub mod binaries;
+pub mod cli;
 mod cmd;
 pub mod control;
 pub mod db;
@@ -20,5 +21,6 @@ pub mod probe;
 pub mod prompts;
 pub mod rt;
 pub mod terminal;
+pub mod update;
 
 pub use error::{CoreError, Result};

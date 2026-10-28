@@ -49,6 +49,21 @@ impl AppPaths {
         self.root.join("run")
     }
 
+    /// Where the running app listens for the `pgdesk` CLI. Socket paths are
+    /// limited to 104 bytes on macOS, so a deep root falls back to `/tmp`
+    /// (named per user and root).
+    pub fn cli_socket(&self) -> PathBuf {
+        use std::hash::{Hash, Hasher};
+        let path = self.root.join("pgdesk.sock");
+        if path.as_os_str().len() < 100 {
+            return path;
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.root.hash(&mut hasher);
+        let user = std::env::var("USER").unwrap_or_default();
+        PathBuf::from(format!("/tmp/pgdesk-{user}-{:x}.sock", hasher.finish()))
+    }
+
     pub fn managed_bin_root(&self) -> PathBuf {
         self.root.join("bin")
     }
@@ -211,6 +226,19 @@ pub fn validate_socket_dir(dir: &Path, port: u16) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_socket_stays_under_the_unix_path_limit() {
+        let short = AppPaths::resolve(None, Some("/Users/me".into()));
+        assert_eq!(
+            short.cli_socket(),
+            PathBuf::from("/Users/me/Library/Application Support/pgdesk/pgdesk.sock")
+        );
+        let deep = AppPaths::resolve(Some("/x".repeat(60).into()), None);
+        let socket = deep.cli_socket();
+        assert!(socket.starts_with("/tmp") && socket.as_os_str().len() < 104);
+        assert_eq!(socket, deep.cli_socket());
+    }
 
     fn inst(name: &str, port: u16) -> Instance {
         Instance {

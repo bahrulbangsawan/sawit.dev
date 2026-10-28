@@ -43,7 +43,8 @@ gpui_kit::assets::icon_assets!(
         Check,
         CopyPlus,
         Trash,
-        Tag
+        Tag,
+        ScrollText
     ]
 );
 

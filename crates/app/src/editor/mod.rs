@@ -79,6 +79,8 @@ pub struct FileEditor {
     disk_mtime: Option<SystemTime>,
     /// Already told the user the file changed under unsaved edits.
     warned_disk_change: bool,
+    /// 1-based line/column from `go_to` before the text finished loading.
+    pending_cursor: Option<(u32, u32)>,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -93,6 +95,16 @@ impl FileEditor {
         let read_path = path.clone();
         let rx = rt::spawn(cx, async move {
             let modified = mtime(&read_path);
+            // `pgdesk new.rs` opens an empty buffer; saving creates the file.
+            if !read_path.exists() {
+                return Ok((
+                    TextFile {
+                        text: String::new(),
+                        read_only_reason: None,
+                    },
+                    modified,
+                ));
+            }
             read_text(&read_path).map(|file| (file, modified))
         });
         cx.spawn_in(window, async move |this, window| {
@@ -103,7 +115,7 @@ impl FileEditor {
                         this.disk_mtime = modified;
                         this.loaded(file, window, cx)
                     }
-                    Ok(Err(e)) => this.notice = Some(error(format!("Gagal membuka: {e}"))),
+                    Ok(Err(e)) => this.notice = Some(error(format!("Failed to open: {e}"))),
                     Err(_) => {}
                 }
                 this.loading = false;
@@ -133,6 +145,7 @@ impl FileEditor {
             preview_scheduled: false,
             disk_mtime: None,
             warned_disk_change: false,
+            pending_cursor: None,
             focus: cx.focus_handle(),
             _subscriptions: Vec::new(),
         }
@@ -180,7 +193,7 @@ impl FileEditor {
             if !self.warned_disk_change {
                 self.warned_disk_change = true;
                 self.notice = Some(error(
-                    "File ini sudah dihapus dari disk; ⌘S akan membuatnya lagi.".into(),
+                    "This file was deleted from disk; ⌘S will create it again.".into(),
                 ));
                 cx.notify();
             }
@@ -190,7 +203,7 @@ impl FileEditor {
             if !self.warned_disk_change {
                 self.warned_disk_change = true;
                 self.notice = Some(error(
-                    "File berubah di disk, tapi ada perubahan yang belum disimpan di sini. ⌘S akan menimpa versi di disk."
+                    "The file changed on disk, but there are unsaved changes here. ⌘S will overwrite the version on disk."
                         .into(),
                 ));
                 cx.notify();
@@ -220,7 +233,7 @@ impl FileEditor {
                 this.saved_text = file.text;
                 this.dirty = false;
                 this.warned_disk_change = false;
-                this.flash("Dimuat ulang: file berubah di disk.".into(), cx);
+                this.flash("Reloaded: the file changed on disk.".into(), cx);
                 cx.emit(FileEditorEvent::Changed);
                 cx.notify();
             });
@@ -298,7 +311,25 @@ impl FileEditor {
         self.saved_text = text;
         state.update(cx, |s, cx| s.focus(window, cx));
         self.state = Some(state);
+        if let Some((line, column)) = self.pending_cursor.take() {
+            self.go_to(line, column, window, cx);
+        }
         self.watch_disk(window, cx);
+    }
+
+    /// Puts the cursor on a 1-based line and column (clamped), now or once
+    /// the file has loaded.
+    pub fn go_to(&mut self, line: u32, column: u32, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            self.pending_cursor = Some((line, column));
+            return;
+        };
+        state.update(cx, |s, cx| {
+            let last = s.value().lines().count().saturating_sub(1) as u32;
+            let line = line.saturating_sub(1).min(last);
+            s.set_cursor_position(Position::new(line, column.saturating_sub(1)), window, cx);
+        });
+        cx.notify();
     }
 
     fn schedule_preview(&mut self, cx: &mut Context<Self>) {
@@ -356,10 +387,8 @@ impl FileEditor {
                         this.disk_mtime = written;
                         this.warned_disk_change = false;
                     }
-                    Ok(Err(e)) => this.notice = Some(error(format!("Gagal menyimpan: {e}"))),
-                    Err(_) => {
-                        this.notice = Some(error("Gagal menyimpan: runtime berhenti.".into()))
-                    }
+                    Ok(Err(e)) => this.notice = Some(error(format!("Failed to save: {e}"))),
+                    Err(_) => this.notice = Some(error("Failed to save: runtime stopped.".into())),
                 }
                 cx.emit(FileEditorEvent::Changed);
                 cx.notify();
@@ -395,7 +424,7 @@ impl FileEditor {
             return;
         }
         let Some(tool) = tool_for(&self.path) else {
-            self.notice = Some(error("Belum ada formatter untuk jenis file ini.".into()));
+            self.notice = Some(error("No formatter for this file type yet.".into()));
             cx.notify();
             return;
         };
@@ -417,15 +446,15 @@ impl FileEditor {
                         }
                         this.flash(
                             if unchanged {
-                                format!("Sudah rapi ({}).", tool.name())
+                                format!("Already formatted ({}).", tool.name())
                             } else {
-                                format!("Diformat dengan {}.", tool.name())
+                                format!("Formatted with {}.", tool.name())
                             },
                             cx,
                         );
                     }
                     Ok(Err(e)) => this.notice = Some(error(e.to_string())),
-                    Err(_) => this.notice = Some(error("Formatter berhenti.".into())),
+                    Err(_) => this.notice = Some(error("Formatter stopped.".into())),
                 }
                 cx.notify();
             });
@@ -480,7 +509,7 @@ impl FileEditor {
                     h_flex()
                         .gap_0p5()
                         .child(
-                            mode_button("mode-code", Lucide::Code, "Kode", ViewMode::Code, current)
+                            mode_button("mode-code", Lucide::Code, "Code", ViewMode::Code, current)
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.set_mode(ViewMode::Code, cx)),
                                 ),
@@ -489,7 +518,7 @@ impl FileEditor {
                             mode_button(
                                 "mode-split",
                                 Lucide::Columns2,
-                                "Berdampingan",
+                                "Side by Side",
                                 ViewMode::Split,
                                 current,
                             )
@@ -501,7 +530,7 @@ impl FileEditor {
                             mode_button(
                                 "mode-preview",
                                 Lucide::Eye,
-                                "Pratinjau",
+                                "Preview",
                                 ViewMode::Preview,
                                 current,
                             )
@@ -706,7 +735,7 @@ impl Render for FileEditor {
                         .p_3()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child("Membuka…"),
+                        .child("Opening…"),
                 )
             })
             .child(div().flex_1().min_h_0().child(body))

@@ -3,14 +3,20 @@
 #   scripts/bundle-macos.sh          # release build → target/release/PG Desk.app
 #   scripts/bundle-macos.sh debug    # reuse a debug build
 #   scripts/bundle-macos.sh --dmg    # release build + compressed PG-Desk.dmg
+#   scripts/bundle-macos.sh --zip    # release build + PG-Desk-<version>-macos-arm64.zip
+#                                    # (the file the in-app updater downloads)
 set -eu
 cd "$(dirname "$0")/.."
 
 dmg=no
-if [ "${1:-}" = --dmg ]; then
-    dmg=yes
-    shift
-fi
+zip=no
+while :; do
+    case "${1:-}" in
+        --dmg) dmg=yes; shift ;;
+        --zip) zip=yes; shift ;;
+        *) break ;;
+    esac
+done
 profile=${1:-release}
 if [ "$profile" = release ]; then
     cargo build --release -p pgdesk -p pgdesk-mcp
@@ -18,7 +24,8 @@ else
     cargo build -p pgdesk -p pgdesk-mcp
 fi
 
-version=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/app/Cargo.toml | head -1)
+# The workspace version (bumped by scripts/release.sh).
+version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 out="target/$profile"
 app="$out/PG Desk.app"
 rm -rf "$app"
@@ -43,6 +50,14 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+# Ad-hoc signature over the whole bundle (no Developer ID needed locally).
+codesign --force --deep --sign - "$app" >/dev/null 2>&1 || true
+if [ "$zip" = yes ]; then
+    archive="$out/PG-Desk-$version-macos-arm64.zip"
+    rm -f "$archive"
+    ditto -c -k --keepParent "$app" "$archive"
+    echo "$archive"
+fi
 if [ "$dmg" = yes ]; then
     # LZMA-compressed (ULMO), with an /Applications link to drag onto.
     stage="$out/dmg"

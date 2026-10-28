@@ -1,4 +1,6 @@
 mod assets;
+mod changelog_page;
+mod cli;
 mod db;
 mod editor;
 mod file_icons;
@@ -11,11 +13,10 @@ mod servers;
 mod tabs;
 mod terminal;
 mod theme;
+mod update;
 mod viewers;
 mod workspace;
 
-use gpui_kit::component::TitleBar;
-use gpui_kit::*;
 use pgdesk_core::rt::Runtime;
 
 /// GUI apps launched from Finder get a minimal PATH; adopt the login shell's
@@ -32,39 +33,23 @@ fn adopt_login_shell_path() {
 }
 
 fn main() {
-    // `pgdesk [folder]` opens a project, like `zed .`.
-    let project = std::env::args_os()
-        .nth(1)
-        .map(std::path::PathBuf::from)
-        .and_then(|p| p.canonicalize().ok())
-        .filter(|p| p.is_dir());
+    // `pgdesk .`, `pgdesk file.rs:42`, … like `zed`: from a terminal this
+    // hands the paths to the running app and exits.
+    let request = cli::command_line();
     adopt_login_shell_path();
     let runtime = Runtime::start();
-    gpui_kit::application()
-        .with_assets(assets::AppAssets)
-        .run(move |cx| {
-            gpui_kit::init(cx);
-            editor::init(cx);
-            db::init(cx);
-            workspace::init(cx);
-            theme::apply_zed_one_dark(cx);
-            cx.set_global(rt::Rt(runtime));
-            let options = WindowOptions {
-                window_bounds: Some(WindowBounds::centered(size(px(1280.), px(800.)), cx)),
-                window_min_size: Some(size(px(720.), px(480.))),
-                ..TitleBar::window_options()
-            };
-            gpui_kit::open_window(options, cx, |window, cx| {
-                window.set_window_title("PG Desk");
-                cx.new(|cx| {
-                    let mut workspace = workspace::Workspace::new(window, cx);
-                    if let Some(project) = project.clone() {
-                        workspace.open_project(project, cx);
-                    }
-                    workspace
-                })
-            })
-            .expect("failed to open window");
-            cx.activate(true);
-        });
+    let app = gpui_kit::application().with_assets(assets::AppAssets);
+    app.on_reopen(cli::reopen);
+    app.run(move |cx| {
+        gpui_kit::init(cx);
+        editor::init(cx);
+        db::init(cx);
+        workspace::init(cx);
+        theme::apply_zed_one_dark(cx);
+        cx.set_global(rt::Rt(runtime));
+        cli::init(cx);
+        update::init(cx);
+        cli::handle(request, None, cx);
+        cli::serve(cx);
+    });
 }
