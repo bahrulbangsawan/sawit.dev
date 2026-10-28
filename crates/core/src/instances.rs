@@ -52,6 +52,11 @@ impl AppPaths {
     pub fn managed_bin_root(&self) -> PathBuf {
         self.root.join("bin")
     }
+
+    /// Disposable files (e.g. PNG copies of HEIC images).
+    pub fn cache_dir(&self) -> PathBuf {
+        self.root.join("cache")
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
