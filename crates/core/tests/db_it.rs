@@ -348,3 +348,107 @@ async fn table_pages_follow_the_primary_key() {
         0
     );
 }
+
+#[tokio::test]
+async fn tls_follows_sslmode() {
+    let Some((cluster, profile)) = cluster().await else {
+        eprintln!("skip: no PostgreSQL binaries");
+        return;
+    };
+    let data = &cluster.inst.data_dir;
+    let made = std::process::Command::new("openssl")
+        .args([
+            "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+        ])
+        .args(["-subj", "/CN=localhost", "-keyout"])
+        .arg(data.join("server.key"))
+        .arg("-out")
+        .arg(data.join("server.crt"))
+        .output();
+    if !made.is_ok_and(|o| o.status.success()) {
+        eprintln!("skip: openssl unavailable");
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(
+        data.join("server.key"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    let admin = db::connect(&profile, None).await.unwrap();
+    admin
+        .batch_execute("ALTER SYSTEM SET ssl = on")
+        .await
+        .unwrap();
+    admin
+        .batch_execute("SELECT pg_reload_conf()")
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    async fn uses_tls(profile: &ConnProfile) -> pgdesk_core::Result<bool> {
+        let c = db::connect(profile, None).await?;
+        let row = c
+            .query_one(
+                "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+                &[],
+            )
+            .await
+            .unwrap();
+        Ok(row.get(0))
+    }
+    let with = |ssl| ConnProfile {
+        ssl,
+        ..profile.clone()
+    };
+    assert!(!uses_tls(&with(db::SslMode::Disable)).await.unwrap());
+    assert!(uses_tls(&with(db::SslMode::Prefer)).await.unwrap());
+    assert!(uses_tls(&with(db::SslMode::Require)).await.unwrap());
+    // Self-signed: encryption is fine, verification must fail.
+    assert!(uses_tls(&with(db::SslMode::VerifyFull)).await.is_err());
+    // Read-only connections honour it too.
+    let ro = db::connect_read_only(&with(db::SslMode::Require), None)
+        .await
+        .unwrap();
+    let row = ro
+        .query_one(
+            "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert!(row.get::<_, bool>(0));
+}
+
+#[tokio::test]
+async fn schema_marks_relations_the_role_cannot_read() {
+    let Some((_cluster, profile)) = cluster().await else {
+        eprintln!("skip: no PostgreSQL binaries");
+        return;
+    };
+    let admin = db::connect(&profile, None).await.unwrap();
+    admin
+        .batch_execute(
+            "CREATE TABLE open_t (x int); CREATE TABLE secret_t (x int);
+             CREATE ROLE limited LOGIN; GRANT SELECT ON open_t TO limited;",
+        )
+        .await
+        .unwrap();
+    let limited = ConnProfile {
+        user: "limited".into(),
+        ..profile.clone()
+    };
+    let client = db::connect(&limited, None).await.unwrap();
+    let schemas = db::load_schema(&client).await.unwrap();
+    let public = schemas.iter().find(|s| s.name == "public").unwrap();
+    let readable = |name: &str| {
+        public
+            .relations
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap()
+            .readable
+    };
+    assert!(readable("open_t"));
+    assert!(!readable("secret_t"));
+}

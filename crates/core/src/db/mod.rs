@@ -3,9 +3,10 @@
 
 mod profile;
 mod query;
+mod tls;
 
 pub use profile::{
-    ConnProfile, Profiles, delete_password, dotenv_upsert, dotenv_value, load_password,
+    ConnProfile, Profiles, SslMode, delete_password, dotenv_upsert, dotenv_value, load_password,
     parse_database_url, read_dotenv_database_url, store_password,
 };
 

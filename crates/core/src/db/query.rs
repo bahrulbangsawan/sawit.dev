@@ -3,9 +3,10 @@
 use std::time::{Duration, Instant};
 
 use futures::{StreamExt, pin_mut};
-use tokio_postgres::{Client, NoTls, SimpleQueryMessage};
+use tokio_postgres::config::SslMode as PgSslMode;
+use tokio_postgres::{Client, SimpleQueryMessage};
 
-use super::profile::ConnProfile;
+use super::profile::{ConnProfile, SslMode};
 use super::quote_ident;
 use crate::{CoreError, Result};
 
@@ -29,7 +30,19 @@ pub fn sql_error(e: tokio_postgres::Error) -> CoreError {
     }
 }
 
-const BASE_OPTIONS: &str = "-c synchronize_seqscans=off";
+/// Session settings every connection gets, as (name, value).
+const BASE_SETTINGS: &[(&str, &str)] = &[
+    // Paging without a primary key uses OFFSET/LIMIT in physical order;
+    // synchronized seqscans (tables > shared_buffers/4) would start each
+    // scan mid-table.
+    ("synchronize_seqscans", "off"),
+];
+
+/// Connection poolers (PgBouncer, Supavisor, Neon) refuse the `options`
+/// startup parameter; settings then have to be applied with SET.
+pub(crate) fn rejects_startup_options(message: &str) -> bool {
+    message.contains("unsupported startup parameter")
+}
 
 /// Login role for agent (MCP) access to PG Desk instances: reads everything,
 /// cannot write, cannot run server programs or write server files.
@@ -42,18 +55,55 @@ fn config(profile: &ConnProfile, password: Option<&str>) -> tokio_postgres::Conf
         .user(&profile.user)
         .dbname(&profile.database)
         .application_name("pgdesk")
-        .connect_timeout(Duration::from_secs(5))
-        // Paging uses OFFSET/LIMIT in physical order; synchronized seqscans
-        // (tables > shared_buffers/4) would start each scan mid-table.
-        .options(BASE_OPTIONS);
+        .connect_timeout(Duration::from_secs(10))
+        // Notice dead links (NAT idle drops on cloud databases) in about a
+        // minute instead of the OS default of two hours.
+        .keepalives(true)
+        .keepalives_idle(Duration::from_secs(30))
+        .keepalives_interval(Duration::from_secs(10))
+        .keepalives_retries(3)
+        .ssl_mode(match profile.ssl {
+            SslMode::Disable => PgSslMode::Disable,
+            SslMode::Prefer => PgSslMode::Prefer,
+            SslMode::Require | SslMode::VerifyFull => PgSslMode::Require,
+        });
     if let Some(pw) = password {
         cfg.password(pw);
     }
     cfg
 }
 
-async fn connect_with(cfg: tokio_postgres::Config) -> Result<Client> {
-    let (client, connection) = cfg.connect(NoTls).await.map_err(sql_error)?;
+async fn connect_with(
+    profile: &ConnProfile,
+    password: Option<&str>,
+    settings: &[(&str, &str)],
+) -> Result<Client> {
+    let mut cfg = config(profile, password);
+    let options: Vec<String> = settings
+        .iter()
+        .map(|(k, v)| format!("-c {k}={v}"))
+        .collect();
+    cfg.options(options.join(" "));
+    match open(cfg, profile.ssl).await {
+        Err(e) if rejects_startup_options(&e.to_string()) => {
+            let client = open(config(profile, password), profile.ssl).await?;
+            for (k, v) in settings {
+                client
+                    .batch_execute(&format!("SET {k} = {v}"))
+                    .await
+                    .map_err(sql_error)?;
+            }
+            Ok(client)
+        }
+        other => other,
+    }
+}
+
+async fn open(cfg: tokio_postgres::Config, ssl: SslMode) -> Result<Client> {
+    let (client, connection) = cfg
+        .connect(super::tls::connector(ssl))
+        .await
+        .map_err(sql_error)?;
     tokio::spawn(async move {
         let _ = connection.await;
     });
@@ -62,16 +112,14 @@ async fn connect_with(cfg: tokio_postgres::Config) -> Result<Client> {
 
 /// Connects (must run on the Tokio runtime; the connection task is spawned there).
 pub async fn connect(profile: &ConnProfile, password: Option<&str>) -> Result<Client> {
-    connect_with(config(profile, password)).await
+    connect_with(profile, password, BASE_SETTINGS).await
 }
 
 /// A connection whose transactions are read-only by default.
 pub async fn connect_read_only(profile: &ConnProfile, password: Option<&str>) -> Result<Client> {
-    let mut cfg = config(profile, password);
-    cfg.options(format!(
-        "{BASE_OPTIONS} -c default_transaction_read_only=on"
-    ));
-    connect_with(cfg).await
+    let mut settings = BASE_SETTINGS.to_vec();
+    settings.push(("default_transaction_read_only", "on"));
+    connect_with(profile, password, &settings).await
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +142,8 @@ pub struct Relation {
     pub name: String,
     pub kind: RelKind,
     pub columns: Vec<ColumnInfo>,
+    /// The connected role may SELECT from it.
+    pub readable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,7 +170,8 @@ pub async fn load_schema(client: &Client) -> Result<Vec<SchemaInfo>> {
           AND nspname NOT LIKE 'pg_toast%' AND nspname NOT LIKE 'pg_temp%'
         ORDER BY nspname";
     const RELATIONS: &str = "SELECT n.nspname, c.relname, c.relkind::text, a.attname,
-               format_type(a.atttypid, a.atttypmod), NOT a.attnotnull
+               format_type(a.atttypid, a.atttypmod), NOT a.attnotnull,
+               has_table_privilege(c.oid, 'SELECT')
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
@@ -154,6 +205,7 @@ pub async fn load_schema(client: &Client) -> Result<Vec<SchemaInfo>> {
                 name: name.clone(),
                 kind,
                 columns: vec![],
+                readable: row.get(6),
             });
         }
         if let Some(col) = row.get::<_, Option<String>>(3) {

@@ -7,6 +7,31 @@ use serde::{Deserialize, Serialize};
 
 use crate::{CoreError, Result};
 
+/// TLS policy, as libpq's `sslmode`. `Prefer` and `Require` encrypt without
+/// checking the certificate (like libpq); `VerifyFull` checks it against the
+/// system trust store (`verify-ca` is treated as `verify-full`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SslMode {
+    Disable,
+    #[default]
+    Prefer,
+    Require,
+    VerifyFull,
+}
+
+impl SslMode {
+    pub fn parse(value: &str) -> Option<SslMode> {
+        Some(match value {
+            "disable" | "allow" => SslMode::Disable,
+            "prefer" => SslMode::Prefer,
+            "require" => SslMode::Require,
+            "verify-ca" | "verify-full" => SslMode::VerifyFull,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnProfile {
     pub name: String,
@@ -14,16 +39,20 @@ pub struct ConnProfile {
     pub port: u16,
     pub database: String,
     pub user: String,
+    /// Absent in profiles saved by older versions.
+    #[serde(default)]
+    pub ssl: SslMode,
 }
 
 impl ConnProfile {
     pub fn new(host: &str, port: u16, database: &str, user: &str) -> ConnProfile {
         ConnProfile {
-            name: format!("{database}@{host}:{port}"),
+            name: format!("{user}@{host}:{port}/{database}"),
             host: host.into(),
             port,
             database: database.into(),
             user: user.into(),
+            ssl: SslMode::default(),
         }
     }
 
@@ -96,7 +125,8 @@ pub fn parse_database_url(url: &str) -> Result<(ConnProfile, Option<String>)> {
         .strip_prefix("postgres://")
         .or_else(|| url.trim().strip_prefix("postgresql://"))
         .ok_or_else(bad)?;
-    let rest = rest.split(['?', '#']).next().unwrap_or_default();
+    let rest = rest.split('#').next().unwrap_or_default();
+    let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
     let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
     let (userinfo, hostport) = match authority.rsplit_once('@') {
         Some((u, h)) => (Some(u), h),
@@ -121,6 +151,20 @@ pub fn parse_database_url(url: &str) -> Result<(ConnProfile, Option<String>)> {
             None => (hostport.to_string(), None),
         }
     };
+    if host.contains(',') {
+        return Err(CoreError::Parse(
+            "URL dengan beberapa host belum didukung; pakai satu host.".into(),
+        ));
+    }
+    let mut ssl = SslMode::default();
+    for pair in query.split('&').filter(|p| !p.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if key == "sslmode" {
+            let value = percent_decode(value);
+            ssl = SslMode::parse(&value)
+                .ok_or_else(|| CoreError::Parse(format!("sslmode tidak dikenal: {value}")))?;
+        }
+    }
     let host = if host.is_empty() {
         "localhost".to_string()
     } else {
@@ -135,7 +179,11 @@ pub fn parse_database_url(url: &str) -> Result<(ConnProfile, Option<String>)> {
     } else {
         percent_decode(path)
     };
-    Ok((ConnProfile::new(&host, port, &database, &user), password))
+    let profile = ConnProfile {
+        ssl,
+        ..ConnProfile::new(&host, port, &database, &user)
+    };
+    Ok((profile, password))
 }
 
 /// Value of `key` in .env text (`KEY=v`, `export KEY="v"`, `KEY='v'`, with

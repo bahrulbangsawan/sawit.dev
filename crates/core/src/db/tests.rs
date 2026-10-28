@@ -10,7 +10,52 @@ fn parses_full_database_url() {
     assert_eq!(p.user, "app_user");
     assert_eq!(p.database, "kyzn_crm");
     assert_eq!(pw.as_deref(), Some("s3cr@t"));
-    assert_eq!(p.name, "kyzn_crm@localhost:5440");
+    assert_eq!(p.name, "app_user@localhost:5440/kyzn_crm");
+    assert_eq!(p.ssl, SslMode::Disable);
+}
+
+#[test]
+fn sslmode_from_url_and_defaults() {
+    let mode = |url: &str| parse_database_url(url).unwrap().0.ssl;
+    assert_eq!(mode("postgres://u@db.example.com/app"), SslMode::Prefer);
+    assert_eq!(
+        mode("postgres://u@db.example.com/app?sslmode=require"),
+        SslMode::Require
+    );
+    assert_eq!(
+        mode("postgres://u@h/app?connect_timeout=5&sslmode=verify-full"),
+        SslMode::VerifyFull
+    );
+    assert_eq!(
+        mode("postgres://u@h/app?sslmode=verify-ca"),
+        SslMode::VerifyFull
+    );
+    assert!(parse_database_url("postgres://u@h/app?sslmode=bogus").is_err());
+}
+
+#[test]
+fn same_database_different_users_are_different_profiles() {
+    let (a, _) = parse_database_url("postgres://alice@h:5432/app").unwrap();
+    let (b, _) = parse_database_url("postgres://bob@h:5432/app").unwrap();
+    assert_ne!(a.name, b.name);
+}
+
+#[test]
+fn rejects_multi_host_urls() {
+    let err = parse_database_url("postgres://u@h1,h2/app").unwrap_err();
+    assert!(err.to_string().contains("host"), "{err}");
+}
+
+#[test]
+fn profiles_saved_before_sslmode_still_load() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("profiles.toml");
+    std::fs::write(
+        &file,
+        "[[profile]]\nname = \"x\"\nhost = \"h\"\nport = 5432\ndatabase = \"d\"\nuser = \"u\"\n",
+    )
+    .unwrap();
+    assert_eq!(Profiles::load(&file).unwrap().items[0].ssl, SslMode::Prefer);
 }
 
 #[test]
@@ -132,4 +177,18 @@ fn read_only_sql_screening() {
     assert!(screen_read_only_sql("  -- c\n COPY (SELECT 1) TO PROGRAM 'touch x'").is_err());
     assert!(screen_read_only_sql("(copy t to '/tmp/x')").is_err());
     assert!(screen_read_only_sql("set default_transaction_read_only = off").is_err());
+}
+
+#[test]
+fn recognises_poolers_rejecting_startup_options() {
+    use super::query::rejects_startup_options;
+    assert!(rejects_startup_options(
+        "db error: FATAL: unsupported startup parameter: options"
+    ));
+    assert!(rejects_startup_options(
+        "FATAL: unsupported startup parameter in options: synchronize_seqscans"
+    ));
+    assert!(!rejects_startup_options(
+        "FATAL: password authentication failed for user \"app\""
+    ));
 }
