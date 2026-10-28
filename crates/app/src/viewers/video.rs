@@ -43,6 +43,7 @@ pub struct VideoView {
     seeking: bool,
     seek: Entity<SliderState>,
     error: Option<String>,
+    focus: FocusHandle,
     _seek_events: Subscription,
 }
 
@@ -122,9 +123,13 @@ impl VideoView {
         let error = player
             .is_none()
             .then(|| "Video tidak bisa dibuka.".to_string());
+        let focus = cx.focus_handle();
+        // Space works right away, without clicking the video first.
+        focus.focus(window, cx);
         Self {
             path,
             player,
+            focus,
             frame: None,
             playing: false,
             muted: false,
@@ -313,6 +318,11 @@ impl Render for VideoView {
             );
         v_flex()
             .id("video")
+            .track_focus(&self.focus)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| this.focus.focus(window, cx)),
+            )
             .size_full()
             .bg(cx.theme().background)
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {

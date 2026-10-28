@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
@@ -45,6 +45,9 @@ pub enum ViewMode {
     Split,
 }
 
+/// How often an open file is checked for changes made outside the editor.
+const DISK_POLL: Duration = Duration::from_secs(2);
+
 /// Wait this long after the last keystroke before re-rendering a preview.
 const PREVIEW_DEBOUNCE: Duration = Duration::from_millis(150);
 
@@ -72,6 +75,10 @@ pub struct FileEditor {
     /// Text the preview renders (lags typing by `PREVIEW_DEBOUNCE`).
     preview: SharedString,
     preview_scheduled: bool,
+    /// Modification time of the file as last loaded or saved.
+    disk_mtime: Option<SystemTime>,
+    /// Already told the user the file changed under unsaved edits.
+    warned_disk_change: bool,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -84,12 +91,18 @@ impl FileEditor {
         cx: &mut Context<Self>,
     ) -> Self {
         let read_path = path.clone();
-        let rx = rt::spawn(cx, async move { read_text(&read_path) });
+        let rx = rt::spawn(cx, async move {
+            let modified = mtime(&read_path);
+            read_text(&read_path).map(|file| (file, modified))
+        });
         cx.spawn_in(window, async move |this, window| {
             let result = rx.await;
             let _ = this.update_in(window, |this, window, cx| {
                 match result {
-                    Ok(Ok(file)) => this.loaded(file, window, cx),
+                    Ok(Ok((file, modified))) => {
+                        this.disk_mtime = modified;
+                        this.loaded(file, window, cx)
+                    }
                     Ok(Err(e)) => this.notice = Some(error(format!("Gagal membuka: {e}"))),
                     Err(_) => {}
                 }
@@ -118,9 +131,101 @@ impl FileEditor {
             formatting: false,
             preview: SharedString::default(),
             preview_scheduled: false,
+            disk_mtime: None,
+            warned_disk_change: false,
             focus: cx.focus_handle(),
             _subscriptions: Vec::new(),
         }
+    }
+
+    fn watch_disk(&self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, window| {
+            loop {
+                window.background_executor().timer(DISK_POLL).await;
+                let Ok(path) = this.read_with(window, |this, _| this.path.clone()) else {
+                    return;
+                };
+                let rx = window
+                    .update(|_, cx| rt::spawn(cx, async move { mtime(&path) }))
+                    .ok();
+                let Some(Ok(now)) = (match rx {
+                    Some(rx) => Some(rx.await),
+                    None => None,
+                }) else {
+                    return;
+                };
+                if this
+                    .update_in(window, |this, window, cx| {
+                        this.on_disk_mtime(now, window, cx)
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn on_disk_mtime(
+        &mut self,
+        now: Option<SystemTime>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if now == self.disk_mtime || self.state.is_none() {
+            return;
+        }
+        let Some(now) = now else {
+            if !self.warned_disk_change {
+                self.warned_disk_change = true;
+                self.notice = Some(error(
+                    "File ini sudah dihapus dari disk; ⌘S akan membuatnya lagi.".into(),
+                ));
+                cx.notify();
+            }
+            return;
+        };
+        if self.dirty {
+            if !self.warned_disk_change {
+                self.warned_disk_change = true;
+                self.notice = Some(error(
+                    "File berubah di disk, tapi ada perubahan yang belum disimpan di sini. ⌘S akan menimpa versi di disk."
+                        .into(),
+                ));
+                cx.notify();
+            }
+            return;
+        }
+        // Clean buffer: take the new contents, like Zed does.
+        self.disk_mtime = Some(now);
+        let path = self.path.clone();
+        let rx = rt::spawn(cx, async move { read_text(&path) });
+        cx.spawn_in(window, async move |this, window| {
+            let Ok(Ok(file)) = rx.await else { return };
+            let _ = this.update_in(window, |this, window, cx| {
+                let (Some(state), None) = (this.state.clone(), file.read_only_reason) else {
+                    return;
+                };
+                if this.dirty || state.read(cx).value().as_ref() == file.text {
+                    return;
+                }
+                state.update(cx, |s, cx| {
+                    let pos = s.cursor_position();
+                    s.set_value(file.text.clone(), window, cx);
+                    s.set_cursor_position(Position::new(pos.line, pos.character), window, cx);
+                });
+                // set_value doesn't emit Change, so refresh the preview here.
+                this.preview = file.text.clone().into();
+                this.saved_text = file.text;
+                this.dirty = false;
+                this.warned_disk_change = false;
+                this.flash("Dimuat ulang: file berubah di disk.".into(), cx);
+                cx.emit(FileEditorEvent::Changed);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn title(&self) -> String {
@@ -191,6 +296,7 @@ impl FileEditor {
         self.saved_text = text;
         state.update(cx, |s, cx| s.focus(window, cx));
         self.state = Some(state);
+        self.watch_disk(window, cx);
     }
 
     fn schedule_preview(&mut self, cx: &mut Context<Self>) {
@@ -232,16 +338,21 @@ impl FileEditor {
         let text = state.read(cx).value().to_string();
         let path = self.path.clone();
         let to_write = text.clone();
-        let rx = rt::spawn(cx, async move { write_text_atomic(&path, &to_write) });
+        let rx = rt::spawn(cx, async move {
+            write_text_atomic(&path, &to_write).map(|()| mtime(&path))
+        });
         cx.spawn(async move |this, cx| {
             let result = rx.await;
             this.update(cx, |this, cx| {
-                let saved = matches!(result, Ok(Ok(())));
+                let saved = matches!(result, Ok(Ok(_)));
                 match result {
-                    Ok(Ok(())) => {
+                    Ok(Ok(written)) => {
                         this.saved_text = text;
                         this.dirty = false;
                         this.notice = None;
+                        // Our own write is not an outside change.
+                        this.disk_mtime = written;
+                        this.warned_disk_change = false;
                     }
                     Ok(Err(e)) => this.notice = Some(error(format!("Gagal menyimpan: {e}"))),
                     Err(_) => {
@@ -254,6 +365,24 @@ impl FileEditor {
             })
             .unwrap_or(false)
         })
+    }
+
+    /// A short-lived, non-error note under the toolbar.
+    fn flash(&mut self, text: String, cx: &mut Context<Self>) {
+        self.notice = Some(Notice {
+            text: text.clone(),
+            error: false,
+        });
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(3)).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.notice.as_ref().is_some_and(|n| n.text == text) {
+                    this.notice = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn format(&mut self, _: &Format, window: &mut Window, cx: &mut Context<Self>) {
@@ -284,25 +413,14 @@ impl FileEditor {
                         if !unchanged {
                             apply_formatted(&state, formatted, window, cx);
                         }
-                        this.notice = Some(Notice {
-                            text: if unchanged {
+                        this.flash(
+                            if unchanged {
                                 format!("Sudah rapi ({}).", tool.name())
                             } else {
                                 format!("Diformat dengan {}.", tool.name())
                             },
-                            error: false,
-                        });
-                        // The success note is transient.
-                        cx.spawn(async move |this, cx| {
-                            cx.background_executor().timer(Duration::from_secs(3)).await;
-                            let _ = this.update(cx, |this, cx| {
-                                if this.notice.as_ref().is_some_and(|n| !n.error) {
-                                    this.notice = None;
-                                    cx.notify();
-                                }
-                            });
-                        })
-                        .detach();
+                            cx,
+                        );
                     }
                     Ok(Err(e)) => this.notice = Some(error(e.to_string())),
                     Err(_) => this.notice = Some(error("Formatter berhenti.".into())),
@@ -491,6 +609,10 @@ fn breadcrumb(path: &Path, root: Option<&Path>) -> Vec<String> {
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
         .filter(|c| c != "/")
         .collect()
+}
+
+fn mtime(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 fn error(text: String) -> Notice {

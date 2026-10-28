@@ -94,6 +94,9 @@ pub struct Workspace {
     tabs: Vec<Tab>,
     active: usize,
     layout: Layout,
+    tab_scroll: ScrollHandle,
+    /// Active tab last scrolled into view.
+    scrolled_to: Option<usize>,
     /// A table/SQL tab asked for while its connection was being re-made.
     pending_db: Option<DbEvent>,
     focus: FocusHandle,
@@ -162,6 +165,8 @@ impl Workspace {
             }],
             active: 0,
             layout: Layout::default(),
+            tab_scroll: ScrollHandle::new(),
+            scrolled_to: None,
             pending_db: None,
             focus: cx.focus_handle(),
             _subscriptions: subscriptions,
@@ -589,7 +594,7 @@ impl Workspace {
         }
     }
 
-    fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_tab_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let weak = cx.entity().downgrade();
         let tabs: Vec<_> = self
             .tabs
@@ -618,6 +623,7 @@ impl Workspace {
                 let weak = weak.clone();
                 h_flex()
                     .id(("pane-tab", ix))
+                    .flex_none()
                     .h_full()
                     .pl_3()
                     .pr_1()
@@ -683,12 +689,20 @@ impl Workspace {
                     })
             })
             .collect();
+        if self.scrolled_to != Some(self.active) {
+            // Bring a newly opened/activated tab into view.
+            self.tab_scroll.scroll_to_item(self.active);
+            self.scrolled_to = Some(self.active);
+        }
         h_flex()
+            .id("tab-bar")
             .h(px(32.))
+            .flex_none()
             .bg(cx.theme().tab_bar)
             .border_b_1()
             .border_color(cx.theme().border)
-            .overflow_x_hidden()
+            .overflow_x_scroll()
+            .track_scroll(&self.tab_scroll)
             .children(tabs)
     }
 
@@ -792,14 +806,14 @@ impl Workspace {
             )
     }
 
-    fn render_center(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_center(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         v_flex()
             .size_full()
             .child(self.render_tab_bar(cx))
             .child(div().flex_1().min_h_0().child(self.render_active_item(cx)))
     }
 
-    fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_body(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let l = self.layout;
         // The terminal stays alive while hidden; only its view is dropped.
         let main = match (l.center, l.terminal) {
