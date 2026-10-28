@@ -10,6 +10,7 @@ pub mod error;
 pub mod files;
 pub mod format;
 pub mod instances;
+pub mod mcp_clients;
 pub mod media;
 pub mod owners;
 pub mod pdf;
