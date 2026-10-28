@@ -6,6 +6,8 @@ publish.workspace = true
 
 [dependencies]
 futures.workspace = true
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
 postgresql_archive = { version = "=0.22.0", default-features = false, features = ["theseus", "tls-rustls-ring"] }
 thiserror.workspace = true
 tokio.workspace = true

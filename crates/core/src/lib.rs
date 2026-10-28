@@ -5,6 +5,7 @@ pub mod binaries;
 mod cmd;
 pub mod download;
 pub mod error;
+pub mod instances;
 pub mod owners;
 pub mod pgctl;
 pub mod ports;
