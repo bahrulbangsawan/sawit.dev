@@ -31,7 +31,7 @@ pub fn write_database_url(
     url: &str,
 ) -> Result<std::path::PathBuf, String> {
     if !project_dir.is_dir() {
-        return Err(format!("{} bukan folder.", project_dir.display()));
+        return Err(format!("{} is not a folder.", project_dir.display()));
     }
     let path = project_dir.join(".env");
     let current = std::fs::read_to_string(&path).unwrap_or_default();
@@ -69,9 +69,10 @@ pub fn format_table(set: &ResultSet) -> String {
         out.push(line(row.iter().map(cell).collect()));
     }
     out.push(format!(
-        "({} baris{})",
+        "({} {}{})",
         set.rows.len(),
-        if set.truncated { ", dipotong" } else { "" }
+        if set.rows.len() == 1 { "row" } else { "rows" },
+        if set.truncated { ", truncated" } else { "" }
     ));
     out.join("\n")
 }

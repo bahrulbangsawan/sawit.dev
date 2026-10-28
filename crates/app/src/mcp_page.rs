@@ -227,7 +227,7 @@ impl McpPage {
                             div()
                                 .text_xs()
                                 .text_color(muted)
-                                .child(format!("{profiles} profil")),
+                                .child(format!("{profiles} profiles")),
                         )
                     }),
             )
@@ -242,31 +242,28 @@ impl McpPage {
         let busy = self.busy.contains(&ix);
         let disabled = !self.server_exists || busy;
         let (badge, color): (String, Hsla) = match &row.status {
-            Status::Installed => ("Terpasang".into(), cx.theme().success),
-            Status::Outdated(_) => ("Versi lain".into(), cx.theme().warning),
-            Status::NotInstalled => ("Belum".into(), muted),
-            Status::Unreadable(_) => ("Edit manual".into(), cx.theme().danger),
+            Status::Installed => ("Installed".into(), cx.theme().success),
+            Status::Outdated(_) => ("Other version".into(), cx.theme().warning),
+            Status::NotInstalled => ("Not installed".into(), muted),
+            Status::Unreadable(_) => ("Edit manually".into(), cx.theme().danger),
             Status::Manual => ("Manual".into(), muted),
         };
         let detail = match &row.status {
-            Status::Outdated(other) => Some(format!("menunjuk ke {other}")),
+            Status::Outdated(other) => Some(format!("points to {other}")),
             Status::Unreadable(why) => Some(why.clone()),
             _ => None,
         };
         let via = match self.cli_for(row.target.client) {
-            Some(_) => format!(
-                "lewat CLI `{}`",
-                row.target.client.cli().unwrap_or_default()
-            ),
+            Some(_) => format!("via CLI `{}`", row.target.client.cli().unwrap_or_default()),
             None if row.target.client.editable() => "edit file".to_string(),
-            None => "salin & tempel".to_string(),
+            None => "copy & paste".to_string(),
         };
         let copy_snippet = |ix: usize, text: String| {
             Button::new(("mcp-copy", ix))
                 .ghost()
                 .xsmall()
                 .icon(Lucide::Copy)
-                .label("Salin snippet")
+                .label("Copy Snippet")
                 .on_click(move |_, _, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
                 })
@@ -279,17 +276,17 @@ impl McpPage {
             Status::Installed => Button::new(("mcp-remove", ix))
                 .ghost()
                 .xsmall()
-                .label("Hapus")
+                .label("Remove")
                 .on_click(cx.listener(move |this, _, _, cx| this.act(ix, true, cx))),
             Status::Outdated(_) => Button::new(("mcp-update", ix))
                 .primary()
                 .xsmall()
-                .label("Perbarui")
+                .label("Update")
                 .on_click(cx.listener(move |this, _, _, cx| this.act(ix, false, cx))),
             Status::NotInstalled => Button::new(("mcp-install", ix))
                 .primary()
                 .xsmall()
-                .label("Pasang")
+                .label("Install")
                 .on_click(cx.listener(move |this, _, _, cx| this.act(ix, false, cx))),
             Status::Unreadable(_) => copy_snippet(ix, snippet(&row.target, &self.server)),
         };
@@ -395,14 +392,14 @@ impl Render for McpPage {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::RefreshCw)
-                            .tooltip("Deteksi ulang")
+                            .tooltip("Detect Again")
                             .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
                     )
                     .child(
                         Button::new("mcp-install-all")
                             .primary()
                             .small()
-                            .label(format!("Pasang ke semua ({pending})"))
+                            .label(format!("Install All ({pending})"))
                             .disabled(pending == 0 || !self.server_exists)
                             .on_click(cx.listener(|this, _, _, cx| this.install_all(cx))),
                     ),
@@ -413,8 +410,8 @@ impl Render for McpPage {
                     .text_color(muted)
                     .whitespace_normal()
                     .child(
-                        "Agent AI bisa melihat instance, menjalankan query read-only dan menulis DATABASE_URL. \
-                         Setelah dipasang, mulai ulang klien (atau sesi Claude/Codex) agar server terbaca.",
+                        "AI agents can see instances, run read-only queries and write DATABASE_URL. \
+                         After installing, restart the client (or the Claude/Codex session) so it picks up the server.",
                     ),
             )
             .child(
@@ -429,20 +426,22 @@ impl Render for McpPage {
                     })
                     .child(tilde(&self.server))
                     .when(!self.server_exists && !self.loading, |el| {
-                        el.child("— belum dibangun: cargo build --release -p pgdesk-mcp")
+                        el.child("— not built yet: cargo build --release -p pgdesk-mcp")
                     }),
             );
         let body = if self.loading {
             div()
                 .text_sm()
                 .text_color(muted)
-                .child("Mendeteksi klien…")
+                .child("Detecting clients…")
                 .into_any_element()
         } else if groups.is_empty() {
             div()
                 .text_sm()
                 .text_color(muted)
-                .child("Tidak ada klien MCP yang terdeteksi (Claude Code, Codex, Claude Desktop, Cursor, Zed, …).")
+                .child(
+                    "No MCP clients detected (Claude Code, Codex, Claude Desktop, Cursor, Zed, …).",
+                )
                 .into_any_element()
         } else {
             let section = |title: &'static str| {

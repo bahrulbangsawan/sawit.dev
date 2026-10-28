@@ -159,7 +159,7 @@ fn result_set_renders_as_aligned_text_table() {
     };
     assert_eq!(
         format_table(&set),
-        "id | email\n---+--------\n1  | a@x.dev\n22 | NULL\n(2 baris, dipotong)"
+        "id | email\n---+--------\n1  | a@x.dev\n22 | NULL\n(2 rows, truncated)"
     );
 }
 

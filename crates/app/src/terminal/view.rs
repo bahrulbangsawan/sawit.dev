@@ -434,7 +434,7 @@ impl Render for TerminalView {
                         };
                         paint_snapshot(&snap, &painter, window, cx);
                         if exited {
-                            let note = "[proses selesai — tutup tab ini atau buka terminal baru]";
+                            let note = "[process exited — close this tab or open a new terminal]";
                             let run = TextRun {
                                 len: note.len(),
                                 font: font.clone(),

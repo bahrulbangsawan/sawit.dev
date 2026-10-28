@@ -89,7 +89,7 @@ impl TerminalPanel {
                     window.focus(&handle, cx);
                 }
             }
-            Err(e) => self.error = Some(format!("Gagal membuka terminal: {e}")),
+            Err(e) => self.error = Some(format!("Failed to open terminal: {e}")),
         }
         cx.notify();
     }
@@ -120,7 +120,7 @@ impl Render for TerminalPanel {
                 let v = view.read(cx);
                 let active = ix == self.active;
                 let label = if v.exited {
-                    format!("{} (selesai)", v.title)
+                    format!("{} (exited)", v.title)
                 } else {
                     v.title.to_string()
                 };
@@ -184,7 +184,7 @@ impl Render for TerminalPanel {
                                         .ghost()
                                         .xsmall()
                                         .label("herdr")
-                                        .tooltip("Buka herdr di tab baru")
+                                        .tooltip("Open herdr in a New Tab")
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.open_herdr(Some(window), cx)
                                         })),
@@ -195,7 +195,7 @@ impl Render for TerminalPanel {
                                     .ghost()
                                     .xsmall()
                                     .icon(IconName::Plus)
-                                    .tooltip("Terminal baru")
+                                    .tooltip("New Terminal")
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_shell(Some(window), cx)
                                     })),

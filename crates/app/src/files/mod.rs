@@ -71,7 +71,7 @@ impl FilesPanel {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Buka folder proyek".into()),
+            prompt: Some("Open Project Folder".into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -247,7 +247,7 @@ impl Render for FilesPanel {
                                 .ghost()
                                 .xsmall()
                                 .icon(IconName::RotateCw)
-                                .tooltip("Muat ulang daftar file")
+                                .tooltip("Reload File List")
                                 .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
                         )
                     })
@@ -256,7 +256,7 @@ impl Render for FilesPanel {
                             .ghost()
                             .xsmall()
                             .icon(IconName::FolderOpen)
-                            .tooltip("Buka folder proyek")
+                            .tooltip("Open Project Folder")
                             .on_click(cx.listener(|this, _, _, cx| this.prompt_open(cx))),
                     ),
             )
@@ -291,7 +291,7 @@ impl Render for FilesPanel {
                                 .p_2()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("Belum ada folder. Klik ikon folder untuk membuka proyek."),
+                                .child("No folder open. Click the folder icon to open a project."),
                         )
                     }),
             )

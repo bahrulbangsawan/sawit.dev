@@ -470,7 +470,7 @@ async fn running_queries_can_be_cancelled() {
     db::cancel(&token, profile.ssl).await.unwrap();
     let err = running.await.unwrap().unwrap_err();
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
-    assert!(err.to_string().contains("dibatalkan"), "{err}");
+    assert!(err.to_string().contains("canceled"), "{err}");
     // The connection survives a cancel.
     assert!(db::run_sql(&client, "SELECT 1", 1).await.is_ok());
 }

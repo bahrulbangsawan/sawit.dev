@@ -54,7 +54,7 @@ impl Pager {
 
     pub fn label(&self) -> String {
         if self.page_rows == 0 && self.page == 0 {
-            return "0 baris".into();
+            return "0 rows".into();
         }
         let range = format!(
             "{}–{}",
@@ -62,8 +62,8 @@ impl Pager {
             self.offset() + self.page_rows as u64
         );
         match self.total {
-            Some(RowCount { rows, exact: true }) => format!("{range} dari {rows}"),
-            Some(RowCount { rows, exact: false }) => format!("{range} dari ±{rows}"),
+            Some(RowCount { rows, exact: true }) => format!("{range} of {rows}"),
+            Some(RowCount { rows, exact: false }) => format!("{range} of ±{rows}"),
             None => range,
         }
     }
@@ -218,7 +218,7 @@ impl TableView {
                         }
                     }
                     Ok(Err(e)) => this.error = Some(e.to_string()),
-                    Err(_) => this.error = Some("Runtime database berhenti.".into()),
+                    Err(_) => this.error = Some("Database runtime stopped.".into()),
                 }
                 cx.notify();
             });
@@ -275,8 +275,8 @@ impl Render for TableView {
         let pager = self.pager.clone();
         let busy = self.loading;
         let page_label = match pager.last_page() {
-            Some(last) => format!("Hal. {} / {}", pager.page + 1, last + 1),
-            None => format!("Hal. {}", pager.page + 1),
+            Some(last) => format!("Page {} / {}", pager.page + 1, last + 1),
+            None => format!("Page {}", pager.page + 1),
         };
         let nav = |id: &'static str, icon: Lucide, tooltip: &'static str, enabled: bool| {
             Button::new(id)
@@ -315,15 +315,15 @@ impl Render for TableView {
                     Button::new("page-cancel")
                         .ghost()
                         .xsmall()
-                        .label("Batal")
-                        .tooltip("Hentikan query di server")
+                        .label("Cancel")
+                        .tooltip("Cancel the Query on the Server")
                         .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
                 )
             })
             .child(if self.waiting_reconnect {
-                "menyambung ulang…".to_string()
+                "reconnecting…".to_string()
             } else if busy {
-                "memuat…".to_string()
+                "loading…".to_string()
             } else if self.error.is_some() {
                 String::new()
             } else {
@@ -333,7 +333,7 @@ impl Render for TableView {
                 nav(
                     "page-first",
                     Lucide::ChevronsLeft,
-                    "Halaman pertama",
+                    "First Page",
                     pager.has_prev(),
                 )
                 .on_click(cx.listener(|this, _, window, cx| this.go(0, window, cx))),
@@ -342,7 +342,7 @@ impl Render for TableView {
                 nav(
                     "page-prev",
                     Lucide::ChevronLeft,
-                    "Sebelumnya",
+                    "Previous Page",
                     pager.has_prev(),
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -355,7 +355,7 @@ impl Render for TableView {
                 nav(
                     "page-next",
                     Lucide::ChevronRight,
-                    "Berikutnya",
+                    "Next Page",
                     pager.has_next(),
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -367,7 +367,7 @@ impl Render for TableView {
                 nav(
                     "page-last",
                     Lucide::ChevronsRight,
-                    "Halaman terakhir",
+                    "Last Page",
                     pager.last_page().is_some_and(|l| pager.page < l),
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -381,7 +381,7 @@ impl Render for TableView {
                     .ghost()
                     .xsmall()
                     .icon(Lucide::RefreshCw)
-                    .tooltip("Muat ulang")
+                    .tooltip("Reload")
                     .on_click(cx.listener(|this, _, window, cx| this.reload(window, cx))),
             );
         let body = if let Some(e) = self.error.clone() {
@@ -399,9 +399,9 @@ impl Render for TableView {
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
                 .child(if pager.page == 0 {
-                    "Tabel ini kosong."
+                    "This table is empty."
                 } else {
-                    "Tidak ada baris di halaman ini."
+                    "No rows on this page."
                 })
                 .into_any_element()
         } else if let Some(grid) = &self.grid {
@@ -411,7 +411,7 @@ impl Render for TableView {
                 .p_3()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child("Memuat…")
+                .child("Loading…")
                 .into_any_element()
         };
         v_flex()
@@ -516,13 +516,13 @@ mod tests {
         assert!(!p.has_prev());
         assert!(p.has_next());
         assert_eq!(p.last_page(), Some(2));
-        assert_eq!(p.label(), "1–50 dari 123");
+        assert_eq!(p.label(), "1–50 of 123");
         p.page = 2;
         p.page_rows = 23;
         assert_eq!(p.offset(), 100);
         assert!(!p.has_next());
         assert!(p.has_prev());
-        assert_eq!(p.label(), "101–123 dari 123");
+        assert_eq!(p.label(), "101–123 of 123");
     }
 
     #[test]
@@ -533,7 +533,7 @@ mod tests {
         };
         assert_eq!(p.last_page(), Some(0));
         assert!(!p.has_next());
-        assert_eq!(p.label(), "0 baris");
+        assert_eq!(p.label(), "0 rows");
         // Count still running or only estimated: a full page means "maybe more".
         let mut p = Pager {
             page_rows: 50,
@@ -546,7 +546,7 @@ mod tests {
             rows: 2_000_000,
             exact: false,
         });
-        assert_eq!(p.label(), "1–50 dari ±2000000");
+        assert_eq!(p.label(), "1–50 of ±2000000");
         p.page_rows = 7;
         assert!(!p.has_next());
     }

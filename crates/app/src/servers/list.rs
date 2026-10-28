@@ -101,7 +101,7 @@ impl Render for ServerList {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Plus)
-                            .tooltip("Instance baru")
+                            .tooltip("New Instance")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.store.update(cx, |s, cx| s.show_create(cx));
                             })),
@@ -121,9 +121,7 @@ impl Render for ServerList {
                                 .p_2()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(
-                                    "Belum ada instance. Klik + untuk membuat atau menambahkan.",
-                                ),
+                                .child("No instances yet. Click + to create or add one."),
                         )
                     }),
             )

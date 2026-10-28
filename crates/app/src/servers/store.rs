@@ -257,7 +257,7 @@ impl ServerStore {
                         this.blocked.insert(name.clone(), report);
                     }
                     Ok(Ok(StartOutcome::AlreadyRunning { pid })) => {
-                        this.notice = Some(format!("{name} sudah berjalan (PID {pid})."));
+                        this.notice = Some(format!("{name} is already running (PID {pid})."));
                     }
                     Ok(Ok(StartOutcome::Started)) => {}
                     Ok(Err(e)) => {
@@ -299,7 +299,7 @@ impl ServerStore {
     pub fn forget(&mut self, name: &str, cx: &mut Context<Self>) {
         self.registry.remove(name);
         if let Err(e) = self.registry.save(&self.paths.instances_file()) {
-            self.notice = Some(format!("Gagal menyimpan daftar instance: {e}"));
+            self.notice = Some(format!("Failed to save the instance list: {e}"));
         }
         self.statuses.remove(name);
         if self.selected.as_deref() == Some(name) {
@@ -341,7 +341,7 @@ impl ServerStore {
             return Task::ready(Err(e.to_string()));
         }
         if self.registry.get(&name).is_some() {
-            return Task::ready(Err(format!("Instance \"{name}\" sudah ada.")));
+            return Task::ready(Err(format!("Instance \"{name}\" already exists.")));
         }
         let paths = self.paths.clone();
         let rx = rt::spawn(cx, async move {
@@ -369,7 +369,7 @@ impl ServerStore {
             Ok::<_, String>(inst)
         });
         cx.spawn(async move |this, cx| {
-            let inst = rx.await.map_err(|_| "dibatalkan".to_string())??;
+            let inst = rx.await.map_err(|_| "cancelled".to_string())??;
             this.update(cx, |this, cx| {
                 let name = inst.name.clone();
                 this.registry.add(inst).map_err(|e| e.to_string())?;
@@ -381,7 +381,7 @@ impl ServerStore {
                 this.refresh_statuses(cx);
                 Ok(())
             })
-            .map_err(|_| "jendela ditutup".to_string())?
+            .map_err(|_| "window closed".to_string())?
         })
     }
 
@@ -392,7 +392,7 @@ impl ServerStore {
         cx: &mut Context<Self>,
     ) -> Task<Result<(), String>> {
         let Some(bins) = self.binaries.first().cloned() else {
-            return Task::ready(Err("Tidak ada binary PostgreSQL yang ditemukan.".into()));
+            return Task::ready(Err("No PostgreSQL binary found.".into()));
         };
         let name = data_dir
             .file_name()
@@ -435,7 +435,7 @@ impl ServerStore {
         cx.spawn(async move |this, cx| {
             match rx.await {
                 Ok(Ok(PgCtlStatus::NotACluster | PgCtlStatus::MissingDir)) => {
-                    return Err("Folder itu bukan data dir PostgreSQL.".to_string());
+                    return Err("That folder isn't a PostgreSQL data directory.".to_string());
                 }
                 Ok(Err(e)) => return Err(e.to_string()),
                 _ => {}
@@ -450,7 +450,7 @@ impl ServerStore {
                 this.refresh_statuses(cx);
                 Ok(())
             })
-            .map_err(|_| "jendela ditutup".to_string())?
+            .map_err(|_| "window closed".to_string())?
         })
     }
 }

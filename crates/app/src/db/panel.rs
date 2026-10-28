@@ -87,7 +87,7 @@ impl DatabasePanel {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Pilih file .env".into()),
+            prompt: Some("Choose .env File".into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -129,7 +129,7 @@ impl DatabasePanel {
             })
             .collect();
         if running.is_empty() {
-            self.error = Some("Tidak ada instance PG Desk yang berjalan.".into());
+            self.error = Some("No PG Desk instances are running.".into());
         } else {
             self.error = None;
             for p in running {
@@ -288,7 +288,7 @@ impl DatabasePanel {
                                 .ghost()
                                 .xsmall()
                                 .label("SQL")
-                                .tooltip("Editor SQL baru")
+                                .tooltip("New SQL Editor")
                                 .on_click(cx.listener(move |_, _, _, cx| {
                                     cx.stop_propagation();
                                     cx.emit(DbEvent::OpenSql {
@@ -301,7 +301,7 @@ impl DatabasePanel {
                                 .ghost()
                                 .xsmall()
                                 .icon(IconName::RotateCw)
-                                .tooltip("Muat ulang skema")
+                                .tooltip("Reload Schema")
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     cx.stop_propagation();
                                     this.store.update(cx, |s, cx| s.refresh(&n2, cx)).detach();
@@ -313,7 +313,7 @@ impl DatabasePanel {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::X)
-                            .tooltip("Hapus koneksi (password di Keychain ikut dihapus)")
+                            .tooltip("Remove Connection (also deletes its password from Keychain)")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
                                 this.store.update(cx, |s, cx| s.remove(&n3, cx))
@@ -405,7 +405,7 @@ impl DatabasePanel {
                         .child(Icon::new(Lucide::Lock).xsmall())
                         .tooltip(|window, cx| {
                             gpui_kit::component::tooltip::Tooltip::new(
-                                "Tidak ada izin SELECT untuk role ini",
+                                "This role has no SELECT permission",
                             )
                             .build(window, cx)
                         })
@@ -471,7 +471,7 @@ impl Render for DatabasePanel {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Plus)
-                            .tooltip("Tambah dari DATABASE_URL")
+                            .tooltip("Add from DATABASE_URL")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.show_url = !this.show_url;
                                 if this.show_url {
@@ -485,7 +485,7 @@ impl Render for DatabasePanel {
                             .ghost()
                             .xsmall()
                             .label(".env")
-                            .tooltip("Impor DATABASE_URL dari file .env")
+                            .tooltip("Import DATABASE_URL from a .env File")
                             .on_click(cx.listener(|this, _, _, cx| this.import_env(cx))),
                     )
                     .child(
@@ -493,7 +493,7 @@ impl Render for DatabasePanel {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::Server)
-                            .tooltip("Hubungkan instance PG Desk yang berjalan")
+                            .tooltip("Connect Running PG Desk Instances")
                             .on_click(cx.listener(|this, _, _, cx| this.add_instances(cx))),
                     ),
             )
@@ -509,7 +509,7 @@ impl Render for DatabasePanel {
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("Enter untuk menambah. Password disimpan di Keychain."),
+                                .child("Press Enter to add. Passwords are stored in Keychain."),
                         ),
                 )
             })
@@ -547,7 +547,7 @@ impl Render for DatabasePanel {
                                 .p_2()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("Belum ada koneksi. Tambah dari DATABASE_URL, file .env, atau instance PG Desk yang berjalan."),
+                                .child("No connections yet. Add one from a DATABASE_URL, a .env file, or a running PG Desk instance."),
                         )
                     }),
             )

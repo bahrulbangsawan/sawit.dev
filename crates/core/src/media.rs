@@ -35,7 +35,7 @@ pub async fn pixel_size(path: &Path) -> Result<(u32, u32)> {
     match (field("pixelWidth"), field("pixelHeight")) {
         (Some(w), Some(h)) if out.code == Some(0) => Ok((w, h)),
         _ => Err(CoreError::Parse(format!(
-            "ukuran gambar tidak terbaca: {}",
+            "can't read image size: {}",
             out.combined().trim()
         ))),
     }
@@ -83,7 +83,7 @@ pub async fn displayable(path: &Path, cache_dir: &Path) -> Result<PathBuf> {
     .await?;
     if result.code != Some(0) || !out.is_file() {
         return Err(CoreError::Parse(format!(
-            "gambar tidak bisa dikonversi: {}",
+            "can't convert image: {}",
             result.combined().trim()
         )));
     }

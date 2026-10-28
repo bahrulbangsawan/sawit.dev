@@ -119,7 +119,7 @@ fn percent_encode(s: &str) -> String {
 /// Parses `postgres://user:pass@host:port/db?params`. Returns the profile and
 /// the password (if any), which callers should put in the Keychain.
 pub fn parse_database_url(url: &str) -> Result<(ConnProfile, Option<String>)> {
-    let bad = || CoreError::Parse(format!("bukan URL PostgreSQL: {url}"));
+    let bad = || CoreError::Parse(format!("not a PostgreSQL URL: {url}"));
     let rest = url
         .trim()
         .strip_prefix("postgres://")
@@ -153,7 +153,7 @@ pub fn parse_database_url(url: &str) -> Result<(ConnProfile, Option<String>)> {
     };
     if host.contains(',') {
         return Err(CoreError::Parse(
-            "URL dengan beberapa host belum didukung; pakai satu host.".into(),
+            "URLs with multiple hosts are not supported yet; use a single host.".into(),
         ));
     }
     let mut ssl = SslMode::default();
@@ -162,7 +162,7 @@ pub fn parse_database_url(url: &str) -> Result<(ConnProfile, Option<String>)> {
         if key == "sslmode" {
             let value = percent_decode(value);
             ssl = SslMode::parse(&value)
-                .ok_or_else(|| CoreError::Parse(format!("sslmode tidak dikenal: {value}")))?;
+                .ok_or_else(|| CoreError::Parse(format!("unknown sslmode: {value}")))?;
         }
     }
     let host = if host.is_empty() {

@@ -53,7 +53,7 @@ impl ServerDetail {
         .detach();
         let mut this = Self {
             store,
-            name_input: cx.new(|cx| InputState::new(window, cx).placeholder("nama-proyek")),
+            name_input: cx.new(|cx| InputState::new(window, cx).placeholder("project-name")),
             port_input: cx.new(|cx| InputState::new(window, cx).placeholder("5432")),
             choice: 0,
             form_error: None,
@@ -86,7 +86,7 @@ impl ServerDetail {
             });
             if !installed {
                 choices.push((
-                    format!("Unduh PostgreSQL {major} (tanpa Homebrew/Docker)"),
+                    format!("Download PostgreSQL {major} (no Homebrew/Docker)"),
                     BinaryChoice::Download { major },
                 ));
             }
@@ -115,12 +115,12 @@ impl ServerDetail {
     fn submit(&mut self, cx: &mut Context<Self>) {
         let name = self.name_input.read(cx).value().trim().to_string();
         let Ok(port) = self.port_input.read(cx).value().trim().parse::<u16>() else {
-            self.form_error = Some("Port harus angka 1–65535.".into());
+            self.form_error = Some("Port must be a number from 1 to 65535.".into());
             cx.notify();
             return;
         };
         let Some((_, choice)) = self.choices(cx).into_iter().nth(self.choice) else {
-            self.form_error = Some("Pilih binary PostgreSQL.".into());
+            self.form_error = Some("Choose a PostgreSQL binary.".into());
             cx.notify();
             return;
         };
@@ -146,7 +146,7 @@ impl ServerDetail {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Tambahkan data dir".into()),
+            prompt: Some("Add Data Directory".into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -179,7 +179,7 @@ impl ServerDetail {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Pilih folder proyek".into()),
+            prompt: Some("Choose Project Folder".into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -198,8 +198,8 @@ impl ServerDetail {
             let Ok(result) = rx.await else { return };
             let _ = this.update(cx, |this, cx| {
                 let notice = match result {
-                    Ok(path) => format!("DATABASE_URL ditulis ke {}", path.display()),
-                    Err(e) => format!("Gagal menulis .env: {e}"),
+                    Ok(path) => format!("Wrote DATABASE_URL to {}", path.display()),
+                    Err(e) => format!("Failed to write .env: {e}"),
                 };
                 this.store.update(cx, |s, cx| {
                     s.notice = Some(notice);
@@ -260,17 +260,17 @@ impl ServerDetail {
             .p_4()
             .gap_3()
             .max_w(px(560.))
-            .child(div().text_lg().font_semibold().child("Instance PostgreSQL baru"))
+            .child(div().text_lg().font_semibold().child("New PostgreSQL Instance"))
             .child(
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
                     .child(format!(
-                        "Dibuat di {}, hanya mendengarkan localhost, user `postgres` tanpa password.",
+                        "Created in {}, listens on localhost only, user `postgres` with no password.",
                         data_root
                     )),
             )
-            .child(field("Nama", Input::new(&self.name_input)))
+            .child(field("Name", Input::new(&self.name_input)))
             .child(field("Port", Input::new(&self.port_input)))
             .child(field("Binary", v_flex().gap_1().children(options)))
             .when_some(self.form_error.clone(), |el, e| el.child(error_box(e, cx)))
@@ -283,7 +283,7 @@ impl ServerDetail {
                             .small()
                             .loading(self.form_busy)
                             .disabled(self.form_busy)
-                            .label(if downloading { "Mengunduh & membuat…" } else { "Buat instance" })
+                            .label(if downloading { "Downloading & creating…" } else { "Create Instance" })
                             .on_click(cx.listener(|this, _, _, cx| this.submit(cx))),
                     )
                     .child(
@@ -291,7 +291,7 @@ impl ServerDetail {
                             .ghost()
                             .small()
                             .icon(IconName::FolderOpen)
-                            .label("Tambahkan data dir yang sudah ada…")
+                            .label("Add existing data directory…")
                             .on_click(cx.listener(|this, _, _, cx| this.adopt(cx))),
                     ),
             )
@@ -313,11 +313,11 @@ impl ServerDetail {
         let log_len = store.log.len();
         let name = inst.name.clone();
         let status_text = match &status {
-            Status::Unknown => "memeriksa…".to_string(),
-            Status::Known(PgCtlStatus::Running { pid }) => format!("berjalan · PID {pid}"),
-            Status::Known(PgCtlStatus::Stopped) => "berhenti".into(),
-            Status::Known(PgCtlStatus::NotACluster) => "bukan cluster".into(),
-            Status::Known(PgCtlStatus::MissingDir) => "data dir hilang".into(),
+            Status::Unknown => "checking…".to_string(),
+            Status::Known(PgCtlStatus::Running { pid }) => format!("running · PID {pid}"),
+            Status::Known(PgCtlStatus::Stopped) => "stopped".into(),
+            Status::Known(PgCtlStatus::NotACluster) => "not a cluster".into(),
+            Status::Known(PgCtlStatus::MissingDir) => "data directory missing".into(),
             Status::Error(e) => format!("error: {e}"),
         };
         let url = format!("postgres://postgres@localhost:{}/postgres", inst.port);
@@ -402,7 +402,7 @@ impl ServerDetail {
                     .small()
                     .ghost()
                     .label(".env")
-                    .tooltip("Tulis DATABASE_URL ke .env proyek (mis. TanStack Start)")
+                    .tooltip("Write DATABASE_URL to the Project's .env (e.g. TanStack Start)")
                     .on_click(cx.listener(move |this, _, _, cx| this.write_env(cx))),
             )
             .child(
@@ -410,7 +410,7 @@ impl ServerDetail {
                     .small()
                     .ghost()
                     .icon(Lucide::X)
-                    .tooltip("Hapus dari daftar (data dir tetap ada)")
+                    .tooltip("Remove from List (keeps the data directory)")
                     .disabled(busy || running)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.store.update(cx, |s, cx| s.forget(&n4, cx))
@@ -536,9 +536,12 @@ impl ServerDetail {
                         cx.theme().warning
                     }))
                     .child(div().font_semibold().child(if conflict {
-                        format!("Port {} sudah dipakai — start dibatalkan", report.port)
+                        format!("Port {} is already in use — start cancelled", report.port)
                     } else {
-                        format!("Port {} dibayangi proses lain — start ditahan", report.port)
+                        format!(
+                            "Port {} is shadowed by another process — start held",
+                            report.port
+                        )
                     })),
             )
             .child(div().text_sm().whitespace_normal().child(report.explain()))
@@ -549,7 +552,7 @@ impl ServerDetail {
                     .child(
                         Button::new("dismiss-blocked")
                             .small()
-                            .label("Batal")
+                            .label("Cancel")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.store.update(cx, |s, cx| s.dismiss_blocked(&n1, cx))
                             })),
@@ -559,7 +562,7 @@ impl ServerDetail {
                             Button::new("force-start")
                                 .small()
                                 .warning()
-                                .label("Tetap start")
+                                .label("Start Anyway")
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.store
                                         .update(cx, |s, cx| s.start(&n2, Preflight::Force, cx))
@@ -600,7 +603,7 @@ impl Render for ServerDetail {
             div()
                 .p_4()
                 .text_color(cx.theme().muted_foreground)
-                .child("Pilih instance di panel kiri.")
+                .child("Select an instance in the left panel.")
                 .into_any_element()
         };
         div().size_full().bg(cx.theme().background).child(content)

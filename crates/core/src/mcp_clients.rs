@@ -345,7 +345,7 @@ pub fn discover(home: &Path, claude_config_dir: Option<PathBuf>) -> Vec<Target> 
         let file = home.join(file);
         if file.is_file() && !out.iter().any(|t| t.config == file) {
             let profile = if out.iter().any(|t| t.client == client) {
-                "lama"
+                "legacy"
             } else {
                 "default"
             };
@@ -437,8 +437,8 @@ fn read_json(path: &Path) -> std::result::Result<Option<Map<String, Value>>, Str
     }
     match serde_json::from_str::<Value>(&text) {
         Ok(Value::Object(map)) => Ok(Some(map)),
-        Ok(_) => Err("bukan objek JSON".into()),
-        Err(e) => Err(format!("{e} (mis. ada komentar)")),
+        Ok(_) => Err("not a JSON object".into()),
+        Err(e) => Err(format!("{e} (e.g. it contains comments)")),
     }
 }
 
@@ -522,7 +522,7 @@ fn write_config(config: &Path, text: &str) -> Result<()> {
 
 fn manual(target: &Target, server: &Path, why: &str) -> CoreError {
     CoreError::Config(format!(
-        "{} tidak bisa diubah otomatis ({why}). Tambahkan manual:\n{}",
+        "{} can't be changed automatically ({why}). Add it manually:\n{}",
         target.config.display(),
         snippet(target, server)
     ))
@@ -531,7 +531,7 @@ fn manual(target: &Target, server: &Path, why: &str) -> CoreError {
 /// Adds or updates the server by editing the config file.
 pub fn install_file(target: &Target, server: &Path) -> Result<()> {
     if !target.client.editable() {
-        return Err(manual(target, server, "format YAML/skrip"));
+        return Err(manual(target, server, "YAML/script format"));
     }
     if target.client == Client::Codex {
         let mut doc = read_toml(&target.config).map_err(|e| manual(target, server, &e))?;
@@ -543,7 +543,7 @@ pub fn install_file(target: &Target, server: &Path) -> Result<()> {
                 toml_edit::Item::Table(t)
             })
             .as_table_mut()
-            .ok_or_else(|| manual(target, server, "mcp_servers bukan tabel"))?;
+            .ok_or_else(|| manual(target, server, "mcp_servers is not a table"))?;
         let mut table = toml_edit::Table::new();
         table["command"] = toml_edit::value(server.display().to_string());
         table["args"] = toml_edit::value(toml_edit::Array::new());
@@ -556,7 +556,7 @@ pub fn install_file(target: &Target, server: &Path) -> Result<()> {
     let (key, value) = entry(target.client, server);
     let servers = map.entry(key).or_insert_with(|| Value::Object(Map::new()));
     let Value::Object(servers) = servers else {
-        return Err(manual(target, server, &format!("{key} bukan objek")));
+        return Err(manual(target, server, &format!("{key} is not an object")));
     };
     servers.insert(SERVER_NAME.into(), value);
     let text = serde_json::to_string_pretty(&Value::Object(map))
@@ -568,7 +568,7 @@ pub fn install_file(target: &Target, server: &Path) -> Result<()> {
 pub fn uninstall_file(target: &Target) -> Result<()> {
     if !target.client.editable() {
         return Err(CoreError::Config(format!(
-            "Hapus entri `{SERVER_NAME}` dari {} secara manual.",
+            "Remove the `{SERVER_NAME}` entry from {} manually.",
             target.config.display()
         )));
     }
@@ -670,7 +670,7 @@ async fn run_cli(call: &CliCall) -> Result<std::process::Output> {
     }
     let out = tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output())
         .await
-        .map_err(|_| CoreError::Config("CLI tidak selesai dalam 30 detik".into()))??;
+        .map_err(|_| CoreError::Config("CLI did not finish within 30 seconds".into()))??;
     Ok(out)
 }
 

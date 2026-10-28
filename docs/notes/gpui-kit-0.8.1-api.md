@@ -1,49 +1,49 @@
-# Catatan API nyata: gpui-kit 0.8.1 (gpui-pre 0.3.10)
+# Real API notes: gpui-kit 0.8.1 (gpui-pre 0.3.10)
 
-Sumber yang dicocokkan: `longbridge/gpui-component` tag `v0.8.1`
-(commit `99576db58ec8103417c41a092e891b4022d24e7e`) dan `gpui-pre-0.3.10` di registry Cargo.
+Sources checked against: `longbridge/gpui-component` tag `v0.8.1`
+(commit `99576db58ec8103417c41a092e891b4022d24e7e`) and `gpui-pre-0.3.10` in the Cargo registry.
 
-## Temuan yang berbeda dari dugaan awal
+## Findings that differ from initial assumptions
 
-1. **`gpui` di crates.io (0.2.2, Okt 2025) tidak dipakai.** gpui-component 0.8.1 mengunci
-   snapshot `gpui-pre =0.3.10` + `gpui-pre-platform` (fitur `runtime_shaders`). Fasad
-   `gpui-kit =0.8.1` mengunci set yang cocok → aplikasi cukup bergantung pada `gpui-kit`.
-   `use gpui_kit::*` = GPUI; komponen di `gpui_kit::component::*`.
-2. **Butuh Rust ≥ 1.99.** `gpui-pre-macos 0.3.10` memakai `Option::map_or_default`
-   (unstable di 1.97.1). Repo mengunci `rust-toolchain.toml` → `1.99.1` (stable terbaru, 2026-10-13).
-3. **Xcode penuh tidak diperlukan.** `runtime_shaders` mengompilasi shader Metal saat runtime;
-   build berhasil hanya dengan Command Line Tools.
-4. **Jendela tertutup tidak di-render.** `gpui-pre-macos` menghentikan display link saat
-   `occlusionState` tidak terlihat (hemat daya). Ini bukan freeze; state tetap ter-update.
-   Aplikasi memanggil `cx.activate(true)` setelah membuka jendela.
+1. **`gpui` on crates.io (0.2.2, Oct 2025) is not used.** gpui-component 0.8.1 pins
+   the snapshot `gpui-pre =0.3.10` + `gpui-pre-platform` (feature `runtime_shaders`). The
+   `gpui-kit =0.8.1` facade pins a matching set → the app only needs to depend on `gpui-kit`.
+   `use gpui_kit::*` = GPUI; components live in `gpui_kit::component::*`.
+2. **Requires Rust ≥ 1.99.** `gpui-pre-macos 0.3.10` uses `Option::map_or_default`
+   (unstable in 1.97.1). The repo pins `rust-toolchain.toml` → `1.99.1` (latest stable, 2026-10-13).
+3. **Full Xcode is not needed.** `runtime_shaders` compiles Metal shaders at runtime;
+   the build succeeds with just the Command Line Tools.
+4. **Occluded windows are not rendered.** `gpui-pre-macos` stops the display link when
+   `occlusionState` is not visible (to save power). This is not a freeze; state keeps updating.
+   The app calls `cx.activate(true)` after opening the window.
 
-## Pola yang terbukti (spike)
+## Proven patterns (spike)
 
 - Bootstrap: `gpui_kit::application().run(|cx| { gpui_kit::init(cx); gpui_kit::open_window(opts, cx, |window, cx| cx.new(|cx| View::new(window, cx))) })`.
 - Global: `struct Rt(Runtime); impl Global for Rt {}` → `cx.set_global(Rt(rt))`, `cx.global::<Rt>()`.
-- Async: `let rx = cx.global::<Rt>().0.spawn(fut);` lalu
+- Async: `let rx = cx.global::<Rt>().0.spawn(fut);` then
   `cx.spawn(async move |this: WeakEntity<T>, cx: &mut AsyncApp| { let v = rx.await; this.update(cx, |this, cx| ...) }).detach()`.
   Signature: `Context::spawn<AsyncFn: AsyncFnOnce(WeakEntity<T>, &mut AsyncApp) -> R>`.
-- Timer di executor GPUI: `cx.background_executor().timer(Duration)`.
-- Tabel: `TableDelegate` (`columns_count`, `rows_count`, `column`, `render_td(row, col, &mut Window, &mut Context<TableState<Self>>) -> impl IntoElement`);
-  `cx.new(|cx| TableState::new(delegate, window, cx))`; render dengan `DataTable::new(&entity).bordered(true)`;
-  ubah data via `entity.update(cx, |t, cx| { t.delegate_mut().rows = ..; t.refresh(cx) })`.
-  Untuk Tahap 3 tersedia `visible_rows_changed`, `has_more`, `load_more_threshold`, `load_more`.
-- Tombol: `Button::new(id).primary().label(..).on_click(cx.listener(|this, _ev, _window, cx| ..))`.
+- Timer on the GPUI executor: `cx.background_executor().timer(Duration)`.
+- Table: `TableDelegate` (`columns_count`, `rows_count`, `column`, `render_td(row, col, &mut Window, &mut Context<TableState<Self>>) -> impl IntoElement`);
+  `cx.new(|cx| TableState::new(delegate, window, cx))`; render with `DataTable::new(&entity).bordered(true)`;
+  change data via `entity.update(cx, |t, cx| { t.delegate_mut().rows = ..; t.refresh(cx) })`.
+  For Stage 3 there are `visible_rows_changed`, `has_more`, `load_more_threshold`, `load_more`.
+- Button: `Button::new(id).primary().label(..).on_click(cx.listener(|this, _ev, _window, cx| ..))`.
 - Layout: `v_flex()`, `h_flex()`, `div().flex_1()`; `window.set_window_title(..)`; `window.is_window_active()`.
 
-## Angka spike (debug, M-series)
+## Spike numbers (debug, M-series)
 
-- Build bersih pertama: ±5,5 menit (unduh + kompilasi seluruh pohon gpui); rebuild app: ±97 detik.
-- `SELECT pg_sleep(3), version()` via Tokio: 29 tick UI (100 ms) dan 33 frame dirender selama 3,0 detik → UI tidak terblokir.
-- RSS debug idle ±86–90 MB.
+- First clean build: ~5.5 minutes (download + compile the whole gpui tree); app rebuild: ~97 seconds.
+- `SELECT pg_sleep(3), version()` via Tokio: 29 UI ticks (100 ms) and 33 frames rendered over 3.0 seconds → UI not blocked.
+- Idle debug RSS ~86–90 MB.
 
-## Pelajaran lain
+## Other lessons
 
-- macOS: path socket Unix maks 103 byte. Path scratchpad yang panjang membuat postmaster gagal
-  start (`Unix-domain socket path ... is too long`). Ini membenarkan `validate_socket_dir` (Task 9).
+- macOS: Unix socket paths are limited to 103 bytes. A long scratchpad path made the postmaster fail
+  to start (`Unix-domain socket path ... is too long`). This justifies `validate_socket_dir` (Task 9).
 
 ## postgresql_archive 0.22.0
 
-- `install_managed("=16", root)` unduh PostgreSQL 16.15.1 (theseus, aarch64-apple-darwin) dalam ±43 detik.
-- Extractor theseus mengekstrak ke tempdir lalu `rename` atomik ke dir tujuan; **dilewati bila dir tujuan sudah ada**.
+- `install_managed("=16", root)` downloads PostgreSQL 16.15.1 (theseus, aarch64-apple-darwin) in ~43 seconds.
+- The theseus extractor extracts to a tempdir, then does an atomic `rename` to the target dir; **skipped if the target dir already exists**.

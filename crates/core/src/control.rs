@@ -83,7 +83,7 @@ pub(crate) fn check_shell_safe_path(path: &Path) -> Result<()> {
         .ok_or_else(|| CoreError::Config("path is not UTF-8".into()))?;
     if text.contains(['"', '$', '`', '\\']) {
         return Err(CoreError::Config(format!(
-            "Path {text} berisi karakter \" $ ` atau \\ yang tidak aman untuk pg_ctl; pindahkan/ganti nama foldernya."
+            "Path {text} contains \" $ ` or \\, which are unsafe for pg_ctl; move or rename the folder."
         )));
     }
     Ok(())

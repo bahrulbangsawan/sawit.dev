@@ -60,7 +60,7 @@ impl DbStore {
 
     fn save(&mut self) {
         if let Err(e) = self.profiles.save(&self.file) {
-            self.notice = Some(format!("Gagal menyimpan profil: {e}"));
+            self.notice = Some(format!("Failed to save profiles: {e}"));
         }
     }
 
@@ -115,7 +115,7 @@ impl DbStore {
     pub fn import_env(&mut self, path: PathBuf, cx: &mut Context<Self>) -> Result<String, String> {
         match read_dotenv_database_url(&path) {
             Ok(Some(url)) => self.add_url(&url, cx),
-            Ok(None) => Err(format!("{} tidak berisi DATABASE_URL.", path.display())),
+            Ok(None) => Err(format!("{} doesn't contain DATABASE_URL.", path.display())),
             Err(e) => Err(e.to_string()),
         }
     }

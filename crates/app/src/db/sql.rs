@@ -56,7 +56,7 @@ impl SqlView {
                     tab_size: 2,
                     hard_tabs: false,
                 })
-                .placeholder("-- Tulis SQL lalu tekan ⌘↩ untuk menjalankan")
+                .placeholder("-- Write SQL, then press ⌘↩ to run")
         });
         Self {
             title,
@@ -92,7 +92,7 @@ impl SqlView {
             self.db
                 .update(cx, |s, cx| s.ensure_connecting(&profile, cx));
             self.error = Some(
-                "Koneksi terputus; menyambung ulang. Jalankan lagi setelah titik koneksi hijau."
+                "Connection lost; reconnecting. Run again once the connection dot turns green."
                     .into(),
             );
             cx.notify();
@@ -125,7 +125,7 @@ impl SqlView {
     fn stop(&mut self, cx: &mut Context<Self>) {
         if let Some(token) = self.cancel.take() {
             let ssl = self.db.read(cx).ssl(&self.profile);
-            // Fire and forget: the running query reports "Query dibatalkan.".
+            // Fire and forget: the running query reports "Query canceled.".
             drop(rt::spawn(cx, async move { db::cancel(&token, ssl).await }));
         }
     }
@@ -135,14 +135,16 @@ impl SqlView {
         let mut parts = vec![format!("{ms:.1} ms")];
         if !outcome.affected.is_empty() {
             let total: u64 = outcome.affected.iter().sum();
-            parts.push(format!("{total} baris terdampak"));
+            let noun = if total == 1 { "row" } else { "rows" };
+            parts.push(format!("{total} {noun} affected"));
         }
         match outcome.results.into_iter().last() {
             Some(set) => {
+                let n = set.rows.len();
                 parts.push(format!(
-                    "{} baris{}",
-                    set.rows.len(),
-                    if set.truncated { " (dipotong)" } else { "" }
+                    "{n} {}{}",
+                    if n == 1 { "row" } else { "rows" },
+                    if set.truncated { " (truncated)" } else { "" }
                 ));
                 self.result =
                     Some(cx.new(|cx| TableState::new(ResultDelegate::new(set), window, cx)));
@@ -180,8 +182,8 @@ impl Render for SqlView {
                                 .ghost()
                                 .xsmall()
                                 .icon(Lucide::X)
-                                .label("Batal")
-                                .tooltip("Hentikan query di server")
+                                .label("Cancel")
+                                .tooltip("Cancel the Query on the Server")
                                 .on_click(cx.listener(|this, _, _, cx| this.stop(cx))),
                         )
                     })
@@ -190,7 +192,7 @@ impl Render for SqlView {
                             .primary()
                             .xsmall()
                             .icon(IconName::Play)
-                            .label("Jalankan ⌘↩")
+                            .label("Run ⌘↩")
                             .loading(self.running)
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.run(&RunQuery, window, cx)),
@@ -211,11 +213,11 @@ impl Render for SqlView {
                     .border_color(cx.theme().border)
                     .text_color(cx.theme().muted_foreground)
                     .child(if self.running {
-                        "menjalankan…".to_string()
+                        "running…".to_string()
                     } else {
                         self.summary
                             .clone()
-                            .unwrap_or_else(|| "Belum ada hasil.".into())
+                            .unwrap_or_else(|| "No results yet.".into())
                     }),
             )
             .when_some(self.error.clone(), |el, e| {

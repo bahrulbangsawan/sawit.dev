@@ -122,7 +122,7 @@ impl VideoView {
         let player = MainThreadMarker::new().and_then(|mtm| open(&path, mtm));
         let error = player
             .is_none()
-            .then(|| "Video tidak bisa dibuka.".to_string());
+            .then(|| "Couldn't open the video.".to_string());
         let focus = cx.focus_handle();
         // Space works right away, without clicking the video first.
         focus.focus(window, cx);
@@ -201,9 +201,8 @@ impl VideoView {
         let Some(p) = &self.player else { return };
         let status = unsafe { p.item.status() };
         if status == AVPlayerItemStatus::Failed {
-            self.error = Some(
-                "macOS tidak bisa memutar format ini (coba MP4/MOV dengan H.264 atau HEVC).".into(),
-            );
+            self.error =
+                Some("macOS can't play this format (try MP4/MOV with H.264 or HEVC).".into());
             self.playing = false;
             return;
         }
@@ -273,7 +272,7 @@ impl Render for VideoView {
             (None, None) => div()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child("Memuat…")
+                .child("Loading…")
                 .into_any_element(),
         };
         let time = format!(
@@ -298,7 +297,7 @@ impl Render for VideoView {
                     } else {
                         Lucide::Play
                     })
-                    .tooltip("Putar / jeda (Spasi)")
+                    .tooltip("Play / Pause (Space)")
                     .disabled(self.error.is_some())
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_play(cx))),
             )
@@ -313,7 +312,7 @@ impl Render for VideoView {
                     } else {
                         Lucide::Volume2
                     })
-                    .tooltip("Bisukan")
+                    .tooltip("Mute")
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_mute(cx))),
             );
         v_flex()

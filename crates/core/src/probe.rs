@@ -102,7 +102,7 @@ impl OwnedListener {
             Owner::Homebrew { formula: None } => format!("Homebrew {} (PID {})", l.command, l.pid),
             Owner::PostgresApp => format!("Postgres.app (PID {})", l.pid),
             Owner::PgDesk { instance } => {
-                format!("instance PG Desk \"{instance}\" (PID {})", l.pid)
+                format!("PG Desk instance \"{instance}\" (PID {})", l.pid)
             }
             Owner::Other => format!("{} (PID {})", l.command, l.pid),
         }
@@ -126,7 +126,7 @@ impl PortReport {
             .unwrap_or_else(|| format!("{} (PID {})", l.command, l.pid))
     }
 
-    /// A human explanation (Indonesian) of the verdict and who is involved.
+    /// A human explanation of the verdict and who is involved.
     pub fn explain(&self) -> String {
         let port = self.port;
         let ours = join(self.intended.iter().filter(|a| !a.is_wildcard()));
@@ -134,28 +134,28 @@ impl PortReport {
             let who = self.describe(l);
             if l.addr.is_wildcard() && !ours.is_empty() {
                 format!(
-                    "{who} mendengarkan {}:{port}. Koneksi ke {ours}:{port} akan sampai ke instance ini, \
-                     tetapi koneksi lewat alamat lain (IP LAN, container, host.docker.internal) sampai ke {who}.",
+                    "{who} listens on {}:{port}. Connections to {ours}:{port} reach this instance, \
+                     but connections through other addresses (LAN IP, container, host.docker.internal) reach {who}.",
                     l.addr
                 )
             } else {
                 format!(
-                    "{who} mendengarkan {}:{port}. Koneksi ke {}:{port} akan sampai ke {who}, bukan ke instance ini.",
+                    "{who} listens on {}:{port}. Connections to {}:{port} reach {who}, not this instance.",
                     l.addr, l.addr
                 )
             }
         };
         match &self.verdict {
-            PortVerdict::Free => format!("Port {port} bebas."),
+            PortVerdict::Free => format!("Port {port} is free."),
             PortVerdict::Conflict {
                 same_addr,
                 shadowing,
             } => {
                 let mut lines = vec![format!(
-                    "Port {port} sudah dipakai di alamat yang sama oleh {}. Start akan gagal; pilih port lain atau hentikan proses itu.",
+                    "Port {port} is already in use on the same address by {}. Start will fail; choose another port or stop that process.",
                     same_addr
                         .iter()
-                        .map(|l| format!("{} di {}", self.describe(l), l.addr))
+                        .map(|l| format!("{} on {}", self.describe(l), l.addr))
                         .collect::<Vec<_>>()
                         .join(", ")
                 )];
@@ -164,7 +164,7 @@ impl PortReport {
             }
             PortVerdict::Shadowing { listeners } => {
                 let mut lines = vec![format!(
-                    "Port {port} juga didengarkan proses lain. Server bisa start, tetapi klien bisa tersambung ke database yang salah tergantung alamat yang dipakai:"
+                    "Another process also listens on port {port}. The server can start, but clients may reach the wrong database depending on the address they use:"
                 )];
                 lines.extend(listeners.iter().map(shadow_line));
                 lines.join("\n")

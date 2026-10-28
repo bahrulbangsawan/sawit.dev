@@ -156,7 +156,7 @@ pub fn resolve(
             }
         }
         return Err(format!(
-            "{} butuh Node.js (npx) atau Bun; atau pasang di proyek: npm i -D {}",
+            "{} needs Node.js (npx) or Bun, or install it in the project: npm i -D {}",
             tool.name(),
             package
                 .split('@')
@@ -172,7 +172,7 @@ pub fn resolve(
         Tool::Shfmt => "brew install shfmt",
         _ => "brew install clang-format",
     };
-    Err(format!("{bin} tidak ditemukan. Pasang dengan: {hint}"))
+    Err(format!("{bin} not found. Install it with: {hint}"))
 }
 
 /// npx may download the tool on first use.
@@ -181,7 +181,7 @@ const TIMEOUT: Duration = Duration::from_secs(90);
 /// Formats `text` as the contents of `path` (which need not be saved).
 pub async fn format_text(path: &Path, text: &str) -> Result<String> {
     let tool = tool_for(path)
-        .ok_or_else(|| CoreError::Format("Belum ada formatter untuk jenis file ini.".into()))?;
+        .ok_or_else(|| CoreError::Format("No formatter for this file type yet.".into()))?;
     let inv = resolve(tool, path, None).map_err(CoreError::Format)?;
     let mut child = tokio::process::Command::new(&inv.program)
         .args(&inv.args)
@@ -199,20 +199,20 @@ pub async fn format_text(path: &Path, text: &str) -> Result<String> {
     let out = tokio::time::timeout(TIMEOUT, child.wait_with_output())
         .await
         .map_err(|_| {
-            CoreError::Format(format!("{} tidak selesai dalam 90 detik.", tool.name()))
+            CoreError::Format(format!("{} did not finish within 90 seconds.", tool.name()))
         })??;
     let _ = writer.await;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let msg = stderr.trim();
         return Err(CoreError::Format(format!(
-            "{} gagal: {}",
+            "{} failed: {}",
             tool.name(),
-            if msg.is_empty() { "tanpa pesan" } else { msg }
+            if msg.is_empty() { "no message" } else { msg }
         )));
     }
     String::from_utf8(out.stdout)
-        .map_err(|_| CoreError::Format(format!("{} mengeluarkan teks non-UTF-8.", tool.name())))
+        .map_err(|_| CoreError::Format(format!("{} produced non-UTF-8 output.", tool.name())))
 }
 
 #[cfg(test)]

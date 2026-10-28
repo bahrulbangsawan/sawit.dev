@@ -13,7 +13,7 @@ use crate::{CoreError, Result};
 /// Formats server errors with their detail, hint and position.
 pub fn sql_error(e: tokio_postgres::Error) -> CoreError {
     if e.code() == Some(&tokio_postgres::error::SqlState::QUERY_CANCELED) {
-        return CoreError::Sql("Query dibatalkan.".into());
+        return CoreError::Sql("Query canceled.".into());
     }
     match e.as_db_error() {
         Some(db) => {
@@ -25,7 +25,7 @@ pub fn sql_error(e: tokio_postgres::Error) -> CoreError {
                 msg.push_str(&format!("\nHINT: {h}"));
             }
             if let Some(tokio_postgres::error::ErrorPosition::Original(pos)) = db.position() {
-                msg.push_str(&format!("\n(posisi {pos})"));
+                msg.push_str(&format!("\n(position {pos})"));
             }
             CoreError::Sql(msg)
         }
@@ -114,7 +114,7 @@ async fn open(cfg: tokio_postgres::Config, ssl: SslMode) -> Result<Client> {
 }
 
 /// Asks the server to stop the query currently running on the connection
-/// `token` came from (the query then fails with "Query dibatalkan.").
+/// `token` came from (the query then fails with "Query canceled.").
 pub async fn cancel(token: &tokio_postgres::CancelToken, ssl: SslMode) -> Result<()> {
     token
         .cancel_query(super::tls::connector(ssl))
@@ -412,7 +412,7 @@ pub async fn fetch_page(
 pub fn screen_read_only_sql(sql: &str) -> Result<()> {
     let lowered = sql.to_lowercase();
     if lowered.contains("transaction_read_only") || lowered.contains("characteristics") {
-        return Err(CoreError::Sql("Mode read-only tidak boleh diubah.".into()));
+        return Err(CoreError::Sql("Read-only mode can't be changed.".into()));
     }
     // First keyword after whitespace, comments and opening parentheses.
     let mut rest = lowered.as_str();
@@ -429,7 +429,7 @@ pub fn screen_read_only_sql(sql: &str) -> Result<()> {
     }
     if rest.starts_with("copy") {
         return Err(CoreError::Sql(
-            "COPY tidak diizinkan pada mode read-only.".into(),
+            "COPY is not allowed in read-only mode.".into(),
         ));
     }
     Ok(())

@@ -42,7 +42,7 @@ impl ImageView {
                         this.bytes = bytes;
                     }
                     Ok(Err(e)) => this.error = Some(e.to_string()),
-                    Err(_) => this.error = Some("Runtime berhenti.".into()),
+                    Err(_) => this.error = Some("Runtime stopped.".into()),
                 }
                 cx.notify();
             });
@@ -85,7 +85,7 @@ impl Render for ImageView {
                 Button::new("img-fit")
                     .ghost()
                     .xsmall()
-                    .label("Pas")
+                    .label("Fit")
                     .selected(!self.actual_size)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.actual_size = false;
@@ -114,7 +114,7 @@ impl Render for ImageView {
                 .p_3()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child("Memuat…")
+                .child("Loading…")
                 .into_any_element(),
             (Some(shown), None) => {
                 let image = img(shown.clone());

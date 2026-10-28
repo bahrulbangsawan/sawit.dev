@@ -78,7 +78,7 @@ impl PgDesk {
         self.registry()?
             .get(name)
             .cloned()
-            .ok_or_else(|| format!("Instance \"{name}\" tidak ada. Lihat list_instances."))
+            .ok_or_else(|| format!("Instance \"{name}\" does not exist. See list_instances."))
     }
 
     /// Read-only connection for a target. Instances are reached as the
@@ -106,7 +106,7 @@ impl PgDesk {
             .items
             .into_iter()
             .find(|p| p.name == target)
-            .ok_or_else(|| format!("\"{target}\" bukan instance atau koneksi yang dikenal."))?;
+            .ok_or_else(|| format!("\"{target}\" is not a known instance or connection."))?;
         let password = load_password(&profile).ok().flatten();
         db::connect_read_only(&profile, password.as_deref())
             .await
@@ -119,13 +119,13 @@ impl PgDesk {
             Err(e) => return fail(e),
         };
         if reg.instances.is_empty() {
-            return ok("Belum ada instance PG Desk.");
+            return ok("No PG Desk instances yet.");
         }
         let mut lines = Vec::new();
         for inst in &reg.instances {
             let status = match control::status(inst).await {
-                Ok(PgCtlStatus::Running { pid }) => format!("berjalan (PID {pid})"),
-                Ok(PgCtlStatus::Stopped) => "berhenti".into(),
+                Ok(PgCtlStatus::Running { pid }) => format!("running (PID {pid})"),
+                Ok(PgCtlStatus::Stopped) => "stopped".into(),
                 Ok(other) => format!("{other:?}"),
                 Err(e) => format!("error: {e}"),
             };
@@ -147,14 +147,14 @@ impl PgDesk {
         let managed = self.registry().map(|r| r.data_dirs()).unwrap_or_default();
         match control::start(&inst, &self.paths, managed, Preflight::Check).await {
             Ok(StartOutcome::Started) => ok(format!(
-                "{name} berjalan. DATABASE_URL={}",
+                "{name} is running. DATABASE_URL={}",
                 instance_url(&inst)
             )),
             Ok(StartOutcome::AlreadyRunning { pid }) => {
-                ok(format!("{name} sudah berjalan (PID {pid})."))
+                ok(format!("{name} is already running (PID {pid})."))
             }
             Ok(StartOutcome::Blocked(report)) => fail(format!(
-                "Start ditahan karena konflik port. Selesaikan dulu atau minta pengguna memakai \"Tetap start\" di PG Desk.\n{}",
+                "Start held back because of a port conflict. Resolve it first, or ask the user to use \"Start Anyway\" in PG Desk.\n{}",
                 report.explain()
             )),
             Err(e) => fail(e.to_string()),
@@ -164,7 +164,7 @@ impl PgDesk {
     pub async fn stop_instance_tool(&self, name: &str) -> CallToolResult {
         match self.instance(name) {
             Ok(inst) => match control::stop(&inst).await {
-                Ok(()) => ok(format!("{name} dihentikan.")),
+                Ok(()) => ok(format!("{name} stopped.")),
                 Err(e) => fail(e.to_string()),
             },
             Err(e) => fail(e),
@@ -177,7 +177,7 @@ impl PgDesk {
             lines.extend(
                 reg.instances
                     .iter()
-                    .map(|i| format!("- {} (instance PG Desk) · {}", i.name, instance_url(i))),
+                    .map(|i| format!("- {} (PG Desk instance) · {}", i.name, instance_url(i))),
             );
         }
         if let Ok(p) = Profiles::load(&self.paths.root.join("profiles.toml")) {
@@ -188,7 +188,7 @@ impl PgDesk {
             );
         }
         if lines.is_empty() {
-            ok("Belum ada koneksi.")
+            ok("No connections yet.")
         } else {
             ok(lines.join("\n"))
         }
@@ -241,7 +241,7 @@ impl PgDesk {
                 }
                 ok(parts.join("\n\n"))
             }
-            Err(e) => fail(format!("{e}\n(query dijalankan read-only)")),
+            Err(e) => fail(format!("{e}\n(query ran read-only)")),
         }
     }
 
@@ -251,7 +251,7 @@ impl PgDesk {
             Err(e) => return fail(e),
         };
         match write_database_url(Path::new(project_dir), &instance_url(&inst)) {
-            Ok(path) => ok(format!("DATABASE_URL ditulis ke {}", path.display())),
+            Ok(path) => ok(format!("DATABASE_URL written to {}", path.display())),
             Err(e) => fail(e),
         }
     }

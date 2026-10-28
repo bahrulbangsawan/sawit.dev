@@ -63,7 +63,7 @@ pub fn read_text(path: &Path) -> Result<TextFile> {
         // FIFOs, sockets and devices: opening them can block or never end.
         return Ok(TextFile {
             text: String::new(),
-            read_only_reason: Some("Bukan file biasa (pipe, socket, atau device).".into()),
+            read_only_reason: Some("Not a regular file (pipe, socket or device).".into()),
         });
     }
     let size = meta.len();
@@ -71,7 +71,7 @@ pub fn read_text(path: &Path) -> Result<TextFile> {
         return Ok(TextFile {
             text: String::new(),
             read_only_reason: Some(format!(
-                "File {:.1} MB terlalu besar untuk editor (batas {} MB).",
+                "File is {:.1} MB, too large for the editor (limit {} MB).",
                 size as f64 / 1_048_576.0,
                 MAX_TEXT_BYTES / 1_048_576
             )),
@@ -85,9 +85,7 @@ pub fn read_text(path: &Path) -> Result<TextFile> {
         }),
         _ => Ok(TextFile {
             text: String::new(),
-            read_only_reason: Some(
-                "File biner atau bukan UTF-8; tidak dibuka sebagai teks.".into(),
-            ),
+            read_only_reason: Some("Binary or non-UTF-8 file; not opened as text.".into()),
         }),
     }
 }
@@ -233,7 +231,7 @@ pub fn language_for(path: &Path) -> String {
 /// Human name of a language token, for the editor's status line.
 pub fn language_label(token: &str) -> String {
     let label = match token {
-        "text" => "Teks",
+        "text" => "Text",
         "sql" => "SQL",
         "typescript" => "TypeScript",
         "tsx" => "TSX",
@@ -323,7 +321,7 @@ mod tests {
         fs::write(&f, [0x89, b'P', b'N', b'G', 0, 0, 0xff, 0xfe]).unwrap();
         let t = read_text(&f).unwrap();
         assert!(t.text.is_empty());
-        assert!(t.read_only_reason.unwrap().contains("biner"));
+        assert!(t.read_only_reason.unwrap().contains("Binary"));
     }
 
     #[test]
@@ -410,7 +408,7 @@ mod tests {
     fn language_labels_for_the_status_line() {
         assert_eq!(language_label("tsx"), "TSX");
         assert_eq!(language_label("rust"), "Rust");
-        assert_eq!(language_label("text"), "Teks");
+        assert_eq!(language_label("text"), "Text");
         assert_eq!(language_label("nim"), "nim");
     }
 

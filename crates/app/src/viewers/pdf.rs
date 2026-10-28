@@ -48,7 +48,7 @@ impl PdfView {
                         this.sizes = Some(sizes);
                     }
                     Ok(Err(e)) => this.error = Some(e.to_string()),
-                    Err(_) => this.error = Some("Runtime berhenti.".into()),
+                    Err(_) => this.error = Some("Runtime stopped.".into()),
                 }
                 cx.notify();
             });
@@ -167,13 +167,13 @@ impl Render for PdfView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pages = self.sizes.as_ref().map(Vec::len);
         let bar = toolbar(self.title(), cx)
-            .children(pages.map(|n| format!("{n} halaman")))
+            .children(pages.map(|n| format!("{n} pages")))
             .child(
                 Button::new("pdf-zoom-out")
                     .ghost()
                     .xsmall()
                     .icon(Lucide::Minus)
-                    .tooltip("Perkecil")
+                    .tooltip("Zoom Out")
                     .disabled(self.zoom_ix == 0)
                     .on_click(cx.listener(|this, _, _, cx| this.zoom(-1, cx))),
             )
@@ -188,7 +188,7 @@ impl Render for PdfView {
                     .ghost()
                     .xsmall()
                     .icon(Lucide::Plus)
-                    .tooltip("Perbesar")
+                    .tooltip("Zoom In")
                     .disabled(self.zoom_ix + 1 == ZOOMS.len())
                     .on_click(cx.listener(|this, _, _, cx| this.zoom(1, cx))),
             );
@@ -204,7 +204,7 @@ impl Render for PdfView {
                 .p_3()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child("Memuat…")
+                .child("Loading…")
                 .into_any_element()
         } else {
             let this = cx.entity();
