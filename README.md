@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo/pgdesk.svg" width="128" alt="PG Desk"></p>
+
 # PG Desk
 
 Aplikasi desktop macOS (Apple Silicon) all-in-one untuk development lokal dengan PostgreSQL, **tanpa Docker**:
@@ -16,13 +18,22 @@ pengelola server Postgres, penjelajah & grid database, editor SQL, editor teks p
   satu proses bind `127.0.0.1:5433` sementara yang lain bind `*:5433`, sehingga klien diam-diam sampai ke
   database yang salah. Start ditahan dengan penjelasan; konflik di alamat yang sama tidak bisa dipaksa.
 - **Database** — koneksi dari `DATABASE_URL`, file `.env`, atau instance PG Desk yang berjalan; password di
-  **macOS Keychain** (tidak pernah di file). Pohon database → schema → tabel/view → kolom & tipe.
-- **Grid data read-only** — virtual (hanya baris terlihat), halaman 200 baris diambil sesuai posisi scroll;
-  diuji pada 300.000 baris.
+  **macOS Keychain** (tidak pernah di file). TLS mengikuti `sslmode` di URL (`disable`/`prefer`/`require`
+  seperti libpq; `verify-full` memeriksa sertifikat terhadap trust store sistem), koneksi yang putus
+  disambung ulang otomatis, dan pooler (PgBouncer, Supavisor, Neon) didukung. Pohon database → schema →
+  tabel/view → kolom & tipe; tabel tanpa izin SELECT diberi ikon gembok.
+- **Tabel read-only berhalaman** — 50 baris per halaman (pertama/sebelumnya/berikutnya/terakhir), diurutkan
+  menurut primary key sehingga halaman stabil, lewat koneksi read-only terpisah. Halaman pertama tampil
+  sebelum jumlah baris selesai dihitung; hitungan dibatasi 3 detik lalu memakai estimasi (`±`).
 - **Editor SQL** — ⌘↩ menjalankan teks terpilih atau seluruh isi; hasil, error (dengan DETAIL/HINT), durasi;
   maksimal 10.000 baris ditampilkan (dibaca secara streaming, sisanya tidak ditampung di memori).
 - **Editor teks** — `pgdesk <folder>` atau ikon folder untuk membuka proyek; pohon file, tab bergaya Zed,
   highlighting (syntect), ⌘S simpan atomik, penanda belum tersimpan; file biner / >5 MB tidak dibuka sebagai teks.
+- **Tab** — klik kanan untuk Close, Close Others (⌥⌘T), Close Left/Right (⌘K E / ⌘K T), Close Clean (⌘K U),
+  Close All (⌘K W), Make Tab Read-Only, Pin Tab (⌘K ⇧↩); ⌘W menutup tab aktif. Tutup massal tidak menyentuh
+  tab yang di-pin atau belum disimpan; menutup file yang belum disimpan meminta konfirmasi. Tab Server bisa
+  ditutup dan muncul lagi saat server dipilih.
+- **Layout** — tombol di title bar atau ⌘B (sidebar), ⌘J (terminal/herdr), ⇧⌘J (area tab & tabel).
 - **Terminal** — dock bawah dengan tab; shell login atau **herdr** (tombol `herdr` bila terpasang). Emulasi
   lengkap via `alacritty_terminal`: warna 256/truecolor, alt-screen, mouse SGR, bracketed paste, resize.
 - **MCP** — biner `pgdesk-mcp` (stdio) untuk agent AI: `list_instances`, `start_instance`, `stop_instance`,
@@ -40,6 +51,7 @@ Xcode **Command Line Tools** saja — Xcode penuh tidak perlu karena shader Meta
 cargo run -p pgdesk                 # aplikasi
 cargo run -p pgdesk -- ~/code/app   # langsung membuka folder proyek
 cargo build --release               # target/release/pgdesk dan target/release/pgdesk-mcp
+scripts/bundle-macos.sh             # target/release/PG Desk.app (dengan ikon) untuk /Applications
 ```
 
 Data aplikasi: `~/Library/Application Support/pgdesk/` (`instances.toml`, `profiles.toml`, `clusters/`,
@@ -94,6 +106,8 @@ crates/mcp    pgdesk-mcp — server MCP stdio di atas core
 | Highlighting: syntect | ±200 bahasa dengan ukuran kecil, tanpa grammar tree-sitter per bahasa. |
 | Keychain via `security-framework` | Target macOS; lebih kecil dari `keyring` 4.x. |
 | Ikon: hanya yang dipakai | Bundle penuh Lucide menambah ±1 MiB. |
+| TLS: rustls + `ring` | `ring` sudah ada untuk unduhan binary, jadi tidak menambah pustaka kripto kedua. |
+| Logo: SVG buatan tangan | Gajah (PostgreSQL) dari dua lingkaran, satu kurva telinga, satu goresan belalai, di atas kursor prompt (editor + terminal); warna One Dark. `assets/logo/`. |
 
 ## Ukuran & memori
 
@@ -112,5 +126,8 @@ Angka aplikasi lain tidak dicantumkan karena belum diukur di mesin yang sama.
 
 - macOS saja (Keychain, `lsof`, Postgres.app). 
 - Grid read-only; edit data lewat editor SQL.
-- Paging tabel memakai urutan fisik (`OFFSET/LIMIT` tanpa `ORDER BY`), stabil selama tabel tidak berubah.
+- Paging memakai `OFFSET/LIMIT`; tabel tanpa primary key (dan view) memakai urutan fisik, stabil selama
+  datanya tidak berubah.
+- Pada pooler mode transaction, setelan sesi (`SET`) tidak dijamin bertahan; browser tabel tetap hanya
+  menjalankan `SELECT`.
 - Terminal belum mendukung seleksi teks dengan mouse untuk disalin (program di dalamnya, mis. herdr, tetap menerima mouse).
