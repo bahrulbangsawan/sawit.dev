@@ -452,3 +452,25 @@ async fn schema_marks_relations_the_role_cannot_read() {
     assert!(readable("open_t"));
     assert!(!readable("secret_t"));
 }
+
+#[tokio::test]
+async fn running_queries_can_be_cancelled() {
+    let Some((_cluster, profile)) = cluster().await else {
+        eprintln!("skip: no PostgreSQL binaries");
+        return;
+    };
+    let client = std::sync::Arc::new(db::connect(&profile, None).await.unwrap());
+    let token = client.cancel_token();
+    let running = {
+        let client = client.clone();
+        tokio::spawn(async move { db::run_sql(&client, "SELECT pg_sleep(30)", 10).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let started = std::time::Instant::now();
+    db::cancel(&token, profile.ssl).await.unwrap();
+    let err = running.await.unwrap().unwrap_err();
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert!(err.to_string().contains("dibatalkan"), "{err}");
+    // The connection survives a cancel.
+    assert!(db::run_sql(&client, "SELECT 1", 1).await.is_ok());
+}

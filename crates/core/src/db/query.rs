@@ -12,6 +12,9 @@ use crate::{CoreError, Result};
 
 /// Formats server errors with their detail, hint and position.
 pub fn sql_error(e: tokio_postgres::Error) -> CoreError {
+    if e.code() == Some(&tokio_postgres::error::SqlState::QUERY_CANCELED) {
+        return CoreError::Sql("Query dibatalkan.".into());
+    }
     match e.as_db_error() {
         Some(db) => {
             let mut msg = format!("{}: {}", db.severity(), db.message());
@@ -108,6 +111,15 @@ async fn open(cfg: tokio_postgres::Config, ssl: SslMode) -> Result<Client> {
         let _ = connection.await;
     });
     Ok(client)
+}
+
+/// Asks the server to stop the query currently running on the connection
+/// `token` came from (the query then fails with "Query dibatalkan.").
+pub async fn cancel(token: &tokio_postgres::CancelToken, ssl: SslMode) -> Result<()> {
+    token
+        .cancel_query(super::tls::connector(ssl))
+        .await
+        .map_err(sql_error)
 }
 
 /// Connects (must run on the Tokio runtime; the connection task is spawned there).
