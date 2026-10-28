@@ -169,6 +169,47 @@ impl ServerDetail {
         .detach();
     }
 
+    /// Writes this instance's DATABASE_URL into a chosen project's .env.
+    fn write_env(&mut self, cx: &mut Context<Self>) {
+        let Some(inst) = self.store.read(cx).selected_instance().cloned() else {
+            return;
+        };
+        let url = format!("postgres://postgres@localhost:{}/postgres", inst.port);
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Pilih folder proyek".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else {
+                return;
+            };
+            let Some(dir) = paths.into_iter().next() else {
+                return;
+            };
+            let Ok(rx) = this.update(cx, |_, cx| {
+                crate::rt::spawn(cx, async move {
+                    pgdesk_core::db::write_database_url(&dir, &url)
+                })
+            }) else {
+                return;
+            };
+            let Ok(result) = rx.await else { return };
+            let _ = this.update(cx, |this, cx| {
+                let notice = match result {
+                    Ok(path) => format!("DATABASE_URL ditulis ke {}", path.display()),
+                    Err(e) => format!("Gagal menulis .env: {e}"),
+                };
+                this.store.update(cx, |s, cx| {
+                    s.notice = Some(notice);
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
     fn render_form(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let choices = self.choices(cx);
         let options: Vec<_> = choices
@@ -345,6 +386,14 @@ impl ServerDetail {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.store.update(cx, |s, cx| s.restart(&n3, cx))
                     })),
+            )
+            .child(
+                Button::new("write-env")
+                    .small()
+                    .ghost()
+                    .label(".env")
+                    .tooltip("Tulis DATABASE_URL ke .env proyek (mis. TanStack Start)")
+                    .on_click(cx.listener(move |this, _, _, cx| this.write_env(cx))),
             )
             .child(
                 Button::new("forget")

@@ -101,3 +101,19 @@ fn keychain_roundtrip() {
     delete_password(&p).unwrap();
     assert_eq!(load_password(&p).unwrap(), None);
 }
+
+#[test]
+fn result_set_renders_as_aligned_text_table() {
+    let set = ResultSet {
+        columns: vec!["id".into(), "email".into()],
+        rows: vec![
+            vec![Some("1".into()), Some("a@x.dev".into())],
+            vec![Some("22".into()), None],
+        ],
+        truncated: true,
+    };
+    assert_eq!(
+        format_table(&set),
+        "id | email\n---+--------\n1  | a@x.dev\n22 | NULL\n(2 baris, dipotong)"
+    );
+}
