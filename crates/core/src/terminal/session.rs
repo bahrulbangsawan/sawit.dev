@@ -127,6 +127,34 @@ impl Snapshot {
     }
 }
 
+/// Variables that tell a program it runs inside another multiplexer session
+/// (herdr refuses to nest when it sees its own). Terminals opened by PG Desk
+/// are new top-level sessions, so these are removed.
+pub fn multiplexer_markers(names: impl Iterator<Item = String>) -> Vec<String> {
+    let mut found: Vec<String> = names
+        .filter(|n| {
+            n.starts_with("HERDR_") || n.starts_with("ZELLIJ") || n == "TMUX" || n == "TMUX_PANE"
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+/// Runs `program` through `/usr/bin/env -u NAME…` when there is something to unset.
+pub fn wrap_unsetting(program: &str, args: &[String], unset: &[String]) -> (String, Vec<String>) {
+    if unset.is_empty() {
+        return (program.to_string(), args.to_vec());
+    }
+    let mut wrapped = Vec::with_capacity(unset.len() * 2 + 1 + args.len());
+    for name in unset {
+        wrapped.push("-u".to_string());
+        wrapped.push(name.clone());
+    }
+    wrapped.push(program.to_string());
+    wrapped.extend(args.iter().cloned());
+    ("/usr/bin/env".to_string(), wrapped)
+}
+
 #[derive(Clone)]
 struct Listener {
     events: mpsc::UnboundedSender<TermEvent>,
@@ -211,12 +239,18 @@ impl Session {
             .or_insert_with(|| "truecolor".into());
         env.entry("TERM_PROGRAM".into())
             .or_insert_with(|| "pgdesk".into());
-        let shell = if cmd.program.is_empty() {
-            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-            tty::Shell::new(shell, vec!["-l".into()])
+        let (program, args) = if cmd.program.is_empty() {
+            (
+                std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into()),
+                vec!["-l".to_string()],
+            )
         } else {
-            tty::Shell::new(cmd.program.clone(), cmd.args.clone())
+            (cmd.program.clone(), cmd.args.clone())
         };
+        let unset =
+            multiplexer_markers(std::env::vars_os().filter_map(|(k, _)| k.into_string().ok()));
+        let (program, args) = wrap_unsetting(&program, &args, &unset);
+        let shell = tty::Shell::new(program, args);
         let options = tty::Options {
             shell: Some(shell),
             working_directory: cmd.cwd.clone(),
@@ -272,6 +306,11 @@ impl Session {
 
     pub fn scroll_to_bottom(&self) {
         self.term.lock().scroll_display(Scroll::Bottom);
+    }
+
+    /// Input-relevant modes, without building a full snapshot.
+    pub fn modes(&self) -> Modes {
+        modes_of(*self.term.lock().mode())
     }
 
     pub fn snapshot(&self, palette: &Palette) -> Snapshot {
@@ -396,16 +435,7 @@ impl Session {
             CursorShape::Hidden => CursorView::Hidden,
             _ => CursorView::Block,
         };
-        let modes = Modes {
-            app_cursor: mode.contains(TermMode::APP_CURSOR),
-            bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
-            mouse_report: mode.contains(TermMode::MOUSE_REPORT_CLICK),
-            mouse_drag: mode.contains(TermMode::MOUSE_DRAG),
-            mouse_motion: mode.contains(TermMode::MOUSE_MOTION),
-            sgr_mouse: mode.contains(TermMode::SGR_MOUSE),
-            alt_screen: mode.contains(TermMode::ALT_SCREEN),
-            alternate_scroll: mode.contains(TermMode::ALTERNATE_SCROLL),
-        };
+        let modes = modes_of(mode);
         Snapshot {
             cols,
             lines,
@@ -420,5 +450,18 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         let _ = self.pty.send(Msg::Shutdown);
+    }
+}
+
+fn modes_of(mode: TermMode) -> Modes {
+    Modes {
+        app_cursor: mode.contains(TermMode::APP_CURSOR),
+        bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
+        mouse_report: mode.contains(TermMode::MOUSE_REPORT_CLICK),
+        mouse_drag: mode.contains(TermMode::MOUSE_DRAG),
+        mouse_motion: mode.contains(TermMode::MOUSE_MOTION),
+        sgr_mouse: mode.contains(TermMode::SGR_MOUSE),
+        alt_screen: mode.contains(TermMode::ALT_SCREEN),
+        alternate_scroll: mode.contains(TermMode::ALTERNATE_SCROLL),
     }
 }

@@ -230,6 +230,7 @@ fn session_echoes_input_and_resizes() {
     let palette = Palette::default();
     let snap = wait_for(&session, &palette, "abc");
     assert!(snap.text().contains("abc"), "{:?}", snap.text());
+    assert_eq!(session.modes(), snap.modes);
     session.resize(GridSize {
         cols: 30,
         rows: 6,
@@ -262,4 +263,33 @@ fn session_reports_exit() {
             Err(_) => panic!("no exit event"),
         }
     }
+}
+
+#[test]
+fn parent_multiplexer_markers_are_detected() {
+    let vars = [
+        ("HERDR_ENV", "1"),
+        ("HERDR_PANE_ID", "3"),
+        ("TMUX", "/tmp/x"),
+        ("ZELLIJ_SESSION_NAME", "a"),
+        ("PATH", "/bin"),
+        ("TERM_PROGRAM", "herdr"),
+    ];
+    let names = multiplexer_markers(vars.iter().map(|(k, _)| k.to_string()));
+    assert_eq!(
+        names,
+        vec!["HERDR_ENV", "HERDR_PANE_ID", "TMUX", "ZELLIJ_SESSION_NAME"]
+    );
+}
+
+#[test]
+fn unset_wrapper_uses_env_dash_u() {
+    let (program, args) = wrap_unsetting("herdr", &[], &["HERDR_ENV".into(), "TMUX".into()]);
+    assert_eq!(program, "/usr/bin/env");
+    assert_eq!(args, vec!["-u", "HERDR_ENV", "-u", "TMUX", "herdr"]);
+    let (program, args) = wrap_unsetting("/bin/zsh", &["-l".into()], &[]);
+    assert_eq!(
+        (program.as_str(), args),
+        ("/bin/zsh", vec!["-l".to_string()])
+    );
 }

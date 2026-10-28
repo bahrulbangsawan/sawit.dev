@@ -6,11 +6,13 @@ use gpui_kit::component::*;
 use gpui_kit::*;
 
 use crate::servers::{ServerDetail, ServerList, ServerStore};
+use crate::terminal::TerminalPanel;
 
 pub struct Workspace {
     servers: Entity<ServerStore>,
     server_list: Entity<ServerList>,
     server_detail: Entity<ServerDetail>,
+    terminal: Entity<TerminalPanel>,
 }
 
 impl Workspace {
@@ -20,6 +22,7 @@ impl Workspace {
         Self {
             server_list: cx.new(|cx| ServerList::new(servers.clone(), cx)),
             server_detail: cx.new(|cx| ServerDetail::new(servers.clone(), window, cx)),
+            terminal: cx.new(TerminalPanel::new),
             servers,
         }
     }
@@ -95,29 +98,7 @@ impl Render for Workspace {
                                         resizable_panel()
                                             .size(px(200.))
                                             .size_range(px(80.)..Pixels::MAX)
-                                            .child(
-                                                v_flex()
-                                                    .size_full()
-                                                    .bg(cx.theme().background)
-                                                    .border_t_1()
-                                                    .border_color(cx.theme().border)
-                                                    .child(
-                                                        div()
-                                                            .px_3()
-                                                            .py_1()
-                                                            .text_xs()
-                                                            .font_semibold()
-                                                            .text_color(cx.theme().muted_foreground)
-                                                            .child("TERMINAL"),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .px_3()
-                                                            .text_sm()
-                                                            .text_color(cx.theme().muted_foreground)
-                                                            .child("Terminal (herdr) menyusul di tahap berikutnya."),
-                                                    ),
-                                            ),
+                                            .child(self.terminal.clone()),
                                     ),
                             ),
                         ),

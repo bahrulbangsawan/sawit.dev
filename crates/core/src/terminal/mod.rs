@@ -9,7 +9,10 @@ pub use input::{
     KeyInput, Modes, MouseAction, MouseButton, key_to_bytes, mouse_report, paste_bytes,
 };
 pub use palette::{Palette, Rgb};
-pub use session::{CellView, Command, CursorView, GridSize, Session, Snapshot, TermEvent};
+pub use session::{
+    CellView, Command, CursorView, GridSize, Session, Snapshot, TermEvent, multiplexer_markers,
+    wrap_unsetting,
+};
 
 #[cfg(test)]
 mod tests;

@@ -1,6 +1,7 @@
 mod assets;
 mod rt;
 mod servers;
+mod terminal;
 mod theme;
 mod workspace;
 
