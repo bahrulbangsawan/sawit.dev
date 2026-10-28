@@ -35,7 +35,7 @@ impl BindAddr {
         (a4 && b4) || (a6 && b6)
     }
 
-    fn from_host(host: &str, ipv6: bool) -> Option<BindAddr> {
+    pub(crate) fn from_host(host: &str, ipv6: bool) -> Option<BindAddr> {
         if host == "*" {
             return Some(if ipv6 {
                 BindAddr::AnyV6
