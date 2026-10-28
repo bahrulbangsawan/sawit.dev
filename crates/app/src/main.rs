@@ -1,4 +1,6 @@
 mod assets;
+mod editor;
+mod files;
 mod rt;
 mod servers;
 mod terminal;
@@ -23,12 +25,19 @@ fn adopt_login_shell_path() {
 }
 
 fn main() {
+    // `pgdesk [folder]` opens a project, like `zed .`.
+    let project = std::env::args_os()
+        .nth(1)
+        .map(std::path::PathBuf::from)
+        .and_then(|p| p.canonicalize().ok())
+        .filter(|p| p.is_dir());
     adopt_login_shell_path();
     let runtime = Runtime::start();
     gpui_kit::application()
         .with_assets(assets::AppAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            editor::init(cx);
             theme::apply_zed_one_dark(cx);
             cx.set_global(rt::Rt(runtime));
             let options = WindowOptions {
@@ -38,7 +47,13 @@ fn main() {
             };
             gpui_kit::open_window(options, cx, |window, cx| {
                 window.set_window_title("PG Desk");
-                cx.new(|cx| workspace::Workspace::new(window, cx))
+                cx.new(|cx| {
+                    let mut workspace = workspace::Workspace::new(window, cx);
+                    if let Some(project) = project.clone() {
+                        workspace.open_project(project, cx);
+                    }
+                    workspace
+                })
             })
             .expect("failed to open window");
             cx.activate(true);

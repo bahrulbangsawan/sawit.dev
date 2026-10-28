@@ -6,7 +6,7 @@ publish.workspace = true
 
 [dependencies]
 futures.workspace = true
-gpui-kit = "=0.8.1"
+gpui-kit = { version = "=0.8.1", features = ["syntect"] }
 pgdesk-core = { path = "../core" }
 tokio.workspace = true
 tokio-postgres.workspace = true

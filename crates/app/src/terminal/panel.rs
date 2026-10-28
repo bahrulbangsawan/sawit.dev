@@ -32,7 +32,6 @@ impl TerminalPanel {
     }
 
     /// Directory new terminals start in (the open project, if any).
-    #[expect(dead_code, reason = "wired up by the Files panel (task E2)")]
     pub fn set_cwd(&mut self, cwd: Option<PathBuf>) {
         self.cwd = cwd;
     }
