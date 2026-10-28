@@ -3,6 +3,7 @@
 
 pub mod binaries;
 mod cmd;
+pub mod download;
 pub mod error;
 pub mod owners;
 pub mod pgctl;

@@ -42,3 +42,8 @@ Sumber yang dicocokkan: `longbridge/gpui-component` tag `v0.8.1`
 
 - macOS: path socket Unix maks 103 byte. Path scratchpad yang panjang membuat postmaster gagal
   start (`Unix-domain socket path ... is too long`). Ini membenarkan `validate_socket_dir` (Task 9).
+
+## postgresql_archive 0.22.0
+
+- `install_managed("=16", root)` unduh PostgreSQL 16.15.1 (theseus, aarch64-apple-darwin) dalam ±43 detik.
+- Extractor theseus mengekstrak ke tempdir lalu `rename` atomik ke dir tujuan; **dilewati bila dir tujuan sudah ada**.
