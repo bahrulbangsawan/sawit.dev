@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 futures.workspace = true
+security-framework = "=3.7.0"
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"
 alacritty_terminal = "=0.26.0"

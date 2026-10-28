@@ -4,6 +4,7 @@
 pub mod binaries;
 mod cmd;
 pub mod control;
+pub mod db;
 pub mod download;
 pub mod error;
 pub mod files;

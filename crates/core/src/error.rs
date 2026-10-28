@@ -16,6 +16,9 @@ pub enum CoreError {
     Config(String),
     #[error(transparent)]
     Db(#[from] tokio_postgres::Error),
+    /// A server-side SQL error, already formatted with detail/hint/position.
+    #[error("{0}")]
+    Sql(String),
     #[error("download failed: {0}")]
     Download(String),
 }

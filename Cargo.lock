@@ -4678,6 +4678,7 @@ dependencies = [
  "alacritty_terminal",
  "futures",
  "postgresql_archive",
+ "security-framework",
  "serde",
  "tempfile",
  "thiserror 2.0.21",
