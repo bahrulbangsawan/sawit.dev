@@ -8,12 +8,10 @@ use crate::{CoreError, Result};
 pub(crate) struct Output {
     pub code: Option<i32>,
     pub stdout: String,
-    #[expect(dead_code, reason = "read by control (stage 1 task 10)")]
     pub stderr: String,
 }
 
 impl Output {
-    #[expect(dead_code, reason = "used by control (stage 1 task 10)")]
     pub fn combined(&self) -> String {
         format!("{}{}", self.stdout, self.stderr)
     }
