@@ -1,4 +1,4 @@
-//! Installing the `pgdesk-mcp` server into AI clients: Claude Code (every
+//! Installing the `sawit-mcp` server into AI clients: Claude Code (every
 //! profile — the default `~/.claude.json` and each `CLAUDE_CONFIG_DIR`
 //! folder such as `~/.claude-work`), Claude Desktop, Codex (and `CODEX_HOME`
 //! profiles), Cursor, Windsurf, Gemini CLI, Zed, opencode and VS Code.
@@ -17,7 +17,11 @@ use crate::files::write_text_atomic;
 use crate::{CoreError, Result};
 
 /// The server's name in every client's config.
-pub const SERVER_NAME: &str = "pgdesk";
+pub const SERVER_NAME: &str = "sawit";
+
+/// The name used before the rename to Sawit (PG Desk). Its entry points at
+/// the old app, so installing removes it.
+const LEGACY_SERVER_NAME: &str = "pgdesk";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Client {
@@ -144,7 +148,7 @@ impl Client {
         }
     }
 
-    /// Whether PG Desk can edit the config (JSON/TOML). YAML and script
+    /// Whether Sawit can edit the config (JSON/TOML). YAML and script
     /// configs get a snippet to paste instead.
     pub fn editable(self) -> bool {
         !matches!(self, Client::Goose | Client::Continue | Client::Crush)
@@ -502,10 +506,10 @@ pub fn status(target: &Target, server: &Path) -> Status {
     }
 }
 
-/// `<config>.pgdesk-backup`, written once before the first change.
+/// `<config>.sawit-backup`, written once before the first change.
 pub fn backup_path(config: &Path) -> PathBuf {
     let mut name = config.file_name().unwrap_or_default().to_os_string();
-    name.push(".pgdesk-backup");
+    name.push(".sawit-backup");
     config.with_file_name(name)
 }
 
@@ -548,6 +552,7 @@ pub fn install_file(target: &Target, server: &Path) -> Result<()> {
         table["command"] = toml_edit::value(server.display().to_string());
         table["args"] = toml_edit::value(toml_edit::Array::new());
         servers[SERVER_NAME] = toml_edit::Item::Table(table);
+        servers.remove(LEGACY_SERVER_NAME);
         return write_config(&target.config, &doc.to_string());
     }
     let mut map = read_json(&target.config)
@@ -559,6 +564,7 @@ pub fn install_file(target: &Target, server: &Path) -> Result<()> {
         return Err(manual(target, server, &format!("{key} is not an object")));
     };
     servers.insert(SERVER_NAME.into(), value);
+    servers.remove(LEGACY_SERVER_NAME);
     let text = serde_json::to_string_pretty(&Value::Object(map))
         .map_err(|e| CoreError::Config(e.to_string()))?;
     write_config(&target.config, &format!("{text}\n"))
@@ -651,9 +657,13 @@ pub fn cli_add(target: &Target, server: &Path, cli: &Path) -> Option<CliCall> {
 }
 
 pub fn cli_remove(target: &Target, cli: &Path) -> Option<CliCall> {
+    cli_remove_named(target, cli, SERVER_NAME)
+}
+
+fn cli_remove_named(target: &Target, cli: &Path, name: &str) -> Option<CliCall> {
     let args: Vec<&str> = match target.client {
-        Client::ClaudeCode => vec!["mcp", "remove", "--scope", "user", SERVER_NAME],
-        Client::Codex => vec!["mcp", "remove", SERVER_NAME],
+        Client::ClaudeCode => vec!["mcp", "remove", "--scope", "user", name],
+        Client::Codex => vec!["mcp", "remove", name],
         _ => return None,
     };
     cli_call(target, cli, args.into_iter().map(String::from).collect())
@@ -693,9 +703,33 @@ pub async fn install(target: &Target, server: &Path, cli: Option<&Path>) -> Resu
                 stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
             });
         }
+        if has_legacy(target)
+            && let Some(remove) = cli_remove_named(target, cli, LEGACY_SERVER_NAME)
+        {
+            // Best effort: the new entry is already in place.
+            let _ = run_cli(&remove).await;
+        }
         return Ok(());
     }
     install_file(target, server)
+}
+
+/// Whether the config still has the pre-rename (PG Desk) entry.
+fn has_legacy(target: &Target) -> bool {
+    if target.client == Client::Codex {
+        return read_toml(&target.config).is_ok_and(|doc| {
+            doc.get("mcp_servers")
+                .and_then(|t| t.get(LEGACY_SERVER_NAME))
+                .is_some()
+        });
+    }
+    let (key, _) = entry(target.client, Path::new(""));
+    read_json(&target.config).is_ok_and(|map| {
+        map.as_ref()
+            .and_then(|m| m.get(key))
+            .and_then(|s| s.get(LEGACY_SERVER_NAME))
+            .is_some()
+    })
 }
 
 pub async fn uninstall(target: &Target, cli: Option<&Path>) -> Result<()> {
@@ -791,17 +825,17 @@ mod tests {
         let h = home();
         let targets = discover(h.path(), None);
         let t = find(&targets, Client::ClaudeCode, "default");
-        let server = Path::new("/Apps/PG Desk.app/Contents/MacOS/pgdesk-mcp");
+        let server = Path::new("/Apps/Sawit.app/Contents/MacOS/sawit-mcp");
         assert_eq!(status(t, server), Status::NotInstalled);
         install_file(t, server).unwrap();
         let text = fs::read_to_string(&t.config).unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["numStartups"], 3);
         assert_eq!(
-            v["mcpServers"]["pgdesk"]["command"],
+            v["mcpServers"]["sawit"]["command"],
             server.display().to_string()
         );
-        assert_eq!(v["mcpServers"]["pgdesk"]["type"], "stdio");
+        assert_eq!(v["mcpServers"]["sawit"]["type"], "stdio");
         // Original key order kept, new key appended.
         let keys: Vec<_> = v.as_object().unwrap().keys().cloned().collect();
         assert_eq!(keys, ["numStartups", "projects", "mcpServers"]);
@@ -813,7 +847,7 @@ mod tests {
         assert_eq!(fs::read_to_string(backup_path(&t.config)).unwrap(), backup);
 
         // A different binary is reported, then replaced.
-        let other = Path::new("/old/pgdesk-mcp");
+        let other = Path::new("/old/sawit-mcp");
         assert_eq!(
             status(t, other),
             Status::Outdated(server.display().to_string())
@@ -822,14 +856,14 @@ mod tests {
         uninstall_file(t).unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&t.config).unwrap()).unwrap();
-        assert!(v["mcpServers"].get("pgdesk").is_none());
+        assert!(v["mcpServers"].get("sawit").is_none());
         assert_eq!(v["numStartups"], 3);
         assert_eq!(status(t, server), Status::NotInstalled);
     }
 
     #[test]
     fn each_client_gets_its_own_entry_shape() {
-        let server = "/bin/pgdesk-mcp";
+        let server = "/bin/sawit-mcp";
         let shape = |c| entry(c, Path::new(server));
         assert_eq!(shape(Client::ClaudeDesktop).0, "mcpServers");
         assert_eq!(shape(Client::Cursor).1["command"], server);
@@ -847,8 +881,34 @@ mod tests {
         let targets = discover(h.path(), None);
         let t = find(&targets, Client::Cursor, "default");
         assert!(!t.config.exists());
-        install_file(t, Path::new("/bin/pgdesk-mcp")).unwrap();
-        assert_eq!(status(t, Path::new("/bin/pgdesk-mcp")), Status::Installed);
+        install_file(t, Path::new("/bin/sawit-mcp")).unwrap();
+        assert_eq!(status(t, Path::new("/bin/sawit-mcp")), Status::Installed);
+    }
+
+    #[test]
+    fn install_replaces_the_pre_rename_entry() {
+        let h = home();
+        fs::create_dir_all(h.path().join(".cursor")).unwrap();
+        fs::write(
+            h.path().join(".cursor/mcp.json"),
+            r#"{"mcpServers": {"pgdesk": {"command": "/old/pgdesk-mcp"}, "other": {}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            h.path().join(".codex/config.toml"),
+            "[mcp_servers.pgdesk]\ncommand = \"/old/pgdesk-mcp\"\n",
+        )
+        .unwrap();
+        let targets = discover(h.path(), None);
+        for client in [Client::Cursor, Client::Codex] {
+            let t = find(&targets, client, "default");
+            assert!(has_legacy(t));
+            install_file(t, Path::new("/bin/sawit-mcp")).unwrap();
+            assert!(!has_legacy(t));
+            assert_eq!(status(t, Path::new("/bin/sawit-mcp")), Status::Installed);
+        }
+        let text = fs::read_to_string(h.path().join(".cursor/mcp.json")).unwrap();
+        assert!(text.contains("\"other\""), "{text}");
     }
 
     #[test]
@@ -862,18 +922,18 @@ mod tests {
         .unwrap();
         let targets = discover(h.path(), None);
         let t = find(&targets, Client::Codex, "default");
-        install_file(t, Path::new("/bin/pgdesk-mcp")).unwrap();
+        install_file(t, Path::new("/bin/sawit-mcp")).unwrap();
         let text = fs::read_to_string(&config).unwrap();
         assert!(text.starts_with("# my model\nmodel = \"o3\""), "{text}");
         assert!(text.contains("[mcp_servers.other]"));
         assert!(
-            text.contains("[mcp_servers.pgdesk]\ncommand = \"/bin/pgdesk-mcp\""),
+            text.contains("[mcp_servers.sawit]\ncommand = \"/bin/sawit-mcp\""),
             "{text}"
         );
-        assert_eq!(status(t, Path::new("/bin/pgdesk-mcp")), Status::Installed);
+        assert_eq!(status(t, Path::new("/bin/sawit-mcp")), Status::Installed);
         uninstall_file(t).unwrap();
         let text = fs::read_to_string(&config).unwrap();
-        assert!(!text.contains("pgdesk"), "{text}");
+        assert!(!text.contains("sawit"), "{text}");
         assert!(text.contains("[mcp_servers.other]"));
     }
 
@@ -899,7 +959,7 @@ mod tests {
     fn cli_targets_the_right_profile() {
         let h = home();
         let targets = discover(h.path(), None);
-        let server = Path::new("/bin/pgdesk-mcp");
+        let server = Path::new("/bin/sawit-mcp");
         let default = find(&targets, Client::ClaudeCode, "default");
         let inv = cli_add(default, server, Path::new("/usr/bin/claude")).unwrap();
         assert_eq!(
@@ -909,9 +969,9 @@ mod tests {
                 "add",
                 "--scope",
                 "user",
-                "pgdesk",
+                "sawit",
                 "--",
-                "/bin/pgdesk-mcp"
+                "/bin/sawit-mcp"
             ]
         );
         // The default profile must not inherit the app's CLAUDE_CONFIG_DIR.
@@ -927,7 +987,7 @@ mod tests {
         );
         let codex = find(&targets, Client::Codex, "default");
         let inv = cli_add(codex, server, Path::new("/usr/bin/codex")).unwrap();
-        assert_eq!(inv.args, ["mcp", "add", "pgdesk", "--", "/bin/pgdesk-mcp"]);
+        assert_eq!(inv.args, ["mcp", "add", "sawit", "--", "/bin/sawit-mcp"]);
         assert_eq!(inv.env, vec![("CODEX_HOME".to_string(), None)]);
         // Clients without a CLI path aren't driven by one.
         let desktop = find(&targets, Client::ClaudeDesktop, "default");
@@ -950,7 +1010,7 @@ mod tests {
         .unwrap();
         fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).unwrap();
         let targets = discover(h.path(), None);
-        let server = Path::new("/bin/pgdesk-mcp");
+        let server = Path::new("/bin/sawit-mcp");
         // SAFETY: test-only; mimics the app launched from a profile shell.
         unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", "/somewhere/else") };
         install(
@@ -971,12 +1031,12 @@ mod tests {
         let lines: Vec<_> = calls.lines().collect();
         assert_eq!(
             lines[0],
-            "unset mcp add --scope user pgdesk -- /bin/pgdesk-mcp"
+            "unset mcp add --scope user sawit -- /bin/sawit-mcp"
         );
         assert_eq!(
             lines[1],
             format!(
-                "{} mcp add --scope user pgdesk -- /bin/pgdesk-mcp",
+                "{} mcp add --scope user sawit -- /bin/sawit-mcp",
                 h.path().join(".claude-work").display()
             )
         );
@@ -1106,7 +1166,7 @@ mod tests {
 
     #[test]
     fn agent_specific_entry_shapes() {
-        let s = Path::new("/bin/pgdesk-mcp");
+        let s = Path::new("/bin/sawit-mcp");
         assert_eq!(entry(Client::Amp, s).0, "amp.mcpServers");
         let copilot = entry(Client::CopilotCli, s).1;
         assert_eq!(copilot["type"], "local");
@@ -1116,7 +1176,7 @@ mod tests {
         assert_eq!(entry(Client::KiloCode, s).0, "mcp");
         assert_eq!(
             entry(Client::KiloCode, s).1["command"][0],
-            "/bin/pgdesk-mcp"
+            "/bin/sawit-mcp"
         );
         assert_eq!(entry(Client::VsCodeInsiders, s).0, "servers");
         assert_eq!(entry(Client::Cursor, s).1["type"], "stdio");
@@ -1132,10 +1192,10 @@ mod tests {
         fs::create_dir_all(h.path().join(".config/amp")).unwrap();
         let targets = discover(h.path(), None);
         let t = find(&targets, Client::Amp, "default");
-        install_file(t, Path::new("/bin/pgdesk-mcp")).unwrap();
+        install_file(t, Path::new("/bin/sawit-mcp")).unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&t.config).unwrap()).unwrap();
-        assert_eq!(v["amp.mcpServers"]["pgdesk"]["command"], "/bin/pgdesk-mcp");
+        assert_eq!(v["amp.mcpServers"]["sawit"]["command"], "/bin/sawit-mcp");
         assert!(v.get("amp").is_none());
     }
 
@@ -1147,7 +1207,7 @@ mod tests {
         fs::write(p.join(".config/goose/config.yaml"), "GOOSE_MODEL: x\n").unwrap();
         fs::create_dir_all(p.join(".continue")).unwrap();
         let targets = discover(p, None);
-        let server = Path::new("/bin/pgdesk-mcp");
+        let server = Path::new("/bin/sawit-mcp");
         let goose = find(&targets, Client::Goose, "default");
         assert!(!goose.client.editable());
         assert!(matches!(status(goose, server), Status::Manual));
@@ -1156,12 +1216,12 @@ mod tests {
             fs::read_to_string(&goose.config).unwrap(),
             "GOOSE_MODEL: x\n"
         );
-        assert!(snippet(goose, server).contains("cmd: /bin/pgdesk-mcp"));
+        assert!(snippet(goose, server).contains("cmd: /bin/sawit-mcp"));
         // Pasted in by hand: reported as installed.
         fs::write(&goose.config, snippet(goose, server)).unwrap();
         assert_eq!(status(goose, server), Status::Installed);
         let cont = find(&targets, Client::Continue, "default");
-        assert!(snippet(cont, server).contains("- name: pgdesk"));
+        assert!(snippet(cont, server).contains("- name: sawit"));
     }
 
     #[test]

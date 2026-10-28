@@ -18,11 +18,11 @@ impl Runtime {
     pub fn start() -> Runtime {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::Builder::new()
-            .name("pgdesk-tokio".into())
+            .name("sawit-tokio".into())
             .spawn(move || {
                 let runtime = tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(2)
-                    .thread_name("pgdesk-tokio-worker")
+                    .thread_name("sawit-tokio-worker")
                     .enable_all()
                     .build()
                     .expect("failed to build tokio runtime");

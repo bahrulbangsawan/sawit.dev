@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui_kit::{Context, EventEmitter};
-use pgdesk_core::instances::AppPaths;
-use pgdesk_core::prompts::{Library, Prompt, import_whatsapp, now};
+use sawit_core::instances::AppPaths;
+use sawit_core::prompts::{Library, Prompt, import_whatsapp, now};
 
 use crate::rt;
 

@@ -1,4 +1,4 @@
-//! MCP page: installs the bundled `pgdesk-mcp` into every AI client and
+//! MCP page: installs the bundled `sawit-mcp` into every AI client and
 //! profile found on this Mac (Claude Code profiles, Codex, Claude Desktop,
 //! Cursor, Zed, …) and shows where each config lives.
 
@@ -10,10 +10,10 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use pgdesk_core::mcp_clients::{
+use sawit_core::mcp_clients::{
     Category, Client, Status, Target, discover, install, snippet, status, uninstall,
 };
-use pgdesk_core::probe::find_in_path;
+use sawit_core::probe::find_in_path;
 
 use crate::rt;
 
@@ -23,7 +23,7 @@ struct Row {
 }
 
 pub struct McpPage {
-    /// `pgdesk-mcp` next to the running app (inside the .app bundle, or the
+    /// `sawit-mcp` next to the running app (inside the .app bundle, or the
     /// cargo target folder during development).
     server: PathBuf,
     server_exists: bool,
@@ -101,8 +101,8 @@ impl McpPage {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let server = std::env::current_exe()
             .ok()
-            .and_then(|exe| exe.parent().map(|d| d.join("pgdesk-mcp")))
-            .unwrap_or_else(|| PathBuf::from("pgdesk-mcp"));
+            .and_then(|exe| exe.parent().map(|d| d.join("sawit-mcp")))
+            .unwrap_or_else(|| PathBuf::from("sawit-mcp"));
         let mut this = Self {
             server_exists: false,
             server,
@@ -426,7 +426,7 @@ impl Render for McpPage {
                     })
                     .child(tilde(&self.server))
                     .when(!self.server_exists && !self.loading, |el| {
-                        el.child("— not built yet: cargo build --release -p pgdesk-mcp")
+                        el.child("— not built yet: cargo build --release -p sawit-mcp")
                     }),
             );
         let body = if self.loading {

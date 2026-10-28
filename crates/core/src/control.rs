@@ -111,7 +111,7 @@ pub(crate) fn postgres_options(
 }
 
 /// Starts the cluster unless it is already running or (with `Preflight::Check`)
-/// another process listens on the port. `managed` lists every PG Desk instance
+/// another process listens on the port. `managed` lists every Sawit instance
 /// (name, data dir) so their listeners are named correctly.
 pub async fn start(
     inst: &Instance,
@@ -308,7 +308,7 @@ mod tests {
         }
         assert!(
             check_shell_safe_path(Path::new(
-                "/Users/u/Library/Application Support/pgdesk/clusters/a b"
+                "/Users/u/Library/Application Support/sawit/clusters/a b"
             ))
             .is_ok()
         );

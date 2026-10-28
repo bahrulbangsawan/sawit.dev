@@ -1,14 +1,14 @@
-//! MCP server exposing PG Desk to AI agents: list/start/stop local instances,
+//! MCP server exposing Sawit to AI agents: list/start/stop local instances,
 //! browse schemas, run read-only queries, and write a project's DATABASE_URL.
 
 use std::path::Path;
 
-use pgdesk_core::control::{self, Preflight, StartOutcome};
-use pgdesk_core::db::{
+use sawit_core::control::{self, Preflight, StartOutcome};
+use sawit_core::db::{
     self, ConnProfile, Profiles, format_table, load_password, write_database_url,
 };
-use pgdesk_core::instances::{AppPaths, Instance, Registry};
-use pgdesk_core::pgctl::PgCtlStatus;
+use sawit_core::instances::{AppPaths, Instance, Registry};
+use sawit_core::pgctl::PgCtlStatus;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock as Content};
 use rmcp::{schemars, tool, tool_router};
@@ -17,7 +17,7 @@ use rmcp::{schemars, tool, tool_router};
 const MAX_ROWS: usize = 500;
 
 #[derive(Debug, Clone)]
-pub struct PgDesk {
+pub struct Sawit {
     paths: AppPaths,
 }
 
@@ -35,21 +35,21 @@ pub fn instance_url(inst: &Instance) -> String {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct InstanceArgs {
-    #[schemars(description = "PG Desk instance name (see list_instances)")]
+    #[schemars(description = "Sawit instance name (see list_instances)")]
     pub name: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct TargetArgs {
     #[schemars(
-        description = "PG Desk instance name or saved connection name (see list_connections)"
+        description = "Sawit instance name or saved connection name (see list_connections)"
     )]
     pub target: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct QueryArgs {
-    #[schemars(description = "PG Desk instance name or saved connection name")]
+    #[schemars(description = "Sawit instance name or saved connection name")]
     pub target: String,
     #[schemars(description = "SQL to run. Always executed read-only.")]
     pub sql: String,
@@ -59,13 +59,13 @@ pub struct QueryArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct WriteEnvArgs {
-    #[schemars(description = "PG Desk instance name")]
+    #[schemars(description = "Sawit instance name")]
     pub instance: String,
     #[schemars(description = "Project folder whose .env gets DATABASE_URL")]
     pub project_dir: String,
 }
 
-impl PgDesk {
+impl Sawit {
     pub fn new(paths: AppPaths) -> Self {
         Self { paths }
     }
@@ -82,7 +82,7 @@ impl PgDesk {
     }
 
     /// Read-only connection for a target. Instances are reached as the
-    /// non-superuser `pgdesk_ro` role (created on first use), so agents can't
+    /// non-superuser `sawit_ro` role (created on first use), so agents can't
     /// write, COPY to files or run server programs. Saved profiles use their
     /// own credentials inside read-only, single-statement transactions.
     async fn connect_target(&self, target: &str) -> Result<tokio_postgres::Client, String> {
@@ -119,7 +119,7 @@ impl PgDesk {
             Err(e) => return fail(e),
         };
         if reg.instances.is_empty() {
-            return ok("No PG Desk instances yet.");
+            return ok("No Sawit instances yet.");
         }
         let mut lines = Vec::new();
         for inst in &reg.instances {
@@ -154,7 +154,7 @@ impl PgDesk {
                 ok(format!("{name} is already running (PID {pid})."))
             }
             Ok(StartOutcome::Blocked(report)) => fail(format!(
-                "Start held back because of a port conflict. Resolve it first, or ask the user to use \"Start Anyway\" in PG Desk.\n{}",
+                "Start held back because of a port conflict. Resolve it first, or ask the user to use \"Start Anyway\" in Sawit.\n{}",
                 report.explain()
             )),
             Err(e) => fail(e.to_string()),
@@ -177,7 +177,7 @@ impl PgDesk {
             lines.extend(
                 reg.instances
                     .iter()
-                    .map(|i| format!("- {} (PG Desk instance) · {}", i.name, instance_url(i))),
+                    .map(|i| format!("- {} (Sawit instance) · {}", i.name, instance_url(i))),
             );
         }
         if let Ok(p) = Profiles::load(&self.paths.root.join("profiles.toml")) {
@@ -258,22 +258,22 @@ impl PgDesk {
 }
 
 #[tool_router(server_handler)]
-impl PgDesk {
+impl Sawit {
     #[tool(
-        description = "List local PostgreSQL instances managed by PG Desk with status, port and DATABASE_URL"
+        description = "List local PostgreSQL instances managed by Sawit with status, port and DATABASE_URL"
     )]
     async fn list_instances(&self) -> CallToolResult {
         self.list_instances_tool().await
     }
 
     #[tool(
-        description = "Start a PG Desk instance. Refuses (and explains) when another process already listens on its port, e.g. a Docker container"
+        description = "Start a Sawit instance. Refuses (and explains) when another process already listens on its port, e.g. a Docker container"
     )]
     async fn start_instance(&self, Parameters(a): Parameters<InstanceArgs>) -> CallToolResult {
         self.start_instance_tool(&a.name).await
     }
 
-    #[tool(description = "Stop a PG Desk instance (fast shutdown)")]
+    #[tool(description = "Stop a Sawit instance (fast shutdown)")]
     async fn stop_instance(&self, Parameters(a): Parameters<InstanceArgs>) -> CallToolResult {
         self.stop_instance_tool(&a.name).await
     }
@@ -298,7 +298,7 @@ impl PgDesk {
     }
 
     #[tool(
-        description = "Write DATABASE_URL for a PG Desk instance into <project_dir>/.env, e.g. for a TanStack Start app"
+        description = "Write DATABASE_URL for a Sawit instance into <project_dir>/.env, e.g. for a TanStack Start app"
     )]
     async fn write_env(&self, Parameters(a): Parameters<WriteEnvArgs>) -> CallToolResult {
         self.write_env_tool(&a.instance, &a.project_dir).await

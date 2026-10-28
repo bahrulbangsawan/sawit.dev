@@ -1,7 +1,7 @@
-//! `cargo run -p pgdesk-core --example probe -- 5433` explains who listens on a port.
+//! `cargo run -p sawit-core --example probe -- 5433` explains who listens on a port.
 
-use pgdesk_core::ports::BindAddr;
-use pgdesk_core::probe::check_port;
+use sawit_core::ports::BindAddr;
+use sawit_core::probe::check_port;
 
 #[tokio::main]
 async fn main() {

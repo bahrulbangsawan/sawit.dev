@@ -106,7 +106,7 @@ pub fn write_text_atomic(path: &Path, text: &str) -> Result<()> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let tmp = dir.join(format!(".{name}.pgdesk-tmp"));
+    let tmp = dir.join(format!(".{name}.sawit-tmp"));
     let result = (|| {
         // Owner-only until the final permissions are applied.
         let mut file = std::fs::OpenOptions::new()

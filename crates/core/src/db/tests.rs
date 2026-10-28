@@ -140,7 +140,7 @@ fn keychain_account_is_stable() {
 #[test]
 #[ignore = "touches the login keychain"]
 fn keychain_roundtrip() {
-    let (p, _) = parse_database_url("postgres://pgdesk_test@localhost:1/keychain_test").unwrap();
+    let (p, _) = parse_database_url("postgres://sawit_test@localhost:1/keychain_test").unwrap();
     store_password(&p, "pw-123").unwrap();
     assert_eq!(load_password(&p).unwrap().as_deref(), Some("pw-123"));
     delete_password(&p).unwrap();

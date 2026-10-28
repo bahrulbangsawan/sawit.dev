@@ -1,5 +1,5 @@
 //! Discovers installed PostgreSQL binaries (Homebrew, Postgres.app, PATH and
-//! PG Desk's own managed downloads) without hardcoding install paths.
+//! Sawit's own managed downloads) without hardcoding install paths.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -49,7 +49,7 @@ pub enum BinarySource {
 impl std::fmt::Display for BinarySource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            BinarySource::Managed => "PG Desk",
+            BinarySource::Managed => "Sawit",
             BinarySource::Homebrew => "Homebrew",
             BinarySource::PostgresApp => "Postgres.app",
             BinarySource::Path => "PATH",
@@ -278,7 +278,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs a real PostgreSQL install (Homebrew on the dev machine)"]
     async fn discover_finds_real_homebrew() {
-        let roots = SearchRoots::detect(std::env::temp_dir().join("pgdesk-none")).await;
+        let roots = SearchRoots::detect(std::env::temp_dir().join("sawit-none")).await;
         let found = discover(&roots).await;
         assert!(
             found

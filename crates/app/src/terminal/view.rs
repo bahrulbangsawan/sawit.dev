@@ -7,7 +7,7 @@ use std::rc::Rc;
 use futures::StreamExt;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
-use pgdesk_core::terminal::{
+use sawit_core::terminal::{
     CursorView, GridSize, KeyInput, MouseAction, MouseButton as TermButton, Palette, Rgb,
     ScrollAccumulator, Session, Snapshot, TermEvent, key_to_bytes, mouse_report, paste_bytes,
 };
@@ -105,7 +105,7 @@ impl TerminalView {
         window.focus(&self.focus, cx);
     }
 
-    fn modes(&self) -> pgdesk_core::terminal::Modes {
+    fn modes(&self) -> sawit_core::terminal::Modes {
         self.session.modes()
     }
 

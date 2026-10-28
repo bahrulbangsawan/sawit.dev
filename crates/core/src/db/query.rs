@@ -47,9 +47,9 @@ pub(crate) fn rejects_startup_options(message: &str) -> bool {
     message.contains("unsupported startup parameter")
 }
 
-/// Login role for agent (MCP) access to PG Desk instances: reads everything,
+/// Login role for agent (MCP) access to Sawit instances: reads everything,
 /// cannot write, cannot run server programs or write server files.
-pub const READ_ONLY_ROLE: &str = "pgdesk_ro";
+pub const READ_ONLY_ROLE: &str = "sawit_ro";
 
 fn config(profile: &ConnProfile, password: Option<&str>) -> tokio_postgres::Config {
     let mut cfg = tokio_postgres::Config::new();
@@ -57,7 +57,7 @@ fn config(profile: &ConnProfile, password: Option<&str>) -> tokio_postgres::Conf
         .port(profile.port)
         .user(&profile.user)
         .dbname(&profile.database)
-        .application_name("pgdesk")
+        .application_name("sawit")
         .connect_timeout(Duration::from_secs(10))
         // Notice dead links (NAT idle drops on cloud databases) in about a
         // minute instead of the OS default of two hours.

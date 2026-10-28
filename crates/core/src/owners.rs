@@ -47,7 +47,7 @@ pub enum Owner {
     Docker { containers: Vec<String> },
     Homebrew { formula: Option<String> },
     PostgresApp,
-    PgDesk { instance: String },
+    Sawit { instance: String },
     Other,
 }
 
@@ -55,7 +55,7 @@ pub enum Owner {
 pub struct OwnerContext {
     pub brew_prefix: Option<PathBuf>,
     pub docker_ports: Vec<DockerPort>,
-    /// (instance name, data dir) of instances managed by PG Desk.
+    /// (instance name, data dir) of instances managed by Sawit.
     pub managed: Vec<(String, PathBuf)>,
 }
 
@@ -67,7 +67,7 @@ pub fn classify(listener: &Listener, command_line: &str, ctx: &OwnerContext) -> 
         .iter()
         .find(|(_, dir)| mentions_dir(command_line, dir))
     {
-        return Owner::PgDesk {
+        return Owner::Sawit {
             instance: name.clone(),
         };
     }
@@ -135,7 +135,7 @@ mod tests {
             docker_ports: parse_docker_ps(PS),
             managed: vec![(
                 "app".into(),
-                "/Users/u/Library/Application Support/pgdesk/clusters/app".into(),
+                "/Users/u/Library/Application Support/sawit/clusters/app".into(),
             )],
         }
     }
@@ -200,20 +200,20 @@ mod tests {
     }
 
     #[test]
-    fn pgdesk_owner_matches_data_dir_with_spaces() {
+    fn sawit_owner_matches_data_dir_with_spaces() {
         let cmd =
-            "/x/bin/postgres -D /Users/u/Library/Application Support/pgdesk/clusters/app -p 5440";
+            "/x/bin/postgres -D /Users/u/Library/Application Support/sawit/clusters/app -p 5440";
         assert_eq!(
             classify(&listener("postgres", 5440), cmd, &ctx()),
-            Owner::PgDesk {
+            Owner::Sawit {
                 instance: "app".into()
             }
         );
     }
 
     #[test]
-    fn pgdesk_owner_does_not_match_prefix_of_other_dir() {
-        let cmd = "/x/bin/postgres -D /Users/u/Library/Application Support/pgdesk/clusters/app2";
+    fn sawit_owner_does_not_match_prefix_of_other_dir() {
+        let cmd = "/x/bin/postgres -D /Users/u/Library/Application Support/sawit/clusters/app2";
         assert_eq!(
             classify(&listener("postgres", 5440), cmd, &ctx()),
             Owner::Other

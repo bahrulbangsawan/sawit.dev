@@ -9,7 +9,7 @@ use gpui_kit::component::table::{Column, DataTable, TableDelegate, TableState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use pgdesk_core::db::{self, ResultSet, RowCount};
+use sawit_core::db::{self, ResultSet, RowCount};
 use tokio_postgres::Client;
 
 use super::store::DbStore;
@@ -189,7 +189,7 @@ impl TableView {
                 PAGE_SIZE,
             )
             .await?;
-            Ok::<_, pgdesk_core::CoreError>((order, set))
+            Ok::<_, sawit_core::CoreError>((order, set))
         });
         cx.spawn_in(window, async move |this, window| {
             let result = rx.await;
@@ -494,7 +494,7 @@ impl TableDelegate for ResultDelegate {
 mod tests {
     // Not a glob: `gpui_kit::*` exports a `test` macro that shadows #[test].
     use super::{PAGE_SIZE, Pager};
-    use pgdesk_core::db::RowCount;
+    use sawit_core::db::RowCount;
 
     fn exact(rows: u64) -> Option<RowCount> {
         Some(RowCount { rows, exact: true })

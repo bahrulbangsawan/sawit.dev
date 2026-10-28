@@ -6,13 +6,13 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use gpui_kit::{Context, EventEmitter, Task};
-use pgdesk_core::binaries::{PgBinaries, SearchRoots, discover};
-use pgdesk_core::control::{self, Preflight, StartOutcome};
-use pgdesk_core::download::install_managed;
-use pgdesk_core::instances::{AppPaths, Instance, ListenScope, Registry, parse_conf_port};
-use pgdesk_core::pgctl::PgCtlStatus;
-use pgdesk_core::ports::PortVerdict;
-use pgdesk_core::probe::{PortReport, check_port};
+use sawit_core::binaries::{PgBinaries, SearchRoots, discover};
+use sawit_core::control::{self, Preflight, StartOutcome};
+use sawit_core::download::install_managed;
+use sawit_core::instances::{AppPaths, Instance, ListenScope, Registry, parse_conf_port};
+use sawit_core::pgctl::PgCtlStatus;
+use sawit_core::ports::PortVerdict;
+use sawit_core::probe::{PortReport, check_port};
 
 use crate::rt;
 
@@ -337,7 +337,7 @@ impl ServerStore {
         choice: BinaryChoice,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), String>> {
-        if let Err(e) = pgdesk_core::instances::validate_name(&name) {
+        if let Err(e) = sawit_core::instances::validate_name(&name) {
             return Task::ready(Err(e.to_string()));
         }
         if self.registry.get(&name).is_some() {

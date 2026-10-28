@@ -1,18 +1,18 @@
-# PG Desk — Spike + Stage 1 (Server Manager) Implementation Plan
+# Sawit — Spike + Stage 1 (Server Manager) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A Rust workspace with a GPUI↔Tokio↔Postgres integration spike, then a local Postgres server manager (instance list, start/stop/restart + live log, port conflict detection, detected or downloaded binaries).
 
-**Architecture:** The `pgdesk-core` crate (no GPUI) holds pure parsers (TDD) + modules that run system commands (`lsof`, `ps`, `docker`, `pg_ctl`, `initdb`) asynchronously on Tokio. The `pgdesk` crate (app) uses `gpui-kit =0.8.1`; all I/O runs through `core::rt::Runtime` (Tokio on its own thread) and results are awaited in `cx.spawn` via `futures` channels.
+**Architecture:** The `sawit-core` crate (no GPUI) holds pure parsers (TDD) + modules that run system commands (`lsof`, `ps`, `docker`, `pg_ctl`, `initdb`) asynchronously on Tokio. The `sawit` crate (app) uses `gpui-kit =0.8.1`; all I/O runs through `core::rt::Runtime` (Tokio on its own thread) and results are awaited in `cx.spawn` via `futures` channels.
 
 **Tech Stack:** Rust 1.97 stable, edition 2024, `gpui-kit =0.8.1`, `tokio` 1 (rt-multi-thread, process, fs, time, macros), `tokio-postgres` 0.7.18, `futures` 0.3, `postgresql_archive` 0.22.0 (`default-features = false`, features `theseus`, `tls-rustls-ring`), `serde` + `toml`, `thiserror`, `tempfile` (dev).
 
-**Spec:** `docs/superpowers/specs/2026-10-28-pgdesk-design.md`
+**Spec:** `docs/superpowers/specs/2026-10-28-sawit-design.md`
 
 ## Global Constraints
 
-- `pgdesk-core` must not depend (directly/transitively) on any `gpui*` crate. Check: `cargo tree -p pgdesk-core | grep -i gpui` is empty.
+- `sawit-core` must not depend (directly/transitively) on any `gpui*` crate. Check: `cargo tree -p sawit-core | grep -i gpui` is empty.
 - UI version pinned exactly: `gpui-kit = "=0.8.1"`. Every GPUI/gpui-component API is checked against the source at tag `v0.8.1` (commit `99576db58ec8103417c41a092e891b4022d24e7e`), reference clone: `git clone --branch v0.8.1 https://github.com/longbridge/gpui-component.git`. If an API differs from the plan: stop, record it in `docs/notes/gpui-kit-0.8.1-api.md`, report, adjust.
 - The UI thread never runs DB/process/file I/O. Everything goes through `Runtime::spawn`.
 - Don't hardcode the Homebrew path; detect it with `brew --prefix`.
@@ -24,7 +24,7 @@
 
 1. **Docker IPv6 wildcard (`tIPv6`, `n*:5433`)** — on macOS Docker Desktop holds dual-stack; it must be reported as shadowing `127.0.0.1:5433`, not "free". Test in Task 4 (`docker_v6_wildcard_shadows_loopback_v4`).
 2. **Own instance already running** — the Start button on an instance that is already running must not report a conflict with itself; it must report "already running". Test in Task 10 (`start_when_running_reports_already_running`).
-3. **Data dir paths with spaces** (`~/Library/Application Support/...`) — `pg_ctl -o` and `ps` matching must handle spaces. Test in Task 5 (`pgdesk_owner_matches_data_dir_with_spaces`) and Task 10 (integration using a tempdir with spaces).
+3. **Data dir paths with spaces** (`~/Library/Application Support/...`) — `pg_ctl -o` and `ps` matching must handle spaces. Test in Task 5 (`sawit_owner_matches_data_dir_with_spaces`) and Task 10 (integration using a tempdir with spaces).
 4. **Unix socket path length (max 103 bytes on macOS)** — a socket dir that's too long makes start fail obscurely. Test in Task 9 (`socket_path_too_long_is_rejected`).
 5. **`docker` not installed / daemon down / `lsof` returning exit 1 when empty** — must not be treated as an error; the port is still assessed. Test in Task 6 (`missing_docker_cli_still_reports`) and Task 4 (`empty_lsof_output_is_free`).
 
@@ -34,7 +34,7 @@
 
 ```
 Cargo.toml                      workspace, [profile.release] lto="thin", strip=true, codegen-units=1
-crates/core/Cargo.toml          pgdesk-core
+crates/core/Cargo.toml          sawit-core
 crates/core/src/lib.rs          pub mod rt, pgctl, ports, owners, probe, binaries, download, instances, control, error
 crates/core/src/rt.rs           Runtime: Tokio on its own thread
 crates/core/src/error.rs        CoreError (thiserror)
@@ -47,7 +47,7 @@ crates/core/src/download.rs     install_managed via postgresql_archive
 crates/core/src/instances.rs    AppPaths, Instance, ListenScope, Registry (TOML)
 crates/core/src/control.rs      init_cluster, status, start, stop, restart, tail_log
 crates/core/tests/control_it.rs real integration (skipped when no binary)
-crates/app/Cargo.toml           pgdesk (bin)
+crates/app/Cargo.toml           sawit (bin)
 crates/app/src/main.rs          bootstrap gpui_kit + Runtime global
 crates/app/src/spike.rs         (Task 2; deleted in Task 11)
 crates/app/src/servers/mod.rs   ServerManager view (list + detail)
@@ -64,8 +64,8 @@ README.md
 **Files:** Create `Cargo.toml`, `.gitignore` (`/target`), `crates/core/Cargo.toml`, `crates/core/src/lib.rs`, `crates/core/src/rt.rs`, `crates/core/src/error.rs`.
 
 **Interfaces — Produces:**
-- `pgdesk_core::rt::Runtime` — `Runtime::start() -> Runtime` (multi-thread Tokio, 2 workers, thread name `pgdesk-tokio`); `fn spawn<F, T>(&self, fut: F) -> futures::channel::oneshot::Receiver<T> where F: Future<Output = T> + Send + 'static, T: Send + 'static`; `fn spawn_stream<T: Send + 'static>(&self, f: impl FnOnce(futures::channel::mpsc::UnboundedSender<T>) -> BoxFuture<'static, ()> + Send + 'static) -> futures::channel::mpsc::UnboundedReceiver<T>`; `Runtime: Clone`.
-- `pgdesk_core::error::CoreError` (thiserror) with variants `Io(#[from] std::io::Error)`, `Command { program: String, code: Option<i32>, stderr: String }`, `Parse(String)`, `Config(String)`, `Db(#[from] tokio_postgres::Error)`, `Download(String)`; `pub type Result<T> = std::result::Result<T, CoreError>`.
+- `sawit_core::rt::Runtime` — `Runtime::start() -> Runtime` (multi-thread Tokio, 2 workers, thread name `sawit-tokio`); `fn spawn<F, T>(&self, fut: F) -> futures::channel::oneshot::Receiver<T> where F: Future<Output = T> + Send + 'static, T: Send + 'static`; `fn spawn_stream<T: Send + 'static>(&self, f: impl FnOnce(futures::channel::mpsc::UnboundedSender<T>) -> BoxFuture<'static, ()> + Send + 'static) -> futures::channel::mpsc::UnboundedReceiver<T>`; `Runtime: Clone`.
+- `sawit_core::error::CoreError` (thiserror) with variants `Io(#[from] std::io::Error)`, `Command { program: String, code: Option<i32>, stderr: String }`, `Parse(String)`, `Config(String)`, `Db(#[from] tokio_postgres::Error)`, `Download(String)`; `pub type Result<T> = std::result::Result<T, CoreError>`.
 
 - [ ] **Step 1: Write failing tests** in `rt.rs`:
 ```rust
@@ -80,22 +80,22 @@ README.md
     assert_eq!(futures::executor::block_on(rx.collect::<Vec<_>>()), vec![0, 1, 2]);
 }
 ```
-- [ ] **Step 2:** `cargo test -p pgdesk-core rt` → fails to compile (Runtime doesn't exist yet).
+- [ ] **Step 2:** `cargo test -p sawit-core rt` → fails to compile (Runtime doesn't exist yet).
 - [ ] **Step 3:** Implement. The runtime is built on a dedicated thread that owns the Tokio `Runtime` and parks forever; store the `Handle`.
-- [ ] **Step 4:** `cargo test -p pgdesk-core` → PASS; clippy clean.
+- [ ] **Step 4:** `cargo test -p sawit-core` → PASS; clippy clean.
 - [ ] **Step 5:** Commit `chore: workspace scaffold and tokio runtime bridge`.
 
 ### Task 2: Integration spike GPUI + DataTable + `SELECT version()`
 
 Purpose: prove the integration, not a feature. No automated tests; manual verification.
 
-**Files:** Create `crates/app/Cargo.toml` (`gpui-kit = "=0.8.1"`, `pgdesk-core = { path = "../core" }`, `tokio-postgres`, `futures`), `crates/app/src/main.rs`, `crates/app/src/spike.rs`, `docs/notes/gpui-kit-0.8.1-api.md`.
+**Files:** Create `crates/app/Cargo.toml` (`gpui-kit = "=0.8.1"`, `sawit-core = { path = "../core" }`, `tokio-postgres`, `futures`), `crates/app/src/main.rs`, `crates/app/src/spike.rs`, `docs/notes/gpui-kit-0.8.1-api.md`.
 
 **Interfaces — Consumes:** `Runtime::spawn`. **Produces:** proven patterns (recorded in notes): how to store `Runtime` as a GPUI global (`impl Global`), the pattern `cx.spawn(async move |this, cx| { let v = rx.await; this.update(cx, |..| ..) })`.
 
 - [ ] **Step 1:** Set up a test DB: `initdb -D <scratch>/spikedb -U postgres -A trust && pg_ctl -D <scratch>/spikedb -o "-p 55432 -k <scratch>" -l <scratch>/spike.log start`.
-- [ ] **Step 2:** Window (pattern from `examples/table_in_scrollable` v0.8.1): a "Run" button, a "Run slow" button (`SELECT pg_sleep(3), version()`), a two-column `DataTable` (`name`, `value`) holding the result + duration, a "loading…" status text. URL from env `PGDESK_SPIKE_URL`, default `host=localhost port=55432 user=postgres dbname=postgres`.
-- [ ] **Step 3:** `cargo run -p pgdesk`. Verify: click "Run slow", then for 3 seconds the window can be resized and the "Run" button stays responsive; the `PostgreSQL 16.x` result appears in the table. Take a screenshot.
+- [ ] **Step 2:** Window (pattern from `examples/table_in_scrollable` v0.8.1): a "Run" button, a "Run slow" button (`SELECT pg_sleep(3), version()`), a two-column `DataTable` (`name`, `value`) holding the result + duration, a "loading…" status text. URL from env `SAWIT_SPIKE_URL`, default `host=localhost port=55432 user=postgres dbname=postgres`.
+- [ ] **Step 3:** `cargo run -p sawit`. Verify: click "Run slow", then for 3 seconds the window can be resized and the "Run" button stays responsive; the `PostgreSQL 16.x` result appears in the table. Take a screenshot.
 - [ ] **Step 4:** Write `docs/notes/gpui-kit-0.8.1-api.md`: APIs used, which differ from assumptions, clean build time, debug binary size.
 - [ ] **Step 5:** Build/test/clippy gate; commit `spike: gpui-kit window with DataTable and async SELECT version()`. Report findings to the user before continuing.
 
@@ -149,9 +149,9 @@ const MIXED: &str = "p58423\ncPython\nf3\ntIPv4\nn127.0.0.1:57360\nf4\ntIPv6\nn*
 
 **Interfaces — Consumes:** `BindAddr`, `Listener`. **Produces:**
 - `pub struct DockerPort { pub container: String, pub host: BindAddr, pub host_port: u16 }`; `pub fn parse_docker_ps(output: &str) -> Vec<DockerPort>` for `docker ps --format '{{.Names}}\t{{.Ports}}'`.
-- `pub enum Owner { Docker { containers: Vec<String> }, Homebrew { formula: Option<String> }, PostgresApp, PgDesk { instance: String }, Other }`
+- `pub enum Owner { Docker { containers: Vec<String> }, Homebrew { formula: Option<String> }, PostgresApp, Sawit { instance: String }, Other }`
 - `pub struct OwnerContext { pub brew_prefix: Option<PathBuf>, pub docker_ports: Vec<DockerPort>, pub managed: Vec<(String, PathBuf)> /*name, data_dir*/ }`
-- `pub fn classify(listener: &Listener, command_line: &str, ctx: &OwnerContext) -> Owner` — order: PgDesk (command_line contains the instance's data_dir, quoted or not) → Docker (command starts with `com.docker`, `vpnkit`, `docker-proxy`, or `OrbStack`; containers = docker_ports with the same host_port) → Homebrew (command_line starts with brew_prefix; formula from the segment after `Cellar/` or `opt/`) → PostgresApp (contains `/Postgres.app/`) → Other.
+- `pub fn classify(listener: &Listener, command_line: &str, ctx: &OwnerContext) -> Owner` — order: Sawit (command_line contains the instance's data_dir, quoted or not) → Docker (command starts with `com.docker`, `vpnkit`, `docker-proxy`, or `OrbStack`; containers = docker_ports with the same host_port) → Homebrew (command_line starts with brew_prefix; formula from the segment after `Cellar/` or `opt/`) → PostgresApp (contains `/Postgres.app/`) → Other.
 
 - [ ] **Step 1: Failing tests:**
 ```rust
@@ -159,13 +159,13 @@ const PS: &str = "kyzn-crm-postgres\t127.0.0.1:5434->5432/tcp\nrekamedika-postgr
 #[test] fn parses_docker_ps_multi_mapping() { /* 3 DockerPort; rekamedika: AnyV4:5433 and AnyV6:5433 */ }
 #[test] fn docker_backend_named_by_container() { /* command "com.docker.backend" port 5433 → Docker{containers:["rekamedika-postgres"]} */ }
 #[test] fn homebrew_formula_from_cellar_path() { /* brew_prefix /opt/homebrew, cmdline "/opt/homebrew/Cellar/postgresql@16/16.14/bin/postgres -D /opt/homebrew/var/postgresql@16" → Homebrew{formula:Some("postgresql@16")} */ }
-#[test] fn pgdesk_owner_matches_data_dir_with_spaces() { /* data_dir "/Users/u/Library/Application Support/pgdesk/clusters/app", cmdline contains that path → PgDesk{instance:"app"} */ }
+#[test] fn sawit_owner_matches_data_dir_with_spaces() { /* data_dir "/Users/u/Library/Application Support/sawit/clusters/app", cmdline contains that path → Sawit{instance:"app"} */ }
 #[test] fn postgres_app_detected() {}
 #[test] fn unknown_is_other() {}
 #[test] fn no_brew_prefix_never_homebrew() {}
 ```
 - [ ] **Step 2–4:** FAIL → implement → PASS.
-- [ ] **Step 5:** Commit `feat(core): identify port owners (docker, homebrew, postgres.app, pgdesk)`.
+- [ ] **Step 5:** Commit `feat(core): identify port owners (docker, homebrew, postgres.app, sawit)`.
 
 ### Task 6: `probe::check_port` (runs system commands)
 
@@ -197,7 +197,7 @@ const PS: &str = "kyzn-crm-postgres\t127.0.0.1:5434->5432/tcp\nrekamedika-postgr
 - `pub async fn discover(roots: &SearchRoots) -> Vec<PgBinaries>` — run `pg_ctl --version`, sort by version descending.
 
 - [ ] **Step 1: Failing tests:** `parse_version` (2 examples + `None` for garbage); `candidate_bin_dirs` with a fake tree in `tempfile::TempDir` (empty `pg_ctl` + `initdb` files): brew `opt/postgresql@16/bin` and `opt/postgresql@17/bin`, Postgres.app `Versions/18/bin`, managed `16.4.0/bin`, a PATH dir that is a symlink to a brew dir → 4 entries, the symlink isn't duplicated, a dir without `initdb` is ignored; `discover_finds_real_homebrew` marked `#[ignore]` (run manually on this machine, must find 16.14).
-- [ ] **Step 2–4:** FAIL → implement → PASS (`cargo test -p pgdesk-core -- --include-ignored binaries` also passes on this machine).
+- [ ] **Step 2–4:** FAIL → implement → PASS (`cargo test -p sawit-core -- --include-ignored binaries` also passes on this machine).
 - [ ] **Step 5:** Commit `feat(core): discover installed PostgreSQL binaries`.
 
 ### Task 8: Download managed binaries
@@ -215,14 +215,14 @@ const PS: &str = "kyzn-crm-postgres\t127.0.0.1:5434->5432/tcp\nrekamedika-postgr
 **Files:** `crates/core/src/instances.rs`.
 
 **Interfaces — Produces:**
-- `pub struct AppPaths { pub root: PathBuf }` — `default_macos() -> AppPaths` (`$HOME/Library/Application Support/pgdesk`), `instances_file()`, `cluster_dir(name)`, `log_file(name)` (`logs/<name>.log`), `socket_dir()` (`run`), `managed_bin_root()` (`bin`).
+- `pub struct AppPaths { pub root: PathBuf }` — `default_macos() -> AppPaths` (`$HOME/Library/Application Support/sawit`), `instances_file()`, `cluster_dir(name)`, `log_file(name)` (`logs/<name>.log`), `socket_dir()` (`run`), `managed_bin_root()` (`bin`).
 - `pub enum ListenScope { Localhost, All }` — `bind_addrs() -> Vec<BindAddr>` (Localhost → `[LoopbackV4, LoopbackV6]`, All → `[AnyV4, AnyV6]`), `listen_addresses() -> &'static str` (`"localhost"` / `"*"`).
 - `#[derive(Serialize, Deserialize)] pub struct Instance { pub name: String, pub bin_dir: PathBuf, pub data_dir: PathBuf, pub port: u16, pub listen: ListenScope, pub managed: bool }`
 - `pub struct Registry { pub instances: Vec<Instance> }` — `load(path) -> Result<Registry>` (missing file → empty), `save(&self, path)` (write to `.tmp` then rename), `add(&mut self, inst) -> Result<()>`, `remove(&mut self, name)`, `get(&self, name) -> Option<&Instance>`, `port_clashes(&self) -> Vec<(String, String, u16)>`.
 - `pub fn validate_name(name: &str) -> Result<()>` — `^[a-z0-9_-]{1,40}$`.
 - `pub fn validate_socket_dir(dir: &Path, port: u16) -> Result<()>` — length of `"<dir>/.s.PGSQL.<port>"` ≤ 103 bytes.
 
-- [ ] **Step 1: Failing tests:** `roundtrip_toml`; `missing_file_loads_empty`; `duplicate_name_rejected`; `duplicate_data_dir_rejected`; `same_port_listed_in_port_clashes` (two instances on port 5433 → one tuple); `invalid_names_rejected` (`"My DB"`, `""`, 41 characters); `socket_path_too_long_is_rejected` (100-character dir → Err; `/Users/rulisme/Library/Application Support/pgdesk/run` → Ok).
+- [ ] **Step 1: Failing tests:** `roundtrip_toml`; `missing_file_loads_empty`; `duplicate_name_rejected`; `duplicate_data_dir_rejected`; `same_port_listed_in_port_clashes` (two instances on port 5433 → one tuple); `invalid_names_rejected` (`"My DB"`, `""`, 41 characters); `socket_path_too_long_is_rejected` (100-character dir → Err; `/Users/rulisme/Library/Application Support/sawit/run` → Ok).
 - [ ] **Step 2–4:** FAIL → implement → PASS.
 - [ ] **Step 5:** Commit `feat(core): instance registry and app paths`.
 
@@ -239,7 +239,7 @@ const PS: &str = "kyzn-crm-postgres\t127.0.0.1:5434->5432/tcp\nrekamedika-postgr
 - `pub async fn stop(inst: &Instance) -> Result<()>` (`pg_ctl stop -w -m fast`; Stopped → Ok), `pub async fn restart(..) -> Result<StartOutcome>` (stop then start with the same preflight).
 - `pub async fn tail_log(path: PathBuf, tx: UnboundedSender<String>)` — start from the last 64 KiB, poll every 250 ms, send line by line, stop when `tx` is closed; tolerate a missing / truncated file (rotation).
 
-- [ ] **Step 1: Failing tests** — unit: `tail_log_emits_appended_lines` (tempfile, append 2 lines, receive 2 lines), `tail_log_waits_for_missing_file`. Integration `control_it.rs` (skip with `eprintln!("skip: no binaries")` when `discover` is empty; tempdir named `"pg desk it"` with spaces; random free port):
+- [ ] **Step 1: Failing tests** — unit: `tail_log_emits_appended_lines` (tempfile, append 2 lines, receive 2 lines), `tail_log_waits_for_missing_file`. Integration `control_it.rs` (skip with `eprintln!("skip: no binaries")` when `discover` is empty; tempdir named `"sawit dev it"` with spaces; random free port):
   - `lifecycle_init_start_query_stop`: init → status `Stopped` → start `Started` → `tokio_postgres` `SELECT 1` via localhost → stop → `Stopped`.
   - `start_when_running_reports_already_running`.
   - `start_blocked_by_foreign_listener`: bind `127.0.0.1:<port>` from the test → `Blocked(report)` with `Conflict`; with `Force` → start is attempted (any result is fine, no panic).
@@ -262,15 +262,15 @@ Required behavior:
 
 - [ ] **Step 1:** Implement; every UI callback that touches core calls `Runtime::spawn` and updates the entity in `cx.spawn`.
 - [ ] **Step 2:** Manual verification on this machine (step script in notes): create instance `demo` on port 5433 → the dialog must name `rekamedika-postgres` (Docker, `*:5433`) and explain the shadowing; recreate it on a free port → start → log appears live → stop → restart; the window stays responsive while downloading a binary. Screenshot each step.
-- [ ] **Step 3:** Build/test/clippy gate; `cargo tree -p pgdesk-core | grep -i gpui` empty.
+- [ ] **Step 3:** Build/test/clippy gate; `cargo tree -p sawit-core | grep -i gpui` empty.
 - [ ] **Step 4:** Commit `feat(app): server manager with port conflict dialog and live logs`.
 
 ### Task 12: README, size & memory footprint
 
 **Files:** `README.md`, `Cargo.toml` (release profile).
 
-- [ ] **Step 1:** `cargo build --release -p pgdesk`; record the binary size (`ls -lh target/release/pgdesk`) and idle RSS 10 seconds after opening (`ps -o rss= -p <pid>`); target < 150 MB.
-- [ ] **Step 2:** README: prerequisites (Rust stable; no full Xcode needed thanks to `runtime_shaders`; no Docker/Homebrew needed when using downloaded binaries), `cargo run -p pgdesk`, running tests (including `--include-ignored`, which needs network/binaries), architecture decisions (table from the spec + spike findings), measured size/RSS numbers, map of stages 2–5.
+- [ ] **Step 1:** `cargo build --release -p sawit`; record the binary size (`ls -lh target/release/sawit`) and idle RSS 10 seconds after opening (`ps -o rss= -p <pid>`); target < 150 MB.
+- [ ] **Step 2:** README: prerequisites (Rust stable; no full Xcode needed thanks to `runtime_shaders`; no Docker/Homebrew needed when using downloaded binaries), `cargo run -p sawit`, running tests (including `--include-ignored`, which needs network/binaries), architecture decisions (table from the spec + spike findings), measured size/RSS numbers, map of stages 2–5.
 - [ ] **Step 3:** Build/test/clippy gate; commit `docs: README with build, run, architecture decisions`.
 
 ---

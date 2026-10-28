@@ -5,7 +5,7 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use pgdesk_core::pgctl::PgCtlStatus;
+use sawit_core::pgctl::PgCtlStatus;
 
 use super::store::{ServerStore, Status};
 

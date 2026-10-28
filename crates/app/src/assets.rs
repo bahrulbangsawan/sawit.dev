@@ -93,8 +93,8 @@ fn agent_logo(path: &str) -> Option<&'static [u8]> {
         .map(|(_, b)| *b)
 }
 
-/// The PG Desk mark (title bar).
-pub const LOGO_MARK: &str = "logo/pgdesk-mark.svg";
+/// The Sawit mark (title bar).
+pub const LOGO_MARK: &str = "logo/sawit-mark.svg";
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
@@ -106,7 +106,7 @@ impl AssetSource for AppAssets {
         }
         if path == LOGO_MARK {
             return Ok(Some(Cow::Borrowed(include_bytes!(
-                "../../../assets/logo/pgdesk-mark.svg"
+                "../../../assets/logo/sawit-mark.svg"
             ))));
         }
         match ExtraIcons.load(path)? {

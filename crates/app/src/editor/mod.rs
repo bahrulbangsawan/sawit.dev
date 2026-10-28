@@ -14,10 +14,10 @@ use gpui_kit::component::text::TextView;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use pgdesk_core::files::{
+use sawit_core::files::{
     FileKind, TextFile, classify, language_for, language_label, read_text, write_text_atomic,
 };
-use pgdesk_core::format::{format_text, tool_for};
+use sawit_core::format::{format_text, tool_for};
 
 use crate::rt;
 
@@ -95,7 +95,7 @@ impl FileEditor {
         let read_path = path.clone();
         let rx = rt::spawn(cx, async move {
             let modified = mtime(&read_path);
-            // `pgdesk new.rs` opens an empty buffer; saving creates the file.
+            // `sawit new.rs` opens an empty buffer; saving creates the file.
             if !read_path.exists() {
                 return Ok((
                     TextFile {

@@ -1,4 +1,4 @@
-//! The `pgdesk` command, like `zed`. From a terminal it hands its paths to
+//! The `sawit` command, like `zed`. From a terminal it hands its paths to
 //! the running app over a Unix socket (launching the app first when needed)
 //! and returns, or blocks with `--wait`. Inside the app, the socket server
 //! routes each request to the right window, opening new ones as needed.
@@ -16,24 +16,24 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use gpui_kit::component::TitleBar;
 use gpui_kit::*;
-use pgdesk_core::cli::{
+use sawit_core::cli::{
     CLI_LINK, Invocation, OpenRequest, REPLY_DONE, REPLY_ERROR, REPLY_OK, Target, USAGE, decode,
     encode, install_link, install_link_as_admin, parse_args,
 };
-use pgdesk_core::cli::{LinkState, link_state};
-use pgdesk_core::instances::AppPaths;
-use pgdesk_core::probe::find_in_path;
+use sawit_core::cli::{LinkState, link_state};
+use sawit_core::instances::AppPaths;
+use sawit_core::probe::find_in_path;
 
 use crate::rt;
 use crate::workspace::Workspace;
 
-actions!(pgdesk, [InstallCli, Quit]);
+actions!(sawit, [InstallCli, Quit]);
 
 // ---------------------------------------------------------------------------
 // The command line (runs before GPUI starts)
 // ---------------------------------------------------------------------------
 
-/// Handles `pgdesk …`. Returns the request to open when this process should
+/// Handles `sawit …`. Returns the request to open when this process should
 /// become the app (launched by Finder/Dock/`open`, or `--foreground`);
 /// otherwise talks to the app and exits.
 pub fn command_line() -> OpenRequest {
@@ -45,7 +45,7 @@ pub fn command_line() -> OpenRequest {
             std::process::exit(0);
         }
         Ok(Invocation::Version) => {
-            println!("pgdesk {}", env!("CARGO_PKG_VERSION"));
+            println!("sawit {}", env!("CARGO_PKG_VERSION"));
             std::process::exit(0);
         }
         Ok(Invocation::Open {
@@ -54,7 +54,7 @@ pub fn command_line() -> OpenRequest {
             foreground,
         }) => (request, stdin, foreground),
         Err(e) => {
-            eprintln!("pgdesk: {e}\nSee `pgdesk --help`.");
+            eprintln!("sawit: {e}\nSee `sawit --help`.");
             std::process::exit(2);
         }
     };
@@ -66,7 +66,7 @@ pub fn command_line() -> OpenRequest {
                 column: None,
             }),
             Err(e) => {
-                eprintln!("pgdesk: failed to read stdin: {e}");
+                eprintln!("sawit: failed to read stdin: {e}");
                 std::process::exit(1);
             }
         }
@@ -78,13 +78,13 @@ pub fn command_line() -> OpenRequest {
     std::process::exit(match send(&request) {
         Ok(()) => 0,
         Err(e) => {
-            eprintln!("pgdesk: {e}");
+            eprintln!("sawit: {e}");
             1
         }
     });
 }
 
-/// Copies stdin into a fresh file under the cache folder (`ls | pgdesk -`).
+/// Copies stdin into a fresh file under the cache folder (`ls | sawit -`).
 fn stdin_to_file() -> std::io::Result<PathBuf> {
     let dir = AppPaths::default_macos().cache_dir().join("stdin");
     std::fs::create_dir_all(&dir)?;
@@ -106,15 +106,15 @@ fn send(request: &OpenRequest) -> Result<(), String> {
     let mut stream = match UnixStream::connect(&socket) {
         Ok(stream) => stream,
         Err(_) => {
-            launch_app().map_err(|e| format!("failed to start PG Desk: {e}"))?;
+            launch_app().map_err(|e| format!("failed to start Sawit: {e}"))?;
             connect_when_ready(&socket, Duration::from_secs(20))
-                .ok_or("PG Desk is not responding; try opening the app directly")?
+                .ok_or("Sawit is not responding; try opening the app directly")?
         }
     };
     stream
         .write_all(&encode(request))
         .and_then(|()| stream.shutdown(std::net::Shutdown::Write))
-        .map_err(|e| format!("failed to send to PG Desk: {e}"))?;
+        .map_err(|e| format!("failed to send to Sawit: {e}"))?;
     let mut handled = false;
     for line in BufReader::new(stream).lines() {
         let line = line.map_err(|e| e.to_string())?;
@@ -130,7 +130,7 @@ fn send(request: &OpenRequest) -> Result<(), String> {
     if handled {
         Ok(())
     } else {
-        Err("PG Desk closed the connection".into())
+        Err("Sawit closed the connection".into())
     }
 }
 
@@ -159,7 +159,7 @@ fn launch_app() -> std::io::Result<()> {
         .map(drop)
 }
 
-/// `…/PG Desk.app` when `exe` is `…/PG Desk.app/Contents/MacOS/pgdesk`.
+/// `…/Sawit.app` when `exe` is `…/Sawit.app/Contents/MacOS/sawit`.
 pub fn bundle_of(exe: &Path) -> Option<&Path> {
     let bundle = exe.parent()?.parent()?.parent()?;
     let inside = exe.parent()?.ends_with("Contents/MacOS");
@@ -200,7 +200,7 @@ struct Windows {
 
 impl Global for Windows {}
 
-/// Whether `pgdesk` in the terminal reaches this app; the title bar's
+/// Whether `sawit` in the terminal reaches this app; the title bar's
 /// "Install CLI" button shows only while it doesn't.
 pub struct CliStatus {
     pub installed: bool,
@@ -212,7 +212,7 @@ impl CliStatus {
             return false;
         };
         link_state(Path::new(CLI_LINK), &exe) == LinkState::Installed
-            || find_in_path("pgdesk").and_then(|p| p.canonicalize().ok()) == Some(exe)
+            || find_in_path("sawit").and_then(|p| p.canonicalize().ok()) == Some(exe)
     }
 }
 
@@ -232,15 +232,15 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &InstallCli, cx| install_cli(cx));
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
-    cx.set_menus([Menu::new("PG Desk").items([
-        MenuItem::action("Install ‘pgdesk’ Command in PATH…", InstallCli),
+    cx.set_menus([Menu::new("Sawit").items([
+        MenuItem::action("Install ‘sawit’ Command in PATH…", InstallCli),
         MenuItem::separator(),
-        MenuItem::action("Quit PG Desk", Quit),
+        MenuItem::action("Quit Sawit", Quit),
     ])]);
     cx.on_window_closed(|cx, _| check_waiters(cx)).detach();
 }
 
-/// Opens a PG Desk window, optionally with a project folder.
+/// Opens a Sawit window, optionally with a project folder.
 pub fn open_window(
     project: Option<PathBuf>,
     cx: &mut App,
@@ -251,7 +251,7 @@ pub fn open_window(
         ..TitleBar::window_options()
     };
     let (handle, workspace) = gpui_kit::open_window(options, cx, |window, cx| {
-        window.set_window_title("PG Desk");
+        window.set_window_title("Sawit");
         cx.new(|cx| {
             let mut workspace = Workspace::new(window, cx);
             if let Some(project) = project {
@@ -260,7 +260,7 @@ pub fn open_window(
             workspace
         })
     })
-    .inspect_err(|e| eprintln!("pgdesk: failed to open a window: {e}"))
+    .inspect_err(|e| eprintln!("sawit: failed to open a window: {e}"))
     .ok()?;
     // Closing a tab notifies the workspace: a `--wait` may be over.
     cx.observe(&workspace, |_, cx| check_waiters(cx)).detach();
@@ -308,7 +308,7 @@ pub fn serve(cx: &mut App) {
     let path = AppPaths::default_macos().cli_socket();
     if UnixStream::connect(&path).is_ok() {
         eprintln!(
-            "pgdesk: another PG Desk is already serving {}; the CLI goes there",
+            "sawit: another Sawit is already serving {}; the CLI goes there",
             path.display()
         );
         return;
@@ -321,7 +321,7 @@ pub fn serve(cx: &mut App) {
     let listener = match UnixListener::bind(&path) {
         Ok(listener) => listener,
         Err(e) => {
-            eprintln!("pgdesk: CLI socket {} failed: {e}", path.display());
+            eprintln!("sawit: CLI socket {} failed: {e}", path.display());
             return;
         }
     };
@@ -345,10 +345,10 @@ pub fn serve(cx: &mut App) {
         }
     };
     if let Err(e) = std::thread::Builder::new()
-        .name("pgdesk-cli".into())
+        .name("sawit-cli".into())
         .spawn(accept)
     {
-        eprintln!("pgdesk: CLI thread failed: {e}");
+        eprintln!("sawit: CLI thread failed: {e}");
         return;
     }
     cx.spawn(async move |cx| {
@@ -394,7 +394,7 @@ pub fn handle(request: OpenRequest, mut stream: Option<UnixStream>, cx: &mut App
         });
         last = Some((handle, workspace));
     }
-    // Just `pgdesk`: bring the app forward.
+    // Just `sawit`: bring the app forward.
     if last.is_none() {
         last = match request.new_window {
             true => open_window(None, cx),
@@ -405,7 +405,7 @@ pub fn handle(request: OpenRequest, mut stream: Option<UnixStream>, cx: &mut App
         if let Some(stream) = &mut stream {
             reply(
                 stream,
-                &format!("{REPLY_ERROR}couldn't open a PG Desk window"),
+                &format!("{REPLY_ERROR}couldn't open a Sawit window"),
             );
         }
         return;
@@ -487,7 +487,7 @@ fn check_waiters(cx: &mut App) {
     });
 }
 
-/// Links `/usr/local/bin/pgdesk` to this app (menu and title bar), asking
+/// Links `/usr/local/bin/sawit` to this app (menu and title bar), asking
 /// for the admin password when the folder is root-owned.
 pub fn install_cli(cx: &mut App) {
     let Ok(exe) = std::env::current_exe().and_then(|e| e.canonicalize()) else {
@@ -518,14 +518,14 @@ pub fn install_cli(cx: &mut App) {
                         std::env::split_paths(&p).any(|d| d == Path::new("/usr/local/bin"))
                     });
                     let mut detail = format!(
-                        "{CLI_LINK} is installed. From a terminal:\n  pgdesk .            open this folder\n  pgdesk file.rs:42    open a file at line 42\n  pgdesk --help        all options"
+                        "{CLI_LINK} is installed. From a terminal:\n  sawit .             open this folder\n  sawit file.rs:42    open a file at line 42\n  sawit --help        all options"
                     );
                     if !in_path {
                         detail.push_str("\n\n/usr/local/bin isn't in your shell's PATH yet; add it in ~/.zshrc.");
                     }
-                    (PromptLevel::Info, "‘pgdesk’ command installed", detail)
+                    (PromptLevel::Info, "‘sawit’ command installed", detail)
                 }
-                Err(e) => (PromptLevel::Critical, "Couldn't install the ‘pgdesk’ command", e),
+                Err(e) => (PromptLevel::Critical, "Couldn't install the ‘sawit’ command", e),
             };
             if let Some((handle, _)) = frontmost(cx) {
                 let _ = handle.update(cx, |_, window, cx| {
@@ -545,9 +545,9 @@ mod tests {
     #[test]
     fn bundle_detection() {
         assert_eq!(
-            bundle_of(Path::new("/Applications/PG Desk.app/Contents/MacOS/pgdesk")),
-            Some(Path::new("/Applications/PG Desk.app"))
+            bundle_of(Path::new("/Applications/Sawit.app/Contents/MacOS/sawit")),
+            Some(Path::new("/Applications/Sawit.app"))
         );
-        assert_eq!(bundle_of(Path::new("/repo/target/release/pgdesk")), None);
+        assert_eq!(bundle_of(Path::new("/repo/target/release/sawit")), None);
     }
 }

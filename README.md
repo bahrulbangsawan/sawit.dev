@@ -1,6 +1,9 @@
-<p align="center"><img src="assets/logo/pgdesk.svg" width="112" alt="PG Desk"></p>
-
-<h1 align="center">PG Desk</h1>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/sawit-wordmark-dark.svg">
+    <img src="assets/logo/sawit-wordmark.svg" width="360" alt="sawit.dev">
+  </picture>
+</p>
 
 <p align="center">
   <b>Postgres, an editor, and a terminal in one native macOS app, without Docker.</b><br>
@@ -25,7 +28,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/media/demo.gif" alt="PG Desk demo: server, port conflict detection, table, SQL editor, code editor, terminal, and Markdown preview" width="100%">
+  <img src="docs/media/demo.gif" alt="Sawit demo: server, port conflict detection, table, SQL editor, code editor, terminal, and Markdown preview" width="100%">
   <br>
   <sub>▶︎ <a href="docs/media/demo.mp4">Watch the demo video (MP4, 40 seconds)</a>: server → port conflict → table → SQL → code + terminal → Markdown preview</sub>
 </p>
@@ -34,8 +37,8 @@
 
 ## Overview
 
-PG Desk is built for local development with PostgreSQL. This work usually needs Docker Desktop,
-a database client, an editor, and a terminal as separate apps. In PG Desk they all live in a single
+Sawit is built for local development with PostgreSQL. This work usually needs Docker Desktop,
+a database client, an editor, and a terminal as separate apps. In Sawit they all live in a single
 **24 MB** Rust binary that uses **±67 MB of memory** when idle. The UI is GPU-rendered with
 [GPUI](https://gpui.rs), and its look follows Zed (the "One Dark" palette).
 
@@ -45,12 +48,12 @@ a database client, an editor, and a terminal as separate apps. In PG Desk they a
 
 | | |
 |---|---|
-| 🐘 **Postgres without Docker** | Use binaries from Homebrew, Postgres.app, or `PATH`, or let PG Desk download PostgreSQL 16/17/18. |
-| 🛡️ **Port conflicts prevented** | Before starting, PG Desk checks for processes already using the port, including Docker containers. |
+| 🐘 **Postgres without Docker** | Use binaries from Homebrew, Postgres.app, or `PATH`, or let Sawit download PostgreSQL 16/17/18. |
+| 🛡️ **Port conflicts prevented** | Before starting, Sawit checks for processes already using the port, including Docker containers. |
 | 🔍 **Safe data browsing** | The table grid uses a separate read-only connection. Passwords are stored in the macOS Keychain. |
 | ✍️ **Full editor** | Highlighting for ±200 languages, formatters, Markdown/HTML/SVG preview, and image, PDF, and video viewers. |
 | 🖥️ **A real terminal** | Full `alacritty_terminal` emulation, and it can run [herdr](https://herdr.dev). |
-| 🤖 **Ready for AI agents** | The `pgdesk-mcp` MCP server: queries are always read-only, plus tools to start/stop instances and write `.env`. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` MCP server: queries are always read-only, plus tools to start/stop instances and write `.env`. |
 
 ## Features
 
@@ -61,7 +64,7 @@ a database client, an editor, and a terminal as separate apps. In PG Desk they a
 - A list of instances with name, version, port, data dir, and status. It has **Start / Stop / Restart**
   buttons (via `pg_ctl`) and a **live log**.
 - Postgres binaries from Homebrew, Postgres.app, or `PATH` are **detected automatically**. They can also be
-  **downloaded by PG Desk** (PostgreSQL 16/17/18), so a project needs neither Docker nor Homebrew.
+  **downloaded by Sawit** (PostgreSQL 16/17/18), so a project needs neither Docker nor Homebrew.
 - Existing data dirs (e.g. a Homebrew cluster) can be added.
 - The **`.env`** button writes `DATABASE_URL=postgres://postgres@localhost:<port>/postgres` to the project's `.env`,
   so TanStack, Next.js, Rails, and other apps connect right away.
@@ -72,8 +75,8 @@ a database client, an editor, and a terminal as separate apps. In PG Desk they a
 
 <img src="docs/media/port-conflict.png" alt="Warning: port 55434 is shadowed by another process, start is blocked" width="100%">
 
-Before starting, PG Desk checks who is already listening on the port: another process, a Homebrew service,
-a Docker container (with its name), Postgres.app, or another PG Desk instance. It also catches the hardest
+Before starting, Sawit checks who is already listening on the port: another process, a Homebrew service,
+a Docker container (with its name), Postgres.app, or another Sawit instance. It also catches the hardest
 case to track down, a **shadowed** port: one process binds `127.0.0.1:5433` while another binds
 `*:5433`, so clients silently connect to the wrong database. Start is blocked and the cause is
 explained. A conflict on the same address cannot be forced.
@@ -82,7 +85,7 @@ explained. A conflict on the same address cannot be forced.
 
 <img src="docs/media/table-grid.png" alt="Schema tree and table grid for shop.orders, 18,500 rows, page 1 of 370" width="100%">
 
-- **Connections** from `DATABASE_URL`, a `.env` file, or a running PG Desk instance. Passwords are stored in the
+- **Connections** from `DATABASE_URL`, a `.env` file, or a running Sawit instance. Passwords are stored in the
   **macOS Keychain**, never in a file.
 - **TLS** follows the `sslmode` in the URL: `disable`/`prefer`/`require` behave like libpq, and
   `verify-full` checks the certificate against the system trust store. Dropped connections reconnect
@@ -104,13 +107,13 @@ explained. A conflict on the same address cannot be forced.
 
 ### Project code editor
 
-- Open a project with `pgdesk <folder>` or the folder icon. See [The `pgdesk` command](#the-pgdesk-command).
+- Open a project with `sawit <folder>` or the folder icon. See [The `sawit` command](#the-sawit-command).
 - **Virtual file tree** with per-file-type icons. The tree updates when files are created or deleted
   from the terminal.
 - **Highlighting for ±200 languages** (syntect), including Dockerfile, Makefile, Vue, Svelte, Kotlin, and more.
 - Soft wrap without horizontal scrolling, Zed-style toolbar (breadcrumb, `Ln, Col`, language).
 - <kbd>⌘</kbd><kbd>S</kbd> saves atomically (symlinks stay symlinks). Files changed on disk are
-  reloaded; if there are unsaved changes, PG Desk shows a warning.
+  reloaded; if there are unsaved changes, Sawit shows a warning.
 - **Formatter** <kbd>⇧</kbd><kbd>⌘</kbd><kbd>I</kbd>:
   - Prettier for JS/TS/JSON/CSS/SCSS/Less/HTML/Vue/Markdown/YAML/GraphQL.
   - sql-formatter (PostgreSQL dialect) for SQL.
@@ -172,51 +175,58 @@ Prerequisites:
 - Docker and Homebrew are not required.
 
 ```bash
-cargo run -p pgdesk -- --foreground             # the app, with logs in the terminal
-cargo run -p pgdesk -- --foreground ~/code/app  # open a project folder directly
-cargo build --release               # target/release/pgdesk and target/release/pgdesk-mcp
-scripts/bundle-macos.sh             # target/release/PG Desk.app (with icon) for /Applications
+cargo run -p sawit -- --foreground             # the app, with logs in the terminal
+cargo run -p sawit -- --foreground ~/code/app  # open a project folder directly
+cargo build --release                          # target/release/sawit and target/release/sawit-mcp
+scripts/bundle-macos.sh                        # target/release/Sawit.app (with icon) for /Applications
 ```
 
-App data is stored in `~/Library/Application Support/pgdesk/`:
+App data is stored in `~/Library/Application Support/sawit/`:
 
 - `instances.toml` and `profiles.toml`
 - `clusters/` and `logs/`
 - `bin/` for downloaded binaries
 - `run/` for sockets
-- `pgdesk.sock`, where the `pgdesk` command talks to the running app
+- `sawit.sock`, where the `sawit` command talks to the running app
 
-Set `PGDESK_HOME=/path` to use a different folder (development/test).
+Set `SAWIT_HOME=/path` to use a different folder (development/test).
 
-## The `pgdesk` command
+**Coming from PG Desk?** Sawit was called PG Desk before v0.0.3. On first launch it moves
+`~/Library/Application Support/pgdesk/` to `…/sawit/`, along with your instances and connections. Saved
+passwords move to the new Keychain entry the first time they are used. Installing the MCP server
+from the MCP page replaces the old `pgdesk` entry in each client. Run **Install CLI** again to get the
+`sawit` command, and delete the old `/usr/local/bin/pgdesk` link. Updating from PG Desk 0.0.2 can't
+happen in the app: download `Sawit.dmg` once from Releases.
 
-Like `zed`, PG Desk can be opened from the terminal. Install the command with the **Install CLI** button in the title bar
-(shown only while the command is not installed) or the **PG Desk → Install ‘pgdesk’ Command in PATH…** menu item.
-Both create a symlink `/usr/local/bin/pgdesk` to the app and ask for an admin password if that folder is owned by
+## The `sawit` command
+
+Like `zed`, Sawit can be opened from the terminal. Install the command with the **Install CLI** button in the title bar
+(shown only while the command is not installed) or the **Sawit → Install ‘sawit’ Command in PATH…** menu item.
+Both create a symlink `/usr/local/bin/sawit` to the app and ask for an admin password if that folder is owned by
 root.
 
 ```bash
-pgdesk                    # open/activate PG Desk
-pgdesk .                  # open this folder as a project
-pgdesk src/main.rs:42:5   # open a file at line 42, column 5 (grep/rustc output format is also accepted)
-pgdesk new.sql           # a file that doesn't exist opens empty; ⌘S creates it
-pgdesk -n ~/code/other     # always in a new window
-pgdesk -r ~/code/other     # replace the project in the frontmost window
-ls -la | pgdesk -         # open stdin as a file
-git config --global core.editor "pgdesk --wait"   # wait until the file tab is closed
+sawit                    # open/activate Sawit
+sawit .                  # open this folder as a project
+sawit src/main.rs:42:5   # open a file at line 42, column 5 (grep/rustc output format is also accepted)
+sawit new.sql            # a file that doesn't exist opens empty; ⌘S creates it
+sawit -n ~/code/other    # always in a new window
+sawit -r ~/code/other    # replace the project in the frontmost window
+ls -la | sawit -         # open stdin as a file
+git config --global core.editor "sawit --wait"   # wait until the file tab is closed
 ```
 
-- If PG Desk is already running, paths are sent to it over a Unix socket and the command returns right away.
-  If not, PG Desk is launched first, detached from the terminal.
+- If Sawit is already running, paths are sent to it over a Unix socket and the command returns right away.
+  If not, Sawit is launched first, detached from the terminal.
 - A folder that is already open is just focused. A new folder fills a window that has no project yet, or
   opens a new window. Files go to the window whose project contains them, or to the frontmost window.
 - `--wait` returns after all opened files are closed (or the app quits).
-- `--foreground` runs the app in that terminal itself (for debugging). `pgdesk --help` lists
+- `--foreground` runs the app in that terminal itself (for debugging). `sawit --help` lists
   all options.
 
 ## MCP for AI agents
 
-The `pgdesk-mcp` binary (stdio) gives AI agents access to local instances and databases:
+The `sawit-mcp` binary (stdio) gives AI agents access to local instances and databases:
 
 | Tool | Purpose |
 |---|---|
@@ -228,16 +238,16 @@ The `pgdesk-mcp` binary (stdio) gives AI agents access to local instances and da
 | `write_env` | Write `DATABASE_URL` to the project's `.env` |
 
 ```bash
-claude mcp add pgdesk -- /path/to/target/release/pgdesk-mcp
+claude mcp add sawit -- /path/to/target/release/sawit-mcp
 ```
 
 ## Versions, changelog & updates
 
 - Versions start at **0.0.1** and bump one patch on **every push to `main`**. The history is in
   [`CHANGELOG.md`](CHANGELOG.md) and on the **Changelog** page in the app (click the version label in the title bar).
-- PG Desk checks [GitHub Releases](https://github.com/bahrulbangsawan/pgdesk/releases) on launch and
+- Sawit checks [GitHub Releases](https://github.com/bahrulbangsawan/sawit/releases) on launch and
   every 4 hours. New versions download in the background. Once ready, a **Restart for Update** button appears in the
-  title bar: the app quits, `PG Desk.app` is replaced, and it reopens. Builds from `cargo` only
+  title bar: the app quits, `Sawit.app` is replaced, and it reopens. Builds from `cargo` only
   open the releases page.
 
 Release flow (enable once per clone with `git config core.hooksPath .githooks`):
@@ -245,9 +255,9 @@ Release flow (enable once per clone with `git config core.hooksPath .githooks`):
 1. `git push` to `main` runs `.githooks/pre-push` → `scripts/release.sh`: the version in `Cargo.toml`
    is bumped (the first release stays 0.0.1), a new `CHANGELOG.md` section is written from commit messages
    (grouped as `feat`/`fix`/`perf`/other), then a `chore(release): vX` commit and a `vX` tag are created.
-2. After that push finishes, the release commit and tag are pushed too (log in `.git/pgdesk-release.log`).
+2. After that push finishes, the release commit and tag are pushed too (log in `.git/sawit-release.log`).
 3. The tag triggers `.github/workflows/release.yml`: the app is built on a macOS runner and published as a
-   GitHub Release (`PG-Desk-X-macos-arm64.zip` for the updater, `PG-Desk.dmg`, notes from `CHANGELOG.md`).
+   GitHub Release (`Sawit-X-macos-arm64.zip` for the updater, `Sawit.dmg`, notes from `CHANGELOG.md`).
 
 ## Test
 
@@ -263,7 +273,7 @@ If no binaries are found, the tests are skipped with a message.
 ## Architecture & key decisions
 
 ```
-crates/core   pgdesk-core — no GPUI, tested with plain cargo test
+crates/core   sawit-core — no GPUI, tested with plain cargo test
   ports, owners, probe   lsof/ps/docker → conflict analysis & explanation
   pgctl, control         status/initdb/start/stop/restart + log tail
   binaries, download     binary detection + download via postgresql_archive
@@ -272,8 +282,8 @@ crates/core   pgdesk-core — no GPUI, tested with plain cargo test
   files                  folder listing, safe reads, atomic saves
   terminal               PTY + alacritty_terminal → snapshot, keyboard/mouse encoding
   rt                     Tokio runtime on its own thread
-crates/app    pgdesk — GPUI UI only (draws & forwards input)
-crates/mcp    pgdesk-mcp — stdio MCP server on top of core
+crates/app    sawit — GPUI UI only (draws & forwards input)
+crates/mcp    sawit-mcp — stdio MCP server on top of core
 ```
 
 <details>
@@ -303,8 +313,8 @@ Measured on an Apple Silicon MacBook (macOS 26.6), release build (`lto = "thin"`
 
 | | |
 |---|---|
-| `pgdesk` | 24.0 MB (single file, no JVM/Chromium/Node runtime) |
-| `pgdesk-mcp` | 4.5 MB (including TLS) |
+| `sawit` | 24.0 MB (single file, no JVM/Chromium/Node runtime) |
+| `sawit-mcp` | 4.5 MB (including TLS) |
 | Idle memory (1 window, 1 terminal tab, 10 seconds after launch) | RSS 85 MB · physical footprint 67 MB (peak 115 MB during startup) |
 | Clean release build | ±4 minutes |
 
@@ -321,5 +331,5 @@ Figures for other apps are not listed because they have not been measured on the
 - The terminal does not yet support mouse text selection for copying. Programs inside it (e.g. herdr)
   still receive mouse input.
 
-<sub>Screenshots and video in `docs/media/` were recorded from a release build with demo data (separate `PGDESK_HOME`,
+<sub>Screenshots and video in `docs/media/` were recorded from a release build with demo data (separate `SAWIT_HOME`,
 Homebrew PostgreSQL 16 cluster).</sub>

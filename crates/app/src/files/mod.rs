@@ -9,7 +9,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::time::Duration;
 
-use pgdesk_core::files::{Entry, list_dir};
+use sawit_core::files::{Entry, list_dir};
 
 use crate::rt;
 

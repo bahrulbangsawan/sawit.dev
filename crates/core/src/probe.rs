@@ -73,7 +73,7 @@ pub async fn brew_prefix() -> Option<PathBuf> {
 /// The `PATH` a login shell would have. GUI apps launched from Finder get a
 /// minimal `PATH`, so the app adopts this at startup (as Zed does).
 pub async fn login_shell_path() -> Option<String> {
-    const MARK: &str = "__PGDESK_PATH__";
+    const MARK: &str = "__SAWIT_PATH__";
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let script = format!("printf '{MARK}%s' \"$PATH\"");
     let out = cmd::run(shell, ["-l", "-c", script.as_str()], Duration::from_secs(5))
@@ -101,8 +101,8 @@ impl OwnedListener {
             Owner::Homebrew { formula: Some(f) } => format!("Homebrew {f} (PID {})", l.pid),
             Owner::Homebrew { formula: None } => format!("Homebrew {} (PID {})", l.command, l.pid),
             Owner::PostgresApp => format!("Postgres.app (PID {})", l.pid),
-            Owner::PgDesk { instance } => {
-                format!("PG Desk instance \"{instance}\" (PID {})", l.pid)
+            Owner::Sawit { instance } => {
+                format!("Sawit instance \"{instance}\" (PID {})", l.pid)
             }
             Owner::Other => format!("{} (PID {})", l.command, l.pid),
         }

@@ -1,4 +1,4 @@
-//! Downloads PostgreSQL binaries for PG Desk to manage, so projects need
+//! Downloads PostgreSQL binaries for Sawit to manage, so projects need
 //! neither Docker nor Homebrew. Uses `postgresql_archive` (theseus builds).
 
 use std::path::{Path, PathBuf};

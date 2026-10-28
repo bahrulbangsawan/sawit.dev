@@ -3,11 +3,11 @@
 
 use std::path::PathBuf;
 
-use pgdesk_core::binaries::{SearchRoots, discover};
-use pgdesk_core::control::{self, Preflight, StartOutcome};
-use pgdesk_core::instances::{AppPaths, Instance, ListenScope};
-use pgdesk_core::pgctl::PgCtlStatus;
-use pgdesk_core::ports::PortVerdict;
+use sawit_core::binaries::{SearchRoots, discover};
+use sawit_core::control::{self, Preflight, StartOutcome};
+use sawit_core::instances::{AppPaths, Instance, ListenScope};
+use sawit_core::pgctl::PgCtlStatus;
+use sawit_core::ports::PortVerdict;
 
 struct Fixture {
     _dir: tempfile::TempDir,
@@ -23,7 +23,7 @@ async fn fixture() -> Option<Fixture> {
     };
     let dir = tempfile::tempdir().unwrap();
     let paths = AppPaths {
-        root: dir.path().join("pg desk it"),
+        root: dir.path().join("sawit dev it"),
     };
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()

@@ -25,8 +25,8 @@ use crate::tabs::{CloseOp, TabFlags, active_after, to_close};
 use crate::terminal::TerminalPanel;
 use crate::update::{Updater, updater};
 use crate::viewers::{ImageView, PdfView, VideoView};
-use pgdesk_core::files::{FileKind, classify};
-use pgdesk_core::update::Version;
+use sawit_core::files::{FileKind, classify};
+use sawit_core::update::Version;
 
 actions!(
     workspace,
@@ -243,7 +243,7 @@ impl Workspace {
         self.files.read(cx).root.clone()
     }
 
-    /// Files shown in tabs (editors and viewers), for `pgdesk --wait`.
+    /// Files shown in tabs (editors and viewers), for `sawit --wait`.
     pub fn open_files(&self, cx: &App) -> Vec<PathBuf> {
         self.tabs
             .iter()
@@ -975,7 +975,7 @@ impl Workspace {
                     .xsmall()
                     .icon(Lucide::Download)
                     .label("Restart for Update")
-                    .tooltip(format!("Install PG Desk {v} and relaunch"))
+                    .tooltip(format!("Install Sawit {v} and relaunch"))
                     .on_click(
                         cx.listener(|this, _, _, cx| {
                             this.updater.update(cx, |u, cx| u.restart(cx))
@@ -997,7 +997,7 @@ impl Workspace {
                         .xsmall()
                         .icon(Lucide::SquareTerminal)
                         .label("Install CLI")
-                        .tooltip("Install the `pgdesk` command to open folders from a terminal")
+                        .tooltip("Install the `sawit` command to open folders from a terminal")
                         .on_click(|_, _, cx| crate::cli::install_cli(cx)),
                 )
             })
@@ -1141,7 +1141,7 @@ impl Render for Workspace {
                         .gap_2()
                         .text_sm()
                         .child(img(crate::assets::LOGO_MARK).size(px(16.)))
-                        .child(div().font_semibold().child("PG Desk"))
+                        .child(div().font_semibold().child("Sawit"))
                         .child(
                             div()
                                 .text_color(cx.theme().muted_foreground)

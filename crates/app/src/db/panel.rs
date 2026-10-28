@@ -1,4 +1,4 @@
-//! Database sidebar: connections (from a URL, a project's .env, or a PG Desk
+//! Database sidebar: connections (from a URL, a project's .env, or a Sawit
 //! instance) and their schema → table/view → column tree.
 
 use std::collections::HashSet;
@@ -9,7 +9,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use pgdesk_core::db::{ConnProfile, RelKind};
+use sawit_core::db::{ConnProfile, RelKind};
 
 use super::store::DbStore;
 use crate::servers::ServerStore;
@@ -110,7 +110,7 @@ impl DatabasePanel {
         .detach();
     }
 
-    /// Adds a profile for every running PG Desk instance.
+    /// Adds a profile for every running Sawit instance.
     fn add_instances(&mut self, cx: &mut Context<Self>) {
         let servers = self.servers.read(cx);
         let running: Vec<_> = servers
@@ -120,16 +120,16 @@ impl DatabasePanel {
             .filter(|i| {
                 matches!(
                     servers.status(&i.name),
-                    crate::servers::Status::Known(pgdesk_core::pgctl::PgCtlStatus::Running { .. })
+                    crate::servers::Status::Known(sawit_core::pgctl::PgCtlStatus::Running { .. })
                 )
             })
             .map(|i| ConnProfile {
-                name: format!("{} (PG Desk)", i.name),
+                name: format!("{} (Sawit)", i.name),
                 ..ConnProfile::new("localhost", i.port, "postgres", "postgres")
             })
             .collect();
         if running.is_empty() {
-            self.error = Some("No PG Desk instances are running.".into());
+            self.error = Some("No Sawit instances are running.".into());
         } else {
             self.error = None;
             for p in running {
@@ -493,7 +493,7 @@ impl Render for DatabasePanel {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::Server)
-                            .tooltip("Connect Running PG Desk Instances")
+                            .tooltip("Connect Running Sawit Instances")
                             .on_click(cx.listener(|this, _, _, cx| this.add_instances(cx))),
                     ),
             )
@@ -547,7 +547,7 @@ impl Render for DatabasePanel {
                                 .p_2()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("No connections yet. Add one from a DATABASE_URL, a .env file, or a running PG Desk instance."),
+                                .child("No connections yet. Add one from a DATABASE_URL, a .env file, or a running Sawit instance."),
                         )
                     }),
             )
@@ -559,7 +559,7 @@ mod tests {
     // Not a glob: `gpui_kit::*` exports a `test` macro that shadows #[test].
     use super::{Node, flatten};
     use crate::db::store::DbStore;
-    use pgdesk_core::db::{ColumnInfo, ConnProfile, Profiles, RelKind, Relation, SchemaInfo};
+    use sawit_core::db::{ColumnInfo, ConnProfile, Profiles, RelKind, Relation, SchemaInfo};
     use std::collections::HashSet;
 
     fn rel(name: &str, readable: bool) -> Relation {

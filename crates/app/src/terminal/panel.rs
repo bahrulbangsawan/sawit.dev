@@ -7,8 +7,8 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use pgdesk_core::probe::find_in_path;
-use pgdesk_core::terminal::{Command, GridSize, Session};
+use sawit_core::probe::find_in_path;
+use sawit_core::terminal::{Command, GridSize, Session};
 
 use super::view::{TerminalEvent, TerminalView};
 

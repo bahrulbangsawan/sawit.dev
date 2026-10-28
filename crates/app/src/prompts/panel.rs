@@ -7,7 +7,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use pgdesk_core::prompts::{fill, variables};
+use sawit_core::prompts::{fill, variables};
 
 use super::store::PromptStore;
 

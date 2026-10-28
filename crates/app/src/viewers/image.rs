@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::*;
-use pgdesk_core::instances::AppPaths;
-use pgdesk_core::media::{displayable, pixel_size};
+use sawit_core::instances::AppPaths;
+use sawit_core::media::{displayable, pixel_size};
 
 use super::{file_size_label, toolbar};
 use crate::rt;
@@ -30,7 +30,7 @@ impl ImageView {
             let shown = displayable(&source, &cache).await?;
             let size = pixel_size(&shown).await.ok();
             let bytes = std::fs::metadata(&source).map(|m| m.len()).ok();
-            Ok::<_, pgdesk_core::CoreError>((shown, size, bytes))
+            Ok::<_, sawit_core::CoreError>((shown, size, bytes))
         });
         cx.spawn(async move |this, cx| {
             let result = rx.await;

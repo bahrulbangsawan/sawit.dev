@@ -1,4 +1,4 @@
-//! Instance registry (TOML) and PG Desk's on-disk layout.
+//! Instance registry (TOML) and Sawit's on-disk layout.
 
 use std::path::{Path, PathBuf};
 
@@ -7,17 +7,24 @@ use serde::{Deserialize, Serialize};
 use crate::ports::BindAddr;
 use crate::{CoreError, Result};
 
-/// PG Desk's data directory and the files inside it.
+/// Sawit's data directory and the files inside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppPaths {
     pub root: PathBuf,
 }
 
 impl AppPaths {
-    /// `$PGDESK_HOME` if set (development/tests), else
-    /// `~/Library/Application Support/pgdesk`.
+    /// `$SAWIT_HOME` if set (development/tests), else
+    /// `~/Library/Application Support/sawit` (moved there from the
+    /// pre-rename `…/pgdesk` on first use).
     pub fn default_macos() -> AppPaths {
-        AppPaths::resolve(std::env::var_os("PGDESK_HOME"), std::env::var_os("HOME"))
+        let override_root = std::env::var_os("SAWIT_HOME").filter(|r| !r.is_empty());
+        let custom = override_root.is_some();
+        let paths = AppPaths::resolve(override_root, std::env::var_os("HOME"));
+        if !custom && let Some(support) = paths.root.parent() {
+            migrate_legacy_root(&support.join("pgdesk"), &paths.root);
+        }
+        paths
     }
 
     pub fn resolve(
@@ -29,7 +36,7 @@ impl AppPaths {
         }
         let home = home.map(PathBuf::from).unwrap_or_else(|| "/tmp".into());
         AppPaths {
-            root: home.join("Library/Application Support/pgdesk"),
+            root: home.join("Library/Application Support/sawit"),
         }
     }
 
@@ -49,19 +56,19 @@ impl AppPaths {
         self.root.join("run")
     }
 
-    /// Where the running app listens for the `pgdesk` CLI. Socket paths are
+    /// Where the running app listens for the `sawit` CLI. Socket paths are
     /// limited to 104 bytes on macOS, so a deep root falls back to `/tmp`
     /// (named per user and root).
     pub fn cli_socket(&self) -> PathBuf {
         use std::hash::{Hash, Hasher};
-        let path = self.root.join("pgdesk.sock");
+        let path = self.root.join("sawit.sock");
         if path.as_os_str().len() < 100 {
             return path;
         }
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.root.hash(&mut hasher);
         let user = std::env::var("USER").unwrap_or_default();
-        PathBuf::from(format!("/tmp/pgdesk-{user}-{:x}.sock", hasher.finish()))
+        PathBuf::from(format!("/tmp/sawit-{user}-{:x}.sock", hasher.finish()))
     }
 
     pub fn managed_bin_root(&self) -> PathBuf {
@@ -71,6 +78,29 @@ impl AppPaths {
     /// Disposable files (e.g. PNG copies of HEIC images).
     pub fn cache_dir(&self) -> PathBuf {
         self.root.join("cache")
+    }
+}
+
+/// Moves the data directory of PG Desk (Sawit's former name) to `root` and
+/// re-points the paths saved in its `.toml` files (instances, binaries).
+/// Does nothing once `root` exists. Running servers keep working: Postgres
+/// holds its data dir open, and `pg_ctl` finds `postmaster.pid` at the new
+/// path.
+fn migrate_legacy_root(legacy: &Path, root: &Path) {
+    if root.exists() || !legacy.is_dir() || std::fs::rename(legacy, root).is_err() {
+        return;
+    }
+    let (from, to) = (format!("{}/", legacy.display()), format!("{}/", root.display()));
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for path in entries.flatten().map(|e| e.path()) {
+        if path.extension().is_some_and(|e| e == "toml")
+            && let Ok(text) = std::fs::read_to_string(&path)
+            && text.contains(&from)
+        {
+            let _ = std::fs::write(&path, text.replace(&from, &to));
+        }
     }
 }
 
@@ -104,7 +134,7 @@ pub struct Instance {
     pub data_dir: PathBuf,
     pub port: u16,
     pub listen: ListenScope,
-    /// Created by PG Desk (vs. an adopted existing data dir).
+    /// Created by Sawit (vs. an adopted existing data dir).
     pub managed: bool,
 }
 
@@ -232,7 +262,7 @@ mod tests {
         let short = AppPaths::resolve(None, Some("/Users/me".into()));
         assert_eq!(
             short.cli_socket(),
-            PathBuf::from("/Users/me/Library/Application Support/pgdesk/pgdesk.sock")
+            PathBuf::from("/Users/me/Library/Application Support/sawit/sawit.sock")
         );
         let deep = AppPaths::resolve(Some("/x".repeat(60).into()), None);
         let socket = deep.cli_socket();
@@ -340,7 +370,7 @@ mod tests {
         assert!(validate_socket_dir(&long, 5432).is_err());
         assert!(
             validate_socket_dir(
-                Path::new("/Users/rulisme/Library/Application Support/pgdesk/run"),
+                Path::new("/Users/rulisme/Library/Application Support/sawit/run"),
                 5432
             )
             .is_ok()
@@ -373,12 +403,42 @@ mod tests {
         let paths = AppPaths::resolve(None, Some("/Users/u".into()));
         assert_eq!(
             paths.root,
-            Path::new("/Users/u/Library/Application Support/pgdesk")
+            Path::new("/Users/u/Library/Application Support/sawit")
         );
         let paths = AppPaths::resolve(Some("".into()), Some("/Users/u".into()));
         assert_eq!(
             paths.root,
-            Path::new("/Users/u/Library/Application Support/pgdesk")
+            Path::new("/Users/u/Library/Application Support/sawit")
+        );
+    }
+
+    #[test]
+    fn legacy_root_moves_once_and_keeps_its_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let (legacy, root) = (dir.path().join("pgdesk"), dir.path().join("sawit"));
+        std::fs::create_dir_all(legacy.join("clusters/app")).unwrap();
+        let toml = |r: &Path| {
+            format!(
+                "[[instance]]\nname = \"app\"\nbin_dir = \"/opt/pg/bin\"\ndata_dir = \"{}/clusters/app\"\nport = 5440\nlisten = \"localhost\"\nmanaged = true\n",
+                r.display()
+            )
+        };
+        std::fs::write(legacy.join("instances.toml"), toml(&legacy)).unwrap();
+
+        migrate_legacy_root(&legacy, &root);
+        assert!(!legacy.exists());
+        assert!(root.join("clusters/app").is_dir());
+        let reg = Registry::load(&root.join("instances.toml")).unwrap();
+        assert_eq!(reg.instances[0].data_dir, root.join("clusters/app"));
+        assert_eq!(reg.instances[0].bin_dir, Path::new("/opt/pg/bin"));
+
+        // Once `root` exists, a leftover legacy dir is left alone.
+        std::fs::create_dir_all(&legacy).unwrap();
+        migrate_legacy_root(&legacy, &root);
+        assert!(legacy.is_dir());
+        assert_eq!(
+            std::fs::read_to_string(root.join("instances.toml")).unwrap(),
+            toml(&root)
         );
     }
 

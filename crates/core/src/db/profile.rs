@@ -273,7 +273,10 @@ impl Profiles {
     }
 }
 
-const KEYCHAIN_SERVICE: &str = "pgdesk";
+const KEYCHAIN_SERVICE: &str = "sawit";
+/// The service passwords were saved under before the rename to Sawit (PG
+/// Desk); they move to `KEYCHAIN_SERVICE` when first read.
+const LEGACY_KEYCHAIN_SERVICE: &str = "pgdesk";
 const ERR_NOT_FOUND: i32 = -25300;
 
 pub fn store_password(profile: &ConnProfile, password: &str) -> Result<()> {
@@ -286,8 +289,24 @@ pub fn store_password(profile: &ConnProfile, password: &str) -> Result<()> {
 }
 
 pub fn load_password(profile: &ConnProfile) -> Result<Option<String>> {
+    if let Some(password) = load_from(KEYCHAIN_SERVICE, profile)? {
+        return Ok(Some(password));
+    }
+    let Some(password) = load_from(LEGACY_KEYCHAIN_SERVICE, profile)? else {
+        return Ok(None);
+    };
+    if store_password(profile, &password).is_ok() {
+        let _ = security_framework::passwords::delete_generic_password(
+            LEGACY_KEYCHAIN_SERVICE,
+            &profile.keychain_account(),
+        );
+    }
+    Ok(Some(password))
+}
+
+fn load_from(service: &str, profile: &ConnProfile) -> Result<Option<String>> {
     match security_framework::passwords::get_generic_password(
-        KEYCHAIN_SERVICE,
+        service,
         &profile.keychain_account(),
     ) {
         Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
@@ -297,6 +316,11 @@ pub fn load_password(profile: &ConnProfile) -> Result<Option<String>> {
 }
 
 pub fn delete_password(profile: &ConnProfile) -> Result<()> {
+    // Not migrated yet; it must not come back on the next read.
+    let _ = security_framework::passwords::delete_generic_password(
+        LEGACY_KEYCHAIN_SERVICE,
+        &profile.keychain_account(),
+    );
     match security_framework::passwords::delete_generic_password(
         KEYCHAIN_SERVICE,
         &profile.keychain_account(),

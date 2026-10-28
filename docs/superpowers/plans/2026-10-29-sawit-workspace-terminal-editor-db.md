@@ -1,12 +1,12 @@
-# PG Desk — Terminal, Editor, Database (Stages T, E, 2–5) Implementation Plan
+# Sawit — Terminal, Editor, Database (Stages T, E, 2–5) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:executing-plans. Steps use checkbox (`- [ ]`) syntax.
 
-**Goal:** Complete the all-in-one PG Desk: a terminal that runs herdr, a project text editor, connections + schema explorer, a virtual data grid, an SQL editor, MCP + `.env` integration.
+**Goal:** Complete the all-in-one Sawit: a terminal that runs herdr, a project text editor, connections + schema explorer, a virtual data grid, an SQL editor, MCP + `.env` integration.
 
-**Architecture:** Non-UI logic lives in `pgdesk-core` (terminal PTY/emulation, file tree, connection/schema/query, keychain, dotenv, MCP tools); the `pgdesk` app only draws and forwards input. A separate `pgdesk-mcp` binary uses core.
+**Architecture:** Non-UI logic lives in `sawit-core` (terminal PTY/emulation, file tree, connection/schema/query, keychain, dotenv, MCP tools); the `sawit` app only draws and forwards input. A separate `sawit-mcp` binary uses core.
 
-**Spec:** `docs/superpowers/specs/2026-10-28-pgdesk-design.md` (section "Scope expansion").
+**Spec:** `docs/superpowers/specs/2026-10-28-sawit-design.md` (section "Scope expansion").
 
 ## Global Constraints
 Same as the Stage 1 plan (core without GPUI, pinned UI version, UI never blocks, build/test/clippy gate + commit per task). Rust 1.99.1 (rust-toolchain.toml).
@@ -32,10 +32,10 @@ Tests: see `crates/core/src/terminal/tests.rs` (12 tests, including a real PTY).
 Tabbed left panel: Servers | Files | Database. Files: open a project folder (prompt), lazy tree. Tabbed center area (Zed style): file tabs with `InputState::code_editor(lang)`, unsaved indicator, Cmd-S save, Cmd-W close. Language from extension (sql, ts, tsx, js, jsx, json, md, toml, rs, css, html, yaml).
 
 ### Task D1: `core::db` — profiles, dotenv, keychain, schema
-`ConnProfile{name, host, port, database, user}` (TOML), `parse_database_url(&str) -> Result<(ConnProfile, Option<String> password)>`, `read_dotenv_database_url(path)`, password via `keyring` (service `pgdesk`, account `user@host:port/db`), `load_schema(client) -> Vec<SchemaNode>` (schema → table/view → columns+types from `information_schema`/`pg_catalog`).
+`ConnProfile{name, host, port, database, user}` (TOML), `parse_database_url(&str) -> Result<(ConnProfile, Option<String> password)>`, `read_dotenv_database_url(path)`, password via `keyring` (service `sawit`, account `user@host:port/db`), `load_schema(client) -> Vec<SchemaNode>` (schema → table/view → columns+types from `information_schema`/`pg_catalog`).
 
 ### Task D2: Database panel + schema tree (app)
-Add connection (form / import `.env` / from a PG Desk instance), tree database→schema→table/view→columns.
+Add connection (form / import `.env` / from a Sawit instance), tree database→schema→table/view→columns.
 
 ### Task D3: Virtual read-only data grid
 `core::db::fetch_page(client, table, offset, limit)` + `count_estimate`; the grid tab uses `TableDelegate` (`rows_count` = estimate/total, `visible_rows_changed` triggers fetching a 200-row page, LRU page cache).
@@ -44,6 +44,6 @@ Add connection (form / import `.env` / from a PG Desk instance), tree database�
 "SQL" tab per connection: code_editor with sql language, Cmd-Enter runs (`simple_query`), results in the grid, errors & duration; selected statement or the whole contents.
 
 ### Task M1: MCP + project integration
-`pgdesk-mcp` binary (rmcp stdio): tools `list_instances`, `start_instance`, `stop_instance`, `list_schemas`, `describe_table`, `query` (read-only by default). A "Write DATABASE_URL to .env" button on the instance (pick a project folder, update/append the line).
+`sawit-mcp` binary (rmcp stdio): tools `list_instances`, `start_instance`, `stop_instance`, `list_schemas`, `describe_table`, `query` (read-only by default). A "Write DATABASE_URL to .env" button on the instance (pick a project folder, update/append the line).
 
 ### Task Z: README + size/RSS + final review

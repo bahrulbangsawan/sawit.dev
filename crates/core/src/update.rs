@@ -10,7 +10,7 @@ use crate::cli::shell_quote;
 use crate::{CoreError, Result, cmd};
 
 /// Where releases are published.
-pub const REPO: &str = "bahrulbangsawan/pgdesk";
+pub const REPO: &str = "bahrulbangsawan/sawit";
 
 /// `major.minor.patch`; a leading `v` (as in tags) is accepted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -42,7 +42,7 @@ pub struct Release {
     pub notes: String,
     /// The release page on GitHub.
     pub page: String,
-    /// The zipped `PG Desk.app`, once CI has attached it.
+    /// The zipped `Sawit.app`, once CI has attached it.
     pub asset: Option<String>,
 }
 
@@ -86,7 +86,7 @@ pub async fn latest_release() -> Result<Release> {
 }
 
 /// Downloads and unpacks the release's app into `dir`, returning the new
-/// `PG Desk.app`.
+/// `Sawit.app`.
 pub async fn download(release: &Release, dir: &Path) -> Result<PathBuf> {
     let url = release
         .asset
@@ -120,8 +120,8 @@ pub async fn download(release: &Release, dir: &Path) -> Result<PathBuf> {
         Duration::from_secs(120),
     )
     .await?;
-    let app = dir.join("PG Desk.app");
-    if unzip.code != Some(0) || !app.join("Contents/MacOS/pgdesk").is_file() {
+    let app = dir.join("Sawit.app");
+    if unzip.code != Some(0) || !app.join("Contents/MacOS/sawit").is_file() {
         return Err(CoreError::Download(format!(
             "unexpected download contents: {}",
             unzip.combined().trim()
@@ -168,11 +168,11 @@ mod tests {
     fn release_json() {
         let json = r#"{
             "tag_name": "v0.0.3",
-            "html_url": "https://github.com/o/pgdesk/releases/tag/v0.0.3",
+            "html_url": "https://github.com/o/sawit/releases/tag/v0.0.3",
             "body": "- feat: x",
             "assets": [
-                {"name": "PG-Desk.dmg", "browser_download_url": "https://x/dmg"},
-                {"name": "PG-Desk-0.0.3-macos-arm64.zip", "browser_download_url": "https://x/zip"}
+                {"name": "Sawit.dmg", "browser_download_url": "https://x/dmg"},
+                {"name": "Sawit-0.0.3-macos-arm64.zip", "browser_download_url": "https://x/zip"}
             ]
         }"#;
         let r = parse_release(json).unwrap();
@@ -187,8 +187,8 @@ mod tests {
     #[test]
     fn swap_script_restores_on_failure() {
         let dir = tempfile::tempdir().unwrap();
-        let current = dir.path().join("PG Desk.app");
-        let new = dir.path().join("new/PG Desk.app");
+        let current = dir.path().join("Sawit.app");
+        let new = dir.path().join("new/Sawit.app");
         std::fs::create_dir_all(&current).unwrap();
         std::fs::write(current.join("v"), "old").unwrap();
         std::fs::create_dir_all(&new).unwrap();
@@ -202,6 +202,6 @@ mod tests {
             .unwrap();
         assert!(ok.success());
         assert_eq!(std::fs::read_to_string(current.join("v")).unwrap(), "new");
-        assert!(!dir.path().join("PG Desk.app.previous").exists());
+        assert!(!dir.path().join("Sawit.app.previous").exists());
     }
 }

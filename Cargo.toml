@@ -90,6 +90,6 @@ opt-level = "s"
 [profile.release.package.objc2-av-foundation]
 opt-level = "s"
 
-# Left-aligned, compact editor line numbers; see vendor/gpui-base/PGDESK_PATCH.md.
+# Left-aligned, compact editor line numbers; see vendor/gpui-base/SAWIT_PATCH.md.
 [patch.crates-io]
 gpui-base = { path = "vendor/gpui-base" }

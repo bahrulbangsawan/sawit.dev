@@ -1,9 +1,9 @@
-//! Calls the MCP tools directly (no stdio) against a temp PG Desk home.
+//! Calls the MCP tools directly (no stdio) against a temp Sawit home.
 
-use pgdesk_core::binaries::{SearchRoots, discover};
-use pgdesk_core::control::{self, Preflight};
-use pgdesk_core::instances::{AppPaths, Instance, ListenScope, Registry};
-use pgdesk_mcp::PgDesk;
+use sawit_core::binaries::{SearchRoots, discover};
+use sawit_core::control::{self, Preflight};
+use sawit_core::instances::{AppPaths, Instance, ListenScope, Registry};
+use sawit_mcp::Sawit;
 
 fn text(result: &rmcp::model::CallToolResult) -> String {
     result
@@ -31,7 +31,7 @@ async fn list_instances_and_write_env() {
     })
     .unwrap();
     reg.save(&paths.instances_file()).unwrap();
-    let server = PgDesk::new(paths);
+    let server = Sawit::new(paths);
 
     let out = text(&server.list_instances_tool().await);
     assert!(out.contains("shop"), "{out}");
@@ -94,7 +94,7 @@ async fn query_is_read_only() {
         .await
         .unwrap();
 
-    let server = PgDesk::new(paths);
+    let server = Sawit::new(paths);
     let ok = server
         .query_tool("mcp", "select 41 + 1 as answer", None)
         .await;

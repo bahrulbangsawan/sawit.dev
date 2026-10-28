@@ -5,11 +5,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui_kit::{Context, Task};
-use pgdesk_core::db::{
+use sawit_core::db::{
     self, ConnProfile, Profiles, SchemaInfo, load_password, parse_database_url,
     read_dotenv_database_url, store_password,
 };
-use pgdesk_core::instances::AppPaths;
+use sawit_core::instances::AppPaths;
 use tokio_postgres::Client;
 
 use crate::rt;
@@ -91,7 +91,7 @@ impl DbStore {
         }
     }
 
-    pub fn ssl(&self, name: &str) -> pgdesk_core::db::SslMode {
+    pub fn ssl(&self, name: &str) -> sawit_core::db::SslMode {
         self.profile(name).map(|p| p.ssl).unwrap_or_default()
     }
 
@@ -151,7 +151,7 @@ impl DbStore {
             let client = db::connect(&profile, password.as_deref()).await?;
             let ro = db::connect_read_only(&profile, password.as_deref()).await?;
             let schema = db::load_schema(&client).await?;
-            Ok::<_, pgdesk_core::CoreError>((Arc::new(client), Arc::new(ro), schema))
+            Ok::<_, sawit_core::CoreError>((Arc::new(client), Arc::new(ro), schema))
         });
         let name = name.to_string();
         cx.spawn(async move |this, cx| {

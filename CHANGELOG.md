@@ -1,6 +1,6 @@
 # Changelog
 
-Every change to PG Desk, by version. Each push to `main` is a new release: the patch version is bumped and
+Every change to Sawit, by version. Each push to `main` is a new release: the patch version is bumped and
 its section is written automatically by `.githooks/pre-push` (`scripts/release.sh`) from the commit messages.
 
 ## [0.0.2] - 2026-10-29
@@ -13,11 +13,11 @@ its section is written automatically by `.githooks/pre-push` (`scripts/release.s
 
 ### Features
 
-- pgdesk CLI, in-app updates and per-push releases
+- sawit CLI, in-app updates and per-push releases
 - prompt manager — save, search, fill and copy prompts
 - MCP page covers popular AI agents and editors, with their logos
-- **app**: MCP page to install pgdesk-mcp into every client and profile
-- **core**: install pgdesk-mcp into AI clients and every profile
+- **app**: MCP page to install sawit-mcp into every client and profile
+- **core**: install sawit-mcp into AI clients and every profile
 - **app**: language logos for files in the tree and tabs
 - **editor**: compact left-aligned line numbers and icon view buttons
 - **app**: image, PDF and video viewers
@@ -26,10 +26,10 @@ its section is written automatically by `.githooks/pre-push` (`scripts/release.s
 - **app**: editor with wrap, formatting, live preview and status line
 - **core**: code formatting with Prettier and per-language formatters
 - **core**: cancel a running query
-- PG Desk logo, title-bar mark and macOS app bundle
+- Sawit logo, title-bar mark and macOS app bundle
 - **app**: show/hide sidebar, center tabs and terminal dock
 - **app**: closable Server tab and Zed-style tab context menu
-- **mcp**: pgdesk-mcp stdio server and DATABASE_URL to project .env
+- **mcp**: sawit-mcp stdio server and DATABASE_URL to project .env
 - **app**: database panel, virtual table grid and SQL editor
 - **core**: connection profiles, DATABASE_URL/.env, Keychain, schema, paging and SQL
 - **app**: project file tree and tabbed code editor with save
@@ -42,7 +42,7 @@ its section is written automatically by `.githooks/pre-push` (`scripts/release.s
 - **core**: download managed PostgreSQL binaries via postgresql_archive
 - **core**: discover installed PostgreSQL binaries
 - **core**: probe listening ports with owner details
-- **core**: identify port owners (docker, homebrew, postgres.app, pgdesk)
+- **core**: identify port owners (docker, homebrew, postgres.app, sawit)
 - **core**: lsof parsing and port conflict analysis
 - **core**: parse pg_ctl status output
 
@@ -68,5 +68,5 @@ its section is written automatically by `.githooks/pre-push` (`scripts/release.s
 - extend scope with text editor, herdr-capable terminal, Zed-style design
 - gpui-kit window with DataTable and async SELECT version()
 - workspace scaffold and tokio runtime bridge
-- PG Desk design and stage 1 implementation plan
+- Sawit design and stage 1 implementation plan
 

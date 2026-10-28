@@ -3,10 +3,10 @@
 
 use std::path::PathBuf;
 
-use pgdesk_core::binaries::{SearchRoots, discover};
-use pgdesk_core::control::{self, Preflight};
-use pgdesk_core::db::{self, ConnProfile, RelKind};
-use pgdesk_core::instances::{AppPaths, Instance, ListenScope};
+use sawit_core::binaries::{SearchRoots, discover};
+use sawit_core::control::{self, Preflight};
+use sawit_core::db::{self, ConnProfile, RelKind};
+use sawit_core::instances::{AppPaths, Instance, ListenScope};
 
 struct Cluster {
     _dir: tempfile::TempDir,
@@ -226,7 +226,7 @@ async fn read_only_cannot_be_escaped() {
         ..profile.clone()
     };
     let ro = db::connect_read_only(&ro_profile, None).await.unwrap();
-    let marker = std::env::temp_dir().join(format!("pgdesk-pwned-{}", std::process::id()));
+    let marker = std::env::temp_dir().join(format!("sawit-pwned-{}", std::process::id()));
     let attacks = [
         "COMMIT; BEGIN READ WRITE; CREATE TABLE pwned(x int); COMMIT;".to_string(),
         "CREATE TABLE pwned(x int)".to_string(),
@@ -386,7 +386,7 @@ async fn tls_follows_sslmode() {
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-    async fn uses_tls(profile: &ConnProfile) -> pgdesk_core::Result<bool> {
+    async fn uses_tls(profile: &ConnProfile) -> sawit_core::Result<bool> {
         let c = db::connect(profile, None).await?;
         let row = c
             .query_one(

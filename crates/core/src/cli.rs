@@ -1,6 +1,6 @@
-//! The `pgdesk` command line, like `zed`: argument parsing (`file:line:col`
+//! The `sawit` command line, like `zed`: argument parsing (`file:line:col`
 //! included), the request the CLI sends to the running app over its Unix
-//! socket, and installing the `pgdesk` symlink into `PATH`.
+//! socket, and installing the `sawit` symlink into `PATH`.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -10,19 +10,19 @@ use std::time::Duration;
 use crate::{CoreError, Result, cmd};
 
 /// Where "Install CLI" puts the command.
-pub const CLI_LINK: &str = "/usr/local/bin/pgdesk";
+pub const CLI_LINK: &str = "/usr/local/bin/sawit";
 
 pub const USAGE: &str = "\
-pgdesk — open folders and files in PG Desk
+sawit — open folders and files in Sawit
 
 Usage:
-  pgdesk [options] [path[:line[:column]] ...]
+  sawit [options] [path[:line[:column]] ...]
 
 Examples:
-  pgdesk .                  open this folder as a project
-  pgdesk src/main.rs:42     open a file at line 42
-  pgdesk -w COMMIT_EDITMSG  wait until the file's tab is closed (git core.editor)
-  ls | pgdesk -             open stdin as a new file
+  sawit .                  open this folder as a project
+  sawit src/main.rs:42     open a file at line 42
+  sawit -w COMMIT_EDITMSG  wait until the file's tab is closed (git core.editor)
+  ls | sawit -             open stdin as a new file
 
 Options:
   -n, --new         always open in a new window
@@ -185,7 +185,7 @@ pub fn absolute(cwd: &Path, path: &Path) -> PathBuf {
     }
 }
 
-const MAGIC: &[u8] = b"pgdesk-open/1";
+const MAGIC: &[u8] = b"sawit-open/1";
 
 /// The request as NUL-separated fields: magic, flags, then path, line and
 /// column per target. The CLI writes it and closes its sending half.
@@ -436,15 +436,15 @@ mod tests {
             Some(OpenRequest::default())
         );
         assert_eq!(decode(b"something else"), None);
-        assert_eq!(decode(b"pgdesk-open/1\0\0/a\0x\0"), None);
+        assert_eq!(decode(b"sawit-open/1\0\0/a\0x\0"), None);
     }
 
     #[test]
     fn link_install_and_state() {
         let dir = tempfile::tempdir().unwrap();
-        let exe = dir.path().join("pgdesk-app");
+        let exe = dir.path().join("sawit-app");
         std::fs::write(&exe, "").unwrap();
-        let link = dir.path().join("bin/pgdesk");
+        let link = dir.path().join("bin/sawit");
         assert_eq!(link_state(&link, &exe), LinkState::Missing);
         install_link(&link, &exe).unwrap();
         assert_eq!(link_state(&link, &exe), LinkState::Installed);

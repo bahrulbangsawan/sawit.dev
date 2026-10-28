@@ -1,4 +1,4 @@
-# PG Desk — Design
+# Sawit — Design
 
 Date: 2026-10-28. Source: the user's project specification (summarized below)
 plus follow-up requests and decisions I made (marked **[my decision]**)
@@ -17,18 +17,18 @@ The user's follow-up requests (gist, verbatim):
 
 ## Scope expansion (2026-10-29)
 
-User: "I want pgdesk to have a text editor too", "is that possible the terminal are running
+User: "I want sawit to have a text editor too", "is that possible the terminal are running
 https://herdr.dev/? ... i need text editor + GUI Postgresql. So far I've been using zed + herdr + docker.
 That's very heavy, I just want all in one. For design, please use zed design." and "Don't stop,
 keep going until everything is done".
 
-So PG Desk = **one all-in-one window** replacing Zed + herdr + Docker for the user's workflow:
+So Sawit = **one all-in-one window** replacing Zed + herdr + Docker for the user's workflow:
 - **Text editor** (stage E): project file tree, file tabs, `gpui-component` code editor (`InputState::code_editor`,
   tree-sitter for sql/ts/tsx/js/json/md/toml/rust/css/html), save (Cmd-S), unsaved indicator.
   Not an IDE: no LSP, no debugger, no git UI in this scope **[my decision]**.
 - **Terminal** (stage T): a real terminal emulator in the bottom panel (PTY + `alacritty_terminal`, like Zed),
   complete enough to run the **herdr** TUI (alt-screen, 256/truecolor, mouse, resize, bracketed paste).
-  herdr runs as a normal program in the terminal (`herdr` on PATH); PG Desk does not bundle herdr.
+  herdr runs as a normal program in the terminal (`herdr` on PATH); Sawit does not bundle herdr.
 - **Zed-style design**: Zed layout (compact title bar, left panel, center tab area, bottom dock, status bar),
   palette from Zed's official "One Dark" theme (taken from `zed-industries/zed` `assets/themes/one/one.json`),
   small, dense UI text like Zed.
@@ -83,9 +83,9 @@ Inline data editing (MVP), visual schema design, databases other than Postgres, 
 | Postgres binaries | Detect Homebrew (`brew --prefix` → `opt/postgresql@*`), Postgres.app (`/Applications/Postgres.app/Contents/Versions/*`), `PATH`; plus self-download via **`postgresql_archive`** (features `theseus`, `tls-rustls-ring`) | Evaluated `postgresql_embedded` 0.22: it pulls in `sqlx` and manages its own lifecycle (clashing with our `pg_ctl` control). Its underlying crate `postgresql_archive` is enough to download+extract binaries → lighter. This is also what frees TanStack projects from Docker/Homebrew. |
 | Process control | `initdb`, `pg_ctl start -l <log> -o "-p <port> -c listen_addresses=<...> -k <sockdir>"`, `pg_ctl stop -m fast`, `pg_ctl status`; live log = tail the log file | `pg_ctl start` detaches the process; tailing the log file also works for instances started outside the app. |
 | Port detection | `lsof -nP -iTCP:<port> -sTCP:LISTEN -F pcn` (field format, stable to parse) + `ps -o command= -p <pid>` + `docker ps --format` when `docker` exists | No root needed for the user's own processes. Verified on this machine: Docker shows up as `com.docker.backend` with `n*:5433`. |
-| Storage | TOML in `~/Library/Application Support/pgdesk/` (`instances.toml`, `profiles.toml`); passwords in the Keychain via the `keyring` crate | Human-readable, easy to diff; secrets never go to files. |
-| Managed instances | Data dir at `~/Library/Application Support/pgdesk/clusters/<name>`; downloaded binaries at `.../pgdesk/bin/<version>`; `listen_addresses=localhost`, socket dir under the app dir | Isolated from Homebrew; no clash with the `/tmp` socket. |
-| MCP | `rmcp` crate (stdio), separate `pgdesk-mcp` binary using `core`; queries read-only by default (`SET TRANSACTION READ ONLY`) | Agents can't damage data without explicit permission. |
+| Storage | TOML in `~/Library/Application Support/sawit/` (`instances.toml`, `profiles.toml`); passwords in the Keychain via the `keyring` crate | Human-readable, easy to diff; secrets never go to files. |
+| Managed instances | Data dir at `~/Library/Application Support/sawit/clusters/<name>`; downloaded binaries at `.../sawit/bin/<version>`; `listen_addresses=localhost`, socket dir under the app dir | Isolated from Homebrew; no clash with the `/tmp` socket. |
+| MCP | `rmcp` crate (stdio), separate `sawit-mcp` binary using `core`; queries read-only by default (`SET TRANSACTION READ ONLY`) | Agents can't damage data without explicit permission. |
 
 ### Port conflict semantics
 
@@ -97,7 +97,7 @@ For the target port and the addresses our instance will use:
   → start may *succeed*, but clients using `localhost` and clients using another IP reach different servers.
   This is the case that bit the user; the warning must name both sides and which one wins for `127.0.0.1`.
 Owners are identified as: Docker (+ container name from `docker ps`), Homebrew (binary path under `brew --prefix`),
-Postgres.app, a PG Desk instance (matching data dir), or another process (name + PID).
+Postgres.app, a Sawit instance (matching data dir), or another process (name + PID).
 
 ### "Lightest" target [my decision]
 
@@ -107,7 +107,7 @@ Target: idle RSS < 150 MB, no JVM/Chromium runtime. No comparison figures for ot
 ## Work order
 
 0. Integration spike (GPUI window + DataTable + `SELECT version()` via Tokio, UI doesn't freeze) → record API findings.
-1. Stage 1 (detailed plan: `docs/superpowers/plans/2026-10-28-pgdesk-stage1-server-manager.md`).
+1. Stage 1 (detailed plan: `docs/superpowers/plans/2026-10-28-sawit-stage1-server-manager.md`).
 2–5. Each stage's plan is written after the previous stage finishes, using real API findings from the previous stage.
 
 ## Left to the builder

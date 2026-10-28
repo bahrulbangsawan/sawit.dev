@@ -9,7 +9,7 @@ use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::*;
-use pgdesk_core::pdf::{Bitmap, page_sizes, render_page};
+use sawit_core::pdf::{Bitmap, page_sizes, render_page};
 
 use super::image::file_name;
 use super::toolbar;

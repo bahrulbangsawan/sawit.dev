@@ -1,4 +1,4 @@
-# Builds PG Desk for each version tag (pushed by .githooks/pre-push) and
+# Builds Sawit for each version tag (pushed by .githooks/pre-push) and
 # publishes the GitHub Release: the zipped app the in-app updater installs,
 # the DMG, and the version's CHANGELOG.md section as notes. Run it by hand
 # (workflow_dispatch) to rebuild an existing tag.
@@ -38,6 +38,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$TAG" \
-            --title "PG Desk $TAG" \
+            --title "Sawit $TAG" \
             --notes-file notes.md \
-            target/release/PG-Desk-*-macos-arm64.zip target/release/PG-Desk.dmg
+            target/release/Sawit-*-macos-arm64.zip target/release/Sawit.dmg

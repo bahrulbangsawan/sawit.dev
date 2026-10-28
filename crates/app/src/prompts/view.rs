@@ -11,7 +11,7 @@ use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputSt
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use pgdesk_core::prompts::{fill, normalize_tags, variables};
+use sawit_core::prompts::{fill, normalize_tags, variables};
 
 use super::store::PromptStore;
 
@@ -111,7 +111,7 @@ impl PromptView {
         }
     }
 
-    fn edit(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut pgdesk_core::prompts::Prompt)) {
+    fn edit(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut sawit_core::prompts::Prompt)) {
         let id = self.id.clone();
         self.store.update(cx, |s, cx| s.update(&id, cx, f));
         cx.notify();

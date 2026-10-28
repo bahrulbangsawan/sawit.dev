@@ -1,4 +1,4 @@
-//! Checks GitHub Releases for a newer PG Desk, downloads it in the
+//! Checks GitHub Releases for a newer Sawit, downloads it in the
 //! background and offers "Restart for Update", which swaps the .app bundle
 //! after the app quits and opens the new one.
 
@@ -8,8 +8,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use gpui_kit::*;
-use pgdesk_core::instances::AppPaths;
-use pgdesk_core::update::{Release, Version, download, latest_release, swap_script};
+use sawit_core::instances::AppPaths;
+use sawit_core::update::{Release, Version, download, latest_release, swap_script};
 
 use crate::rt;
 
@@ -36,7 +36,7 @@ pub struct Updater {
     pub state: UpdateState,
     /// The newest release seen, for the changelog page.
     pub latest: Option<Release>,
-    /// The running `PG Desk.app`, when launched from one.
+    /// The running `Sawit.app`, when launched from one.
     bundle: Option<PathBuf>,
 }
 

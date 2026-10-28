@@ -53,7 +53,7 @@ pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(6.);
 const FOLD_ICON_WIDTH: Pixels = px(14.);
 const FOLD_ICON_HITBOX_WIDTH: Pixels = px(18.);
 const MAX_HIGHLIGHT_LINE_LENGTH: usize = 10_000;
-// PG Desk patch: compact gutter (was 3).
+// Sawit patch: compact gutter (was 3).
 const MIN_LINE_NUMBER_DIGITS: usize = 2;
 const MAX_LINE_NUMBER_DIGITS: usize = 7;
 const MAX_DISPLAYED_LINE_NUMBER: usize = 9_999_999;
@@ -3135,7 +3135,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 .iter()
                 .zip(last_layout.visible_buffer_lines.iter())
             {
-                // PG Desk patch: left-aligned numbers (was right-aligned).
+                // Sawit patch: left-aligned numbers (was right-aligned).
                 let line_no: SharedString = format!(
                     "{:<width$}",
                     displayed_line_number(buffer_line + 1),

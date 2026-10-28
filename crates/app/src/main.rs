@@ -17,7 +17,7 @@ mod update;
 mod viewers;
 mod workspace;
 
-use pgdesk_core::rt::Runtime;
+use sawit_core::rt::Runtime;
 
 /// GUI apps launched from Finder get a minimal PATH; adopt the login shell's
 /// so docker, brew, herdr and friends are found (as Zed does).
@@ -26,14 +26,14 @@ fn adopt_login_shell_path() {
         .enable_all()
         .build()
         .expect("probe runtime");
-    if let Some(path) = probe.block_on(pgdesk_core::probe::login_shell_path()) {
+    if let Some(path) = probe.block_on(sawit_core::probe::login_shell_path()) {
         // SAFETY: called first thing in `main`, before any other thread exists.
         unsafe { std::env::set_var("PATH", path) };
     }
 }
 
 fn main() {
-    // `pgdesk .`, `pgdesk file.rs:42`, … like `zed`: from a terminal this
+    // `sawit .`, `sawit file.rs:42`, … like `zed`: from a terminal this
     // hands the paths to the running app and exits.
     let request = cli::command_line();
     adopt_login_shell_path();

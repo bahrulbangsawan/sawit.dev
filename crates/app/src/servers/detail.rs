@@ -7,11 +7,11 @@ use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use pgdesk_core::control::Preflight;
-use pgdesk_core::instances::Instance;
-use pgdesk_core::pgctl::PgCtlStatus;
-use pgdesk_core::ports::PortVerdict;
-use pgdesk_core::probe::PortReport;
+use sawit_core::control::Preflight;
+use sawit_core::instances::Instance;
+use sawit_core::pgctl::PgCtlStatus;
+use sawit_core::ports::PortVerdict;
+use sawit_core::probe::PortReport;
 
 use super::list::status_color;
 use super::store::{BinaryChoice, ServerStore, Status};
@@ -82,7 +82,7 @@ impl ServerDetail {
             .collect();
         for major in DOWNLOADABLE {
             let installed = store.binaries.iter().any(|b| {
-                b.version.major == major && b.source == pgdesk_core::binaries::BinarySource::Managed
+                b.version.major == major && b.source == sawit_core::binaries::BinarySource::Managed
             });
             if !installed {
                 choices.push((
@@ -190,7 +190,7 @@ impl ServerDetail {
             };
             let Ok(rx) = this.update(cx, |_, cx| {
                 crate::rt::spawn(cx, async move {
-                    pgdesk_core::db::write_database_url(&dir, &url)
+                    sawit_core::db::write_database_url(&dir, &url)
                 })
             }) else {
                 return;

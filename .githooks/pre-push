@@ -8,7 +8,7 @@
 #   3. the tag starts .github/workflows/release.yml, which builds the app
 #      and publishes the GitHub Release the in-app updater reads.
 set -eu
-[ -z "${PGDESK_RELEASE_PUSH:-}" ] || exit 0
+[ -z "${SAWIT_RELEASE_PUSH:-}" ] || exit 0
 remote=$1
 
 pushes_main=no
@@ -23,10 +23,10 @@ done
 tag=$(scripts/release.sh)
 [ -n "$tag" ] || exit 0
 
-log="$(git rev-parse --absolute-git-dir)/pgdesk-release.log"
+log="$(git rev-parse --absolute-git-dir)/sawit-release.log"
 echo "pre-push: release $tag created; the release commit and tag are pushed once this push finishes (log: $log)" >&2
 nohup sh -c '
     while kill -0 "$1" 2>/dev/null; do sleep 0.3; done
-    PGDESK_RELEASE_PUSH=1 git push "$2" main "$3"
+    SAWIT_RELEASE_PUSH=1 git push "$2" main "$3"
 ' sh "$PPID" "$remote" "$tag" >"$log" 2>&1 &
 exit 0

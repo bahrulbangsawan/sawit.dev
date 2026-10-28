@@ -4,7 +4,7 @@ use std::future::Future;
 
 use futures::channel::oneshot;
 use gpui_kit::{App, Global};
-use pgdesk_core::rt::Runtime;
+use sawit_core::rt::Runtime;
 
 pub struct Rt(pub Runtime);
 

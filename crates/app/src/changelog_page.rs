@@ -7,7 +7,7 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::*;
 use gpui_kit::*;
-use pgdesk_core::update::{REPO, Version};
+use sawit_core::update::{REPO, Version};
 
 use crate::update::{UpdateState, Updater, updater};
 
@@ -44,7 +44,7 @@ impl ChangelogPage {
             ),
             UpdateState::Downloading(v) => (format!("Downloading version {v}…"), None),
             UpdateState::Idle => match &u.latest {
-                Some(_) => ("PG Desk is up to date.".to_string(), None),
+                Some(_) => ("Sawit is up to date.".to_string(), None),
                 None => ("Not checked for updates yet.".to_string(), None),
             },
         };
@@ -63,7 +63,7 @@ impl ChangelogPage {
                         div()
                             .text_lg()
                             .font_semibold()
-                            .child(format!("PG Desk {}", Version::current())),
+                            .child(format!("Sawit {}", Version::current())),
                     )
                     .child(
                         div()
