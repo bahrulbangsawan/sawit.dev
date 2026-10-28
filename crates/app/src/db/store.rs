@@ -18,6 +18,9 @@ pub struct DbStore {
     file: PathBuf,
     pub profiles: Profiles,
     pub clients: HashMap<String, Arc<Client>>,
+    /// Read-only connections for the table browser (separate from `clients`
+    /// so an open transaction in the SQL editor never affects them).
+    pub ro_clients: HashMap<String, Arc<Client>>,
     pub schemas: HashMap<String, Vec<SchemaInfo>>,
     pub connecting: HashSet<String>,
     pub errors: HashMap<String, String>,
@@ -32,6 +35,7 @@ impl DbStore {
             file,
             profiles,
             clients: HashMap::new(),
+            ro_clients: HashMap::new(),
             schemas: HashMap::new(),
             connecting: HashSet::new(),
             errors: HashMap::new(),
@@ -83,6 +87,7 @@ impl DbStore {
         }
         self.profiles.remove(name);
         self.clients.remove(name);
+        self.ro_clients.remove(name);
         self.schemas.remove(name);
         self.save();
         cx.notify();
@@ -98,8 +103,9 @@ impl DbStore {
         let rx = rt::spawn(cx, async move {
             let password = load_password(&profile).ok().flatten();
             let client = db::connect(&profile, password.as_deref()).await?;
+            let ro = db::connect_read_only(&profile, password.as_deref()).await?;
             let schema = db::load_schema(&client).await?;
-            Ok::<_, pgdesk_core::CoreError>((Arc::new(client), schema))
+            Ok::<_, pgdesk_core::CoreError>((Arc::new(client), Arc::new(ro), schema))
         });
         let name = name.to_string();
         cx.spawn(async move |this, cx| {
@@ -107,8 +113,9 @@ impl DbStore {
             let _ = this.update(cx, |this, cx| {
                 this.connecting.remove(&name);
                 match result {
-                    Ok(Ok((client, schema))) => {
+                    Ok(Ok((client, ro, schema))) => {
                         this.clients.insert(name.clone(), client);
+                        this.ro_clients.insert(name.clone(), ro);
                         this.schemas.insert(name.clone(), schema);
                     }
                     Ok(Err(e)) => {

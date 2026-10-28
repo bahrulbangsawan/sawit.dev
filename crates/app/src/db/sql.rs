@@ -197,7 +197,7 @@ impl Render for SqlView {
                     div()
                         .flex_1()
                         .min_h_0()
-                        .child(DataTable::new(&table).stripe(true)),
+                        .child(DataTable::new(&table).stripe(true).small()),
                 )
             })
     }

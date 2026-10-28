@@ -107,9 +107,12 @@ async fn schema_paging_and_sql() {
     // Count and pages.
     assert_eq!(
         db::row_count(&client, "app", "users").await.unwrap(),
-        250_000
+        db::RowCount {
+            rows: 250_000,
+            exact: true
+        }
     );
-    let page = db::fetch_page(&client, "app", "users", 200_000, 200)
+    let page = db::fetch_page(&client, "app", "users", &[], 200_000, 200)
         .await
         .unwrap();
     assert_eq!(page.columns, vec!["id", "email", "note"]);
@@ -163,7 +166,7 @@ async fn schema_paging_and_sql() {
         .is_err()
     );
     assert_eq!(
-        db::row_count(&client, "app", "users").await.unwrap(),
+        db::row_count(&client, "app", "users").await.unwrap().rows,
         250_000
     );
 
@@ -171,7 +174,10 @@ async fn schema_paging_and_sql() {
     assert!(dbs.contains(&"postgres".to_string()));
 
     // Views get a bounded exact count (no unbounded count(*) on huge views).
-    assert_eq!(db::row_count(&client, "app", "active").await.unwrap(), 9);
+    assert_eq!(
+        db::row_count(&client, "app", "active").await.unwrap().rows,
+        9
+    );
 }
 
 #[tokio::test]
@@ -194,7 +200,7 @@ async fn pages_are_stable_on_tables_above_synchronized_scan_threshold() {
         (0, "1"),
         (150_000, "150001"),
     ] {
-        let page = db::fetch_page(&client, "public", "big", offset, 200)
+        let page = db::fetch_page(&client, "public", "big", &[], offset, 200)
             .await
             .unwrap();
         assert_eq!(page.rows[0][0].as_deref(), Some(first), "offset {offset}");
@@ -260,4 +266,85 @@ async fn read_only_cannot_be_escaped() {
     // Reading still works for the read-only role.
     let read = db::run_read_only(&ro, "SELECT x FROM t", 10).await.unwrap();
     assert_eq!(read.results[0].rows[0][0].as_deref(), Some("1"));
+}
+
+#[tokio::test]
+async fn table_pages_follow_the_primary_key() {
+    let Some((_cluster, profile)) = cluster().await else {
+        eprintln!("skip: no PostgreSQL binaries");
+        return;
+    };
+    let client = db::connect(&profile, None).await.unwrap();
+    client
+        .batch_execute(
+            r#"CREATE TABLE "Orders" ("Region" text, id int, label text, PRIMARY KEY ("Region", id));
+               INSERT INTO "Orders" SELECT CASE WHEN g % 2 = 0 THEN 'b' ELSE 'a' END, 200 - g, 'o' || g
+                 FROM generate_series(1, 120) g;
+               CREATE TABLE empty_t (x int, y text);
+               CREATE VIEW v AS SELECT label FROM "Orders";"#,
+        )
+        .await
+        .unwrap();
+
+    let pk = db::primary_key(&client, "public", "Orders").await.unwrap();
+    assert_eq!(pk, vec!["Region", "id"]);
+    assert!(
+        db::primary_key(&client, "public", "v")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Pages of 50, ordered by the key: stable whatever the physical order.
+    let p0 = db::fetch_page(&client, "public", "Orders", &pk, 0, 50)
+        .await
+        .unwrap();
+    assert_eq!(p0.columns, vec!["Region", "id", "label"]);
+    assert_eq!(p0.rows.len(), 50);
+    assert_eq!(p0.rows[0][0].as_deref(), Some("a"));
+    assert_eq!(p0.rows[0][1].as_deref(), Some("81")); // smallest odd g=119 → 200-119
+    let p2 = db::fetch_page(&client, "public", "Orders", &pk, 100, 50)
+        .await
+        .unwrap();
+    assert_eq!(p2.rows.len(), 20);
+    assert_eq!(p2.rows[19][0].as_deref(), Some("b"));
+    assert_eq!(p2.rows[19][1].as_deref(), Some("198"));
+
+    // Empty tables still report their columns; views page without a key.
+    let empty = db::fetch_page(&client, "public", "empty_t", &[], 0, 50)
+        .await
+        .unwrap();
+    assert_eq!(empty.columns, vec!["x", "y"]);
+    assert!(empty.rows.is_empty());
+    assert_eq!(
+        db::row_count(&client, "public", "empty_t").await.unwrap(),
+        db::RowCount {
+            rows: 0,
+            exact: true
+        }
+    );
+    let view = db::fetch_page(&client, "public", "v", &[], 0, 50)
+        .await
+        .unwrap();
+    assert_eq!(view.rows.len(), 50);
+
+    // A count that outlives the limit falls back to the estimate, and the
+    // connection stays usable.
+    client
+        .batch_execute("CREATE VIEW slow AS SELECT pg_sleep(2)::text AS s")
+        .await
+        .unwrap();
+    let started = std::time::Instant::now();
+    let slow = db::row_count_within(&client, "public", "slow", "200ms")
+        .await
+        .unwrap();
+    assert!(!slow.exact);
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    assert_eq!(
+        db::row_count(&client, "public", "empty_t")
+            .await
+            .unwrap()
+            .rows,
+        0
+    );
 }

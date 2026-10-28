@@ -9,7 +9,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use pgdesk_core::db::{ColumnInfo, ConnProfile, RelKind};
+use pgdesk_core::db::{ConnProfile, RelKind};
 
 use super::store::DbStore;
 use crate::servers::ServerStore;
@@ -19,7 +19,6 @@ pub enum DbEvent {
         profile: String,
         schema: String,
         table: String,
-        columns: Vec<ColumnInfo>,
     },
     OpenSql {
         profile: String,
@@ -287,12 +286,8 @@ impl Render for DatabasePanel {
                         RelKind::Table | RelKind::Foreign => Icon::new(Lucide::Table),
                         RelKind::View | RelKind::MaterializedView => Icon::new(Lucide::Eye),
                     };
-                    let (profile_name, schema_name, table_name, columns) = (
-                        name.clone(),
-                        schema.name.clone(),
-                        rel.name.clone(),
-                        rel.columns.clone(),
-                    );
+                    let (profile_name, schema_name, table_name) =
+                        (name.clone(), schema.name.clone(), rel.name.clone());
                     let toggle_key = rkey.clone();
                     let id = pix * 1_000_000 + six * 1000 + rix;
                     rows.push(
@@ -318,7 +313,6 @@ impl Render for DatabasePanel {
                                     profile: profile_name.clone(),
                                     schema: schema_name.clone(),
                                     table: table_name.clone(),
-                                    columns: columns.clone(),
                                 });
                             }))
                             .into_any_element(),

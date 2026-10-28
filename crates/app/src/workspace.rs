@@ -28,7 +28,12 @@ enum SidebarTab {
 enum PaneItem {
     Server,
     File(Entity<FileEditor>),
-    Other(AnyView, SharedString),
+    Other {
+        view: AnyView,
+        /// Identity for "already open?" checks.
+        key: SharedString,
+        title: SharedString,
+    },
 }
 
 pub struct Workspace {
@@ -120,8 +125,14 @@ impl Workspace {
     }
 
     /// Opens an arbitrary view as a center tab (used by the database tools).
-    pub fn open_item(&mut self, view: AnyView, title: SharedString, cx: &mut Context<Self>) {
-        self.items.push(PaneItem::Other(view, title));
+    pub fn open_item(
+        &mut self,
+        view: AnyView,
+        key: SharedString,
+        title: SharedString,
+        cx: &mut Context<Self>,
+    ) {
+        self.items.push(PaneItem::Other { view, key, title });
         self.active = self.items.len() - 1;
         cx.notify();
     }
@@ -132,24 +143,27 @@ impl Workspace {
                 profile,
                 schema,
                 table,
-                columns,
             } => {
-                let title: SharedString = format!("{schema}.{table}").into();
+                // One tab per table per connection.
+                let key: SharedString =
+                    format!("table\u{0}{profile}\u{0}{schema}\u{0}{table}").into();
                 if let Some(ix) = self
                     .items
                     .iter()
-                    .position(|i| matches!(i, PaneItem::Other(_, t) if *t == title))
+                    .position(|i| matches!(i, PaneItem::Other { key: k, .. } if *k == key))
                 {
                     self.active = ix;
                     cx.notify();
                     return;
                 }
-                let Some(client) = self.db.read(cx).clients.get(profile).cloned() else {
+                let Some(client) = self.db.read(cx).ro_clients.get(profile).cloned() else {
                     return;
                 };
-                let (schema, table, columns) = (schema.clone(), table.clone(), columns.clone());
-                let view = cx.new(|cx| TableView::new(client, schema, table, columns, window, cx));
-                self.open_item(view.into(), title, cx);
+                let title: SharedString = format!("{schema}.{table}").into();
+                let (schema, table) = (schema.clone(), table.clone());
+                let view =
+                    cx.new(|cx| TableView::new(title.clone(), client, schema, table, window, cx));
+                self.open_item(view.into(), key, title, cx);
             }
             DbEvent::OpenSql { profile } => {
                 let Some(client) = self.db.read(cx).clients.get(profile).cloned() else {
@@ -158,7 +172,7 @@ impl Workspace {
                 self.sql_count += 1;
                 let title: SharedString = format!("SQL {} · {profile}", self.sql_count).into();
                 let view = cx.new(|cx| SqlView::new(title.clone(), client, window, cx));
-                self.open_item(view.into(), title, cx);
+                self.open_item(view.into(), title.clone(), title, cx);
             }
         }
     }
@@ -257,7 +271,7 @@ impl Workspace {
                         let e = e.read(cx);
                         (Icon::new(Lucide::FileCode), e.title(), e.dirty)
                     }
-                    PaneItem::Other(_, title) => {
+                    PaneItem::Other { title, .. } => {
                         (Icon::new(Lucide::Table), title.to_string(), false)
                     }
                 };
@@ -311,7 +325,7 @@ impl Workspace {
     fn render_active_item(&self) -> AnyElement {
         match self.items.get(self.active) {
             Some(PaneItem::File(editor)) => editor.clone().into_any_element(),
-            Some(PaneItem::Other(view, _)) => view.clone().into_any_element(),
+            Some(PaneItem::Other { view, .. }) => view.clone().into_any_element(),
             _ => self.server_detail.clone().into_any_element(),
         }
     }

@@ -8,7 +8,19 @@ use gpui_kit::{AssetSource, Result, SharedString};
 gpui_kit::assets::icon_assets!(
     ExtraIcons,
     [
-        Database, Server, Terminal, FileCode, Download, Table, X, Save, Circle
+        Database,
+        Server,
+        Terminal,
+        FileCode,
+        Download,
+        Table,
+        X,
+        Save,
+        Circle,
+        Eye,
+        Lock,
+        ChevronsLeft,
+        ChevronsRight
     ]
 );
 

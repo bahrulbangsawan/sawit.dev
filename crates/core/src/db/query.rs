@@ -168,8 +168,31 @@ pub async fn load_schema(client: &Client) -> Result<Vec<SchemaInfo>> {
     Ok(schemas)
 }
 
-/// Exact row count for tables up to ~1M rows (by statistics), else the estimate.
-pub async fn row_count(client: &Client, schema: &str, table: &str) -> Result<u64> {
+/// Rows in a table or view; `exact` is false when only the planner's
+/// estimate was available in time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowCount {
+    pub rows: u64,
+    pub exact: bool,
+}
+
+/// Longest an exact `count(*)` may run before falling back to the estimate
+/// (a slow count on a remote database would otherwise hold up the connection).
+const COUNT_TIMEOUT: &str = "3s";
+
+/// Exact count for relations estimated below ~1M rows (bounded by
+/// `COUNT_TIMEOUT`), else the statistics estimate.
+pub async fn row_count(client: &Client, schema: &str, table: &str) -> Result<RowCount> {
+    row_count_within(client, schema, table, COUNT_TIMEOUT).await
+}
+
+/// [`row_count`] with an explicit Postgres interval for the exact count.
+pub async fn row_count_within(
+    client: &Client,
+    schema: &str,
+    table: &str,
+    timeout: &str,
+) -> Result<RowCount> {
     let estimate: i64 = client
         .query_opt(
             "SELECT c.reltuples::bigint FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -180,17 +203,56 @@ pub async fn row_count(client: &Client, schema: &str, table: &str) -> Result<u64
         .map_err(sql_error)?
         .map(|r| r.get(0))
         .unwrap_or(-1);
-    if (0..1_000_000).contains(&estimate) || estimate < 0 {
-        let sql = format!(
-            "SELECT count(*) FROM {}.{}",
-            quote_ident(schema),
-            quote_ident(table)
-        );
-        let n: i64 = client.query_one(&sql, &[]).await.map_err(sql_error)?.get(0);
-        Ok(n as u64)
-    } else {
-        Ok(estimate as u64)
+    let fallback = RowCount {
+        rows: estimate.max(0) as u64,
+        exact: false,
+    };
+    if estimate >= 1_000_000 {
+        return Ok(fallback);
     }
+    // One implicit transaction, so SET LOCAL only bounds this count.
+    let sql = format!(
+        "SET LOCAL statement_timeout = '{}'; SELECT count(*) FROM {}.{}",
+        timeout.replace('\'', "''"),
+        quote_ident(schema),
+        quote_ident(table)
+    );
+    match client.simple_query(&sql).await {
+        Ok(messages) => {
+            let rows = messages
+                .iter()
+                .find_map(|m| match m {
+                    SimpleQueryMessage::Row(r) => r.get(0).and_then(|v| v.parse().ok()),
+                    _ => None,
+                })
+                .unwrap_or(0);
+            Ok(RowCount { rows, exact: true })
+        }
+        Err(e) if e.code() == Some(&tokio_postgres::error::SqlState::QUERY_CANCELED) => {
+            Ok(fallback)
+        }
+        Err(e) => Err(sql_error(e)),
+    }
+}
+
+/// Primary-key columns of a table, in key order (empty for views and
+/// tables without one).
+pub async fn primary_key(client: &Client, schema: &str, table: &str) -> Result<Vec<String>> {
+    let rows = client
+        .query(
+            "SELECT a.attname::text
+             FROM pg_index i
+             JOIN pg_class c ON c.oid = i.indrelid
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
+             JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum
+             WHERE i.indisprimary AND n.nspname = $1 AND c.relname = $2
+             ORDER BY k.ord",
+            &[&schema, &table],
+        )
+        .await
+        .map_err(sql_error)?;
+    Ok(rows.iter().map(|r| r.get(0)).collect())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -255,16 +317,25 @@ pub async fn run_sql(client: &Client, sql: &str, max_rows: usize) -> Result<Quer
     Ok(out)
 }
 
-/// One page of a table, in physical order (stable for an unchanged table).
+/// One page of a table or view. Ordered by `order_by` (normally the primary
+/// key) so pages are stable while rows change; without it, physical order
+/// (stable only for an unchanged table).
 pub async fn fetch_page(
     client: &Client,
     schema: &str,
     table: &str,
+    order_by: &[String],
     offset: u64,
     limit: u64,
 ) -> Result<ResultSet> {
+    let order = if order_by.is_empty() {
+        String::new()
+    } else {
+        let cols: Vec<_> = order_by.iter().map(|c| quote_ident(c)).collect();
+        format!(" ORDER BY {}", cols.join(", "))
+    };
     let sql = format!(
-        "SELECT * FROM {}.{} OFFSET {offset} LIMIT {limit}",
+        "SELECT * FROM {}.{}{order} OFFSET {offset} LIMIT {limit}",
         quote_ident(schema),
         quote_ident(table)
     );
