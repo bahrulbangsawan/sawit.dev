@@ -4743,6 +4743,7 @@ dependencies = [
  "serde",
  "tempfile",
  "tokio",
+ "tokio-postgres",
 ]
 
 [[package]]

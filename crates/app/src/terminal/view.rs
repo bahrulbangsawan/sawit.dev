@@ -8,8 +8,8 @@ use futures::StreamExt;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
 use pgdesk_core::terminal::{
-    CursorView, GridSize, KeyInput, MouseAction, MouseButton as TermButton, Palette, Rgb, Session,
-    Snapshot, TermEvent, key_to_bytes, mouse_report, paste_bytes,
+    CursorView, GridSize, KeyInput, MouseAction, MouseButton as TermButton, Palette, Rgb,
+    ScrollAccumulator, Session, Snapshot, TermEvent, key_to_bytes, mouse_report, paste_bytes,
 };
 
 const FONT_SIZE: f32 = 13.;
@@ -34,6 +34,7 @@ pub struct TerminalView {
     /// Grid origin and cell size from the last paint, for mouse mapping.
     layout: Rc<Cell<Option<GridLayout>>>,
     pressed: Option<TermButton>,
+    scroll: ScrollAccumulator,
     _events: Task<()>,
 }
 
@@ -95,6 +96,7 @@ impl TerminalView {
             exited: false,
             layout: Rc::new(Cell::new(None)),
             pressed: None,
+            scroll: ScrollAccumulator::default(),
             _events: task,
         }
     }
@@ -163,7 +165,8 @@ impl TerminalView {
         let Some((_, cell)) = self.layout.get() else {
             return;
         };
-        let lines = (event.delta.pixel_delta(cell.height).y / cell.height).round() as i32;
+        let pixels = f32::from(event.delta.pixel_delta(cell.height).y);
+        let lines = self.scroll.add(pixels, f32::from(cell.height));
         if lines == 0 {
             return;
         }

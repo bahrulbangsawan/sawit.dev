@@ -18,12 +18,54 @@ const PAGE: u64 = 200;
 /// Pages kept in memory; older ones are dropped as you scroll.
 const MAX_PAGES: usize = 40;
 
+/// Pages (of `PAGE` rows) touched by a visible row range.
+fn pages_for(visible: &Range<usize>) -> std::ops::RangeInclusive<u64> {
+    let first = visible.start as u64 / PAGE;
+    let last = visible.end.saturating_sub(1).max(visible.start) as u64 / PAGE;
+    first..=last
+}
+
+/// Loaded pages, least recently viewed first.
+struct PageLru {
+    order: Vec<u64>,
+    capacity: usize,
+}
+
+impl PageLru {
+    fn new(capacity: usize) -> Self {
+        Self {
+            order: Vec::new(),
+            capacity,
+        }
+    }
+
+    fn touch(&mut self, page: u64) {
+        if let Some(i) = self.order.iter().position(|p| *p == page) {
+            let p = self.order.remove(i);
+            self.order.push(p);
+        }
+    }
+
+    /// Records a newly loaded page; returns the page to evict, if any.
+    fn insert(&mut self, page: u64) -> Option<u64> {
+        self.order.retain(|p| *p != page);
+        self.order.push(page);
+        (self.order.len() > self.capacity).then(|| self.order.remove(0))
+    }
+}
+
+/// Wait this long after scrolling stops before fetching, so dragging the
+/// scrollbar across 300k rows doesn't queue a query per page passed over.
+const FETCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(120);
+
 pub struct RowsDelegate {
     columns: Vec<Column>,
     total: usize,
     pages: HashMap<u64, Vec<Vec<Option<String>>>>,
     pending: HashSet<u64>,
-    order: Vec<u64>,
+    lru: PageLru,
+    visible: Range<usize>,
+    fetch_scheduled: bool,
     client: Arc<Client>,
     schema: String,
     table: String,
@@ -48,9 +90,7 @@ impl RowsDelegate {
                 match result {
                     Ok(Ok(set)) => {
                         d.pages.insert(page, set.rows);
-                        d.order.push(page);
-                        if d.order.len() > MAX_PAGES {
-                            let old = d.order.remove(0);
+                        if let Some(old) = d.lru.insert(page) {
                             d.pages.remove(&old);
                         }
                     }
@@ -123,11 +163,35 @@ impl TableDelegate for RowsDelegate {
         if visible.is_empty() {
             return;
         }
-        let first = visible.start as u64 / PAGE;
-        let last = (visible.end.saturating_sub(1)) as u64 / PAGE;
-        for page in first..=last {
-            self.request(page, cx);
+        self.visible = visible;
+        if self.fetch_scheduled {
+            return;
         }
+        self.fetch_scheduled = true;
+        cx.spawn(async move |this, cx| {
+            let mut last = None;
+            // Fetch once the visible range has been stable for one debounce period.
+            loop {
+                cx.background_executor().timer(FETCH_DEBOUNCE).await;
+                let Ok(range) = this.update(cx, |state, _| state.delegate().visible.clone()) else {
+                    return;
+                };
+                if last.as_ref() == Some(&range) {
+                    break;
+                }
+                last = Some(range);
+            }
+            let _ = this.update(cx, |state, cx| {
+                let d = state.delegate_mut();
+                d.fetch_scheduled = false;
+                let pages = pages_for(&d.visible);
+                for page in pages {
+                    d.lru.touch(page);
+                    d.request(page, cx);
+                }
+            });
+        })
+        .detach();
     }
 }
 
@@ -155,7 +219,9 @@ impl TableView {
             total: 0,
             pages: HashMap::new(),
             pending: HashSet::new(),
-            order: vec![],
+            lru: PageLru::new(MAX_PAGES),
+            visible: 0..0,
+            fetch_scheduled: false,
             client: client.clone(),
             schema: schema.clone(),
             table: table.clone(),
@@ -284,5 +350,26 @@ impl TableDelegate for ResultDelegate {
                 .italic()
                 .child("NULL"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Not a glob: `gpui_kit::*` exports a `test` macro that shadows #[test].
+    use super::{PageLru, pages_for};
+
+    #[test]
+    fn pages_cover_visible_rows() {
+        assert_eq!(pages_for(&(0..10)), 0..=0);
+        assert_eq!(pages_for(&(195..410)), 0..=2);
+    }
+
+    #[test]
+    fn lru_evicts_least_recently_viewed() {
+        let mut lru = PageLru::new(2);
+        assert_eq!(lru.insert(1), None);
+        assert_eq!(lru.insert(2), None);
+        lru.touch(1); // page 1 is on screen again
+        assert_eq!(lru.insert(3), Some(2));
     }
 }

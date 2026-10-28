@@ -54,18 +54,23 @@ impl ConnProfile {
 
 fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
+    let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%'
-            && i + 2 < bytes.len()
-            && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16)
-        {
-            out.push(v);
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
+        match (
+            bytes[i],
+            bytes.get(i + 1).and_then(|b| hex(*b)),
+            bytes.get(i + 2).and_then(|b| hex(*b)),
+        ) {
+            (b'%', Some(hi), Some(lo)) => {
+                out.push(hi << 4 | lo);
+                i += 3;
+            }
+            (b, _, _) => {
+                out.push(b);
+                i += 1;
+            }
         }
     }
     String::from_utf8_lossy(&out).into_owned()

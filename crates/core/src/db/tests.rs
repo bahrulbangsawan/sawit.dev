@@ -117,3 +117,19 @@ fn result_set_renders_as_aligned_text_table() {
         "id | email\n---+--------\n1  | a@x.dev\n22 | NULL\n(2 baris, dipotong)"
     );
 }
+
+#[test]
+fn percent_decode_with_multibyte_does_not_panic() {
+    let (_, pw) = parse_database_url("postgres://u:p%a\u{e9}x@localhost/db").unwrap();
+    assert_eq!(pw.as_deref(), Some("p%a\u{e9}x"));
+    let (_, pw) = parse_database_url("postgres://u:%C3%A9@localhost/db").unwrap();
+    assert_eq!(pw.as_deref(), Some("\u{e9}"));
+}
+
+#[test]
+fn read_only_sql_screening() {
+    assert!(screen_read_only_sql("select 1").is_ok());
+    assert!(screen_read_only_sql("  -- c\n COPY (SELECT 1) TO PROGRAM 'touch x'").is_err());
+    assert!(screen_read_only_sql("(copy t to '/tmp/x')").is_err());
+    assert!(screen_read_only_sql("set default_transaction_read_only = off").is_err());
+}

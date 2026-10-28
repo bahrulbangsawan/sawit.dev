@@ -10,8 +10,9 @@ pub use profile::{
 };
 
 pub use query::{
-    ColumnInfo, QueryOutcome, RelKind, Relation, ResultSet, SchemaInfo, connect, connect_read_only,
-    fetch_page, list_databases, load_schema, row_count, run_read_only, run_sql, sql_error,
+    ColumnInfo, QueryOutcome, READ_ONLY_ROLE, RelKind, Relation, ResultSet, SchemaInfo, connect,
+    connect_read_only, ensure_read_only_role, fetch_page, list_databases, load_schema, row_count,
+    run_read_only, run_sql, screen_read_only_sql, sql_error,
 };
 
 /// Quotes an SQL identifier.

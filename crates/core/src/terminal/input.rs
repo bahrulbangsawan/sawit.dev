@@ -115,6 +115,15 @@ pub fn key_to_bytes(k: &KeyInput, modes: Modes) -> Option<Vec<u8>> {
             };
             alt_prefix(vec![code])
         }
+        // Option composed a different character (å, or @ [ ] on many
+        // layouts): send it as typed, like Terminal.app by default.
+        key if k.alt
+            && k.text
+                .as_deref()
+                .is_some_and(|t| !t.eq_ignore_ascii_case(key)) =>
+        {
+            k.text.clone()?.into_bytes()
+        }
         _ => alt_prefix(k.text.clone()?.into_bytes()),
     };
     Some(bytes)
@@ -193,5 +202,21 @@ pub fn paste_bytes(text: &str, modes: Modes) -> Vec<u8> {
         format!("\x1b[200~{}\x1b[201~", text.replace('\x1b', "")).into_bytes()
     } else {
         text.into_bytes()
+    }
+}
+
+/// Turns pixel scroll deltas into whole lines, carrying the remainder so slow
+/// trackpad scrolling still moves.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScrollAccumulator {
+    remainder: f32,
+}
+
+impl ScrollAccumulator {
+    pub fn add(&mut self, pixels: f32, line_height: f32) -> i32 {
+        let total = self.remainder + pixels / line_height;
+        let lines = total.trunc();
+        self.remainder = total - lines;
+        lines as i32
     }
 }

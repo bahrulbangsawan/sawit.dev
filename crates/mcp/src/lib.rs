@@ -81,13 +81,24 @@ impl PgDesk {
             .ok_or_else(|| format!("Instance \"{name}\" tidak ada. Lihat list_instances."))
     }
 
-    /// Connection target: an instance (trust auth on localhost) or a saved profile.
-    fn resolve(&self, target: &str) -> Result<(ConnProfile, Option<String>), String> {
+    /// Read-only connection for a target. Instances are reached as the
+    /// non-superuser `pgdesk_ro` role (created on first use), so agents can't
+    /// write, COPY to files or run server programs. Saved profiles use their
+    /// own credentials inside read-only, single-statement transactions.
+    async fn connect_target(&self, target: &str) -> Result<tokio_postgres::Client, String> {
         if let Ok(inst) = self.instance(target) {
-            return Ok((
-                ConnProfile::new("localhost", inst.port, "postgres", "postgres"),
-                None,
-            ));
+            let admin = ConnProfile::new("localhost", inst.port, "postgres", "postgres");
+            let client = db::connect(&admin, None).await.map_err(|e| e.to_string())?;
+            db::ensure_read_only_role(&client)
+                .await
+                .map_err(|e| e.to_string())?;
+            let ro = ConnProfile {
+                user: db::READ_ONLY_ROLE.into(),
+                ..admin
+            };
+            return db::connect_read_only(&ro, None)
+                .await
+                .map_err(|e| e.to_string());
         }
         let profiles =
             Profiles::load(&self.paths.root.join("profiles.toml")).map_err(|e| e.to_string())?;
@@ -97,7 +108,9 @@ impl PgDesk {
             .find(|p| p.name == target)
             .ok_or_else(|| format!("\"{target}\" bukan instance atau koneksi yang dikenal."))?;
         let password = load_password(&profile).ok().flatten();
-        Ok((profile, password))
+        db::connect_read_only(&profile, password.as_deref())
+            .await
+            .map_err(|e| e.to_string())
     }
 
     pub async fn list_instances_tool(&self) -> CallToolResult {
@@ -182,13 +195,9 @@ impl PgDesk {
     }
 
     pub async fn describe_schema_tool(&self, target: &str) -> CallToolResult {
-        let (profile, password) = match self.resolve(target) {
-            Ok(r) => r,
-            Err(e) => return fail(e),
-        };
-        let client = match db::connect_read_only(&profile, password.as_deref()).await {
+        let client = match self.connect_target(target).await {
             Ok(c) => c,
-            Err(e) => return fail(e.to_string()),
+            Err(e) => return fail(e),
         };
         match db::load_schema(&client).await {
             Ok(schemas) => {
@@ -219,13 +228,9 @@ impl PgDesk {
         sql: &str,
         max_rows: Option<usize>,
     ) -> CallToolResult {
-        let (profile, password) = match self.resolve(target) {
-            Ok(r) => r,
-            Err(e) => return fail(e),
-        };
-        let client = match db::connect_read_only(&profile, password.as_deref()).await {
+        let client = match self.connect_target(target).await {
             Ok(c) => c,
-            Err(e) => return fail(e.to_string()),
+            Err(e) => return fail(e),
         };
         let limit = max_rows.unwrap_or(MAX_ROWS).min(MAX_ROWS);
         match db::run_read_only(&client, sql, limit).await {

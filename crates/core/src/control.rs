@@ -75,6 +75,20 @@ pub enum StartOutcome {
     Blocked(PortReport),
 }
 
+/// pg_ctl runs `exec postgres -D "<dir>" ... >> "<log>"` through `sh`, so
+/// paths with shell metacharacters inside double quotes would be expanded.
+pub(crate) fn check_shell_safe_path(path: &Path) -> Result<()> {
+    let text = path
+        .to_str()
+        .ok_or_else(|| CoreError::Config("path is not UTF-8".into()))?;
+    if text.contains(['"', '$', '`', '\\']) {
+        return Err(CoreError::Config(format!(
+            "Path {text} berisi karakter \" $ ` atau \\ yang tidak aman untuk pg_ctl; pindahkan/ganti nama foldernya."
+        )));
+    }
+    Ok(())
+}
+
 /// Options passed through `pg_ctl -o`, which runs them via the shell, so every
 /// value is single-quoted (`*` would otherwise glob).
 pub(crate) fn postgres_options(
@@ -115,8 +129,10 @@ pub async fn start(
 
     let socket_dir = paths.socket_dir();
     validate_socket_dir(&socket_dir, inst.port)?;
-    tokio::fs::create_dir_all(&socket_dir).await?;
     let log = paths.log_file(&inst.name);
+    check_shell_safe_path(&inst.data_dir)?;
+    check_shell_safe_path(&log)?;
+    tokio::fs::create_dir_all(&socket_dir).await?;
     if let Some(dir) = log.parent() {
         tokio::fs::create_dir_all(dir).await?;
     }
@@ -283,6 +299,19 @@ mod tests {
     fn postgres_options_are_shell_quoted() {
         let opts = postgres_options(5440, ListenScope::All, Path::new("/a b/run")).unwrap();
         assert_eq!(opts, "-p 5440 -c listen_addresses='*' -k '/a b/run'");
+    }
+
+    #[test]
+    fn shell_metacharacters_in_paths_rejected() {
+        for bad in ["/a\"b", "/pg$data", "/x`id`", "/a\\b"] {
+            assert!(check_shell_safe_path(Path::new(bad)).is_err(), "{bad}");
+        }
+        assert!(
+            check_shell_safe_path(Path::new(
+                "/Users/u/Library/Application Support/pgdesk/clusters/a b"
+            ))
+            .is_ok()
+        );
     }
 
     #[test]

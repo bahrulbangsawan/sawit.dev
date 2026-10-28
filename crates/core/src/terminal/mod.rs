@@ -6,7 +6,8 @@ mod palette;
 mod session;
 
 pub use input::{
-    KeyInput, Modes, MouseAction, MouseButton, key_to_bytes, mouse_report, paste_bytes,
+    KeyInput, Modes, MouseAction, MouseButton, ScrollAccumulator, key_to_bytes, mouse_report,
+    paste_bytes,
 };
 pub use palette::{Palette, Rgb};
 pub use session::{

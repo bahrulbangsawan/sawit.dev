@@ -29,6 +29,12 @@ pub fn sql_error(e: tokio_postgres::Error) -> CoreError {
     }
 }
 
+const BASE_OPTIONS: &str = "-c synchronize_seqscans=off";
+
+/// Login role for agent (MCP) access to PG Desk instances: reads everything,
+/// cannot write, cannot run server programs or write server files.
+pub const READ_ONLY_ROLE: &str = "pgdesk_ro";
+
 fn config(profile: &ConnProfile, password: Option<&str>) -> tokio_postgres::Config {
     let mut cfg = tokio_postgres::Config::new();
     cfg.host(&profile.host)
@@ -36,7 +42,10 @@ fn config(profile: &ConnProfile, password: Option<&str>) -> tokio_postgres::Conf
         .user(&profile.user)
         .dbname(&profile.database)
         .application_name("pgdesk")
-        .connect_timeout(Duration::from_secs(5));
+        .connect_timeout(Duration::from_secs(5))
+        // Paging uses OFFSET/LIMIT in physical order; synchronized seqscans
+        // (tables > shared_buffers/4) would start each scan mid-table.
+        .options(BASE_OPTIONS);
     if let Some(pw) = password {
         cfg.password(pw);
     }
@@ -59,7 +68,9 @@ pub async fn connect(profile: &ConnProfile, password: Option<&str>) -> Result<Cl
 /// A connection whose transactions are read-only by default.
 pub async fn connect_read_only(profile: &ConnProfile, password: Option<&str>) -> Result<Client> {
     let mut cfg = config(profile, password);
-    cfg.options("-c default_transaction_read_only=on");
+    cfg.options(format!(
+        "{BASE_OPTIONS} -c default_transaction_read_only=on"
+    ));
     connect_with(cfg).await
 }
 
@@ -261,13 +272,57 @@ pub async fn fetch_page(
     Ok(out.results.pop().unwrap_or_default())
 }
 
-/// Runs SQL on a `connect_read_only` connection inside a read-only
-/// transaction. Statements that try to switch read-only mode off are refused.
-pub async fn run_read_only(client: &Client, sql: &str, max_rows: usize) -> Result<QueryOutcome> {
+/// Rejects SQL that the read-only mode must never run: COPY (server files /
+/// programs) and attempts to switch read-only mode off.
+pub fn screen_read_only_sql(sql: &str) -> Result<()> {
     let lowered = sql.to_lowercase();
     if lowered.contains("transaction_read_only") || lowered.contains("characteristics") {
         return Err(CoreError::Sql("Mode read-only tidak boleh diubah.".into()));
     }
+    // First keyword after whitespace, comments and opening parentheses.
+    let mut rest = lowered.as_str();
+    loop {
+        let trimmed = rest.trim_start_matches(|c: char| c.is_whitespace() || c == '(');
+        if let Some(after) = trimmed.strip_prefix("--") {
+            rest = after.split_once('\n').map(|(_, r)| r).unwrap_or("");
+        } else if let Some(after) = trimmed.strip_prefix("/*") {
+            rest = after.split_once("*/").map(|(_, r)| r).unwrap_or("");
+        } else {
+            rest = trimmed;
+            break;
+        }
+    }
+    if rest.starts_with("copy") {
+        return Err(CoreError::Sql(
+            "COPY tidak diizinkan pada mode read-only.".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Creates (idempotently) the non-superuser `READ_ONLY_ROLE` with
+/// `pg_read_all_data` (PostgreSQL 14+). Run on an admin connection.
+pub async fn ensure_read_only_role(admin: &Client) -> Result<()> {
+    admin
+        .batch_execute(&format!(
+            "DO $$ BEGIN
+               IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{READ_ONLY_ROLE}') THEN
+                 CREATE ROLE {READ_ONLY_ROLE} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+               END IF;
+             END $$;
+             GRANT pg_read_all_data TO {READ_ONLY_ROLE};"
+        ))
+        .await
+        .map_err(sql_error)
+}
+
+/// Runs one SQL statement on a `connect_read_only` connection inside a
+/// read-only transaction. Multiple statements are refused (the server's
+/// Parse step rejects them), as are COPY and read-only switches. Use a
+/// non-superuser role (see `ensure_read_only_role`) for full protection.
+pub async fn run_read_only(client: &Client, sql: &str, max_rows: usize) -> Result<QueryOutcome> {
+    screen_read_only_sql(sql)?;
+    client.prepare(sql).await.map_err(sql_error)?;
     client
         .batch_execute("BEGIN TRANSACTION READ ONLY")
         .await

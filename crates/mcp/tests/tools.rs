@@ -103,6 +103,15 @@ async fn query_is_read_only() {
         .query_tool("mcp", "create table t(x int)", None)
         .await;
     assert_eq!(denied.is_error, Some(true), "{}", text(&denied));
+    // Even single statements a superuser could run must not reach the shell.
+    let marker = home.path().join("pwned");
+    let sql = format!(
+        "DO $$ BEGIN EXECUTE 'COPY (SELECT 1) TO PROGRAM ''touch {}'''; END $$",
+        marker.display()
+    );
+    let attack = server.query_tool("mcp", &sql, None).await;
+    assert_eq!(attack.is_error, Some(true), "{}", text(&attack));
+    assert!(!marker.exists(), "shell command ran via MCP");
     let schema = server.describe_schema_tool("mcp").await;
     assert!(text(&schema).contains("public"), "{}", text(&schema));
 

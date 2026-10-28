@@ -169,4 +169,95 @@ async fn schema_paging_and_sql() {
 
     let dbs = db::list_databases(&client).await.unwrap();
     assert!(dbs.contains(&"postgres".to_string()));
+
+    // Views get a bounded exact count (no unbounded count(*) on huge views).
+    assert_eq!(db::row_count(&client, "app", "active").await.unwrap(), 9);
+}
+
+#[tokio::test]
+async fn pages_are_stable_on_tables_above_synchronized_scan_threshold() {
+    let Some((_cluster, profile)) = cluster().await else {
+        eprintln!("skip: no PostgreSQL binaries");
+        return;
+    };
+    let client = db::connect(&profile, None).await.unwrap();
+    // ~70 MB: above shared_buffers/4, where seqscans synchronize.
+    client
+        .batch_execute(
+            "CREATE TABLE big AS SELECT g AS id, repeat('x', 200) AS pad FROM generate_series(1, 300000) g;",
+        )
+        .await
+        .unwrap();
+    for (offset, first) in [
+        (200_000u64, "200001"),
+        (200_200, "200201"),
+        (0, "1"),
+        (150_000, "150001"),
+    ] {
+        let page = db::fetch_page(&client, "public", "big", offset, 200)
+            .await
+            .unwrap();
+        assert_eq!(page.rows[0][0].as_deref(), Some(first), "offset {offset}");
+    }
+}
+
+#[tokio::test]
+async fn read_only_cannot_be_escaped() {
+    let Some((_cluster, profile)) = cluster().await else {
+        eprintln!("skip: no PostgreSQL binaries");
+        return;
+    };
+    let admin = db::connect(&profile, None).await.unwrap();
+    admin
+        .batch_execute("CREATE TABLE t (x int); INSERT INTO t VALUES (1);")
+        .await
+        .unwrap();
+    db::ensure_read_only_role(&admin).await.unwrap();
+    db::ensure_read_only_role(&admin).await.unwrap(); // idempotent
+
+    let ro_profile = ConnProfile {
+        user: db::READ_ONLY_ROLE.into(),
+        ..profile.clone()
+    };
+    let ro = db::connect_read_only(&ro_profile, None).await.unwrap();
+    let marker = std::env::temp_dir().join(format!("pgdesk-pwned-{}", std::process::id()));
+    let attacks = [
+        "COMMIT; BEGIN READ WRITE; CREATE TABLE pwned(x int); COMMIT;".to_string(),
+        "CREATE TABLE pwned(x int)".to_string(),
+        format!("COPY (SELECT 1) TO PROGRAM 'touch {}'", marker.display()),
+        format!(
+            "DO $$ BEGIN EXECUTE 'COPY (SELECT 1) TO PROGRAM ''touch {}'''; END $$",
+            marker.display()
+        ),
+    ];
+    for sql in &attacks {
+        assert!(
+            db::run_read_only(&ro, sql, 10).await.is_err(),
+            "allowed: {sql}"
+        );
+    }
+    // Saved profiles may use powerful users: the single-statement rule must
+    // still stop COMMIT/BEGIN READ WRITE smuggling on a superuser connection.
+    let su_ro = db::connect_read_only(&profile, None).await.unwrap();
+    assert!(
+        db::run_read_only(
+            &su_ro,
+            "COMMIT; BEGIN READ WRITE; CREATE TABLE pwned(x int); COMMIT;",
+            10
+        )
+        .await
+        .is_err()
+    );
+    assert!(!marker.exists(), "shell command ran");
+    let tables = db::run_sql(
+        &admin,
+        "SELECT count(*) FROM pg_tables WHERE tablename = 'pwned'",
+        1,
+    )
+    .await
+    .unwrap();
+    assert_eq!(tables.results[0].rows[0][0].as_deref(), Some("0"));
+    // Reading still works for the read-only role.
+    let read = db::run_read_only(&ro, "SELECT x FROM t", 10).await.unwrap();
+    assert_eq!(read.results[0].rows[0][0].as_deref(), Some("1"));
 }

@@ -293,3 +293,33 @@ fn unset_wrapper_uses_env_dash_u() {
         ("/bin/zsh", vec!["-l".to_string()])
     );
 }
+
+#[test]
+fn option_composed_characters_are_sent_as_typed() {
+    // German layout: Option-L types '@'; Option-a composes 'å'.
+    let at = KeyInput {
+        key: "l".into(),
+        alt: true,
+        text: Some("@".into()),
+        ..KeyInput::default()
+    };
+    assert_eq!(key_to_bytes(&at, Modes::default()), Some(b"@".to_vec()));
+    let a = KeyInput {
+        key: "a".into(),
+        alt: true,
+        text: Some("\u{e5}".into()),
+        ..KeyInput::default()
+    };
+    assert_eq!(
+        key_to_bytes(&a, Modes::default()),
+        Some("\u{e5}".as_bytes().to_vec())
+    );
+}
+
+#[test]
+fn scroll_accumulator_keeps_fractions() {
+    let mut acc = ScrollAccumulator::default();
+    let lines: Vec<i32> = (0..10).map(|_| acc.add(5.0, 17.0)).collect();
+    assert_eq!(lines.iter().sum::<i32>(), 2); // 50px / 17px
+    assert_eq!(acc.add(-40.0, 17.0), -1);
+}
