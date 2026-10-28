@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="72 88 360 360">
+  <!-- The PG Desk mark without its tile, for use on any background: the
+       ear/head gap is a mask instead of a tile-coloured circle. -->
+  <defs>
+    <mask id="gap" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <rect width="512" height="512" fill="#fff"/>
+      <circle cx="276" cy="206" r="108" fill="#000"/>
+    </mask>
+  </defs>
+  <path d="M240 118 C142 92 80 160 88 244 C96 314 146 360 214 372 C244 342 264 300 274 254 Z"
+        fill="#3B74B8" mask="url(#gap)"/>
+  <path d="M334 224 C372 254 378 318 360 354 C348 378 368 400 396 386"
+        fill="none" stroke="#5C9BE0" stroke-width="54" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="276" cy="206" r="97" fill="#5C9BE0"/>
+  <circle cx="316" cy="182" r="11" fill="#1F2329"/>
+  <rect x="112" y="404" width="112" height="22" rx="11" fill="#E5C07B"/>
+</svg>

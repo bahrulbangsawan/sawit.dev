@@ -840,6 +840,7 @@ impl Render for Workspace {
                         .pr_2()
                         .gap_2()
                         .text_sm()
+                        .child(img(crate::assets::LOGO_MARK).size(px(16.)))
                         .child(div().font_semibold().child("PG Desk"))
                         .child(
                             div()

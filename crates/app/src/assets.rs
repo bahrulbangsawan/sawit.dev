@@ -30,8 +30,16 @@ gpui_kit::assets::icon_assets!(
 /// replaces the default one rather than adding to it).
 pub struct AppAssets;
 
+/// The PG Desk mark (title bar).
+pub const LOGO_MARK: &str = "logo/pgdesk-mark.svg";
+
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if path == LOGO_MARK {
+            return Ok(Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/logo/pgdesk-mark.svg"
+            ))));
+        }
         match ExtraIcons.load(path)? {
             Some(bytes) => Ok(Some(bytes)),
             None => gpui_kit::assets::Assets.load(path),

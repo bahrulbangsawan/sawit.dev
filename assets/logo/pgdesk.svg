@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- PG Desk app icon: an elephant (PostgreSQL) above a prompt cursor
+       (editor + terminal), on a Zed One Dark tile. Geometry only: two
+       circles, one ear curve, one trunk stroke. -->
+  <defs>
+    <!-- userSpaceOnUse so the gap circle below matches the tile exactly -->
+    <linearGradient id="tile" gradientUnits="userSpaceOnUse" x1="0" y1="32" x2="0" y2="480">
+      <stop offset="0" stop-color="#30363F"/>
+      <stop offset="1" stop-color="#1F2329"/>
+    </linearGradient>
+  </defs>
+  <rect x="32" y="32" width="448" height="448" rx="100" fill="url(#tile)"/>
+  <!-- ear, hanging behind the head -->
+  <path d="M240 118 C142 92 80 160 88 244 C96 314 146 360 214 372 C244 342 264 300 274 254 Z"
+        fill="#3B74B8"/>
+  <!-- gap between ear and head -->
+  <circle cx="276" cy="206" r="108" fill="url(#tile)"/>
+  <!-- trunk: down from the snout, tip curling forward -->
+  <path d="M334 224 C372 254 378 318 360 354 C348 378 368 400 396 386"
+        fill="none" stroke="#5C9BE0" stroke-width="54" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- head -->
+  <circle cx="276" cy="206" r="97" fill="#5C9BE0"/>
+  <!-- eye -->
+  <circle cx="316" cy="182" r="11" fill="#1F2329"/>
+  <!-- prompt cursor -->
+  <rect x="112" y="404" width="112" height="22" rx="11" fill="#E5C07B"/>
+</svg>
