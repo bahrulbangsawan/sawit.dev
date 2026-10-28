@@ -28,6 +28,8 @@ pub struct FileEditor {
     state: Option<Entity<EditorState>>,
     saved_text: String,
     pub dirty: bool,
+    /// Set from the tab menu ("Make Tab Read-Only"): no edits, no saves.
+    pub read_only: bool,
     notice: Option<String>,
     loading: bool,
     focus: FocusHandle,
@@ -56,6 +58,7 @@ impl FileEditor {
             state: None,
             saved_text: String::new(),
             dirty: false,
+            read_only: false,
             notice: None,
             loading: true,
             focus: cx.focus_handle(),
@@ -103,15 +106,32 @@ impl FileEditor {
         self.state = Some(state);
     }
 
+    pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
+        self.read_only = read_only;
+        cx.emit(FileEditorEvent::Changed);
+        cx.notify();
+    }
+
     fn save(&mut self, _: &Save, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(state) = &self.state else { return };
+        self.save_task(cx).detach();
+    }
+
+    /// Writes the buffer; resolves to whether the file is now saved.
+    pub fn save_task(&mut self, cx: &mut Context<Self>) -> Task<bool> {
+        let Some(state) = &self.state else {
+            return Task::ready(false);
+        };
+        if self.read_only {
+            return Task::ready(!self.dirty);
+        }
         let text = state.read(cx).value().to_string();
         let path = self.path.clone();
         let to_write = text.clone();
         let rx = rt::spawn(cx, async move { write_text_atomic(&path, &to_write) });
         cx.spawn(async move |this, cx| {
             let result = rx.await;
-            let _ = this.update(cx, |this, cx| {
+            this.update(cx, |this, cx| {
+                let saved = matches!(result, Ok(Ok(())));
                 match result {
                     Ok(Ok(())) => {
                         this.saved_text = text;
@@ -119,13 +139,14 @@ impl FileEditor {
                         this.notice = None;
                     }
                     Ok(Err(e)) => this.notice = Some(format!("Gagal menyimpan: {e}")),
-                    Err(_) => {}
+                    Err(_) => this.notice = Some("Gagal menyimpan: runtime berhenti.".into()),
                 }
                 cx.emit(FileEditorEvent::Changed);
                 cx.notify();
-            });
+                saved
+            })
+            .unwrap_or(false)
         })
-        .detach();
     }
 }
 
@@ -166,10 +187,12 @@ impl Render for FileEditor {
             })
             .when_some(self.state.clone(), |el, state| {
                 el.child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .child(Editor::new(&state).size_full().bordered(false)),
+                    div().flex_1().min_h_0().child(
+                        Editor::new(&state)
+                            .size_full()
+                            .bordered(false)
+                            .disabled(self.read_only),
+                    ),
                 )
             })
     }

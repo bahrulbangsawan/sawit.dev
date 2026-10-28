@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_kit::component::resizable::{h_resizable, resizable_panel, v_resizable};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -14,14 +15,48 @@ use gpui_kit::*;
 use crate::db::{DatabasePanel, DbEvent, DbStore, SqlView, TableView};
 use crate::editor::{FileEditor, FileEditorEvent};
 use crate::files::{FilesEvent, FilesPanel};
-use crate::servers::{ServerDetail, ServerList, ServerStore};
+use crate::servers::{ServerDetail, ServerList, ServerStore, ShowServerTab};
+use crate::tabs::{CloseOp, TabFlags, active_after, to_close};
 use crate::terminal::TerminalPanel;
+
+actions!(
+    workspace,
+    [
+        CloseActiveTab,
+        CloseOtherTabs,
+        CloseTabsLeft,
+        CloseTabsRight,
+        CloseCleanTabs,
+        CloseAllTabs,
+        TogglePinTab
+    ]
+);
+
+/// Zed's default bindings for the same commands.
+pub fn init(cx: &mut App) {
+    let ctx = Some("Workspace");
+    cx.bind_keys([
+        KeyBinding::new("cmd-w", CloseActiveTab, ctx),
+        KeyBinding::new("alt-cmd-t", CloseOtherTabs, ctx),
+        KeyBinding::new("cmd-k e", CloseTabsLeft, ctx),
+        KeyBinding::new("cmd-k t", CloseTabsRight, ctx),
+        KeyBinding::new("cmd-k u", CloseCleanTabs, ctx),
+        KeyBinding::new("cmd-k w", CloseAllTabs, ctx),
+        KeyBinding::new("cmd-k shift-enter", TogglePinTab, ctx),
+    ]);
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SidebarTab {
     Servers,
     Files,
     Database,
+}
+
+#[derive(Clone)]
+struct Tab {
+    item: PaneItem,
+    pinned: bool,
 }
 
 #[derive(Clone)]
@@ -46,9 +81,9 @@ pub struct Workspace {
     sql_count: usize,
     terminal: Entity<TerminalPanel>,
     sidebar: SidebarTab,
-    items: Vec<PaneItem>,
+    tabs: Vec<Tab>,
     active: usize,
-    last_selected: Option<String>,
+    focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -61,13 +96,9 @@ impl Workspace {
         let db_panel = cx.new(|cx| DatabasePanel::new(db.clone(), servers.clone(), window, cx));
         let subscriptions =
             vec![
-                cx.observe(&servers, |this, servers, cx| {
-                    let s = servers.read(cx);
-                    let selected = (!s.creating).then(|| s.selected.clone()).flatten();
-                    if s.creating || selected != this.last_selected {
-                        this.last_selected = selected;
-                        this.active = 0;
-                    }
+                cx.observe(&servers, |_, _, cx| cx.notify()),
+                cx.subscribe(&servers, |this, _, _: &ShowServerTab, cx| {
+                    this.show_server_tab();
                     cx.notify();
                 }),
                 cx.subscribe_in(&files, window, |this, _, event: &FilesEvent, window, cx| {
@@ -94,9 +125,12 @@ impl Workspace {
             sql_count: 0,
             terminal,
             sidebar: SidebarTab::Servers,
-            items: vec![PaneItem::Server],
+            tabs: vec![Tab {
+                item: PaneItem::Server,
+                pinned: false,
+            }],
             active: 0,
-            last_selected: None,
+            focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         }
     }
@@ -109,17 +143,16 @@ impl Workspace {
 
     pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(ix) = self
-            .items
+            .tabs
             .iter()
-            .position(|i| matches!(i, PaneItem::File(e) if e.read(cx).path == path))
+            .position(|t| matches!(&t.item, PaneItem::File(e) if e.read(cx).path == path))
         {
             self.active = ix;
         } else {
             let editor = cx.new(|cx| FileEditor::open(path, window, cx));
             cx.subscribe(&editor, |_, _, _: &FileEditorEvent, cx| cx.notify())
                 .detach();
-            self.items.push(PaneItem::File(editor));
-            self.active = self.items.len() - 1;
+            self.push_tab(PaneItem::File(editor));
         }
         cx.notify();
     }
@@ -132,9 +165,38 @@ impl Workspace {
         title: SharedString,
         cx: &mut Context<Self>,
     ) {
-        self.items.push(PaneItem::Other { view, key, title });
-        self.active = self.items.len() - 1;
+        self.push_tab(PaneItem::Other { view, key, title });
         cx.notify();
+    }
+
+    fn push_tab(&mut self, item: PaneItem) {
+        self.tabs.push(Tab {
+            item,
+            pinned: false,
+        });
+        self.active = self.tabs.len() - 1;
+    }
+
+    /// Activates the Server tab, reopening it (after pinned tabs) if closed.
+    fn show_server_tab(&mut self) {
+        match self
+            .tabs
+            .iter()
+            .position(|t| matches!(t.item, PaneItem::Server))
+        {
+            Some(ix) => self.active = ix,
+            None => {
+                let at = self.tabs.iter().take_while(|t| t.pinned).count();
+                self.tabs.insert(
+                    at,
+                    Tab {
+                        item: PaneItem::Server,
+                        pinned: false,
+                    },
+                );
+                self.active = at;
+            }
+        }
     }
 
     fn on_db_event(&mut self, event: &DbEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -148,9 +210,9 @@ impl Workspace {
                 let key: SharedString =
                     format!("table\u{0}{profile}\u{0}{schema}\u{0}{table}").into();
                 if let Some(ix) = self
-                    .items
+                    .tabs
                     .iter()
-                    .position(|i| matches!(i, PaneItem::Other { key: k, .. } if *k == key))
+                    .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
                 {
                     self.active = ix;
                     cx.notify();
@@ -177,15 +239,179 @@ impl Workspace {
         }
     }
 
-    fn close_item(&mut self, ix: usize, cx: &mut Context<Self>) {
-        if ix == 0 || ix >= self.items.len() {
+    fn flags(&self, cx: &App) -> Vec<TabFlags> {
+        self.tabs
+            .iter()
+            .map(|t| TabFlags {
+                pinned: t.pinned,
+                dirty: matches!(&t.item, PaneItem::File(e) if e.read(cx).dirty),
+            })
+            .collect()
+    }
+
+    /// Closes tabs per `op` relative to `target`. Closing a single tab with
+    /// unsaved changes asks first; bulk closes leave such tabs open.
+    fn close(&mut self, op: CloseOp, target: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let closing = to_close(op, target, &self.flags(cx));
+        if let [ix] = closing[..]
+            && let Some(PaneItem::File(editor)) = self.tabs.get(ix).map(|t| t.item.clone())
+            && editor.read(cx).dirty
+        {
+            self.confirm_close_dirty(editor, window, cx);
             return;
         }
-        self.items.remove(ix);
-        if self.active >= ix {
-            self.active = self.active.saturating_sub(1);
+        self.remove_tabs(&closing, cx);
+    }
+
+    fn remove_tabs(&mut self, closing: &[usize], cx: &mut Context<Self>) {
+        if closing.is_empty() {
+            return;
+        }
+        let len = self.tabs.len();
+        self.active = active_after(self.active, closing, len).unwrap_or(0);
+        let mut ix = 0;
+        self.tabs.retain(|_| {
+            let keep = !closing.contains(&ix);
+            ix += 1;
+            keep
+        });
+        cx.notify();
+    }
+
+    fn confirm_close_dirty(
+        &mut self,
+        editor: Entity<FileEditor>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let name = editor.read(cx).title();
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!("Simpan perubahan pada {name}?"),
+            Some("Perubahan akan hilang jika tidak disimpan."),
+            &["Simpan", "Jangan simpan", "Batal"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            let close = match answer.await {
+                Ok(0) => editor.update(cx, |e, cx| e.save_task(cx)).await,
+                Ok(1) => true,
+                _ => false,
+            };
+            if close {
+                let _ = this.update(cx, |this, cx| {
+                    if let Some(ix) = this
+                        .tabs
+                        .iter()
+                        .position(|t| matches!(&t.item, PaneItem::File(e) if *e == editor))
+                    {
+                        this.remove_tabs(&[ix], cx);
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn toggle_pin(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(ix).cloned() else {
+            return;
+        };
+        let active_is_target = self.active == ix;
+        let active_item = self.active;
+        self.tabs.remove(ix);
+        let pinned_count = self.tabs.iter().take_while(|t| t.pinned).count();
+        // Pinned tabs sit together at the start, like in Zed; a pinned tab
+        // goes to the end of that group, an unpinned one just after it.
+        let at = pinned_count;
+        self.tabs.insert(
+            at,
+            Tab {
+                pinned: !tab.pinned,
+                ..tab
+            },
+        );
+        if active_is_target {
+            self.active = at;
+        } else {
+            // Shift the active index the same way the move shifted it.
+            let mut a = active_item;
+            if ix < a {
+                a -= 1;
+            }
+            if at <= a {
+                a += 1;
+            }
+            self.active = a;
         }
         cx.notify();
+    }
+
+    fn toggle_read_only(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if let Some(PaneItem::File(editor)) = self.tabs.get(ix).map(|t| t.item.clone()) {
+            editor.update(cx, |e, cx| {
+                let ro = !e.read_only;
+                e.set_read_only(ro, cx)
+            });
+        }
+    }
+
+    fn tab_menu(
+        this: WeakEntity<Self>,
+        ix: usize,
+        is_file: bool,
+        read_only: bool,
+        pinned: bool,
+        menu: PopupMenu,
+        cx: &App,
+    ) -> PopupMenu {
+        let muted = cx.theme().muted_foreground;
+        let item = |label: &'static str, keys: &'static str| {
+            PopupMenuItem::element(move |_, _| {
+                h_flex()
+                    .w_full()
+                    .gap_6()
+                    .justify_between()
+                    .child(label)
+                    .child(div().text_color(muted).child(keys))
+            })
+        };
+        let close = |op: CloseOp| {
+            let this = this.clone();
+            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |ws, cx| ws.close(op, ix, window, cx));
+            }
+        };
+        let this_pin = this.clone();
+        let this_ro = this.clone();
+        menu.item(item("Close", "⌘W").on_click(close(CloseOp::This)))
+            .item(item("Close Others", "⌥⌘T").on_click(close(CloseOp::Others)))
+            .separator()
+            .item(item("Close Left", "⌘K E").on_click(close(CloseOp::Left)))
+            .item(item("Close Right", "⌘K T").on_click(close(CloseOp::Right)))
+            .separator()
+            .item(item("Close Clean", "⌘K U").on_click(close(CloseOp::Clean)))
+            .item(item("Close All", "⌘K W").on_click(close(CloseOp::All)))
+            .when(is_file, |menu| {
+                menu.separator().item(
+                    PopupMenuItem::new(if read_only {
+                        "Make Tab Editable"
+                    } else {
+                        "Make Tab Read-Only"
+                    })
+                    .on_click(move |_, _, cx| {
+                        let _ = this_ro.update(cx, |ws, cx| ws.toggle_read_only(ix, cx));
+                    }),
+                )
+            })
+            .separator()
+            .item(
+                item(if pinned { "Unpin Tab" } else { "Pin Tab" }, "⌘K ⇧↩").on_click(
+                    move |_, _, cx| {
+                        let _ = this_pin.update(cx, |ws, cx| ws.toggle_pin(ix, cx));
+                    },
+                ),
+            )
     }
 
     fn render_sidebar_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -259,26 +485,37 @@ impl Workspace {
     }
 
     fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let weak = cx.entity().downgrade();
         let tabs: Vec<_> = self
-            .items
+            .tabs
             .iter()
             .enumerate()
-            .map(|(ix, item)| {
+            .map(|(ix, tab)| {
                 let active = ix == self.active;
-                let (icon, title, dirty) = match item {
-                    PaneItem::Server => (Icon::new(Lucide::Server), "Server".to_string(), false),
+                let pinned = tab.pinned;
+                let (icon, title, dirty, read_only) = match &tab.item {
+                    PaneItem::Server => {
+                        (Icon::new(Lucide::Server), "Server".to_string(), false, None)
+                    }
                     PaneItem::File(e) => {
                         let e = e.read(cx);
-                        (Icon::new(Lucide::FileCode), e.title(), e.dirty)
+                        (
+                            Icon::new(Lucide::FileCode),
+                            e.title(),
+                            e.dirty,
+                            Some(e.read_only),
+                        )
                     }
                     PaneItem::Other { title, .. } => {
-                        (Icon::new(Lucide::Table), title.to_string(), false)
+                        (Icon::new(Lucide::Table), title.to_string(), false, None)
                     }
                 };
+                let weak = weak.clone();
                 h_flex()
                     .id(("pane-tab", ix))
                     .h_full()
-                    .px_3()
+                    .pl_3()
+                    .pr_1()
                     .gap_1p5()
                     .text_sm()
                     .cursor_pointer()
@@ -293,24 +530,52 @@ impl Workspace {
                     })
                     .child(icon.xsmall())
                     .child(title)
+                    .when(read_only == Some(true), |el| {
+                        el.child(
+                            Icon::new(Lucide::Lock)
+                                .xsmall()
+                                .text_color(cx.theme().muted_foreground),
+                        )
+                    })
                     .when(dirty, |el| {
                         el.child(div().size(px(6.)).rounded_full().bg(cx.theme().foreground))
                     })
-                    .when(ix > 0, |el| {
-                        el.child(
-                            Button::new(("close-tab", ix))
-                                .ghost()
-                                .xsmall()
-                                .icon(Lucide::X)
-                                .on_click(
-                                    cx.listener(move |this, _, _, cx| this.close_item(ix, cx)),
-                                ),
-                        )
+                    .child(if pinned {
+                        Button::new(("pin-tab", ix))
+                            .ghost()
+                            .xsmall()
+                            .icon(Lucide::Pin)
+                            .tooltip("Lepas pin")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.toggle_pin(ix, cx);
+                            }))
+                    } else {
+                        Button::new(("close-tab", ix))
+                            .ghost()
+                            .xsmall()
+                            .icon(Lucide::X)
+                            .tooltip("Tutup (⌘W)")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.close(CloseOp::This, ix, window, cx);
+                            }))
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.active = ix;
                         cx.notify();
                     }))
+                    .context_menu(move |menu, _, cx| {
+                        Self::tab_menu(
+                            weak.clone(),
+                            ix,
+                            read_only.is_some(),
+                            read_only == Some(true),
+                            pinned,
+                            menu,
+                            cx,
+                        )
+                    })
             })
             .collect();
         h_flex()
@@ -322,11 +587,21 @@ impl Workspace {
             .children(tabs)
     }
 
-    fn render_active_item(&self) -> AnyElement {
-        match self.items.get(self.active) {
+    fn render_active_item(&self, cx: &App) -> AnyElement {
+        match self.tabs.get(self.active).map(|t| &t.item) {
             Some(PaneItem::File(editor)) => editor.clone().into_any_element(),
             Some(PaneItem::Other { view, .. }) => view.clone().into_any_element(),
-            _ => self.server_detail.clone().into_any_element(),
+            Some(PaneItem::Server) => self.server_detail.clone().into_any_element(),
+            None => v_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .gap_1()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child("Tidak ada tab yang terbuka.")
+                .child("Pilih server, file, atau tabel di panel kiri.")
+                .into_any_element(),
         }
     }
 
@@ -365,9 +640,44 @@ impl Workspace {
     }
 }
 
+impl Workspace {
+    fn on_close_action(&mut self, op: CloseOp, window: &mut Window, cx: &mut Context<Self>) {
+        let target = self.active;
+        self.close(op, target, window, cx);
+    }
+}
+
 impl Render for Workspace {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if window.focused(cx).is_none() {
+            // Keep workspace shortcuts working when nothing inside has focus.
+            self.focus.focus(window, cx);
+        }
         v_flex()
+            .key_context("Workspace")
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &CloseActiveTab, w, cx| {
+                this.on_close_action(CloseOp::This, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CloseOtherTabs, w, cx| {
+                this.on_close_action(CloseOp::Others, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CloseTabsLeft, w, cx| {
+                this.on_close_action(CloseOp::Left, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CloseTabsRight, w, cx| {
+                this.on_close_action(CloseOp::Right, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CloseCleanTabs, w, cx| {
+                this.on_close_action(CloseOp::Clean, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CloseAllTabs, w, cx| {
+                this.on_close_action(CloseOp::All, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &TogglePinTab, _, cx| {
+                let ix = this.active;
+                this.toggle_pin(ix, cx)
+            }))
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
@@ -415,7 +725,7 @@ impl Render for Workspace {
                                                     div()
                                                         .flex_1()
                                                         .min_h_0()
-                                                        .child(self.render_active_item()),
+                                                        .child(self.render_active_item(cx)),
                                                 ),
                                         ),
                                     )

@@ -4,6 +4,7 @@ mod editor;
 mod files;
 mod rt;
 mod servers;
+mod tabs;
 mod terminal;
 mod theme;
 mod workspace;
@@ -40,6 +41,7 @@ fn main() {
             gpui_kit::init(cx);
             editor::init(cx);
             db::init(cx);
+            workspace::init(cx);
             theme::apply_zed_one_dark(cx);
             cx.set_global(rt::Rt(runtime));
             let options = WindowOptions {

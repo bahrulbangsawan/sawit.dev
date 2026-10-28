@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use futures::StreamExt;
-use gpui_kit::{Context, Task};
+use gpui_kit::{Context, EventEmitter, Task};
 use pgdesk_core::binaries::{PgBinaries, SearchRoots, discover};
 use pgdesk_core::control::{self, Preflight, StartOutcome};
 use pgdesk_core::download::install_managed;
@@ -32,6 +32,11 @@ pub enum BinaryChoice {
     Installed(PgBinaries),
     Download { major: u32 },
 }
+
+/// Asks the workspace to show (and reopen if closed) the Server tab.
+pub struct ShowServerTab;
+
+impl EventEmitter<ShowServerTab> for ServerStore {}
 
 pub struct ServerStore {
     pub paths: AppPaths,
@@ -165,6 +170,7 @@ impl ServerStore {
 
     pub fn select(&mut self, name: &str, cx: &mut Context<Self>) {
         self.creating = false;
+        cx.emit(ShowServerTab);
         if self.selected.as_deref() == Some(name) && self._log_task.is_some() {
             cx.notify();
             return;
@@ -201,6 +207,7 @@ impl ServerStore {
 
     pub fn show_create(&mut self, cx: &mut Context<Self>) {
         self.creating = true;
+        cx.emit(ShowServerTab);
         cx.notify();
     }
 
