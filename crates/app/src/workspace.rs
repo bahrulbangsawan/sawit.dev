@@ -179,7 +179,8 @@ impl Workspace {
         {
             self.active = ix;
         } else {
-            let editor = cx.new(|cx| FileEditor::open(path, window, cx));
+            let root = self.files.read(cx).root.clone();
+            let editor = cx.new(|cx| FileEditor::open(path, root, window, cx));
             cx.subscribe(&editor, |_, _, _: &FileEditorEvent, cx| cx.notify())
                 .detach();
             self.push_tab(PaneItem::File(editor));

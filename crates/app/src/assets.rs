@@ -22,7 +22,8 @@ gpui_kit::assets::icon_assets!(
         ChevronsLeft,
         ChevronsRight,
         Pin,
-        PanelTop
+        PanelTop,
+        WandSparkles
     ]
 );
 
