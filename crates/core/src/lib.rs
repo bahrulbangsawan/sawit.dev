@@ -12,5 +12,6 @@ pub mod pgctl;
 pub mod ports;
 pub mod probe;
 pub mod rt;
+pub mod terminal;
 
 pub use error::{CoreError, Result};
