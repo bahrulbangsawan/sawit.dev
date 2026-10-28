@@ -4522,6 +4522,7 @@ name = "pgdesk-core"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-postgres",
