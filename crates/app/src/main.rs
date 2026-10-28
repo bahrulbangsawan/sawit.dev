@@ -2,6 +2,7 @@ mod assets;
 mod db;
 mod editor;
 mod files;
+mod layout;
 mod rt;
 mod servers;
 mod tabs;

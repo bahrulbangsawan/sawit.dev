@@ -15,6 +15,7 @@ use gpui_kit::*;
 use crate::db::{DatabasePanel, DbEvent, DbStore, SqlView, TableView};
 use crate::editor::{FileEditor, FileEditorEvent};
 use crate::files::{FilesEvent, FilesPanel};
+use crate::layout::{Area, Layout};
 use crate::servers::{ServerDetail, ServerList, ServerStore, ShowServerTab};
 use crate::tabs::{CloseOp, TabFlags, active_after, to_close};
 use crate::terminal::TerminalPanel;
@@ -28,7 +29,10 @@ actions!(
         CloseTabsRight,
         CloseCleanTabs,
         CloseAllTabs,
-        TogglePinTab
+        TogglePinTab,
+        ToggleSidebar,
+        ToggleTerminal,
+        ToggleCenter
     ]
 );
 
@@ -43,6 +47,9 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-k u", CloseCleanTabs, ctx),
         KeyBinding::new("cmd-k w", CloseAllTabs, ctx),
         KeyBinding::new("cmd-k shift-enter", TogglePinTab, ctx),
+        KeyBinding::new("cmd-b", ToggleSidebar, ctx),
+        KeyBinding::new("cmd-j", ToggleTerminal, ctx),
+        KeyBinding::new("cmd-shift-j", ToggleCenter, ctx),
     ]);
 }
 
@@ -83,6 +90,7 @@ pub struct Workspace {
     sidebar: SidebarTab,
     tabs: Vec<Tab>,
     active: usize,
+    layout: Layout,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -130,6 +138,7 @@ impl Workspace {
                 pinned: false,
             }],
             active: 0,
+            layout: Layout::default(),
             focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         }
@@ -641,6 +650,96 @@ impl Workspace {
 }
 
 impl Workspace {
+    fn toggle_area(&mut self, area: Area, cx: &mut Context<Self>) {
+        self.layout.toggle(area);
+        cx.notify();
+    }
+
+    fn render_layout_toggles(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let l = self.layout;
+        let toggle = |id: &'static str, icon: Lucide, tooltip: &'static str, on: bool| {
+            Button::new(id)
+                .ghost()
+                .xsmall()
+                .icon(icon)
+                .tooltip(tooltip)
+                .selected(on)
+        };
+        h_flex()
+            .gap_0p5()
+            .child(
+                toggle(
+                    "toggle-sidebar",
+                    Lucide::PanelLeft,
+                    "Sidebar (⌘B)",
+                    l.sidebar,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_area(Area::Sidebar, cx))),
+            )
+            .child(
+                toggle(
+                    "toggle-center",
+                    Lucide::PanelTop,
+                    "Tab & tabel (⇧⌘J)",
+                    l.center,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_area(Area::Center, cx))),
+            )
+            .child(
+                toggle(
+                    "toggle-terminal",
+                    Lucide::PanelBottom,
+                    "Terminal / herdr (⌘J)",
+                    l.terminal,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_area(Area::Terminal, cx))),
+            )
+    }
+
+    fn render_center(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        v_flex()
+            .size_full()
+            .child(self.render_tab_bar(cx))
+            .child(div().flex_1().min_h_0().child(self.render_active_item(cx)))
+    }
+
+    fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        let l = self.layout;
+        // The terminal stays alive while hidden; only its view is dropped.
+        let main = match (l.center, l.terminal) {
+            (true, true) => v_resizable("workspace-v")
+                .child(resizable_panel().child(self.render_center(cx)))
+                .child(
+                    resizable_panel()
+                        .size(px(240.))
+                        .size_range(px(80.)..Pixels::MAX)
+                        .child(self.terminal.clone()),
+                )
+                .into_any_element(),
+            (true, false) => self.render_center(cx).into_any_element(),
+            _ => self.terminal.clone().into_any_element(),
+        };
+        if !l.sidebar {
+            return main;
+        }
+        h_resizable("workspace-h")
+            .child(
+                resizable_panel()
+                    .size(px(240.))
+                    .size_range(px(160.)..px(480.))
+                    .child(
+                        v_flex()
+                            .size_full()
+                            .border_r_1()
+                            .border_color(cx.theme().border)
+                            .child(self.render_sidebar_tabs(cx))
+                            .child(div().flex_1().min_h_0().child(self.render_sidebar())),
+                    ),
+            )
+            .child(resizable_panel().child(main))
+            .into_any_element()
+    }
+
     fn on_close_action(&mut self, op: CloseOp, window: &mut Window, cx: &mut Context<Self>) {
         let target = self.active;
         self.close(op, target, window, cx);
@@ -674,6 +773,15 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &CloseAllTabs, w, cx| {
                 this.on_close_action(CloseOp::All, w, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_area(Area::Sidebar, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ToggleTerminal, _, cx| this.toggle_area(Area::Terminal, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ToggleCenter, _, cx| this.toggle_area(Area::Center, cx)),
+            )
             .on_action(cx.listener(|this, _: &TogglePinTab, _, cx| {
                 let ix = this.active;
                 this.toggle_pin(ix, cx)
@@ -685,6 +793,7 @@ impl Render for Workspace {
                 TitleBar::new().child(
                     h_flex()
                         .size_full()
+                        .pr_2()
                         .gap_2()
                         .text_sm()
                         .child(div().font_semibold().child("PG Desk"))
@@ -692,53 +801,12 @@ impl Render for Workspace {
                             div()
                                 .text_color(cx.theme().muted_foreground)
                                 .child("Postgres · Editor · Terminal"),
-                        ),
-                ),
-            )
-            .child(
-                div().flex_1().min_h_0().child(
-                    h_resizable("workspace-h")
-                        .child(
-                            resizable_panel()
-                                .size(px(240.))
-                                .size_range(px(160.)..px(480.))
-                                .child(
-                                    v_flex()
-                                        .size_full()
-                                        .border_r_1()
-                                        .border_color(cx.theme().border)
-                                        .child(self.render_sidebar_tabs(cx))
-                                        .child(
-                                            div().flex_1().min_h_0().child(self.render_sidebar()),
-                                        ),
-                                ),
                         )
-                        .child(
-                            resizable_panel().child(
-                                v_resizable("workspace-v")
-                                    .child(
-                                        resizable_panel().child(
-                                            v_flex()
-                                                .size_full()
-                                                .child(self.render_tab_bar(cx))
-                                                .child(
-                                                    div()
-                                                        .flex_1()
-                                                        .min_h_0()
-                                                        .child(self.render_active_item(cx)),
-                                                ),
-                                        ),
-                                    )
-                                    .child(
-                                        resizable_panel()
-                                            .size(px(240.))
-                                            .size_range(px(80.)..Pixels::MAX)
-                                            .child(self.terminal.clone()),
-                                    ),
-                            ),
-                        ),
+                        .child(div().flex_1())
+                        .child(self.render_layout_toggles(cx)),
                 ),
             )
+            .child(div().flex_1().min_h_0().child(self.render_body(cx)))
             .child(self.render_status_bar(cx))
     }
 }

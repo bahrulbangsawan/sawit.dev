@@ -20,7 +20,9 @@ gpui_kit::assets::icon_assets!(
         Eye,
         Lock,
         ChevronsLeft,
-        ChevronsRight
+        ChevronsRight,
+        Pin,
+        PanelTop
     ]
 );
 
