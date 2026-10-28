@@ -269,24 +269,31 @@ impl Workspace {
                     cx.notify();
                     return;
                 }
-                let Some(client) = self.live_client(profile, true, cx) else {
+                if self.live_client(profile, true, cx).is_none() {
                     self.pending_db = Some(event.clone());
                     return;
-                };
+                }
                 let title: SharedString = format!("{schema}.{table}").into();
-                let (schema, table) = (schema.clone(), table.clone());
-                let view =
-                    cx.new(|cx| TableView::new(title.clone(), client, schema, table, window, cx));
+                let (db, profile, schema, table) = (
+                    self.db.clone(),
+                    profile.clone(),
+                    schema.clone(),
+                    table.clone(),
+                );
+                let view = cx.new(|cx| {
+                    TableView::new(title.clone(), db, profile, schema, table, window, cx)
+                });
                 self.open_item(view.into(), key, title, cx);
             }
             DbEvent::OpenSql { profile } => {
-                let Some(client) = self.live_client(profile, false, cx) else {
+                if self.live_client(profile, false, cx).is_none() {
                     self.pending_db = Some(event.clone());
                     return;
-                };
+                }
                 self.sql_count += 1;
                 let title: SharedString = format!("SQL {} · {profile}", self.sql_count).into();
-                let view = cx.new(|cx| SqlView::new(title.clone(), client, window, cx));
+                let (db, profile) = (self.db.clone(), profile.clone());
+                let view = cx.new(|cx| SqlView::new(title.clone(), db, profile, window, cx));
                 self.open_item(view.into(), title.clone(), title, cx);
             }
         }

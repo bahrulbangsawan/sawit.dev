@@ -43,6 +43,21 @@ impl DbStore {
         }
     }
 
+    /// A store with no file and no connections, for unit tests.
+    #[cfg(test)]
+    pub fn detached(profiles: Profiles) -> Self {
+        Self {
+            file: PathBuf::new(),
+            profiles,
+            clients: HashMap::new(),
+            ro_clients: HashMap::new(),
+            schemas: HashMap::new(),
+            connecting: HashSet::new(),
+            errors: HashMap::new(),
+            notice: None,
+        }
+    }
+
     fn save(&mut self) {
         if let Err(e) = self.profiles.save(&self.file) {
             self.notice = Some(format!("Gagal menyimpan profil: {e}"));
@@ -54,6 +69,30 @@ impl DbStore {
     pub fn is_connected(&self, name: &str) -> bool {
         let alive = |m: &HashMap<String, Arc<Client>>| m.get(name).is_some_and(|c| !c.is_closed());
         alive(&self.clients) && alive(&self.ro_clients)
+    }
+
+    /// A live client for `name` (read-only or read-write), if connected.
+    pub fn client(&self, name: &str, read_only: bool) -> Option<Arc<Client>> {
+        if !self.is_connected(name) {
+            return None;
+        }
+        let clients = if read_only {
+            &self.ro_clients
+        } else {
+            &self.clients
+        };
+        clients.get(name).cloned()
+    }
+
+    /// Starts reconnecting unless that is already under way.
+    pub fn ensure_connecting(&mut self, name: &str, cx: &mut Context<Self>) {
+        if !self.connecting.contains(name) && !self.is_connected(name) {
+            self.connect(name, cx);
+        }
+    }
+
+    pub fn ssl(&self, name: &str) -> pgdesk_core::db::SslMode {
+        self.profile(name).map(|p| p.ssl).unwrap_or_default()
     }
 
     pub fn profile(&self, name: &str) -> Option<&ConnProfile> {

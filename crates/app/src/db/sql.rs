@@ -1,8 +1,7 @@
 //! SQL editor tab: write SQL, Cmd-Enter to run the selection (or everything),
 //! see results, errors and timing.
 
-use std::sync::Arc;
-
+use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Editor, EditorState, TabSize};
 use gpui_kit::component::table::{DataTable, TableState};
@@ -10,8 +9,8 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pgdesk_core::db::{self, QueryOutcome};
-use tokio_postgres::Client;
 
+use super::store::DbStore;
 use super::table::ResultDelegate;
 use crate::rt;
 
@@ -30,7 +29,10 @@ pub fn init(cx: &mut App) {
 
 pub struct SqlView {
     pub title: SharedString,
-    client: Arc<Client>,
+    db: Entity<DbStore>,
+    profile: String,
+    /// Cancels the statement in flight.
+    cancel: Option<tokio_postgres::CancelToken>,
     editor: Entity<EditorState>,
     result: Option<Entity<TableState<ResultDelegate>>>,
     summary: Option<String>,
@@ -41,7 +43,8 @@ pub struct SqlView {
 impl SqlView {
     pub fn new(
         title: SharedString,
-        client: Arc<Client>,
+        db: Entity<DbStore>,
+        profile: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -57,7 +60,9 @@ impl SqlView {
         });
         Self {
             title,
-            client,
+            db,
+            profile,
+            cancel: None,
             editor,
             result: None,
             summary: None,
@@ -80,10 +85,23 @@ impl SqlView {
         if sql.trim().is_empty() {
             return;
         }
+        let Some(client) = self.db.read(cx).client(&self.profile, false) else {
+            // Not re-run automatically: a write may have reached the server
+            // before the connection dropped.
+            let profile = self.profile.clone();
+            self.db
+                .update(cx, |s, cx| s.ensure_connecting(&profile, cx));
+            self.error = Some(
+                "Koneksi terputus; menyambung ulang. Jalankan lagi setelah titik koneksi hijau."
+                    .into(),
+            );
+            cx.notify();
+            return;
+        };
         self.running = true;
         self.error = None;
+        self.cancel = Some(client.cancel_token());
         cx.notify();
-        let client = self.client.clone();
         let rx = rt::spawn(
             cx,
             async move { db::run_sql(&client, &sql, MAX_ROWS).await },
@@ -92,6 +110,7 @@ impl SqlView {
             let result = rx.await;
             let _ = this.update_in(window, |this, window, cx| {
                 this.running = false;
+                this.cancel = None;
                 match result {
                     Ok(Ok(outcome)) => this.show(outcome, window, cx),
                     Ok(Err(e)) => this.error = Some(e.to_string()),
@@ -101,6 +120,14 @@ impl SqlView {
             });
         })
         .detach();
+    }
+
+    fn stop(&mut self, cx: &mut Context<Self>) {
+        if let Some(token) = self.cancel.take() {
+            let ssl = self.db.read(cx).ssl(&self.profile);
+            // Fire and forget: the running query reports "Query dibatalkan.".
+            drop(rt::spawn(cx, async move { db::cancel(&token, ssl).await }));
+        }
     }
 
     fn show(&mut self, outcome: QueryOutcome, window: &mut Window, cx: &mut Context<Self>) {
@@ -147,6 +174,17 @@ impl Render for SqlView {
                             .flex_1()
                             .child(self.title.clone()),
                     )
+                    .when(self.running, |el| {
+                        el.child(
+                            Button::new("cancel-sql")
+                                .ghost()
+                                .xsmall()
+                                .icon(Lucide::X)
+                                .label("Batal")
+                                .tooltip("Hentikan query di server")
+                                .on_click(cx.listener(|this, _, _, cx| this.stop(cx))),
+                        )
+                    })
                     .child(
                         Button::new("run-sql")
                             .primary()

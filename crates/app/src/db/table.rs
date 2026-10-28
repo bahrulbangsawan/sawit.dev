@@ -7,10 +7,12 @@ use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::table::{Column, DataTable, TableDelegate, TableState};
 use gpui_kit::component::*;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pgdesk_core::db::{self, ResultSet, RowCount};
 use tokio_postgres::Client;
 
+use super::store::DbStore;
 use crate::rt;
 
 /// Rows per page (the most a page ever shows).
@@ -83,7 +85,8 @@ pub fn column_for(name: &str, data_type: &str) -> Column {
 
 pub struct TableView {
     pub title: SharedString,
-    client: Arc<Client>,
+    db: Entity<DbStore>,
+    profile: String,
     schema: String,
     table: String,
     /// Primary key, looked up with the first page.
@@ -94,21 +97,34 @@ pub struct TableView {
     error: Option<String>,
     /// Bumped per request so a slow, superseded response is ignored.
     generation: u64,
+    /// Cancels the page query in flight.
+    cancel: Option<tokio_postgres::CancelToken>,
+    /// The connection died; reload once the store has reconnected.
+    waiting_reconnect: bool,
+    _observe: Subscription,
 }
 
 impl TableView {
-    /// `client` should be a read-only connection.
+    /// Reads go through the profile's read-only connection in `db`.
     pub fn new(
         title: SharedString,
-        client: Arc<Client>,
+        db: Entity<DbStore>,
+        profile: String,
         schema: String,
         table: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let observe = cx.observe_in(&db, window, |this: &mut Self, db, window, cx| {
+            if this.waiting_reconnect && db.read(cx).is_connected(&this.profile) {
+                this.waiting_reconnect = false;
+                this.reload(window, cx);
+            }
+        });
         let mut this = Self {
             title,
-            client,
+            db,
+            profile,
             schema,
             table,
             order_by: None,
@@ -117,6 +133,9 @@ impl TableView {
             loading: false,
             error: None,
             generation: 0,
+            cancel: None,
+            waiting_reconnect: false,
+            _observe: observe,
         };
         this.reload(window, cx);
         this
@@ -129,14 +148,31 @@ impl TableView {
         self.load_page(self.pager.page, window, cx);
     }
 
+    /// The live read-only client, or `None` after asking the store to
+    /// reconnect (the view reloads itself when that finishes).
+    fn client(&mut self, cx: &mut Context<Self>) -> Option<Arc<Client>> {
+        let client = self.db.read(cx).client(&self.profile, true);
+        if client.is_none() {
+            self.waiting_reconnect = true;
+            let profile = self.profile.clone();
+            self.db
+                .update(cx, |s, cx| s.ensure_connecting(&profile, cx));
+        }
+        client
+    }
+
     fn load_page(&mut self, page: u64, window: &mut Window, cx: &mut Context<Self>) {
         self.generation += 1;
         let generation = self.generation;
         self.loading = true;
         self.error = None;
         cx.notify();
-        let (client, schema, table) =
-            (self.client.clone(), self.schema.clone(), self.table.clone());
+        let Some(client) = self.client(cx) else {
+            return;
+        };
+        self.cancel = Some(client.cancel_token());
+        let (schema, table) = (self.schema.clone(), self.table.clone());
+        let dead = client.clone();
         let known_order = self.order_by.clone();
         let count = self.pager.total.is_none();
         let rx = rt::spawn(cx, async move {
@@ -160,6 +196,16 @@ impl TableView {
             let _ = this.update_in(window, |this, window, cx| {
                 if this.generation != generation {
                     return;
+                }
+                this.cancel = None;
+                if dead.is_closed() {
+                    // Dropped mid-request: reconnect and load again.
+                    this.pager.total = None;
+                    this.order_by = None;
+                    if this.client(cx).is_none() {
+                        cx.notify();
+                        return;
+                    }
                 }
                 this.loading = false;
                 match result {
@@ -190,8 +236,10 @@ impl TableView {
 
     /// Counts rows after the first page is on screen (the count may be slow).
     fn count(&mut self, cx: &mut Context<Self>) {
-        let (client, schema, table) =
-            (self.client.clone(), self.schema.clone(), self.table.clone());
+        let Some(client) = self.db.read(cx).client(&self.profile, true) else {
+            return;
+        };
+        let (schema, table) = (self.schema.clone(), self.table.clone());
         let rx = rt::spawn(
             cx,
             async move { db::row_count(&client, &schema, &table).await },
@@ -205,6 +253,14 @@ impl TableView {
             }
         })
         .detach();
+    }
+
+    fn cancel(&mut self, cx: &mut Context<Self>) {
+        if let Some(token) = self.cancel.take() {
+            let ssl = self.db.read(cx).ssl(&self.profile);
+            // Fire and forget: the page request itself reports the outcome.
+            drop(rt::spawn(cx, async move { db::cancel(&token, ssl).await }));
+        }
     }
 
     fn go(&mut self, page: u64, window: &mut Window, cx: &mut Context<Self>) {
@@ -254,7 +310,19 @@ impl Render for TableView {
                     .child("read-only"),
             )
             .child(div().flex_1())
-            .child(if busy {
+            .when(busy && self.cancel.is_some(), |el| {
+                el.child(
+                    Button::new("page-cancel")
+                        .ghost()
+                        .xsmall()
+                        .label("Batal")
+                        .tooltip("Hentikan query di server")
+                        .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
+                )
+            })
+            .child(if self.waiting_reconnect {
+                "menyambung ulang…".to_string()
+            } else if busy {
                 "memuat…".to_string()
             } else if self.error.is_some() {
                 String::new()
