@@ -6054,7 +6054,7 @@ dependencies = [
 
 [[package]]
 name = "sawit"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "futures",
  "gpui-kit",
@@ -6072,7 +6072,7 @@ dependencies = [
 
 [[package]]
 name = "sawit-core"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "alacritty_terminal",
  "futures",
@@ -6095,7 +6095,7 @@ dependencies = [
 
 [[package]]
 name = "sawit-mcp"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "rmcp",
  "sawit-core",

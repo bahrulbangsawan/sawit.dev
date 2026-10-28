@@ -3,6 +3,16 @@
 Every change to Sawit, by version. Each push to `main` is a new release: the patch version is bumped and
 its section is written automatically by `.githooks/pre-push` (`scripts/release.sh`) from the commit messages.
 
+## [0.0.3] - 2026-10-29
+
+### Features
+
+- rebrand PG Desk to Sawit (sawit.dev)
+
+### Fixes
+
+- releases come from bahrulbangsawan/sawit.dev
+
 ## [0.0.2] - 2026-10-29
 
 ### Other
