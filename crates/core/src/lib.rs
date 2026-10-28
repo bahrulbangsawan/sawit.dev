@@ -6,6 +6,7 @@ mod cmd;
 pub mod control;
 pub mod download;
 pub mod error;
+pub mod files;
 pub mod instances;
 pub mod owners;
 pub mod pgctl;
