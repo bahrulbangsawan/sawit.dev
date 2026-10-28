@@ -21,30 +21,133 @@ pub const SERVER_NAME: &str = "pgdesk";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Client {
+    // Agents and CLIs
     ClaudeCode,
-    ClaudeDesktop,
     Codex,
+    Gemini,
+    Qwen,
+    OpenCode,
+    Amp,
+    CopilotCli,
+    FactoryDroid,
+    Kiro,
+    Cline,
+    Auggie,
+    AmazonQ,
+    Junie,
+    Warp,
+    Goose,
+    Crush,
+    // Editors and IDEs
+    ClaudeDesktop,
     Cursor,
     Windsurf,
-    Gemini,
-    Zed,
-    OpenCode,
     VsCode,
+    VsCodeInsiders,
+    Zed,
+    Antigravity,
+    Trae,
+    RooCode,
+    KiloCode,
+    Continue,
+    LmStudio,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Category {
+    /// Coding agents and CLIs.
+    Agent,
+    /// Editors, IDEs and desktop apps.
+    Editor,
 }
 
 impl Client {
+    pub const ALL: [Client; 28] = [
+        Client::ClaudeCode,
+        Client::Codex,
+        Client::Gemini,
+        Client::Qwen,
+        Client::OpenCode,
+        Client::Amp,
+        Client::CopilotCli,
+        Client::FactoryDroid,
+        Client::Kiro,
+        Client::Cline,
+        Client::Auggie,
+        Client::AmazonQ,
+        Client::Junie,
+        Client::Warp,
+        Client::Goose,
+        Client::Crush,
+        Client::ClaudeDesktop,
+        Client::Cursor,
+        Client::Windsurf,
+        Client::VsCode,
+        Client::VsCodeInsiders,
+        Client::Zed,
+        Client::Antigravity,
+        Client::Trae,
+        Client::RooCode,
+        Client::KiloCode,
+        Client::Continue,
+        Client::LmStudio,
+    ];
+
     pub fn name(self) -> &'static str {
         match self {
             Client::ClaudeCode => "Claude Code",
-            Client::ClaudeDesktop => "Claude Desktop",
             Client::Codex => "Codex",
-            Client::Cursor => "Cursor",
-            Client::Windsurf => "Windsurf",
             Client::Gemini => "Gemini CLI",
-            Client::Zed => "Zed",
+            Client::Qwen => "Qwen Code",
             Client::OpenCode => "opencode",
+            Client::Amp => "Amp",
+            Client::CopilotCli => "GitHub Copilot CLI",
+            Client::FactoryDroid => "Factory Droid",
+            Client::Kiro => "Kiro",
+            Client::Cline => "Cline",
+            Client::Auggie => "Augment (Auggie)",
+            Client::AmazonQ => "Amazon Q CLI",
+            Client::Junie => "JetBrains Junie",
+            Client::Warp => "Warp",
+            Client::Goose => "Goose",
+            Client::Crush => "Crush",
+            Client::ClaudeDesktop => "Claude Desktop",
+            Client::Cursor => "Cursor",
+            Client::Windsurf => "Windsurf / Devin",
             Client::VsCode => "VS Code",
+            Client::VsCodeInsiders => "VS Code Insiders",
+            Client::Zed => "Zed",
+            Client::Antigravity => "Antigravity",
+            Client::Trae => "Trae",
+            Client::RooCode => "Roo Code",
+            Client::KiloCode => "Kilo Code",
+            Client::Continue => "Continue",
+            Client::LmStudio => "LM Studio",
         }
+    }
+
+    pub fn category(self) -> Category {
+        match self {
+            Client::ClaudeDesktop
+            | Client::Cursor
+            | Client::Windsurf
+            | Client::VsCode
+            | Client::VsCodeInsiders
+            | Client::Zed
+            | Client::Antigravity
+            | Client::Trae
+            | Client::RooCode
+            | Client::KiloCode
+            | Client::Continue
+            | Client::LmStudio => Category::Editor,
+            _ => Category::Agent,
+        }
+    }
+
+    /// Whether PG Desk can edit the config (JSON/TOML). YAML and script
+    /// configs get a snippet to paste instead.
+    pub fn editable(self) -> bool {
+        !matches!(self, Client::Goose | Client::Continue | Client::Crush)
     }
 
     /// The environment variable that selects a profile folder, for clients
@@ -173,23 +276,90 @@ pub fn discover(home: &Path, claude_config_dir: Option<PathBuf>) -> Vec<Target> 
             Some(dir),
         ));
     }
-    let simple: [(Client, &str, &str); 6] = [
-        (Client::Cursor, ".cursor", "mcp.json"),
-        (Client::Windsurf, ".codeium/windsurf", "mcp_config.json"),
+    // (client, folder that shows it's installed, config file in it). Paths
+    // checked against each tool's documentation.
+    let documented: [(Client, &str, &str); 19] = [
         (Client::Gemini, ".gemini", "settings.json"),
-        (Client::Zed, ".config/zed", "settings.json"),
+        (Client::Qwen, ".qwen", "settings.json"),
         (Client::OpenCode, ".config/opencode", "opencode.json"),
+        (Client::Amp, ".config/amp", "settings.json"),
+        (Client::CopilotCli, ".copilot", "mcp-config.json"),
+        (Client::FactoryDroid, ".factory", "mcp.json"),
+        (Client::Kiro, ".kiro", "settings/mcp.json"),
+        (
+            Client::Cline,
+            ".cline",
+            "data/settings/cline_mcp_settings.json",
+        ),
+        (Client::Auggie, ".augment", "settings.json"),
+        (Client::Junie, ".junie", "mcp/mcp.json"),
+        (Client::Warp, ".warp", ".mcp.json"),
+        (Client::Goose, ".config/goose", "config.yaml"),
+        (Client::Crush, ".config/crush", "crushrc"),
+        (Client::Cursor, ".cursor", "mcp.json"),
+        (Client::Windsurf, ".config/devin", "mcp_config.json"),
+        (Client::Zed, ".config/zed", "settings.json"),
+        (Client::Antigravity, ".gemini/config", "mcp_config.json"),
+        (Client::KiloCode, ".config/kilo", "kilo.json"),
+        (Client::Continue, ".continue", "config.yaml"),
+    ];
+    let documented_mac: [(Client, &str, &str); 2] = [
         (
             Client::VsCode,
             "Library/Application Support/Code/User",
             "mcp.json",
         ),
+        (
+            Client::VsCodeInsiders,
+            "Library/Application Support/Code - Insiders/User",
+            "mcp.json",
+        ),
     ];
-    for (client, dir, file) in simple {
+    for (client, dir, file) in documented.into_iter().chain(documented_mac) {
         let dir = home.join(dir);
         if dir.is_dir() {
             out.push(target(client, "default", dir.join(file), None));
         }
+    }
+    // Unconfirmed or older locations: offered only when the file itself is
+    // there, so a wrong guess never creates a stray file.
+    let existing: [(Client, &str); 7] = [
+        (Client::LmStudio, ".lmstudio/mcp.json"),
+        (Client::AmazonQ, ".aws/amazonq/mcp.json"),
+        (
+            Client::Trae,
+            "Library/Application Support/Trae/User/mcp.json",
+        ),
+        (
+            Client::RooCode,
+            "Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json",
+        ),
+        (
+            Client::Cline,
+            "Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+        ),
+        (Client::Windsurf, ".codeium/windsurf/mcp_config.json"),
+        (Client::Antigravity, ".gemini/antigravity/mcp_config.json"),
+    ];
+    for (client, file) in existing {
+        let file = home.join(file);
+        if file.is_file() && !out.iter().any(|t| t.config == file) {
+            let profile = if out.iter().any(|t| t.client == client) {
+                "lama"
+            } else {
+                "default"
+            };
+            out.push(target(client, profile, file, None));
+        }
+    }
+    // LM Studio's folder is documented even if mcp.json isn't there yet.
+    if home.join(".lmstudio").is_dir() && !out.iter().any(|t| t.client == Client::LmStudio) {
+        out.push(target(
+            Client::LmStudio,
+            "default",
+            home.join(".lmstudio/mcp.json"),
+            None,
+        ));
     }
     out
 }
@@ -206,13 +376,39 @@ pub fn entry(client: Client, server: &Path) -> (&'static str, Value) {
             "context_servers",
             json!({"command": cmd, "args": [], "env": {}}),
         ),
-        Client::OpenCode => (
+        Client::OpenCode | Client::KiloCode => (
             "mcp",
             json!({"type": "local", "command": [cmd], "enabled": true}),
         ),
-        Client::VsCode => (
+        Client::VsCode | Client::VsCodeInsiders => (
             "servers",
             json!({"type": "stdio", "command": cmd, "args": []}),
+        ),
+        // A flat, dotted key in Amp's settings.
+        Client::Amp => ("amp.mcpServers", json!({"command": cmd, "args": []})),
+        Client::CopilotCli => (
+            "mcpServers",
+            json!({"type": "local", "command": cmd, "args": [], "env": {}, "tools": ["*"]}),
+        ),
+        Client::FactoryDroid => (
+            "mcpServers",
+            json!({"type": "stdio", "command": cmd, "args": [], "disabled": false}),
+        ),
+        Client::Cursor => (
+            "mcpServers",
+            json!({"type": "stdio", "command": cmd, "args": []}),
+        ),
+        Client::Kiro => (
+            "mcpServers",
+            json!({"command": cmd, "args": [], "disabled": false}),
+        ),
+        Client::Cline => (
+            "mcpServers",
+            json!({"command": cmd, "args": [], "disabled": false, "autoApprove": []}),
+        ),
+        Client::RooCode => (
+            "mcpServers",
+            json!({"command": cmd, "args": [], "disabled": false, "alwaysAllow": []}),
         ),
         _ => ("mcpServers", json!({"command": cmd, "args": []})),
     }
@@ -226,6 +422,8 @@ pub enum Status {
     NotInstalled,
     /// The config can't be read safely (comments, syntax errors).
     Unreadable(String),
+    /// YAML or script config: paste the snippet by hand.
+    Manual,
 }
 
 fn read_json(path: &Path) -> std::result::Result<Option<Map<String, Value>>, String> {
@@ -257,6 +455,14 @@ fn read_toml(path: &Path) -> std::result::Result<toml_edit::DocumentMut, String>
 /// Whether `server` is installed for `target`.
 pub fn status(target: &Target, server: &Path) -> Status {
     let wanted = server.display().to_string();
+    if !target.client.editable() {
+        let text = std::fs::read_to_string(&target.config).unwrap_or_default();
+        return if text.contains(SERVER_NAME) && text.contains(&wanted) {
+            Status::Installed
+        } else {
+            Status::Manual
+        };
+    }
     let found: Option<String> = if target.client == Client::Codex {
         match read_toml(&target.config) {
             Ok(doc) => doc
@@ -324,6 +530,9 @@ fn manual(target: &Target, server: &Path, why: &str) -> CoreError {
 
 /// Adds or updates the server by editing the config file.
 pub fn install_file(target: &Target, server: &Path) -> Result<()> {
+    if !target.client.editable() {
+        return Err(manual(target, server, "format YAML/skrip"));
+    }
     if target.client == Client::Codex {
         let mut doc = read_toml(&target.config).map_err(|e| manual(target, server, &e))?;
         let servers = doc
@@ -357,6 +566,12 @@ pub fn install_file(target: &Target, server: &Path) -> Result<()> {
 
 /// Removes the server entry (other servers and settings stay).
 pub fn uninstall_file(target: &Target) -> Result<()> {
+    if !target.client.editable() {
+        return Err(CoreError::Config(format!(
+            "Hapus entri `{SERVER_NAME}` dari {} secara manual.",
+            target.config.display()
+        )));
+    }
     if !target.config.exists() {
         return Ok(());
     }
@@ -381,6 +596,21 @@ pub fn uninstall_file(target: &Target) -> Result<()> {
 
 /// What to paste by hand when the file can't be edited safely.
 pub fn snippet(target: &Target, server: &Path) -> String {
+    let cmd = server.display();
+    match target.client {
+        Client::Goose => {
+            return format!(
+                "extensions:\n  {SERVER_NAME}:\n    type: stdio\n    name: {SERVER_NAME}\n    cmd: {cmd}\n    args: []\n    enabled: true\n    envs: {{}}\n    timeout: 300\n"
+            );
+        }
+        Client::Continue => {
+            return format!(
+                "mcpServers:\n  - name: {SERVER_NAME}\n    type: stdio\n    command: {cmd}\n    args: []\n"
+            );
+        }
+        Client::Crush => return format!("mcp add {SERVER_NAME} --command {cmd}\n"),
+        _ => {}
+    }
     if target.client == Client::Codex {
         return format!(
             "[mcp_servers.{SERVER_NAME}]\ncommand = \"{}\"\nargs = []",
@@ -723,15 +953,26 @@ mod tests {
         let server = Path::new("/bin/pgdesk-mcp");
         // SAFETY: test-only; mimics the app launched from a profile shell.
         unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", "/somewhere/else") };
-        install(find(&targets, Client::ClaudeCode, "default"), server, Some(&cli))
-            .await
-            .unwrap();
-        install(find(&targets, Client::ClaudeCode, "work"), server, Some(&cli))
-            .await
-            .unwrap();
+        install(
+            find(&targets, Client::ClaudeCode, "default"),
+            server,
+            Some(&cli),
+        )
+        .await
+        .unwrap();
+        install(
+            find(&targets, Client::ClaudeCode, "work"),
+            server,
+            Some(&cli),
+        )
+        .await
+        .unwrap();
         let calls = fs::read_to_string(&log).unwrap();
         let lines: Vec<_> = calls.lines().collect();
-        assert_eq!(lines[0], "unset mcp add --scope user pgdesk -- /bin/pgdesk-mcp");
+        assert_eq!(
+            lines[0],
+            "unset mcp add --scope user pgdesk -- /bin/pgdesk-mcp"
+        );
         assert_eq!(
             lines[1],
             format!(
@@ -739,5 +980,197 @@ mod tests {
                 h.path().join(".claude-work").display()
             )
         );
+    }
+
+    #[test]
+    fn popular_agents_and_editors_are_detected() {
+        let h = home();
+        let p = h.path();
+        for dir in [
+            ".gemini",
+            ".qwen",
+            ".config/opencode",
+            ".config/amp",
+            ".copilot",
+            ".factory",
+            ".kiro",
+            ".junie",
+            ".augment",
+            ".warp",
+            ".lmstudio",
+            ".config/kilo",
+            ".config/devin",
+            ".gemini/config",
+            ".cline/data/settings",
+            ".config/goose",
+            ".continue",
+            ".config/crush",
+            "Library/Application Support/Code - Insiders/User",
+        ] {
+            fs::create_dir_all(p.join(dir)).unwrap();
+        }
+        let targets = discover(p, None);
+        let config = |c: Client| {
+            targets
+                .iter()
+                .find(|t| t.client == c)
+                .unwrap_or_else(|| panic!("{c:?} not detected"))
+                .config
+                .strip_prefix(p)
+                .unwrap()
+                .to_path_buf()
+        };
+        assert_eq!(config(Client::Qwen), Path::new(".qwen/settings.json"));
+        assert_eq!(config(Client::Amp), Path::new(".config/amp/settings.json"));
+        assert_eq!(
+            config(Client::CopilotCli),
+            Path::new(".copilot/mcp-config.json")
+        );
+        assert_eq!(config(Client::FactoryDroid), Path::new(".factory/mcp.json"));
+        assert_eq!(config(Client::Kiro), Path::new(".kiro/settings/mcp.json"));
+        assert_eq!(config(Client::Junie), Path::new(".junie/mcp/mcp.json"));
+        assert_eq!(config(Client::Auggie), Path::new(".augment/settings.json"));
+        assert_eq!(config(Client::Warp), Path::new(".warp/.mcp.json"));
+        assert_eq!(config(Client::LmStudio), Path::new(".lmstudio/mcp.json"));
+        assert_eq!(
+            config(Client::KiloCode),
+            Path::new(".config/kilo/kilo.json")
+        );
+        assert_eq!(
+            config(Client::Windsurf),
+            Path::new(".config/devin/mcp_config.json")
+        );
+        assert_eq!(
+            config(Client::Antigravity),
+            Path::new(".gemini/config/mcp_config.json")
+        );
+        assert_eq!(
+            config(Client::Cline),
+            Path::new(".cline/data/settings/cline_mcp_settings.json")
+        );
+        assert_eq!(
+            config(Client::Goose),
+            Path::new(".config/goose/config.yaml")
+        );
+        assert_eq!(config(Client::Continue), Path::new(".continue/config.yaml"));
+        assert_eq!(config(Client::Crush), Path::new(".config/crush/crushrc"));
+        assert_eq!(
+            config(Client::VsCodeInsiders),
+            Path::new("Library/Application Support/Code - Insiders/User/mcp.json")
+        );
+    }
+
+    #[test]
+    fn unverified_locations_need_the_file_itself() {
+        let h = home();
+        let p = h.path();
+        let trae = p.join("Library/Application Support/Trae/User");
+        fs::create_dir_all(&trae).unwrap();
+        let roo = p.join(
+            "Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings",
+        );
+        fs::create_dir_all(&roo).unwrap();
+        fs::create_dir_all(p.join(".aws/amazonq")).unwrap();
+        // Folders alone: not offered (we'd be guessing a file name).
+        let targets = discover(p, None);
+        for c in [Client::Trae, Client::RooCode, Client::AmazonQ] {
+            assert!(!targets.iter().any(|t| t.client == c), "{c:?}");
+        }
+        fs::write(trae.join("mcp.json"), "{}").unwrap();
+        fs::write(roo.join("mcp_settings.json"), "{}").unwrap();
+        fs::write(p.join(".aws/amazonq/mcp.json"), "{}").unwrap();
+        let targets = discover(p, None);
+        for c in [Client::Trae, Client::RooCode, Client::AmazonQ] {
+            assert!(targets.iter().any(|t| t.client == c), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn legacy_locations_are_offered_when_their_file_exists() {
+        let h = home();
+        let p = h.path();
+        fs::create_dir_all(p.join(".codeium/windsurf")).unwrap();
+        fs::write(p.join(".codeium/windsurf/mcp_config.json"), "{}").unwrap();
+        let targets = discover(p, None);
+        let windsurf: Vec<_> = targets
+            .iter()
+            .filter(|t| t.client == Client::Windsurf)
+            .collect();
+        assert_eq!(windsurf.len(), 1);
+        assert!(
+            windsurf[0]
+                .config
+                .ends_with(".codeium/windsurf/mcp_config.json")
+        );
+    }
+
+    #[test]
+    fn agent_specific_entry_shapes() {
+        let s = Path::new("/bin/pgdesk-mcp");
+        assert_eq!(entry(Client::Amp, s).0, "amp.mcpServers");
+        let copilot = entry(Client::CopilotCli, s).1;
+        assert_eq!(copilot["type"], "local");
+        assert_eq!(copilot["tools"][0], "*");
+        assert_eq!(entry(Client::FactoryDroid, s).1["type"], "stdio");
+        assert_eq!(entry(Client::Kiro, s).1["disabled"], false);
+        assert_eq!(entry(Client::KiloCode, s).0, "mcp");
+        assert_eq!(
+            entry(Client::KiloCode, s).1["command"][0],
+            "/bin/pgdesk-mcp"
+        );
+        assert_eq!(entry(Client::VsCodeInsiders, s).0, "servers");
+        assert_eq!(entry(Client::Cursor, s).1["type"], "stdio");
+        assert_eq!(
+            entry(Client::RooCode, s).1["alwaysAllow"],
+            serde_json::json!([])
+        );
+    }
+
+    #[test]
+    fn amp_uses_a_flat_dotted_key() {
+        let h = home();
+        fs::create_dir_all(h.path().join(".config/amp")).unwrap();
+        let targets = discover(h.path(), None);
+        let t = find(&targets, Client::Amp, "default");
+        install_file(t, Path::new("/bin/pgdesk-mcp")).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&t.config).unwrap()).unwrap();
+        assert_eq!(v["amp.mcpServers"]["pgdesk"]["command"], "/bin/pgdesk-mcp");
+        assert!(v.get("amp").is_none());
+    }
+
+    #[test]
+    fn yaml_and_script_configs_are_manual() {
+        let h = home();
+        let p = h.path();
+        fs::create_dir_all(p.join(".config/goose")).unwrap();
+        fs::write(p.join(".config/goose/config.yaml"), "GOOSE_MODEL: x\n").unwrap();
+        fs::create_dir_all(p.join(".continue")).unwrap();
+        let targets = discover(p, None);
+        let server = Path::new("/bin/pgdesk-mcp");
+        let goose = find(&targets, Client::Goose, "default");
+        assert!(!goose.client.editable());
+        assert!(matches!(status(goose, server), Status::Manual));
+        assert!(install_file(goose, server).is_err());
+        assert_eq!(
+            fs::read_to_string(&goose.config).unwrap(),
+            "GOOSE_MODEL: x\n"
+        );
+        assert!(snippet(goose, server).contains("cmd: /bin/pgdesk-mcp"));
+        // Pasted in by hand: reported as installed.
+        fs::write(&goose.config, snippet(goose, server)).unwrap();
+        assert_eq!(status(goose, server), Status::Installed);
+        let cont = find(&targets, Client::Continue, "default");
+        assert!(snippet(cont, server).contains("- name: pgdesk"));
+    }
+
+    #[test]
+    fn every_client_has_a_category() {
+        for c in Client::ALL {
+            let _ = c.category();
+            assert!(!c.name().is_empty());
+        }
+        assert_eq!(Client::ClaudeCode.category(), Category::Agent);
+        assert_eq!(Client::Cursor.category(), Category::Editor);
     }
 }

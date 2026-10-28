@@ -36,7 +36,8 @@ gpui_kit::assets::icon_assets!(
         Columns2,
         File,
         Plug,
-        Copy
+        Copy,
+        Bot
     ]
 );
 
@@ -44,11 +45,55 @@ gpui_kit::assets::icon_assets!(
 /// replaces the default one rather than adding to it).
 pub struct AppAssets;
 
+macro_rules! agent_logos {
+    ($($name:literal),* $(,)?) => {
+        /// AI client logos for the MCP page (see assets/agent_logos/SOURCES.md).
+        const AGENT_LOGOS: &[(&str, &[u8])] = &[
+            $(($name, include_bytes!(concat!("../../../assets/agent_logos/", $name, ".svg")))),*
+        ];
+    };
+}
+
+agent_logos!(
+    "amp-color",
+    "antigravity-color",
+    "claude-color",
+    "claudecode-color",
+    "cline",
+    "codex-color",
+    "cursor",
+    "geminicli-color",
+    "githubcopilot",
+    "goose",
+    "junie-color",
+    "kilocode",
+    "kiro-color",
+    "lmstudio",
+    "opencode",
+    "qwen-color",
+    "roocode",
+    "trae-color",
+    "warp",
+    "windsurf",
+    "zed",
+);
+
+fn agent_logo(path: &str) -> Option<&'static [u8]> {
+    let name = path.strip_prefix("agent_logos/")?.strip_suffix(".svg")?;
+    AGENT_LOGOS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, b)| *b)
+}
+
 /// The PG Desk mark (title bar).
 pub const LOGO_MARK: &str = "logo/pgdesk-mark.svg";
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if let Some(svg) = agent_logo(path) {
+            return Ok(Some(Cow::Borrowed(svg)));
+        }
         if let Some(svg) = crate::file_icons::asset(path) {
             return Ok(Some(Cow::Borrowed(svg)));
         }

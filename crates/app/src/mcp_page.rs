@@ -11,7 +11,7 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pgdesk_core::mcp_clients::{
-    Client, Status, Target, discover, install, snippet, status, uninstall,
+    Category, Client, Status, Target, discover, install, snippet, status, uninstall,
 };
 use pgdesk_core::probe::find_in_path;
 
@@ -32,6 +32,60 @@ pub struct McpPage {
     busy: HashSet<usize>,
     errors: HashMap<usize, String>,
     loading: bool,
+}
+
+/// The client's logo: colour logos as images, one-colour ones tinted with
+/// the theme, and a neutral glyph for clients without a free logo.
+fn logo(client: Client, cx: &App) -> AnyElement {
+    let (name, colour) = match client {
+        Client::ClaudeCode => ("claudecode-color", true),
+        Client::ClaudeDesktop => ("claude-color", true),
+        Client::Codex => ("codex-color", true),
+        Client::Gemini => ("geminicli-color", true),
+        Client::Qwen => ("qwen-color", true),
+        Client::Amp => ("amp-color", true),
+        Client::Kiro => ("kiro-color", true),
+        Client::Junie => ("junie-color", true),
+        Client::Antigravity => ("antigravity-color", true),
+        Client::Trae => ("trae-color", true),
+        Client::OpenCode => ("opencode", false),
+        Client::CopilotCli => ("githubcopilot", false),
+        Client::Cline => ("cline", false),
+        Client::Goose => ("goose", false),
+        Client::Cursor => ("cursor", false),
+        Client::Windsurf => ("windsurf", false),
+        Client::Zed => ("zed", false),
+        Client::Warp => ("warp", false),
+        Client::RooCode => ("roocode", false),
+        Client::KiloCode => ("kilocode", false),
+        Client::LmStudio => ("lmstudio", false),
+        _ => {
+            // Same 18 px box as the logos, so names line up.
+            return div()
+                .size(px(18.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    Icon::new(Lucide::Bot)
+                        .small()
+                        .text_color(cx.theme().muted_foreground),
+                )
+                .into_any_element();
+        }
+    };
+    let path: SharedString = format!("agent_logos/{name}.svg").into();
+    if colour {
+        img(path).size(px(18.)).flex_none().into_any_element()
+    } else {
+        svg()
+            .path(path)
+            .size(px(18.))
+            .flex_none()
+            .text_color(cx.theme().foreground)
+            .into_any_element()
+    }
 }
 
 /// `~/…` instead of the full home path.
@@ -151,6 +205,38 @@ impl McpPage {
         }
     }
 
+    fn render_group(&self, client: Client, ixs: Vec<usize>, cx: &mut Context<Self>) -> Div {
+        let muted = cx.theme().muted_foreground;
+        let profiles = ixs.len();
+        v_flex()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(
+                h_flex()
+                    .px_3()
+                    .py_1p5()
+                    .gap_2()
+                    .bg(cx.theme().secondary)
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(logo(client, cx))
+                    .child(div().text_sm().font_semibold().child(client.name()))
+                    .when(client.profile_var().is_some() && profiles > 1, |el| {
+                        el.child(
+                            div()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(format!("{profiles} profil")),
+                        )
+                    }),
+            )
+            .children(ixs.into_iter().map(|ix| {
+                let row = &self.rows[ix];
+                self.render_row(ix, row, cx).into_any_element()
+            }))
+    }
+
     fn render_row(&self, ix: usize, row: &Row, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let muted = cx.theme().muted_foreground;
         let busy = self.busy.contains(&ix);
@@ -160,6 +246,7 @@ impl McpPage {
             Status::Outdated(_) => ("Versi lain".into(), cx.theme().warning),
             Status::NotInstalled => ("Belum".into(), muted),
             Status::Unreadable(_) => ("Edit manual".into(), cx.theme().danger),
+            Status::Manual => ("Manual".into(), muted),
         };
         let detail = match &row.status {
             Status::Outdated(other) => Some(format!("menunjuk ke {other}")),
@@ -171,9 +258,24 @@ impl McpPage {
                 "lewat CLI `{}`",
                 row.target.client.cli().unwrap_or_default()
             ),
-            None => "edit file".to_string(),
+            None if row.target.client.editable() => "edit file".to_string(),
+            None => "salin & tempel".to_string(),
+        };
+        let copy_snippet = |ix: usize, text: String| {
+            Button::new(("mcp-copy", ix))
+                .ghost()
+                .xsmall()
+                .icon(Lucide::Copy)
+                .label("Salin snippet")
+                .on_click(move |_, _, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                })
         };
         let action = match &row.status {
+            Status::Installed if !row.target.client.editable() => {
+                copy_snippet(ix, snippet(&row.target, &self.server))
+            }
+            Status::Manual => copy_snippet(ix, snippet(&row.target, &self.server)),
             Status::Installed => Button::new(("mcp-remove", ix))
                 .ghost()
                 .xsmall()
@@ -189,17 +291,7 @@ impl McpPage {
                 .xsmall()
                 .label("Pasang")
                 .on_click(cx.listener(move |this, _, _, cx| this.act(ix, false, cx))),
-            Status::Unreadable(_) => {
-                let text = snippet(&row.target, &self.server);
-                Button::new(("mcp-copy", ix))
-                    .ghost()
-                    .xsmall()
-                    .icon(Lucide::Copy)
-                    .label("Salin snippet")
-                    .on_click(move |_, _, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
-                    })
-            }
+            Status::Unreadable(_) => copy_snippet(ix, snippet(&row.target, &self.server)),
         };
         v_flex()
             .px_3()
@@ -239,14 +331,12 @@ impl McpPage {
                             .child(div().size(px(6.)).rounded_full().bg(color))
                             .child(badge),
                     )
-                    .child(
-                        div()
-                            .w(px(116.))
-                            .flex_none()
-                            .flex()
-                            .justify_end()
-                            .child(action.loading(busy).disabled(disabled)),
-                    ),
+                    .child(div().w(px(116.)).flex_none().flex().justify_end().child(
+                        action.loading(busy).disabled(
+                            disabled
+                                && !matches!(row.status, Status::Manual | Status::Unreadable(_)),
+                        ),
+                    )),
             )
             .when_some(detail, |el, d| {
                 el.child(
@@ -282,6 +372,13 @@ impl Render for McpPage {
                 None => groups.push((row.target.client, vec![ix])),
             }
         }
+        // Agents first, then editors; each in the table's order.
+        groups.sort_by_key(|(c, _)| {
+            (
+                c.category() == Category::Editor,
+                Client::ALL.iter().position(|x| x == c),
+            )
+        });
         let pending = self
             .rows
             .iter()
@@ -348,37 +445,24 @@ impl Render for McpPage {
                 .child("Tidak ada klien MCP yang terdeteksi (Claude Code, Codex, Claude Desktop, Cursor, Zed, …).")
                 .into_any_element()
         } else {
-            v_flex()
-                .gap_4()
-                .children(groups.into_iter().map(|(client, ixs)| {
-                    v_flex()
-                        .rounded(cx.theme().radius)
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .child(
-                            h_flex()
-                                .px_3()
-                                .py_1p5()
-                                .gap_2()
-                                .bg(cx.theme().secondary)
-                                .border_b_1()
-                                .border_color(cx.theme().border)
-                                .child(div().text_sm().font_semibold().child(client.name()))
-                                .when(client.profile_var().is_some() && ixs.len() > 1, |el| {
-                                    el.child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(muted)
-                                            .child(format!("{} profil", ixs.len())),
-                                    )
-                                }),
-                        )
-                        .children(ixs.into_iter().map(|ix| {
-                            let row = &self.rows[ix];
-                            self.render_row(ix, row, cx).into_any_element()
-                        }))
-                }))
-                .into_any_element()
+            let section = |title: &'static str| {
+                div()
+                    .pt_2()
+                    .text_xs()
+                    .font_semibold()
+                    .text_color(muted)
+                    .child(title)
+            };
+            let mut seen_editor = false;
+            let mut children: Vec<AnyElement> = vec![section("AGENT & CLI").into_any_element()];
+            for (client, ixs) in groups {
+                if client.category() == Category::Editor && !seen_editor {
+                    seen_editor = true;
+                    children.push(section("IDE & EDITOR").into_any_element());
+                }
+                children.push(self.render_group(client, ixs, cx).into_any_element());
+            }
+            v_flex().gap_3().children(children).into_any_element()
         };
         div()
             .id("mcp-page")
