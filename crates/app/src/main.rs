@@ -1,6 +1,7 @@
 mod assets;
 mod db;
 mod editor;
+mod file_icons;
 mod files;
 mod layout;
 mod rt;

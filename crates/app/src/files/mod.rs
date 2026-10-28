@@ -3,14 +3,13 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::time::Duration;
 
-use pgdesk_core::files::{Entry, FileKind, classify, list_dir};
+use pgdesk_core::files::{Entry, list_dir};
 
 use crate::rt;
 
@@ -20,17 +19,6 @@ pub enum FilesEvent {
 }
 
 impl EventEmitter<FilesEvent> for FilesPanel {}
-
-/// Icon for a file in the tree, by what it opens as.
-pub fn file_icon(path: &Path) -> Lucide {
-    match classify(path) {
-        FileKind::Image | FileKind::Svg => Lucide::Image,
-        FileKind::Pdf | FileKind::Markdown => Lucide::FileText,
-        FileKind::Video => Lucide::Film,
-        _ if path.extension().is_some_and(|e| e == "sql") => Lucide::Database,
-        _ => Lucide::FileCode,
-    }
-}
 
 /// How often open folders are re-read, so files made in the terminal show up.
 const REFRESH: Duration = Duration::from_secs(3);
@@ -192,10 +180,13 @@ impl FilesPanel {
                     IconName::FolderOpen
                 } else {
                     IconName::Folder
-                }),
+                })
+                .xsmall()
+                .text_color(muted)
+                .into_any_element(),
             )
         } else {
-            (None, Icon::new(file_icon(&entry.path)))
+            (None, crate::file_icons::file_icon(&entry.path, cx))
         };
         let name = entry.name.clone();
         h_flex()
@@ -215,7 +206,7 @@ impl FilesPanel {
                     .flex_none()
                     .children(chevron.map(|c| Icon::new(c).xsmall().text_color(muted))),
             )
-            .child(icon.xsmall().text_color(muted))
+            .child(icon)
             .child(div().truncate().child(name))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(&entry, cx)))
     }
@@ -304,26 +295,5 @@ impl Render for FilesPanel {
                         )
                     }),
             )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    // Not a glob: `gpui_kit::*` exports a `test` macro that shadows #[test].
-    use super::file_icon;
-    use gpui_kit::assets::IconName as Lucide;
-    use std::path::Path;
-
-    #[test]
-    fn icons_follow_the_file_kind() {
-        let icon = |p: &str| file_icon(Path::new(p));
-        assert_eq!(icon("a.png"), Lucide::Image);
-        assert_eq!(icon("a.heic"), Lucide::Image);
-        assert_eq!(icon("doc.pdf"), Lucide::FileText);
-        assert_eq!(icon("README.md"), Lucide::FileText);
-        assert_eq!(icon("clip.mov"), Lucide::Film);
-        assert_eq!(icon("q.sql"), Lucide::Database);
-        assert_eq!(icon("main.rs"), Lucide::FileCode);
-        assert_eq!(icon("logo.svg"), Lucide::Image);
     }
 }

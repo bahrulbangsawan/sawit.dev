@@ -78,6 +78,8 @@ enum PaneItem {
         key: SharedString,
         title: SharedString,
         icon: Lucide,
+        /// The file shown, for its language logo.
+        file: Option<PathBuf>,
     },
 }
 
@@ -202,6 +204,7 @@ impl Workspace {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default()
                 .into();
+            let path_for_icon = path.clone();
             let view: AnyView = match classify(&path) {
                 FileKind::Image => cx.new(|cx| ImageView::new(path, cx)).into(),
                 FileKind::Pdf => cx.new(|cx| PdfView::new(path, cx)).into(),
@@ -212,6 +215,7 @@ impl Workspace {
                 key,
                 title,
                 icon,
+                file: Some(path_for_icon),
             });
             cx.notify();
             return;
@@ -245,6 +249,7 @@ impl Workspace {
             key,
             title,
             icon: Lucide::Table,
+            file: None,
         });
         cx.notify();
     }
@@ -603,22 +608,29 @@ impl Workspace {
             .map(|(ix, tab)| {
                 let active = ix == self.active;
                 let pinned = tab.pinned;
+                let glyph = |icon: Lucide| Icon::new(icon).xsmall().into_any_element();
                 let (icon, title, dirty, read_only) = match &tab.item {
-                    PaneItem::Server => {
-                        (Icon::new(Lucide::Server), "Server".to_string(), false, None)
-                    }
+                    PaneItem::Server => (glyph(Lucide::Server), "Server".to_string(), false, None),
                     PaneItem::File(e) => {
                         let e = e.read(cx);
                         (
-                            Icon::new(Lucide::FileCode),
+                            crate::file_icons::file_icon(&e.path, cx),
                             e.title(),
                             e.dirty,
                             Some(e.read_only),
                         )
                     }
-                    PaneItem::Other { title, icon, .. } => {
-                        (Icon::new(*icon), title.to_string(), false, None)
-                    }
+                    PaneItem::Other {
+                        title, icon, file, ..
+                    } => (
+                        match file {
+                            Some(path) => crate::file_icons::file_icon(path, cx),
+                            None => glyph(*icon),
+                        },
+                        title.to_string(),
+                        false,
+                        None,
+                    ),
                 };
                 let weak = weak.clone();
                 h_flex()
@@ -639,7 +651,7 @@ impl Workspace {
                     .when(!active, |el| {
                         el.bg(cx.theme().tab).text_color(cx.theme().tab_foreground)
                     })
-                    .child(icon.xsmall())
+                    .child(icon)
                     .child(title)
                     .when(read_only == Some(true), |el| {
                         el.child(

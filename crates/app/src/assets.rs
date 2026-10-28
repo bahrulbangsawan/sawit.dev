@@ -31,7 +31,10 @@ gpui_kit::assets::icon_assets!(
         Play,
         Pause,
         Volume2,
-        VolumeX
+        VolumeX,
+        Code,
+        Columns2,
+        File
     ]
 );
 
@@ -44,6 +47,9 @@ pub const LOGO_MARK: &str = "logo/pgdesk-mark.svg";
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if let Some(svg) = crate::file_icons::asset(path) {
+            return Ok(Some(Cow::Borrowed(svg)));
+        }
         if path == LOGO_MARK {
             return Ok(Some(Cow::Borrowed(include_bytes!(
                 "../../../assets/logo/pgdesk-mark.svg"
