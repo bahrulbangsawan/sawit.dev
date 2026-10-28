@@ -1,11 +1,17 @@
 # Builds PG Desk for each version tag (pushed by .githooks/pre-push) and
 # publishes the GitHub Release: the zipped app the in-app updater installs,
-# the DMG, and the version's CHANGELOG.md section as notes.
+# the DMG, and the version's CHANGELOG.md section as notes. Run it by hand
+# (workflow_dispatch) to rebuild an existing tag.
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build, e.g. v0.0.1"
+        required: true
 
 permissions:
   contents: write
@@ -13,21 +19,25 @@ permissions:
 jobs:
   release:
     runs-on: macos-15
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: Swatinem/rust-cache@v2
       - name: Build app
         run: scripts/bundle-macos.sh --zip --dmg
       - name: Release notes
         run: |
-          v="${GITHUB_REF_NAME#v}"
+          v="${TAG#v}"
           awk -v v="$v" 'index($0, "## [" v "]") == 1 { on = 1; next } /^## \[/ { if (on) exit } on' \
             CHANGELOG.md > notes.md
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "PG Desk $GITHUB_REF_NAME" \
+          gh release create "$TAG" \
+            --title "PG Desk $TAG" \
             --notes-file notes.md \
             target/release/PG-Desk-*-macos-arm64.zip target/release/PG-Desk.dmg
