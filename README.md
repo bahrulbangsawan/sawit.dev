@@ -126,9 +126,9 @@ Diukur di MacBook Apple Silicon (macOS 26.6), build release (`lto = "thin"`, `st
 
 | | |
 |---|---|
-| `pgdesk` | 23,3 MB (satu file, tanpa runtime JVM/Chromium/Node) |
-| `pgdesk-mcp` | 3,3 MB |
-| Memori diam (1 jendela, 1 tab terminal, 10 detik setelah buka) | RSS 80 MB · physical footprint 61 MB (puncak 109 MB saat startup) |
+| `pgdesk` | 24,0 MB (satu file, tanpa runtime JVM/Chromium/Node) |
+| `pgdesk-mcp` | 4,5 MB (termasuk TLS) |
+| Memori diam (1 jendela, 1 tab terminal, 10 detik setelah buka) | RSS 85 MB · physical footprint 67 MB (puncak 115 MB saat startup) |
 | Build release bersih | ±4 menit |
 
 Angka aplikasi lain tidak dicantumkan karena belum diukur di mesin yang sama.
