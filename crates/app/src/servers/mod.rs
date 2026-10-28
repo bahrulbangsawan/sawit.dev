@@ -7,4 +7,4 @@ mod store;
 
 pub use detail::ServerDetail;
 pub use list::ServerList;
-pub use store::ServerStore;
+pub use store::{ServerStore, Status};

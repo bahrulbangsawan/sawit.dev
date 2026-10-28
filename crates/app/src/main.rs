@@ -1,4 +1,5 @@
 mod assets;
+mod db;
 mod editor;
 mod files;
 mod rt;
@@ -38,6 +39,7 @@ fn main() {
         .run(move |cx| {
             gpui_kit::init(cx);
             editor::init(cx);
+            db::init(cx);
             theme::apply_zed_one_dark(cx);
             cx.set_global(rt::Rt(runtime));
             let options = WindowOptions {

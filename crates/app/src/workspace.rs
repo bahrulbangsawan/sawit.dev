@@ -11,6 +11,7 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::db::{DatabasePanel, DbEvent, DbStore, SqlView, TableView};
 use crate::editor::{FileEditor, FileEditorEvent};
 use crate::files::{FilesEvent, FilesPanel};
 use crate::servers::{ServerDetail, ServerList, ServerStore};
@@ -27,7 +28,6 @@ enum SidebarTab {
 enum PaneItem {
     Server,
     File(Entity<FileEditor>),
-    #[expect(dead_code, reason = "database tabs (task D2/D3)")]
     Other(AnyView, SharedString),
 }
 
@@ -36,6 +36,9 @@ pub struct Workspace {
     server_list: Entity<ServerList>,
     server_detail: Entity<ServerDetail>,
     files: Entity<FilesPanel>,
+    db: Entity<DbStore>,
+    db_panel: Entity<DatabasePanel>,
+    sql_count: usize,
     terminal: Entity<TerminalPanel>,
     sidebar: SidebarTab,
     items: Vec<PaneItem>,
@@ -49,6 +52,8 @@ impl Workspace {
         let servers = cx.new(ServerStore::new);
         let files = cx.new(FilesPanel::new);
         let terminal = cx.new(TerminalPanel::new);
+        let db = cx.new(DbStore::new);
+        let db_panel = cx.new(|cx| DatabasePanel::new(db.clone(), servers.clone(), window, cx));
         let subscriptions =
             vec![
                 cx.observe(&servers, |this, servers, cx| {
@@ -70,12 +75,18 @@ impl Workspace {
                         }
                     }
                 }),
+                cx.subscribe_in(&db_panel, window, |this, _, event: &DbEvent, window, cx| {
+                    this.on_db_event(event, window, cx)
+                }),
             ];
         Self {
             server_list: cx.new(|cx| ServerList::new(servers.clone(), cx)),
             server_detail: cx.new(|cx| ServerDetail::new(servers.clone(), window, cx)),
             servers,
             files,
+            db,
+            db_panel,
+            sql_count: 0,
             terminal,
             sidebar: SidebarTab::Servers,
             items: vec![PaneItem::Server],
@@ -109,11 +120,47 @@ impl Workspace {
     }
 
     /// Opens an arbitrary view as a center tab (used by the database tools).
-    #[expect(dead_code, reason = "database tabs (task D2/D3)")]
     pub fn open_item(&mut self, view: AnyView, title: SharedString, cx: &mut Context<Self>) {
         self.items.push(PaneItem::Other(view, title));
         self.active = self.items.len() - 1;
         cx.notify();
+    }
+
+    fn on_db_event(&mut self, event: &DbEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match event {
+            DbEvent::OpenTable {
+                profile,
+                schema,
+                table,
+                columns,
+            } => {
+                let title: SharedString = format!("{schema}.{table}").into();
+                if let Some(ix) = self
+                    .items
+                    .iter()
+                    .position(|i| matches!(i, PaneItem::Other(_, t) if *t == title))
+                {
+                    self.active = ix;
+                    cx.notify();
+                    return;
+                }
+                let Some(client) = self.db.read(cx).clients.get(profile).cloned() else {
+                    return;
+                };
+                let (schema, table, columns) = (schema.clone(), table.clone(), columns.clone());
+                let view = cx.new(|cx| TableView::new(client, schema, table, columns, window, cx));
+                self.open_item(view.into(), title, cx);
+            }
+            DbEvent::OpenSql { profile } => {
+                let Some(client) = self.db.read(cx).clients.get(profile).cloned() else {
+                    return;
+                };
+                self.sql_count += 1;
+                let title: SharedString = format!("SQL {} · {profile}", self.sql_count).into();
+                let view = cx.new(|cx| SqlView::new(title.clone(), client, window, cx));
+                self.open_item(view.into(), title, cx);
+            }
+        }
     }
 
     fn close_item(&mut self, ix: usize, cx: &mut Context<Self>) {
@@ -189,18 +236,11 @@ impl Workspace {
             )
     }
 
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_sidebar(&self) -> AnyElement {
         match self.sidebar {
             SidebarTab::Servers => self.server_list.clone().into_any_element(),
             SidebarTab::Files => self.files.clone().into_any_element(),
-            SidebarTab::Database => div()
-                .size_full()
-                .p_2()
-                .bg(cx.theme().sidebar)
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child("Koneksi database menyusul.")
-                .into_any_element(),
+            SidebarTab::Database => self.db_panel.clone().into_any_element(),
         }
     }
 
@@ -345,7 +385,7 @@ impl Render for Workspace {
                                         .border_color(cx.theme().border)
                                         .child(self.render_sidebar_tabs(cx))
                                         .child(
-                                            div().flex_1().min_h_0().child(self.render_sidebar(cx)),
+                                            div().flex_1().min_h_0().child(self.render_sidebar()),
                                         ),
                                 ),
                         )
