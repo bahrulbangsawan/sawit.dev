@@ -21,6 +21,9 @@ pub enum CoreError {
     Sql(String),
     #[error("download failed: {0}")]
     Download(String),
+    /// A formatter is missing or rejected the input; already user-facing.
+    #[error("{0}")]
+    Format(String),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
