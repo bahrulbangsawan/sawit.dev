@@ -245,7 +245,7 @@ claude mcp add sawit -- /path/to/target/release/sawit-mcp
 
 - Versions start at **0.0.1** and bump one patch on **every push to `main`**. The history is in
   [`CHANGELOG.md`](CHANGELOG.md) and on the **Changelog** page in the app (click the version label in the title bar).
-- Sawit checks [GitHub Releases](https://github.com/bahrulbangsawan/sawit/releases) on launch and
+- Sawit checks [GitHub Releases](https://github.com/bahrulbangsawan/sawit.dev/releases) on launch and
   every 4 hours. New versions download in the background. Once ready, a **Restart for Update** button appears in the
   title bar: the app quits, `Sawit.app` is replaced, and it reopens. Builds from `cargo` only
   open the releases page.

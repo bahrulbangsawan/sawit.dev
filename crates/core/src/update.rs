@@ -10,7 +10,7 @@ use crate::cli::shell_quote;
 use crate::{CoreError, Result, cmd};
 
 /// Where releases are published.
-pub const REPO: &str = "bahrulbangsawan/sawit";
+pub const REPO: &str = "bahrulbangsawan/sawit.dev";
 
 /// `major.minor.patch`; a leading `v` (as in tags) is accepted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
