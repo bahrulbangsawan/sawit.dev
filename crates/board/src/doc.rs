@@ -56,15 +56,27 @@ impl BoardDoc {
         Ok(Self { session })
     }
 
-    /// The file in `bytes` (a `.figcraft` archive). Structural repairs the loader made are logged.
+    /// The file in `bytes` (a `.figcraft` archive). What the loader repaired or left out is only
+    /// logged, so a caller that may save back to the file should use
+    /// [`BoardDoc::from_bytes_with_issues`].
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, BoardError> {
-        let (doc, repairs) = figcraft_format::load_bytes(bytes).map_err(format_error)?;
-        for repair in repairs {
-            log::warn!("canvas file repaired on load: {repair}");
+        let (board, issues) = Self::from_bytes_with_issues(bytes)?;
+        for issue in issues {
+            log::warn!("canvas file loaded with an issue: {issue}");
         }
-        Ok(Self {
+        Ok(board)
+    }
+
+    /// Like [`BoardDoc::from_bytes`], with the loader's notes on what it repaired or left out, one
+    /// sentence each (none for a healthy file). Some mean data loss: an image, version history,
+    /// published library or branch it could not read is missing from the returned document, so
+    /// saving that document over the same file drops it.
+    pub fn from_bytes_with_issues(bytes: &[u8]) -> Result<(Self, Vec<String>), BoardError> {
+        let (doc, issues) = figcraft_format::load_bytes(bytes).map_err(format_error)?;
+        let board = Self {
             session: Session::with_document(doc),
-        })
+        };
+        Ok((board, issues))
     }
 
     /// The document as a `.figcraft` archive, without a thumbnail.
@@ -155,6 +167,37 @@ mod tests {
             .unwrap();
         let bytes = b.to_bytes().unwrap();
         assert!(is_format_error(&bytes[..bytes.len() / 2]));
+    }
+
+    #[test]
+    fn a_damaged_image_loads_with_issues_that_name_what_was_lost() {
+        // A 1x1 PNG.
+        const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+        let mut b = BoardDoc::new_board("Canvas").unwrap();
+        let placed = b
+            .execute("image.place", &json!({"data": PNG, "x": 0, "y": 0}))
+            .unwrap();
+        let hash = placed["image"].as_str().unwrap().to_string();
+        let png = b.doc().unwrap().images[&hash].bytes.clone();
+        let bytes = b.to_bytes().unwrap();
+
+        // The undamaged file loads without a word.
+        let (back, issues) = BoardDoc::from_bytes_with_issues(&bytes).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert!(back.doc().unwrap().images.contains_key(&hash));
+
+        // Flip a byte of the stored image: the file still opens, without the image, and says so.
+        let mut damaged = bytes.clone();
+        let at = damaged
+            .windows(png.len())
+            .position(|w| w == png.as_slice())
+            .unwrap();
+        damaged[at + png.len() / 2] ^= 0xFF;
+        let (back, issues) = BoardDoc::from_bytes_with_issues(&damaged).unwrap();
+        assert!(issues.iter().any(|i| i.contains(&hash)), "{issues:?}");
+        assert!(!back.doc().unwrap().images.contains_key(&hash));
+        // `from_bytes` opens it too, and only logs the issues.
+        assert!(BoardDoc::from_bytes(&damaged).is_ok());
     }
 
     #[test]
