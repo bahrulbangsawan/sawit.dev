@@ -3,6 +3,7 @@
 // Excalidraw. Excalidraw is MIT-licensed: no key, no watermark.
 import { build } from 'esbuild'
 import { cpSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { compress } from './compress.mjs'
 
 const out = new URL('../../crates/app/canvas/', import.meta.url).pathname
 rmSync(out, { recursive: true, force: true })
@@ -36,3 +37,4 @@ for (const family of readdirSync(fonts)) {
 		cpSync(fonts + family, out + 'fonts/' + family, { recursive: true })
 	}
 }
+compress(out)

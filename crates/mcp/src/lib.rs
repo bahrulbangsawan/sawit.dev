@@ -28,6 +28,36 @@ pub mod ssh;
 
 pub use ssh::askpass;
 
+/// The `sawit-mcp` program: a stdio MCP server, or (run by `ssh` as
+/// SSH_ASKPASS from `ssh_exec`) the answer to a password prompt. Release
+/// builds ship it inside the `sawit` binary, reached through a `sawit-mcp`
+/// symlink next to it (see `invoked_as_mcp` in the app's main.rs).
+pub fn main() -> std::process::ExitCode {
+    if let Some(account) = std::env::var_os(sawit_core::ssh::ASKPASS_ENV) {
+        let prompt = std::env::args().nth(1).unwrap_or_default();
+        return (askpass(&account.to_string_lossy(), &prompt) as u8).into();
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    let served = runtime.block_on(async {
+        use rmcp::ServiceExt as _;
+        let service = Sawit::new(AppPaths::default_macos())
+            .serve(rmcp::transport::stdio())
+            .await?;
+        service.waiting().await?;
+        Ok::<_, Box<dyn std::error::Error>>(())
+    });
+    match served {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
 /// Text returned by one tool call at most; longer output is cut with a note.
 const MAX_OUTPUT: usize = 100_000;
 

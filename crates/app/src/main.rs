@@ -86,7 +86,19 @@ fn save_login_path(cache: &std::path::Path, path: &str) {
     let _ = std::fs::write(cache, path);
 }
 
-fn main() {
+/// Whether this process was started as `sawit-mcp`. The app bundle ships
+/// one binary: `sawit-mcp` is a symlink to `sawit`, so the MCP server
+/// doesn't carry a second copy of sawit-core (QuickJS, Postgres, TLS, …).
+fn invoked_as_mcp() -> bool {
+    std::env::args_os()
+        .next()
+        .is_some_and(|arg0| std::path::Path::new(&arg0).file_name() == Some("sawit-mcp".as_ref()))
+}
+
+fn main() -> std::process::ExitCode {
+    if invoked_as_mcp() {
+        return sawit_mcp::main();
+    }
     // Run by `ssh` as SSH_ASKPASS for a server whose password is saved:
     // answer the prompt and exit (see sawit_core::ssh::askpass_main).
     if let Some(account) = std::env::var_os(sawit_core::ssh::ASKPASS_ENV) {
@@ -120,4 +132,5 @@ fn main() {
         cli::handle(request, None, cx);
         cli::serve(cx);
     });
+    std::process::ExitCode::SUCCESS
 }

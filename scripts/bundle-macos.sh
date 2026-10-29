@@ -19,9 +19,9 @@ while :; do
 done
 profile=${1:-release}
 if [ "$profile" = release ]; then
-    cargo build --release -p sawit -p sawit-mcp
+    cargo build --release -p sawit
 else
-    cargo build -p sawit -p sawit-mcp
+    cargo build -p sawit
 fi
 
 # The workspace version (bumped by scripts/release.sh).
@@ -30,7 +30,10 @@ out="target/$profile"
 app="$out/Sawit.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "$out/sawit" "$out/sawit-mcp" "$app/Contents/MacOS/"
+cp "$out/sawit" "$app/Contents/MacOS/"
+# The MCP server is built into `sawit` (it runs as the server when started
+# under this name), so the bundle doesn't carry a second copy of sawit-core.
+ln -s sawit "$app/Contents/MacOS/sawit-mcp"
 cp assets/logo/Sawit.icns "$app/Contents/Resources/"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

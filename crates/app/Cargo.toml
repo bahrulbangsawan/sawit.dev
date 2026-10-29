@@ -12,6 +12,8 @@ syntect = { version = "5.3.0", default-features = false, features = ["parsing", 
 two-face = { version = "0.4.5", default-features = false, features = ["syntect-fancy"] }
 image = { version = "0.25", default-features = false }
 sawit-core = { path = "../core" }
+# `sawit-mcp` is built into this binary; see `invoked_as_mcp` in main.rs.
+sawit-mcp = { path = "../mcp" }
 # In-app video: AVPlayer frames painted through GPUI's surface().
 objc2 = "0.6"
 objc2-av-foundation = { version = "0.3.2", default-features = false, features = ["std", "AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "AVAsset", "objc2-core-foundation", "objc2-core-media", "objc2-core-video"] }
@@ -23,4 +25,6 @@ tokio.workspace = true
 tokio-postgres.workspace = true
 wry = { version = "0.57", default-features = false, features = ["os-webview"] }
 include_dir = "0.7"
+# The canvas bundle is embedded brotli-compressed (web/canvas/compress.mjs).
+brotli-decompressor = "6.2.0"
 serde_json = "1"

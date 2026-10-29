@@ -20,7 +20,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::{LazyLock, Mutex, mpsc};
 
 use futures::StreamExt as _;
 use futures::channel::mpsc::{UnboundedSender, unbounded};
@@ -499,10 +499,31 @@ fn serve(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
     }
     let path = path.trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
-    match BUNDLE.get_file(path) {
-        Some(file) => respond(200, mime(path), Cow::Borrowed(file.contents())),
+    match bundle_file(path) {
+        Some(body) => respond(200, mime(path), Cow::Borrowed(body)),
         None => respond(404, "text/plain", Cow::Borrowed(b"not found")),
     }
+}
+
+/// A file of the bundle. All but the fonts are embedded as `<path>.br`
+/// (web/canvas/compress.mjs, 9 MB down to under 3): each is decoded the first
+/// time the page asks for it and kept for the life of the process, so only
+/// what gets used (most locales and diagram chunks never are) costs memory.
+fn bundle_file(path: &str) -> Option<&'static [u8]> {
+    static DECODED: LazyLock<Mutex<HashMap<String, &'static [u8]>>> = LazyLock::new(Default::default);
+    if let Some(file) = BUNDLE.get_file(path) {
+        return Some(file.contents());
+    }
+    let packed = BUNDLE.get_file(format!("{path}.br"))?.contents();
+    let mut decoded = DECODED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(body) = decoded.get(path) {
+        return Some(body);
+    }
+    let mut body = Vec::with_capacity(packed.len() * 4);
+    brotli_decompressor::BrotliDecompress(&mut &packed[..], &mut body).ok()?;
+    let body: &'static [u8] = Box::leak(body.into_boxed_slice());
+    decoded.insert(path.to_string(), body);
+    Some(body)
 }
 
 fn respond(status: u16, mime: &str, body: Cow<'static, [u8]>) -> Response<Cow<'static, [u8]>> {
@@ -532,7 +553,7 @@ pub const TITLE: &str = "Canvas";
 
 #[cfg(test)]
 mod tests {
-    use super::{BUNDLE, hex, is_empty_scene, keep_backup_before_emptying, mime, rgba_tuple};
+    use super::{bundle_file, hex, is_empty_scene, keep_backup_before_emptying, mime, rgba_tuple};
 
     #[test]
     fn emptying_a_board_keeps_a_backup() {
@@ -596,8 +617,24 @@ mod tests {
             "fonts/Virgil/Virgil-Regular.woff2",
             "fonts/Cascadia/CascadiaCode-Regular.woff2",
         ] {
-            assert!(BUNDLE.get_file(path).is_some(), "missing {path}");
+            assert!(bundle_file(path).is_some_and(|b| !b.is_empty()), "missing {path}");
         }
+    }
+
+    #[test]
+    fn every_compressed_file_decodes() {
+        fn walk(dir: &include_dir::Dir<'static>, found: &mut usize) {
+            for file in dir.files() {
+                if let Some(path) = file.path().to_str().unwrap().strip_suffix(".br") {
+                    assert!(bundle_file(path).is_some_and(|b| !b.is_empty()), "{path} doesn't decode");
+                    *found += 1;
+                }
+            }
+            dir.dirs().for_each(|d| walk(d, found));
+        }
+        let mut found = 0;
+        walk(&super::BUNDLE, &mut found);
+        assert!(found > 100, "only {found} compressed files");
     }
 
     #[test]

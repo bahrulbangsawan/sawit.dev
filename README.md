@@ -364,7 +364,8 @@ Prerequisites:
 cargo run -p sawit -- --foreground             # the app, with logs in the terminal
 cargo run -p sawit -- --foreground ~/code/app  # open a project folder directly
 cargo build --release                          # target/release/sawit and target/release/sawit-mcp
-scripts/bundle-macos.sh                        # target/release/Sawit.app (with icon) for /Applications
+scripts/bundle-macos.sh                        # target/release/Sawit.app (with icon) for /Applications;
+                                               # its sawit-mcp is a symlink to sawit (one binary)
 ```
 
 App data is stored in `~/Library/Application Support/sawit/`:
@@ -455,12 +456,12 @@ crates/mcp    sawit-mcp — stdio MCP server on top of core
 
 ## Size & memory
 
-Measured on an Apple Silicon MacBook (macOS 26.6), release build (`lto = "thin"`, `strip`):
+Measured on an Apple Silicon MacBook (macOS 26.6), release build (`lto = "fat"`, `strip`):
 
 | | |
 |---|---|
-| `sawit` | 24.0 MB (single file, no JVM/Chromium/Node runtime) |
-| `sawit-mcp` | 4.5 MB (including TLS) |
+| `sawit` | 34 MB (single file, no JVM/Chromium/Node runtime; includes the MCP server, reached as `sawit-mcp` through a symlink) |
+| `Sawit.app` installed · DMG · update zip | 33 MB · 13.5 MB · 17.3 MB |
 | Idle memory (1 window, 1 terminal tab, 10 seconds after launch) | RSS 85 MB · physical footprint 67 MB (peak 115 MB during startup) |
 | Clean release build | About 4 minutes |
 
