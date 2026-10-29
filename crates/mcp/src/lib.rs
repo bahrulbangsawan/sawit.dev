@@ -16,6 +16,7 @@ use sawit_core::app_control::{self, Store};
 use sawit_core::instances::{AppPaths, Instance};
 
 pub mod app;
+pub mod browser;
 pub mod db;
 pub mod db_admin;
 pub mod dev_tools;
@@ -78,12 +79,13 @@ Sawit is a macOS developer workbench. These tools work without the Sawit app run
 - Git: status, log, diff, show, branches, stage/unstage, commit, switch.
 - Prompts: the prompt library (with {{variables}}).
 - Files: text search in a folder.
-- Dev tools: the Tools page catalog (Homebrew, Bun, uv, Claude Code, …), what is installed, installing with prerequisites (confirm=true).
+- Dev tools: the Tools page catalog (Homebrew, Bun, uv, Claude Code, …), what is installed and what has a newer release, installing with prerequisites and upgrading (confirm=true).
 - MCP servers: the MCP page catalog and the AI clients on this Mac; install or remove a server in a client's config.
 These control the running Sawit app (start it with launch_app; app_state shows windows, tabs and terminals):
 - app_*: open files/folders, show panels, layout, tabs, pages (canvas, MCP, tools, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
 - terminal_*: run commands in Sawit's terminal and read their output, type keys (ctrl-c), close tabs.
 - canvas_*: the Excalidraw board: list, add shapes/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG.
+- browser_*: a browser tab (WebKit) to check the app being built: navigate (default the project's dev server), snapshot the page as an outline with element refs, click/hover/type/press keys/select/scroll by ref or CSS selector, wait for text, screenshot, read console errors and network requests, evaluate JS. Take a new browser_snapshot after the page changes; refs reset.
 Most app tools take `project` to pick the window that has that folder open; otherwise the frontmost window is used.
 Targets: database tools take a Sawit instance name or a saved connection name (see list_connections).";
 
@@ -235,6 +237,7 @@ impl Sawit {
             + Self::mcp_servers_router()
             // App-control tools (need the app running).
             + Self::app_router()
+            + Self::browser_router()
     }
 
     /// Tells a running app to re-read `store` after a tool changed its file.
@@ -338,6 +341,7 @@ mod tests {
             // dev tools
             "list_dev_tools",
             "install_dev_tools",
+            "upgrade_dev_tools",
             // mcp servers
             "list_mcp_servers",
             "install_mcp_server",
@@ -375,6 +379,20 @@ mod tests {
             "canvas_clear",
             "canvas_load",
             "canvas_export",
+            // browser
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_click",
+            "browser_hover",
+            "browser_type",
+            "browser_press_key",
+            "browser_select_option",
+            "browser_scroll",
+            "browser_wait_for",
+            "browser_screenshot",
+            "browser_console",
+            "browser_network",
+            "browser_evaluate",
         ];
         expected.sort();
         assert_eq!(names, expected);

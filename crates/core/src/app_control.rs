@@ -49,6 +49,7 @@ pub enum Panel {
 #[serde(rename_all = "snake_case")]
 pub enum Page {
     Canvas,
+    Browser,
     Mcp,
     Tools,
     Changelog,
@@ -200,6 +201,10 @@ pub enum Command {
     /// Changes the canvas (opening it if needed); see `web/canvas`.
     Canvas {
         op: Value,
+    },
+    /// Drives the browser tab (opening it if needed); see `crate::browser`.
+    Browser {
+        op: crate::browser::BrowserOp,
     },
     Reload {
         store: Store,
@@ -445,6 +450,24 @@ mod tests {
             .unwrap()
             .is_err()
         );
+    }
+
+    #[test]
+    fn browser_ops_round_trip() {
+        let request = Request {
+            project: None,
+            command: Command::Browser {
+                op: crate::browser::BrowserOp::Navigate {
+                    url: "http://localhost:5173".into(),
+                },
+            },
+        };
+        let bytes = encode(&request);
+        assert_eq!(
+            &bytes[MAGIC.len()..],
+            br#"{"cmd":"browser","op":{"op":"navigate","url":"http://localhost:5173"}}"#
+        );
+        assert_eq!(decode(&bytes), Some(Ok(request)));
     }
 
     #[test]

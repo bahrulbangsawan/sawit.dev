@@ -7,7 +7,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
-use crate::kebun::{BakarArgs, DbJob, ListWhat, PasangArgs};
+use crate::kebun::{BakarArgs, DbJob, ListWhat, PasangArgs, PupukArgs};
 use crate::{CoreError, Result, cmd};
 
 /// Where "Install CLI" puts the command.
@@ -26,6 +26,7 @@ Usage:
   sawit backup <db> [schema|schema.table] <file.sql|file.dump> [-y]
   sawit tanam <db> <table> <file.csv>
   sawit pasang <tool ...> [-y]
+  sawit pupuk [tool ...] [-y]
 
 Examples:
   sawit .                  open this folder as a project (joins the open
@@ -58,13 +59,17 @@ Kebun (databases), no app needed:
   sawit tanam kyzn leads leads.csv         load a CSV file into a table
   An existing file is replaced only after asking (or with -y).
   Aliases: panen = export, ekspor · backup = dump, cadangkan ·
-  tanam = import, impor · pasang = install. `sawit ./panen` opens a
+  tanam = import, impor · pasang = install · pupuk = upgrade.
+  `sawit ./panen` opens a
   folder named panen.
 
 Tools (the app's Tools page):
   sawit list tools         package managers, runtimes, AI agents (alat)
   sawit pasang bun uv      run their official install scripts, prerequisites
                            first (asks first; -y to skip)
+  sawit pupuk              upgrade every installed tool with a newer
+                           release (shown as → in `list tools`)
+  sawit pupuk bun          upgrade just bun (asks first; -y to skip)
 
 Options:
   -n, --new         always open in a new window
@@ -105,6 +110,8 @@ pub enum Invocation {
     DbJob(DbJob),
     /// `sawit pasang …`.
     Pasang(PasangArgs),
+    /// `sawit pupuk …`.
+    Pupuk(PupukArgs),
     Open {
         request: OpenRequest,
         /// `-` was given: the CLI turns stdin into a file target.
@@ -131,6 +138,9 @@ pub fn parse_args(
         }
         Some("install" | "pasang") if words.len() == args.len() => {
             return PasangArgs::parse(&words[1..]).map(Invocation::Pasang);
+        }
+        Some("upgrade" | "pupuk") if words.len() == args.len() => {
+            return PupukArgs::parse(&words[1..]).map(Invocation::Pupuk);
         }
         Some(word) if words.len() == args.len() && DbJob::kind(word).is_some() => {
             let kind = DbJob::kind(word).expect("checked");
@@ -529,6 +539,14 @@ mod tests {
         // The escape still opens folders with these names.
         assert!(matches!(parse(&["./panen"]), Ok(Invocation::Open { .. })));
         assert!(matches!(parse(&["./pasang"]), Ok(Invocation::Open { .. })));
+        let Ok(Invocation::Pupuk(p)) = parse(&["upgrade", id, "-y"]) else {
+            panic!()
+        };
+        assert_eq!(p.tools, [id]);
+        assert!(p.yes);
+        assert!(matches!(parse(&["pupuk"]), Ok(Invocation::Pupuk(_))));
+        assert!(parse(&["pupuk", "nope-tool"]).is_err());
+        assert!(matches!(parse(&["./pupuk"]), Ok(Invocation::Open { .. })));
     }
 
     #[test]

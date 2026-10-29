@@ -3,7 +3,7 @@
 //! is missing; prerequisites (nvm before Node.js, uv before Python) are
 //! queued first. Rows change state as soon as they are queued and show
 //! "Installed" the moment the installer succeeds; the next detection
-//! confirms it.
+//! confirms it. Installed tools with a newer release offer an upgrade.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -16,7 +16,9 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sawit_core::dev_tools::{Category, Found, TOOLS, Tool, detect, find, install, plan};
+use sawit_core::dev_tools::{
+    Category, Found, TOOLS, Tool, detect, find, is_newer, latest_versions, plan, run,
+};
 
 use crate::rt;
 
@@ -49,6 +51,10 @@ impl EventEmitter<ToolsEvent> for ToolsPage {}
 pub struct ToolsPage {
     found: HashMap<&'static str, Found>,
     loading: bool,
+    /// Latest released versions, by tool id.
+    latest: HashMap<&'static str, String>,
+    /// Queued or failed runs that upgrade instead of install.
+    upgrades: HashSet<&'static str>,
     states: HashMap<&'static str, State>,
     logs: HashMap<&'static str, Vec<String>>,
     selected: HashSet<&'static str>,
@@ -125,6 +131,8 @@ impl ToolsPage {
         let mut this = Self {
             found: HashMap::new(),
             loading: true,
+            latest: HashMap::new(),
+            upgrades: HashSet::new(),
             states: HashMap::new(),
             logs: HashMap::new(),
             selected: HashSet::new(),
@@ -135,8 +143,23 @@ impl ToolsPage {
             search: None,
             _search: None,
         };
-        this.reload(cx);
+        this.refresh(cx);
         this
+    }
+
+    /// Detects again and rereads the latest versions.
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.reload(cx);
+        let rx = rt::spawn(cx, latest_versions());
+        cx.spawn(async move |this, cx| {
+            if let Ok(latest) = rx.await {
+                let _ = this.update(cx, |this, cx| {
+                    this.latest = latest;
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     /// Detects installed tools again (off the UI thread).
@@ -166,6 +189,36 @@ impl ToolsPage {
     /// Installed per detection, or the installer just succeeded.
     fn installed(&self, id: &str) -> bool {
         self.found.contains_key(id) || self.states.get(id) == Some(&State::Done)
+    }
+
+    /// The newer release an installed tool can upgrade to.
+    fn newer(&self, id: &str) -> Option<&String> {
+        let installed = self.found.get(id)?.version.as_ref()?;
+        let latest = self.latest.get(id)?;
+        (is_newer(latest, installed) && self.states.get(id) != Some(&State::Done)).then_some(latest)
+    }
+
+    /// Installed tools with a newer release, not already queued.
+    fn upgradable(&self) -> Vec<&'static str> {
+        TOOLS
+            .iter()
+            .filter(|t| self.newer(t.id).is_some() && !self.busy(t.id))
+            .map(|t| t.id)
+            .collect()
+    }
+
+    /// The command a run of `tool` uses: its upgrade or its installer.
+    fn command(&self, tool: &Tool) -> &'static str {
+        if self.upgrades.contains(tool.id) {
+            tool.upgrade_command()
+        } else {
+            tool.install
+        }
+    }
+
+    fn upgrade(&mut self, ids: &[&'static str], cx: &mut Context<Self>) {
+        self.upgrades.extend(ids);
+        self.enqueue(ids, cx);
     }
 
     fn busy(&self, id: &str) -> bool {
@@ -200,7 +253,8 @@ impl ToolsPage {
             self.selected.remove(tool.id);
             if tool.interactive {
                 self.states.insert(tool.id, State::InTerminal);
-                cx.emit(ToolsEvent::RunInTerminal(tool.install.to_string()));
+                cx.emit(ToolsEvent::RunInTerminal(self.command(tool).to_string()));
+                self.upgrades.remove(tool.id);
                 continue;
             }
             let for_ = (!wanted.contains(&tool.id))
@@ -245,10 +299,11 @@ impl ToolsPage {
         let id = tool.id;
         self.running = Some(id);
         self.states.insert(id, State::Installing);
-        self.logs.insert(id, vec![format!("$ {}", tool.install)]);
+        let command = self.command(tool);
+        self.logs.insert(id, vec![format!("$ {command}")]);
         let (tx, mut lines) = futures::channel::mpsc::unbounded::<String>();
         let done = rt::spawn(cx, async move {
-            install(tool, move |line| {
+            run(tool, command, move |line| {
                 let _ = tx.unbounded_send(line);
             })
             .await
@@ -282,6 +337,7 @@ impl ToolsPage {
         self.batch.0 += 1;
         match result {
             Ok(()) => {
+                self.upgrades.remove(id);
                 self.states.insert(id, State::Done);
                 self.expanded.remove(id);
             }
@@ -298,6 +354,7 @@ impl ToolsPage {
     fn stop_queue(&mut self, cx: &mut Context<Self>) {
         for tool in self.queue.drain(..) {
             self.states.remove(tool.id);
+            self.upgrades.remove(tool.id);
         }
         self.batch.1 = self.batch.0 + usize::from(self.running.is_some());
         cx.notify();
@@ -307,6 +364,7 @@ impl ToolsPage {
         if let Some(ix) = self.queue.iter().position(|t| t.id == id) {
             self.queue.remove(ix);
             self.states.remove(id);
+            self.upgrades.remove(id);
             self.batch.1 = self.batch.1.saturating_sub(1);
         }
         cx.notify();
@@ -332,6 +390,7 @@ impl ToolsPage {
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let muted = cx.theme().muted_foreground;
         let missing = self.missing();
+        let upgradable = self.upgradable();
         let selected: Vec<&'static str> = TOOLS
             .iter()
             .filter(|t| self.selected.contains(t.id))
@@ -372,7 +431,7 @@ impl ToolsPage {
                             .icon(Lucide::RefreshCw)
                             .tooltip("Detect Again")
                             .loading(self.loading)
-                            .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
+                            .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
                     )
                     .child(
                         Button::new("tools-select-missing")
@@ -398,6 +457,16 @@ impl ToolsPage {
                             .disabled(selected.is_empty())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.enqueue(&selected, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("tools-upgrade-all")
+                            .outline()
+                            .small()
+                            .label(format!("Upgrade All ({})", upgradable.len()))
+                            .disabled(upgradable.is_empty())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.upgrade(&upgradable, cx)
                             })),
                     )
                     .child(
@@ -449,7 +518,16 @@ impl ToolsPage {
                         .child(Spinner::new().xsmall().color(muted))
                         .when_some(running, |el, t| el.child(logo(t.id, 16., cx)))
                         .child(div().flex_1().child(match running {
-                            Some(t) => format!("Installing {} · {} of {total}", t.name, done + 1),
+                            Some(t) => format!(
+                                "{} {} · {} of {total}",
+                                if self.upgrades.contains(t.id) {
+                                    "Upgrading"
+                                } else {
+                                    "Installing"
+                                },
+                                t.name,
+                                done + 1
+                            ),
                             None => format!("{done} of {total} done"),
                         }))
                         .when(!self.queue.is_empty(), |el| {
@@ -497,10 +575,13 @@ impl ToolsPage {
         let found = self.found.get(id);
         let installed = self.installed(id);
         let busy = self.busy(id);
+        let newer = self.newer(id).cloned();
+        let upgrading = self.upgrades.contains(id);
 
         let (badge, color): (String, Hsla) = match (&state, found) {
             (Some(State::Queued { for_: Some(f) }), _) => (format!("Queued · for {f}"), muted),
             (Some(State::Queued { for_: None }), _) => ("Queued".into(), muted),
+            (Some(State::Installing), _) if upgrading => ("Upgrading…".into(), theme.warning),
             (Some(State::Installing), _) => ("Installing…".into(), theme.warning),
             (Some(State::Failed(_)), _) => ("Failed".into(), theme.danger),
             (Some(State::Skipped(need)), _) => (format!("Skipped · {need} missing"), theme.danger),
@@ -508,6 +589,15 @@ impl ToolsPage {
             (Some(State::Done), None) if !self.loading => {
                 ("Installed · restart shell".into(), theme.success)
             }
+            (
+                _,
+                Some(Found {
+                    version: Some(v), ..
+                }),
+            ) if newer.is_some() => (
+                format!("Installed · {v} → {}", newer.as_deref().unwrap_or_default()),
+                theme.info,
+            ),
             (_, Some(f)) => (
                 f.version
                     .as_ref()
@@ -523,7 +613,7 @@ impl ToolsPage {
             Some(State::Installing) => Button::new(("tool-busy", ix))
                 .ghost()
                 .xsmall()
-                .label("Installing")
+                .label(if upgrading { "Upgrading" } else { "Installing" })
                 .loading(true)
                 .disabled(true),
             Some(State::Queued { .. }) => Button::new(("tool-dequeue", ix))
@@ -537,6 +627,13 @@ impl ToolsPage {
                 .icon(Lucide::RotateCcw)
                 .label("Retry")
                 .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&[id], cx))),
+            _ if newer.is_some() => Button::new(("tool-upgrade", ix))
+                .primary()
+                .xsmall()
+                .icon(Lucide::CircleArrowUp)
+                .label("Upgrade")
+                .tooltip(tool.upgrade_command())
+                .on_click(cx.listener(move |this, _, _, cx| this.upgrade(&[id], cx))),
             _ if installed => Button::new(("tool-reinstall", ix))
                 .ghost()
                 .xsmall()
@@ -600,7 +697,11 @@ impl ToolsPage {
             .filter(|_| state == Some(State::Installing))
             .and_then(|l| l.last().cloned());
         let expanded = self.expanded.contains(id) && log.is_some();
-        let command = tool.install;
+        let command = if newer.is_some() || upgrading {
+            tool.upgrade_command()
+        } else {
+            tool.install
+        };
 
         v_flex()
             .px_3()
@@ -660,7 +761,11 @@ impl ToolsPage {
                                             .ghost()
                                             .xsmall()
                                             .icon(Lucide::Copy)
-                                            .tooltip("Copy Install Command")
+                                            .tooltip(if command == tool.install {
+                                                "Copy Install Command"
+                                            } else {
+                                                "Copy Upgrade Command"
+                                            })
                                             .on_click(move |_, _, cx| {
                                                 cx.write_to_clipboard(ClipboardItem::new_string(
                                                     command.to_string(),

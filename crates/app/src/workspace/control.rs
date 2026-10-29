@@ -99,6 +99,7 @@ impl Workspace {
             "tabs": tabs,
             "terminals": self.terminal.read(cx).describe(cx),
             "canvas_open": self.canvases.iter().any(|c| c.upgrade().is_some()),
+            "browser": self.browser.as_ref().and_then(|b| b.upgrade()).map(|b| b.read(cx).describe()),
         })
     }
 
@@ -319,6 +320,22 @@ impl Workspace {
                 let canvas = self.open_canvas(cx).ok_or("The canvas didn't open.")?;
                 Ok(Answer::Later(canvas.update(cx, |c, _| c.apply(op))))
             }
+            Command::Browser { op } => {
+                let open = self.browser.as_ref().and_then(|b| b.upgrade());
+                // Only opening a page or a screenshot brings the tab forward;
+                // other ops work with it in the background.
+                let browser = match open {
+                    Some(browser) if !op.shows_tab() || self.browser_active() => browser,
+                    _ => {
+                        self.open_browser(None, window, cx);
+                        self.browser
+                            .as_ref()
+                            .and_then(|b| b.upgrade())
+                            .ok_or("The browser didn't open.")?
+                    }
+                };
+                Ok(Answer::Later(browser.update(cx, |b, cx| b.apply(op, cx))))
+            }
         };
         cx.notify();
         result
@@ -334,6 +351,7 @@ impl Workspace {
             Page::Canvas => {
                 self.open_canvas(cx);
             }
+            Page::Browser => self.open_browser(None, window, cx),
             Page::Mcp => self.open_mcp_page(cx),
             Page::Tools => self.open_tools_page(window, cx),
             Page::Changelog => {

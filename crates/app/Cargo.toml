@@ -10,7 +10,7 @@ gpui-kit = { version = "=0.8.1", features = ["syntect"] }
 # Same versions/features as gpui-kit's syntect backend; see src/highlight.rs.
 syntect = { version = "5.3.0", default-features = false, features = ["parsing", "default-syntaxes", "regex-fancy"] }
 two-face = { version = "0.4.5", default-features = false, features = ["syntect-fancy"] }
-image = { version = "0.25", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png"] }
 sawit-core = { path = "../core" }
 # `sawit-mcp` is built into this binary; see `invoked_as_mcp` in main.rs.
 sawit-mcp = { path = "../mcp" }
@@ -20,10 +20,14 @@ objc2-av-foundation = { version = "0.3.2", default-features = false, features = 
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "objc2", "CFString", "CFCGTypes"] }
 objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMTime"] }
 objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "CVBuffer", "CVImageBuffer", "CVPixelBuffer"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDictionary", "NSError", "NSFileManager", "NSString", "NSURL", "NSValue", "NSObject"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDictionary", "NSError", "NSFileManager", "NSString", "NSURL", "NSValue", "NSObject", "NSData"] }
 tokio.workspace = true
 tokio-postgres.workspace = true
-wry = { version = "0.57", default-features = false, features = ["os-webview"] }
+wry = { version = "0.57", default-features = false, features = ["os-webview", "devtools"] }
+# Browser tab screenshots (WKWebView takeSnapshot → PNG); same versions as wry's.
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKSnapshotConfiguration"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSResponder", "NSView"] }
+block2 = "0.6"
 include_dir = "0.7"
 # The canvas bundle is embedded brotli-compressed (web/canvas/compress.mjs).
 brotli-decompressor = "6.2.0"

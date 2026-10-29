@@ -6871,6 +6871,7 @@ dependencies = [
 name = "sawit"
 version = "0.0.7"
 dependencies = [
+ "block2 0.6.2",
  "brotli-decompressor",
  "futures",
  "gpui-kit",
@@ -6878,11 +6879,13 @@ dependencies = [
  "image",
  "include_dir",
  "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
  "objc2-av-foundation",
  "objc2-core-foundation",
  "objc2-core-media",
  "objc2-core-video",
  "objc2-foundation 0.3.2",
+ "objc2-web-kit",
  "sawit-core",
  "sawit-mcp",
  "serde_json",
