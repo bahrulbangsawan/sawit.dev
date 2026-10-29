@@ -79,7 +79,7 @@ Sawit is a macOS developer workbench. These tools work without the Sawit app run
 - Git: status, log, diff, show, branches, stage/unstage, commit, switch.
 - Prompts: the prompt library (with {{variables}}).
 - Files: text search in a folder.
-- Dev tools: the Tools page catalog (Homebrew, Bun, uv, Claude Code, …), what is installed, installing with prerequisites (confirm=true).
+- Dev tools: the Tools page catalog (Homebrew, Bun, uv, Claude Code, …), what is installed and what has a newer release, installing with prerequisites and upgrading (confirm=true).
 - MCP servers: the MCP page catalog and the AI clients on this Mac; install or remove a server in a client's config.
 These control the running Sawit app (start it with launch_app; app_state shows windows, tabs and terminals):
 - app_*: open files/folders, show panels, layout, tabs, pages (canvas, MCP, tools, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
@@ -328,6 +328,7 @@ mod tests {
             // dev tools
             "list_dev_tools",
             "install_dev_tools",
+            "upgrade_dev_tools",
             // mcp servers
             "list_mcp_servers",
             "install_mcp_server",

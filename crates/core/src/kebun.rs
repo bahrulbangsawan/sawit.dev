@@ -2,7 +2,7 @@
 //! `sawit <db> [table] ["sql"]` like psql, `sawit list`, `sawit bakar`
 //! ("burn": stop dev servers or instances, like the `kill-dev` script),
 //! `sawit panen|backup|tanam` (export, `pg_dump`, CSV import) and
-//! `sawit pasang` (install developer tools).
+//! `sawit pasang|pupuk` (install or upgrade developer tools).
 //! The wording riffs on Indonesia's forest fires (karhutla) and the palm-oil
 //! plantations (kebun sawit) behind them.
 
@@ -37,6 +37,8 @@ const SUBCOMMANDS: &[&str] = &[
     "tanam",
     "install",
     "pasang",
+    "upgrade",
+    "pupuk",
 ];
 
 /// Rows printed per result set at most.
@@ -314,6 +316,35 @@ impl PasangArgs {
             );
         }
         Ok(PasangArgs { tools, yes })
+    }
+}
+
+/// `sawit pupuk [tool…] [-y]`: no tools means every outdated one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PupukArgs {
+    pub tools: Vec<String>,
+    pub yes: bool,
+}
+
+impl PupukArgs {
+    pub fn parse(args: &[&str]) -> Result<PupukArgs, String> {
+        let mut tools = Vec::new();
+        let mut yes = false;
+        for &arg in args {
+            match arg {
+                "-y" | "--yes" | "--ya" => yes = true,
+                _ if arg.starts_with('-') => {
+                    return Err(format!("opsi tak dikenal: {arg} (yang ada cuma -y)"));
+                }
+                _ if crate::dev_tools::find(arg).is_none() => {
+                    return Err(format!(
+                        "“{arg}” tidak ada di katalog bibit. Lihat `sawit list tools`."
+                    ));
+                }
+                _ => tools.push(arg.to_string()),
+            }
+        }
+        Ok(PupukArgs { tools, yes })
     }
 }
 
@@ -746,7 +777,10 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
         }
     }
     if what.shows(ListWhat::Tools) {
-        let found = crate::dev_tools::detect().await;
+        let (found, latest) = futures::join!(
+            crate::dev_tools::detect(),
+            crate::dev_tools::latest_versions()
+        );
         for category in crate::dev_tools::Category::ALL {
             ink.section(&format!("🧰 {}", category.title()));
             for t in crate::dev_tools::TOOLS
@@ -754,13 +788,19 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
                 .filter(|t| t.category == category)
             {
                 let state = match found.get(t.id) {
-                    Some(f) => ink.green(&format!(
-                        "terpasang{}",
-                        f.version
-                            .as_ref()
-                            .map(|v| format!(" {v}"))
-                            .unwrap_or_default()
-                    )),
+                    Some(f) => {
+                        let installed = ink.green(&format!(
+                            "terpasang{}",
+                            f.version
+                                .as_ref()
+                                .map(|v| format!(" {v}"))
+                                .unwrap_or_default()
+                        ));
+                        match crate::dev_tools::newer(t.id, &found, &latest) {
+                            Some(v) => format!("{installed} {}", ink.yellow(&format!("→ {v}"))),
+                            None => installed,
+                        }
+                    }
                     None => ink.gray("belum"),
                 };
                 println!("  {:<14} {:<22} {state}", t.id, clip(t.name, 22));
@@ -769,6 +809,10 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
         println!(
             "  {}",
             ink.gray("Pasang dengan `sawit pasang <id…>`; prasyaratnya ikut ditanam duluan.")
+        );
+        println!(
+            "  {}",
+            ink.gray("Yang bertanda → ada versi baru: `sawit pupuk` memupuk semuanya.")
         );
     }
     println!();
@@ -1245,6 +1289,98 @@ pub async fn pasang(args: PasangArgs) -> i32 {
     0
 }
 
+/// `sawit pupuk [tool…]`.
+pub async fn pupuk(args: PupukArgs) -> i32 {
+    use crate::dev_tools;
+    let ink = Ink::stdout();
+    ink.header(
+        "🧪 Pupuk Bibit (upgrade tools)",
+        "perintah upgrade tiap alat, atau skrip instalnya lagi",
+    );
+    let (found, latest) = futures::join!(dev_tools::detect(), dev_tools::latest_versions());
+    let wanted: Vec<&str> = args.tools.iter().map(|t| t.as_str()).collect();
+    let plan = dev_tools::upgrade_plan(&wanted, &found, &latest);
+    for id in wanted
+        .iter()
+        .filter(|id| !plan.iter().any(|t| t.id == **id))
+    {
+        if found.contains_key(id) {
+            ink.empty(&format!("{id} sudah versi terbaru"));
+        } else {
+            ink.empty(&format!(
+                "{id} belum terpasang. Tanam dulu: `sawit pasang {id}`"
+            ));
+        }
+    }
+    if plan.is_empty() {
+        ink.footer("Tidak ada yang perlu dipupuk. Kebun sudah subur.");
+        return 0;
+    }
+    ink.section(&format!("Bibit ({})", plan.len()));
+    for (ix, t) in plan.iter().enumerate() {
+        let from = found
+            .get(t.id)
+            .and_then(|f| f.version.clone())
+            .unwrap_or_else(|| "?".into());
+        let to = dev_tools::newer(t.id, &found, &latest).unwrap_or("?");
+        println!(
+            "  {} {:<14} {:<22} {}",
+            ink.gray(&format!("{:>3}.", ix + 1)),
+            t.id,
+            clip(&format!("{from} → {to}"), 22),
+            ink.gray(t.upgrade_command())
+        );
+    }
+    println!();
+    if !args.yes {
+        match confirm(&format!(
+            "Jalankan {} perintah upgrade di atas?",
+            plan.len()
+        )) {
+            Some(true) => {}
+            Some(false) => {
+                ink.footer("Batal. Pupuknya disimpan dulu.");
+                return 0;
+            }
+            None => {
+                println!(
+                    "  {} Tidak ada saksi (stdin bukan terminal). Tambahkan -y kalau memang mau memupuk.",
+                    ink.red("✗")
+                );
+                return 1;
+            }
+        }
+    }
+    let mut code = 0;
+    for tool in plan {
+        if tool.interactive {
+            // It may ask for a password, which can't be read here.
+            ink.warn(&format!(
+                "{} mungkin minta kata sandi. Jalankan sendiri:\n      {}",
+                tool.id,
+                tool.upgrade_command()
+            ));
+            code = 1;
+            continue;
+        }
+        println!("  {} {}", ink.yellow("⏳"), tool.name);
+        let gray = |line: String| println!("     {}", ink.gray(&clip(&line, 100)));
+        match dev_tools::run(tool, tool.upgrade_command(), gray).await {
+            Ok(()) => println!("  {} {} dipupuk", ink.green("✓"), tool.id),
+            Err(e) => {
+                println!("  {} {}: {e}", ink.red("✗"), tool.id);
+                code = 1;
+            }
+        }
+    }
+    ink.footer(if code == 0 {
+        "Selesai. Buka terminal baru supaya versinya ikut segar."
+    } else {
+        "Sebagian gagal tumbuh; lihat di atas."
+    });
+    code
+}
+
 /// Asks on the terminal; `None` when stdin isn't one.
 fn confirm(question: &str) -> Option<bool> {
     if !std::io::stdin().is_terminal() {
@@ -1551,9 +1687,31 @@ mod tests {
     }
 
     #[test]
+    fn pupuk_words() {
+        let id = crate::dev_tools::TOOLS[0].id;
+        assert_eq!(
+            PupukArgs::parse(&[]),
+            Ok(PupukArgs {
+                tools: vec![],
+                yes: false
+            })
+        );
+        assert_eq!(
+            PupukArgs::parse(&["--ya", id]),
+            Ok(PupukArgs {
+                tools: vec![id.into()],
+                yes: true
+            })
+        );
+        assert!(PupukArgs::parse(&["sawit-palsu"]).is_err());
+        assert!(PupukArgs::parse(&["--force"]).is_err());
+    }
+
+    #[test]
     fn job_words_are_not_databases() {
         assert_eq!(q(&["panen", "kyzn", "a.csv"]), None);
         assert_eq!(q(&["backup", "kyzn"]), None);
         assert_eq!(q(&["pasang", "bun"]), None);
+        assert_eq!(q(&["pupuk", "bun"]), None);
     }
 }

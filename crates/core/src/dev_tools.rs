@@ -609,6 +609,39 @@ pub async fn latest_versions() -> HashMap<&'static str, String> {
     .collect()
 }
 
+/// The newer release installed tool `id` can upgrade to.
+pub fn newer<'a>(
+    id: &str,
+    found: &HashMap<&'static str, Found>,
+    latest: &'a HashMap<&'static str, String>,
+) -> Option<&'a str> {
+    let installed = found.get(id)?.version.as_ref()?;
+    let latest = latest.get(id)?;
+    is_newer(latest, installed).then_some(latest.as_str())
+}
+
+/// The tools upgrading `wanted` runs, in catalog order: every installed
+/// tool with a newer release when `wanted` is empty, else each wanted tool
+/// that is installed and not known to be up to date.
+pub fn upgrade_plan(
+    wanted: &[&str],
+    found: &HashMap<&'static str, Found>,
+    latest: &HashMap<&'static str, String>,
+) -> Vec<&'static Tool> {
+    TOOLS
+        .iter()
+        .filter(|t| found.contains_key(t.id))
+        .filter(|t| {
+            if wanted.is_empty() {
+                newer(t.id, found, latest).is_some()
+            } else {
+                wanted.contains(&t.id)
+                    && (newer(t.id, found, latest).is_some() || !latest.contains_key(t.id))
+            }
+        })
+        .collect()
+}
+
 /// `latest` is a higher dotted version than `installed`. Pre-release and
 /// build suffixes ("-beta.1", "+abc") are ignored; missing parts count as 0.
 pub fn is_newer(latest: &str, installed: &str) -> bool {
@@ -790,6 +823,35 @@ mod tests {
         assert_eq!(tag_version("bun-v1.4.4").as_deref(), Some("1.4.4"));
         assert_eq!(tag_version("7.0.11").as_deref(), Some("7.0.11"));
         assert_eq!(tag_version("nightly"), None);
+    }
+
+    #[test]
+    fn upgrades() {
+        let at = |v: &str| Found {
+            path: PathBuf::from("/x"),
+            version: Some(v.into()),
+        };
+        // bun is behind, uv is current, deno publishes nothing readable.
+        let found = HashMap::from([
+            ("bun", at("1.0.0")),
+            ("uv", at("0.5.0")),
+            ("deno", at("2.0")),
+        ]);
+        let latest = HashMap::from([("bun", "1.1.0".to_string()), ("uv", "0.5.0".to_string())]);
+        assert_eq!(super::newer("bun", &found, &latest), Some("1.1.0"));
+        assert_eq!(super::newer("uv", &found, &latest), None);
+        assert_eq!(super::newer("pnpm", &found, &latest), None);
+        let ids = |p: Vec<&Tool>| p.iter().map(|t| t.id).collect::<Vec<_>>();
+        assert_eq!(ids(upgrade_plan(&[], &found, &latest)), ["bun"]);
+        // Named: current ones are skipped, unknown latest still runs, missing ones never.
+        assert_eq!(
+            ids(upgrade_plan(
+                &["uv", "deno", "pnpm", "bun"],
+                &found,
+                &latest
+            )),
+            ["bun", "deno"]
+        );
     }
 
     #[test]
