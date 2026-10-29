@@ -1,4 +1,5 @@
 mod assets;
+mod board;
 mod browser;
 mod canvas;
 mod changelog_page;
@@ -98,6 +99,11 @@ fn invoked_as_mcp() -> bool {
 }
 
 fn main() -> std::process::ExitCode {
+    // `RUST_LOG=sawit=debug` prints the debug log (the canvas's render times, …) on stderr. Without
+    // RUST_LOG no logger is installed, and log calls do nothing.
+    if std::env::var_os("RUST_LOG").is_some() {
+        let _ = env_logger::try_init();
+    }
     if invoked_as_mcp() {
         return sawit_mcp::main();
     }
