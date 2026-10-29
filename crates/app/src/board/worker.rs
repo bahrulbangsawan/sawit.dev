@@ -377,43 +377,52 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_display_p3_document_is_shown_in_srgb() {
-        let p3 = Color::from_rgba8(200, 100, 50, 255);
+    /// A Display P3 document whose page colour is `rgba` (P3 values), and the page.
+    fn p3_page([r, g, b, a]: [u8; 4]) -> (Arc<Document>, NodeId) {
         let mut doc = Document::new("File");
         doc.color_profile = ColorProfile::DisplayP3;
         let page = doc.first_page().unwrap();
         if let Some(NodeKind::Page { background, .. }) = doc.node_mut(page).map(|n| &mut n.kind) {
-            *background = p3;
+            *background = Color::from_rgba8(r, g, b, a);
         }
-        let doc = Arc::new(doc);
+        (Arc::new(doc), page)
+    }
+
+    #[test]
+    fn a_display_p3_document_is_shown_in_srgb() {
         let [r, g, b, _] = ColorProfile::DisplayP3
             .conversion_to(ColorProfile::Srgb)
-            .apply(p3)
+            .apply(Color::from_rgba8(200, 100, 50, 255))
             .to_rgba8();
         let srgb = [b, g, r, 255];
-        // The same values in sRGB would be another colour: the test can tell the two apart.
+        // The P3 values read as sRGB are far from that: even half the difference, which a page
+        // colour left unconverted under a half-transparent pixel would make, is more than the
+        // step or two that 8-bit conversions round by.
         assert!(
             srgb.iter()
                 .zip([50, 100, 200])
-                .any(|(c, p)| c.abs_diff(p) > 2)
+                .any(|(s, p)| s.abs_diff(p) > 8)
         );
+        let shows_srgb = |frame: &Frame| {
+            let drawn = pixel(frame, 5, 5);
+            assert!(
+                drawn.iter().zip(srgb).all(|(d, s)| d.abs_diff(s) <= 2),
+                "{drawn:?}, not {srgb:?}"
+            );
+        };
 
         let (worker, mut frames) = Worker::spawn();
-        // The page drawn by the renderer: its pixels are converted (8-bit, so within a step).
+        // An opaque page, drawn on its colour as the canvas draws it: the pixels are converted.
+        let (doc, page) = p3_page([200, 100, 50, 255]);
         worker.request(job(&doc, page, 1));
-        let frame = next_frame(&mut frames).expect("a frame");
-        let drawn = pixel(&frame, 5, 5);
-        assert!(
-            drawn.iter().zip(srgb).all(|(d, s)| d.abs_diff(s) <= 1),
-            "{drawn:?}, not {srgb:?}"
-        );
-        // Nothing drawn: the page colour shows through, converted as well.
-        let mut clear = job(&doc, page, 2);
-        clear.opts.background = None;
-        worker.request(clear);
-        let frame = next_frame(&mut frames).expect("a frame");
-        assert_eq!(pixel(&frame, 5, 5), srgb);
+        shows_srgb(&next_frame(&mut frames).expect("a frame"));
+        // A half-transparent page colour, which the renderer lays itself without a background of
+        // the job's: half of each pixel is the page colour behind it, converted as well.
+        let (doc, page) = p3_page([200, 100, 50, 128]);
+        let mut translucent = job(&doc, page, 2);
+        translucent.opts.background = None;
+        worker.request(translucent);
+        shows_srgb(&next_frame(&mut frames).expect("a frame"));
     }
 
     #[test]
