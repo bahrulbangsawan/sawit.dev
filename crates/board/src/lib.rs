@@ -3,5 +3,6 @@
 
 pub mod doc;
 pub mod store;
+pub mod view;
 
 pub use doc::{BoardDoc, BoardError, DocKind};
