@@ -13,7 +13,8 @@ use std::collections::HashMap;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use figcraft_color::Color;
-use figcraft_doc::{BoardItem, Document, Node, NodeId, NodeKind};
+use figcraft_doc::{BoardItem, Document, Node, NodeId, NodeKind, Routing};
+use figcraft_engine::board::BoardTool;
 use figcraft_engine::params::id_of;
 use figcraft_engine::{EngineError, Result as EngineResult, Session};
 use serde::{Deserialize, Serialize};
@@ -36,6 +37,32 @@ const SAME_POINT: f64 = 1e-9;
 /// The types a skeleton can have, for the note on one that has another.
 const TYPES: &str =
     "rectangle, ellipse, diamond, sticky, text, arrow, line, frame, image, freedraw";
+
+// What a skeleton leaves open is drawn the same on every board. FigCraft fills it in from the
+// session: a new shape's or sticky's colour, the colour of ink and a connector's routing from the
+// toolbar, and a sticky's author line from Preferences. In the app those are whatever the user
+// last picked and typed, in a headless session (the MCP server with no app running) they are the
+// defaults, so the same skeletons would come out differently by path and by the user's last click.
+// `apply` therefore names all of them (below), and `set_colors` applies the colours the skeleton
+// does name afterwards. Text is left alone: its default fill follows its page, not the toolbar.
+
+/// The colour of a shape or a sticky whose skeleton names none: the engine's default for the
+/// sticky tool (yellow), not the one the user has picked.
+fn default_fill() -> String {
+    BoardTool::default().sticky.to_css_hex()
+}
+
+/// The colour of ink whose skeleton names none: the engine's default for the marker (#1E1E1E).
+fn default_ink() -> String {
+    BoardTool::default().marker.to_css_hex()
+}
+
+/// How a connector runs: a straight line. The engine's own default is elbow, which draws a line or
+/// an arrow with free ends as a Z, so every diagonal line of an agent or of an Excalidraw scene
+/// would be bent. A straight one is today's arrow, edge to edge, and the spec's 2-point line.
+fn default_routing() -> &'static str {
+    Routing::Straight.id()
+}
 
 /// One element to draw.
 ///
@@ -119,6 +146,12 @@ pub struct Applied {
 /// `id` of this call first, then one already on the board, then a node id. An end that names
 /// nothing it can join stays free, at its own `x`/`y` or where the arrow is drawn. Elements with a
 /// `frameId` then move into that section, and keep their place on the page.
+///
+/// What a skeleton doesn't name looks the same on every board, whatever the user last picked in
+/// the toolbar or set in Preferences, so one call draws the same in the app as with no app: shapes
+/// and stickies in the engine's default sticky colour (yellow), stickies unsigned, ink in the
+/// engine's default marker colour, connectors straight. What it does name is applied on top of
+/// that (see [`set_colors`]).
 pub fn apply(
     board: &mut BoardDoc,
     items: &[Skeleton],
@@ -585,7 +618,7 @@ impl<'a> Maker<'a> {
             _ => "rectangle",
         };
         let (x, y) = self.at(item);
-        let mut args = json!({"shape": shape, "x": x, "y": y});
+        let mut args = json!({"shape": shape, "x": x, "y": y, "color": default_fill()});
         put(&mut args, "width", item.width);
         put(&mut args, "height", item.height);
         put(&mut args, "text", label_or_text(item));
@@ -596,7 +629,8 @@ impl<'a> Maker<'a> {
 
     fn sticky(&mut self, item: &Skeleton) -> EngineResult<NodeId> {
         let (x, y) = self.at(item);
-        let mut args = json!({"x": x, "y": y});
+        // `author: false`: a note an agent makes is not signed with the user's name.
+        let mut args = json!({"x": x, "y": y, "color": default_fill(), "author": false});
         put(&mut args, "text", label_or_text(item));
         let id = self.create("board.sticky", &args)?;
         self.colour(id, item)?;
@@ -721,7 +755,8 @@ impl<'a> Maker<'a> {
                 self.notes.push(note);
                 return Ok(None);
             }
-            let id = self.create("board.ink", &json!({"points": points}))?;
+            let args = json!({"points": points, "color": default_ink()});
+            let id = self.create("board.ink", &args)?;
             self.colour(id, item)?;
             return Ok(Some(id));
         }
@@ -762,8 +797,10 @@ impl<'a> Maker<'a> {
         } else {
             "none"
         };
-        let mut args =
-            json!({"from": from.json(), "to": to.json(), "startCap": "none", "endCap": end_cap});
+        let mut args = json!({
+            "from": from.json(), "to": to.json(), "style": default_routing(),
+            "startCap": "none", "endCap": end_cap,
+        });
         put(
             &mut args,
             "label",
@@ -948,6 +985,44 @@ mod tests {
     fn bounds_of(board: &BoardDoc, id: NodeId) -> [f64; 4] {
         let r = board.doc().unwrap().world_bounds(id).unwrap();
         [r.x0, r.y0, r.x1, r.y1]
+    }
+
+    /// A board whose user has picked other tools than the defaults and has given a name, as in
+    /// the app: the toolbar's sticky colour, shape, connector style and marker, and Preferences.
+    fn board_with_other_choices() -> BoardDoc {
+        let mut b = board();
+        let tool = &mut b.session.tool.board;
+        tool.sticky = palette("pink");
+        tool.shape = BoardShape::Diamond;
+        tool.routing = Routing::Curved;
+        tool.marker = css("#e03131").unwrap();
+        b.session.prefs.user_name = "Ada".into();
+        b
+    }
+
+    /// Every connector on the page (not the labels, which are layers of their own).
+    fn connectors(board: &BoardDoc) -> Vec<Connector> {
+        let doc = board.doc().unwrap();
+        layers(board)
+            .into_iter()
+            .filter_map(|id| match doc.node(id).unwrap().board.clone() {
+                Some(BoardItem::Connector(c)) => Some(c),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Both boards hold the same document: the same layers, each the same in every field.
+    fn assert_same_document(left: &BoardDoc, right: &BoardDoc) {
+        let (left, right) = (left.doc().unwrap(), right.doc().unwrap());
+        for (a, b) in left.nodes().zip(right.nodes()) {
+            assert_eq!(a, b, "layer {} ({}) differs", a.id, a.name);
+        }
+        assert_eq!(left.nodes().count(), right.nodes().count(), "layers");
+        assert!(
+            *left == *right,
+            "the layers are alike but the documents differ"
+        );
     }
 
     // The tests the brief asks for.
@@ -1705,6 +1780,94 @@ mod tests {
         // A colour the engine doesn't know is its error.
         assert!(set_colors(&mut b.session, shape, Some("banana"), None).is_err());
         assert!(set_colors(&mut b.session, NodeId(99_999), Some("pink"), None).is_err());
+    }
+
+    #[test]
+    fn what_is_drawn_does_not_depend_on_the_users_tools_or_name() {
+        let items = json!([
+            // None of these says what colour, which line or whose note.
+            {"type": "rectangle", "id": "r", "x": 0, "y": 0, "width": 160, "height": 80,
+             "label": {"text": "API"}},
+            {"type": "sticky", "id": "s", "x": 400, "y": 0, "text": "note"},
+            {"type": "rectangle", "x": 0, "y": 200, "width": 160, "height": 80,
+             "backgroundColor": "transparent"},
+            {"type": "ellipse", "x": 200, "y": 200, "width": 120, "height": 80},
+            {"type": "arrow", "x": 160, "y": 40, "start": {"id": "r"}, "end": {"id": "s"},
+             "label": {"text": "calls"}},
+            {"type": "line", "x": 0, "y": 400, "points": [[0, 0], [200, 120]]},
+            {"type": "arrow", "x": 300, "y": 400, "width": 100, "height": 60},
+            {"type": "line", "x": 0, "y": 600, "points": [[0, 0], [50, 0], [50, 50]]},
+            {"type": "freedraw", "x": 300, "y": 600, "points": [[0, 0], [30, 30], [60, 0]]},
+            {"type": "text", "x": 0, "y": 800, "text": "plain"},
+            {"type": "frame", "x": 600, "y": 0, "width": 300, "height": 200, "name": "Group"},
+            // What a skeleton does name is drawn as named, whatever the user picked.
+            {"type": "rectangle", "x": 600, "y": 300, "width": 160, "height": 80,
+             "backgroundColor": "blue", "strokeColor": "#e03131"},
+            {"type": "sticky", "x": 800, "y": 300, "text": "green", "backgroundColor": "green"},
+            {"type": "freedraw", "x": 600, "y": 500, "points": [[0, 0], [40, 40]],
+             "strokeColor": "#1971c2"},
+            {"type": "arrow", "x": 800, "y": 500, "width": 100, "strokeColor": "#2f9e44"},
+        ]);
+        let mut fresh = board();
+        let mut picked = board_with_other_choices();
+        let done = add(&mut fresh, items.clone());
+        assert_eq!(add(&mut picked, items), done, "the same ids and notes");
+        assert!(done.notes.is_empty(), "{:?}", done.notes);
+        assert_same_document(&fresh, &picked);
+
+        // And the look is the engine's own default on a fresh board, not the user's.
+        let tool = BoardTool::default();
+        let mut engine = board();
+        let made = engine
+            .execute(
+                "board.shape",
+                &json!({"shape": "rectangle", "x": 0, "y": 0}),
+            )
+            .unwrap();
+        let reference = made.get("id").and_then(id_of).unwrap();
+        for b in [&fresh, &picked] {
+            let at = |i| node(&done, i);
+            assert_eq!(fill(b, outline(b, at(0))), Some(tool.sticky), "a rectangle");
+            assert_eq!(fill(b, outline(b, at(3))), Some(tool.sticky), "an ellipse");
+            assert_eq!(fill(b, at(1)), Some(tool.sticky), "a sticky");
+            assert!(
+                matches!(board_item(b, at(1)), BoardItem::Sticky { author } if author.is_empty()),
+                "a sticky is not signed"
+            );
+            let sticky = b.doc().unwrap().node(at(1)).unwrap().children.len();
+            assert_eq!(sticky, 1, "it holds the note and no author line");
+            let transparent = outline(b, at(2));
+            assert!(b.doc().unwrap().node(transparent).unwrap().fills.is_empty());
+            assert_eq!(
+                stroke(b, transparent),
+                stroke(&engine, outline(&engine, reference)),
+                "a shape with no fill is outlined as the engine does by default"
+            );
+            for ink in [7, 8] {
+                assert_eq!(stroke(b, at(ink)), Some(tool.marker), "ink {ink}");
+            }
+            let lines = connectors(b);
+            assert_eq!(
+                lines.len(),
+                4,
+                "the joining arrow, the line and two free arrows"
+            );
+            assert!(
+                lines.iter().all(|c| c.routing == Routing::Straight),
+                "connectors are straight: {lines:?}"
+            );
+        }
+        assert_eq!(
+            fill(&picked, outline(&picked, node(&done, 11))),
+            Some(palette("blue"))
+        );
+        assert_eq!(
+            stroke(&picked, outline(&picked, node(&done, 11))),
+            css("#e03131")
+        );
+        assert_eq!(fill(&picked, node(&done, 12)), Some(palette("green")));
+        assert_eq!(stroke(&picked, node(&done, 13)), css("#1971c2"));
+        assert_eq!(stroke(&picked, node(&done, 14)), css("#2f9e44"));
     }
 
     #[test]
