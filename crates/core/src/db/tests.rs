@@ -709,7 +709,10 @@ fn connection_string_round_trips_settings() {
     assert_eq!(back, p);
     // Defaults add nothing.
     let plain = ConnProfile::new("localhost", 5432, "app", "me");
-    assert_eq!(plain.connection_string(), "postgres://me@localhost:5432/app");
+    assert_eq!(
+        plain.connection_string(),
+        "postgres://me@localhost:5432/app"
+    );
 }
 
 #[test]
@@ -744,7 +747,8 @@ fn row_query_builds_quoted_clauses() {
          AND r.\"note\" IS NULL AND r::text ILIKE '%x%' ESCAPE '!'"
     );
     assert_eq!(
-        q.order_sql("r", &["id".into(), "Created At".into()]).unwrap(),
+        q.order_sql("r", &["id".into(), "Created At".into()])
+            .unwrap(),
         "r.\"Created At\" DESC NULLS LAST, r.\"id\""
     );
     assert!(q.is_filtered());
@@ -754,4 +758,51 @@ fn row_query_builds_quoted_clauses() {
     assert!(!none.is_filtered());
     // Backslashes survive whatever standard_conforming_strings is.
     assert_eq!(quote_literal(r"a\b'c"), r"E'a\\b''c'");
+}
+
+#[test]
+fn bulk_changes_target_keys_or_the_query() {
+    let keys = RowTarget::Keys {
+        key: vec!["id".into()],
+        rows: vec![vec!["1".into()], vec!["o'k".into()]],
+    };
+    assert_eq!(
+        bulk_sql("public", "t", &keys, &BulkChange::Delete),
+        "DELETE FROM \"public\".\"t\" AS \"sawit row\" WHERE \"sawit row\".\"id\" IN ('1', 'o''k')"
+    );
+    let pair = RowTarget::Keys {
+        key: vec!["a".into(), "b".into()],
+        rows: vec![vec!["1".into(), "x".into()]],
+    };
+    assert_eq!(
+        bulk_sql(
+            "s",
+            "t",
+            &pair,
+            &BulkChange::Update {
+                column: "Note".into(),
+                value: None
+            }
+        ),
+        "UPDATE \"s\".\"t\" AS \"sawit row\" SET \"Note\" = NULL \
+         WHERE (\"sawit row\".\"a\", \"sawit row\".\"b\") IN (('1', 'x'))"
+    );
+    let none = RowTarget::Keys {
+        key: vec!["id".into()],
+        rows: vec![],
+    };
+    assert!(bulk_sql("s", "t", &none, &BulkChange::Delete).ends_with(" WHERE false"));
+    let all = RowTarget::Matching(RowQuery::default());
+    assert_eq!(
+        bulk_sql(
+            "s",
+            "t",
+            &all,
+            &BulkChange::Update {
+                column: "n".into(),
+                value: Some("5".into())
+            }
+        ),
+        "UPDATE \"s\".\"t\" AS \"sawit row\" SET \"n\" = '5'"
+    );
 }

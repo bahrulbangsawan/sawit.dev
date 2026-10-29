@@ -1,6 +1,10 @@
 //! Database sidebar: connections (from a URL, a project's .env, or a Sawit
-//! instance) and their schema → table/view → column, index and constraint
-//! tree, with a table-name filter and per-connection settings.
+//! instance) and their schema → tables / views / … → column, index and
+//! constraint tree, with a table-name filter and per-connection settings.
+//!
+//! Right-clicking a connection, schema or relation offers what to do with
+//! it: open, query, export its rows, back it up with `pg_dump`, import a CSV
+//! file, empty or delete it. Those run in the background and report here.
 
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -8,11 +12,13 @@ use std::rc::Rc;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sawit_core::db::{ConnProfile, RelKind, Relation};
+use sawit_core::db::{self, BackupScope, ConnProfile, ExportFormat, RelKind, Relation};
 
+use super::actions;
 use super::store::DbStore;
 use crate::servers::ServerStore;
 use crate::states::{Banner, Placeholder};
@@ -60,6 +66,10 @@ pub struct DatabasePanel {
     nodes: Rc<Vec<Node>>,
     scroll: UniformListScrollHandle,
     error: Option<String>,
+    /// Background jobs (backups, exports, imports, drops) still running.
+    jobs: Vec<String>,
+    /// How the last job ended; `true` for a failure.
+    notice: Option<(bool, String)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -99,6 +109,8 @@ impl DatabasePanel {
             nodes: Rc::default(),
             scroll: UniformListScrollHandle::new(),
             error: None,
+            jobs: Vec::new(),
+            notice: None,
             _subscriptions: subscriptions,
         }
     }
@@ -265,6 +277,542 @@ impl DatabasePanel {
     }
 }
 
+/// The relation a context menu acts on.
+#[derive(Debug, Clone)]
+struct Target {
+    profile: String,
+    schema: String,
+    name: String,
+    kind: RelKind,
+}
+
+impl Target {
+    fn qualified(&self) -> String {
+        format!(
+            "{}.{}",
+            db::quote_ident(&self.schema),
+            db::quote_ident(&self.name)
+        )
+    }
+}
+
+/// Background jobs and what the context menus run.
+impl DatabasePanel {
+    /// Shows `label` while `rx` runs, then how it ended; reloads the schema
+    /// of `refresh` after a success.
+    fn track<T: 'static>(
+        &mut self,
+        label: String,
+        rx: Option<futures::channel::oneshot::Receiver<sawit_core::Result<T>>>,
+        refresh: Option<String>,
+        done: impl FnOnce(T) -> String + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(rx) = rx else {
+            self.notice = Some((
+                true,
+                "Not connected. Reconnecting; try again in a moment.".into(),
+            ));
+            cx.notify();
+            return;
+        };
+        self.jobs.push(label.clone());
+        self.notice = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = rx.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(ix) = this.jobs.iter().position(|j| *j == label) {
+                    this.jobs.remove(ix);
+                }
+                this.notice = Some(match result {
+                    Ok(Ok(value)) => {
+                        if let Some(profile) = refresh {
+                            this.store
+                                .update(cx, |s, cx| s.refresh(&profile, cx))
+                                .detach();
+                        }
+                        (false, done(value))
+                    }
+                    Ok(Err(e)) => (true, format!("{label} failed. {e}")),
+                    Err(_) => (true, format!("{label} stopped unexpectedly. Try again.")),
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Asks where to save `name`, then calls `then` with the path.
+    fn save_as(
+        &mut self,
+        name: String,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, std::path::PathBuf, &mut Context<Self>) + 'static,
+    ) {
+        let picked = cx.prompt_for_new_path(&actions::save_dir(), Some(&name));
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(path))) = picked.await {
+                let _ = this.update(cx, |this, cx| then(this, path, cx));
+            }
+        })
+        .detach();
+    }
+
+    fn backup(
+        &mut self,
+        profile: String,
+        scope: BackupScope,
+        custom: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let base = match &scope {
+            BackupScope::Database => self
+                .store
+                .read(cx)
+                .profile(&profile)
+                .map(|p| p.database.clone())
+                .unwrap_or_else(|| "backup".into()),
+            BackupScope::Schema(schema) => schema.clone(),
+            BackupScope::Table { table, .. } => table.clone(),
+        };
+        let name = format!("{base}.{}", if custom { "dump" } else { "sql" });
+        self.save_as(name, cx, move |this, path, cx| {
+            let file = file_name(&path);
+            let binaries = this.servers.read(cx).binaries.clone();
+            let rx = actions::backup(&this.store, &profile, binaries, scope, path, cx);
+            this.track(
+                format!("Backing up {base}"),
+                rx,
+                None,
+                move |()| format!("Saved the backup to {file}."),
+                cx,
+            );
+        });
+    }
+
+    fn export(&mut self, target: Target, format: ExportFormat, cx: &mut Context<Self>) {
+        let name = format!("{}.{}", target.name, format.extension());
+        self.save_as(name, cx, move |this, path, cx| {
+            let file = file_name(&path);
+            let order = this
+                .store
+                .read(cx)
+                .relation(&target.profile, &target.schema, &target.name)
+                .map(|r| r.primary_key.clone())
+                .unwrap_or_default();
+            let rx = actions::export_relation(
+                &this.store,
+                &target.profile,
+                target.schema.clone(),
+                target.name.clone(),
+                order,
+                Default::default(),
+                format,
+                path,
+                Default::default(),
+                Default::default(),
+                cx,
+            );
+            this.track(
+                format!("Exporting {}", target.name),
+                rx,
+                None,
+                move |summary| {
+                    let rows = summary.rows;
+                    let rows = format!("{rows} row{}", if rows == 1 { "" } else { "s" });
+                    if summary.truncated {
+                        format!("Saved the first {rows} to {file}: Excel holds no more. Export as CSV for every row.")
+                    } else {
+                        format!("Saved {rows} to {file}.")
+                    }
+                },
+                cx,
+            );
+        });
+    }
+
+    fn import_csv(&mut self, target: Target, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(format!("Import into {}", target.name).into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                let rx = actions::import_csv(
+                    &this.store,
+                    &target.profile,
+                    target.schema.clone(),
+                    target.name.clone(),
+                    path,
+                    cx,
+                );
+                let table = target.name.clone();
+                this.track(
+                    format!("Importing into {table}"),
+                    rx,
+                    Some(target.profile.clone()),
+                    move |n| {
+                        format!(
+                            "Imported {n} row{} into {table}.",
+                            if n == 1 { "" } else { "s" }
+                        )
+                    },
+                    cx,
+                );
+            });
+        })
+        .detach();
+    }
+
+    /// Asks with `buttons` (the last cancels); answer `i` runs `sql[i]`.
+    #[allow(clippy::too_many_arguments)]
+    fn confirm_sql(
+        &mut self,
+        profile: String,
+        message: String,
+        detail: String,
+        buttons: Vec<&'static str>,
+        sql: Vec<String>,
+        label: String,
+        done: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let answer = window.prompt(PromptLevel::Warning, &message, Some(&detail), &buttons, cx);
+        cx.spawn(async move |this, cx| {
+            let Ok(choice) = answer.await else { return };
+            let Some(sql) = sql.into_iter().nth(choice) else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                let rx = actions::execute(&this.store, &profile, sql, cx);
+                this.track(label, rx, Some(profile.clone()), move |_| done, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn delete_relation(&mut self, t: Target, window: &mut Window, cx: &mut Context<Self>) {
+        let noun = kind_noun(t.kind);
+        self.confirm_sql(
+            t.profile.clone(),
+            format!("Delete the {noun} {}.{}?", t.schema, t.name),
+            "This can't be undone. If views or foreign keys depend on it, \
+             “Delete with Dependents” removes those too."
+                .into(),
+            vec!["Delete", "Delete with Dependents", "Cancel"],
+            vec![
+                db::drop_sql(&t.schema, &t.name, t.kind, false),
+                db::drop_sql(&t.schema, &t.name, t.kind, true),
+            ],
+            format!("Deleting {}", t.name),
+            format!("Deleted the {noun} {}.", t.name),
+            window,
+            cx,
+        );
+    }
+
+    fn empty_table(&mut self, t: Target, window: &mut Window, cx: &mut Context<Self>) {
+        self.confirm_sql(
+            t.profile.clone(),
+            format!("Delete every row in {}.{}?", t.schema, t.name),
+            "The table stays, empty. This can't be undone.".into(),
+            vec!["Empty Table", "Cancel"],
+            vec![db::truncate_sql(&t.schema, &t.name)],
+            format!("Emptying {}", t.name),
+            format!("Emptied {}.", t.name),
+            window,
+            cx,
+        );
+    }
+
+    fn refresh_matview(&mut self, t: Target, cx: &mut Context<Self>) {
+        let rx = actions::execute(
+            &self.store,
+            &t.profile,
+            db::refresh_matview_sql(&t.schema, &t.name),
+            cx,
+        );
+        let name = t.name.clone();
+        self.track(
+            format!("Refreshing {name}"),
+            rx,
+            None,
+            move |_| format!("Refreshed {name}."),
+            cx,
+        );
+    }
+}
+
+fn file_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// A menu item that runs `f` on the panel.
+fn panel_item(
+    label: impl Into<SharedString>,
+    icon: Option<Lucide>,
+    panel: &WeakEntity<DatabasePanel>,
+    f: impl Fn(&mut DatabasePanel, &mut Window, &mut Context<DatabasePanel>) + 'static,
+) -> PopupMenuItem {
+    let panel = panel.clone();
+    PopupMenuItem::new(label)
+        .when_some(icon, |item, icon| item.icon(icon))
+        .on_click(move |_, window, cx| {
+            let _ = panel.update(cx, |this, cx| f(this, window, cx));
+        })
+}
+
+fn profile_menu(
+    menu: PopupMenu,
+    panel: WeakEntity<DatabasePanel>,
+    name: String,
+    connected: bool,
+) -> PopupMenu {
+    let n = |_: ()| name.clone();
+    let menu = if connected {
+        let (sql, reload, b1, b2, off) = (n(()), n(()), n(()), n(()), n(()));
+        menu.item(panel_item(
+            "New SQL Editor",
+            Some(Lucide::SquareTerminal),
+            &panel,
+            move |_, _, cx| {
+                cx.emit(DbEvent::OpenSql {
+                    profile: sql.clone(),
+                    sql: None,
+                })
+            },
+        ))
+        .item(panel_item(
+            "Reload Schema",
+            Some(Lucide::RefreshCw),
+            &panel,
+            move |this, _, cx| {
+                this.store
+                    .update(cx, |s, cx| s.refresh(&reload, cx))
+                    .detach();
+            },
+        ))
+        .separator()
+        .item(panel_item(
+            "Back Up Database as SQL…",
+            Some(Lucide::Download),
+            &panel,
+            move |this, _, cx| this.backup(b1.clone(), BackupScope::Database, false, cx),
+        ))
+        .item(panel_item(
+            "Back Up Database for pg_restore…",
+            None,
+            &panel,
+            move |this, _, cx| this.backup(b2.clone(), BackupScope::Database, true, cx),
+        ))
+        .separator()
+        .item(panel_item(
+            "Disconnect",
+            Some(Lucide::Unplug),
+            &panel,
+            move |this, _, cx| {
+                this.store.update(cx, |s, cx| s.disconnect(&off, cx));
+            },
+        ))
+    } else {
+        let on = n(());
+        menu.item(panel_item(
+            "Connect",
+            Some(Lucide::Plug),
+            &panel,
+            move |this, _, cx| {
+                this.store.update(cx, |s, cx| s.connect(&on, cx));
+                this.expanded.insert(on.clone());
+                cx.notify();
+            },
+        ))
+    };
+    let settings = n(());
+    menu.item(panel_item(
+        "Connection Settings…",
+        Some(Lucide::Settings2),
+        &panel,
+        move |this, window, cx| this.open_settings(&settings, window, cx),
+    ))
+}
+
+fn schema_menu(
+    menu: PopupMenu,
+    panel: WeakEntity<DatabasePanel>,
+    profile: String,
+    schema: String,
+) -> PopupMenu {
+    let (p1, s1) = (profile.clone(), schema.clone());
+    let (p2, s2) = (profile.clone(), schema.clone());
+    let (p3, s3) = (profile, schema.clone());
+    menu.item(panel_item(
+        "Show Diagram",
+        Some(Lucide::Waypoints),
+        &panel,
+        move |_, _, cx| {
+            cx.emit(DbEvent::OpenDiagram {
+                profile: p1.clone(),
+                schema: s1.clone(),
+            })
+        },
+    ))
+    .separator()
+    .item(panel_item(
+        "Back Up Schema as SQL…",
+        Some(Lucide::Download),
+        &panel,
+        move |this, _, cx| this.backup(p2.clone(), BackupScope::Schema(s2.clone()), false, cx),
+    ))
+    .item(panel_item(
+        "Back Up Schema for pg_restore…",
+        None,
+        &panel,
+        move |this, _, cx| this.backup(p3.clone(), BackupScope::Schema(s3.clone()), true, cx),
+    ))
+    .separator()
+    .item(panel_item(
+        "Copy Name",
+        Some(Lucide::Copy),
+        &panel,
+        move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(db::quote_ident(&schema))),
+    ))
+}
+
+fn relation_menu(menu: PopupMenu, panel: WeakEntity<DatabasePanel>, t: Target) -> PopupMenu {
+    let noun = kind_noun(t.kind);
+    let is_table = t.kind == RelKind::Table;
+    let with = |f: fn(&mut DatabasePanel, Target, &mut Window, &mut Context<DatabasePanel>)| {
+        let t = t.clone();
+        move |this: &mut DatabasePanel, window: &mut Window, cx: &mut Context<DatabasePanel>| {
+            f(this, t.clone(), window, cx)
+        }
+    };
+    let mut menu = menu
+        .item(panel_item(
+            "Open",
+            Some(Lucide::Table),
+            &panel,
+            with(|_, t, _, cx| {
+                cx.emit(DbEvent::OpenTable {
+                    profile: t.profile,
+                    schema: t.schema,
+                    table: t.name,
+                })
+            }),
+        ))
+        .item(panel_item(
+            "Query in SQL Editor",
+            Some(Lucide::SquareTerminal),
+            &panel,
+            with(|_, t, _, cx| {
+                let sql = format!("SELECT *\nFROM {}\nLIMIT 100;", t.qualified());
+                cx.emit(DbEvent::OpenSql {
+                    profile: t.profile,
+                    sql: Some(sql),
+                })
+            }),
+        ))
+        .separator()
+        .item(panel_item(
+            "Download as CSV…",
+            Some(Lucide::FileText),
+            &panel,
+            with(|this, t, _, cx| this.export(t, ExportFormat::Csv, cx)),
+        ))
+        .item(panel_item(
+            "Download as Excel…",
+            Some(Lucide::FileSpreadsheet),
+            &panel,
+            with(|this, t, _, cx| this.export(t, ExportFormat::Xlsx, cx)),
+        ));
+    if is_table {
+        menu = menu.item(panel_item(
+            "Import CSV…",
+            Some(Lucide::Upload),
+            &panel,
+            with(|this, t, _, cx| this.import_csv(t, cx)),
+        ));
+    }
+    menu = menu
+        .separator()
+        .item(panel_item(
+            "Back Up as SQL…",
+            Some(Lucide::Download),
+            &panel,
+            with(|this, t, _, cx| {
+                let scope = BackupScope::Table {
+                    schema: t.schema,
+                    table: t.name,
+                };
+                this.backup(t.profile, scope, false, cx)
+            }),
+        ))
+        .item(panel_item(
+            "Back Up for pg_restore…",
+            None,
+            &panel,
+            with(|this, t, _, cx| {
+                let scope = BackupScope::Table {
+                    schema: t.schema,
+                    table: t.name,
+                };
+                this.backup(t.profile, scope, true, cx)
+            }),
+        ));
+    if t.kind == RelKind::MaterializedView {
+        menu = menu.item(panel_item(
+            "Refresh Materialized View",
+            Some(Lucide::RefreshCw),
+            &panel,
+            with(|this, t, _, cx| this.refresh_matview(t, cx)),
+        ));
+    }
+    let qualified = t.qualified();
+    menu = menu
+        .separator()
+        .item(panel_item(
+            "Copy Name",
+            Some(Lucide::Copy),
+            &panel,
+            move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(qualified.clone())),
+        ))
+        .separator();
+    if is_table {
+        menu = menu.item(panel_item(
+            "Empty Table…",
+            Some(Lucide::Eraser),
+            &panel,
+            with(|this, t, window, cx| this.empty_table(t, window, cx)),
+        ));
+    }
+    menu.item(panel_item(
+        format!("Delete {}…", capitalize(noun)),
+        Some(Lucide::Trash),
+        &panel,
+        with(|this, t, window, cx| this.delete_relation(t, window, cx)),
+    ))
+}
+
+fn capitalize(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
 /// The Connection Settings form for one profile.
 struct SettingsForm {
     profile: String,
@@ -275,6 +823,41 @@ struct SettingsForm {
     /// "Remove" was clicked once; the next click removes.
     confirm_remove: bool,
     _subscriptions: Vec<Subscription>,
+}
+
+/// The sections a schema's relations are listed in, in this order.
+const KIND_ORDER: [RelKind; 4] = [
+    RelKind::Table,
+    RelKind::View,
+    RelKind::MaterializedView,
+    RelKind::Foreign,
+];
+
+fn kind_label(kind: RelKind) -> &'static str {
+    match kind {
+        RelKind::Table => "Tables",
+        RelKind::View => "Views",
+        RelKind::MaterializedView => "Materialized Views",
+        RelKind::Foreign => "Foreign Tables",
+    }
+}
+
+/// "table", "view", … for menus and prompts.
+fn kind_noun(kind: RelKind) -> &'static str {
+    match kind {
+        RelKind::Table => "table",
+        RelKind::View => "view",
+        RelKind::MaterializedView => "materialized view",
+        RelKind::Foreign => "foreign table",
+    }
+}
+
+fn kind_icon(kind: RelKind) -> Lucide {
+    match kind {
+        RelKind::Table | RelKind::Foreign => Lucide::Table,
+        RelKind::View => Lucide::Eye,
+        RelKind::MaterializedView => Lucide::Layers,
+    }
 }
 
 /// The collapsible groups under a table, after its columns.
@@ -318,6 +901,13 @@ pub enum Node {
         name: String,
         open: bool,
         count: usize,
+    },
+    /// "Tables", "Views", … under a schema; open unless collapsed.
+    Kind {
+        key: String,
+        kind: RelKind,
+        count: usize,
+        open: bool,
     },
     Relation {
         key: String,
@@ -463,21 +1053,43 @@ pub fn flatten(store: &DbStore, expanded: &HashSet<String>, query: &str) -> Vec<
             if !sopen {
                 continue;
             }
-            for rel in matching {
-                let rkey = format!("{skey}\u{0}{}", rel.name);
-                // Columns of a relation the role cannot read stay hidden too.
-                let ropen = rel.readable && expanded.contains(&rkey);
-                out.push(Node::Relation {
-                    key: rkey.clone(),
-                    profile: name.clone(),
-                    schema: schema.name.clone(),
-                    name: rel.name.clone(),
-                    kind: rel.kind,
-                    open: ropen,
-                    readable: rel.readable,
+            for kind in KIND_ORDER {
+                let of_kind: Vec<&Relation> = matching
+                    .iter()
+                    .copied()
+                    .filter(|r| r.kind == kind)
+                    .collect();
+                if of_kind.is_empty() {
+                    continue;
+                }
+                // Sections start open; the key marks one collapsed.
+                let kkey = format!("{skey}\u{0}\u{1}{}", kind_label(kind));
+                let kopen = !query.is_empty() || !expanded.contains(&kkey);
+                out.push(Node::Kind {
+                    key: kkey,
+                    kind,
+                    count: of_kind.len(),
+                    open: kopen,
                 });
-                if ropen {
-                    relation_children(&rkey, rel, expanded, &mut out);
+                if !kopen {
+                    continue;
+                }
+                for rel in of_kind {
+                    let rkey = format!("{skey}\u{0}{}", rel.name);
+                    // Columns of a relation the role cannot read stay hidden too.
+                    let ropen = rel.readable && expanded.contains(&rkey);
+                    out.push(Node::Relation {
+                        key: rkey.clone(),
+                        profile: name.clone(),
+                        schema: schema.name.clone(),
+                        name: rel.name.clone(),
+                        kind: rel.kind,
+                        open: ropen,
+                        readable: rel.readable,
+                    });
+                    if ropen {
+                        relation_children(&rkey, rel, expanded, &mut out);
+                    }
                 }
             }
         }
@@ -618,6 +1230,11 @@ impl DatabasePanel {
                             cx.notify();
                         }
                     }))
+                    .context_menu({
+                        let (weak, name, connected) =
+                            (cx.entity().downgrade(), name.clone(), *connected);
+                        move |menu, _, _| profile_menu(menu, weak.clone(), name.clone(), connected)
+                    })
                     .into_any_element()
             }
             Node::Error { message } => {
@@ -645,6 +1262,7 @@ impl DatabasePanel {
                 count,
             } => {
                 let k = key.clone();
+                let node_profile = profile.clone();
                 let (profile, schema) = (profile.clone(), name.clone());
                 row(
                     ElementId::Name(format!("db-schema\u{0}{key}").into()),
@@ -677,7 +1295,36 @@ impl DatabasePanel {
                         })),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| this.toggle(k.clone(), cx)))
+                .context_menu({
+                    let weak = cx.entity().downgrade();
+                    let (profile, schema) = (node_profile.clone(), name.clone());
+                    move |menu, _, _| {
+                        schema_menu(menu, weak.clone(), profile.clone(), schema.clone())
+                    }
+                })
                 .into_any_element()
+            }
+            Node::Kind {
+                key,
+                kind,
+                count,
+                open,
+            } => {
+                let k = key.clone();
+                row(ElementId::Name(format!("db-kind\u{0}{key}").into()), 2, cx)
+                    .text_color(muted)
+                    .child(
+                        Icon::new(if *open {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .xsmall(),
+                    )
+                    .child(div().text_xs().font_semibold().child(kind_label(*kind)))
+                    .child(div().text_xs().child(count.to_string()))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(k.clone(), cx)))
+                    .into_any_element()
             }
             Node::Relation {
                 key,
@@ -689,18 +1336,14 @@ impl DatabasePanel {
                 readable,
             } => {
                 let id = |part: &str| ElementId::Name(format!("{part}\u{0}{key}").into());
-                let icon = match kind {
-                    RelKind::Table | RelKind::Foreign => Icon::new(Lucide::Table),
-                    RelKind::View => Icon::new(Lucide::Eye),
-                    RelKind::MaterializedView => Icon::new(Lucide::Layers),
-                };
+                let icon = Icon::new(kind_icon(*kind));
                 if !readable {
                     // Disabled: nothing to open, the tooltip says why.
                     return h_flex()
                         .id(id("db-rel"))
                         .w_full()
                         .h(px(ROW_HEIGHT))
-                        .pl(px(8. + 2. * 12.))
+                        .pl(px(8. + 3. * 12.))
                         .pr_1()
                         .gap_1p5()
                         .text_sm()
@@ -720,8 +1363,14 @@ impl DatabasePanel {
                         .into_any_element();
                 }
                 let toggle_key = key.clone();
+                let target = Target {
+                    profile: profile.clone(),
+                    schema: schema.clone(),
+                    name: name.clone(),
+                    kind: *kind,
+                };
                 let (profile, schema, table) = (profile.clone(), schema.clone(), name.clone());
-                row(id("db-rel"), 2, cx)
+                row(id("db-rel"), 3, cx)
                     .child(
                         Button::new(id("db-rel-toggle"))
                             .ghost()
@@ -745,6 +1394,10 @@ impl DatabasePanel {
                             table: table.clone(),
                         });
                     }))
+                    .context_menu({
+                        let weak = cx.entity().downgrade();
+                        move |menu, _, _| relation_menu(menu, weak.clone(), target.clone())
+                    })
                     .into_any_element()
             }
             Node::Column {
@@ -752,14 +1405,27 @@ impl DatabasePanel {
                 name,
                 detail,
                 primary,
-            } => row(ElementId::Name(format!("db-col\u{0}{key}").into()), 4, cx)
+            } => row(ElementId::Name(format!("db-col\u{0}{key}").into()), 5, cx)
                 .cursor_default()
                 // The name keeps its room; the type truncates first.
-                .child(div().flex_shrink_0().max_w(relative(0.7)).truncate().child(name.clone()))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .max_w(relative(0.7))
+                        .truncate()
+                        .child(name.clone()),
+                )
                 .when(*primary, |el| {
                     el.child(Icon::new(Lucide::KeyRound).xsmall().text_color(muted))
                 })
-                .child(div().min_w_0().text_xs().text_color(muted).truncate().child(detail.clone()))
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(muted)
+                        .truncate()
+                        .child(detail.clone()),
+                )
                 .into_any_element(),
             Node::Group {
                 key,
@@ -769,7 +1435,7 @@ impl DatabasePanel {
             } => {
                 let k = key.clone();
                 let empty = *count == 0;
-                row(ElementId::Name(format!("db-group\u{0}{key}").into()), 4, cx)
+                row(ElementId::Name(format!("db-group\u{0}{key}").into()), 5, cx)
                     .text_color(muted)
                     .child(
                         Icon::new(if *open {
@@ -803,10 +1469,16 @@ impl DatabasePanel {
                 ..
             } => {
                 let full: SharedString = definition.clone().into();
-                row(ElementId::Name(format!("db-item\u{0}{key}").into()), 6, cx)
+                row(ElementId::Name(format!("db-item\u{0}{key}").into()), 7, cx)
                     .cursor_default()
                     .child(div().truncate().child(name.clone()))
-                    .child(div().text_xs().text_color(muted).flex_shrink_0().child(detail.clone()))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .flex_shrink_0()
+                            .child(detail.clone()),
+                    )
                     .tooltip(move |window, cx| {
                         gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(window, cx)
                     })
@@ -898,7 +1570,9 @@ impl DatabasePanel {
                                 .icon(Lucide::Trash)
                                 .label(if confirm { "Confirm Remove" } else { "Remove" })
                                 .tooltip("Removes the connection and its Keychain password")
-                                .on_click(cx.listener(|this, _, _, cx| this.remove_from_settings(cx))),
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.remove_from_settings(cx)),
+                                ),
                         ),
                 )
                 .into_any_element(),
@@ -916,7 +1590,10 @@ impl Render for DatabasePanel {
         // Something is loaded to search, and nothing in it matches.
         let no_match = !query.is_empty()
             && !store.schemas.is_empty()
-            && !self.nodes.iter().any(|n| matches!(n, Node::Relation { .. }));
+            && !self
+                .nodes
+                .iter()
+                .any(|n| matches!(n, Node::Relation { .. }));
         let settings = self.render_settings(cx);
 
         v_flex()
@@ -997,6 +1674,20 @@ impl Render for DatabasePanel {
             .when_some(self.error.clone(), |el, e| {
                 el.child(Banner::error("db-error", e).on_dismiss(cx.listener(|this, _, _, cx| {
                     this.error = None;
+                    cx.notify();
+                })))
+            })
+            .children(self.jobs.iter().enumerate().map(|(ix, job)| {
+                Banner::info(("db-job", ix), format!("{job}…"))
+            }))
+            .when_some(self.notice.clone(), |el, (failed, message)| {
+                let banner = if failed {
+                    Banner::error("db-notice", message)
+                } else {
+                    Banner::info("db-notice", message)
+                };
+                el.child(banner.on_dismiss(cx.listener(|this, _, _, cx| {
+                    this.notice = None;
                     cx.notify();
                 })))
             })
@@ -1131,6 +1822,7 @@ mod tests {
                 Node::Profile { name, .. } => format!("p:{name}"),
                 Node::Error { .. } => "error".into(),
                 Node::Schema { name, .. } => format!("s:{name}"),
+                Node::Kind { kind, .. } => format!("k:{}", super::kind_label(*kind)),
                 Node::Relation { name, .. } => format!("r:{name}"),
                 Node::Column { name, .. } => format!("c:{name}"),
                 Node::Group { facet, count, .. } => format!("g:{}:{count}", facet.label()),
@@ -1158,6 +1850,7 @@ mod tests {
                 format!("p:{name}"),
                 "s:audit".into(),
                 "s:public".into(),
+                "k:Tables".into(),
                 "r:users".into(),
                 "r:secret".into(),
             ]
@@ -1259,7 +1952,12 @@ mod tests {
         // `audit` starts closed but opens for a match; `public` has none.
         assert_eq!(
             names(&flatten(&store, &expanded, " LO ")),
-            vec![format!("p:{name}"), "s:audit".into(), "r:log".into()]
+            vec![
+                format!("p:{name}"),
+                "s:audit".into(),
+                "k:Tables".into(),
+                "r:log".into()
+            ]
         );
         assert_eq!(
             names(&flatten(&store, &expanded, "zzz")),
@@ -1288,7 +1986,7 @@ mod tests {
         let mut expanded = HashSet::from([name.clone(), rkey.clone()]);
         let lines = names(&flatten(&store, &expanded, ""));
         assert_eq!(
-            lines[3..7],
+            lines[4..8],
             ["r:users", "c:id", "g:Indexes:1", "g:Constraints:1"].map(String::from)
         );
         expanded.insert(format!("{rkey}\u{0}Indexes"));
@@ -1297,7 +1995,11 @@ mod tests {
             n,
             Node::Item { facet: Facet::Indexes, detail, .. } if detail == "primary btree"
         )));
-        assert!(nodes.iter().any(|n| matches!(n, Node::Column { primary: true, .. })));
+        assert!(
+            nodes
+                .iter()
+                .any(|n| matches!(n, Node::Column { primary: true, .. }))
+        );
     }
 
     #[test]
@@ -1310,6 +2012,46 @@ mod tests {
             !flatten(&store, &expanded, "")
                 .iter()
                 .any(|n| matches!(n, Node::Group { .. }))
+        );
+    }
+
+    #[test]
+    fn relations_are_listed_by_kind_in_collapsible_sections() {
+        let (mut store, name) = store();
+        let public = &mut store.schemas.get_mut(&name).unwrap()[1];
+        public.relations[1].kind = RelKind::View;
+        public.relations.push(Relation {
+            kind: RelKind::MaterializedView,
+            ..rel("totals", true)
+        });
+        public.relations.push(rel("accounts", true));
+        let mut expanded = HashSet::from([name.clone()]);
+        let lines = names(&flatten(&store, &expanded, ""));
+        assert_eq!(
+            lines[3..],
+            [
+                "k:Tables",
+                "r:users",
+                "r:accounts",
+                "k:Views",
+                "r:secret",
+                "k:Materialized Views",
+                "r:totals"
+            ]
+            .map(String::from)
+        );
+        // Collapsing a section hides its relations only.
+        expanded.insert(format!("{name}\u{0}public\u{0}\u{1}Tables"));
+        let lines = names(&flatten(&store, &expanded, ""));
+        assert_eq!(
+            lines[3..6],
+            ["k:Tables", "k:Views", "r:secret"].map(String::from)
+        );
+        // A filter opens every section with a match.
+        let lines = names(&flatten(&store, &expanded, "acc"));
+        assert_eq!(
+            lines[1..],
+            ["s:public", "k:Tables", "r:accounts"].map(String::from)
         );
     }
 }

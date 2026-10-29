@@ -6,27 +6,40 @@
 //!
 //! Sorting (a column header), filters and the row search run on the server,
 //! so they cover every row, not only the page shown.
+//!
+//! Rows export to CSV or Excel: the page shown, or every row the query
+//! matches (streamed over a connection of its own). On a table with a primary
+//! key, rows can be ticked (on this page, across pages, or all that match)
+//! for a bulk update or delete over the read-write connection.
 
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use futures::channel::oneshot;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::searchable_list::SearchableVec;
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sawit_core::db::{self, FilterOp, ResultSet, RowCount, RowFilter, RowQuery, SortDir};
+use sawit_core::db::{
+    self, BulkChange, ExportFormat, ExportSummary, FilterOp, RelKind, ResultSet, RowCount,
+    RowFilter, RowQuery, RowTarget, SortDir,
+};
 use tokio_postgres::Client;
 
 use super::DbEvent;
 use super::store::DbStore;
 use crate::rt;
-use crate::states::Placeholder;
+use crate::states::{Banner, Placeholder};
 
 /// Rows per page (the most a page ever shows).
 pub const PAGE_SIZE: u64 = 50;
@@ -61,6 +74,42 @@ impl FilterRow {
         let value = self.value.read(cx).value().to_string();
         (!op.needs_value() || !value.is_empty()).then_some(RowFilter { column, op, value })
     }
+}
+
+/// Rows ticked for a bulk change, by primary-key values (kept across pages).
+#[derive(Debug, Default, Clone)]
+struct Selection {
+    rows: BTreeSet<Vec<String>>,
+    /// Every row the current query matches, ticked or not.
+    all: bool,
+}
+
+impl Selection {
+    fn is_empty(&self) -> bool {
+        !self.all && self.rows.is_empty()
+    }
+}
+
+/// An export of every matching row, writing in the background.
+struct Exporting {
+    format: ExportFormat,
+    rows: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+}
+
+/// The "set a column to a value" form of a bulk update.
+struct UpdateForm {
+    column: Entity<ColumnSelect>,
+    value: Entity<InputState>,
+    null: bool,
+    _subscription: Subscription,
+}
+
+/// How often the export's row count refreshes.
+const PROGRESS_TICK: Duration = Duration::from_millis(250);
+
+fn plural(n: u64, one: &str) -> String {
+    format!("{n} {one}{}", if n == 1 { "" } else { "s" })
 }
 
 /// Which page is shown and what is known about the total.
@@ -165,6 +214,16 @@ pub struct TableView {
     counted: bool,
     /// Column names shown last, for the filter's column list.
     columns: Vec<String>,
+    selection: Selection,
+    /// Key values of the rows shown, so ticks are read without the grid
+    /// (whose cells ask this view while it draws them).
+    shown_keys: Vec<Vec<String>>,
+    updating: Option<UpdateForm>,
+    /// A bulk update or delete is running.
+    changing: bool,
+    exporting: Option<Exporting>,
+    /// Outcome of the last export or bulk change; `true` for a failure.
+    notice: Option<(bool, String)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -188,8 +247,10 @@ impl TableView {
             }
         });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search all columns"));
-        let on_search = cx.subscribe_in(&search, window, |this, _, event: &InputEvent, window, cx| {
-            match event {
+        let on_search = cx.subscribe_in(
+            &search,
+            window,
+            |this, _, event: &InputEvent, window, cx| match event {
                 InputEvent::PressEnter { .. } => this.apply_search(window, cx),
                 InputEvent::Change => {
                     this.search_rev += 1;
@@ -205,8 +266,8 @@ impl TableView {
                     .detach();
                 }
                 _ => {}
-            }
-        });
+            },
+        );
         let mut this = Self {
             title,
             db,
@@ -231,6 +292,12 @@ impl TableView {
             show_filters: false,
             counted: false,
             columns: Vec::new(),
+            selection: Selection::default(),
+            shown_keys: Vec::new(),
+            updating: None,
+            changing: false,
+            exporting: None,
+            notice: None,
             _subscriptions: vec![observe, on_search],
         };
         this.reload(window, cx);
@@ -395,7 +462,9 @@ impl TableView {
                         this.prefetch(cx);
                     }
                     Ok(Err(e)) => this.error = Some(e.to_string()),
-                    Err(_) => this.error = Some("The query stopped unexpectedly. Try again.".into()),
+                    Err(_) => {
+                        this.error = Some("The query stopped unexpectedly. Try again.".into())
+                    }
                 }
                 cx.notify();
             });
@@ -452,19 +521,33 @@ impl TableView {
             self.columns = set.columns.clone();
         }
         let first_row = self.pager.offset();
-        let delegate = ResultDelegate::numbered(set, first_row)
-            .sortable(self.query.sort.clone(), cx.entity().downgrade());
+        let key = self.key(cx);
+        let view = cx.entity().downgrade();
+        let mut delegate = ResultDelegate::numbered(set, first_row)
+            .sortable(self.query.sort.clone(), view.clone());
+        if let Some(key) = key {
+            delegate = delegate.pickable(&key, view);
+        }
+        self.shown_keys = delegate.page_keys();
         self.grid = Some(cx.new(|cx| TableState::new(delegate, window, cx)));
     }
 
     /// Loads the first page again with the current query.
     fn requery(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // "All matching" and ticks made under another filter would mislead.
+        self.selection = Selection::default();
         self.pager.page = 0;
         self.reload(window, cx);
     }
 
     /// From a column header: descending, then ascending, then the key order.
-    fn set_sort(&mut self, column: String, sort: ColumnSort, window: &mut Window, cx: &mut Context<Self>) {
+    fn set_sort(
+        &mut self,
+        column: String,
+        sort: ColumnSort,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.query.sort = match sort {
             ColumnSort::Ascending => Some((column, SortDir::Asc)),
             ColumnSort::Descending => Some((column, SortDir::Desc)),
@@ -504,10 +587,14 @@ impl TableView {
         let first = (!columns.is_empty()).then(|| IndexPath::new(0));
         let column = cx.new(|cx| ColumnSelect::new(SearchableVec::new(columns), first, window, cx));
         let ops: Vec<&'static str> = FilterOp::ALL.iter().map(|op| op.label()).collect();
-        let op = cx.new(|cx| OpSelect::new(SearchableVec::new(ops), Some(IndexPath::new(0)), window, cx));
+        let op = cx
+            .new(|cx| OpSelect::new(SearchableVec::new(ops), Some(IndexPath::new(0)), window, cx));
         let value = cx.new(|cx| InputState::new(window, cx).placeholder("Value"));
         let subscriptions = vec![
-            cx.subscribe(&op, |_, _, _: &SelectEvent<SearchableVec<&'static str>>, cx| cx.notify()),
+            cx.subscribe(
+                &op,
+                |_, _, _: &SelectEvent<SearchableVec<&'static str>>, cx| cx.notify(),
+            ),
             cx.subscribe_in(&value, window, |this, _, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::PressEnter { .. }) {
                     this.apply_filters(window, cx);
@@ -562,6 +649,451 @@ impl TableView {
     }
 }
 
+/// Selection and bulk changes.
+impl TableView {
+    /// The primary key rows are ticked by; `None` for views and keyless
+    /// tables, which can't be changed row by row.
+    fn key(&self, cx: &App) -> Option<Vec<String>> {
+        let relation = self
+            .db
+            .read(cx)
+            .relation(&self.profile, &self.schema, &self.table);
+        if relation.is_some_and(|r| r.kind != RelKind::Table) {
+            return None;
+        }
+        self.order_by.clone().filter(|k| !k.is_empty())
+    }
+
+    fn page_keys(&self) -> Vec<Vec<String>> {
+        self.shown_keys.clone()
+    }
+
+    fn is_picked(&self, key: &[String]) -> bool {
+        self.selection.all || self.selection.rows.contains(key)
+    }
+
+    /// Every row on this page is ticked.
+    fn page_picked(&self) -> bool {
+        let keys = self.page_keys();
+        !keys.is_empty() && keys.iter().all(|k| self.is_picked(k))
+    }
+
+    /// The grid draws ticks from this view, so it redraws with it.
+    fn selection_changed(&mut self, cx: &mut Context<Self>) {
+        if let Some(grid) = &self.grid {
+            grid.update(cx, |_, cx| cx.notify());
+        }
+        cx.notify();
+    }
+
+    fn pick_row(&mut self, key: Vec<String>, on: bool, cx: &mut Context<Self>) {
+        if self.selection.all && !on {
+            // Unticking one of "all": keep the rest of this page ticked.
+            self.selection.all = false;
+            self.selection.rows = self.page_keys().into_iter().collect();
+        }
+        if on {
+            self.selection.rows.insert(key);
+        } else {
+            self.selection.rows.remove(&key);
+        }
+        self.selection_changed(cx);
+    }
+
+    fn pick_page(&mut self, on: bool, cx: &mut Context<Self>) {
+        let keys = self.page_keys();
+        if on {
+            self.selection.rows.extend(keys);
+        } else {
+            self.selection.all = false;
+            for k in &keys {
+                self.selection.rows.remove(k);
+            }
+        }
+        self.selection_changed(cx);
+    }
+
+    fn pick_all(&mut self, cx: &mut Context<Self>) {
+        self.selection = Selection {
+            rows: BTreeSet::new(),
+            all: true,
+        };
+        self.selection_changed(cx);
+    }
+
+    fn clear_picks(&mut self, cx: &mut Context<Self>) {
+        self.selection = Selection::default();
+        self.updating = None;
+        self.selection_changed(cx);
+    }
+
+    /// "3 rows", "all 1200 rows", "all matching rows".
+    fn picked_label(&self) -> String {
+        if !self.selection.all {
+            return plural(self.selection.rows.len() as u64, "row");
+        }
+        let scope = if self.query.is_filtered() {
+            " matching"
+        } else {
+            ""
+        };
+        match self.pager.total {
+            Some(RowCount { rows, exact: true }) => format!("all {rows}{scope} rows"),
+            _ => format!("all{scope} rows"),
+        }
+    }
+
+    fn target(&self) -> Option<RowTarget> {
+        if self.selection.all {
+            return Some(RowTarget::Matching(self.query.clone()));
+        }
+        Some(RowTarget::Keys {
+            key: self.key_cached()?,
+            rows: self.selection.rows.iter().cloned().collect(),
+        })
+    }
+
+    fn key_cached(&self) -> Option<Vec<String>> {
+        self.order_by.clone().filter(|k| !k.is_empty())
+    }
+
+    fn open_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let key = self.key_cached().unwrap_or_default();
+        // Key columns are left out: changing them is rarely meant in bulk.
+        let columns: Vec<String> = self
+            .column_names(cx)
+            .into_iter()
+            .filter(|c| !key.contains(c))
+            .collect();
+        let first = (!columns.is_empty()).then(|| IndexPath::new(0));
+        let column = cx.new(|cx| ColumnSelect::new(SearchableVec::new(columns), first, window, cx));
+        let value = cx.new(|cx| InputState::new(window, cx).placeholder("New value"));
+        let subscription =
+            cx.subscribe_in(&value, window, |this, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.submit_update(window, cx);
+                }
+            });
+        value.update(cx, |s, cx| s.focus(window, cx));
+        self.updating = Some(UpdateForm {
+            column,
+            value,
+            null: false,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    fn submit_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(form) = &self.updating else { return };
+        let Some(column) = form.column.read(cx).selected_value().cloned() else {
+            return;
+        };
+        let value = (!form.null).then(|| form.value.read(cx).value().to_string());
+        self.confirm_change(BulkChange::Update { column, value }, window, cx);
+    }
+
+    /// Asks first, then runs `change` over the ticked rows.
+    fn confirm_change(&mut self, change: BulkChange, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self.target() else { return };
+        let relation = format!("{}.{}", self.schema, self.table);
+        let whole_table = self.selection.all && !self.query.is_filtered();
+        let rows = self.picked_label();
+        let (message, detail, verb) = match &change {
+            BulkChange::Delete if whole_table => (
+                format!("Delete every row in {relation}?"),
+                format!("This deletes {rows}, not only the ones on this page. It can't be undone."),
+                "Delete All Rows",
+            ),
+            BulkChange::Delete => (
+                format!("Delete {rows} from {relation}?"),
+                "This can't be undone.".to_string(),
+                "Delete Rows",
+            ),
+            BulkChange::Update { column, value } => (
+                format!(
+                    "Set {column} to {} in {rows}?",
+                    value
+                        .as_deref()
+                        .map(|v| format!("“{v}”"))
+                        .unwrap_or_else(|| "NULL".into())
+                ),
+                if whole_table {
+                    "Every row in the table changes. This can't be undone.".to_string()
+                } else {
+                    "This can't be undone.".to_string()
+                },
+                "Update Rows",
+            ),
+        };
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &message,
+            Some(&detail),
+            &[verb, "Cancel"],
+            cx,
+        );
+        let sql = db::bulk_sql(&self.schema, &self.table, &target, &change);
+        let deleting = matches!(change, BulkChange::Delete);
+        cx.spawn_in(window, async move |this, window| {
+            if answer.await != Ok(0) {
+                return;
+            }
+            let _ = this.update_in(window, |this, window, cx| {
+                this.run_change(sql, deleting, window, cx)
+            });
+        })
+        .detach();
+    }
+
+    fn run_change(
+        &mut self,
+        sql: String,
+        deleting: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(rx) = super::actions::execute(&self.db, &self.profile, sql, cx) else {
+            self.notice = Some((true, "Not connected. Reconnect and try again.".into()));
+            cx.notify();
+            return;
+        };
+        self.changing = true;
+        self.notice = None;
+        cx.notify();
+        cx.spawn_in(window, async move |this, window| {
+            let result = rx.await;
+            let _ = this.update_in(window, |this, window, cx| {
+                this.changing = false;
+                this.notice = Some(match result {
+                    Ok(Ok(n)) => {
+                        this.selection = Selection::default();
+                        this.updating = None;
+                        this.reload(window, cx);
+                        let verb = if deleting { "Deleted" } else { "Updated" };
+                        (false, format!("{verb} {}.", plural(n, "row")))
+                    }
+                    Ok(Err(e)) => (true, format!("Nothing was changed. {e}")),
+                    Err(_) => (
+                        true,
+                        "The change stopped unexpectedly. Reload to see what happened.".into(),
+                    ),
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+}
+
+/// Exports.
+impl TableView {
+    /// Asks where to save, then writes this page or every matching row.
+    fn export(
+        &mut self,
+        format: ExportFormat,
+        all: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let name = format!("{}.{}", self.table, format.extension());
+        let picked = cx.prompt_for_new_path(&super::actions::save_dir(), Some(&name));
+        cx.spawn_in(window, async move |this, window| {
+            let Ok(Ok(Some(path))) = picked.await else {
+                return;
+            };
+            let _ = this.update_in(window, |this, window, cx| {
+                if all {
+                    this.export_all(format, path, window, cx);
+                } else {
+                    this.export_page(format, path, window, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn column_types(&self, cx: &App) -> Vec<db::ColumnInfo> {
+        self.db
+            .read(cx)
+            .relation(&self.profile, &self.schema, &self.table)
+            .map(|r| r.columns.clone())
+            .unwrap_or_default()
+    }
+
+    fn export_page(
+        &mut self,
+        format: ExportFormat,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(set) = self
+            .grid
+            .as_ref()
+            .map(|g| g.read(cx).delegate().set.clone())
+        else {
+            return;
+        };
+        let (types, sheet) = (self.column_types(cx), self.table.clone());
+        let target = path.clone();
+        let rx = rt::spawn_blocking(cx, move || {
+            db::export_result_set(&set, format, &sheet, &types, &target)
+        });
+        cx.spawn_in(window, async move |this, window| {
+            let result = rx.await;
+            let _ = this.update_in(window, |this, _, cx| this.exported(&path, result, cx));
+        })
+        .detach();
+    }
+
+    /// Streams over a connection of its own, so browsing stays responsive.
+    fn export_all(
+        &mut self,
+        format: ExportFormat,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let rows = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let Some(rx) = super::actions::export_relation(
+            &self.db,
+            &self.profile,
+            self.schema.clone(),
+            self.table.clone(),
+            self.order_by.clone().unwrap_or_default(),
+            self.query.clone(),
+            format,
+            path.clone(),
+            rows.clone(),
+            stop.clone(),
+            cx,
+        ) else {
+            return;
+        };
+        self.exporting = Some(Exporting { format, rows, stop });
+        self.notice = None;
+        cx.notify();
+        cx.spawn_in(window, async move |this, window| {
+            let mut rx = rx;
+            // Redraws the row count until the export ends.
+            let result = loop {
+                let tick = window.background_executor().timer(PROGRESS_TICK);
+                match futures::future::select(rx, Box::pin(tick)).await {
+                    futures::future::Either::Left((result, _)) => break result,
+                    futures::future::Either::Right((_, pending)) => {
+                        rx = pending;
+                        if this.update(window, |_, cx| cx.notify()).is_err() {
+                            return;
+                        }
+                    }
+                }
+            };
+            let _ = this.update_in(window, |this, _, cx| {
+                this.exporting = None;
+                this.exported(&path, result, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn exported(
+        &mut self,
+        path: &std::path::Path,
+        result: Result<sawit_core::Result<ExportSummary>, oneshot::Canceled>,
+        cx: &mut Context<Self>,
+    ) {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.notice = Some(match result {
+            Ok(Ok(ExportSummary {
+                rows,
+                truncated: false,
+            })) => (false, format!("Saved {} to {name}.", plural(rows, "row"))),
+            Ok(Ok(ExportSummary {
+                rows,
+                truncated: true,
+            })) => (
+                false,
+                format!(
+                    "Saved the first {rows} rows to {name}: Excel holds no more. Export as CSV for every row."
+                ),
+            ),
+            Ok(Err(e)) => (true, format!("Unable to export {name}. {e}")),
+            Err(_) => (true, "The export stopped unexpectedly. Try again.".into()),
+        });
+        cx.notify();
+    }
+
+    fn export_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let view = cx.entity().downgrade();
+        let page_rows = self.pager.page_rows as u64;
+        let filtered = self.query.is_filtered();
+        let all_label = match self.pager.total {
+            Some(RowCount { rows, exact: true }) if filtered => format!("All {rows} Matching Rows"),
+            Some(RowCount { rows, exact: true }) => format!("All {rows} Rows"),
+            _ if filtered => "All Matching Rows".to_string(),
+            _ => "All Rows".to_string(),
+        };
+        let has_rows = page_rows > 0;
+        Button::new("table-export")
+            .ghost()
+            .xsmall()
+            .icon(Lucide::Download)
+            .label("Export")
+            .tooltip("Save Rows as CSV or Excel")
+            .disabled(!has_rows || self.exporting.is_some())
+            .dropdown_menu(move |mut menu, _, _| {
+                let item = |label: String, icon: Lucide, format: ExportFormat, all: bool| {
+                    let view = view.clone();
+                    PopupMenuItem::new(label)
+                        .icon(icon)
+                        .on_click(move |_, window, cx| {
+                            let _ =
+                                view.update(cx, |this, cx| this.export(format, all, window, cx));
+                        })
+                };
+                menu = menu.label(format!("This Page ({})", plural(page_rows, "row")));
+                for format in [ExportFormat::Csv, ExportFormat::Xlsx] {
+                    menu = menu.item(item(
+                        format!("{}…", format.label()),
+                        icon_for(format),
+                        format,
+                        false,
+                    ));
+                }
+                menu = menu.separator().label(all_label.clone());
+                for format in [ExportFormat::Csv, ExportFormat::Xlsx] {
+                    menu = menu.item(item(
+                        format!("{}…", format.label()),
+                        icon_for(format),
+                        format,
+                        true,
+                    ));
+                }
+                menu
+            })
+    }
+}
+
+fn capitalize(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
+fn icon_for(format: ExportFormat) -> Lucide {
+    match format {
+        ExportFormat::Csv => Lucide::FileText,
+        ExportFormat::Xlsx => Lucide::FileSpreadsheet,
+    }
+}
+
 impl Render for TableView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pager = self.pager.clone();
@@ -592,16 +1124,40 @@ impl Render for TableView {
                     .font_semibold()
                     .child(self.title.clone()),
             )
-            .child(
-                h_flex()
-                    .gap_1()
-                    .px_1p5()
-                    .rounded(cx.theme().radius)
-                    .bg(cx.theme().secondary)
-                    .child(Icon::new(Lucide::Lock).xsmall())
-                    .child("read-only"),
-            )
+            .when(self.key(cx).is_none(), |el| {
+                el.child(
+                    h_flex()
+                        .gap_1()
+                        .px_1p5()
+                        .rounded(cx.theme().radius)
+                        .bg(cx.theme().secondary)
+                        .child(Icon::new(Lucide::Lock).xsmall())
+                        .child("read-only"),
+                )
+            })
             .child(div().flex_1())
+            .map(|el| match &self.exporting {
+                Some(e) => el
+                    .child(format!(
+                        "Exporting {}… {}",
+                        e.format.label(),
+                        plural(e.rows.load(Ordering::Relaxed), "row")
+                    ))
+                    .child(
+                        Button::new("table-export-cancel")
+                            .ghost()
+                            .xsmall()
+                            .label("Cancel")
+                            .tooltip("Stop the Export")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(e) = &this.exporting {
+                                    e.stop.store(true, Ordering::Relaxed);
+                                }
+                                cx.notify();
+                            })),
+                    ),
+                None => el.child(self.export_menu(cx)),
+            })
             .child(
                 Button::new("page-query")
                     .ghost()
@@ -711,7 +1267,9 @@ impl Render for TableView {
                 } else {
                     e
                 })
-                .when(customized, |p| p.action(reset("table-error-reset", cx).primary()))
+                .when(customized, |p| {
+                    p.action(reset("table-error-reset", cx).primary())
+                })
                 .action(
                     Button::new("table-retry")
                         .small()
@@ -742,12 +1300,28 @@ impl Render for TableView {
         };
         let filter_bar = self.render_filter_bar(cx);
         let filter_panel = self.show_filters.then(|| self.render_filters(cx));
+        let picks_bar = (!self.selection.is_empty()).then(|| self.render_picks_bar(cx));
+        let update_form = self.updating.is_some().then(|| self.render_update_form(cx));
+        let notice = self.notice.clone().map(|(failed, message)| {
+            let banner = if failed {
+                Banner::error("table-notice", message)
+            } else {
+                Banner::info("table-notice", message)
+            };
+            banner.on_dismiss(cx.listener(|this, _, _, cx| {
+                this.notice = None;
+                cx.notify();
+            }))
+        });
         v_flex()
             .size_full()
             .bg(cx.theme().background)
             .child(toolbar)
             .child(filter_bar)
             .children(filter_panel)
+            .children(picks_bar)
+            .children(update_form)
+            .children(notice)
             .child(div().flex_1().min_h_0().child(body))
     }
 }
@@ -780,7 +1354,11 @@ impl TableView {
                         0 => "Filter".to_string(),
                         n => format!("Filter · {n}"),
                     })
-                    .tooltip(if self.show_filters { "Hide Filters" } else { "Show Filters" })
+                    .tooltip(if self.show_filters {
+                        "Hide Filters"
+                    } else {
+                        "Show Filters"
+                    })
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.show_filters = !this.show_filters;
                         if this.show_filters && this.filters.is_empty() {
@@ -806,17 +1384,151 @@ impl TableView {
                 )
             })
             .child(div().flex_1())
-            .when(self.query.is_filtered() || self.query.sort.is_some(), |el| {
+            .when(
+                self.query.is_filtered() || self.query.sort.is_some(),
+                |el| {
+                    el.child(
+                        Button::new("table-reset")
+                            .small()
+                            .ghost()
+                            .icon(Lucide::FunnelX)
+                            .label("Reset")
+                            .tooltip("Show Every Row in Key Order")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.reset_query(window, cx)),
+                            ),
+                    )
+                },
+            )
+            .into_any_element()
+    }
+
+    /// What is ticked, widening to every matching row, and what to do with it.
+    fn render_picks_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let busy = self.changing || self.loading;
+        // Gmail-style: a whole page ticked offers every row beyond it.
+        let offer_all = !self.selection.all
+            && self.page_picked()
+            && (self.pager.has_next() || self.pager.has_prev());
+        let all_label = match self.pager.total {
+            Some(RowCount { rows, exact: true }) => format!("Select All {rows}"),
+            _ => "Select All".to_string(),
+        };
+        h_flex()
+            .px_3()
+            .py_1()
+            .gap_2()
+            .text_xs()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().accent)
+            .child(
+                div()
+                    .font_semibold()
+                    .child(format!("{} selected", capitalize(&self.picked_label()))),
+            )
+            .when(offer_all, |el| {
                 el.child(
-                    Button::new("table-reset")
-                        .small()
-                        .ghost()
-                        .icon(Lucide::FunnelX)
-                        .label("Reset")
-                        .tooltip("Show Every Row in Key Order")
-                        .on_click(cx.listener(|this, _, window, cx| this.reset_query(window, cx))),
+                    Button::new("table-pick-all")
+                        .link()
+                        .xsmall()
+                        .label(format!(
+                            "{all_label}{}",
+                            if self.query.is_filtered() {
+                                " Matching Rows"
+                            } else {
+                                " Rows"
+                            }
+                        ))
+                        .on_click(cx.listener(|this, _, _, cx| this.pick_all(cx))),
                 )
             })
+            .child(
+                Button::new("table-pick-clear")
+                    .ghost()
+                    .xsmall()
+                    .label("Clear Selection")
+                    .on_click(cx.listener(|this, _, _, cx| this.clear_picks(cx))),
+            )
+            .child(div().flex_1())
+            .when(self.changing, |el| el.child("Applying…"))
+            .child(
+                Button::new("table-bulk-update")
+                    .small()
+                    .icon(Lucide::Pencil)
+                    .label("Update…")
+                    .tooltip("Set a Column in the Selected Rows")
+                    .disabled(busy)
+                    .on_click(cx.listener(|this, _, window, cx| this.open_update(window, cx))),
+            )
+            .child(
+                Button::new("table-bulk-delete")
+                    .small()
+                    .danger()
+                    .icon(Lucide::Trash)
+                    .label("Delete…")
+                    .tooltip("Delete the Selected Rows")
+                    .disabled(busy)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.confirm_change(BulkChange::Delete, window, cx)
+                    })),
+            )
+            .into_any_element()
+    }
+
+    fn render_update_form(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(form) = &self.updating else {
+            return div().into_any_element();
+        };
+        let muted = cx.theme().muted_foreground;
+        h_flex()
+            .px_3()
+            .py_2()
+            .gap_1p5()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().secondary)
+            .child(div().text_xs().text_color(muted).child("Set"))
+            .child(
+                div()
+                    .w(px(200.))
+                    .child(Select::new(&form.column).small().placeholder("Column")),
+            )
+            .child(div().text_xs().text_color(muted).child("to"))
+            .child(
+                div()
+                    .flex_1()
+                    .child(Input::new(&form.value).small().disabled(form.null)),
+            )
+            .child(
+                Checkbox::new("table-update-null")
+                    .label("NULL")
+                    .checked(form.null)
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        if let Some(form) = &mut this.updating {
+                            form.null = *checked;
+                        }
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("table-update-cancel")
+                    .ghost()
+                    .small()
+                    .label("Cancel")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.updating = None;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("table-update-apply")
+                    .small()
+                    .primary()
+                    .label("Update Rows…")
+                    .disabled(self.changing || form.column.read(cx).selected_value().is_none())
+                    .on_click(cx.listener(|this, _, window, cx| this.submit_update(window, cx))),
+            )
             .into_any_element()
     }
 
@@ -833,14 +1545,16 @@ impl TableView {
                         .text_color(muted)
                         .child(if ix == 0 { "where" } else { "and" }),
                 )
-                .child(div().w(px(200.)).child(Select::new(&f.column).small().placeholder("Column")))
+                .child(
+                    div()
+                        .w(px(200.))
+                        .child(Select::new(&f.column).small().placeholder("Column")),
+                )
                 .child(div().w(px(150.)).child(Select::new(&f.op).small()))
                 .child(
-                    div().flex_1().child(
-                        Input::new(&f.value)
-                            .small()
-                            .disabled(!needs_value),
-                    ),
+                    div()
+                        .flex_1()
+                        .child(Input::new(&f.value).small().disabled(!needs_value)),
                 )
                 .child(
                     Button::new(("table-filter-remove", ix))
@@ -876,7 +1590,9 @@ impl TableView {
                             .small()
                             .icon(IconName::Plus)
                             .label("Add Condition")
-                            .on_click(cx.listener(|this, _, window, cx| this.add_filter(window, cx))),
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.add_filter(window, cx)),
+                            ),
                     )
                     .child(
                         div()
@@ -891,7 +1607,9 @@ impl TableView {
                             .primary()
                             .label("Apply")
                             .disabled(!pending)
-                            .on_click(cx.listener(|this, _, window, cx| this.apply_filters(window, cx))),
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.apply_filters(window, cx)),
+                            ),
                     ),
             )
             .into_any_element()
@@ -906,6 +1624,9 @@ pub struct ResultDelegate {
     first_row: Option<u64>,
     /// Header clicks sort through this view (table browser only).
     sorts: Option<WeakEntity<TableView>>,
+    /// A leading checkbox column ticking rows in this view, by the positions
+    /// of the key columns in `set` (table browser on a keyed table).
+    picks: Option<(WeakEntity<TableView>, Vec<usize>)>,
 }
 
 impl ResultDelegate {
@@ -915,6 +1636,7 @@ impl ResultDelegate {
             set,
             first_row: None,
             sorts: None,
+            picks: None,
         }
     }
 
@@ -927,12 +1649,57 @@ impl ResultDelegate {
             set,
             first_row: Some(offset),
             sorts: None,
+            picks: None,
         }
     }
 
+    /// Leading columns before the data: the checkbox and the row number.
+    fn lead(&self) -> usize {
+        usize::from(self.picks.is_some()) + usize::from(self.first_row.is_some())
+    }
+
+    /// Adds the checkbox column, unless the page lacks a `key` column.
+    fn pickable(mut self, key: &[String], view: WeakEntity<TableView>) -> Self {
+        let positions: Option<Vec<usize>> = key
+            .iter()
+            .map(|k| self.set.columns.iter().position(|c| c == k))
+            .collect();
+        if let Some(positions) = positions {
+            self.columns.insert(
+                0,
+                Column::new("pick", "")
+                    .width(px(36.))
+                    .resizable(false)
+                    .movable(false),
+            );
+            self.picks = Some((view, positions));
+        }
+        self
+    }
+
+    /// Key values of a row; `None` if one is NULL (never, for a primary key).
+    fn row_key(&self, row_ix: usize) -> Option<Vec<String>> {
+        let (_, positions) = self.picks.as_ref()?;
+        let row = self.set.rows.get(row_ix)?;
+        positions
+            .iter()
+            .map(|&i| row.get(i).cloned().flatten())
+            .collect()
+    }
+
+    fn page_keys(&self) -> Vec<Vec<String>> {
+        (0..self.set.rows.len())
+            .filter_map(|ix| self.row_key(ix))
+            .collect()
+    }
+
     /// Headers sort on the server through `view`; `sort` is the current one.
-    pub fn sortable(mut self, sort: Option<(String, SortDir)>, view: WeakEntity<TableView>) -> Self {
-        let skip = usize::from(self.first_row.is_some());
+    pub fn sortable(
+        mut self,
+        sort: Option<(String, SortDir)>,
+        view: WeakEntity<TableView>,
+    ) -> Self {
+        let skip = self.lead();
         for (ix, column) in self.columns.iter_mut().enumerate().skip(skip) {
             let name = &self.set.columns[ix - skip];
             let state = match &sort {
@@ -967,10 +1734,13 @@ impl TableDelegate for ResultDelegate {
         window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) {
-        let skip = usize::from(self.first_row.is_some());
+        let skip = self.lead();
         let (Some(view), Some(name)) = (
             self.sorts.clone(),
-            col_ix.checked_sub(skip).and_then(|i| self.set.columns.get(i)).cloned(),
+            col_ix
+                .checked_sub(skip)
+                .and_then(|i| self.set.columns.get(i))
+                .cloned(),
         ) else {
             return;
         };
@@ -980,6 +1750,30 @@ impl TableDelegate for ResultDelegate {
         });
     }
 
+    fn render_th(
+        &mut self,
+        col_ix: usize,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let Some((view, _)) = self.picks.clone().filter(|_| col_ix == 0) else {
+            return div().size_full().child(self.columns[col_ix].name.clone());
+        };
+        let checked = view.upgrade().is_some_and(|v| v.read(cx).page_picked());
+        div().size_full().child(
+            Checkbox::new("pick-page")
+                .checked(checked)
+                .tooltip(if checked {
+                    "Unselect This Page"
+                } else {
+                    "Select This Page"
+                })
+                .on_click(move |checked, _, cx| {
+                    let _ = view.update(cx, |view, cx| view.pick_page(*checked, cx));
+                }),
+        )
+    }
+
     fn render_td(
         &mut self,
         row_ix: usize,
@@ -987,6 +1781,23 @@ impl TableDelegate for ResultDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
+        let col_ix = match &self.picks {
+            Some((view, _)) if col_ix == 0 => {
+                let Some(key) = self.row_key(row_ix) else {
+                    return div();
+                };
+                let checked = view.upgrade().is_some_and(|v| v.read(cx).is_picked(&key));
+                let view = view.clone();
+                return div().child(Checkbox::new(("pick", row_ix)).checked(checked).on_click(
+                    move |checked, _, cx| {
+                        let key = key.clone();
+                        let _ = view.update(cx, |view, cx| view.pick_row(key, *checked, cx));
+                    },
+                ));
+            }
+            Some(_) => col_ix - 1,
+            None => col_ix,
+        };
         let col_ix = match self.first_row {
             Some(offset) if col_ix == 0 => {
                 return div()
@@ -1035,7 +1846,12 @@ mod tests {
         let shown = cell_preview(&long);
         assert_eq!(shown.chars().count(), CELL_PREVIEW_CHARS + 1);
         assert!(shown.ends_with('…'));
-        assert_eq!(cell_preview(&"y".repeat(CELL_PREVIEW_CHARS)).chars().count(), CELL_PREVIEW_CHARS);
+        assert_eq!(
+            cell_preview(&"y".repeat(CELL_PREVIEW_CHARS))
+                .chars()
+                .count(),
+            CELL_PREVIEW_CHARS
+        );
     }
     use sawit_core::db::RowCount;
 

@@ -1,6 +1,7 @@
 //! Database tools: connection panel with schema tree, table grids, SQL
 //! editor tabs and schema diagrams.
 
+mod actions;
 mod diagram;
 mod lifecycle;
 mod panel;

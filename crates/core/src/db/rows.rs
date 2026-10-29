@@ -170,3 +170,86 @@ impl RowQuery {
         (!cols.is_empty()).then(|| cols.join(", "))
     }
 }
+
+/// Which rows a bulk change touches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RowTarget {
+    /// Rows picked one by one: their primary-key values (as text, in `key`
+    /// order), one list per row.
+    Keys {
+        key: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
+    /// Every row the query's filters and search match (all rows without any).
+    Matching(RowQuery),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BulkChange {
+    Delete,
+    /// Sets `column` to `value` (`None` is NULL); the literal takes the
+    /// column's type.
+    Update {
+        column: String,
+        value: Option<String>,
+    },
+}
+
+impl RowTarget {
+    /// The `WHERE` condition over `alias`; `None` means every row.
+    fn where_sql(&self, alias: &str) -> Option<String> {
+        match self {
+            RowTarget::Matching(query) => query.where_sql(alias),
+            RowTarget::Keys { rows, .. } if rows.is_empty() => Some("false".into()),
+            RowTarget::Keys { key, rows } => {
+                let col = |k: &String| format!("{alias}.{}", quote_ident(k));
+                let tuple = |values: &Vec<String>| {
+                    values
+                        .iter()
+                        .map(|v| quote_literal(v))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let list = rows
+                    .iter()
+                    .map(|r| {
+                        if key.len() == 1 {
+                            tuple(r)
+                        } else {
+                            format!("({})", tuple(r))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Some(if key.len() == 1 {
+                    format!("{} IN ({list})", col(&key[0]))
+                } else {
+                    let cols = key.iter().map(col).collect::<Vec<_>>().join(", ");
+                    format!("({cols}) IN ({list})")
+                })
+            }
+        }
+    }
+}
+
+/// The one statement that applies `change` to `target` in `schema.table`.
+pub fn bulk_sql(schema: &str, table: &str, target: &RowTarget, change: &BulkChange) -> String {
+    // The browser's alias, so a whole-row search reads the same as when browsing.
+    let alias = "\"sawit row\"";
+    let relation = format!("{}.{} AS {alias}", quote_ident(schema), quote_ident(table));
+    let filter = target
+        .where_sql(alias)
+        .map(|w| format!(" WHERE {w}"))
+        .unwrap_or_default();
+    match change {
+        BulkChange::Delete => format!("DELETE FROM {relation}{filter}"),
+        BulkChange::Update { column, value } => format!(
+            "UPDATE {relation} SET {} = {}{filter}",
+            quote_ident(column),
+            value
+                .as_deref()
+                .map(quote_literal)
+                .unwrap_or_else(|| "NULL".into())
+        ),
+    }
+}

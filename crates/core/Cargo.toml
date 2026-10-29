@@ -6,6 +6,11 @@ publish.workspace = true
 
 [dependencies]
 futures.workspace = true
+# Excel export (crates/core/src/db/export.rs); already built for postgresql_archive.
+crc32fast = "1.5"
+# COPY FROM STDIN chunks (tokio-postgres's own byte type).
+bytes = "1"
+flate2 = "1.1"
 security-framework = "=3.7.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

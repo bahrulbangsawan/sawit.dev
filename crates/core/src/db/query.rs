@@ -795,7 +795,16 @@ pub async fn fetch_page(
     offset: u64,
     limit: u64,
 ) -> Result<ResultSet> {
-    fetch_rows(client, schema, table, order_by, &RowQuery::default(), offset, limit).await
+    fetch_rows(
+        client,
+        schema,
+        table,
+        order_by,
+        &RowQuery::default(),
+        offset,
+        limit,
+    )
+    .await
 }
 
 /// The relation's alias in browser queries; a whole-row search reads
@@ -813,6 +822,20 @@ pub async fn fetch_rows(
     offset: u64,
     limit: u64,
 ) -> Result<ResultSet> {
+    let sql = select_sql(schema, table, order_by, query, Some((offset, limit)));
+    let mut out = run_sql(client, &sql, limit as usize).await?;
+    Ok(out.results.pop().unwrap_or_default())
+}
+
+/// The browser's SELECT for `query`; `page` is (offset, limit), `None` for
+/// every row.
+pub(super) fn select_sql(
+    schema: &str,
+    table: &str,
+    order_by: &[String],
+    query: &RowQuery,
+    page: Option<(u64, u64)>,
+) -> String {
     // Without any order, pages follow physical order, which synchronized
     // seqscans would shuffle. SET LOCAL lasts for this one implicit
     // transaction, so it is safe behind a pooler too.
@@ -824,13 +847,28 @@ pub async fn fetch_rows(
         .where_sql(ROW_ALIAS)
         .map(|w| format!(" WHERE {w}"))
         .unwrap_or_default();
-    let sql = format!(
-        "{prelude}SELECT {ROW_ALIAS}.* FROM {}.{} AS {ROW_ALIAS}{filter}{order} OFFSET {offset} LIMIT {limit}",
+    let range = page
+        .map(|(offset, limit)| format!(" OFFSET {offset} LIMIT {limit}"))
+        .unwrap_or_default();
+    format!(
+        "{prelude}SELECT {ROW_ALIAS}.* FROM {}.{} AS {ROW_ALIAS}{filter}{order}{range}",
         quote_ident(schema),
         quote_ident(table)
-    );
-    let mut out = run_sql(client, &sql, limit as usize).await?;
-    Ok(out.results.pop().unwrap_or_default())
+    )
+}
+
+/// Runs one data-changing statement (see [`bulk_sql`](super::bulk_sql)) on
+/// a read-write connection; a single statement commits or fails as a whole.
+/// Returns the rows it changed.
+pub async fn run_bulk(client: &Client, sql: &str) -> Result<u64> {
+    let messages = client.simple_query(sql).await.map_err(sql_error)?;
+    Ok(messages
+        .iter()
+        .find_map(|m| match m {
+            SimpleQueryMessage::CommandComplete(n) => Some(*n),
+            _ => None,
+        })
+        .unwrap_or(0))
 }
 
 /// Rows matching `query`'s filters, counted exactly within `COUNT_TIMEOUT`;

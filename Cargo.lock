@@ -6726,6 +6726,9 @@ name = "sawit-core"
 version = "0.0.5"
 dependencies = [
  "alacritty_terminal",
+ "bytes",
+ "crc32fast",
+ "flate2",
  "futures",
  "libc",
  "objc2-core-foundation",

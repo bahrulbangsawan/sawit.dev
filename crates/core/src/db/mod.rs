@@ -1,7 +1,9 @@
 //! Connections: profiles, DATABASE_URL/.env import, Keychain passwords,
 //! schema browsing, paged table reads and ad-hoc SQL.
 
+mod admin;
 pub mod diagram;
+mod export;
 mod profile;
 mod query;
 mod rows;
@@ -13,13 +15,26 @@ pub use profile::{
     read_dotenv_database_url, resolve_password, store_password,
 };
 
-pub use rows::{FilterOp, RowFilter, RowQuery, SortDir, quote_literal};
+pub use admin::{
+    BackupFormat, BackupScope, backup, backup_args, csv_header, drop_sql, find_relation,
+    import_csv, pick_pg_dump, refresh_matview_sql, server_major, truncate_sql,
+};
+
+pub use export::{
+    CellKind, ExportFormat, ExportSummary, RowWriter, XLSX_MAX_ROWS, cell_kind, export_query,
+    export_result_set, export_rows, export_table,
+};
+
+pub use rows::{
+    BulkChange, FilterOp, RowFilter, RowQuery, RowTarget, SortDir, bulk_sql, quote_literal,
+};
 
 pub use query::{
-    ColumnInfo, Constraint, ConstraintKind, FailureKind, ForeignKey, IndexInfo, QueryOutcome, READ_ONLY_ROLE, RelKind, Relation, ResultSet, RowCount,
-    SchemaInfo, cancel, connect, connect_all, failure_kind, connect_read_only, ensure_read_only_role, fetch_page, fetch_rows, row_count_matching,
-    list_databases, load_schema, primary_key, row_count, row_count_estimated, row_count_within,
-    run_read_only, run_sql, screen_read_only_sql, sql_error,
+    ColumnInfo, Constraint, ConstraintKind, FailureKind, ForeignKey, IndexInfo, QueryOutcome,
+    READ_ONLY_ROLE, RelKind, Relation, ResultSet, RowCount, SchemaInfo, cancel, connect,
+    connect_all, connect_read_only, ensure_read_only_role, failure_kind, fetch_page, fetch_rows,
+    list_databases, load_schema, primary_key, row_count, row_count_estimated, row_count_matching,
+    row_count_within, run_bulk, run_read_only, run_sql, screen_read_only_sql, sql_error,
 };
 
 /// Quotes an SQL identifier.
