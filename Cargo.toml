@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/app", "crates/mcp"]
+members = ["crates/core", "crates/app", "crates/mcp", "crates/board"]
 exclude = ["vendor"]
 
 [workspace.package]
@@ -11,9 +11,20 @@ publish = false
 
 [workspace.dependencies]
 futures = "0.3"
+serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "process", "fs", "time", "macros", "io-util", "sync", "net"] }
 tokio-postgres = "0.7.18"
+
+# FigCraft drives the native canvas (crates/board). One pinned rev for every crate, never a
+# branch: bump them together.
+figcraft-color = { git = "https://github.com/storytold/figcraft", rev = "0971d096db18aa107c5f3d1f83af4ac7f89ea2c3" }
+figcraft-doc = { git = "https://github.com/storytold/figcraft", rev = "0971d096db18aa107c5f3d1f83af4ac7f89ea2c3" }
+figcraft-engine = { git = "https://github.com/storytold/figcraft", rev = "0971d096db18aa107c5f3d1f83af4ac7f89ea2c3" }
+figcraft-format = { git = "https://github.com/storytold/figcraft", rev = "0971d096db18aa107c5f3d1f83af4ac7f89ea2c3" }
+figcraft-geom = { git = "https://github.com/storytold/figcraft", rev = "0971d096db18aa107c5f3d1f83af4ac7f89ea2c3" }
+figcraft-render = { git = "https://github.com/storytold/figcraft", rev = "0971d096db18aa107c5f3d1f83af4ac7f89ea2c3" }
+figcraft-text = { git = "https://github.com/storytold/figcraft", rev = "0971d096db18aa107c5f3d1f83af4ac7f89ea2c3" }
 
 # GPUI's dependency tree is large; full debuginfo for it filled the disk
 # (17 GB in target/). Keep line tables for our crates only.
