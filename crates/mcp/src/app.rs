@@ -70,7 +70,9 @@ pub struct LayoutArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct PageArgs {
-    #[schemars(description = "canvas, mcp, tools, changelog, git_graph, github or instance")]
+    #[schemars(
+        description = "canvas, browser, mcp, tools, changelog, git_graph, github or instance"
+    )]
     pub page: String,
     pub project: Option<String>,
 }
@@ -261,10 +263,10 @@ fn variant<T: serde::de::DeserializeOwned>(name: &str, choices: &str) -> Result<
 
 const PANELS: &str =
     "instances, files, git, database, run, ports, network, prompts, ssh, shell_config";
-const PAGES: &str = "canvas, mcp, tools, changelog, git_graph, github, instance";
+const PAGES: &str = "canvas, browser, mcp, tools, changelog, git_graph, github, instance";
 const INSTANCE_ACTIONS: &str = "select, start, stop, restart";
 
-fn pretty(value: &Value) -> String {
+pub(crate) fn pretty(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
@@ -274,7 +276,11 @@ fn project_path(p: Option<String>) -> Option<PathBuf> {
 
 impl Sawit {
     /// Sends `command` to the running app; the reply's JSON or its error.
-    async fn app_call(&self, project: Option<String>, command: Command) -> Result<Value, String> {
+    pub(crate) async fn app_call(
+        &self,
+        project: Option<String>,
+        command: Command,
+    ) -> Result<Value, String> {
         let paths = self.paths.clone();
         let request = Request {
             project: project_path(project),
@@ -360,7 +366,7 @@ fn export_path(cache: &Path, ext: &str) -> PathBuf {
     cache.join("canvas").join(format!("canvas-{stamp}.{ext}"))
 }
 
-fn base64_decode(text: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn base64_decode(text: &str) -> Result<Vec<u8>, String> {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut lookup = [255u8; 256];
     for (i, &c) in ALPHABET.iter().enumerate() {
@@ -452,7 +458,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Open a page as a tab: canvas (Excalidraw board), mcp (install page), tools (dev tools installer), changelog, git_graph, github, instance (selected PostgreSQL instance)"
+        description = "Open a page as a tab: canvas (Excalidraw board), browser (web browser agents can drive), mcp (install page), tools (dev tools installer), changelog, git_graph, github, instance (selected PostgreSQL instance)"
     )]
     async fn app_open_page(&self, Parameters(a): Parameters<PageArgs>) -> CallToolResult {
         match variant::<Page>(&a.page, PAGES) {
