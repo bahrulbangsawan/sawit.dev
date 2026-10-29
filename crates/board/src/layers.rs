@@ -12,7 +12,8 @@
 //!   never rows.
 //! - A drop is checked here, against the document's rules (no cycles, containers only, sections
 //!   only on pages and in sections) and the engine's rule that nothing goes into an instance, so
-//!   the view doesn't offer a drop the engine would refuse for those reasons.
+//!   the view doesn't offer a drop the engine would refuse for those reasons. A drop that would
+//!   leave the layers where they are is no drop either, so it adds no empty undo step.
 //! - [`rows`] walks the tree with a stack of its own, so a deep file can't overflow the thread's,
 //!   and it cuts no depth off.
 //!
@@ -212,15 +213,19 @@ pub fn pages(doc: &Document, current: NodeId) -> Vec<PageRow> {
 ///   vanish from the panel. A drop next to a layer is a drop into its parent, so the same goes
 ///   for that parent;
 /// - into a parent that takes no sections, when a section is among the dragged layers: sections
-///   go on the page or in other sections.
+///   go on the page or in other sections;
+/// - where it changes nothing: every layer that moves (a dragged layer that no other dragged layer
+///   holds) is a layer of the parent already, and `node.reparent` would leave them in the order
+///   they have. That is a layer dropped on the gap it fills, or on top of a parent it tops. A drop
+///   line there would mark where the layers are, and running it would record an undo step that
+///   changes nothing and work the layers' transforms out again.
 ///
 /// Dragged layers that are no longer there, and pages, are left out, and one that is listed twice
 /// moves once. Which layers are dragged is for the view to say: FigCraft drags the whole selection
 /// when the dragged row is in it.
 ///
-/// Two things are left to the engine. A dragged layer that is inside an instance is not checked:
-/// the engine refuses to move it and says why. And a drop that leaves the layers where they are is
-/// not refused, so it runs `node.reparent` and records an undo step that changes nothing.
+/// One thing is left to the engine: a dragged layer that is inside an instance is not checked, the
+/// engine refuses to move it and says why.
 pub fn drop_target(
     doc: &Document,
     rows: &[LayerRow],
@@ -279,6 +284,9 @@ pub fn drop_target(
                 .count()
         }
     };
+    if leaves_in_place(doc, parent, &moving, index) {
+        return None;
+    }
     Some(Reparent {
         ids,
         parent: parent.id,
@@ -387,6 +395,29 @@ fn takes_layers(doc: &Document, node: &Node) -> bool {
         && !matches!(node.kind, NodeKind::Instance { .. })
         && !node.is_board_atom()
         && !structure_locked(doc, node.id)
+}
+
+/// Whether `node.reparent` of the `moving` layers into `parent` at `index` leaves `parent`'s layers
+/// as they are. A layer moves when it is dragged and no other dragged layer holds it: a held one
+/// goes along with its holder. Nothing changes when every one that moves is a layer of `parent`
+/// already and they land in the order they have, which is the order the engine makes of them:
+/// `parent`'s layers that stay, with the moved ones, in their order, put in at `index`.
+fn leaves_in_place(doc: &Document, parent: &Node, moving: &HashSet<NodeId>, index: usize) -> bool {
+    let in_parent = |id: &NodeId| {
+        doc.node(*id)
+            .is_some_and(|node| node.parent == Some(parent.id))
+    };
+    let goes_along = |id: &NodeId| doc.ancestors(*id).iter().any(|up| moving.contains(up));
+    if !moving.iter().all(|id| in_parent(id) || goes_along(id)) {
+        return false;
+    }
+    let stay = parent.children.iter().filter(|id| !moving.contains(id));
+    let moved = parent.children.iter().filter(|id| moving.contains(id));
+    stay.clone()
+        .take(index)
+        .chain(moved)
+        .chain(stay.skip(index))
+        .eq(&parent.children)
 }
 
 #[cfg(test)]
@@ -1111,6 +1142,120 @@ mod tests {
     }
 
     #[test]
+    fn drop_that_changes_nothing_is_no_drop() {
+        // The single-layer drops on the fixture that leave the layer where it is: in the gap it
+        // fills already, or on top of a parent it is on top of.
+        let in_place = |t: &Tree| {
+            [
+                (t.b, DropPos::Above, t.a),
+                (t.a, DropPos::Below, t.b),
+                (t.a, DropPos::Above, t.g),
+                (t.g, DropPos::Below, t.a),
+                (t.b, DropPos::Into, t.f),
+                (t.c, DropPos::Into, t.g),
+            ]
+        };
+        let t = tree();
+        // F's layers run [G, A, B] from the bottom, and G holds C.
+        assert_eq!(t.children(t.f), [t.g, t.a, t.b]);
+        assert_eq!(t.children(t.g), [t.c]);
+        let rows = t.all_rows();
+        for (dragged, pos, over) in in_place(&t) {
+            let drop = t.target(&rows, &[dragged], over, pos);
+            assert_eq!(drop, None, "{dragged:?} {pos:?} {over:?}");
+        }
+
+        // Every other drop of one layer on a row is refused (on the layer or inside it, or into a
+        // layer that holds none), or changes the layers of its parent when the engine runs it. Each
+        // one runs on a tree of its own.
+        for who in 0..4 {
+            for at in 0..rows.len() {
+                for pos in [DropPos::Above, DropPos::Below, DropPos::Into] {
+                    let mut t = tree();
+                    let dragged = [t.a, t.b, t.g, t.c][who];
+                    let rows = t.all_rows();
+                    let over = rows[at].id;
+                    let what = format!("{dragged:?} {pos:?} {over:?}");
+                    match drop_target(&t.doc(), &rows, &[dragged], at, pos) {
+                        Some(reparent) => {
+                            let before = t.children(reparent.parent);
+                            t.apply(&reparent);
+                            assert_ne!(t.children(reparent.parent), before, "{what}");
+                        }
+                        None => {
+                            let doc = t.doc();
+                            let on_dragged = std::iter::once(over)
+                                .chain(doc.ancestors(over))
+                                .any(|id| id == dragged);
+                            let into_a_leaf = pos == DropPos::Into
+                                && !doc.node(over).unwrap().kind.is_container();
+                            let stays = in_place(&t).contains(&(dragged, pos, over));
+                            assert!(on_dragged || into_a_leaf || stays, "{what}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn several_layers_that_stay_where_they_are_are_no_drop() {
+        let t = tree();
+        let rows = t.all_rows();
+        // F's layers run [G, A, B]. Layers that stay together in the gap they fill, in whatever
+        // order they are dragged...
+        assert_eq!(t.target(&rows, &[t.g, t.a], t.b, DropPos::Below), None);
+        assert_eq!(t.target(&rows, &[t.a, t.g], t.b, DropPos::Below), None);
+        assert_eq!(t.target(&rows, &[t.a, t.b], t.g, DropPos::Above), None);
+        assert_eq!(t.target(&rows, &[t.g, t.a, t.b], t.f, DropPos::Into), None);
+        // ...also with a layer one of them holds: it goes along, and no more moves on its own than
+        // the layer that holds it.
+        assert_eq!(t.target(&rows, &[t.g, t.c], t.a, DropPos::Below), None);
+        assert_eq!(
+            t.target(&rows, &[t.c, t.g, t.a, t.b], t.f, DropPos::Into),
+            None
+        );
+
+        // Layers that don't all stay are a move: under G, G and B round A, and G on top...
+        assert!(t.target(&rows, &[t.a, t.b], t.g, DropPos::Below).is_some());
+        assert!(t.target(&rows, &[t.g, t.b], t.a, DropPos::Above).is_some());
+        assert!(t.target(&rows, &[t.g, t.c], t.f, DropPos::Into).is_some());
+        // ...and so is a layer from another parent among them, even when the others stay: C leaves
+        // G, and B is on top of F already.
+        assert!(t.target(&rows, &[t.a, t.c], t.f, DropPos::Into).is_some());
+        assert!(t.target(&rows, &[t.b, t.c], t.f, DropPos::Into).is_some());
+    }
+
+    #[test]
+    fn an_offered_drop_of_any_layers_changes_the_parent_they_land_in() {
+        let mut offered = 0;
+        // Every set of the layers below F, dragged onto every row at every position. Each drop
+        // runs on a tree of its own.
+        for set in 1..16_u32 {
+            for at in 0..tree().all_rows().len() {
+                for pos in [DropPos::Above, DropPos::Below, DropPos::Into] {
+                    let mut t = tree();
+                    let rows = t.all_rows();
+                    let layers = [t.a, t.b, t.g, t.c];
+                    let dragged: Vec<NodeId> = (0..4)
+                        .filter(|n| set & (1 << n) != 0)
+                        .map(|n| layers[n])
+                        .collect();
+                    let Some(reparent) = drop_target(&t.doc(), &rows, &dragged, at, pos) else {
+                        continue;
+                    };
+                    let before = t.children(reparent.parent);
+                    t.apply(&reparent);
+                    let after = t.children(reparent.parent);
+                    assert_ne!(after, before, "{dragged:?} {pos:?} row {at}");
+                    offered += 1;
+                }
+            }
+        }
+        assert!(offered > 0);
+    }
+
+    #[test]
     fn drop_into_sticky_is_refused() {
         let mut board = BoardDoc::new_board("Canvas").unwrap();
         let first = make(&mut board, "board.sticky", json!({"x": 0, "y": 0}));
@@ -1150,7 +1295,8 @@ mod tests {
         let rows = rows(&doc, page, &HashSet::new(), &[], "");
         for atom in [shape, table, stamp] {
             assert_eq!(drop_on(&doc, &rows, &[loose], atom, DropPos::Into), None);
-            assert!(drop_on(&doc, &rows, &[loose], atom, DropPos::Above).is_some());
+            // Next to one is fine: under it, as `loose` is right above the stamp already.
+            assert!(drop_on(&doc, &rows, &[loose], atom, DropPos::Below).is_some());
         }
     }
 
@@ -1220,8 +1366,9 @@ mod tests {
             drop_on(&doc, &rows, &[loose], instance, DropPos::Into),
             None
         );
-        // Next to the instance is the page, and its main component takes layers.
-        let beside = drop_on(&doc, &rows, &[loose], instance, DropPos::Above).unwrap();
+        // Next to the instance is the page (under it, as `loose` is right above it already), and
+        // its main component takes layers.
+        let beside = drop_on(&doc, &rows, &[loose], instance, DropPos::Below).unwrap();
         assert_eq!(beside.parent, page);
         let into_main = drop_on(&doc, &rows, &[loose], main, DropPos::Into).unwrap();
         assert_eq!(into_main.parent, main);
