@@ -146,6 +146,8 @@ pub struct Workspace {
     ssh_panel: Entity<SshPanel>,
     shell_config_panel: Entity<ShellConfigPanel>,
     sql_count: usize,
+    /// The next SQL tab opened runs its SQL right away (`open_sql` with `run`).
+    run_next_sql: bool,
     terminal: Entity<TerminalPanel>,
     sidebar: SidebarTab,
     tabs: Vec<Tab>,
@@ -343,6 +345,7 @@ impl Workspace {
             ssh_panel,
             shell_config_panel,
             sql_count: 0,
+            run_next_sql: false,
             terminal,
             sidebar: SidebarTab::Servers,
             tabs: Vec::new(),
@@ -661,6 +664,9 @@ impl Workspace {
                 let title: SharedString = format!("SQL {} · {shown}", self.sql_count).into();
                 let (db, profile, sql) = (self.db.clone(), profile.clone(), sql.clone());
                 let view = cx.new(|cx| SqlView::new(title.clone(), db, profile, sql, window, cx));
+                if std::mem::take(&mut self.run_next_sql) {
+                    view.update(cx, |v, cx| v.run_now(window, cx));
+                }
                 self.open_item(
                     view.into(),
                     title.clone(),

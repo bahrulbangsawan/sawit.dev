@@ -8,7 +8,7 @@ use std::time::Duration;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
-use sawit_core::app_control::{self, Command, Page, Panel, Request};
+use sawit_core::app_control::{self, Command, InstanceAction, Page, Panel, Request};
 use serde_json::{Value, json};
 
 use crate::{Sawit, fail, ok};
@@ -159,8 +159,28 @@ pub struct OpenTableArgs {
 pub struct OpenSqlArgs {
     #[schemars(description = "Saved connection name or Sawit instance name")]
     pub connection: String,
-    #[schemars(description = "SQL to put in the editor (not run)")]
+    #[schemars(description = "SQL to put in the editor")]
     pub sql: Option<String>,
+    #[schemars(
+        description = "Run it right away (default false). It runs with the connection's own privileges, like execute_sql"
+    )]
+    pub run: Option<bool>,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct InstanceArgs {
+    #[schemars(description = "Sawit instance name (see list_instances)")]
+    pub name: String,
+    #[schemars(description = "select, start, stop or restart")]
+    pub action: String,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct NetworkArgs {
+    #[schemars(description = "Also ping this host or IP (4 pings)")]
+    pub ping: Option<String>,
     pub project: Option<String>,
 }
 
@@ -242,6 +262,7 @@ fn variant<T: serde::de::DeserializeOwned>(name: &str, choices: &str) -> Result<
 const PANELS: &str =
     "instances, files, git, database, run, ports, network, prompts, ssh, shell_config";
 const PAGES: &str = "canvas, mcp, tools, changelog, git_graph, github, instance";
+const INSTANCE_ACTIONS: &str = "select, start, stop, restart";
 
 fn pretty(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
@@ -556,13 +577,40 @@ impl Sawit {
         self.app_tool(a.project, command).await
     }
 
-    #[tool(description = "Open a SQL editor tab for a connection, optionally prefilled with SQL")]
+    #[tool(
+        description = "Open a SQL editor tab for a connection, optionally prefilled with SQL; run=true also runs it in the app, as ⌘↩ does (the results show in the tab; use query or execute_sql to get rows back as text)"
+    )]
     async fn app_open_sql(&self, Parameters(a): Parameters<OpenSqlArgs>) -> CallToolResult {
         let command = Command::OpenSql {
             connection: a.connection,
             sql: a.sql,
+            run: a.run.unwrap_or(false),
         };
         self.app_tool(a.project, command).await
+    }
+
+    #[tool(
+        description = "Select a PostgreSQL instance in the app's Instances tab and start, stop or restart it there, as its buttons do (needs the app; start_instance/stop_instance work without it). A start whose port is taken is held and the Instance tab explains the conflict. Returns at once; read the outcome with list_instances or instance_logs"
+    )]
+    async fn app_instance(&self, Parameters(a): Parameters<InstanceArgs>) -> CallToolResult {
+        match variant::<InstanceAction>(&a.action, INSTANCE_ACTIONS) {
+            Ok(action) => {
+                let command = Command::Instance {
+                    name: a.name,
+                    action,
+                };
+                self.app_tool(a.project, command).await
+            }
+            Err(e) => fail(e),
+        }
+    }
+
+    #[tool(
+        description = "Run the app's network diagnosis (connection, router, DNS, internet, Wi-Fi sign-in) on its Network tab, optionally pinging a host too. Needs the app; diagnose_network and ping return the same results as text without it"
+    )]
+    async fn app_network_diagnose(&self, Parameters(a): Parameters<NetworkArgs>) -> CallToolResult {
+        self.app_tool(a.project, Command::NetworkDiagnose { ping: a.ping })
+            .await
     }
 
     #[tool(
@@ -789,6 +837,15 @@ mod tests {
             Ok(Panel::ShellConfig)
         );
         assert_eq!(variant::<Page>("git_graph", PAGES), Ok(Page::GitGraph));
+        assert_eq!(
+            variant::<InstanceAction>("Restart", INSTANCE_ACTIONS),
+            Ok(InstanceAction::Restart)
+        );
+        assert!(
+            variant::<InstanceAction>("burn", INSTANCE_ACTIONS)
+                .unwrap_err()
+                .contains("restart")
+        );
         assert!(
             variant::<Panel>("nope", PANELS)
                 .unwrap_err()

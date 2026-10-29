@@ -346,6 +346,8 @@ mod tests {
             "app_ssh_connect",
             "app_open_table",
             "app_open_sql",
+            "app_instance",
+            "app_network_diagnose",
             "app_open_diagram",
             "app_open_prompt",
             "terminal_run",

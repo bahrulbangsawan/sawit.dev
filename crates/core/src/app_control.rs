@@ -69,6 +69,15 @@ pub enum Store {
     RunCommands,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstanceAction {
+    Select,
+    Start,
+    Stop,
+    Restart,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Command {
@@ -165,6 +174,21 @@ pub enum Command {
         connection: String,
         #[serde(default)]
         sql: Option<String>,
+        /// Runs it right away (once connected), as ⌘↩ does.
+        #[serde(default)]
+        run: bool,
+    },
+    /// Selects an instance in the Instances tab and starts, stops or
+    /// restarts it there. A start whose port is taken is held, and the
+    /// instance tab explains the conflict, as when clicking Start.
+    Instance {
+        name: String,
+        action: InstanceAction,
+    },
+    /// Runs the Network tab's diagnosis, and pings `ping` when given.
+    NetworkDiagnose {
+        #[serde(default)]
+        ping: Option<String>,
     },
     OpenDiagram {
         connection: String,
@@ -366,6 +390,61 @@ mod tests {
             br#"{"cmd":"open_page","page":"tools"}"#
         );
         assert_eq!(decode(&bytes), Some(Ok(request)));
+    }
+
+    #[test]
+    fn instance_network_and_run_round_trip() {
+        for (command, wire) in [
+            (
+                Command::Instance {
+                    name: "shop".into(),
+                    action: InstanceAction::Start,
+                },
+                r#"{"cmd":"instance","name":"shop","action":"start"}"#,
+            ),
+            (
+                Command::NetworkDiagnose {
+                    ping: Some("github.com".into()),
+                },
+                r#"{"cmd":"network_diagnose","ping":"github.com"}"#,
+            ),
+            (
+                Command::OpenSql {
+                    connection: "shop".into(),
+                    sql: Some("select 1".into()),
+                    run: true,
+                },
+                r#"{"cmd":"open_sql","connection":"shop","sql":"select 1","run":true}"#,
+            ),
+        ] {
+            let request = Request {
+                project: None,
+                command,
+            };
+            let bytes = encode(&request);
+            assert_eq!(&bytes[MAGIC.len()..], wire.as_bytes());
+            assert_eq!(decode(&bytes), Some(Ok(request)));
+        }
+        // `run` and `ping` are optional.
+        let old = decode(
+            br#"sawit-control/1
+{"cmd":"open_sql","connection":"shop"}"#,
+        );
+        assert!(matches!(
+            old,
+            Some(Ok(Request {
+                command: Command::OpenSql { run: false, .. },
+                ..
+            }))
+        ));
+        assert!(
+            decode(
+                br#"sawit-control/1
+{"cmd":"instance","name":"a","action":"burn"}"#
+            )
+            .unwrap()
+            .is_err()
+        );
     }
 
     #[test]

@@ -136,7 +136,7 @@ impl NetworkPanel {
     }
 
     /// Runs every check; rows fill in as each one answers.
-    fn diagnose(&mut self, cx: &mut Context<Self>) {
+    pub fn diagnose(&mut self, cx: &mut Context<Self>) {
         if self.running() {
             return;
         }
@@ -274,6 +274,11 @@ impl NetworkPanel {
             return;
         }
         self.host.update(cx, |s, cx| s.set_value("", window, cx));
+        self.ping(host, cx);
+    }
+
+    /// Pings `host` and adds its row to the top of the list.
+    pub fn ping(&mut self, host: String, cx: &mut Context<Self>) {
         self.pings.insert(
             0,
             PingRow {

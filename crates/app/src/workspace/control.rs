@@ -3,7 +3,8 @@
 //! database tabs and canvas an agent can drive.
 
 use futures::channel::oneshot;
-use sawit_core::app_control::{Command, Page, Panel, Store, key_bytes};
+use sawit_core::app_control::{Command, InstanceAction, Page, Panel, Store, key_bytes};
+use sawit_core::control::Preflight;
 use sawit_core::db::ConnProfile;
 use serde_json::{Value, json};
 
@@ -251,9 +252,56 @@ impl Workspace {
                     cx,
                 )
             }
-            Command::OpenSql { connection, sql } => {
+            Command::OpenSql {
+                connection,
+                sql,
+                run,
+            } => {
                 let profile = self.db_profile(&connection, cx)?;
+                self.run_next_sql = run;
                 self.open_db(DbEvent::OpenSql { profile, sql }, window, cx)
+            }
+            Command::Instance { name, action } => {
+                if self.servers.read(cx).registry.get(&name).is_none() {
+                    return Err(format!(
+                        "No instance is called “{name}”. See list_instances."
+                    ));
+                }
+                self.leave_welcome(PANEL_AND_TABS, cx);
+                self.layout.sidebar = true;
+                self.sidebar = SidebarTab::Servers;
+                self.servers.update(cx, |s, cx| {
+                    s.select(&name, cx);
+                    match action {
+                        InstanceAction::Select => {}
+                        InstanceAction::Start => s.start(&name, Preflight::Check, cx),
+                        InstanceAction::Stop => s.stop(&name, cx),
+                        InstanceAction::Restart => s.restart(&name, cx),
+                    }
+                });
+                self.show_center(cx);
+                self.show_server_tab();
+                done(json!({
+                    "instance": name,
+                    "action": action,
+                    "note": "Runs in the app. A port conflict holds the start and is explained on the Instance tab; read the outcome with list_instances or instance_logs.",
+                }))
+            }
+            Command::NetworkDiagnose { ping } => {
+                self.leave_welcome(PANEL_AND_TABS, cx);
+                self.layout.sidebar = true;
+                self.sidebar = SidebarTab::Network;
+                self.network_panel.update(cx, |n, cx| {
+                    n.diagnose(cx);
+                    if let Some(host) = ping.as_deref().filter(|h| !h.trim().is_empty()) {
+                        n.ping(host.trim().to_string(), cx);
+                    }
+                });
+                done(json!({
+                    "diagnosing": true,
+                    "ping": ping,
+                    "note": "The checks fill in on the Network tab; diagnose_network returns the same verdict as text.",
+                }))
             }
             Command::OpenDiagram { connection, schema } => {
                 let profile = self.db_profile(&connection, cx)?;

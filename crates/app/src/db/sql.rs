@@ -78,6 +78,11 @@ impl SqlView {
         }
     }
 
+    /// Runs the editor's SQL, as ⌘↩ does.
+    pub fn run_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.run(&RunQuery, window, cx);
+    }
+
     fn run(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
         if self.running {
             return;
