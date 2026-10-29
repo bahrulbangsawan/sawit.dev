@@ -5,7 +5,7 @@
 //! The view is FigCraft's [`ViewState`]: the page point at the centre of the canvas, the zoom and
 //! the canvas's size. Lengths are logical px unless a name says device px.
 
-use figcraft_color::Color;
+use figcraft_color::{Color, ColorProfile};
 use figcraft_doc::{Document, NodeId, NodeKind};
 use figcraft_engine::ViewState;
 use figcraft_render::{Dots, Pixmap, View};
@@ -115,9 +115,10 @@ fn dot_spacing(zoom: f64) -> Option<(f64, f32)> {
     })
 }
 
-/// The board's dot grid on a page of colour `page_rgb`, for the renderer to draw under the layers
-/// (`Options::dots`): white dots on a dark page (luma under 128), black ones on a light page, about
-/// a point and a half across on screen. `None` when `zoom` is not finite and above zero.
+/// The board's dot grid on a page of colour `page_rgb` as the screen shows it ([`screen_rgb`]), for
+/// the renderer to draw under the layers (`Options::dots`): white dots on a dark page (luma under
+/// 128), black ones on a light page, about a point and a half across on screen. `None` when `zoom`
+/// is not finite and above zero.
 pub fn dots(zoom: f64, page_rgb: [u8; 3]) -> Option<Dots> {
     let (step, fade) = dot_spacing(zoom)?;
     let [r, g, b] = page_rgb.map(f32::from);
@@ -134,8 +135,12 @@ pub fn dots(zoom: f64, page_rgb: [u8; 3]) -> Option<Dots> {
     })
 }
 
-/// The colour to fill the canvas with for `page`: its background, without the alpha. White when
-/// `page` is not a page.
+/// The colour of `page` as the document holds it: its background without the alpha, in the
+/// document's colour profile (`doc.color_profile`). White when `page` is not a page. The renderer
+/// takes it as it is (`Options::background`).
+///
+/// The screen shows sRGB. The page's colour there, which fills the canvas and which the dot grid's
+/// light/dark test reads ([`dots`]), is [`screen_rgb`]`(doc.color_profile, page_rgb)`.
 pub fn page_rgb(doc: &Document, page: NodeId) -> [u8; 3] {
     match doc.node(page).map(|n| &n.kind) {
         Some(NodeKind::Page { background, .. }) => {
@@ -144,6 +149,21 @@ pub fn page_rgb(doc: &Document, page: NodeId) -> [u8; 3] {
         }
         _ => [255; 3],
     }
+}
+
+/// `rgb`, a colour of a document in `profile`, as the screen shows it: in sRGB. An sRGB colour is
+/// returned as it is. One in another profile is converted, clipping what sRGB can't show, as
+/// FigCraft's own canvas converts the document colours it paints (ui-egui `doc_c32`).
+pub fn screen_rgb(profile: ColorProfile, rgb: [u8; 3]) -> [u8; 3] {
+    if profile.is_srgb() {
+        return rgb;
+    }
+    let [r, g, b] = rgb;
+    let [r, g, b, _] = profile
+        .conversion_to(ColorProfile::Srgb)
+        .apply(Color::from_rgba8(r, g, b, 255))
+        .to_rgba8();
+    [r, g, b]
 }
 
 /// `pixmap` as BGRA bytes, the order of a GPU image: its premultiplied RGBA pixels composited over
@@ -672,6 +692,23 @@ mod tests {
         let layer = doc.node(page).unwrap().children[0];
         assert_eq!(page_rgb(&doc, layer), [255; 3]);
         assert_eq!(page_rgb(&doc, NodeId(9999)), [255; 3]);
+    }
+
+    #[test]
+    fn screen_rgb_leaves_srgb_alone_and_converts_display_p3() {
+        // An sRGB document's colours are the screen's already: they come back as they are.
+        for v in 0..=255 {
+            let rgb = [v, 255 - v, v / 2];
+            assert_eq!(screen_rgb(ColorProfile::Srgb, rgb), rgb);
+        }
+        // A Display P3 colour is converted to sRGB, where this orange has more red and less blue.
+        // Within 2 a channel: the colour is rounded to 8 bits on the way in and on the way out.
+        let shown = screen_rgb(ColorProfile::DisplayP3, [200, 100, 50]);
+        let srgb: [u8; 3] = [215, 93, 31];
+        assert!(
+            shown.iter().zip(srgb).all(|(s, e)| s.abs_diff(e) <= 2),
+            "{shown:?}, not about {srgb:?}"
+        );
     }
 
     #[test]

@@ -7,12 +7,12 @@ use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
-use figcraft_doc::color::{Color, ColorProfile};
+use figcraft_doc::color::ColorProfile;
 use figcraft_doc::{Document, NodeId};
 use figcraft_render::{Options, Pixmap, Retained, View};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use gpui_kit::RenderImage;
-use sawit_board::view::to_bgra;
+use sawit_board::view::{screen_rgb, to_bgra};
 
 /// What to render: a view of a page of a document, and how to draw it.
 pub struct Job {
@@ -22,8 +22,11 @@ pub struct Job {
     /// The page area to draw and its size in device px (`sawit_board::view::render_view`).
     pub view: View,
     pub opts: Options,
-    /// The page's colour (`sawit_board::view::page_rgb`). It shows wherever the render leaves a
-    /// pixel less than opaque.
+    /// The page's colour as the document holds it, in the document's colour profile
+    /// (`sawit_board::view::page_rgb`). It shows wherever the render leaves a pixel less than
+    /// opaque, converted to sRGB with the pixels. Its colour on screen, which fills the canvas
+    /// around the frames and which the dot grid's light/dark test reads, is
+    /// `sawit_board::view::screen_rgb(doc.color_profile, page_rgb)`.
     pub page_rgb: [u8; 3],
     /// The caller's name for this request, handed back with its frame.
     pub key: u64,
@@ -188,7 +191,8 @@ fn guarded<T>(retained: &mut Retained, draw: impl FnOnce(&mut Retained) -> Optio
 
 /// `pixmap`, a render of a document whose colours are in `profile`, as BGRA bytes for the screen,
 /// which shows sRGB. As in FigCraft's own canvas, a document in another profile has its pixels
-/// converted to sRGB (ui-egui `screen_image`) and its page colour too (ui-egui `doc_c32`).
+/// converted to sRGB (ui-egui `screen_image`) and its page colour too ([`screen_rgb`], as ui-egui
+/// `doc_c32` does).
 fn screen_bgra(pixmap: &Pixmap, profile: ColorProfile, page_rgb: [u8; 3]) -> Vec<u8> {
     if profile.is_srgb() {
         return to_bgra(pixmap, page_rgb);
@@ -196,9 +200,7 @@ fn screen_bgra(pixmap: &Pixmap, profile: ColorProfile, page_rgb: [u8; 3]) -> Vec
     let to_srgb = profile.conversion_to(ColorProfile::Srgb);
     let mut converted = pixmap.clone();
     to_srgb.apply_pixels(converted.data_mut());
-    let [r, g, b] = page_rgb;
-    let [r, g, b, _] = to_srgb.apply(Color::from_rgba8(r, g, b, 255)).to_rgba8();
-    to_bgra(&converted, [r, g, b])
+    to_bgra(&converted, screen_rgb(profile, page_rgb))
 }
 
 #[cfg(test)]
