@@ -1,8 +1,11 @@
 //! The context bar's model: the small bar that floats over a board's selection with the controls
 //! the selected items share (colour, outline, text size, connector style and caps). It ports
 //! FigCraft's `ui-egui/src/canvas/board_bar.rs`, which decides the same things for its own UI. The
-//! view in `crates/app/src/board/context_bar.rs` draws what [`context_bar`] returns and, when an
-//! option is picked, runs the command its control names.
+//! view in `crates/app/src/board/context_bar.rs` draws what [`context_bar`] returns, a button for
+//! each of [`options`] of each control, and runs the one picked through `BoardView::choose`, with
+//! the command and params its [`ControlOption`] has: they are the ones the tests here run. The one
+//! option the view doesn't run is a selected shape, which the engine refuses because the selection
+//! has that shape already.
 //!
 //! What each kind of item takes, as `board.setColor` and `board.setStyle` take it:
 //!
@@ -28,6 +31,7 @@ use figcraft_doc::{
 use figcraft_engine::board::{TEXT_SIZES, is_board, text_of};
 use figcraft_engine::tools::selection_box;
 use figcraft_engine::{DocState, Session};
+use serde_json::{Value, json};
 
 /// How far above the selection the bar's bottom edge floats.
 const GAP: f64 = 12.0;
@@ -36,8 +40,8 @@ const GAP: f64 = 12.0;
 const MARGIN: f64 = 8.0;
 
 /// One control of the bar, with the value the selection has for it now: `None` when the selected
-/// items differ, or have none of the named values. Each says which command runs when one of its
-/// options is picked.
+/// items differ, or have none of the named values. [`options`] lists what it offers, the buttons
+/// the view draws for it, each with the command that picking it runs (which each variant names).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Control {
     /// The board colours, as `(name, rgba8)` in FigCraft's order. `board.setColor {color}` with the
@@ -73,7 +77,9 @@ pub const CAPS: &[&str] = &[
     "diamondFilled",
 ];
 
-/// The bar to float over the selection.
+/// The bar to float over the selection. The view draws each of its controls as the buttons of
+/// [`options`] and runs the one picked through `BoardView::choose`, except a selected shape option:
+/// the engine refuses the shape the selection has already, so that one runs nothing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContextBar {
     /// Where the bar's bottom-centre goes: the middle of the selection's top on screen, 12 px above
@@ -83,6 +89,41 @@ pub struct ContextBar {
     /// What the selected items share, in the order of [`Control`].
     pub controls: Vec<Control>,
 }
+
+/// One button of a [`Control`]: what the view draws for an option and the command that picking it
+/// runs on the selection. It has the fields of `toolbar::FlyoutItem`, so the view can draw the two
+/// alike.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ControlOption {
+    /// The command picking the option runs: `board.setColor` or `board.setStyle`.
+    pub command: &'static str,
+    /// The command's params: the one value the option sets. The command acts on the selection.
+    pub params: Value,
+    /// What the view calls the option: the colour's name, the shape's label, the text size's name
+    /// (S, M, L or XL), the routing's or the cap's label.
+    pub label: String,
+    /// The colour to draw for a colour option, `None` for the others.
+    pub swatch: Option<[u8; 4]>,
+    /// Whether the option is the value the control shows now.
+    pub selected: bool,
+}
+
+/// How the view calls each of [`CAPS`], in the same order.
+const CAP_LABELS: [&str; CAPS.len()] = [
+    "None",
+    "Line arrow",
+    "Triangle arrow",
+    "Reversed triangle",
+    "Circle",
+    "Diamond",
+];
+
+/// The ways a connector can run, in the order the bar offers them, and how the view calls each.
+const ROUTINGS: [(Routing, &str); 3] = [
+    (Routing::Straight, "Straight"),
+    (Routing::Elbow, "Elbow"),
+    (Routing::Curved, "Curved"),
+];
 
 /// The board colours as swatches: `(name, rgba8)`.
 fn palette() -> Vec<(&'static str, [u8; 4])> {
@@ -299,6 +340,73 @@ pub fn context_bar(s: &Session) -> Option<ContextBar> {
     })
 }
 
+/// An option that runs `board.setStyle` with `key` set to `value`.
+fn style_option(key: &str, value: Value, label: &str, selected: bool) -> ControlOption {
+    ControlOption {
+        command: "board.setStyle",
+        params: json!({ key: value }),
+        label: label.to_owned(),
+        swatch: None,
+        selected,
+    }
+}
+
+/// The options of a cap control: `key` (`startCap` or `endCap`) set to each of [`CAPS`].
+fn cap_options(key: &str, current: Option<&str>) -> Vec<ControlOption> {
+    CAPS.iter()
+        .zip(CAP_LABELS)
+        .map(|(cap, label)| style_option(key, json!(cap), label, Some(*cap) == current))
+        .collect()
+}
+
+/// What `control` offers, a [`ControlOption`] for each button of the view, in order: the control's
+/// own colours, [`BoardShape::ALL`], [`TEXT_SIZES`], straight, elbow and curved, or [`CAPS`].
+///
+/// The view draws these, and runs the command of the one picked with its params on the selection,
+/// through `BoardView::choose`. Every option works on the whole selection, whether or not it is
+/// the one selected, except a selected shape option: the engine refuses a shape that every
+/// selected shape already has, so the view runs nothing for that one.
+///
+/// `selected` marks the option that is the control's current value. No option is selected when
+/// the selected items differ, or have a value that the control has no option for.
+pub fn options(control: &Control) -> Vec<ControlOption> {
+    match control {
+        Control::Colors { items, current } => items
+            .iter()
+            .map(|(name, rgba)| ControlOption {
+                command: "board.setColor",
+                params: json!({ "color": name }),
+                label: (*name).to_owned(),
+                swatch: Some(*rgba),
+                selected: Some(*name) == *current,
+            })
+            .collect(),
+        Control::Shape { current } => BoardShape::ALL
+            .iter()
+            .map(|shape| {
+                let selected = Some(*shape) == *current;
+                style_option("shape", json!(shape.id()), shape.label(), selected)
+            })
+            .collect(),
+        // The engine takes the size, not its name.
+        Control::FontSize { current } => TEXT_SIZES
+            .iter()
+            .map(|(name, size)| {
+                style_option("fontSize", json!(size), name, Some(*name) == *current)
+            })
+            .collect(),
+        Control::Routing { current } => ROUTINGS
+            .iter()
+            .map(|(routing, label)| {
+                let selected = Some(*routing) == *current;
+                style_option("style", json!(routing.id()), label, selected)
+            })
+            .collect(),
+        Control::StartCap { current } => cap_options("startCap", current.as_deref()),
+        Control::EndCap { current } => cap_options("endCap", current.as_deref()),
+    }
+}
+
 /// Moves a bar of size `bar` so that it lies inside a canvas of size `canvas`, at least 8 px from
 /// each edge. `anchor` is the bar's top-centre, and so is the result. [`ContextBar::anchor`] is
 /// where the bar's bottom-centre goes, so a bar above it has its top-centre at
@@ -318,7 +426,6 @@ pub fn clamp_anchor(anchor: (f64, f64), bar: (f64, f64), canvas: (f64, f64)) -> 
 #[cfg(test)]
 mod tests {
     use figcraft_doc::{FileKind, NodeId, StyleRun};
-    use serde_json::{Value, json};
 
     use super::*;
     use crate::doc::{BoardDoc, DocKind};
@@ -394,55 +501,6 @@ mod tests {
                 Control::EndCap { .. } => "end cap",
             })
             .collect()
-    }
-
-    /// What picking each option of `control` runs, as a button of the bar would (`(command,
-    /// params)`), and the index of the option the control shows as current.
-    fn options(control: &Control) -> (Vec<(&'static str, Value)>, Option<usize>) {
-        let style = |key: &str, values: Vec<Value>| -> Vec<(&'static str, Value)> {
-            let one = |value: Value| ("board.setStyle", json!({ key: value }));
-            values.into_iter().map(one).collect()
-        };
-        match control {
-            Control::Colors { items, current } => (
-                items
-                    .iter()
-                    .map(|(name, _)| ("board.setColor", json!({ "color": name })))
-                    .collect(),
-                items.iter().position(|(name, _)| Some(*name) == *current),
-            ),
-            Control::Shape { current } => (
-                style(
-                    "shape",
-                    BoardShape::ALL.iter().map(|s| json!(s.id())).collect(),
-                ),
-                BoardShape::ALL.iter().position(|s| Some(*s) == *current),
-            ),
-            Control::FontSize { current } => (
-                style(
-                    "fontSize",
-                    TEXT_SIZES.iter().map(|(_, size)| json!(size)).collect(),
-                ),
-                TEXT_SIZES
-                    .iter()
-                    .position(|(name, _)| Some(*name) == *current),
-            ),
-            Control::Routing { current } => {
-                let all = [Routing::Straight, Routing::Elbow, Routing::Curved];
-                (
-                    style("style", all.iter().map(|r| json!(r.id())).collect()),
-                    all.iter().position(|r| Some(*r) == *current),
-                )
-            }
-            Control::StartCap { current } => (
-                style("startCap", CAPS.iter().map(|c| json!(c)).collect()),
-                CAPS.iter().position(|c| Some(*c) == current.as_deref()),
-            ),
-            Control::EndCap { current } => (
-                style("endCap", CAPS.iter().map(|c| json!(c)).collect()),
-                CAPS.iter().position(|c| Some(*c) == current.as_deref()),
-            ),
-        }
     }
 
     #[test]
@@ -706,9 +764,10 @@ mod tests {
             b.execute("board.setColor", &json!({"color": "blue"}))
                 .is_err()
         );
-        let (choices, _) = options(&bar(&b).controls[0]);
-        let (command, params) = &choices[1];
-        b.execute(command, params).unwrap();
+        // What is left, the outline, still works: the first outline the shape doesn't have.
+        let choices = options(&bar(&b).controls[0]);
+        let choice = choices.iter().find(|option| !option.selected).unwrap();
+        b.execute(choice.command, &choice.params).unwrap();
     }
 
     #[test]
@@ -809,27 +868,226 @@ mod tests {
             for (at, control) in before.controls.iter().enumerate() {
                 // The first option that is not the item's value now: the engine refuses to give a
                 // shape the outline it has.
-                let (choices, current) = options(control);
-                let (picked, (command, params)) = choices
-                    .into_iter()
-                    .enumerate()
-                    .find(|(i, _)| Some(*i) != current)
-                    .unwrap();
-                b.execute(command, &params)
+                let choices = options(control);
+                let picked = choices.iter().position(|option| !option.selected).unwrap();
+                let ControlOption {
+                    command, params, ..
+                } = &choices[picked];
+                b.execute(command, params)
                     .unwrap_or_else(|e| panic!("{item:?} {control:?} {command} {params}: {e}"));
-                // And the bar shows what was picked.
+                // And the bar shows what was picked, and nothing else, as the value now.
                 let after = bar(&b);
                 assert_eq!(kinds(&after), kinds(&before));
-                assert_eq!(
-                    options(&after.controls[at]).1,
-                    Some(picked),
-                    "{item:?} {command} {params}"
-                );
+                let on: Vec<usize> = options(&after.controls[at])
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, option)| option.selected)
+                    .map(|(i, _)| i)
+                    .collect();
+                assert_eq!(on, [picked], "{item:?} {command} {params}");
                 run += 1;
             }
         }
         // 1 for the sticky, 3 for the shape, 4 for the connector and 1 for the ink.
         assert_eq!(run, 9);
+    }
+
+    /// What picking each option of `control` runs, and what the option is called: `(command,
+    /// params, label)`.
+    fn picks(control: &Control) -> Vec<(&'static str, Value, String)> {
+        let options = options(control).into_iter();
+        options.map(|o| (o.command, o.params, o.label)).collect()
+    }
+
+    /// The labels of the options of `control` that show as selected.
+    fn selected(control: &Control) -> Vec<String> {
+        let options = options(control).into_iter();
+        options.filter(|o| o.selected).map(|o| o.label).collect()
+    }
+
+    #[test]
+    fn options_are_the_commands_the_controls_run() {
+        // Written out here, not read from the lists the engine keeps them in, so that a change to
+        // one of those has to be seen.
+        let colour = |name: &str| ("board.setColor", json!({ "color": name }), name.to_owned());
+        let style = |key: &str, value: Value, label: &str| {
+            ("board.setStyle", json!({ key: value }), label.to_owned())
+        };
+
+        let colours = [
+            "yellow", "orange", "red", "pink", "violet", "blue", "green", "gray",
+        ];
+        assert_eq!(picks(&colors(None)), colours.map(colour));
+
+        let shapes = [
+            ("rectangle", "Rectangle"),
+            ("roundedRectangle", "Rounded rectangle"),
+            ("ellipse", "Ellipse"),
+            ("diamond", "Diamond"),
+            ("triangle", "Triangle"),
+            ("speechBubble", "Speech bubble"),
+            ("chevron", "Chevron"),
+        ];
+        assert_eq!(
+            picks(&Control::Shape { current: None }),
+            shapes.map(|(id, label)| style("shape", json!(id), label))
+        );
+
+        // The size is the number, never its name.
+        let sizes = [("S", 12.0), ("M", 16.0), ("L", 24.0), ("XL", 36.0)];
+        assert_eq!(
+            picks(&Control::FontSize { current: None }),
+            sizes.map(|(name, size)| style("fontSize", json!(size), name))
+        );
+
+        let routings = [
+            ("straight", "Straight"),
+            ("elbow", "Elbow"),
+            ("curved", "Curved"),
+        ];
+        assert_eq!(
+            picks(&Control::Routing { current: None }),
+            routings.map(|(id, label)| style("style", json!(id), label))
+        );
+
+        let caps = [
+            ("none", "None"),
+            ("lineArrow", "Line arrow"),
+            ("triangleArrow", "Triangle arrow"),
+            ("reversedTriangle", "Reversed triangle"),
+            ("circleFilled", "Circle"),
+            ("diamondFilled", "Diamond"),
+        ];
+        assert_eq!(
+            picks(&Control::StartCap { current: None }),
+            caps.map(|(name, label)| style("startCap", json!(name), label))
+        );
+        assert_eq!(
+            picks(&Control::EndCap { current: None }),
+            caps.map(|(name, label)| style("endCap", json!(name), label))
+        );
+
+        // The colours are the only options with a swatch, and it is the control's own.
+        let swatches: Vec<_> = options(&colors(None)).iter().map(|o| o.swatch).collect();
+        let palette: Vec<_> = palette().iter().map(|(_, rgba)| Some(*rgba)).collect();
+        assert_eq!(swatches, palette);
+        for control in [
+            Control::Shape { current: None },
+            Control::FontSize { current: None },
+            Control::Routing { current: None },
+            Control::StartCap { current: None },
+            Control::EndCap { current: None },
+        ] {
+            assert!(options(&control).iter().all(|o| o.swatch.is_none()));
+        }
+
+        // The colours are the control's own, whole: all five fields of an option.
+        let own = Control::Colors {
+            items: vec![("mauve", [1, 2, 3, 255])],
+            current: Some("mauve"),
+        };
+        assert_eq!(
+            options(&own),
+            [ControlOption {
+                command: "board.setColor",
+                params: json!({ "color": "mauve" }),
+                label: "mauve".to_owned(),
+                swatch: Some([1, 2, 3, 255]),
+                selected: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn the_selected_option_is_the_value_the_control_shows() {
+        assert_eq!(selected(&colors(Some("blue"))), ["blue"]);
+        assert_eq!(
+            selected(&Control::Shape {
+                current: Some(BoardShape::Ellipse)
+            }),
+            ["Ellipse"]
+        );
+        assert_eq!(selected(&Control::FontSize { current: Some("L") }), ["L"]);
+        assert_eq!(
+            selected(&Control::Routing {
+                current: Some(Routing::Curved)
+            }),
+            ["Curved"]
+        );
+        let cap = |name: &str| Some(name.to_owned());
+        assert_eq!(
+            selected(&Control::StartCap {
+                current: cap("lineArrow")
+            }),
+            ["Line arrow"]
+        );
+        assert_eq!(
+            selected(&Control::EndCap {
+                current: cap("diamondFilled")
+            }),
+            ["Diamond"]
+        );
+
+        // No value (the items differ), or one the bar has no option for (a plain round cap, which
+        // FigCraft has but the bar doesn't offer): nothing shows as selected.
+        for control in [
+            colors(None),
+            Control::Shape { current: None },
+            Control::FontSize { current: None },
+            Control::Routing { current: None },
+            Control::StartCap { current: None },
+            Control::EndCap {
+                current: cap("round"),
+            },
+        ] {
+            assert_eq!(selected(&control), Vec::<String>::new(), "{control:?}");
+        }
+
+        // A real selection: a connector is elbow, has no cap at its start and a triangle at its
+        // end, and its line is in no board colour.
+        let mut b = board();
+        connector(&mut b);
+        let on: Vec<_> = bar(&b).controls.iter().map(selected).collect();
+        assert_eq!(
+            on,
+            [vec![], vec!["Elbow"], vec!["None"], vec!["Triangle arrow"]]
+        );
+    }
+
+    #[test]
+    fn every_option_runs_but_the_shape_the_item_has() {
+        let mut b = board();
+        let items = [
+            sticky(&mut b),
+            shape(&mut b),
+            connector(&mut b),
+            ink(&mut b),
+        ];
+        let mut run = 0;
+        for item in items {
+            select(&mut b, &[item]);
+            for at in 0..bar(&b).controls.len() {
+                for pick in 0..options(&bar(&b).controls[at]).len() {
+                    // What is selected moves with each pick, so ask the bar again every time.
+                    let control = bar(&b).controls[at].clone();
+                    let option = options(&control).swap_remove(pick);
+                    let result = b.execute(option.command, &option.params);
+                    // The engine refuses a shape the item has already. Everything else works,
+                    // whether or not it is what the item has now.
+                    let refused = matches!(control, Control::Shape { .. }) && option.selected;
+                    assert_eq!(
+                        result.is_err(),
+                        refused,
+                        "{item:?} {} {}: {result:?}",
+                        option.command,
+                        option.params
+                    );
+                    run += 1;
+                }
+            }
+        }
+        // The 8 colours for each of the 4 items, 7 shapes, 4 sizes, 3 routings, and 6 caps twice.
+        assert_eq!(run, 4 * 8 + 7 + 4 + 3 + 2 * 6);
     }
 
     #[test]
