@@ -505,10 +505,10 @@ fn handle_control(request: app_control::Request, mut stream: UnixStream, cx: &mu
                     futures::future::Either::Left((Ok(Ok(value)), _)) => reply_ok(&value),
                     futures::future::Either::Left((Ok(Err(e)), _)) => reply_error(&e),
                     futures::future::Either::Left((Err(_), _)) => {
-                        reply_error("The canvas closed before answering.")
+                        reply_error("The canvas or browser closed before answering.")
                     }
                     futures::future::Either::Right(_) => reply_error(
-                        "The canvas didn't answer in time. Is the Sawit window visible?",
+                        "The canvas or browser page didn't answer in time. Is the Sawit window visible?",
                     ),
                 };
                 reply(&mut stream, &line);

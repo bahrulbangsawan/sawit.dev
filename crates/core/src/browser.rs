@@ -288,7 +288,9 @@ pub fn parse_ipc(body: &str, token: &str) -> Option<PageEvent> {
     match kind {
         "console" => serde_json::from_str(json).ok().map(PageEvent::Console),
         "network" => serde_json::from_str(json).ok().map(PageEvent::Network),
-        "url" => serde_json::from_str::<String>(json).ok().map(PageEvent::Url),
+        "url" => serde_json::from_str::<String>(json)
+            .ok()
+            .map(PageEvent::Url),
         _ => None,
     }
 }
@@ -348,7 +350,12 @@ impl Logs {
         })
     }
 
-    pub fn network_json(&self, pattern: Option<&str>, failed_only: bool, limit: Option<usize>) -> Value {
+    pub fn network_json(
+        &self,
+        pattern: Option<&str>,
+        failed_only: bool,
+        limit: Option<usize>,
+    ) -> Value {
         let pattern = pattern.map(str::to_lowercase).filter(|p| !p.is_empty());
         let matching: Vec<&NetworkEntry> = self
             .network
@@ -372,6 +379,26 @@ impl Logs {
 
 fn newest<'a, T>(items: &'a [&'a T], limit: usize) -> &'a [&'a T] {
     &items[items.len().saturating_sub(limit)..]
+}
+
+/// Standard base64 with padding (screenshots over the control socket).
+pub fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | u32::from(*b) << (16 - 8 * i));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }
 
 /// The website data store (cookies, storage) of the project's browser:
@@ -398,7 +425,9 @@ pub fn pick_dev_server(jobs: &[PortJob], project: &Path) -> Option<String> {
         j.dev
             && !j.is_daemon()
             && !j.is_docker()
-            && j.cwd.as_deref().is_some_and(|c| Path::new(c).starts_with(project))
+            && j.cwd
+                .as_deref()
+                .is_some_and(|c| Path::new(c).starts_with(project))
             && !j.ports.is_empty()
     });
     let job = found.next()?;
@@ -519,6 +548,15 @@ mod tests {
     }
 
     #[test]
+    fn base64() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"h"), "aA==");
+        assert_eq!(base64_encode(b"hi"), "aGk=");
+        assert_eq!(base64_encode(b"hello"), "aGVsbG8=");
+        assert_eq!(base64_encode(&[0x89, b'P', b'N', b'G']), "iVBORw==");
+    }
+
+    #[test]
     fn store_ids_are_stable_per_folder() {
         let a = data_store_id(Path::new("/code/shop"));
         assert_eq!(a, data_store_id(Path::new("/code/shop")));
@@ -544,11 +582,17 @@ mod tests {
     fn dev_server_of_the_project() {
         let project = Path::new("/code/shop");
         assert_eq!(
-            pick_dev_server(&[job("/code/shop/web", 5173), job("/code/blog", 3000)], project),
+            pick_dev_server(
+                &[job("/code/shop/web", 5173), job("/code/blog", 3000)],
+                project
+            ),
             Some("http://localhost:5173".into())
         );
         assert_eq!(
-            pick_dev_server(&[job("/code/shop", 5173), job("/code/shop/api", 3000)], project),
+            pick_dev_server(
+                &[job("/code/shop", 5173), job("/code/shop/api", 3000)],
+                project
+            ),
             None
         );
         assert_eq!(pick_dev_server(&[], project), None);
@@ -574,7 +618,9 @@ mod tests {
             json!({"op": "click", "ref": "e3", "double": false})
         );
         let op: BrowserOp = serde_json::from_str(r#"{"op":"type","text":"hi"}"#).unwrap();
-        assert!(matches!(op, BrowserOp::Type { ref target, clear: false, .. } if target.is_empty()));
+        assert!(
+            matches!(op, BrowserOp::Type { ref target, clear: false, .. } if target.is_empty())
+        );
         assert!(BrowserOp::State.is_native() && !BrowserOp::Snapshot.is_native());
         assert!(serde_json::from_str::<BrowserOp>(r#"{"op":"fly"}"#).is_err());
     }

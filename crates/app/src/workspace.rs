@@ -15,6 +15,7 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::browser::BrowserView;
 use crate::canvas::{CanvasView, ToggleCanvasMaximize};
 use crate::changelog_page::ChangelogPage;
 use crate::cli::{CliStatus, cli_status};
@@ -164,6 +165,8 @@ pub struct Workspace {
     canvas: Option<WeakEntity<CanvasView>>,
     /// The canvas fills the window: no sidebar, terminal or tab bar.
     canvas_maximized: bool,
+    /// The browser tab (owned by its tab), while open.
+    browser: Option<WeakEntity<BrowserView>>,
     /// Shown instead of the panels until something is opened.
     welcome: Option<Entity<Welcome>>,
     tab_scroll: ScrollHandle,
@@ -357,6 +360,7 @@ impl Workspace {
             unmaximized: None,
             canvas: None,
             canvas_maximized: false,
+            browser: None,
             welcome: Some(welcome),
             tab_scroll: ScrollHandle::new(),
             scrolled_to: None,
@@ -1924,6 +1928,63 @@ impl Workspace {
         });
     }
 
+    /// Opens the browser (one tab), at `url` when given; an open browser
+    /// becomes the active tab and keeps its page.
+    pub(crate) fn open_browser(
+        &mut self,
+        url: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.leave_welcome(CENTER_ONLY, cx);
+        if !self.layout.center {
+            self.layout.toggle(Area::Center);
+        }
+        let key: SharedString = "browser".into();
+        if let Some(ix) = self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
+        {
+            self.active = ix;
+        } else {
+            let project = self.root(cx);
+            let view = cx.new(|cx| BrowserView::new(project, url, window, cx));
+            self.browser = Some(view.downgrade());
+            self.push_tab(
+                PaneItem::Other {
+                    view: view.into(),
+                    key,
+                    title: crate::browser::TITLE.into(),
+                    icon: crate::browser::ICON,
+                    file: None,
+                },
+                None,
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    /// The browser is the tab showing in the center pane.
+    fn browser_active(&self) -> bool {
+        matches!(
+            self.tabs.get(self.active).map(|t| &t.item),
+            Some(PaneItem::Other { key, .. }) if key.as_ref() == "browser"
+        )
+    }
+
+    /// Keeps the browser's native webview in step with what is on screen,
+    /// as [`Self::sync_canvas`] does for the canvas.
+    fn sync_browser(&mut self, cx: &mut Context<Self>) {
+        let Some(browser) = self.browser.as_ref().and_then(|b| b.upgrade()) else {
+            self.browser = None;
+            return;
+        };
+        let visible = self.welcome.is_none() && self.layout.center && self.browser_active();
+        browser.update(cx, |b, _| b.set_visible(visible));
+    }
+
     /// Shows the MCP install page (one tab).
     fn open_mcp_page(&mut self, cx: &mut Context<Self>) {
         self.leave_welcome(CENTER_ONLY, cx);
@@ -2115,6 +2176,17 @@ impl Workspace {
                     .on_click(cx.listener(|this, _, _, cx| this.open_canvas(cx))),
             )
             .child(
+                Button::new("open-browser")
+                    .ghost()
+                    .xsmall()
+                    .icon(crate::browser::ICON)
+                    .label("Browser")
+                    .tooltip("Preview Your App in a Browser an Agent Can Drive")
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.open_browser(None, window, cx)),
+                    ),
+            )
+            .child(
                 Button::new("open-tools")
                     .ghost()
                     .xsmall()
@@ -2230,6 +2302,7 @@ impl Render for Workspace {
             self.focus.focus(window, cx);
         }
         self.sync_canvas(cx);
+        self.sync_browser(cx);
         v_flex()
             .key_context("Workspace")
             .track_focus(&self.focus)
