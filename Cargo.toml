@@ -47,6 +47,31 @@ opt-level = 3
 [profile.dev.package.markdown]
 opt-level = 3
 
+# Hot CPU path: debug renders of the native canvas (FigCraft's renderer and
+# text layout, the raster and font crates under them, and the engine that
+# drives them). At opt-level 0 they also hold enough unwind tables to pass
+# the linker's 16 MiB __eh_frame limit: the app's test binary had 17.3 MiB.
+[profile.dev.package.figcraft-render]
+opt-level = 3
+[profile.dev.package.figcraft-engine]
+opt-level = 3
+[profile.dev.package.figcraft-text]
+opt-level = 3
+[profile.dev.package.figcraft-geom]
+opt-level = 3
+[profile.dev.package.figcraft-doc]
+opt-level = 3
+[profile.dev.package.tiny-skia]
+opt-level = 3
+[profile.dev.package.tiny-skia-path]
+opt-level = 3
+[profile.dev.package.skrifa]
+opt-level = 3
+[profile.dev.package.read-fonts]
+opt-level = 3
+[profile.dev.package.harfrust]
+opt-level = 3
+
 [profile.release]
 lto = "fat"
 strip = true

@@ -143,6 +143,7 @@ fn bindings() -> Vec<KeyBinding> {
 
 pub fn init(cx: &mut App) {
     cx.bind_keys(bindings());
+    crate::board::init(cx);
 }
 
 /// The workspace shortcuts the canvas passes to the app while it has the
