@@ -59,9 +59,10 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🖥️ **A real terminal** | Full `alacritty_terminal` emulation, fullscreen with one click, and it can run [herdr](https://herdr.dev). |
 | 📡 **Ports & network** | See and stop every dev server you started, and diagnose your internet connection step by step. |
 | 💬 **Prompt library** | Save the prompts you reuse, with tags and `{{variables}}` to fill in before copying. |
-| 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first. |
-| ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports and `sawit backup` dumps. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (96 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with Web Inspector, and that AI agents drive through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
+| 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
+| ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (110 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 
 ## Install
 
@@ -71,7 +72,7 @@ On an Apple Silicon Mac, run:
 curl -fsSL https://raw.githubusercontent.com/bahrulbangsawan/sawit.dev/main/scripts/install.sh | sh
 ```
 
-This installs the latest release into `/Applications` (or `~/Applications`). Add `SAWIT_VERSION=v0.0.6` before `sh`
+This installs the latest release into `/Applications` (or `~/Applications`). Add `SAWIT_VERSION=v0.0.8` before `sh`
 to pick a version. After that, the app updates itself.
 
 The script also offers to install [herdr](https://herdr.dev) (optional, for split panes in Sawit's terminal). It asks
@@ -213,11 +214,26 @@ explained. A conflict on the same address can't be forced.
 - Click **Tools** in the title bar for package managers (Homebrew, nvm, pnpm, npm, uv), languages and runtimes
   (Node.js, Bun, Deno, Python, Rust), AI agents (Claude Code, Codex, OpenCode, Amp, …) and terminal apps.
 - Each tool shows whether it's installed, its version and where it lives, and the exact command that installs it.
+- When npm or GitHub has a newer release, an installed tool shows `11.21.0 → 12.16.1` and an **Upgrade** button;
+  **Upgrade All** upgrades every one of them. Upgrades use the tool's own command (`bun upgrade`, `uv self update`,
+  `claude update`, …), or its install script again.
 - **Install** one, tick several and **Install Selected**, or **Install All Missing**. Each runs its official install
   script in your login shell, one at a time, with prerequisites first (nvm before Node.js, uv before Python).
 - Homebrew asks for your password, so it runs in the terminal. Open a new terminal tab afterwards so it sees the
   new `PATH`.
-- From the terminal: `sawit list tools` and `sawit pasang bun uv`.
+- From the terminal: `sawit list tools`, `sawit pasang bun uv` and `sawit pupuk`.
+
+### Browser
+
+<img src="docs/media/browser.png" alt="Browser tab showing the acme-store demo shop on localhost:5173, with back, forward, reload, the address field and a Web Inspector button above the page" width="100%">
+
+- Click **Browser** in the title bar for a web browser tab (WebKit). With nothing typed, it opens the project's
+  running dev server. The toolbar has back, forward, reload, an address field (text that isn't a URL is searched)
+  and the Web Inspector.
+- Cookies and storage are kept per project, so being signed in to one app doesn't leak into another.
+- AI agents drive it through the `browser_*` MCP tools: open pages, read the page as an accessibility outline,
+  click, type, pick options, press keys, scroll, wait for text, run JavaScript, and read the console, failed
+  requests and screenshots.
 
 ### Canvas
 
@@ -340,7 +356,7 @@ Both create a symlink `/usr/local/bin/sawit` to the app and ask for an admin pas
 root.
 
 Besides opening files, the command can query databases like `psql`, export, back up and import tables, list
-instances, databases, ports and dev tools, stop dev servers or instances, and install dev tools, all without the app (see
+instances, databases, ports and dev tools, stop dev servers or instances, and install or upgrade dev tools, all without the app (see
 [below](#databases-ports-and-instances-from-the-terminal)).
 
 ```bash
@@ -384,15 +400,17 @@ sawit backup kyzn crm.leads leads.sql        # one schema or one table
 sawit tanam kyzn leads leads.csv             # "plant": load a CSV file into a table, all rows or none
 sawit list tools                             # dev tools and whether they're installed
 sawit pasang bun uv                          # "plant": install dev tools, prerequisites first (asks; -y skips)
+sawit pupuk                                  # "fertilize": upgrade every tool with a newer release (asks; -y skips)
+sawit pupuk bun -y                           # upgrade one tool without asking
 ```
 
 - `<db>` is looked up in this order: a Sawit instance or saved connection with that name, a database with that name in
   a saved connection, `DATABASE_URL` in `.env` in the current folder or one above it, then the databases of every
   Postgres running locally. A unique prefix also works (`kyzn` finds `kyzn_crm`). If a file or folder with that name
   exists, it's opened instead. To open a folder named after a subcommand (`list`, `bakar`, `panen`, `backup`,
-  `tanam`, `pasang`, …), use `sawit ./list`.
+  `tanam`, `pasang`, `pupuk`, …), use `sawit ./list`.
 - Every word has an English and an Indonesian name: `list`/`ls`, `panen`/`export`/`ekspor`,
-  `backup`/`dump`/`cadangkan`, `tanam`/`import`/`impor`, `pasang`/`install`, and for `list`: `db`/`blok`,
+  `backup`/`dump`/`cadangkan`, `tanam`/`import`/`impor`, `pasang`/`install`, `pupuk`/`upgrade`, and for `list`: `db`/`blok`,
   `ports`/`lahan`, `instances`/`kebun`, `connections`/`konsesi`, `tools`/`alat`/`perkakas`.
 - `panen` and `backup` ask before replacing an existing file; `-y` replaces it without asking. Without a terminal
   they refuse instead of prompting. `panen` with SQL runs it read-only.
@@ -404,12 +422,15 @@ sawit pasang bun uv                          # "plant": install dev tools, prere
 - `pasang` runs each tool's official install script, the same as the app's **Tools** page. It lists what will run and
   asks first (`-y` skips the question; without a terminal it needs `-y`). Homebrew asks for a password, so `pasang`
   prints its command for you to run instead.
+- `list tools` marks a tool with a newer release as `terpasang 0.12.1 → 0.13.6`. `pupuk` with no tools upgrades all
+  of those, the same as **Upgrade All**; named tools are upgraded unless they're already the latest. It asks first
+  like `pasang`, and without a terminal it needs `-y`.
 
 ## MCP for AI agents
 
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 96 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 110 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it).
 
 | Area | Tools |
@@ -425,15 +446,16 @@ except the app-control ones, which drive the running app (`launch_app` starts it
 | Git | `git_status`, `git_log`, `git_diff`, `git_show`, `git_branches`, `git_stage`, `git_unstage`, `git_commit`, `git_switch` |
 | Prompts | `list_prompts`, `get_prompt`, `create_prompt`, `update_prompt`, `delete_prompt`, `fill_prompt` |
 | Files | `search_files` |
-| Dev tools | `list_dev_tools`, `install_dev_tools` |
+| Dev tools | `list_dev_tools` (with newer releases), `install_dev_tools`, `upgrade_dev_tools` |
 | MCP servers | `list_mcp_servers`, `install_mcp_server`, `uninstall_mcp_server` |
 | App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page`, `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
 | Terminal (app running) | `terminal_run`, `terminal_read`, `terminal_input`, `terminal_close` |
+| Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot` |
 | Canvas (app running) | `canvas_get`, `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear`, `canvas_load`, `canvas_export` |
 
 Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`
-and `uninstall_mcp_server` take the name again as `confirm` (so does `remove_instance` when it deletes the data), and `install_dev_tools` needs
-`confirm: true` because it runs install scripts from the internet. Passwords never appear in a result.
+and `uninstall_mcp_server` take the name again as `confirm` (so does `remove_instance` when it deletes the data), and `install_dev_tools` and `upgrade_dev_tools` need
+`confirm: true` because they run install scripts from the internet. Passwords never appear in a result.
 
 Click **MCP** in the title bar to install it, along with a catalog of other servers: AWS, Cloudflare, Neon, Postman,
 Figma, Mobbin, Exa and more. Servers that need an account sign in through the client's own sign-in, which the page
@@ -527,10 +549,11 @@ crates/core   sawit-core — no GPUI, tested with plain cargo test
   git, github            status, diff, log graph, commits, branches; GitHub pull requests and checks
   ssh, shell_config      saved SSH hosts and ~/.ssh/config; shell startup files
   scripts, search        a project's run scripts and saved commands; text search in a folder
-  dev_tools              the Tools page catalog, detection and install scripts
+  dev_tools              the Tools page catalog, detection, latest releases, install and upgrade
+  browser                the browser tab's agent ops, page agent script, console and network logs
   mcp_clients, mcp_catalog, mcp_auth   MCP install into AI clients, the server catalog, client sign-in
   app_control, update, cli    control socket for agents, self-update, the sawit command
-  kebun                  sawit <db>, list, bakar, panen, backup, tanam, pasang (no app needed)
+  kebun                  sawit <db>, list, bakar, panen, backup, tanam, pasang, pupuk (no app needed)
   rt                     Tokio runtime on its own thread
 crates/app    sawit — GPUI UI only (draws & forwards input)
 crates/mcp    sawit-mcp — stdio MCP server on top of core
