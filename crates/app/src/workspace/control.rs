@@ -98,7 +98,8 @@ impl Workspace {
             },
             "tabs": tabs,
             "terminals": self.terminal.read(cx).describe(cx),
-            "canvas_open": self.canvases.iter().any(|c| c.upgrade().is_some()),
+            "canvas_open": self.canvases.iter().any(|c| c.upgrade().is_some())
+                || self.boards.iter().any(|b| b.upgrade().is_some()),
             "browser": self.browser.as_ref().and_then(|b| b.upgrade()).map(|b| b.read(cx).describe()),
         })
     }
@@ -317,8 +318,16 @@ impl Workspace {
                 done(json!({ "tab": self.active }))
             }
             Command::Canvas { op } => {
-                let canvas = self.open_canvas(cx).ok_or("The canvas didn't open.")?;
-                Ok(Answer::Later(canvas.update(cx, |c, _| c.apply(op))))
+                match self.open_canvas(cx).ok_or("The canvas didn't open.")? {
+                    // The page answers when its script has run the op.
+                    CanvasTab::Web(canvas) => {
+                        Ok(Answer::Later(canvas.update(cx, |c, _| c.apply(op))))
+                    }
+                    // The native canvas answers at once.
+                    CanvasTab::Native(board) => {
+                        Ok(Answer::Now(board.update(cx, |b, cx| b.run_op(&op, cx))))
+                    }
+                }
             }
             Command::Browser { op } => {
                 let open = self.browser.as_ref().and_then(|b| b.upgrade());

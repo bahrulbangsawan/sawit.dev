@@ -8,6 +8,7 @@ pub mod doc;
 pub mod input;
 pub mod layers;
 pub mod menu;
+pub mod ops;
 pub mod policy;
 pub mod shortcuts;
 pub mod skeleton;

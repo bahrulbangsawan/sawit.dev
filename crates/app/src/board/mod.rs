@@ -6,10 +6,6 @@
 //! pans and zooms show at once and the render catches up ([`paint`]). Edits are saved once the
 //! canvas has been still for a moment, and when the tab closes or the app quits.
 
-// Nothing outside the tests uses the canvas until it is opened from the workspace (Plan 1,
-// Task 6). Task 6 removes this allow, with anything still unused.
-#![allow(dead_code)]
-
 mod paint;
 mod worker;
 
@@ -27,7 +23,8 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
 use sawit_board::store::{self, Writer};
 use sawit_board::view::{self, PREVIEW_QUALITY, Viewport};
-use sawit_board::{BoardDoc, BoardError, DocKind};
+use sawit_board::{BoardDoc, BoardError, DocKind, ops};
+use serde_json::{Value, json};
 
 use crate::canvas::ToggleCanvasMaximize;
 use crate::states::Placeholder;
@@ -176,6 +173,35 @@ impl BoardView {
         self.board.as_mut().ok()
     }
 
+    /// Runs a control op, `{"op": "get" | "command" | ...}` (`sawit_board::ops::run`), on the
+    /// document, and answers it as the control socket replies: `{ok: true, ...}` or
+    /// `{ok: false, error}`.
+    ///
+    /// Then the canvas redraws, and saves whatever the op changed: an op arrives with no input in
+    /// the window, perhaps while it is covered and its display link has stopped, so the save
+    /// can't wait for the next paint.
+    pub fn run_op(&mut self, op: &Value, cx: &mut Context<Self>) -> Value {
+        let reply = match self.board_mut() {
+            Some(board) => ops::run(board, op),
+            None => self.not_opened(),
+        };
+        self.autosave(cx);
+        cx.notify();
+        reply
+    }
+
+    /// The answer to an op when the file couldn't be opened: why, as `{ok: false, error}`.
+    fn not_opened(&self) -> Value {
+        let reason = self.board.as_ref().err().map_or("", |error| error.as_ref());
+        json!({
+            "ok": false,
+            "error": format!(
+                "The canvas file {} couldn't be opened: {reason}",
+                self.path().display()
+            ),
+        })
+    }
+
     /// Saves the document now if it isn't the one in the file, and waits until it is on disk.
     /// When that fails the error is logged, and the next flush or edit tries again; the writer's
     /// [`Writer::last_error`] still says why.
@@ -259,6 +285,8 @@ impl BoardView {
 
     /// A frame from the render thread replaces the one shown.
     fn show_frame(&mut self, frame: Frame, cx: &mut Context<Self>) {
+        // Which request the frame answers, to follow a stutter from its request to its paint.
+        log::trace!("canvas frame of request {:016x}", frame.key);
         if let Some(old) = self.frame.replace(frame) {
             self.stale.push(old.image);
         }
@@ -402,7 +430,7 @@ impl BoardView {
     }
 
     fn view_mut(&mut self) -> Option<&mut ViewState> {
-        let ds = self.board.as_mut().ok()?.session.ds_mut().ok()?;
+        let ds = self.board_mut()?.session.ds_mut().ok()?;
         Some(&mut ds.view)
     }
 }
@@ -531,7 +559,9 @@ fn issues_line(path: &Path, issues: &[String]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::path::{Path, PathBuf};
+    use std::rc::Rc;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -543,7 +573,7 @@ mod tests {
         TestAppContext, WindowHandle, point, px, size,
     };
     use sawit_board::{BoardDoc, DocKind, store};
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::{BoardView, SAVE_DELAY, TOAST_TIME, issues_line};
 
@@ -599,6 +629,16 @@ mod tests {
         let doc = store::open(path).unwrap().doc().unwrap();
         let page = doc.first_page().unwrap();
         doc.node(page).unwrap().children.len()
+    }
+
+    /// Sends `op` to the canvas as the control socket does, and returns its answer.
+    fn run_op(view: &Entity<BoardView>, op: Value, cx: &mut TestAppContext) -> Value {
+        view.update(cx, |view, cx| view.run_op(&op, cx))
+    }
+
+    /// The op that puts a sticky note on the board.
+    fn sticky_op() -> Value {
+        json!({"op": "command", "command": "board.sticky", "params": {"x": 0, "y": 0}})
     }
 
     fn view_state(view: &Entity<BoardView>, cx: &TestAppContext) -> ViewState {
@@ -818,6 +858,113 @@ mod tests {
         view.update(cx, |view, _| view.flush());
         assert!(std::fs::read(&path).unwrap() == bytes, "the file was saved");
         assert_eq!(names(&tmp.0), ["design.figcraft"]);
+    }
+
+    #[gpui_kit::test]
+    fn ops_run_on_the_canvas_document(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("ops");
+        let view = open(cx, &tmp.0.join("canvas.figcraft"));
+        let layers = |cx: &mut TestAppContext| {
+            let reply = run_op(&view, json!({"op": "get"}), cx);
+            assert_eq!(reply["ok"], json!(true), "{reply}");
+            reply["elements"].as_array().map(Vec::len)
+        };
+        assert_eq!(layers(cx), Some(0));
+        let reply = run_op(&view, sticky_op(), cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        assert!(!reply["result"]["id"].is_null(), "{reply}");
+        // The edit is in the canvas's own document, which `get` reads back.
+        assert_eq!(layers(cx), Some(1));
+        let in_document = view.read_with(cx, |view, _| {
+            let doc = view.board().unwrap().doc().unwrap();
+            doc.node(doc.first_page().unwrap()).unwrap().children.len()
+        });
+        assert_eq!(in_document, 1);
+        // An op the canvas doesn't have yet is an error reply, not a panic.
+        let reply = run_op(&view, json!({"op": "mermaid", "source": "graph TD"}), cx);
+        assert_eq!(reply["ok"], json!(false), "{reply}");
+    }
+
+    #[gpui_kit::test]
+    fn an_op_is_saved_without_a_paint(cx: &mut TestAppContext) {
+        // No window: the canvas is never painted, as when an agent edits a covered window, whose
+        // display link has stopped. The edit must reach the file all the same.
+        let tmp = Scratch::new("op-saves");
+        let path = tmp.0.join("canvas.figcraft");
+        let view = open(cx, &path);
+        let step = SAVE_DELAY / 2;
+
+        // Ops that change nothing, or fail, leave nothing to save.
+        run_op(&view, json!({"op": "get"}), cx);
+        run_op(&view, json!({"op": "command", "command": "no.such"}), cx);
+        cx.executor().advance_clock(SAVE_DELAY * 2);
+        cx.run_until_parked();
+        assert!(!path.exists(), "saved with nothing to save");
+
+        let reply = run_op(&view, sticky_op(), cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        cx.executor().advance_clock(step);
+        cx.run_until_parked();
+        assert!(!path.exists(), "saved before the canvas was still");
+        cx.executor().advance_clock(SAVE_DELAY);
+        cx.run_until_parked();
+        assert_eq!(saved_layers(&path), 1);
+
+        // Each op after that is saved the same way.
+        run_op(&view, sticky_op(), cx);
+        cx.executor().advance_clock(SAVE_DELAY * 2);
+        cx.run_until_parked();
+        assert_eq!(saved_layers(&path), 2);
+    }
+
+    #[gpui_kit::test]
+    fn an_op_redraws_the_canvas(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("op-redraw");
+        let view = open(cx, &tmp.0.join("canvas.figcraft"));
+        let redraws = Rc::new(Cell::new(0));
+        cx.update(|cx| {
+            let redraws = redraws.clone();
+            cx.observe(&view, move |_, _| redraws.set(redraws.get() + 1))
+                .detach();
+        });
+        // A command that only moves the view changes nothing in the document, but the canvas
+        // has to show it.
+        let zoom = |cx: &TestAppContext| view_state(&view, cx).zoom;
+        let before = zoom(cx);
+        run_op(
+            &view,
+            json!({"op": "command", "command": "view.zoomIn"}),
+            cx,
+        );
+        assert!(zoom(cx) > before);
+        assert!(redraws.get() > 0, "the canvas wasn't told to redraw");
+    }
+
+    #[gpui_kit::test]
+    fn a_canvas_that_could_not_be_opened_answers_ops_with_the_reason(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("op-corrupt");
+        let path = tmp.0.join("canvas.figcraft");
+        std::fs::write(&path, b"not a canvas").unwrap();
+        let view = open(cx, &path);
+        let reason = store::open(&path)
+            .err()
+            .expect("a corrupt file")
+            .to_string();
+        for op in [json!({"op": "get"}), sticky_op()] {
+            let reply = run_op(&view, op, cx);
+            assert_eq!(reply["ok"], json!(false), "{reply}");
+            // It says which file, and what is wrong with it.
+            let error = reply["error"].as_str().expect("an error string");
+            assert!(error.contains("couldn't be opened"), "{error}");
+            assert!(error.contains(&*path.to_string_lossy()), "{error}");
+            assert!(error.contains(&reason), "{error}");
+        }
+        // And the file it couldn't open is as it was.
+        cx.executor().advance_clock(SAVE_DELAY * 2);
+        cx.run_until_parked();
+        view.update(cx, |view, _| view.flush());
+        assert_eq!(std::fs::read(&path).unwrap(), b"not a canvas");
+        assert_eq!(names(&tmp.0), ["canvas.figcraft"]);
     }
 
     #[test]

@@ -15,6 +15,7 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::board::BoardView;
 use crate::browser::BrowserView;
 use crate::canvas::{CanvasView, ToggleCanvasMaximize};
 use crate::changelog_page::ChangelogPage;
@@ -46,6 +47,7 @@ use crate::tools_page::{ToolsEvent, ToolsPage};
 use crate::update::{Updater, updater};
 use crate::viewers::{ImageView, PdfView, VideoView};
 use crate::welcome::{Welcome, WelcomeEvent};
+use sawit_board::store::board_file;
 use sawit_core::files::{FileKind, classify};
 use sawit_core::instances::AppPaths;
 use sawit_core::recent::RecentProjects;
@@ -215,6 +217,23 @@ enum PaneItem {
     },
 }
 
+/// The canvas [`Workspace::open_canvas`] opened or found: the Excalidraw page, or the native
+/// canvas while `SAWIT_NATIVE_CANVAS` is set (the Excalidraw page goes once the native canvas
+/// replaces it).
+pub enum CanvasTab {
+    Web(Entity<CanvasView>),
+    Native(Entity<BoardView>),
+}
+
+impl CanvasTab {
+    fn view(&self) -> AnyView {
+        match self {
+            CanvasTab::Web(view) => view.clone().into(),
+            CanvasTab::Native(view) => view.clone().into(),
+        }
+    }
+}
+
 pub struct Workspace {
     servers: Entity<ServerStore>,
     server_list: Entity<ServerList>,
@@ -250,6 +269,12 @@ pub struct Workspace {
     unmaximized: Option<Layout>,
     /// The canvas tabs (owned by their tabs), one per project at most.
     canvases: Vec<WeakEntity<CanvasView>>,
+    /// The native canvas tabs (owned by their tabs), one per project at most. `canvases` holds
+    /// the Excalidraw ones.
+    boards: Vec<WeakEntity<BoardView>>,
+    /// The canvas tab is the native canvas instead of the Excalidraw page: the environment
+    /// variable `SAWIT_NATIVE_CANVAS` is set (read once, when the window opens).
+    native_canvas: bool,
     /// The canvas fills the window: no sidebar, terminal or tab bar.
     canvas_maximized: bool,
     /// The browser tab (owned by its tab), while open.
@@ -447,6 +472,8 @@ impl Workspace {
             _path_copied_reset: Task::ready(()),
             unmaximized: None,
             canvases: Vec::new(),
+            boards: Vec::new(),
+            native_canvas: std::env::var_os("SAWIT_NATIVE_CANVAS").is_some(),
             canvas_maximized: false,
             browser: None,
             welcome: Some(welcome),
@@ -1946,8 +1973,10 @@ impl Workspace {
 
     /// Opens the active project's brainstorming canvas (one tab per
     /// project, saved in its `.nyawit/`), or the app-wide one without a
-    /// project.
-    fn open_canvas(&mut self, cx: &mut Context<Self>) -> Option<Entity<CanvasView>> {
+    /// project. With `native_canvas` it is the native canvas: its file is
+    /// `.nyawit/canvas.figcraft` (else `canvas.figcraft` in Sawit's own
+    /// folder) instead of the Excalidraw board.
+    fn open_canvas(&mut self, cx: &mut Context<Self>) -> Option<CanvasTab> {
         self.leave_welcome(CENTER_ONLY, cx);
         if !self.layout.center {
             self.layout.toggle(Area::Center);
@@ -1964,21 +1993,36 @@ impl Workspace {
         {
             self.active = ix;
             cx.notify();
-            return self
-                .canvases
-                .iter()
-                .filter_map(|c| c.upgrade())
-                .find(|c| c.read(cx).project == root);
+            // The canvas is the tab's own view.
+            let PaneItem::Other { view, .. } = &self.tabs[ix].item else {
+                return None;
+            };
+            return match view.clone().downcast::<BoardView>() {
+                Ok(board) => Some(CanvasTab::Native(board)),
+                Err(view) => view.downcast::<CanvasView>().ok().map(CanvasTab::Web),
+            };
         }
-        let view = cx.new(|cx| CanvasView::new(root.clone(), cx));
-        cx.subscribe(&view, |this, _, _: &ToggleCanvasMaximize, cx| {
-            this.toggle_canvas_maximized(cx)
-        })
-        .detach();
-        self.canvases.push(view.downgrade());
+        let tab = if self.native_canvas {
+            let file = board_file(root.as_deref(), &AppPaths::default_macos().root);
+            let view = cx.new(|cx| BoardView::open(file, cx));
+            cx.subscribe(&view, |this, _, _: &ToggleCanvasMaximize, cx| {
+                this.toggle_canvas_maximized(cx)
+            })
+            .detach();
+            self.boards.push(view.downgrade());
+            CanvasTab::Native(view)
+        } else {
+            let view = cx.new(|cx| CanvasView::new(root.clone(), cx));
+            cx.subscribe(&view, |this, _, _: &ToggleCanvasMaximize, cx| {
+                this.toggle_canvas_maximized(cx)
+            })
+            .detach();
+            self.canvases.push(view.downgrade());
+            CanvasTab::Web(view)
+        };
         self.push_tab(
             PaneItem::Other {
-                view: view.clone().into(),
+                view: tab.view(),
                 key,
                 title: crate::canvas::TITLE.into(),
                 icon: crate::canvas::ICON,
@@ -1988,7 +2032,7 @@ impl Workspace {
             cx,
         );
         cx.notify();
-        Some(view)
+        Some(tab)
     }
 
     /// The canvas whose tab is showing in the center pane.
@@ -2021,6 +2065,7 @@ impl Workspace {
     /// they draw above GPUI, so each is hidden unless its tab is showing.
     fn sync_canvas(&mut self, cx: &mut Context<Self>) {
         self.canvases.retain(|c| c.upgrade().is_some());
+        self.boards.retain(|b| b.upgrade().is_some());
         let shown = self
             .active_canvas()
             .filter(|_| self.welcome.is_none() && self.layout.center);

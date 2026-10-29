@@ -42,8 +42,6 @@ pub struct Frame {
     pub image: Arc<RenderImage>,
     /// The [`Job::key`] of the request this answers.
     pub key: u64,
-    /// How long the job took, from the render to the image, in milliseconds.
-    pub millis: f64,
 }
 
 /// The render thread of one canvas (named `canvas-render`). It ends when the worker drops, once
@@ -165,13 +163,13 @@ fn render(retained: &mut Retained, job: &Job) -> Option<Frame> {
     // As `viewers/pdf.rs` wraps its pages: GPUI takes the bytes as they are, BGRA.
     let pixels = image::RgbaImage::from_raw(width, height, bgra)?;
     let image = Arc::new(RenderImage::new([image::Frame::new(pixels)]));
+    // How long the job took, from the render to the image.
     let millis = started.elapsed().as_secs_f64() * 1000.0;
     log::debug!("canvas render {millis:.1} ms");
     Some(Frame {
         view,
         image,
         key: job.key,
-        millis,
     })
 }
 
@@ -302,7 +300,6 @@ mod tests {
             (size.width.0, size.height.0),
             (view.width as i32, view.height as i32)
         );
-        assert!(frame.millis.is_finite() && frame.millis >= 0.0);
 
         // What is drawn: the sticky where it is on the page, and the page around it.
         let [r, g, b] = page_rgb(&doc, page);
