@@ -1,12 +1,13 @@
 //! Shell startup files on this machine (`~/.zshrc`, `/etc/profile`, …):
 //! which ones exist, which shell reads them and when, so they can be opened
-//! in the editor without hunting for the path.
+//! in the editor without hunting for the path. The user's own files can be
+//! saved to a private GitHub repository.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::cli::{applescript_escape, shell_quote};
-use crate::{CoreError, Result, cmd};
+use crate::{CoreError, Result, cmd, github};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
@@ -182,6 +183,177 @@ pub async fn write_text_as_admin(path: &Path, text: &str) -> Result<()> {
     })
 }
 
+// ---------------------------------------------------------------- GitHub
+
+/// The private repository the user's files are saved to.
+pub const BACKUP_REPO: &str = "sawit-shell-config";
+
+/// The user's own startup files (not the system-wide ones) and the path
+/// each gets in the repository: its path under the home folder.
+pub fn backup_files() -> Vec<(String, PathBuf)> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    backup_files_in(&detect(), &home)
+}
+
+fn backup_files_in(configs: &[ShellConfig], home: &Path) -> Vec<(String, PathBuf)> {
+    configs
+        .iter()
+        .filter(|c| c.scope == Scope::User)
+        .map(|c| {
+            let rel = c.path.strip_prefix(home).unwrap_or(&c.path);
+            let rel = rel.to_string_lossy().trim_start_matches('/').to_string();
+            (rel, c.path.clone())
+        })
+        .collect()
+}
+
+/// Lines that set what looks like a secret (`export OPENAI_API_KEY=sk-…`,
+/// fish's `set -gx GITHUB_TOKEN …`), as `line number, variable`. Values
+/// that only point at another variable or a command (`$(op read …)`) don't
+/// count.
+pub fn find_secrets(text: &str) -> Vec<(usize, String)> {
+    const HINTS: [&str; 6] = [
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "API_KEY",
+        "PRIVATE_KEY",
+    ];
+    let mut out = Vec::new();
+    for (ix, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        let (name, value) = if let Some(rest) = line.strip_prefix("set ") {
+            // fish: set [-gxU…] NAME value
+            let mut words = rest.split_whitespace().skip_while(|w| w.starts_with('-'));
+            let Some(name) = words.next() else { continue };
+            (name, words.collect::<Vec<_>>().join(" "))
+        } else {
+            let line = line.strip_prefix("export ").unwrap_or(line);
+            let Some((name, value)) = line.split_once('=') else {
+                continue;
+            };
+            (name.trim(), value.trim().to_string())
+        };
+        let valid = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        let upper = name.to_ascii_uppercase();
+        let value = value.trim_matches(|c| c == '"' || c == '\'');
+        if valid
+            && HINTS.iter().any(|h| upper.contains(h))
+            && !value.is_empty()
+            && !value.starts_with('$')
+            && !value.starts_with('`')
+        {
+            out.push((ix + 1, name.to_string()));
+        }
+    }
+    out
+}
+
+/// What saving would do, worked out before anything is sent.
+#[derive(Debug, Clone)]
+pub struct BackupPlan {
+    pub login: String,
+    /// `None` when the repository will be created.
+    pub repo: Option<github::OwnRepo>,
+    /// `~/.zshrc:12 OPENAI_API_KEY`, one per line that looks like a secret.
+    pub secrets: Vec<String>,
+}
+
+/// Looks up the account and the repository, and scans the files.
+pub async fn plan_backup(token: &str) -> Result<BackupPlan> {
+    let login = github::account(token).await?.login;
+    let repo = github::own_repo(token, &login, BACKUP_REPO).await?;
+    if let Some(r) = &repo
+        && !r.private
+    {
+        return Err(CoreError::GitHub(format!(
+            "github.com/{login}/{BACKUP_REPO} is public, so your shell config won't be saved there. Make it private on GitHub, then save again."
+        )));
+    }
+    let mut secrets = Vec::new();
+    for (rel, path) in backup_files() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for (line, name) in find_secrets(&text) {
+            secrets.push(format!("~/{rel}:{line} {name}"));
+        }
+    }
+    Ok(BackupPlan {
+        login,
+        repo,
+        secrets,
+    })
+}
+
+/// What a save did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Saved {
+    pub url: String,
+    pub files: usize,
+    /// The repository was made by this save.
+    pub created: bool,
+    /// `false` when GitHub already had these exact files.
+    pub changed: bool,
+}
+
+/// Creates the private repository when it's missing, then commits every
+/// one of the user's startup files to it.
+pub async fn save_backup(token: &str, plan: &BackupPlan) -> Result<Saved> {
+    let files = backup_files();
+    if files.is_empty() {
+        return Err(CoreError::Config(
+            "There are no shell config files in your home folder to save.".into(),
+        ));
+    }
+    let mut contents = Vec::new();
+    for (rel, path) in &files {
+        contents.push((rel.clone(), std::fs::read(path)?));
+    }
+    let (repo, created) = match &plan.repo {
+        Some(r) => (r.clone(), false),
+        None => (
+            github::create_private_repo(
+                token,
+                BACKUP_REPO,
+                "Shell config files (~/.zshrc and friends), saved by Sawit.",
+            )
+            .await?,
+            true,
+        ),
+    };
+    let host = std::process::Command::new("/usr/sbin/scutil")
+        .args(["--get", "ComputerName"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "this Mac".into());
+    let names: Vec<&str> = files.iter().map(|(rel, _)| rel.as_str()).collect();
+    let message = format!("Save shell config from {host}\n\n{}", names.join("\n"));
+    let changed = github::commit_files(
+        token,
+        &plan.login,
+        BACKUP_REPO,
+        &repo.default_branch,
+        &contents,
+        &message,
+    )
+    .await?;
+    Ok(Saved {
+        url: repo.html_url,
+        files: files.len(),
+        created,
+        changed,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,6 +391,45 @@ mod tests {
             ]
         );
         assert!(found.iter().all(|c| c.writable));
+    }
+
+    #[test]
+    fn backup_takes_only_the_users_files_by_home_path() {
+        let home = Path::new("/Users/me");
+        let config = |path: &str, scope| ShellConfig {
+            path: PathBuf::from(path),
+            shell: "zsh",
+            note: "",
+            scope,
+            writable: true,
+        };
+        let files = backup_files_in(
+            &[
+                config("/Users/me/.zshrc", Scope::User),
+                config("/Users/me/.config/fish/config.fish", Scope::User),
+                config("/etc/zshrc", Scope::System),
+            ],
+            home,
+        );
+        let rels: Vec<_> = files.iter().map(|(r, _)| r.as_str()).collect();
+        assert_eq!(rels, [".zshrc", ".config/fish/config.fish"]);
+    }
+
+    #[test]
+    fn secrets_are_found_but_references_are_not() {
+        let text = "# export OLD_TOKEN=abc
+export OPENAI_API_KEY=\"sk-123\"
+export GITHUB_TOKEN=$(gh auth token)
+NPM_TOKEN=\"$NPM\"
+export PATH=$HOME/bin:$PATH
+set -gx HF_TOKEN hf_abc
+DB_PASSWORD='hunter2'
+";
+        let found: Vec<_> = find_secrets(text)
+            .into_iter()
+            .map(|(l, n)| format!("{l} {n}"))
+            .collect();
+        assert_eq!(found, ["2 OPENAI_API_KEY", "6 HF_TOKEN", "7 DB_PASSWORD"]);
     }
 
     #[test]

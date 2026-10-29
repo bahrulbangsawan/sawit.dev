@@ -1,6 +1,8 @@
 //! Shell Config sidebar: the shell startup files found on this machine
 //! (`~/.zshrc`, `/etc/profile`, …); a click opens one in the editor, a
 //! right-click offers the Files panel's commands that fit a single file.
+//! "Save to GitHub" commits the user's own files to a private repository,
+//! creating it the first time.
 
 use std::path::{Path, PathBuf};
 
@@ -12,8 +14,9 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::files;
+use sawit_core::github;
 use sawit_core::recent::tildify;
-use sawit_core::shell_config::{self, Scope, ShellConfig};
+use sawit_core::shell_config::{self, BACKUP_REPO, Saved, Scope, ShellConfig};
 
 use crate::files::ops::Op;
 use crate::files::{
@@ -41,6 +44,8 @@ pub fn init(cx: &mut App) {
 pub enum ShellConfigEvent {
     OpenFile(PathBuf),
     OpenTerminal(PathBuf),
+    /// Saving needs a GitHub sign-in first.
+    SignInToGitHub,
 }
 
 impl EventEmitter<ShellConfigEvent> for ShellConfigPanel {}
@@ -51,6 +56,10 @@ pub struct ShellConfigPanel {
     /// The file the menu's commands act on.
     selected: Option<PathBuf>,
     error: Option<String>,
+    /// Saving to GitHub is under way.
+    saving: bool,
+    /// The last save's outcome, and the repository's address.
+    saved: Option<(String, Option<String>)>,
     focus: FocusHandle,
 }
 
@@ -61,6 +70,8 @@ impl ShellConfigPanel {
             login_shell: shell_config::login_shell(),
             selected: None,
             error: None,
+            saving: false,
+            saved: None,
             focus: cx.focus_handle(),
         }
     }
@@ -252,6 +263,162 @@ impl ShellConfigPanel {
     }
 }
 
+/// Saving the user's files to GitHub.
+impl ShellConfigPanel {
+    fn save_to_github(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.saving {
+            return;
+        }
+        self.error = None;
+        self.saved = None;
+        let token = match github::load_token() {
+            Ok(Some(token)) => token,
+            Ok(None) => {
+                self.saved = Some((
+                    "Sign in to GitHub in the GitHub tab, then save again.".into(),
+                    None,
+                ));
+                cx.emit(ShellConfigEvent::SignInToGitHub);
+                cx.notify();
+                return;
+            }
+            Err(e) => {
+                self.error = Some(e.to_string());
+                cx.notify();
+                return;
+            }
+        };
+        self.saving = true;
+        cx.notify();
+        let rx = rt::spawn(cx, {
+            let token = token.clone();
+            async move { shell_config::plan_backup(&token).await }
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let plan = match rx.await {
+                Ok(Ok(plan)) => plan,
+                outcome => {
+                    let _ = this.update(cx, |this, cx| {
+                        this.saving = false;
+                        if let Ok(Err(e)) = outcome {
+                            this.error = Some(e.to_string());
+                        }
+                        cx.notify();
+                    });
+                    return;
+                }
+            };
+            // The first save creates the repository: say what's about to
+            // leave this Mac when it looks like a secret.
+            if plan.repo.is_none() && !plan.secrets.is_empty() {
+                let Ok(answer) = this.update_in(cx, |_, window, cx| {
+                    let mut lines: Vec<&str> = plan.secrets.iter().take(6).map(String::as_str).collect();
+                    let more = plan.secrets.len().saturating_sub(lines.len());
+                    let more = format!("and {more} more");
+                    if plan.secrets.len() > 6 {
+                        lines.push(&more);
+                    }
+                    window.prompt(
+                        PromptLevel::Warning,
+                        "Save lines that look like secrets?",
+                        Some(&format!(
+                            "{}\n\nThey'll be stored in the new private repository github.com/{}/{BACKUP_REPO}. Anyone you give access to it can read them.",
+                            lines.join("\n"),
+                            plan.login
+                        )),
+                        &["Save Anyway", "Cancel"],
+                        cx,
+                    )
+                }) else {
+                    return;
+                };
+                if !matches!(answer.await, Ok(0)) {
+                    let _ = this.update(cx, |this, cx| {
+                        this.saving = false;
+                        cx.notify();
+                    });
+                    return;
+                }
+            }
+            let Ok(rx) = this.update(cx, |_, cx| {
+                rt::spawn(cx, async move { shell_config::save_backup(&token, &plan).await })
+            }) else {
+                return;
+            };
+            let outcome = rx.await;
+            let _ = this.update(cx, |this, cx| {
+                this.saving = false;
+                match outcome {
+                    Ok(Ok(saved)) => this.saved = Some((saved_message(&saved), Some(saved.url))),
+                    Ok(Err(e)) => this.error = Some(e.to_string()),
+                    Err(_) => {}
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let user_files = self
+            .configs
+            .iter()
+            .filter(|c| c.scope == Scope::User)
+            .count();
+        v_flex()
+            .p_2()
+            .gap_1()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(
+                Button::new("shell-config-save-github")
+                    .outline()
+                    .small()
+                    .w_full()
+                    .icon(Lucide::Github)
+                    .label(if self.saving { "Saving to GitHub…" } else { "Save to GitHub" })
+                    .loading(self.saving)
+                    .disabled(self.saving || user_files == 0)
+                    .tooltip(format!(
+                        "Commit Your {user_files} Profile Files to the Private Repository {BACKUP_REPO}"
+                    ))
+                    .on_click(cx.listener(|this, _, window, cx| this.save_to_github(window, cx))),
+            )
+            .when_some(self.saved.clone(), |el, (message, url)| {
+                el.child(
+                    h_flex()
+                        .gap_1()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(div().flex_1().min_w_0().whitespace_normal().child(message))
+                        .when_some(url, |el, url| {
+                            el.child(
+                                Button::new("shell-config-open-repo")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(Lucide::ExternalLink)
+                                    .tooltip("Open the Repository on GitHub")
+                                    .on_click(move |_, _, cx| cx.open_url(&url)),
+                            )
+                        }),
+                )
+            })
+    }
+}
+
+fn saved_message(saved: &Saved) -> String {
+    let files = if saved.files == 1 {
+        "1 file".to_string()
+    } else {
+        format!("{} files", saved.files)
+    };
+    match (saved.created, saved.changed) {
+        (true, _) => format!("Created the private repository {BACKUP_REPO} and saved {files}."),
+        (false, true) => format!("Saved {files} to {BACKUP_REPO}."),
+        (false, false) => format!("{BACKUP_REPO} already has these {files}; nothing to save."),
+    }
+}
+
 fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -362,5 +529,6 @@ impl Render for ShellConfigPanel {
                         )
                     }),
             )
+            .child(self.render_footer(cx))
     }
 }

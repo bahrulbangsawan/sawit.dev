@@ -291,6 +291,7 @@ impl Workspace {
                     ShellConfigEvent::OpenTerminal(dir) => {
                         this.open_terminal_in(dir.clone(), window, cx)
                     }
+                    ShellConfigEvent::SignInToGitHub => this.open_github(window, cx),
                 },
             ),
             // Server tabs follow renames and close when deleted.
