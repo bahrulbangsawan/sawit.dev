@@ -1,12 +1,20 @@
-//! Keys on the canvas. GPUI and FigCraft name keys differently, so [`key_name`] and
-//! [`gpui_keystroke`] translate between them, and [`route_key`] sends a key where FigCraft's own
-//! keymap says, under Sawit's command policy ([`crate::policy`]).
+//! Keys and the pointer on the canvas.
+//!
+//! GPUI and FigCraft name keys differently, so [`key_name`] and [`gpui_keystroke`] translate
+//! between them, and [`route_key`] sends a key where FigCraft's own keymap says, under Sawit's
+//! command policy ([`crate::policy`]).
+//!
+//! The pointer goes to FigCraft's tools as page points ([`pointer_event`], [`pointer`]). What the
+//! tools and commands ask of the view comes back as requests: [`handle_requests`] carries out the
+//! ones that need no view, and hands back the rest.
 
 use std::borrow::Cow;
 
 use figcraft_doc::{NodeId, NodeKind};
 use figcraft_engine::keymap::{self, Context, Platform};
-use figcraft_engine::{Session, guard, textedit, vectoredit};
+use figcraft_engine::{
+    PointerEvent, PointerKind, Session, UiRequest, ViewState, guard, textedit, vectoredit,
+};
 use serde_json::json;
 
 use crate::policy::{is_hidden, is_ui};
@@ -345,6 +353,137 @@ fn single_text(session: &Session) -> Option<NodeId> {
 /// The selected layers Enter edits as vectors.
 fn vector_targets(session: &Session) -> Option<Vec<NodeId>> {
     vectoredit::enter_targets(session.doc().ok()?, &session.selection())
+}
+
+/// A pointer event of `kind` at `local`, a point of the canvas in logical px from its top-left,
+/// with `mods` held: the page point under it in `view`, the canvas's own view, as the tools take
+/// it. It has no pen pressure: as on FigCraft's own Mac canvas, strokes draw at their weight.
+pub fn pointer_event(
+    kind: PointerKind,
+    local: (f64, f64),
+    view: &ViewState,
+    mods: Mods,
+) -> PointerEvent {
+    let page = view.screen_to_page(local.0, local.1);
+    event(kind, page, local, view.zoom, mods)
+}
+
+/// A pointer event of `kind` at `page`, a point of the page, which is where `view` shows it on
+/// the canvas: the event a control op names by its page point.
+pub(crate) fn page_pointer_event(
+    kind: PointerKind,
+    page: (f64, f64),
+    view: &ViewState,
+    mods: Mods,
+) -> PointerEvent {
+    let local = view.page_to_screen(page.0, page.1);
+    event(kind, page, local, view.zoom, mods)
+}
+
+/// A pointer event of `kind` at page point `page`, which is `local` on the canvas at `zoom`.
+fn event(
+    kind: PointerKind,
+    page: (f64, f64),
+    local: (f64, f64),
+    zoom: f64,
+    mods: Mods,
+) -> PointerEvent {
+    PointerEvent {
+        kind,
+        x: page.0,
+        y: page.1,
+        sx: local.0,
+        sy: local.1,
+        shift: mods.shift,
+        alt: mods.alt,
+        cmd: mods.cmd,
+        ctrl: mods.ctrl,
+        zoom,
+        pressure: None,
+    }
+}
+
+/// Sends `event` to the canvas's tools, and takes out of the session what they asked of the view
+/// (`session.ui_requests`), in order, for [`handle_requests`] and then the view.
+///
+/// Errors are the engine's refusals, and its panics caught by [`guard::run`]. The requests made
+/// before an error stay in the session.
+pub fn pointer(board: &mut BoardDoc, event: &PointerEvent) -> Result<Vec<UiRequest>, BoardError> {
+    let session = &mut board.session;
+    guard::run("ui.pointer", || session.pointer(event))?;
+    Ok(std::mem::take(&mut board.session.ui_requests))
+}
+
+/// The pointer left the canvas: what hovering there showed goes (what Alt measured, a vector
+/// part's highlight), unless a gesture still holds it.
+pub fn pointer_left(board: &mut BoardDoc) -> Result<(), BoardError> {
+    let session = &mut board.session;
+    guard::run("ui.pointerLeft", || {
+        session.pointer_left();
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// Carries out the requests in `reqs` that need no view, as FigCraft's own canvas does, and hands
+/// back the others (panels, menus, dialogs), in order, for the view.
+///
+/// - `board.editText` starts typing in the text of the board object it names (`data.id`): the
+///   new sticky of ⇧⌘↩, for one.
+///
+/// A request that fails leaves the engine's error in `session.message`, FigCraft's message for
+/// the user, for the view to show.
+pub fn handle_requests(board: &mut BoardDoc, reqs: &[UiRequest]) -> Vec<UiRequest> {
+    let mut rest = Vec::new();
+    for req in reqs {
+        match req.kind.as_str() {
+            "board.editText" => {
+                let Some(id) = req.data.get("id").and_then(figcraft_engine::params::id_of) else {
+                    continue;
+                };
+                let session = &mut board.session;
+                let edited = guard::run("ui.editText", || {
+                    figcraft_engine::board::edit_text(session, id)
+                });
+                if let Err(error) = edited {
+                    board.session.message = Some(error.to_string());
+                }
+            }
+            _ => rest.push(req.clone()),
+        }
+    }
+    rest
+}
+
+/// The way a resize handle pulls, as the four two-headed arrows a cursor shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResizeDir {
+    /// Left and right: 0°.
+    Horizontal,
+    /// Up and down: 90°.
+    Vertical,
+    /// From the top left to the bottom right: 45°, as the screen's y goes down.
+    DiagDown,
+    /// From the top right to the bottom left: 135°.
+    DiagUp,
+}
+
+/// The arrow of [`ResizeDir`] nearest a resize along `angle_radians` (0 is horizontal and π/2
+/// vertical, on the screen, where y goes down), whichever way along the line it points: the angle
+/// counts modulo π. An angle that is no number is horizontal.
+pub fn resize_dir(angle_radians: f64) -> ResizeDir {
+    use std::f64::consts::{FRAC_PI_8, PI};
+    // Each arrow takes the angles within π/8 of its own.
+    let angle = angle_radians.rem_euclid(PI);
+    if !(FRAC_PI_8..7.0 * FRAC_PI_8).contains(&angle) {
+        ResizeDir::Horizontal
+    } else if angle < 3.0 * FRAC_PI_8 {
+        ResizeDir::DiagDown
+    } else if angle < 5.0 * FRAC_PI_8 {
+        ResizeDir::Vertical
+    } else {
+        ResizeDir::DiagUp
+    }
 }
 
 #[cfg(test)]
@@ -741,5 +880,220 @@ mod tests {
         assert_eq!(list_style(&board, note), ListStyle::Numbered);
         assert_eq!(route_key(&mut board, ")", NONE), Ok(KeyOutcome::Unhandled));
         assert_eq!(sticky_text(&board, note), "hi");
+    }
+
+    /// A new, empty design file.
+    fn design() -> BoardDoc {
+        BoardDoc {
+            session: Session::with_document(figcraft_doc::Document::new("Design")),
+        }
+    }
+
+    /// A pointer event of `kind` at page point (`x`, `y`), at 100%.
+    fn at(kind: PointerKind, x: f64, y: f64) -> PointerEvent {
+        PointerEvent::at(kind, x, y, 1.0)
+    }
+
+    /// Sends `events` to the tools, one after another, and what they asked of the view.
+    fn send(board: &mut BoardDoc, events: &[PointerEvent]) -> Vec<UiRequest> {
+        let mut requests = Vec::new();
+        for event in events {
+            requests.extend(pointer(board, event).unwrap());
+        }
+        requests
+    }
+
+    /// The top-level layers of the page on show.
+    fn layers(board: &BoardDoc) -> Vec<NodeId> {
+        let page = board.session.page().unwrap();
+        board.doc().unwrap().node(page).unwrap().children.clone()
+    }
+
+    /// The text layer of board object `id`.
+    fn text_of(board: &BoardDoc, id: NodeId) -> NodeId {
+        figcraft_engine::board::text_of(&board.doc().unwrap(), id).unwrap()
+    }
+
+    /// The request a command makes to start typing in board object `id`.
+    fn edit_text_request(id: NodeId) -> UiRequest {
+        UiRequest {
+            kind: "board.editText".into(),
+            data: json!({"id": id}),
+        }
+    }
+
+    #[test]
+    fn pointer_event_uses_page_coordinates() {
+        let view = ViewState {
+            cx: 100.0,
+            cy: 50.0,
+            zoom: 2.0,
+            vw: 800.0,
+            vh: 600.0,
+            ..ViewState::default()
+        };
+        let event = pointer_event(PointerKind::Down, (400.0, 300.0), &view, SHIFT);
+        assert_eq!((event.x, event.y), (100.0, 50.0));
+        assert_eq!((event.sx, event.sy), (400.0, 300.0));
+        assert_eq!(event.zoom, 2.0);
+        assert_eq!(event.kind, PointerKind::Down);
+        assert!(event.shift && !event.alt && !event.cmd && !event.ctrl);
+    }
+
+    #[test]
+    fn rectangle_tool_draws_one_undo_step() {
+        let mut board = design();
+        board.execute("tool.rectangle", &json!({})).unwrap();
+        // As FigCraft's own drags go (ruling P2-C4): the last move sizes the shape, and the
+        // release commits it.
+        send(
+            &mut board,
+            &[
+                at(PointerKind::Down, 0.0, 0.0),
+                at(PointerKind::Move, 50.0, 40.0),
+                at(PointerKind::Move, 100.0, 80.0),
+                at(PointerKind::Up, 100.0, 80.0),
+            ],
+        );
+        let layers = layers(&board);
+        assert_eq!(layers.len(), 1);
+        let doc = board.doc().unwrap();
+        let drawn = doc.node(layers[0]).unwrap();
+        assert!(
+            matches!(drawn.kind, NodeKind::Rectangle),
+            "{:?}",
+            drawn.kind
+        );
+        assert_eq!((drawn.width, drawn.height), (100.0, 80.0));
+        assert_eq!(board.session.undo_depth(), (1, 0));
+        board.execute("edit.undo", &json!({})).unwrap();
+        assert!(page_is_empty(&board));
+    }
+
+    #[test]
+    fn drag_released_outside_ends_gesture() {
+        let mut board = design();
+        board.execute("tool.rectangle", &json!({})).unwrap();
+        // The release comes far off the canvas, where the window's listener sees it.
+        send(
+            &mut board,
+            &[
+                at(PointerKind::Down, 0.0, 0.0),
+                at(PointerKind::Move, 50.0, 40.0),
+                at(PointerKind::Move, 100.0, 80.0),
+                at(PointerKind::Up, 5000.0, 5000.0),
+            ],
+        );
+        assert_eq!(layers(&board).len(), 1);
+        assert!(!board.session.tool.busy());
+        assert_eq!(board.session.undo_depth(), (1, 0));
+    }
+
+    #[test]
+    fn sticky_click_starts_text_editing() {
+        let mut board = board();
+        board.execute("tool.sticky", &json!({})).unwrap();
+        let requests = send(
+            &mut board,
+            &[
+                at(PointerKind::Down, 0.0, 0.0),
+                at(PointerKind::Up, 0.0, 0.0),
+            ],
+        );
+        handle_requests(&mut board, &requests);
+        let [note] = layers(&board)[..] else {
+            panic!("layers {:?}", layers(&board))
+        };
+        assert!(editing(&board));
+        assert_eq!(text_edit(&board).id, text_of(&board, note));
+    }
+
+    #[test]
+    fn next_sticky_keeps_typing() {
+        let mut board = board();
+        let first = sticky(&mut board, "");
+        assert!(figcraft_engine::board::edit_text(&mut board.session, first).unwrap());
+        let shift_cmd = Mods { shift: true, ..CMD };
+        assert_eq!(
+            route_key(&mut board, "Enter", shift_cmd),
+            Ok(KeyOutcome::Handled)
+        );
+        let requests = std::mem::take(&mut board.session.ui_requests);
+        let rest = handle_requests(&mut board, &requests);
+        assert!(rest.is_empty(), "{rest:?}");
+        let [one, next] = layers(&board)[..] else {
+            panic!("layers {:?}", layers(&board))
+        };
+        assert_eq!(one, first);
+        // Typing goes on in the new sticky.
+        assert_eq!(text_edit(&board).id, text_of(&board, next));
+        textedit::insert(&mut board.session, "more").unwrap();
+        assert_eq!(sticky_text(&board, next), "more");
+    }
+
+    #[test]
+    fn requests_for_the_view_are_handed_back_in_order() {
+        let mut board = board();
+        let note = sticky(&mut board, "hi");
+        let ask = |kind: &str| UiRequest {
+            kind: kind.into(),
+            data: json!({}),
+        };
+        let requests = [
+            ask("panel.layers"),
+            edit_text_request(note),
+            ask("palette.actions"),
+        ];
+        let rest = handle_requests(&mut board, &requests);
+        assert_eq!(rest, [ask("panel.layers"), ask("palette.actions")]);
+        assert_eq!(text_edit(&board).id, text_of(&board, note));
+        assert!(board.session.message.is_none());
+    }
+
+    #[test]
+    fn a_text_edit_that_cant_start_leaves_a_message_for_the_view() {
+        let mut board = board();
+        let note = sticky(&mut board, "hi");
+        board
+            .execute("file.saveVersion", &json!({"name": "First"}))
+            .unwrap();
+        // An earlier version on show can't be edited.
+        board
+            .execute("version.preview", &json!({"index": 0}))
+            .unwrap();
+        let rest = handle_requests(&mut board, &[edit_text_request(note)]);
+        assert!(rest.is_empty(), "{rest:?}");
+        assert!(!editing(&board));
+        let message = board.session.message.clone().unwrap_or_default();
+        assert!(message.contains("earlier version"), "{message:?}");
+    }
+
+    #[test]
+    fn leaving_the_canvas_clears_what_hovering_showed() {
+        let mut board = design();
+        // Alt over a layer measures to it, outlining the box measured to.
+        board.session.tool.overlay.measure_box = Some([0.0, 0.0, 10.0, 10.0]);
+        pointer_left(&mut board).unwrap();
+        assert_eq!(board.session.tool.overlay.measure_box, None);
+    }
+
+    #[test]
+    fn resize_dir_buckets_angles() {
+        use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+        for (angle, dir) in [
+            (0.0, ResizeDir::Horizontal),
+            (FRAC_PI_2, ResizeDir::Vertical),
+            (FRAC_PI_4, ResizeDir::DiagDown),
+            (3.0 * FRAC_PI_4, ResizeDir::DiagUp),
+            (PI, ResizeDir::Horizontal),
+            // Either way along the line, and the nearest arrow.
+            (-FRAC_PI_4, ResizeDir::DiagUp),
+            (-FRAC_PI_2, ResizeDir::Vertical),
+            (0.3, ResizeDir::Horizontal),
+            (1.0, ResizeDir::DiagDown),
+            (f64::NAN, ResizeDir::Horizontal),
+        ] {
+            assert_eq!(resize_dir(angle), dir, "{angle}");
+        }
     }
 }

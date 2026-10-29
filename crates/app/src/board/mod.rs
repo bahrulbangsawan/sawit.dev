@@ -8,6 +8,7 @@
 //! ([`overlay_paint`]). Edits are saved once the canvas has been still for a moment, and when the
 //! tab closes or the app quits.
 
+mod events;
 mod overlay_paint;
 mod paint;
 mod worker;
@@ -19,14 +20,14 @@ use std::time::{Duration, Instant};
 
 use figcraft_doc::color::Color;
 use figcraft_doc::{Document, NodeId};
-use figcraft_engine::ViewState;
+use figcraft_engine::{UiRequest, ViewState};
 use figcraft_render::{Options, View};
 use futures::StreamExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
 use sawit_board::store::{self, Writer};
 use sawit_board::view::{self, PREVIEW_QUALITY, Viewport};
-use sawit_board::{BoardDoc, BoardError, DocKind, ops};
+use sawit_board::{BoardDoc, BoardError, DocKind, input, ops};
 use serde_json::{Value, json};
 
 use crate::canvas::ToggleCanvasMaximize;
@@ -75,6 +76,9 @@ pub struct BoardView {
     fitted: bool,
     /// Where the canvas was in the window when it was last painted.
     bounds: Bounds<Pixels>,
+    /// The left button went down on the canvas and hasn't come up: its moves and its release go
+    /// to the tools wherever the pointer is ([`events`]).
+    dragging: bool,
     /// The window it was last painted in, whose sprite atlas holds its images.
     window: Option<AnyWindowHandle>,
     /// A zoom gesture is on until then: frames render at [`PREVIEW_QUALITY`] to keep up.
@@ -144,6 +148,7 @@ impl BoardView {
             stale: Vec::new(),
             fitted: false,
             bounds: Bounds::default(),
+            dragging: false,
             window: None,
             zooming_until: None,
             zoom_settle: None,
@@ -180,17 +185,41 @@ impl BoardView {
     /// document, and answers it as the control socket replies: `{ok: true, ...}` or
     /// `{ok: false, error}`.
     ///
-    /// Then the canvas redraws, and saves whatever the op changed: an op arrives with no input in
-    /// the window, perhaps while it is covered and its display link has stopped, so the save
-    /// can't wait for the next paint.
+    /// Then the canvas carries out what the op asked of it, as after the same input in the
+    /// window, redraws, and saves whatever the op changed: an op arrives with no input in the
+    /// window, perhaps while it is covered and its display link has stopped, so the save can't
+    /// wait for the next paint.
     pub fn run_op(&mut self, op: &Value, cx: &mut Context<Self>) -> Value {
         let reply = match self.board_mut() {
             Some(board) => ops::run(board, op),
             None => self.not_opened(),
         };
+        self.handle_ui_requests(Vec::new(), cx);
         self.autosave(cx);
         cx.notify();
         reply
+    }
+
+    /// Carries out what the engine asked of the canvas: `requests`, which an input already took
+    /// out of the session, then any still waiting in `session.ui_requests`. It runs after every
+    /// pointer event, key and op, as FigCraft's own canvas handles its requests after each input.
+    ///
+    /// `sawit_board::input::handle_requests` does the ones that need no view (`board.editText`
+    /// starts typing in a sticky). The panels' and menus' requests get their arms here with Plans
+    /// 4, 5 and 6. A message the engine left for the user shows as a toast.
+    fn handle_ui_requests(&mut self, mut requests: Vec<UiRequest>, cx: &mut Context<Self>) {
+        let Some(board) = self.board_mut() else {
+            return;
+        };
+        requests.append(&mut board.session.ui_requests);
+        let rest = input::handle_requests(board, &requests);
+        let message = board.session.message.take();
+        for request in rest {
+            log::debug!("the canvas has no handler yet for request {}", request.kind);
+        }
+        if let Some(message) = message {
+            self.show_toast(message, cx);
+        }
     }
 
     /// The answer to an op when the file couldn't be opened: why, as `{ok: false, error}`.
@@ -472,6 +501,10 @@ impl Render for BoardView {
                 .into_any_element();
         }
         let this = cx.entity().downgrade();
+        let drags = this.clone();
+        let cursor = self.board().map_or(CursorStyle::Arrow, |board| {
+            events::cursor_style(&board.session.tool.overlay.cursor)
+        });
         let theme = cx.theme();
         let toast = self.toast.clone().map(|text| {
             div()
@@ -502,8 +535,15 @@ impl Render for BoardView {
             .size_full()
             .overflow_hidden()
             .track_focus(&self.focus)
+            .cursor(cursor)
             .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| this.on_scroll(event, cx)))
             .on_pinch(cx.listener(|this, event: &PinchEvent, _, cx| this.on_pinch(event, cx)))
+            // The right button is left for the context menu.
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_left_down))
+            .on_mouse_move(cx.listener(Self::on_mouse_move))
+            // A key pressed with the pointer resting on the canvas isn't the pointer leaving it.
+            .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
+            .on_hover(cx.listener(Self::on_hover))
             .child(
                 canvas(
                     move |bounds, window, cx| {
@@ -511,7 +551,8 @@ impl Render for BoardView {
                             .ok()
                             .flatten()
                     },
-                    |bounds, painting, window, cx| {
+                    move |bounds, painting, window, cx| {
+                        events::track_drags(&drags, window);
                         if let Some(painting) = painting {
                             paint::paint(bounds, painting, window, cx);
                         }
@@ -587,8 +628,9 @@ mod tests {
     use figcraft_engine::ViewState;
     use gpui_kit::component::{Theme, ThemeMode};
     use gpui_kit::{
-        AppContext as _, Entity, Modifiers, PinchEvent, RenderImage, ScrollDelta, ScrollEvent,
-        TestAppContext, WindowHandle, point, px, size,
+        AppContext as _, Entity, Modifiers, MouseButton, MouseDownEvent, MouseExitEvent,
+        MouseUpEvent, PinchEvent, RenderImage, ScrollDelta, ScrollEvent, TestAppContext,
+        VisualTestContext, WindowHandle, point, px, size,
     };
     use sawit_board::{BoardDoc, DocKind, store};
     use serde_json::{Value, json};
@@ -1148,5 +1190,194 @@ mod tests {
         cx.executor().advance_clock(Duration::from_secs(1));
         cx.run_until_parked();
         assert!(view.read_with(cx, |view, _| view.zooming_until.is_none()));
+    }
+
+    /// A new, empty canvas in a 400 × 300 window, painted once: at 100%, with page point (0, 0)
+    /// in the middle of the window, (200, 150). What simulates input in that window, and the app.
+    fn painted_canvas(
+        cx: &mut TestAppContext,
+        tmp: &Scratch,
+    ) -> (Entity<BoardView>, VisualTestContext) {
+        cx.update(gpui_kit::init);
+        let (window, view) = open_in_window(cx, &tmp.0.join("canvas.figcraft"));
+        next_frame(cx, &view, None);
+        (view, VisualTestContext::from_window(window.into(), cx))
+    }
+
+    /// The top-level layers of the canvas's page.
+    fn layers(view: &Entity<BoardView>, cx: &TestAppContext) -> Vec<figcraft_doc::NodeId> {
+        view.read_with(cx, |view, _| {
+            let doc = view.board().unwrap().doc().unwrap();
+            doc.node(doc.first_page().unwrap())
+                .unwrap()
+                .children
+                .clone()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn a_drag_out_of_the_window_ends_as_one_undo_step(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("drag-out");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        let tool = json!({"op": "command", "command": "tool.rectangle"});
+        let reply = run_op(&view, tool, &mut cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        let (left, none) = (MouseButton::Left, Modifiers::default());
+
+        cx.simulate_mouse_down(point(px(100.), px(100.)), left, none);
+        // The press gave the canvas the keyboard.
+        assert!(cx.update(|window, cx| view.read(cx).focus.is_focused(window)));
+        cx.simulate_mouse_move(point(px(150.), px(140.)), left, none);
+        // Out of the window: only the window's listeners see the last move and the release.
+        cx.simulate_mouse_move(point(px(600.), px(500.)), left, none);
+        cx.simulate_mouse_up(point(px(600.), px(500.)), left, none);
+
+        let [drawn] = layers(&view, &cx)[..] else {
+            panic!("layers {:?}", layers(&view, &cx))
+        };
+        view.read_with(&cx, |view, _| {
+            assert!(!view.dragging);
+            let board = view.board().unwrap();
+            // The gesture is over: the tool is free, and back to Move once the shape is drawn.
+            assert!(!board.session.tool.busy());
+            assert_eq!(board.session.tool.tool.id(), "move");
+            // From the press to the last move, out of the window: 500 × 400 page units at 100%.
+            let doc = board.doc().unwrap();
+            let node = doc.node(drawn).unwrap();
+            assert_eq!((node.width, node.height), (500.0, 400.0));
+            assert_eq!(board.session.undo_depth(), (1, 0));
+        });
+        let undo = json!({"op": "command", "command": "edit.undo"});
+        let reply = run_op(&view, undo, &mut cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        assert!(layers(&view, &cx).is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn a_press_ends_a_drag_whose_release_never_came(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("lost-release");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        let tool = json!({"op": "command", "command": "tool.rectangle"});
+        run_op(&view, tool, &mut cx);
+        let (left, none) = (MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_down(point(px(100.), px(100.)), left, none);
+        cx.simulate_mouse_move(point(px(150.), px(140.)), left, none);
+        // The release went elsewhere, as when the tab is hidden mid-drag. The next press ends
+        // that drag as it was drawn, then makes its own gesture.
+        cx.simulate_mouse_down(point(px(300.), px(200.)), left, none);
+        cx.simulate_mouse_up(point(px(300.), px(200.)), left, none);
+
+        let [drawn] = layers(&view, &cx)[..] else {
+            panic!("layers {:?}", layers(&view, &cx))
+        };
+        view.read_with(&cx, |view, _| {
+            let board = view.board().unwrap();
+            assert!(!board.session.tool.busy());
+            let doc = board.doc().unwrap();
+            let node = doc.node(drawn).unwrap();
+            assert_eq!((node.width, node.height), (50.0, 40.0));
+            assert_eq!(board.session.undo_depth(), (1, 0));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_double_click_types_in_a_sticky(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("double-click");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        // A 200 × 200 sticky about page point (0, 0), the middle of the window, not selected.
+        let sticky = json!({
+            "op": "command", "command": "board.sticky", "params": {"x": -100, "y": -100},
+        });
+        run_op(&view, sticky, &mut cx);
+        run_op(
+            &view,
+            json!({"op": "command", "command": "select.none"}),
+            &mut cx,
+        );
+        let (middle, button, modifiers) = (
+            point(px(200.), px(150.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        for click_count in [1, 2] {
+            cx.simulate_event(MouseDownEvent {
+                position: middle,
+                button,
+                modifiers,
+                click_count,
+                first_mouse: false,
+            });
+            cx.simulate_event(MouseUpEvent {
+                position: middle,
+                button,
+                modifiers,
+                click_count,
+            });
+        }
+
+        let [note] = layers(&view, &cx)[..] else {
+            panic!("layers {:?}", layers(&view, &cx))
+        };
+        view.read_with(&cx, |view, _| {
+            let ds = view.board().unwrap().session.ds().unwrap();
+            let text = figcraft_engine::board::text_of(&ds.doc, note).unwrap();
+            assert_eq!(ds.text_edit.as_ref().map(|edit| edit.id), Some(text));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn leaving_the_canvas_clears_what_hovering_showed(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("leave");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        // What Alt measured from over the canvas, outlined.
+        let measure = |cx: &mut TestAppContext| {
+            view.update(cx, |view, _| {
+                let overlay = &mut view.board_mut().unwrap().session.tool.overlay;
+                overlay.measure_box = Some([0.0, 0.0, 10.0, 10.0]);
+            })
+        };
+        let measured = |cx: &TestAppContext| {
+            view.read_with(cx, |view, _| {
+                view.board().unwrap().session.tool.overlay.measure_box
+            })
+        };
+        let (over, none) = (point(px(200.), px(150.)), Modifiers::default());
+
+        // From over the canvas to off it (it fills the window).
+        cx.simulate_mouse_move(over, None, none);
+        measure(&mut cx);
+        cx.simulate_mouse_move(point(px(600.), px(150.)), None, none);
+        assert_eq!(measured(&cx), None);
+
+        // From over the canvas out of the window, which comes with no move off the canvas first.
+        cx.simulate_mouse_move(over, None, none);
+        measure(&mut cx);
+        cx.simulate_event(MouseExitEvent {
+            position: point(px(200.), px(-1.)),
+            pressed_button: None,
+            modifiers: none,
+        });
+        assert_eq!(measured(&cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn an_ops_requests_reach_the_view(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("op-requests");
+        let view = open(cx, &tmp.0.join("canvas.figcraft"));
+        run_op(&view, sticky_op(), cx);
+        // ⇧⌘↩'s command, with typing going on in the new sticky: the engine asks the view to
+        // start it, and an op's requests reach the view as an input's do.
+        let next_sticky =
+            json!({"op": "command", "command": "board.nextSticky", "params": {"edit": true}});
+        let reply = run_op(&view, next_sticky, cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        let next = figcraft_engine::params::id_of(&reply["result"]["id"]).unwrap();
+        view.read_with(cx, |view, _| {
+            let board = view.board().unwrap();
+            let ds = board.session.ds().unwrap();
+            let text = figcraft_engine::board::text_of(&ds.doc, next).unwrap();
+            assert_eq!(ds.text_edit.as_ref().map(|edit| edit.id), Some(text));
+            assert!(board.session.ui_requests.is_empty());
+        });
     }
 }

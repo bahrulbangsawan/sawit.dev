@@ -3,13 +3,17 @@
 //!
 //! Every answer is `{ok: true, ...}` or `{ok: false, error}`, and an op never panics: a failure of
 //! the engine, or an op that is malformed, is an `error` the agent can read. The ops are `get`,
-//! `add`, `update`, `delete`, `clear`, `replace`, `command` and `commands`; the others of the
+//! `add`, `update`, `delete`, `clear`, `replace`, `command`, `commands` and `pointer`; the others of the
 //! contract get their own answer, "<op> is not supported yet".
 //!
 //! Each op that draws, changes or removes layers (all but `command`, which is the engine's) is one
 //! undo step, and when the engine refuses a part of it, none of it is done. A layer is named by the
 //! id an agent gave it when it drew it, or by its node id ([`skeleton::resolve`]): an agent's id
 //! wins.
+//!
+//! The `pointer` op takes the path of the pointer on the canvas (`crate::input`), so what an agent
+//! does with it is what a mouse does there. What it asks of the view is left in
+//! `session.ui_requests`, as after the same input in the window, for the view to carry out.
 //!
 //! A canvas holds one document, and the view saves the one on show over the canvas's file, so no
 //! `command` op may leave another document open or on show. The ones that do that by name are
@@ -22,12 +26,13 @@ use std::fmt::Display;
 use std::path::Path;
 
 use figcraft_doc::{BoardItem, Document, NodeId};
-use figcraft_engine::{EngineError, Result as EngineResult, Session};
+use figcraft_engine::{EngineError, PointerKind, Result as EngineResult, Session, UiRequest};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
 use crate::doc::{BoardDoc, BoardError};
+use crate::input::{self, Mods};
 use crate::skeleton::{self, Applied, Label, Skeleton};
 use crate::{policy, summary};
 
@@ -93,6 +98,10 @@ const BATCH: &str = "command.batch";
 ///   the canvas keeps its one document".
 /// - `commands` answers `{ok, commands: [{id, label, params}]}`: the engine's commands that
 ///   `command` runs and that the canvas doesn't hide, with the parameters each documents.
+/// - `pointer` (`{kind, x, y, shift?, alt?, cmd?}`) sends the tools a press (`down`), a move with
+///   the button down (`move`), its release (`up`), a double-click (`double`) or a move without a
+///   button (`hover`) at page point (`x`, `y`), with the modifier keys given held, and answers
+///   `{ok, selection, tool}`: the ids selected then, and the tool on.
 pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
     match op.get("op").and_then(Value::as_str) {
         Some("get") => get(board),
@@ -103,6 +112,7 @@ pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
         Some("replace") => replace(board, op),
         Some("command") => command(board, op),
         Some("commands") => commands(),
+        Some("pointer") => pointer(board, op),
         Some(other) => failure(format!("{other} is not supported yet")),
         None => failure(r#"an op needs a name, like {"op": "get"}"#),
     }
@@ -607,6 +617,56 @@ fn batch(board: &mut BoardDoc, params: &Value) -> Result<Value, Failed> {
         return Err(Failed::Switched(BATCH.into()));
     }
     Ok(result.map_err(BoardError::from)?)
+}
+
+/// The kinds of the `pointer` op, as an error lists them.
+const POINTER_KINDS: &str = "down, move, up, double or hover";
+
+fn pointer(board: &mut BoardDoc, op: &Value) -> Value {
+    let Some(name) = op.get("kind").and_then(Value::as_str) else {
+        return failure(format!("a pointer op needs a kind: {POINTER_KINDS}"));
+    };
+    let kind = match name {
+        "down" => PointerKind::Down,
+        "move" => PointerKind::Move,
+        "up" => PointerKind::Up,
+        "double" => PointerKind::DoubleClick,
+        "hover" => PointerKind::Hover,
+        other => return failure(format!("{other:?} is no pointer kind: use {POINTER_KINDS}")),
+    };
+    let number = |key: &str| op.get(key).and_then(Value::as_f64);
+    let (Some(x), Some(y)) = (number("x"), number("y")) else {
+        return failure("a pointer op needs x and y, a point on the page");
+    };
+    let held = |key: &str| op.get(key).and_then(Value::as_bool).unwrap_or(false);
+    let mods = Mods {
+        shift: held("shift"),
+        alt: held("alt"),
+        cmd: held("cmd"),
+        ctrl: false,
+    };
+    let event = match board.session.ds() {
+        Ok(ds) => input::page_pointer_event(kind, (x, y), &ds.view, mods),
+        Err(error) => return failure(error),
+    };
+    let requests = match input::pointer(board, &event) {
+        Ok(requests) => requests,
+        Err(error) => return failure(error),
+    };
+    leave_for_the_view(board, &requests);
+    let selection: Vec<String> = (board.session.selection().iter())
+        .map(ToString::to_string)
+        .collect();
+    json!({"ok": true, "selection": selection, "tool": board.session.tool.tool.id()})
+}
+
+/// Carries out what an op's input asked of the view that needs none
+/// ([`input::handle_requests`]), and leaves the rest in `session.ui_requests`, ahead of any made
+/// since, as the same input from the window leaves them for the view.
+fn leave_for_the_view(board: &mut BoardDoc, requests: &[UiRequest]) {
+    let mut rest = input::handle_requests(board, requests);
+    rest.append(&mut board.session.ui_requests);
+    board.session.ui_requests = rest;
 }
 
 #[cfg(test)]
@@ -2184,6 +2244,7 @@ mod tests {
             json!({"op": "clear"}),
             json!({"op": "replace", "path": "/tmp/canvas.figcraft"}),
             json!({"op": "command", "command": "board.sticky", "params": {"x": 0, "y": 0}}),
+            json!({"op": "pointer", "kind": "down", "x": 0, "y": 0}),
         ] {
             let reply = run(&mut board, &op);
             assert_eq!(reply["ok"], json!(false), "{op}: {reply}");
@@ -2208,5 +2269,133 @@ mod tests {
             assert_eq!(reply["ok"], json!(false), "{op}: {reply}");
             assert!(reply["error"].as_str().is_some_and(|e| e.contains("op")));
         }
+    }
+
+    /// A new, empty design file.
+    fn design() -> BoardDoc {
+        BoardDoc {
+            session: Session::with_document(figcraft_doc::Document::new("Design")),
+        }
+    }
+
+    /// Sends pointer op `kind` at page point (`x`, `y`), checks that it answered, and returns the
+    /// answer.
+    fn pointer_at(board: &mut BoardDoc, kind: &str, x: f64, y: f64) -> Value {
+        let reply = run(
+            board,
+            &json!({"op": "pointer", "kind": kind, "x": x, "y": y}),
+        );
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        reply
+    }
+
+    #[test]
+    fn pointer_op_drives_tools() {
+        let mut board = board();
+        let reply = send(&mut board, "tool.sticky", json!({}));
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        pointer_at(&mut board, "down", 0.0, 0.0);
+        let reply = pointer_at(&mut board, "up", 0.0, 0.0);
+        assert_eq!(elements(&mut board).len(), 1);
+        // The answer says which tool is on, back to Move once the sticky is placed, and what is
+        // selected, by id.
+        assert_eq!(reply["tool"], json!("move"));
+        let selection = reply["selection"].as_array().expect("a selection");
+        assert_eq!(selection.len(), 1, "{reply}");
+        assert!(
+            selection[0]
+                .as_str()
+                .is_some_and(|id| id.parse::<u64>().is_ok()),
+            "{reply}"
+        );
+    }
+
+    #[test]
+    fn pointer_op_takes_page_points_whatever_the_view() {
+        let mut board = design();
+        // Zoomed in and panned: the op's points are page points all the same.
+        board.session.ds_mut().unwrap().view = figcraft_engine::ViewState {
+            cx: 37.0,
+            cy: -12.0,
+            zoom: 2.0,
+            vw: 640.0,
+            vh: 480.0,
+            ..figcraft_engine::ViewState::default()
+        };
+        send(&mut board, "tool.rectangle", json!({}));
+        for (kind, x, y) in [
+            ("down", 10.0, 20.0),
+            ("move", 60.0, 60.0),
+            ("move", 110.0, 100.0),
+            ("up", 110.0, 100.0),
+        ] {
+            pointer_at(&mut board, kind, x, y);
+        }
+        let elements = elements(&mut board);
+        assert_eq!(elements.len(), 1, "{elements:?}");
+        let drawn = &elements[0];
+        let bounds = ["x", "y", "width", "height"].map(|key| drawn[key].as_f64().unwrap());
+        assert_eq!(bounds, [10.0, 20.0, 100.0, 80.0], "{drawn}");
+    }
+
+    #[test]
+    fn pointer_op_leaves_the_views_requests_for_it() {
+        let mut board = design();
+        let made = board
+            .execute(
+                "node.create",
+                &json!({"type": "frame", "name": "Frame", "x": 0, "y": 0, "width": 200, "height": 100}),
+            )
+            .unwrap();
+        let frame = figcraft_engine::params::id_of(&made["id"]).unwrap();
+        board.execute("select.none", &json!({})).unwrap();
+        // The view hands the engine its frames' names as it paints them: this one just above the
+        // frame's top-left corner.
+        let corner = figcraft_geom::Point::new;
+        board.session.tool.labels = vec![(
+            frame,
+            [
+                corner(0.0, -20.0),
+                corner(60.0, -20.0),
+                corner(60.0, -4.0),
+                corner(0.0, -4.0),
+            ],
+        )];
+
+        let reply = pointer_at(&mut board, "double", 10.0, -12.0);
+
+        // Renaming the frame there is the view's to do: the request waits for it.
+        let kinds: Vec<&str> = (board.session.ui_requests.iter())
+            .map(|request| request.kind.as_str())
+            .collect();
+        assert_eq!(kinds, ["canvas.renameLabel"]);
+        assert_eq!(reply["selection"], json!([frame.to_string()]));
+    }
+
+    #[test]
+    fn malformed_pointer_ops_are_reported() {
+        let mut board = board();
+        send(&mut board, "tool.sticky", json!({}));
+        for (op, says) in [
+            (json!({"op": "pointer", "x": 0, "y": 0}), "kind"),
+            (json!({"op": "pointer", "kind": 1, "x": 0, "y": 0}), "kind"),
+            (
+                json!({"op": "pointer", "kind": "tap", "x": 0, "y": 0}),
+                "tap",
+            ),
+            (json!({"op": "pointer", "kind": "down"}), "x and y"),
+            (
+                json!({"op": "pointer", "kind": "down", "x": "0", "y": 0}),
+                "x and y",
+            ),
+        ] {
+            let reply = run(&mut board, &op);
+            assert_eq!(reply["ok"], json!(false), "{op}: {reply}");
+            let error = reply["error"].as_str().expect("an error string");
+            assert!(error.contains(says), "{op}: {error}");
+        }
+        // None of them reached the tools: no sticky was placed, and the tool is still on.
+        assert!(elements(&mut board).is_empty());
+        assert_eq!(board.session.tool.tool.id(), "sticky");
     }
 }
