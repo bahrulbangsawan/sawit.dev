@@ -35,7 +35,9 @@ pub struct DiffArgs {
     pub repo: String,
     #[schemars(description = "Only this file (relative to the repository root)")]
     pub path: Option<String>,
-    #[schemars(description = "Staged changes (index vs HEAD) instead of unstaged ones. Default false")]
+    #[schemars(
+        description = "Staged changes (index vs HEAD) instead of unstaged ones. Default false"
+    )]
     #[serde(default)]
     pub staged: bool,
 }
@@ -52,7 +54,9 @@ pub struct ShowArgs {
 pub struct PathsArgs {
     #[schemars(description = "A folder inside the repository (absolute path)")]
     pub repo: String,
-    #[schemars(description = "Paths relative to the repository root; empty or omitted means all changes")]
+    #[schemars(
+        description = "Paths relative to the repository root; empty or omitted means all changes"
+    )]
     #[serde(default)]
     pub paths: Vec<String>,
 }
@@ -205,7 +209,13 @@ impl Sawit {
         let files: Vec<&FileChange> = status
             .files
             .iter()
-            .filter(|f| if a.staged { f.is_staged() } else { f.is_unstaged() })
+            .filter(|f| {
+                if a.staged {
+                    f.is_staged()
+                } else {
+                    f.is_unstaged()
+                }
+            })
             .filter(|f| path.is_none_or(|p| f.path == p || f.from.as_deref() == Some(p)))
             .collect();
         if files.is_empty() {
@@ -214,7 +224,10 @@ impl Sawit {
                     "No {} changes in {p}.",
                     if a.staged { "staged" } else { "unstaged" }
                 ),
-                None => format!("No {} changes.", if a.staged { "staged" } else { "unstaged" }),
+                None => format!(
+                    "No {} changes.",
+                    if a.staged { "staged" } else { "unstaged" }
+                ),
             });
         }
         let mut out = Vec::new();
@@ -340,7 +353,9 @@ impl Sawit {
         self.git_status_tool(&a.repo).await
     }
 
-    #[tool(description = "Recent commits (hash, date UTC, author, subject, refs), optionally for one path")]
+    #[tool(
+        description = "Recent commits (hash, date UTC, author, subject, refs), optionally for one path"
+    )]
     async fn git_log(&self, Parameters(a): Parameters<LogArgs>) -> CallToolResult {
         self.git_log_tool(a).await
     }
@@ -396,7 +411,10 @@ mod tests {
 1 A. N... 000000 100644 100644 000 ccc new.rs\0\
 ? notes.txt\0";
         let text = status_text(&git::parse_status(raw));
-        assert!(text.starts_with("On branch main · tracking origin/main (ahead 2, behind 1)"), "{text}");
+        assert!(
+            text.starts_with("On branch main · tracking origin/main (ahead 2, behind 1)"),
+            "{text}"
+        );
         assert!(text.contains("Staged:\n  added: new.rs"));
         assert!(text.contains("Not staged:\n  modified: src/a.rs"));
         assert!(text.contains("Untracked:\n  notes.txt"));

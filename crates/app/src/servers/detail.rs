@@ -537,7 +537,10 @@ impl ServerDetail {
                         cx.theme().warning
                     }))
                     .child(div().font_semibold().child(if conflict {
-                        format!("Port {} is already in use, so the instance didn't start", report.port)
+                        format!(
+                            "Port {} is already in use, so the instance didn't start",
+                            report.port
+                        )
                     } else {
                         format!(
                             "Another process also listens on port {}. Start anyway?",

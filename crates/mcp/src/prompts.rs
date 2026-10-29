@@ -61,7 +61,11 @@ fn summary(p: &Prompt) -> String {
     if !p.tags.is_empty() {
         line.push_str(&format!(
             " · {}",
-            p.tags.iter().map(|t| format!("#{t}")).collect::<Vec<_>>().join(" ")
+            p.tags
+                .iter()
+                .map(|t| format!("#{t}"))
+                .collect::<Vec<_>>()
+                .join(" ")
         ));
     }
     let vars = prompts::variables(&p.body);
@@ -112,13 +116,21 @@ impl Sawit {
                 "No prompts match."
             });
         }
-        ok(found.iter().map(|p| summary(p)).collect::<Vec<_>>().join("\n"))
+        ok(found
+            .iter()
+            .map(|p| summary(p))
+            .collect::<Vec<_>>()
+            .join("\n"))
     }
 
     async fn get_prompt_tool(&self, id: &str) -> CallToolResult {
         let lib = tri!(self.library());
         let p = tri!(Self::prompt(&lib, id));
-        ok(format!("{}\n\n{}", summary(p).trim_start_matches("- "), p.body))
+        ok(format!(
+            "{}\n\n{}",
+            summary(p).trim_start_matches("- "),
+            p.body
+        ))
     }
 
     async fn create_prompt_tool(&self, a: CreateArgs) -> CallToolResult {

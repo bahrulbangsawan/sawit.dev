@@ -27,7 +27,11 @@ const NOT_FOUND: i32 = 44;
 fn security(args: &[&str], stdin: Option<&str>) -> Result<Output> {
     let mut child = Command::new(SECURITY)
         .args(args)
-        .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -39,14 +43,21 @@ fn security(args: &[&str], stdin: Option<&str>) -> Result<Output> {
 
 fn error(out: &Output) -> CoreError {
     let msg = String::from_utf8_lossy(&out.stderr);
-    let msg = msg.lines().next().unwrap_or("").trim_start_matches("security: ");
+    let msg = msg
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim_start_matches("security: ");
     CoreError::Config(format!("Keychain: {msg}"))
 }
 
 /// The item's attributes as `security` prints them, or `None` if there is
 /// none. Never reads the secret, so never asks.
 fn attributes(service: &str, account: &str) -> Result<Option<String>> {
-    let out = security(&["find-generic-password", "-s", service, "-a", account], None)?;
+    let out = security(
+        &["find-generic-password", "-s", service, "-a", account],
+        None,
+    )?;
     match out.status.code() {
         Some(0) => Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned())),
         Some(NOT_FOUND) => Ok(None),
@@ -61,7 +72,10 @@ pub fn get(service: &str, account: &str) -> Result<Option<String>> {
     if !attrs.contains(&format!("\"icmt\"<blob>=\"{MARKER}\"")) {
         return get_legacy(service, account);
     }
-    let out = security(&["find-generic-password", "-s", service, "-a", account, "-g"], None)?;
+    let out = security(
+        &["find-generic-password", "-s", service, "-a", account, "-g"],
+        None,
+    )?;
     if !out.status.success() {
         return Err(error(&out));
     }
@@ -78,7 +92,9 @@ pub fn get(service: &str, account: &str) -> Result<Option<String>> {
     }
     if let Some(hex) = value.strip_prefix("0x") {
         let hex = hex.split_whitespace().next().unwrap_or("");
-        return Ok(Some(String::from_utf8_lossy(&decode_hex(hex)?).into_owned()));
+        return Ok(Some(
+            String::from_utf8_lossy(&decode_hex(hex)?).into_owned(),
+        ));
     }
     value
         .strip_prefix('"')
@@ -118,7 +134,11 @@ pub fn set(service: &str, account: &str, secret: &str) -> Result<()> {
         quote(MARKER),
     );
     let out = security(&["-i"], Some(&line))?;
-    if out.status.success() { Ok(()) } else { Err(error(&out)) }
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(error(&out))
+    }
 }
 
 /// Whether an item is saved, without reading (or asking for) its secret.
@@ -127,7 +147,10 @@ pub fn exists(service: &str, account: &str) -> Result<bool> {
 }
 
 pub fn delete(service: &str, account: &str) -> Result<()> {
-    let out = security(&["delete-generic-password", "-s", service, "-a", account], None)?;
+    let out = security(
+        &["delete-generic-password", "-s", service, "-a", account],
+        None,
+    )?;
     match out.status.code() {
         Some(0 | NOT_FOUND) => Ok(()),
         _ => Err(error(&out)),

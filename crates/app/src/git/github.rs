@@ -60,8 +60,10 @@ pub struct GitHubView {
 impl GitHubView {
     pub fn new(store: Entity<GitStore>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let new_title = cx.new(|cx| InputState::new(window, cx).placeholder("Title"));
-        let new_body = cx.new(|cx| TextareaState::new(window, cx).placeholder("Description (Markdown)"));
-        let repo_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search your repositories"));
+        let new_body =
+            cx.new(|cx| TextareaState::new(window, cx).placeholder("Description (Markdown)"));
+        let repo_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search your repositories"));
         let subscriptions = vec![
             cx.observe(&store, |this, _, cx| {
                 this.ensure_loaded(cx);
@@ -146,7 +148,9 @@ impl GitHubView {
         self.items_for = Some((owner.clone(), name.clone(), open));
         self.items = Load::Loading;
         cx.notify();
-        let rx = rt::spawn(cx, async move { github::items(&token, &owner, &name, open).await });
+        let rx = rt::spawn(cx, async move {
+            github::items(&token, &owner, &name, open).await
+        });
         cx.spawn(async move |this, cx| {
             let Ok(result) = rx.await else {
                 return;
@@ -201,8 +205,10 @@ impl GitHubView {
         self.composing = None;
         self.error = None;
         let thread = cx.new(|cx| ThreadView::new(item, slug, token, window, cx));
-        cx.subscribe(&thread, |this, _, e: &ThreadEvent, cx| this.on_thread_event(e, cx))
-            .detach();
+        cx.subscribe(&thread, |this, _, e: &ThreadEvent, cx| {
+            this.on_thread_event(e, cx)
+        })
+        .detach();
         self.thread = Some(thread);
         cx.notify();
     }
@@ -210,7 +216,9 @@ impl GitHubView {
     /// Keeps the list in step with what was done in the open thread.
     fn on_thread_event(&mut self, event: &ThreadEvent, cx: &mut Context<Self>) {
         let number = match event {
-            ThreadEvent::StateChanged { number, .. } | ThreadEvent::Commented(number) | ThreadEvent::Merged(number) => *number,
+            ThreadEvent::StateChanged { number, .. }
+            | ThreadEvent::Commented(number)
+            | ThreadEvent::Merged(number) => *number,
         };
         if let Load::Ready(items) = &mut self.items
             && let Some(item) = items.iter_mut().find(|i| i.number == number)
@@ -226,7 +234,9 @@ impl GitHubView {
             self.store.update(cx, |s, cx| {
                 s.run("Fetching…", cx, move |repo, token| async move {
                     git::fetch(&repo, token.as_deref()).await?;
-                    Ok(format!("Pull request #{number} was merged. Pull to bring it into your branch."))
+                    Ok(format!(
+                        "Pull request #{number} was merged. Pull to bring it into your branch."
+                    ))
                 })
             });
         }
@@ -252,22 +262,33 @@ impl GitHubView {
             s.set_value(title, window, cx);
             s.focus(window, cx);
         });
-        self.new_body.update(cx, |s, cx| s.set_value("", window, cx));
+        self.new_body
+            .update(cx, |s, cx| s.set_value("", window, cx));
         cx.notify();
     }
 
     fn create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(token), Some((owner, name)), Some(pull)) = (self.token(cx), self.slug(cx), self.composing) else {
+        let (Some(token), Some((owner, name)), Some(pull)) =
+            (self.token(cx), self.slug(cx), self.composing)
+        else {
             return;
         };
         let title = self.new_title.read(cx).value().trim().to_string();
         let body = self.new_body.read(cx).value().to_string();
-        let head = self.store.read(cx).status.as_ref().and_then(|s| s.branch.clone());
+        let head = self
+            .store
+            .read(cx)
+            .status
+            .as_ref()
+            .and_then(|s| s.branch.clone());
         if title.is_empty() {
             return;
         }
         if pull && head.is_none() {
-            self.error = Some("Switch to a branch first: a pull request is opened from your current branch.".into());
+            self.error = Some(
+                "Switch to a branch first: a pull request is opened from your current branch."
+                    .into(),
+            );
             cx.notify();
             return;
         }
@@ -335,7 +356,12 @@ impl GitHubView {
             let Some(parent) = paths.into_iter().next() else {
                 return;
             };
-            let name = repo.full_name.rsplit('/').next().unwrap_or(&repo.full_name).to_string();
+            let name = repo
+                .full_name
+                .rsplit('/')
+                .next()
+                .unwrap_or(&repo.full_name)
+                .to_string();
             let target = parent.join(&name);
             let Ok(rx) = this.update(cx, |this, cx| {
                 this.cloning = Some(repo.full_name.clone());
@@ -358,7 +384,9 @@ impl GitHubView {
             let _ = this.update(cx, |this, cx| {
                 this.cloning = None;
                 match result {
-                    Ok(Ok(())) => cx.defer(move |cx| crate::cli::open_folder_in(target, Some(handle), cx)),
+                    Ok(Ok(())) => {
+                        cx.defer(move |cx| crate::cli::open_folder_in(target, Some(handle), cx))
+                    }
                     Ok(Err(e)) => this.error = Some(e.to_string()),
                     Err(_) => {}
                 }
@@ -411,7 +439,11 @@ impl GitHubView {
                             .primary()
                             .w_full()
                             .icon(if copied { Lucide::Check } else { Lucide::Copy })
-                            .label(if copied { "Copied, Opening GitHub…" } else { "Copy Code & Open GitHub" })
+                            .label(if copied {
+                                "Copied, Opening GitHub…"
+                            } else {
+                                "Copy Code & Open GitHub"
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
                                 cx.open_url(&url);
@@ -449,7 +481,11 @@ impl GitHubView {
                     h_flex()
                         .gap_2()
                         .text_sm()
-                        .child(Icon::new(Lucide::Check).small().text_color(cx.theme().success))
+                        .child(
+                            Icon::new(Lucide::Check)
+                                .small()
+                                .text_color(cx.theme().success),
+                        )
                         .child(text)
                 };
                 v_flex()
@@ -499,17 +535,22 @@ impl GitHubView {
             .size_full()
             .overflow_y_scroll()
             .child(
-                v_flex().min_h_full().p_6().items_center().justify_center().child(
-                    div()
-                        .w_full()
-                        .max_w(px(400.))
-                        .p_6()
-                        .rounded(cx.theme().radius * 2.)
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .bg(cx.theme().secondary)
-                        .child(card),
-                ),
+                v_flex()
+                    .min_h_full()
+                    .p_6()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(px(400.))
+                            .p_6()
+                            .rounded(cx.theme().radius * 2.)
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .bg(cx.theme().secondary)
+                            .child(card),
+                    ),
             )
             .into_any_element()
     }
@@ -532,11 +573,19 @@ impl GitHubView {
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let store = self.store.read(cx);
-        let login = store.account.as_ref().map(|a| a.login.clone()).unwrap_or_default();
+        let login = store
+            .account
+            .as_ref()
+            .map(|a| a.login.clone())
+            .unwrap_or_default();
         let slug = store.slug.clone();
         let page = self.page;
         let tab = |id: &'static str, label: String, which: Page| {
-            Button::new(id).ghost().small().label(label).selected(page == which)
+            Button::new(id)
+                .ghost()
+                .small()
+                .label(label)
+                .selected(page == which)
         };
         h_flex()
             .px_3()
@@ -595,7 +644,10 @@ impl GitHubView {
         let Some(item) = self.items().get(ix).cloned() else {
             return div().into_any_element();
         };
-        let selected = self.thread.as_ref().is_some_and(|t| t.read(cx).number() == item.number);
+        let selected = self
+            .thread
+            .as_ref()
+            .is_some_and(|t| t.read(cx).number() == item.number);
         let (icon, color) = match (item.pull, item.open) {
             (true, true) => (Lucide::GitPullRequest, cx.theme().success),
             (true, false) => (Lucide::GitMerge, cx.theme().muted_foreground),
@@ -626,7 +678,12 @@ impl GitHubView {
                             .text_xs()
                             .truncate()
                             .text_color(cx.theme().muted_foreground)
-                            .child(format!("#{} · {} · {}", item.number, item.author, ago(item.updated_at, now()))),
+                            .child(format!(
+                                "#{} · {} · {}",
+                                item.number,
+                                item.author,
+                                ago(item.updated_at, now())
+                            )),
                     ),
             )
             .when(item.comments > 0, |el| {
@@ -655,7 +712,12 @@ impl GitHubView {
     }
 
     fn render_compose(&self, pull: bool, cx: &mut Context<Self>) -> AnyElement {
-        let branch = self.store.read(cx).status.as_ref().and_then(|s| s.branch.clone());
+        let branch = self
+            .store
+            .read(cx)
+            .status
+            .as_ref()
+            .and_then(|s| s.branch.clone());
         let ready = !self.new_title.read(cx).value().trim().is_empty() && !self.working;
         v_flex()
             .size_full()
@@ -732,11 +794,14 @@ impl GitHubView {
                         .on_click(cx.listener(|this, _, _, cx| this.load_items(cx))),
                 )
                 .into_any_element(),
-            Load::Ready(items) if items.is_empty() => Placeholder::new(Lucide::Check, if show_open {
-                "Nothing open"
-            } else {
-                "Nothing closed"
-            })
+            Load::Ready(items) if items.is_empty() => Placeholder::new(
+                Lucide::Check,
+                if show_open {
+                    "Nothing open"
+                } else {
+                    "Nothing closed"
+                },
+            )
             .compact()
             .detail(if show_open {
                 "No open pull requests or issues."
@@ -754,7 +819,9 @@ impl GitHubView {
             .track_scroll(&self.item_scroll)
             .size_full()
             .into_any_element(),
-            _ => Placeholder::loading("Loading from GitHub…").compact().into_any_element(),
+            _ => Placeholder::loading("Loading from GitHub…")
+                .compact()
+                .into_any_element(),
         };
         let has_branch = store.status.as_ref().is_some_and(|s| s.branch.is_some());
         h_flex()
@@ -802,7 +869,9 @@ impl GitHubView {
                                     .xsmall()
                                     .icon(Lucide::CircleDot)
                                     .tooltip("New Issue")
-                                    .on_click(cx.listener(|this, _, window, cx| this.compose(false, window, cx))),
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.compose(false, window, cx)
+                                    })),
                             )
                             .child(
                                 Button::new("gh-new-pull")
@@ -811,7 +880,9 @@ impl GitHubView {
                                     .icon(Lucide::GitPullRequest)
                                     .tooltip("New Pull Request from This Branch")
                                     .disabled(!has_branch)
-                                    .on_click(cx.listener(|this, _, window, cx| this.compose(true, window, cx))),
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.compose(true, window, cx)
+                                    })),
                             )
                             .child(
                                 Button::new("gh-refresh")
@@ -824,7 +895,13 @@ impl GitHubView {
                     )
                     .child(div().flex_1().min_h_0().child(list)),
             )
-            .child(div().flex_1().min_w_0().h_full().child(self.render_thread(cx)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(self.render_thread(cx)),
+            )
             .into_any_element()
     }
 
@@ -836,7 +913,9 @@ impl GitHubView {
                 .filter(|r| {
                     query.is_empty()
                         || r.full_name.to_lowercase().contains(&query)
-                        || r.description.as_ref().is_some_and(|d| d.to_lowercase().contains(&query))
+                        || r.description
+                            .as_ref()
+                            .is_some_and(|d| d.to_lowercase().contains(&query))
                 })
                 .cloned()
                 .collect(),
@@ -856,22 +935,26 @@ impl GitHubView {
             .gap_3()
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(Icon::new(if repo.private { Lucide::Lock } else { Lucide::BookMarked }).small().text_color(muted))
+            .child(
+                Icon::new(if repo.private {
+                    Lucide::Lock
+                } else {
+                    Lucide::BookMarked
+                })
+                .small()
+                .text_color(muted),
+            )
             .child(
                 v_flex()
                     .flex_1()
                     .min_w_0()
                     .child(div().text_sm().truncate().child(repo.full_name.clone()))
-                    .child(
-                        div()
-                            .text_xs()
-                            .truncate()
-                            .text_color(muted)
-                            .child(match &repo.description {
-                                Some(d) => format!("{d} · pushed {}", ago(repo.pushed_at, now())),
-                                None => format!("Pushed {}", ago(repo.pushed_at, now())),
-                            }),
-                    ),
+                    .child(div().text_xs().truncate().text_color(muted).child(
+                        match &repo.description {
+                            Some(d) => format!("{d} · pushed {}", ago(repo.pushed_at, now())),
+                            None => format!("Pushed {}", ago(repo.pushed_at, now())),
+                        },
+                    )),
             )
             .child(
                 Button::new(("gh-clone", ix))
@@ -881,7 +964,9 @@ impl GitHubView {
                     .loading(cloning)
                     .disabled(busy)
                     .tooltip("Clone into a Folder and Open It")
-                    .on_click(cx.listener(move |this, _, window, cx| this.clone_repo(repo.clone(), window, cx))),
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.clone_repo(repo.clone(), window, cx)
+                    })),
             )
             .into_any_element()
     }
@@ -899,12 +984,16 @@ impl GitHubView {
                         .on_click(cx.listener(|this, _, _, cx| this.load_repos(cx))),
                 )
                 .into_any_element(),
-            Load::Ready(all) if all.is_empty() => Placeholder::new(Lucide::BookMarked, "No repositories")
-                .detail("Repositories you own or collaborate on show here.")
-                .into_any_element(),
-            Load::Ready(_) if count == 0 => Placeholder::new(IconName::Search, "No matching repositories")
-                .detail("Nothing matches your search.")
-                .into_any_element(),
+            Load::Ready(all) if all.is_empty() => {
+                Placeholder::new(Lucide::BookMarked, "No repositories")
+                    .detail("Repositories you own or collaborate on show here.")
+                    .into_any_element()
+            }
+            Load::Ready(_) if count == 0 => {
+                Placeholder::new(IconName::Search, "No matching repositories")
+                    .detail("Nothing matches your search.")
+                    .into_any_element()
+            }
             Load::Ready(_) => uniform_list(
                 "gh-repos",
                 count,
@@ -928,7 +1017,11 @@ impl GitHubView {
                     .gap_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(div().flex_1().child(Input::new(&self.repo_search).small().cleanable(true)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(Input::new(&self.repo_search).small().cleanable(true)),
+                    )
                     .child(
                         Button::new("gh-repos-refresh")
                             .ghost()
@@ -938,9 +1031,10 @@ impl GitHubView {
                             .on_click(cx.listener(|this, _, _, cx| this.load_repos(cx))),
                     ),
             )
-            .when_some(self.error.clone().filter(|_| self.page == Page::Repos), |el, e| {
-                el.child(Banner::error("gh-repos-error", e))
-            })
+            .when_some(
+                self.error.clone().filter(|_| self.page == Page::Repos),
+                |el, e| el.child(Banner::error("gh-repos-error", e)),
+            )
             .child(div().flex_1().min_h_0().child(list))
             .into_any_element()
     }
@@ -954,10 +1048,11 @@ impl Render for GitHubView {
             .bg(cx.theme().background)
             .when(!signed_in, |el| el.child(self.render_sign_in(cx)))
             .when(signed_in, |el| {
-                el.child(self.render_header(cx)).child(div().flex_1().min_h_0().child(match self.page {
-                    Page::Repository => self.render_repository(cx),
-                    Page::Repos => self.render_repos(cx),
-                }))
+                el.child(self.render_header(cx))
+                    .child(div().flex_1().min_h_0().child(match self.page {
+                        Page::Repository => self.render_repository(cx),
+                        Page::Repos => self.render_repos(cx),
+                    }))
             })
     }
 }
@@ -983,7 +1078,12 @@ fn card_heading(title: &'static str, subtitle: &'static str, cx: &App) -> impl I
             v_flex()
                 .gap_0p5()
                 .child(div().text_base().font_semibold().child(title))
-                .child(div().text_sm().text_color(cx.theme().muted_foreground).child(subtitle)),
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(subtitle),
+                ),
         )
 }
 

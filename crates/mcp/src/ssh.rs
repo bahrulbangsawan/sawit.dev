@@ -33,7 +33,9 @@ pub struct AddHostArgs {
         description = "Password (sign-in with a password; saved in the macOS Keychain, never in a file)"
     )]
     pub password: Option<String>,
-    #[schemars(description = "Local port forwards: `8080:localhost:80`, or `5432` for the same port")]
+    #[schemars(
+        description = "Local port forwards: `8080:localhost:80`, or `5432` for the same port"
+    )]
     pub forwards: Option<Vec<String>>,
     #[schemars(description = "ProxyJump: `user@bastion:22`, comma-separated for several hops")]
     pub jump: Option<String>,
@@ -79,17 +81,13 @@ pub struct HostIdArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct HostArgs {
-    #[schemars(
-        description = "Saved host id or name, a ~/.ssh/config alias, or a plain host name"
-    )]
+    #[schemars(description = "Saved host id or name, a ~/.ssh/config alias, or a plain host name")]
     pub host: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ExecArgs {
-    #[schemars(
-        description = "Saved host id or name, a ~/.ssh/config alias, or user@host"
-    )]
+    #[schemars(description = "Saved host id or name, a ~/.ssh/config alias, or user@host")]
     pub host: String,
     #[schemars(description = "Command to run on the server (non-interactive, no TTY)")]
     pub command: String,
@@ -132,7 +130,10 @@ pub(crate) fn find_saved<'a>(list: &'a HostList, key: &str) -> Result<Option<&'a
         many => Err(format!(
             "{} saved hosts are named “{key}”; use the id: {}",
             many.len(),
-            many.iter().map(|h| h.id.as_str()).collect::<Vec<_>>().join(", ")
+            many.iter()
+                .map(|h| h.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         )),
     }
 }
@@ -144,7 +145,11 @@ fn saved_line(h: &SshHost, has_password: bool) -> String {
         format!(
             "auth {}{}",
             auth_name(h.auth),
-            if h.auth == Auth::Password && !has_password { " (none saved)" } else { "" }
+            if h.auth == Auth::Password && !has_password {
+                " (none saved)"
+            } else {
+                ""
+            }
         ),
     ];
     if h.auth == Auth::Key {
@@ -172,9 +177,9 @@ fn config_line(c: &ConfigHost) -> String {
 
 fn probe_text(target: &str, probe: Probe) -> CallToolResult {
     match probe {
-        Probe::Up { latency_ms, banner } => {
-            ok(format!("{target} is up: {banner} ({latency_ms} ms to connect)."))
-        }
+        Probe::Up { latency_ms, banner } => ok(format!(
+            "{target} is up: {banner} ({latency_ms} ms to connect)."
+        )),
         Probe::Indirect => ok(format!(
             "{target} is reached through a jump host or proxy command; it wasn't checked directly."
         )),
@@ -197,7 +202,9 @@ pub(crate) fn exec_options(password: bool) -> Vec<String> {
     } else {
         opts.push("BatchMode=yes".into());
     }
-    opts.into_iter().flat_map(|o| ["-o".to_string(), o]).collect()
+    opts.into_iter()
+        .flat_map(|o| ["-o".to_string(), o])
+        .collect()
 }
 
 /// `SSH_ASKPASS` entry point for `sawit-mcp` (see `main.rs`): answers the
@@ -303,13 +310,19 @@ impl Sawit {
         let id = list.add(host.clone(), ssh::now());
         if let Some(pw) = password {
             let h = host.clone();
-            tri!(blocking(move || ssh::store_password(&h, &pw))
-                .await
-                .and_then(|r| r.map_err(|e| format!("Unable to save the password. {e}"))));
+            tri!(
+                blocking(move || ssh::store_password(&h, &pw))
+                    .await
+                    .and_then(|r| r.map_err(|e| format!("Unable to save the password. {e}")))
+            );
         }
         tri!(list.save(&self.ssh_file()).map_err(|e| e.to_string()));
         self.notify(Store::Ssh).await;
-        ok(format!("Saved {} ({}) with id {id}.", host.label(), host.address()))
+        ok(format!(
+            "Saved {} ({}) with id {id}.",
+            host.label(),
+            host.address()
+        ))
     }
 
     async fn update_ssh_host_tool(&self, a: UpdateHostArgs) -> CallToolResult {
@@ -365,16 +378,22 @@ impl Sawit {
         list.update(&current.id, |h| *h = edited);
         if let Some(pw) = password {
             let h = host.clone();
-            tri!(blocking(move || ssh::store_password(&h, &pw))
-                .await
-                .and_then(|r| r.map_err(|e| format!("Unable to save the password. {e}"))));
+            tri!(
+                blocking(move || ssh::store_password(&h, &pw))
+                    .await
+                    .and_then(|r| r.map_err(|e| format!("Unable to save the password. {e}")))
+            );
         } else if current.auth == Auth::Password && host.auth != Auth::Password {
             let h = host.clone();
             let _ = blocking(move || ssh::delete_password(&h)).await;
         }
         tri!(list.save(&self.ssh_file()).map_err(|e| e.to_string()));
         self.notify(Store::Ssh).await;
-        ok(format!("Updated {}.\n{}", host.label(), saved_line(&host, true)))
+        ok(format!(
+            "Updated {}.\n{}",
+            host.label(),
+            saved_line(&host, true)
+        ))
     }
 
     async fn remove_ssh_host_tool(&self, key: &str) -> CallToolResult {
@@ -404,7 +423,10 @@ impl Sawit {
         if a.command.trim().is_empty() {
             return fail("The command is empty.");
         }
-        let secs = a.timeout_secs.unwrap_or(EXEC_TIMEOUT).clamp(1, MAX_EXEC_TIMEOUT);
+        let secs = a
+            .timeout_secs
+            .unwrap_or(EXEC_TIMEOUT)
+            .clamp(1, MAX_EXEC_TIMEOUT);
         let dest = tri!(self.resolve_dest(&a.host).await);
         let mut cmd = tokio::process::Command::new("ssh");
         let label = match &dest {
@@ -422,15 +444,17 @@ impl Sawit {
                             h.label()
                         ));
                     }
-                    let helper = tri!(std::env::current_exe()
-                        .map_err(|e| format!("Unable to find sawit-mcp for the password helper. {e}")));
+                    let helper = tri!(std::env::current_exe().map_err(|e| format!(
+                        "Unable to find sawit-mcp for the password helper. {e}"
+                    )));
                     // The same askpass environment the app uses; `main.rs`
                     // answers it.
                     for (k, v) in ssh::launch(h, Some(&helper)).env {
                         cmd.env(k, v);
                     }
                 }
-                cmd.args(exec_options(password)).args(ssh::connection_args(h));
+                cmd.args(exec_options(password))
+                    .args(ssh::connection_args(h));
                 h.label()
             }
             Dest::Alias(alias) => {
@@ -444,10 +468,20 @@ impl Sawit {
         let out = match tokio::time::timeout(Duration::from_secs(secs), cmd.output()).await {
             Ok(Ok(out)) => out,
             Ok(Err(e)) => return fail(format!("Unable to run ssh. {e}")),
-            Err(_) => return fail(format!("Timed out after {secs} s on {label}; the command was stopped.")),
+            Err(_) => {
+                return fail(format!(
+                    "Timed out after {secs} s on {label}; the command was stopped."
+                ));
+            }
         };
-        let stdout = clip(String::from_utf8_lossy(&out.stdout).into_owned(), MAX_STREAM);
-        let stderr = clip(String::from_utf8_lossy(&out.stderr).into_owned(), MAX_STREAM);
+        let stdout = clip(
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            MAX_STREAM,
+        );
+        let stderr = clip(
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+            MAX_STREAM,
+        );
         let code = out.status.code();
         let mut text = format!(
             "{label}: exit {}",

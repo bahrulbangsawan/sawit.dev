@@ -176,7 +176,11 @@ pub(crate) fn check_confirm(name: &str, confirm: &str, what: &str) -> Result<(),
 }
 
 /// `CREATE DATABASE` with quoted identifiers.
-pub(crate) fn create_database_sql(name: &str, owner: Option<&str>, template: Option<&str>) -> String {
+pub(crate) fn create_database_sql(
+    name: &str,
+    owner: Option<&str>,
+    template: Option<&str>,
+) -> String {
     let mut sql = format!("CREATE DATABASE {}", quote_ident(name));
     if let Some(owner) = owner.filter(|o| !o.trim().is_empty()) {
         sql.push_str(&format!(" OWNER {}", quote_ident(owner.trim())));
@@ -251,7 +255,12 @@ impl Sawit {
         let database = database.map(str::trim).filter(|d| !d.is_empty());
         match self.resolve_target(target)? {
             Target::Instance(inst) => Ok((
-                ConnProfile::new("localhost", inst.port, database.unwrap_or("postgres"), "postgres"),
+                ConnProfile::new(
+                    "localhost",
+                    inst.port,
+                    database.unwrap_or("postgres"),
+                    "postgres",
+                ),
                 None,
             )),
             Target::Profile(mut profile) => {
@@ -316,7 +325,11 @@ impl Sawit {
             );
         }
         if let Ok(p) = self.profiles() {
-            lines.extend(p.items.iter().map(|p| format!("- {} · {}", p.name, p.url())));
+            lines.extend(
+                p.items
+                    .iter()
+                    .map(|p| format!("- {} · {}", p.name, p.url())),
+            );
         }
         if lines.is_empty() {
             ok("No connections yet.")
@@ -334,7 +347,10 @@ impl Sawit {
         let client = tri!(self.connect_target(target, database).await);
         let schemas = tri!(db::load_schema(&client).await.map_err(|e| e.to_string()));
         let mut out = Vec::new();
-        for s in schemas.iter().filter(|s| schema.is_none_or(|o| o == s.name)) {
+        for s in schemas
+            .iter()
+            .filter(|s| schema.is_none_or(|o| o == s.name))
+        {
             out.push(format!("schema {}", s.name));
             for r in &s.relations {
                 let rows = r
@@ -343,7 +359,11 @@ impl Sawit {
                     .unwrap_or_default();
                 out.push(format!("  {:?} {}.{}{rows}", r.kind, s.name, r.name));
                 for c in &r.columns {
-                    let pk = if r.primary_key.contains(&c.name) { " PK" } else { "" };
+                    let pk = if r.primary_key.contains(&c.name) {
+                        " PK"
+                    } else {
+                        ""
+                    };
                     out.push(format!(
                         "    {} {}{}{pk}",
                         c.name,
@@ -364,7 +384,9 @@ impl Sawit {
         }
         if out.is_empty() {
             return match schema {
-                Some(s) => fail(format!("No schema named \"{s}\" (or it has nothing visible).")),
+                Some(s) => fail(format!(
+                    "No schema named \"{s}\" (or it has nothing visible)."
+                )),
                 None => ok("No user schemas."),
             };
         }
@@ -422,7 +444,9 @@ impl Sawit {
         for mut k in found {
             let p = &k.profile;
             if unique.iter().any(|u| {
-                u.profile.host == p.host && u.profile.port == p.port && u.profile.database == p.database
+                u.profile.host == p.host
+                    && u.profile.port == p.port
+                    && u.profile.database == p.database
             }) {
                 continue;
             }
@@ -434,7 +458,9 @@ impl Sawit {
             out.extend(unique.iter().map(kebun_line));
         }
         if out.is_empty() {
-            return ok("No databases found: no Sawit instances, saved connections, .env DATABASE_URL or running local Postgres.");
+            return ok(
+                "No databases found: no Sawit instances, saved connections, .env DATABASE_URL or running local Postgres.",
+            );
         }
         ok(out.join("\n"))
     }
@@ -499,7 +525,12 @@ impl Sawit {
             .await
             .map_err(err));
         let row = match found.as_slice() {
-            [] => return fail(format!("No table or view named \"{}\". See describe_schema.", a.table)),
+            [] => {
+                return fail(format!(
+                    "No table or view named \"{}\". See describe_schema.",
+                    a.table
+                ));
+            }
             [one] => one,
             [first, ..] if first.get::<_, String>(0) == "public" && a.schema.is_none() => first,
             many => {
@@ -516,9 +547,10 @@ impl Sawit {
         let estimate: Option<i64> = row.get(2);
         let comment: Option<String> = row.get(3);
         let rel = "format('%I.%I', $1::text, $2::text)::regclass";
-        let columns = tri!(client
-            .query(
-                &format!(
+        let columns = tri!(
+            client
+                .query(
+                    &format!(
                     "SELECT a.attname::text, format_type(a.atttypid, a.atttypmod), a.attnotnull,
                             pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum)
                      FROM pg_attribute a
@@ -526,47 +558,56 @@ impl Sawit {
                      WHERE a.attrelid = {rel} AND a.attnum > 0 AND NOT a.attisdropped
                      ORDER BY a.attnum"
                 ),
-                &[&schema, &a.table],
-            )
-            .await
-            .map_err(err));
-        let constraints = tri!(client
-            .query(
-                &format!(
-                    "SELECT conname::text, contype::text, pg_get_constraintdef(oid)
+                    &[&schema, &a.table],
+                )
+                .await
+                .map_err(err)
+        );
+        let constraints = tri!(
+            client
+                .query(
+                    &format!(
+                        "SELECT conname::text, contype::text, pg_get_constraintdef(oid)
                      FROM pg_constraint WHERE conrelid = {rel}
                      ORDER BY array_position(ARRAY['p','f','u','c','x'], contype::text), conname"
-                ),
-                &[&schema, &a.table],
-            )
-            .await
-            .map_err(err));
-        let indexes = tri!(client
-            .query(
-                &format!(
-                    "SELECT i.relname::text, pg_get_indexdef(x.indexrelid)
+                    ),
+                    &[&schema, &a.table],
+                )
+                .await
+                .map_err(err)
+        );
+        let indexes = tri!(
+            client
+                .query(
+                    &format!(
+                        "SELECT i.relname::text, pg_get_indexdef(x.indexrelid)
                      FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid
                      WHERE x.indrelid = {rel} ORDER BY x.indisprimary DESC, i.relname"
-                ),
-                &[&schema, &a.table],
-            )
-            .await
-            .map_err(err));
-        let referenced = tri!(client
-            .query(
-                &format!(
-                    "SELECT conname::text, conrelid::regclass::text, pg_get_constraintdef(oid)
+                    ),
+                    &[&schema, &a.table],
+                )
+                .await
+                .map_err(err)
+        );
+        let referenced = tri!(
+            client
+                .query(
+                    &format!(
+                        "SELECT conname::text, conrelid::regclass::text, pg_get_constraintdef(oid)
                      FROM pg_constraint WHERE confrelid = {rel} AND contype = 'f' ORDER BY 2, 1"
-                ),
-                &[&schema, &a.table],
-            )
-            .await
-            .map_err(err));
+                    ),
+                    &[&schema, &a.table],
+                )
+                .await
+                .map_err(err)
+        );
 
         let mut out = vec![format!(
             "{kind} {schema}.{}{}",
             a.table,
-            estimate.map(|n| format!(" · ~{n} rows (estimate)")).unwrap_or_default()
+            estimate
+                .map(|n| format!(" · ~{n} rows (estimate)"))
+                .unwrap_or_default()
         )];
         if let Some(c) = comment {
             out.push(format!("comment: {c}"));
@@ -641,14 +682,20 @@ impl Sawit {
         let replaced = profiles.items.iter().any(|p| p.name == name);
         if let Some(password) = password {
             let p = profile.clone();
-            tri!(blocking(move || db::store_password(&p, &password))
-                .await
-                .and_then(|r| r.map_err(|e| {
-                    format!("Unable to save the password in the Keychain. {e}")
-                })));
+            tri!(
+                blocking(move || db::store_password(&p, &password))
+                    .await
+                    .and_then(|r| r.map_err(|e| {
+                        format!("Unable to save the password in the Keychain. {e}")
+                    }))
+            );
         }
         profiles.upsert(profile.clone());
-        tri!(profiles.save(&self.profiles_file()).map_err(|e| e.to_string()));
+        tri!(
+            profiles
+                .save(&self.profiles_file())
+                .map_err(|e| e.to_string())
+        );
         self.notify(Store::Connections).await;
         ok(format!(
             "{} connection {name} · {}",
@@ -660,10 +707,16 @@ impl Sawit {
     pub async fn remove_connection_tool(&self, name: &str) -> CallToolResult {
         let mut profiles = tri!(self.profiles());
         let Some(profile) = profiles.items.iter().find(|p| p.name == name).cloned() else {
-            return fail(format!("No saved connection named \"{name}\". See list_connections."));
+            return fail(format!(
+                "No saved connection named \"{name}\". See list_connections."
+            ));
         };
         profiles.remove(name);
-        tri!(profiles.save(&self.profiles_file()).map_err(|e| e.to_string()));
+        tri!(
+            profiles
+                .save(&self.profiles_file())
+                .map_err(|e| e.to_string())
+        );
         // The password is shared by profiles with the same user, host and database.
         let shared = profiles
             .items
@@ -789,7 +842,10 @@ mod tests {
 
     #[test]
     fn create_database_quotes_identifiers() {
-        assert_eq!(create_database_sql("shop", None, None), "CREATE DATABASE \"shop\"");
+        assert_eq!(
+            create_database_sql("shop", None, None),
+            "CREATE DATABASE \"shop\""
+        );
         assert_eq!(
             create_database_sql("a\"b", Some("app"), Some("template0")),
             "CREATE DATABASE \"a\"\"b\" OWNER \"app\" TEMPLATE \"template0\""
@@ -825,7 +881,10 @@ mod tests {
 
     #[test]
     fn via_labels_in_english() {
-        assert_eq!(english_via("koneksi tersimpan prod"), "saved connection prod");
+        assert_eq!(
+            english_via("koneksi tersimpan prod"),
+            "saved connection prod"
+        );
         assert_eq!(english_via(".env di ~/code/app"), ".env in ~/code/app");
         assert_eq!(english_via("instance shop"), "instance shop");
     }

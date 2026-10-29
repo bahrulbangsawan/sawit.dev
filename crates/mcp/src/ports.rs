@@ -55,8 +55,12 @@ pub(crate) fn plan<'a>(jobs: &'a [PortJob], ports: &[u16], instance_ports: &[u16
             .extend(jobs.iter().filter(|j| kebun::burnable(j, instance_ports)));
     }
     for &port in ports {
-        let Some(job) = jobs.iter().find(|j| j.ports.iter().any(|(p, _)| *p == port)) else {
-            plan.skipped.push(format!(":{port}: nothing listens there."));
+        let Some(job) = jobs
+            .iter()
+            .find(|j| j.ports.iter().any(|(p, _)| *p == port))
+        else {
+            plan.skipped
+                .push(format!(":{port}: nothing listens there."));
             continue;
         };
         if job.is_docker() {
@@ -106,9 +110,17 @@ pub(crate) fn job_line(job: &PortJob, instance_ports: &[u16]) -> String {
         "- {} · PID {}{} · {}{}",
         ports_of(job),
         job.root,
-        if kids > 0 { format!(" (+{kids} children)") } else { String::new() },
+        if kids > 0 {
+            format!(" (+{kids} children)")
+        } else {
+            String::new()
+        },
         job.label,
-        if tags.is_empty() { String::new() } else { format!(" [{}]", tags.join(", ")) }
+        if tags.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", tags.join(", "))
+        }
     );
     if job.cmdline != job.label && !job.cmdline.is_empty() {
         line.push_str(&format!("\n    cmd: {}", clip_line(&job.cmdline, 300)));
@@ -223,7 +235,10 @@ impl Sawit {
         if killed {
             out.push("SIGKILL was sent to processes that ignored SIGTERM.".into());
         } else if !survivors.is_empty() {
-            out.push("Some processes ignored SIGTERM; call again with force=true to SIGKILL them.".into());
+            out.push(
+                "Some processes ignored SIGTERM; call again with force=true to SIGKILL them."
+                    .into(),
+            );
         }
         out.extend(refused);
         out.extend(skipped);

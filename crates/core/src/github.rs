@@ -51,9 +51,24 @@ pub fn delete_token() -> Result<()> {
 
 /// One request with `curl`. `header` lines (the token among them) go in on
 /// stdin; the HTTP status comes back with the body.
-async fn curl(method: &str, url: &str, headers: &[String], body: Option<&str>) -> Result<(u16, String)> {
+async fn curl(
+    method: &str,
+    url: &str,
+    headers: &[String],
+    body: Option<&str>,
+) -> Result<(u16, String)> {
     let mut cmd = tokio::process::Command::new("/usr/bin/curl");
-    cmd.args(["-sS", "--max-time", "30", "-X", method, "-H", "@-", "-w", "\n%{http_code}"]);
+    cmd.args([
+        "-sS",
+        "--max-time",
+        "30",
+        "-X",
+        method,
+        "-H",
+        "@-",
+        "-w",
+        "\n%{http_code}",
+    ]);
     if let Some(body) = body {
         cmd.args(["--data-binary", body]);
     }
@@ -68,7 +83,11 @@ async fn curl(method: &str, url: &str, headers: &[String], body: Option<&str>) -
     }
     let out = tokio::time::timeout(Duration::from_secs(40), child.wait_with_output())
         .await
-        .map_err(|_| CoreError::GitHub("GitHub didn't answer in time. Check your connection and try again.".into()))??;
+        .map_err(|_| {
+            CoreError::GitHub(
+                "GitHub didn't answer in time. Check your connection and try again.".into(),
+            )
+        })??;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         return Err(CoreError::GitHub(format!(
@@ -89,7 +108,13 @@ async fn api(method: &str, path: &str, token: &str, body: Option<Value>) -> Resu
 
 /// Like [`api`], asking for the `accept` media type and returning the text
 /// (a diff, say).
-async fn api_raw(method: &str, path: &str, token: &str, body: Option<Value>, accept: &str) -> Result<String> {
+async fn api_raw(
+    method: &str,
+    path: &str,
+    token: &str,
+    body: Option<Value>,
+    accept: &str,
+) -> Result<String> {
     let headers = vec![
         format!("Authorization: Bearer {token}"),
         format!("Accept: {accept}"),
@@ -107,11 +132,15 @@ async fn api_raw(method: &str, path: &str, token: &str, body: Option<Value>, acc
             let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
             let message = value["message"].as_str().unwrap_or("Unknown error");
             let hint = match code {
-                403 | 404 => " Your account may not have access, or the app wasn't granted access to this organization.",
+                403 | 404 => {
+                    " Your account may not have access, or the app wasn't granted access to this organization."
+                }
                 405 | 409 => " The pull request can't be merged as it is.",
                 _ => "",
             };
-            Err(CoreError::GitHub(format!("GitHub refused ({code}): {message}.{hint}")))
+            Err(CoreError::GitHub(format!(
+                "GitHub refused ({code}): {message}.{hint}"
+            )))
         }
     }
 }
@@ -141,7 +170,11 @@ pub fn parse_device_code(v: &Value) -> Option<DeviceCode> {
 /// Starts signing in: show `user_code` and open `verification_uri`, then
 /// call [`wait_for_token`].
 pub async fn start_sign_in() -> Result<DeviceCode> {
-    let body = format!("client_id={}&scope={}", client_id()?, SCOPES.replace(' ', "%20"));
+    let body = format!(
+        "client_id={}&scope={}",
+        client_id()?,
+        SCOPES.replace(' ', "%20")
+    );
     let (code, text) = curl(
         "POST",
         "https://github.com/login/device/code",
@@ -153,7 +186,9 @@ pub async fn start_sign_in() -> Result<DeviceCode> {
     parse_device_code(&v).ok_or_else(|| {
         CoreError::GitHub(format!(
             "GitHub didn't start the sign-in ({code}): {}",
-            v["error_description"].as_str().unwrap_or("unexpected answer")
+            v["error_description"]
+                .as_str()
+                .unwrap_or("unexpected answer")
         ))
     })
 }
@@ -174,11 +209,15 @@ pub fn parse_poll(v: &Value) -> Poll {
     match v["error"].as_str() {
         Some("authorization_pending") => Poll::Pending,
         Some("slow_down") => Poll::SlowDown,
-        Some("expired_token") => Poll::Failed("The code expired before it was entered. Start signing in again.".into()),
+        Some("expired_token") => {
+            Poll::Failed("The code expired before it was entered. Start signing in again.".into())
+        }
         Some("access_denied") => Poll::Failed("Sign-in was canceled on GitHub.".into()),
         _ => Poll::Failed(format!(
             "GitHub didn't finish the sign-in: {}",
-            v["error_description"].as_str().unwrap_or("unexpected answer")
+            v["error_description"]
+                .as_str()
+                .unwrap_or("unexpected answer")
         )),
     }
 }
@@ -249,7 +288,10 @@ pub fn parse_repos(v: &Value) -> Vec<Repo> {
         .filter_map(|r| {
             Some(Repo {
                 full_name: r["full_name"].as_str()?.to_string(),
-                description: r["description"].as_str().filter(|d| !d.is_empty()).map(String::from),
+                description: r["description"]
+                    .as_str()
+                    .filter(|d| !d.is_empty())
+                    .map(String::from),
                 private: r["private"].as_bool().unwrap_or(false),
                 clone_url: r["clone_url"].as_str()?.to_string(),
                 pushed_at: r["pushed_at"].as_str().and_then(parse_time).unwrap_or(0),
@@ -345,7 +387,13 @@ pub async fn comments(token: &str, owner: &str, repo: &str, number: u64) -> Resu
     .map(|v| parse_comments(&v))
 }
 
-pub async fn add_comment(token: &str, owner: &str, repo: &str, number: u64, body: &str) -> Result<Comment> {
+pub async fn add_comment(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    body: &str,
+) -> Result<Comment> {
     let v = api(
         "POST",
         &format!("/repos/{owner}/{repo}/issues/{number}/comments"),
@@ -382,7 +430,13 @@ pub struct PullState {
 }
 
 pub async fn pull_state(token: &str, owner: &str, repo: &str, number: u64) -> Result<PullState> {
-    let v = api("GET", &format!("/repos/{owner}/{repo}/pulls/{number}"), token, None).await?;
+    let v = api(
+        "GET",
+        &format!("/repos/{owner}/{repo}/pulls/{number}"),
+        token,
+        None,
+    )
+    .await?;
     Ok(PullState {
         merged: v["merged"].as_bool().unwrap_or(false),
         mergeable: v["mergeable"].as_bool(),
@@ -513,10 +567,22 @@ pub fn parse_timeline(v: &Value) -> Vec<Event> {
             };
             match event {
                 "committed" => Some(Event::Committed {
-                    author: e["author"]["name"].as_str().unwrap_or("unknown").to_string(),
-                    time: e["author"]["date"].as_str().and_then(parse_time).unwrap_or(0),
+                    author: e["author"]["name"]
+                        .as_str()
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    time: e["author"]["date"]
+                        .as_str()
+                        .and_then(parse_time)
+                        .unwrap_or(0),
                     sha: e["sha"].as_str()?.to_string(),
-                    message: e["message"].as_str().unwrap_or_default().lines().next().unwrap_or_default().to_string(),
+                    message: e["message"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .to_string(),
                 }),
                 "commented" => Some(Event::Commented {
                     author: login(&e["user"]),
@@ -538,7 +604,10 @@ pub fn parse_timeline(v: &Value) -> Vec<Event> {
                 }),
                 "merged" => action(
                     ActionKind::Merged,
-                    e["commit_id"].as_str().map(|c| c[..c.len().min(7)].to_string()).unwrap_or_default(),
+                    e["commit_id"]
+                        .as_str()
+                        .map(|c| c[..c.len().min(7)].to_string())
+                        .unwrap_or_default(),
                 ),
                 "closed" => action(ActionKind::Closed, String::new()),
                 "reopened" => action(ActionKind::Reopened, String::new()),
@@ -546,8 +615,14 @@ pub fn parse_timeline(v: &Value) -> Vec<Event> {
                     ActionKind::Renamed,
                     e["rename"]["to"].as_str().unwrap_or_default().to_string(),
                 ),
-                "labeled" => action(ActionKind::Labeled, e["label"]["name"].as_str().unwrap_or_default().to_string()),
-                "unlabeled" => action(ActionKind::Unlabeled, e["label"]["name"].as_str().unwrap_or_default().to_string()),
+                "labeled" => action(
+                    ActionKind::Labeled,
+                    e["label"]["name"].as_str().unwrap_or_default().to_string(),
+                ),
+                "unlabeled" => action(
+                    ActionKind::Unlabeled,
+                    e["label"]["name"].as_str().unwrap_or_default().to_string(),
+                ),
                 "review_requested" => action(
                     ActionKind::ReviewRequested,
                     e["requested_reviewer"]["login"]
@@ -607,7 +682,14 @@ pub fn attach_review_comments(events: &mut [Event], comments: Vec<(u64, ReviewCo
 
 /// A page (100 events) of the timeline, newest pages later. For a pull
 /// request, its reviews carry their inline comments.
-pub async fn timeline(token: &str, owner: &str, repo: &str, number: u64, pull: bool, page: u32) -> Result<Vec<Event>> {
+pub async fn timeline(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    pull: bool,
+    page: u32,
+) -> Result<Vec<Event>> {
     let v = api(
         "GET",
         &format!("/repos/{owner}/{repo}/issues/{number}/timeline?per_page=100&page={page}"),
@@ -647,9 +729,19 @@ pub enum Entry {
 pub fn group(events: &[Event]) -> Vec<Entry> {
     let mut entries: Vec<Entry> = Vec::new();
     for event in events {
-        if let Event::Committed { author, time, sha, message } = event {
+        if let Event::Committed {
+            author,
+            time,
+            sha,
+            message,
+        } = event
+        {
             let commit = (sha[..sha.len().min(7)].to_string(), message.clone());
-            if let Some(Entry::Pushed { author: a, time: t, commits }) = entries.last_mut()
+            if let Some(Entry::Pushed {
+                author: a,
+                time: t,
+                commits,
+            }) = entries.last_mut()
                 && a == author
             {
                 commits.push(commit);
@@ -700,7 +792,13 @@ pub async fn create_pull(
     Ok(item)
 }
 
-pub async fn create_issue(token: &str, owner: &str, repo: &str, title: &str, body: &str) -> Result<Item> {
+pub async fn create_issue(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    title: &str,
+    body: &str,
+) -> Result<Item> {
     let v = api(
         "POST",
         &format!("/repos/{owner}/{repo}/issues"),
@@ -728,7 +826,10 @@ pub fn parse_time(s: &str) -> Option<i64> {
             let (t, o) = time.split_at(at);
             let sign = if o.starts_with('-') { -1 } else { 1 };
             let (oh, om) = o[1..].split_once(':').unwrap_or((&o[1..], "0"));
-            (t, sign * (oh.parse::<i64>().ok()? * 3600 + om.parse::<i64>().ok()? * 60))
+            (
+                t,
+                sign * (oh.parse::<i64>().ok()? * 3600 + om.parse::<i64>().ok()? * 60),
+            )
         }
         None => (time, 0),
     };
@@ -781,10 +882,19 @@ mod tests {
         assert_eq!(d.user_code, "ABCD-1234");
         assert_eq!(d.expires_in, 899);
         assert_eq!(parse_device_code(&json!({"error": "x"})), None);
-        assert_eq!(parse_poll(&json!({"access_token": "t"})), Poll::Token("t".into()));
-        assert_eq!(parse_poll(&json!({"error": "authorization_pending"})), Poll::Pending);
+        assert_eq!(
+            parse_poll(&json!({"access_token": "t"})),
+            Poll::Token("t".into())
+        );
+        assert_eq!(
+            parse_poll(&json!({"error": "authorization_pending"})),
+            Poll::Pending
+        );
         assert_eq!(parse_poll(&json!({"error": "slow_down"})), Poll::SlowDown);
-        assert!(matches!(parse_poll(&json!({"error": "access_denied"})), Poll::Failed(_)));
+        assert!(matches!(
+            parse_poll(&json!({"error": "access_denied"})),
+            Poll::Failed(_)
+        ));
     }
 
     #[test]
@@ -802,11 +912,15 @@ mod tests {
 
     #[test]
     fn repos_and_comments_parse() {
-        let repos = parse_repos(&json!([{"full_name": "a/b", "description": "", "private": true,
-            "clone_url": "https://github.com/a/b.git", "pushed_at": "1970-01-02T00:00:00Z"}]));
+        let repos = parse_repos(
+            &json!([{"full_name": "a/b", "description": "", "private": true,
+            "clone_url": "https://github.com/a/b.git", "pushed_at": "1970-01-02T00:00:00Z"}]),
+        );
         assert_eq!(repos[0].description, None);
         assert_eq!(repos[0].pushed_at, 86400);
-        let c = parse_comments(&json!([{"user": {"login": "ann"}, "body": "hi", "created_at": "2000-03-01T00:00:00Z"}]));
+        let c = parse_comments(
+            &json!([{"user": {"login": "ann"}, "body": "hi", "created_at": "2000-03-01T00:00:00Z"}]),
+        );
         assert_eq!(c[0].created_at, 951868800);
     }
 
@@ -823,21 +937,41 @@ mod tests {
             {"event": "merged", "actor": {"login": "ann"}, "commit_id": "abcdef1234", "created_at": "2024-01-05T00:00:00Z"}
         ]));
         assert_eq!(events.len(), 7);
-        attach_review_comments(&mut events, parse_review_comments(&json!([
-            {"pull_request_review_id": 9, "path": "db.sql", "line": 12, "body": "on conflict"},
-            {"pull_request_review_id": 9, "path": "a.ts", "line": null, "body": "moved"}
-        ])));
-        let Event::Reviewed { state, comments, .. } = &events[2] else { panic!() };
+        attach_review_comments(
+            &mut events,
+            parse_review_comments(&json!([
+                {"pull_request_review_id": 9, "path": "db.sql", "line": 12, "body": "on conflict"},
+                {"pull_request_review_id": 9, "path": "a.ts", "line": null, "body": "moved"}
+            ])),
+        );
+        let Event::Reviewed {
+            state, comments, ..
+        } = &events[2]
+        else {
+            panic!()
+        };
         assert_eq!(*state, ReviewState::ChangesRequested);
         assert_eq!(comments.len(), 2);
         assert_eq!(comments[1].line, None);
         let entries = group(&events);
         assert_eq!(entries.len(), 6);
-        let Entry::Pushed { author, commits, time } = &entries[0] else { panic!() };
-        assert_eq!((author.as_str(), commits.len(), *time), ("Tres", 2, 1704070800));
+        let Entry::Pushed {
+            author,
+            commits,
+            time,
+        } = &entries[0]
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (author.as_str(), commits.len(), *time),
+            ("Tres", 2, 1704070800)
+        );
         assert_eq!(commits[0], ("a1f3c2e".into(), "IG review".into()));
         assert!(matches!(&entries[3], Entry::Pushed { author, .. } if author == "Kev"));
-        assert!(matches!(&entries[5], Entry::Event(Event::Action { kind: ActionKind::Merged, detail, .. }) if detail == "abcdef1"));
+        assert!(
+            matches!(&entries[5], Entry::Event(Event::Action { kind: ActionKind::Merged, detail, .. }) if detail == "abcdef1")
+        );
     }
 
     #[test]

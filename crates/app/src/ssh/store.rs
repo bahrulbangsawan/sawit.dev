@@ -304,7 +304,11 @@ impl SshStore {
     /// How to open a session to the server with `key`, or why it can't be.
     pub fn remote(&mut self, key: &str, cx: &mut Context<Self>) -> Result<Remote, String> {
         if let Some(id) = key.strip_prefix("ssh\u{0}") {
-            let host = self.list.get(id).cloned().ok_or("This server was deleted.")?;
+            let host = self
+                .list
+                .get(id)
+                .cloned()
+                .ok_or("This server was deleted.")?;
             if let Some(problem) = host.problem() {
                 return Err(format!("{}: {problem}", host.label()));
             }

@@ -45,17 +45,21 @@ impl PdfView {
         let rx = rt::spawn_blocking(cx, move || page_sizes(&source));
         cx.spawn(async move |this, cx| {
             let result = rx.await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(Ok(sizes)) => {
-                        this.list.reset(sizes.len());
-                        this.sizes = Some(sizes);
+            let _ =
+                this.update(cx, |this, cx| {
+                    match result {
+                        Ok(Ok(sizes)) => {
+                            this.list.reset(sizes.len());
+                            this.sizes = Some(sizes);
+                        }
+                        Ok(Err(e)) => this.error = Some(e.to_string()),
+                        Err(_) => this.error = Some(
+                            "Loading stopped unexpectedly. Close the tab and open the file again."
+                                .into(),
+                        ),
                     }
-                    Ok(Err(e)) => this.error = Some(e.to_string()),
-                    Err(_) => this.error = Some("Loading stopped unexpectedly. Close the tab and open the file again.".into()),
-                }
-                cx.notify();
-            });
+                    cx.notify();
+                });
         })
         .detach();
         Self {

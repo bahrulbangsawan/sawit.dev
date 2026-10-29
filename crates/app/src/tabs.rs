@@ -208,9 +208,19 @@ mod tests {
 
     #[test]
     fn a_path_belongs_to_the_deepest_project_holding_it() {
-        let roots = vec![PathBuf::from("/w"), PathBuf::from("/w/api"), PathBuf::from("/x")];
-        assert_eq!(project_of(&roots, Path::new("/w/api/src/main.rs")), Some("/w/api".into()));
-        assert_eq!(project_of(&roots, Path::new("/w/web/index.html")), Some("/w".into()));
+        let roots = vec![
+            PathBuf::from("/w"),
+            PathBuf::from("/w/api"),
+            PathBuf::from("/x"),
+        ];
+        assert_eq!(
+            project_of(&roots, Path::new("/w/api/src/main.rs")),
+            Some("/w/api".into())
+        );
+        assert_eq!(
+            project_of(&roots, Path::new("/w/web/index.html")),
+            Some("/w".into())
+        );
         assert_eq!(project_of(&roots, Path::new("/w")), Some("/w".into()));
         // A prefix of the name isn't containment.
         assert_eq!(project_of(&roots, Path::new("/xy/file")), None);

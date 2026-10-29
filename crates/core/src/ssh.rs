@@ -209,8 +209,8 @@ impl HostList {
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        let text = serde_json::to_string_pretty(self)
-            .map_err(|e| CoreError::Parse(e.to_string()))?;
+        let text =
+            serde_json::to_string_pretty(self).map_err(|e| CoreError::Parse(e.to_string()))?;
         write_text_atomic(path, &text)
     }
 
@@ -250,8 +250,8 @@ impl HostList {
             .hosts
             .iter()
             .filter(|h| {
-                let hay = format!("{} {} {} {}", h.name, h.address(), h.group, h.jump)
-                    .to_lowercase();
+                let hay =
+                    format!("{} {} {} {}", h.name, h.address(), h.group, h.jump).to_lowercase();
                 words.iter().all(|w| hay.contains(w))
             })
             .collect();
@@ -261,10 +261,7 @@ impl HostList {
 }
 
 fn query_words(query: &str) -> Vec<String> {
-    query
-        .split_whitespace()
-        .map(|w| w.to_lowercase())
-        .collect()
+    query.split_whitespace().map(|w| w.to_lowercase()).collect()
 }
 
 // ---------------------------------------------------------------- ~/.ssh/config
@@ -316,7 +313,13 @@ pub fn load_config_hosts() -> Vec<ConfigHost> {
     };
     let ssh_dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let mut out = Vec::new();
-    parse_config(&text, &ssh_dir, &mut |p| std::fs::read_to_string(p).ok(), 0, &mut out);
+    parse_config(
+        &text,
+        &ssh_dir,
+        &mut |p| std::fs::read_to_string(p).ok(),
+        0,
+        &mut out,
+    );
     out
 }
 
@@ -639,7 +642,10 @@ fn load_password_for(account: &str) -> Result<Option<String>> {
 
 /// Whether a password is saved for `host`, without reading (or asking for) it.
 pub fn has_password(host: &SshHost) -> bool {
-    matches!(crate::keychain::exists(KEYCHAIN_SERVICE, host.keychain_account()), Ok(true))
+    matches!(
+        crate::keychain::exists(KEYCHAIN_SERVICE, host.keychain_account()),
+        Ok(true)
+    )
 }
 
 pub fn store_password(host: &SshHost, password: &str) -> Result<()> {
@@ -756,7 +762,10 @@ fn ask_tty(prompt: &str) -> Option<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Probe {
     /// The SSH server answered: its version banner and how long it took.
-    Up { latency_ms: u64, banner: String },
+    Up {
+        latency_ms: u64,
+        banner: String,
+    },
     /// Reached through a jump host or proxy command; not checked directly.
     Indirect,
     Down(String),
@@ -900,7 +909,10 @@ mod tests {
 
     #[test]
     fn forwards_accept_a_bare_port() {
-        assert_eq!(parse_forward("5432").as_deref(), Some("5432:localhost:5432"));
+        assert_eq!(
+            parse_forward("5432").as_deref(),
+            Some("5432:localhost:5432")
+        );
         assert_eq!(
             parse_forward("8080:localhost:80").as_deref(),
             Some("8080:localhost:80")
@@ -920,7 +932,10 @@ mod tests {
         h.auth = Auth::Password;
         let l = launch(&h, Some(Path::new("/A/sawit")));
         assert!(l.env.contains(&("SSH_ASKPASS".into(), "/A/sawit".into())));
-        assert!(l.env.contains(&("SSH_ASKPASS_REQUIRE".into(), "force".into())));
+        assert!(
+            l.env
+                .contains(&("SSH_ASKPASS_REQUIRE".into(), "force".into()))
+        );
         assert!(l.env.contains(&(ASKPASS_ENV.into(), "abc".into())));
         // Without a helper (no saved password) ssh asks in the terminal.
         assert!(launch(&h, None).env.is_empty());
@@ -934,14 +949,22 @@ mod tests {
         h.host = "ok".into();
         h.user = "-x".into();
         assert!(h.problem().is_some());
-        assert!(launch_alias("-oX").args.ends_with(&["--".into(), "-oX".into()]));
+        assert!(
+            launch_alias("-oX")
+                .args
+                .ends_with(&["--".into(), "-oX".into()])
+        );
     }
 
     #[test]
     fn command_line_is_shell_quoted() {
         let mut h = host();
         h.startup = "echo hi".into();
-        assert!(launch(&h, None).command_line().ends_with("'echo hi; exec \"$SHELL\" -l'"));
+        assert!(
+            launch(&h, None)
+                .command_line()
+                .ends_with("'echo hi; exec \"$SHELL\" -l'")
+        );
     }
 
     #[test]

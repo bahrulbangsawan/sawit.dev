@@ -76,8 +76,7 @@ impl SshHostView {
         });
 
         let mut subscriptions = Vec::new();
-        let mut bind = |input: &Entity<InputState>,
-                        apply: fn(&mut SshHost, String, &mut bool)| {
+        let mut bind = |input: &Entity<InputState>, apply: fn(&mut SshHost, String, &mut bool)| {
             subscriptions.push(cx.subscribe(input, move |this, input, e: &InputEvent, cx| {
                 if matches!(e, InputEvent::Change) {
                     let v = input.read(cx).value().to_string();
@@ -151,7 +150,8 @@ impl SshHostView {
 
     fn set_auth(&mut self, auth: Auth, cx: &mut Context<Self>) {
         let id = self.id.clone();
-        self.store.update(cx, |s, cx| s.update(&id, cx, |h| h.auth = auth));
+        self.store
+            .update(cx, |s, cx| s.update(&id, cx, |h| h.auth = auth));
     }
 
     fn browse_key(&mut self, cx: &mut Context<Self>) {
@@ -187,8 +187,10 @@ impl SshHostView {
             return;
         }
         let id = self.id.clone();
-        self.store.update(cx, |s, cx| s.set_password(&id, value, cx));
-        self.password.update(cx, |s, cx| s.set_value("", window, cx));
+        self.store
+            .update(cx, |s, cx| s.set_password(&id, value, cx));
+        self.password
+            .update(cx, |s, cx| s.set_value("", window, cx));
     }
 
     fn copy_command(&mut self, cx: &mut Context<Self>) {
@@ -227,12 +229,9 @@ impl SshHostView {
                     .child(choice("auth-password", "Password", Auth::Password)),
             )
             .map(|el| match h.auth {
-                Auth::Default => el.child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child("Uses your SSH agent and the keys in ~/.ssh, like the ssh command does."),
-                ),
+                Auth::Default => el.child(div().text_xs().text_color(muted).child(
+                    "Uses your SSH agent and the keys in ~/.ssh, like the ssh command does.",
+                )),
                 Auth::Key => el.child(
                     h_flex()
                         .gap_1()
@@ -248,8 +247,16 @@ impl SshHostView {
                     h_flex()
                         .gap_2()
                         .text_sm()
-                        .child(Icon::new(Lucide::KeyRound).small().text_color(cx.theme().success))
-                        .child(div().flex_1().child("Saved in the Keychain. Sawit signs in for you."))
+                        .child(
+                            Icon::new(Lucide::KeyRound)
+                                .small()
+                                .text_color(cx.theme().success),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .child("Saved in the Keychain. Sawit signs in for you."),
+                        )
                         .child(
                             Button::new("forget-password")
                                 .small()
@@ -257,7 +264,8 @@ impl SshHostView {
                                 .label("Forget Password")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     let id = this.id.clone();
-                                    this.store.update(cx, |s, cx| s.set_password(&id, String::new(), cx));
+                                    this.store
+                                        .update(cx, |s, cx| s.set_password(&id, String::new(), cx));
                                 })),
                         )
                         .into_any_element()
@@ -278,10 +286,9 @@ impl SshHostView {
                                 ),
                         )
                         .child(
-                            div()
-                                .text_xs()
-                                .text_color(muted)
-                                .child("Or leave it empty and type the password when the server asks."),
+                            div().text_xs().text_color(muted).child(
+                                "Or leave it empty and type the password when the server asks.",
+                            ),
                         )
                         .into_any_element()
                 }),
@@ -298,7 +305,12 @@ fn tilde(path: &str) -> String {
     }
 }
 
-fn field(label: &'static str, hint: Option<&'static str>, child: impl IntoElement, cx: &App) -> Div {
+fn field(
+    label: &'static str,
+    hint: Option<&'static str>,
+    child: impl IntoElement,
+    cx: &App,
+) -> Div {
     v_flex()
         .gap_1()
         .child(div().text_xs().font_semibold().child(label))
@@ -316,7 +328,10 @@ fn field(label: &'static str, hint: Option<&'static str>, child: impl IntoElemen
 impl Render for SshHostView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(h) = self.host(cx) else {
-            return div().p_4().child("This server was deleted.").into_any_element();
+            return div()
+                .p_4()
+                .child("This server was deleted.")
+                .into_any_element();
         };
         let store = self.store.read(cx);
         let has_password = store.passwords.contains(&self.id);

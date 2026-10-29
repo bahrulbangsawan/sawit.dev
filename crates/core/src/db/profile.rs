@@ -159,7 +159,10 @@ impl ConnProfile {
         params.extend(self.ssl_cert.clone().map(|v| ("sslcert", v)));
         params.extend(self.ssl_key.clone().map(|v| ("sslkey", v)));
         params.extend(self.options.clone().map(|v| ("options", v)));
-        params.extend(self.connect_timeout.map(|v| ("connect_timeout", v.to_string())));
+        params.extend(
+            self.connect_timeout
+                .map(|v| ("connect_timeout", v.to_string())),
+        );
         params.extend(self.channel_binding.map(|v| {
             let v = match v {
                 ChannelBinding::Disable => "disable",

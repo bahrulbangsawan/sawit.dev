@@ -14,9 +14,7 @@ const MAX_LIMIT: usize = 1000;
 pub struct SearchArgs {
     #[schemars(description = "Folder to search (absolute path)")]
     pub dir: String,
-    #[schemars(
-        description = "Text to find (literal, case-insensitive unless it has capitals)"
-    )]
+    #[schemars(description = "Text to find (literal, case-insensitive unless it has capitals)")]
     pub query: String,
     #[schemars(description = "Maximum matches (default 100, max 1000)")]
     pub limit: Option<usize>,

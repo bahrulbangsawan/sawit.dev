@@ -104,7 +104,14 @@ pub async fn ping(host: &str, count: u32) -> Result<PingStats> {
     if program == "ping" {
         // Overall deadline in seconds (macOS -t; Linux calls it -w).
         let deadline = (count / 5 + 3).to_string();
-        cmd.args([if cfg!(target_os = "macos") { "-t" } else { "-w" }, &deadline]);
+        cmd.args([
+            if cfg!(target_os = "macos") {
+                "-t"
+            } else {
+                "-w"
+            },
+            &deadline,
+        ]);
     }
     let out = cmd.arg(host).kill_on_drop(true).output().await?;
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -112,16 +119,18 @@ pub async fn ping(host: &str, count: u32) -> Result<PingStats> {
         Some(stats) => Ok(stats),
         None => {
             let stderr = String::from_utf8_lossy(&out.stderr);
-            Err(CoreError::Network(if stderr.contains("cannot resolve")
-                || stderr.contains("Unknown host")
-                || stderr.contains("Name or service not known")
-            {
-                "Unable to find this host. Check the spelling, or run the diagnosis to test DNS.".to_string()
-            } else if stderr.trim().is_empty() {
-                format!("No reply from {host}.")
-            } else {
-                stderr.trim().trim_start_matches("ping: ").to_string()
-            }))
+            Err(CoreError::Network(
+                if stderr.contains("cannot resolve")
+                    || stderr.contains("Unknown host")
+                    || stderr.contains("Name or service not known")
+                {
+                    "Unable to find this host. Check the spelling, or run the diagnosis to test DNS.".to_string()
+                } else if stderr.trim().is_empty() {
+                    format!("No reply from {host}.")
+                } else {
+                    stderr.trim().trim_start_matches("ping: ").to_string()
+                },
+            ))
         }
     }
 }
@@ -265,8 +274,8 @@ pub fn verdict(f: &Findings) -> Verdict {
     }
     let internet: Vec<&PingStats> = f.internet.iter().filter_map(|r| r.as_ref().ok()).collect();
     let online = internet.iter().any(|s| s.reachable());
-    let router_down = matches!(&f.router, Some(Err(_)))
-        || matches!(&f.router, Some(Ok(s)) if !s.reachable());
+    let router_down =
+        matches!(&f.router, Some(Err(_))) || matches!(&f.router, Some(Ok(s)) if !s.reachable());
     if !online {
         // Some routers ignore ping; only blame the router when nothing else works.
         return if router_down {
@@ -357,14 +366,20 @@ rtt min/avg/max/mdev = 9.1/10.2/11.3/0.8 ms
 
     #[test]
     fn garbage_is_not_a_ping() {
-        assert_eq!(parse_ping("x", "ping: cannot resolve x: Unknown host"), None);
+        assert_eq!(
+            parse_ping("x", "ping: cannot resolve x: Unknown host"),
+            None
+        );
     }
 
     #[test]
     fn parses_gateway() {
         let out = "   route to: default\ndestination: default\n    gateway: 192.168.1.1\n  interface: en0\n";
         assert_eq!(parse_gateway(out).as_deref(), Some("192.168.1.1"));
-        assert_eq!(parse_gateway("route: writing to routing socket: not in table"), None);
+        assert_eq!(
+            parse_gateway("route: writing to routing socket: not in table"),
+            None
+        );
     }
 
     #[test]

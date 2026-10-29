@@ -36,7 +36,12 @@ pub(crate) fn describe(s: &PingStats) -> String {
         out.push_str(&format!(" ({:.0}% loss)", s.loss_percent()));
     }
     if let (Some(min), Some(avg), Some(max)) = (s.min_ms, s.avg_ms, s.max_ms) {
-        out.push_str(&format!(", avg {} (min {}, max {})", ms(avg), ms(min), ms(max)));
+        out.push_str(&format!(
+            ", avg {} (min {}, max {})",
+            ms(avg),
+            ms(min),
+            ms(max)
+        ));
     }
     out
 }
@@ -159,7 +164,10 @@ mod tests {
 
     #[test]
     fn describes_pings() {
-        assert_eq!(describe(&stats(5, 12.)), "5/5 replies, avg 12 ms (min 11 ms, max 13 ms)");
+        assert_eq!(
+            describe(&stats(5, 12.)),
+            "5/5 replies, avg 12 ms (min 11 ms, max 13 ms)"
+        );
         assert!(describe(&stats(4, 5.)).contains("(20% loss)"));
     }
 
@@ -169,7 +177,10 @@ mod tests {
             local_ip: Some("192.168.1.2".parse().unwrap()),
             gateway: Some("192.168.1.1".into()),
             router: Some(Ok(stats(5, 2.))),
-            dns: Some(Ok((vec!["1.2.3.4".parse().unwrap()], std::time::Duration::from_millis(20)))),
+            dns: Some(Ok((
+                vec!["1.2.3.4".parse().unwrap()],
+                std::time::Duration::from_millis(20),
+            ))),
             internet: vec![Ok(stats(5, 12.)), Ok(stats(5, 14.))],
             portal: Some(Ok((Portal::Open, std::time::Duration::from_millis(30)))),
         };

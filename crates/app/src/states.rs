@@ -128,7 +128,11 @@ impl RenderOnce for Placeholder {
                     .font_medium()
                     .when(self.compact, |el| el.text_xs())
                     .when(!self.compact, |el| el.text_sm())
-                    .text_color(if danger { theme.danger } else { theme.foreground })
+                    .text_color(if danger {
+                        theme.danger
+                    } else {
+                        theme.foreground
+                    })
                     .child(self.title),
             )
             .when_some(self.detail, |el, detail| {

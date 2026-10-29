@@ -51,33 +51,42 @@ pub struct GitPanel {
 
 impl GitPanel {
     pub fn new(store: Entity<GitStore>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let message = cx.new(|cx| {
-            TextareaState::new(window, cx).placeholder("Commit message (⌘↩ to commit)")
-        });
+        let message = cx
+            .new(|cx| TextareaState::new(window, cx).placeholder("Commit message (⌘↩ to commit)"));
         let new_branch = cx.new(|cx| InputState::new(window, cx).placeholder("New branch name"));
         let subscriptions = vec![
             cx.observe(&store, |_, _, cx| cx.notify()),
-            cx.subscribe_in(&message, window, |this, _, e: &InputEvent, window, cx| match e {
-                InputEvent::PressEnter { secondary: true, .. } => this.commit(window, cx),
-                InputEvent::Change => cx.notify(),
-                _ => {}
-            }),
-            cx.subscribe_in(&new_branch, window, |this, input, e: &InputEvent, window, cx| {
-                if matches!(e, InputEvent::PressEnter { .. }) {
-                    let name = input.read(cx).value().trim().to_string();
-                    if !name.is_empty() {
-                        this.store.update(cx, |s, cx| {
-                            s.run("Creating branch…", cx, move |repo, _| async move {
-                                git::create_branch(&repo, &name).await?;
-                                Ok(format!("Switched to the new branch {name}."))
-                            })
-                        });
+            cx.subscribe_in(
+                &message,
+                window,
+                |this, _, e: &InputEvent, window, cx| match e {
+                    InputEvent::PressEnter {
+                        secondary: true, ..
+                    } => this.commit(window, cx),
+                    InputEvent::Change => cx.notify(),
+                    _ => {}
+                },
+            ),
+            cx.subscribe_in(
+                &new_branch,
+                window,
+                |this, input, e: &InputEvent, window, cx| {
+                    if matches!(e, InputEvent::PressEnter { .. }) {
+                        let name = input.read(cx).value().trim().to_string();
+                        if !name.is_empty() {
+                            this.store.update(cx, |s, cx| {
+                                s.run("Creating branch…", cx, move |repo, _| async move {
+                                    git::create_branch(&repo, &name).await?;
+                                    Ok(format!("Switched to the new branch {name}."))
+                                })
+                            });
+                        }
+                        this.creating_branch = false;
+                        input.update(cx, |s, cx| s.set_value("", window, cx));
+                        cx.notify();
                     }
-                    this.creating_branch = false;
-                    input.update(cx, |s, cx| s.set_value("", window, cx));
-                    cx.notify();
-                }
-            }),
+                },
+            ),
         ];
         Self {
             store,
@@ -96,7 +105,10 @@ impl GitPanel {
         };
         let mut rows = Vec::new();
         for (section, files) in [
-            (Section::Conflicts, status.conflicted().cloned().collect::<Vec<_>>()),
+            (
+                Section::Conflicts,
+                status.conflicted().cloned().collect::<Vec<_>>(),
+            ),
             (Section::Staged, status.staged().cloned().collect()),
             (Section::Changes, status.unstaged().cloned().collect()),
         ] {
@@ -191,7 +203,10 @@ impl GitPanel {
         let (title, button) = if file.untracked() {
             (format!("Delete “{}”?", file.path), "Delete File")
         } else {
-            (format!("Discard changes to “{}”?", file.path), "Discard Changes")
+            (
+                format!("Discard changes to “{}”?", file.path),
+                "Discard Changes",
+            )
         };
         let answer = window.prompt(
             PromptLevel::Warning,
@@ -222,7 +237,9 @@ impl GitPanel {
             .is_some_and(|s| s.upstream.is_some());
         self.store.update(cx, |s, cx| match which {
             Sync::Fetch => s.run("Fetching…", cx, |repo, token| async move {
-                git::fetch(&repo, token.as_deref()).await.map(|_| String::new())
+                git::fetch(&repo, token.as_deref())
+                    .await
+                    .map(|_| String::new())
             }),
             Sync::Pull => s.run("Pulling…", cx, |repo, token| async move {
                 git::pull(&repo, token.as_deref()).await.map(|out| {
@@ -234,13 +251,15 @@ impl GitPanel {
                 })
             }),
             Sync::Push => s.run("Pushing…", cx, move |repo, token| async move {
-                git::push(&repo, has_upstream, token.as_deref()).await.map(|out| {
-                    if out.contains("Everything up-to-date") {
-                        "Everything is already pushed.".into()
-                    } else {
-                        String::new()
-                    }
-                })
+                git::push(&repo, has_upstream, token.as_deref())
+                    .await
+                    .map(|out| {
+                        if out.contains("Everything up-to-date") {
+                            "Everything is already pushed.".into()
+                        } else {
+                            String::new()
+                        }
+                    })
             }),
         });
     }
@@ -275,14 +294,18 @@ impl GitPanel {
                                 .tooltip(tooltip)
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.store.update(cx, |s, cx| {
-                                        s.run(if stage { "Staging…" } else { "Unstaging…" }, cx, move |repo, _| async move {
-                                            if stage {
-                                                git::stage_all(&repo).await?;
-                                            } else {
-                                                git::unstage_all(&repo).await?;
-                                            }
-                                            Ok(String::new())
-                                        })
+                                        s.run(
+                                            if stage { "Staging…" } else { "Unstaging…" },
+                                            cx,
+                                            move |repo, _| async move {
+                                                if stage {
+                                                    git::stage_all(&repo).await?;
+                                                } else {
+                                                    git::unstage_all(&repo).await?;
+                                                }
+                                                Ok(String::new())
+                                            },
+                                        )
                                     })
                                 })),
                         )
@@ -343,14 +366,24 @@ impl GitPanel {
                             staged,
                         })
                     }))
-                    .child(crate::file_icons::file_icon(std::path::Path::new(&file.path), cx))
+                    .child(crate::file_icons::file_icon(
+                        std::path::Path::new(&file.path),
+                        cx,
+                    ))
                     .child(
                         h_flex()
                             .flex_1()
                             .min_w_0()
                             .gap_1()
                             .child(div().flex_none().max_w_full().truncate().child(name))
-                            .child(div().min_w_0().truncate().text_xs().text_color(muted).child(folder)),
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(folder),
+                            ),
                     )
                     .child(
                         h_flex()
@@ -364,7 +397,11 @@ impl GitPanel {
                                         .xsmall()
                                         .disabled(busy)
                                         .icon(Lucide::Undo2)
-                                        .tooltip(if discard.untracked() { "Delete File" } else { "Discard Changes" })
+                                        .tooltip(if discard.untracked() {
+                                            "Delete File"
+                                        } else {
+                                            "Discard Changes"
+                                        })
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             cx.stop_propagation();
                                             this.discard(discard.clone(), window, cx);
@@ -430,7 +467,14 @@ impl GitPanel {
             .tooltip("Switch, Create or Merge Branches")
             .disabled(busy)
             .dropdown_menu(move |menu, window, cx| {
-                branch_menu(menu, &menu_branches, menu_current.as_deref(), weak.clone(), window, cx)
+                branch_menu(
+                    menu,
+                    &menu_branches,
+                    menu_current.as_deref(),
+                    weak.clone(),
+                    window,
+                    cx,
+                )
             });
         let (ahead, behind) = (status.ahead, status.behind);
         let has_upstream = status.upstream.is_some();
@@ -440,7 +484,14 @@ impl GitPanel {
             .gap_0p5()
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(h_flex().flex_1().min_w_0().overflow_hidden().justify_start().child(branch_button))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .justify_start()
+                    .child(branch_button),
+            )
             .child(
                 Button::new("git-fetch")
                     .ghost()
@@ -504,7 +555,11 @@ impl GitPanel {
             .gap_1p5()
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(Textarea::new(&self.message).h(px(64.)).aria_label("Commit message"))
+            .child(
+                Textarea::new(&self.message)
+                    .h(px(64.))
+                    .aria_label("Commit message"),
+            )
             .child(
                 h_flex()
                     .gap_2()
@@ -525,7 +580,11 @@ impl GitPanel {
                             .small()
                             .icon(Lucide::Check)
                             .label(label)
-                            .disabled(busy || empty || conflicts > 0 || (staged + changed == 0 && !self.amend))
+                            .disabled(
+                                busy || empty
+                                    || conflicts > 0
+                                    || (staged + changed == 0 && !self.amend),
+                            )
                             .tooltip(if conflicts > 0 {
                                 "Resolve the conflicts first"
                             } else {
@@ -595,16 +654,18 @@ fn branch_menu(
         menu = menu.submenu("Remote Branches", window, cx, move |mut menu, _, _| {
             for b in remotes.clone() {
                 let panel = panel_for_remote.clone();
-                menu = menu.item(PopupMenuItem::new(b.name.clone()).on_click(move |_, _, cx| {
-                    let b = b.clone();
-                    let _ = panel.update(cx, |this, cx| {
-                        this.store.update(cx, |s, cx| {
-                            s.run("Switching branch…", cx, move |repo, _| async move {
-                                git::switch(&repo, &b).await.map(|_| String::new())
+                menu = menu.item(
+                    PopupMenuItem::new(b.name.clone()).on_click(move |_, _, cx| {
+                        let b = b.clone();
+                        let _ = panel.update(cx, |this, cx| {
+                            this.store.update(cx, |s, cx| {
+                                s.run("Switching branch…", cx, move |repo, _| async move {
+                                    git::switch(&repo, &b).await.map(|_| String::new())
+                                })
                             })
-                        })
-                    });
-                }));
+                        });
+                    }),
+                );
             }
             menu
         });
@@ -626,16 +687,23 @@ fn branch_menu(
         && !mergeable.is_empty()
     {
         let panel_merge = panel.clone();
-        menu = menu.submenu(format!("Merge into {current}"), window, cx, move |mut menu, _, _| {
-            for name in mergeable.clone() {
-                let panel = panel_merge.clone();
-                menu = menu.item(PopupMenuItem::new(name.clone()).on_click(move |_, window, cx| {
-                    let name = name.clone();
-                    let _ = panel.update(cx, |this, cx| this.merge(name, window, cx));
-                }));
-            }
-            menu
-        });
+        menu = menu.submenu(
+            format!("Merge into {current}"),
+            window,
+            cx,
+            move |mut menu, _, _| {
+                for name in mergeable.clone() {
+                    let panel = panel_merge.clone();
+                    menu = menu.item(PopupMenuItem::new(name.clone()).on_click(
+                        move |_, window, cx| {
+                            let name = name.clone();
+                            let _ = panel.update(cx, |this, cx| this.merge(name, window, cx));
+                        },
+                    ));
+                }
+                menu
+            },
+        );
     }
     menu
 }
@@ -704,7 +772,9 @@ impl Render for GitPanel {
                     .child(match &store.repo {
                         Some(repo) => format!(
                             "GIT · {}",
-                            repo.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+                            repo.file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default()
                         ),
                         None => "GIT".into(),
                     }),

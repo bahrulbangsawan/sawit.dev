@@ -120,7 +120,9 @@ impl Render for ServerList {
                         el.child(
                             Placeholder::new(Lucide::Server, "No instances yet")
                                 .compact()
-                                .detail("Create a local PostgreSQL server, or add one you already run.")
+                                .detail(
+                                    "Create a local PostgreSQL server, or add one you already run.",
+                                )
                                 .action(
                                     Button::new("empty-new-instance")
                                         .small()

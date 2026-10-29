@@ -260,7 +260,11 @@ pub fn erd(schemas: &[SchemaInfo], only: Option<&str>) -> Erd {
                 from,
                 from_columns: fk.columns.iter().filter_map(|c| col_ix(rel, c)).collect(),
                 to,
-                to_columns: fk.ref_columns.iter().filter_map(|c| col_ix(target, c)).collect(),
+                to_columns: fk
+                    .ref_columns
+                    .iter()
+                    .filter_map(|c| col_ix(target, c))
+                    .collect(),
                 optional: fk
                     .columns
                     .iter()
@@ -340,7 +344,12 @@ pub fn layout(sizes: &[(f32, f32)], edges: &[(usize, usize)]) -> Vec<(f32, f32)>
     // Rank = longest chain of references below a table; cycles are cut
     // where the depth-first walk meets a table it is still inside.
     let mut rank = vec![usize::MAX; n];
-    fn rank_of(t: usize, parents: &[Vec<usize>], rank: &mut [usize], on_path: &mut [bool]) -> usize {
+    fn rank_of(
+        t: usize,
+        parents: &[Vec<usize>],
+        rank: &mut [usize],
+        on_path: &mut [bool],
+    ) -> usize {
         if rank[t] != usize::MAX {
             return rank[t];
         }
@@ -411,7 +420,10 @@ pub fn layout(sizes: &[(f32, f32)], edges: &[(usize, usize)]) -> Vec<(f32, f32)>
         }
         let heights: Vec<f32> = cols
             .iter()
-            .map(|c| c.iter().map(|&t| sizes[t].1).sum::<f32>() + NODE_GAP * c.len().saturating_sub(1) as f32)
+            .map(|c| {
+                c.iter().map(|&t| sizes[t].1).sum::<f32>()
+                    + NODE_GAP * c.len().saturating_sub(1) as f32
+            })
             .collect();
         let tallest = heights.iter().cloned().fold(0., f32::max);
         let mut x = 0.;
@@ -428,7 +440,10 @@ pub fn layout(sizes: &[(f32, f32)], edges: &[(usize, usize)]) -> Vec<(f32, f32)>
     }
 
     // Pack groups into rows: bigger groups first, lone tables last.
-    let area: f32 = boxes.iter().map(|b| (b.1 + GROUP_GAP) * (b.2 + GROUP_GAP)).sum();
+    let area: f32 = boxes
+        .iter()
+        .map(|b| (b.1 + GROUP_GAP) * (b.2 + GROUP_GAP))
+        .sum();
     let widest = boxes.iter().map(|b| b.1).fold(0., f32::max);
     let row_width = widest.max(area.sqrt() * 1.6);
     boxes.sort_by(|a, b| {
@@ -577,7 +592,10 @@ mod tests {
         assert_eq!(search(&erd, "USER"), vec![(0, None), (1, Some(1))]);
         assert_eq!(search(&erd, "public.ord"), vec![(1, None)]);
         // Table names come before columns, whatever the table order.
-        assert_eq!(search(&erd, "id"), vec![(0, Some(0)), (1, Some(0)), (1, Some(1))]);
+        assert_eq!(
+            search(&erd, "id"),
+            vec![(0, Some(0)), (1, Some(0)), (1, Some(1))]
+        );
         assert_eq!(search(&erd, "r"), vec![(0, None), (1, None), (1, Some(1))]);
         assert!(search(&erd, "  ").is_empty());
     }
@@ -585,7 +603,15 @@ mod tests {
     #[test]
     fn layout_puts_referenced_tables_left_and_never_overlaps() {
         // 0 <- 1 <- 2, 0 <- 3, a cycle 4 <-> 5, and lone 6.
-        let sizes = vec![(200., 100.), (220., 160.), (180., 80.), (200., 60.), (150., 90.), (150., 90.), (120., 40.)];
+        let sizes = vec![
+            (200., 100.),
+            (220., 160.),
+            (180., 80.),
+            (200., 60.),
+            (150., 90.),
+            (150., 90.),
+            (120., 40.),
+        ];
         let edges = vec![(1, 0), (2, 1), (3, 0), (4, 5), (5, 4), (2, 2)];
         let pos = layout(&sizes, &edges);
         assert!(pos[0].0 < pos[1].0 && pos[1].0 < pos[2].0);

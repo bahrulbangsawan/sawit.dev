@@ -78,9 +78,9 @@ pub enum StartOutcome {
 /// pg_ctl runs `exec postgres -D "<dir>" ... >> "<log>"` through `sh`, so
 /// paths with shell metacharacters inside double quotes would be expanded.
 pub(crate) fn check_shell_safe_path(path: &Path) -> Result<()> {
-    let text = path
-        .to_str()
-        .ok_or_else(|| CoreError::Config("This path isn't valid UTF-8. Rename the folder and try again.".into()))?;
+    let text = path.to_str().ok_or_else(|| {
+        CoreError::Config("This path isn't valid UTF-8. Rename the folder and try again.".into())
+    })?;
     if text.contains(['"', '$', '`', '\\']) {
         return Err(CoreError::Config(format!(
             "Path {text} contains \" $ ` or \\, which are unsafe for pg_ctl; move or rename the folder."
@@ -96,9 +96,11 @@ pub(crate) fn postgres_options(
     listen: ListenScope,
     socket_dir: &Path,
 ) -> Result<String> {
-    let dir = socket_dir
-        .to_str()
-        .ok_or_else(|| CoreError::Config("The socket folder path isn't valid UTF-8. Move Sawit's data to another folder.".into()))?;
+    let dir = socket_dir.to_str().ok_or_else(|| {
+        CoreError::Config(
+            "The socket folder path isn't valid UTF-8. Move Sawit's data to another folder.".into(),
+        )
+    })?;
     if dir.contains('\'') {
         return Err(CoreError::Config(format!(
             "The socket folder path can't contain a quote ('): {dir}. Rename the folder."

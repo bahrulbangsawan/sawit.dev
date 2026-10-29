@@ -36,7 +36,12 @@ impl GitOutput {
 
 /// Runs `git -C dir args…`. Never prompts in a terminal; with `token`, HTTPS
 /// remotes on github.com fall back to it when no credential helper answers.
-async fn git(dir: &Path, args: &[&str], token: Option<&str>, timeout: Duration) -> Result<GitOutput> {
+async fn git(
+    dir: &Path,
+    args: &[&str],
+    token: Option<&str>,
+    timeout: Duration,
+) -> Result<GitOutput> {
     let mut cmd = tokio::process::Command::new("git");
     cmd.arg("-C").arg(dir);
     if token.is_some() {
@@ -76,7 +81,12 @@ async fn git(dir: &Path, args: &[&str], token: Option<&str>, timeout: Duration) 
 }
 
 /// Like [`git`], but a failure becomes an error carrying git's message.
-async fn git_ok(dir: &Path, args: &[&str], token: Option<&str>, timeout: Duration) -> Result<String> {
+async fn git_ok(
+    dir: &Path,
+    args: &[&str],
+    token: Option<&str>,
+    timeout: Duration,
+) -> Result<String> {
     let out = git(dir, args, token, timeout).await?;
     if out.ok {
         Ok(out.stdout)
@@ -242,15 +252,26 @@ fn change(xy: &str, path: &str, from: Option<String>, conflicted: bool) -> FileC
 pub async fn status(repo: &Path) -> Result<Status> {
     let raw = git_ok(
         repo,
-        &["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"],
+        &[
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "-z",
+            "--untracked-files=all",
+        ],
         None,
         LOCAL_TIMEOUT,
     )
     .await?;
     let mut status = parse_status(&raw);
-    status.merging = git(repo, &["rev-parse", "-q", "--verify", "MERGE_HEAD"], None, LOCAL_TIMEOUT)
-        .await
-        .is_ok_and(|o| o.ok);
+    status.merging = git(
+        repo,
+        &["rev-parse", "-q", "--verify", "MERGE_HEAD"],
+        None,
+        LOCAL_TIMEOUT,
+    )
+    .await
+    .is_ok_and(|o| o.ok);
     Ok(status)
 }
 
@@ -263,7 +284,9 @@ pub async fn stage(repo: &Path, paths: &[String]) -> Result<()> {
 }
 
 pub async fn stage_all(repo: &Path) -> Result<()> {
-    git_ok(repo, &["add", "--all"], None, LOCAL_TIMEOUT).await.map(drop)
+    git_ok(repo, &["add", "--all"], None, LOCAL_TIMEOUT)
+        .await
+        .map(drop)
 }
 
 pub async fn unstage(repo: &Path, paths: &[String]) -> Result<()> {
@@ -284,21 +307,36 @@ pub async fn unstage_all(repo: &Path) -> Result<()> {
     if out.ok {
         return Ok(());
     }
-    git_ok(repo, &["rm", "--cached", "-r", "-q", "."], None, LOCAL_TIMEOUT)
-        .await
-        .map(drop)
+    git_ok(
+        repo,
+        &["rm", "--cached", "-r", "-q", "."],
+        None,
+        LOCAL_TIMEOUT,
+    )
+    .await
+    .map(drop)
 }
 
 /// Throws away unstaged changes to `file` (deletes it when untracked).
 pub async fn discard(repo: &Path, file: &FileChange) -> Result<()> {
     if file.untracked() {
-        git_ok(repo, &["clean", "-f", "-q", "--", &file.path], None, LOCAL_TIMEOUT)
-            .await
-            .map(drop)
+        git_ok(
+            repo,
+            &["clean", "-f", "-q", "--", &file.path],
+            None,
+            LOCAL_TIMEOUT,
+        )
+        .await
+        .map(drop)
     } else {
-        git_ok(repo, &["restore", "--worktree", "--", &file.path], None, LOCAL_TIMEOUT)
-            .await
-            .map(drop)
+        git_ok(
+            repo,
+            &["restore", "--worktree", "--", &file.path],
+            None,
+            LOCAL_TIMEOUT,
+        )
+        .await
+        .map(drop)
     }
 }
 
@@ -373,7 +411,10 @@ pub async fn branches(repo: &Path) -> Result<Vec<Branch>> {
 /// branch `x`.
 pub async fn switch(repo: &Path, branch: &Branch) -> Result<()> {
     let args: Vec<&str> = if branch.remote {
-        let local = branch.name.split_once('/').map_or(branch.name.as_str(), |(_, b)| b);
+        let local = branch
+            .name
+            .split_once('/')
+            .map_or(branch.name.as_str(), |(_, b)| b);
         vec!["switch", "--track", "-c", local, &branch.name]
     } else {
         vec!["switch", &branch.name]
@@ -428,9 +469,14 @@ pub async fn push(repo: &Path, has_upstream: bool, token: Option<&str>) -> Resul
 pub async fn clone(url: &str, into: &Path, token: Option<&str>) -> Result<()> {
     let parent = into.parent().unwrap_or(Path::new("/"));
     let target = into.to_string_lossy();
-    git_ok(parent, &["clone", "--", url, &target], token, REMOTE_TIMEOUT)
-        .await
-        .map(drop)
+    git_ok(
+        parent,
+        &["clone", "--", url, &target],
+        token,
+        REMOTE_TIMEOUT,
+    )
+    .await
+    .map(drop)
 }
 
 pub async fn remote_url(repo: &Path) -> Option<String> {
@@ -628,7 +674,15 @@ pub struct CommitDetail {
 pub async fn show(repo: &Path, hash: &str) -> Result<CommitDetail> {
     let raw = git_ok(
         repo,
-        &["show", "--first-parent", "-m", "--format=%cn%x00%B%x00", "--patch", "--no-color", hash],
+        &[
+            "show",
+            "--first-parent",
+            "-m",
+            "--format=%cn%x00%B%x00",
+            "--patch",
+            "--no-color",
+            hash,
+        ],
         None,
         LOCAL_TIMEOUT,
     )
@@ -647,7 +701,14 @@ pub async fn diff(repo: &Path, file: &FileChange, staged: bool) -> Result<String
     if !staged && file.untracked() {
         let out = git(
             repo,
-            &["diff", "--no-color", "--no-index", "--", "/dev/null", &file.path],
+            &[
+                "diff",
+                "--no-color",
+                "--no-index",
+                "--",
+                "/dev/null",
+                &file.path,
+            ],
             None,
             LOCAL_TIMEOUT,
         )
@@ -685,7 +746,16 @@ u UU N... 100644 100644 100644 100644 e f g conflict.rs\0\
         assert_eq!(s.upstream.as_deref(), Some("origin/main"));
         assert_eq!((s.ahead, s.behind), (2, 1));
         let paths: Vec<_> = s.files.iter().map(|f| f.path.as_str()).collect();
-        assert_eq!(paths, ["src/a file.rs", "new.rs", "b.rs", "conflict.rs", "notes.txt"]);
+        assert_eq!(
+            paths,
+            [
+                "src/a file.rs",
+                "new.rs",
+                "b.rs",
+                "conflict.rs",
+                "notes.txt"
+            ]
+        );
         assert_eq!(s.files[2].from.as_deref(), Some("old b.rs"));
         assert_eq!(s.staged().count(), 2);
         assert_eq!(s.unstaged().count(), 2);
@@ -738,7 +808,7 @@ u UU N... 100644 100644 100644 100644 e f g conflict.rs\0\
 
     #[test]
     fn log_parses_records() {
-        let raw = "aaa\0bbb ccc\0Ann\0ann@x\01700000000\0HEAD -> main, origin/main\0Merge feat\x1e\nbbb\0\0Bo\0bo@x\01600000000\0\0First\x1e\n";
+        let raw = "aaa\0bbb ccc\0Ann\0ann@x\x001700000000\0HEAD -> main, origin/main\0Merge feat\x1e\nbbb\0\0Bo\0bo@x\x001600000000\0\0First\x1e\n";
         let log = parse_log(raw);
         assert_eq!(log.len(), 2);
         assert_eq!(log[0].parents, ["bbb", "ccc"]);
@@ -798,17 +868,38 @@ u UU N... 100644 100644 100644 100644 e f g conflict.rs\0\
             .build()
             .unwrap();
         rt.block_on(async {
-            git_ok(repo, &["init", "-q", "-b", "main"], None, LOCAL_TIMEOUT).await.unwrap();
-            for (k, v) in [("user.name", "Test"), ("user.email", "t@example.com"), ("commit.gpgsign", "false")] {
-                git_ok(repo, &["config", k, v], None, LOCAL_TIMEOUT).await.unwrap();
+            git_ok(repo, &["init", "-q", "-b", "main"], None, LOCAL_TIMEOUT)
+                .await
+                .unwrap();
+            for (k, v) in [
+                ("user.name", "Test"),
+                ("user.email", "t@example.com"),
+                ("commit.gpgsign", "false"),
+            ] {
+                git_ok(repo, &["config", k, v], None, LOCAL_TIMEOUT)
+                    .await
+                    .unwrap();
             }
 
-            assert_eq!(discover(&repo.join(".")).await.map(|p| p.canonicalize().unwrap()), Some(repo.canonicalize().unwrap()));
+            assert_eq!(
+                discover(&repo.join("."))
+                    .await
+                    .map(|p| p.canonicalize().unwrap()),
+                Some(repo.canonicalize().unwrap())
+            );
             std::fs::write(repo.join("a.txt"), "one\n").unwrap();
             let s = status(repo).await.unwrap();
             assert_eq!(s.branch.as_deref(), Some("main"));
             assert!(s.files[0].untracked());
-            assert_eq!(diff(repo, &s.files[0], false).await.unwrap().lines().filter(|l| l.starts_with('+')).count(), 2);
+            assert_eq!(
+                diff(repo, &s.files[0], false)
+                    .await
+                    .unwrap()
+                    .lines()
+                    .filter(|l| l.starts_with('+'))
+                    .count(),
+                2
+            );
 
             stage_all(repo).await.unwrap();
             assert_eq!(status(repo).await.unwrap().staged().count(), 1);
@@ -822,7 +913,12 @@ u UU N... 100644 100644 100644 100644 e f g conflict.rs\0\
             std::fs::write(repo.join("b.txt"), "two\n").unwrap();
             stage_all(repo).await.unwrap();
             commit(repo, "second", false).await.unwrap();
-            let main = branches(repo).await.unwrap().into_iter().find(|b| b.name == "main").unwrap();
+            let main = branches(repo)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|b| b.name == "main")
+                .unwrap();
             switch(repo, &main).await.unwrap();
             assert!(merge(repo, "feat").await.unwrap().ok);
 

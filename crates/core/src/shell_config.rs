@@ -65,7 +65,11 @@ const SYSTEM: &[(&str, &str, &str)] = &[
     ("bash", "/etc/bash.bashrc", "Interactive bash, all users"),
     ("bash", "/etc/bashrc", "Interactive bash, all users"),
     ("sh", "/etc/profile", "Login shells, all users"),
-    ("fish", "/etc/fish/config.fish", "Every fish shell, all users"),
+    (
+        "fish",
+        "/etc/fish/config.fish",
+        "Every fish shell, all users",
+    ),
 ];
 
 /// The startup files that exist, the user's own first.

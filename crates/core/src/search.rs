@@ -32,12 +32,18 @@ pub async fn find(dir: &Path, query: &str, limit: usize) -> Result<Vec<Hit>> {
     let (program, args): (PathBuf, Vec<String>) = match find_in_path("rg") {
         Some(rg) => (
             rg,
-            ["--line-number", "--no-heading", "--null", "--color=never", "--fixed-strings"]
-                .into_iter()
-                .chain(smart_case)
-                .chain(["-e", query, "--", &dir])
-                .map(String::from)
-                .collect(),
+            [
+                "--line-number",
+                "--no-heading",
+                "--null",
+                "--color=never",
+                "--fixed-strings",
+            ]
+            .into_iter()
+            .chain(smart_case)
+            .chain(["-e", query, "--", &dir])
+            .map(String::from)
+            .collect(),
         ),
         None => (
             "/usr/bin/grep".into(),
@@ -45,7 +51,11 @@ pub async fn find(dir: &Path, query: &str, limit: usize) -> Result<Vec<Hit>> {
                 .into_iter()
                 .chain(smart_case)
                 .map(String::from)
-                .chain(crate::files::HIDDEN.iter().map(|d| format!("--exclude-dir={d}")))
+                .chain(
+                    crate::files::HIDDEN
+                        .iter()
+                        .map(|d| format!("--exclude-dir={d}")),
+                )
                 .chain(["-e", query, "--", &dir].map(String::from))
                 .collect(),
         ),
@@ -88,7 +98,7 @@ mod tests {
 
     #[test]
     fn parses_null_separated_hits() {
-        let raw = "/p/a:b.rs\012:    let x = 1;\n/p/c.rs\03:fn main() {}\nnoise\n";
+        let raw = "/p/a:b.rs\x0012:    let x = 1;\n/p/c.rs\x003:fn main() {}\nnoise\n";
         assert_eq!(
             parse(raw, 10),
             vec![

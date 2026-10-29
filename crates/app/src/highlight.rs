@@ -150,7 +150,11 @@ fn parse_lines(text: &str, from: Checkpoint, until: usize) -> Parsed {
                 let _ = scopes.apply(&operation);
                 cursor = at;
             }
-            push(offset + cursor..offset + line.len(), &scopes, &mut out.highlights);
+            push(
+                offset + cursor..offset + line.len(),
+                &scopes,
+                &mut out.highlights,
+            );
         }
         offset += line.len();
     }
@@ -251,7 +255,11 @@ impl Highlighter {
             .last()
             .map_or(from.byte, |(r, _)| r.end)
             .max(line_end(text, until));
-        splice(&mut self.highlights.borrow_mut(), from.byte..end, parsed.highlights);
+        splice(
+            &mut self.highlights.borrow_mut(),
+            from.byte..end,
+            parsed.highlights,
+        );
         checkpoints.extend(parsed.checkpoints.into_iter().skip(1));
     }
 }
@@ -411,8 +419,19 @@ fn semantic_name(scope: Scope) -> Option<&'static str> {
     } else if is("storage.type") {
         // `fn`, `class` and `let` are declarations, `int` and `bool` are types.
         if [
-            "class", "enum", "function", "impl", "interface", "module", "namespace", "struct",
-            "trait", "type", "let", "var", "const",
+            "class",
+            "enum",
+            "function",
+            "impl",
+            "interface",
+            "module",
+            "namespace",
+            "struct",
+            "trait",
+            "type",
+            "let",
+            "var",
+            "const",
         ]
         .iter()
         .any(|word| scope.contains(word))

@@ -40,9 +40,8 @@ impl FolderSearch {
     }
 
     pub fn new(dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let query = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Search text, then press Enter")
-        });
+        let query =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search text, then press Enter"));
         let subscription = cx.subscribe(&query, |this, _, e: &InputEvent, cx| {
             if matches!(e, InputEvent::PressEnter { .. }) {
                 this.search(cx);
@@ -147,7 +146,9 @@ impl Render for FolderSearch {
             None => String::new(),
         };
         let list: AnyElement = if let Some(e) = &self.error {
-            Placeholder::error("Search failed").detail(e.clone()).into_any_element()
+            Placeholder::error("Search failed")
+                .detail(e.clone())
+                .into_any_element()
         } else if self.loading && count == 0 {
             Placeholder::loading("Searching…").into_any_element()
         } else if let Some(q) = self.searched.as_ref().filter(|_| count == 0) {

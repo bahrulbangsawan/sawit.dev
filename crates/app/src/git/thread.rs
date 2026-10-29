@@ -13,8 +13,8 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::github::{
-    self, ActionKind, Entry, Event, Item, PullState, ReviewComment, ReviewState, TIMELINE_PAGE, ago,
-    now,
+    self, ActionKind, Entry, Event, Item, PullState, ReviewComment, ReviewState, TIMELINE_PAGE,
+    ago, now,
 };
 
 use crate::rt;
@@ -22,7 +22,10 @@ use crate::states::{Banner, Placeholder};
 
 pub enum ThreadEvent {
     /// Opened or closed on GitHub.
-    StateChanged { number: u64, open: bool },
+    StateChanged {
+        number: u64,
+        open: bool,
+    },
     Commented(u64),
     Merged(u64),
 }
@@ -94,21 +97,27 @@ impl ThreadView {
         let comment = cx.new(|cx| {
             TextareaState::new(window, cx).placeholder("Leave a comment (Markdown, ⌘↩ to send)")
         });
-        let subscriptions = vec![cx.subscribe_in(&comment, window, |this, input, e: &InputEvent, window, cx| {
-            match e {
-                InputEvent::PressEnter { secondary: true, .. } => this.send_comment(window, cx),
-                // Only the Send button depends on the text. Re-rendering the
-                // whole timeline per keystroke made typing lag on long threads.
-                InputEvent::Change => {
-                    let empty = input.read(cx).value().trim().is_empty();
-                    if empty != this.comment_empty {
-                        this.comment_empty = empty;
-                        cx.notify();
+        let subscriptions = vec![cx.subscribe_in(
+            &comment,
+            window,
+            |this, input, e: &InputEvent, window, cx| {
+                match e {
+                    InputEvent::PressEnter {
+                        secondary: true, ..
+                    } => this.send_comment(window, cx),
+                    // Only the Send button depends on the text. Re-rendering the
+                    // whole timeline per keystroke made typing lag on long threads.
+                    InputEvent::Change => {
+                        let empty = input.read(cx).value().trim().is_empty();
+                        if empty != this.comment_empty {
+                            this.comment_empty = empty;
+                            cx.notify();
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
-            }
-        })];
+            },
+        )];
         let mut this = Self {
             item,
             comment_empty: true,
@@ -137,7 +146,12 @@ impl ThreadView {
     }
 
     fn api(&self) -> (String, String, String, u64) {
-        (self.token.clone(), self.owner.clone(), self.name.clone(), self.item.number)
+        (
+            self.token.clone(),
+            self.owner.clone(),
+            self.name.clone(),
+            self.item.number,
+        )
     }
 
     /// Reads the pull request state and the timeline's first page again.
@@ -220,7 +234,9 @@ impl ThreadView {
         let (token, owner, name, number) = self.api();
         self.diff = Some(Load::Loading);
         cx.notify();
-        let rx = rt::spawn(cx, async move { github::pull_diff(&token, &owner, &name, number).await });
+        let rx = rt::spawn(cx, async move {
+            github::pull_diff(&token, &owner, &name, number).await
+        });
         cx.spawn(async move |this, cx| {
             let Ok(result) = rx.await else {
                 return;
@@ -230,7 +246,9 @@ impl ThreadView {
                     Ok(patch) => match DiffFile::parse(&patch) {
                         Ok(files) if files.is_empty() => Load::Ready(None),
                         Ok(files) => Load::Ready(Some(cx.new(|cx| DiffState::new(files, cx)))),
-                        Err(e) => Load::Failed(format!("Unable to show this diff. {}", e.message())),
+                        Err(e) => {
+                            Load::Failed(format!("Unable to show this diff. {}", e.message()))
+                        }
                     },
                     Err(e) => Load::Failed(e.to_string()),
                 });
@@ -257,7 +275,9 @@ impl ThreadView {
         self.working = true;
         self.error = None;
         cx.notify();
-        let rx = rt::spawn(cx, async move { github::add_comment(&token, &owner, &name, number, &body).await });
+        let rx = rt::spawn(cx, async move {
+            github::add_comment(&token, &owner, &name, number, &body).await
+        });
         cx.spawn_in(window, async move |this, cx| {
             let Ok(result) = rx.await else {
                 return;
@@ -291,7 +311,9 @@ impl ThreadView {
         let (token, owner, name, number) = self.api();
         self.working = true;
         cx.notify();
-        let rx = rt::spawn(cx, async move { github::set_open(&token, &owner, &name, number, open).await });
+        let rx = rt::spawn(cx, async move {
+            github::set_open(&token, &owner, &name, number, open).await
+        });
         cx.spawn(async move |this, cx| {
             let Ok(result) = rx.await else {
                 return;
@@ -322,7 +344,9 @@ impl ThreadView {
         let answer = window.prompt(
             PromptLevel::Info,
             &format!("Merge pull request #{number}?"),
-            Some(&format!("{head} is merged into {base} on GitHub with a merge commit.")),
+            Some(&format!(
+                "{head} is merged into {base} on GitHub with a merge commit."
+            )),
             &["Merge Pull Request", "Cancel"],
             cx,
         );
@@ -334,7 +358,9 @@ impl ThreadView {
                 this.working = true;
                 this.error = None;
                 cx.notify();
-                rt::spawn(cx, async move { github::merge_pull(&token, &owner, &name, number).await })
+                rt::spawn(cx, async move {
+                    github::merge_pull(&token, &owner, &name, number).await
+                })
             }) else {
                 return;
             };
@@ -375,7 +401,12 @@ impl ThreadView {
             (false, true) => ("Merged", cx.theme().magenta),
             (false, false) => ("Closed", cx.theme().danger),
         };
-        let can_merge = item.pull && item.open && self.pull.as_ref().is_some_and(|p| p.mergeable != Some(false));
+        let can_merge = item.pull
+            && item.open
+            && self
+                .pull
+                .as_ref()
+                .is_some_and(|p| p.mergeable != Some(false));
         let url = item.url.clone();
         let open = item.open;
         let pull = item.pull;
@@ -386,7 +417,14 @@ impl ThreadView {
             .child(
                 h_flex()
                     .gap_2()
-                    .child(div().flex_1().min_w_0().text_lg().font_semibold().child(item.title.clone()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_lg()
+                            .font_semibold()
+                            .child(item.title.clone()),
+                    )
                     .child(
                         Button::new("gh-reload")
                             .ghost()
@@ -413,7 +451,9 @@ impl ThreadView {
                                     _ => "Reopen",
                                 })
                                 .disabled(self.working)
-                                .on_click(cx.listener(move |this, _, _, cx| this.set_open(!open, cx))),
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.set_open(!open, cx)),
+                                ),
                         )
                     })
                     .when(can_merge, |el| {
@@ -424,7 +464,9 @@ impl ThreadView {
                                 .icon(Lucide::GitMerge)
                                 .label("Merge")
                                 .disabled(self.working)
-                                .on_click(cx.listener(|this, _, window, cx| this.merge(window, cx))),
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.merge(window, cx)),
+                                ),
                         )
                     }),
             )
@@ -442,7 +484,12 @@ impl ThreadView {
                             .text_color(state_color)
                             .child(state_label),
                     )
-                    .child(format!("#{} · {} opened {}", item.number, item.author, ago(item.created_at, now())))
+                    .child(format!(
+                        "#{} · {} opened {}",
+                        item.number,
+                        item.author,
+                        ago(item.created_at, now())
+                    ))
                     .when_some(self.pull.clone(), |el, p| {
                         el.child(
                             div()
@@ -469,8 +516,16 @@ impl ThreadView {
                 .text_sm()
                 .cursor_pointer()
                 .border_b_2()
-                .border_color(if active { cx.theme().primary } else { transparent_black() })
-                .text_color(if active { cx.theme().foreground } else { cx.theme().muted_foreground })
+                .border_color(if active {
+                    cx.theme().primary
+                } else {
+                    transparent_black()
+                })
+                .text_color(if active {
+                    cx.theme().foreground
+                } else {
+                    cx.theme().muted_foreground
+                })
                 .hover(|el| el.text_color(cx.theme().foreground))
         };
         let current = self.tab;
@@ -489,8 +544,12 @@ impl ThreadView {
                     tab("gh-tab-changes", Tab::Changes, current, cx)
                         .child("Changes")
                         .when_some(stats, |el, (add, del)| {
-                            el.child(div().text_color(cx.theme().success).child(format!("+{add}")))
-                                .child(div().text_color(cx.theme().danger).child(format!("−{del}")))
+                            el.child(
+                                div()
+                                    .text_color(cx.theme().success)
+                                    .child(format!("+{add}")),
+                            )
+                            .child(div().text_color(cx.theme().danger).child(format!("−{del}")))
                         })
                         .on_click(cx.listener(|this, _, _, cx| this.set_tab(Tab::Changes, cx))),
                 )
@@ -571,7 +630,9 @@ impl ThreadView {
 
     fn render_timeline(&self, cx: &mut Context<Self>) -> AnyElement {
         let events = match &self.events {
-            Load::Loading => return Placeholder::loading("Loading the timeline…").into_any_element(),
+            Load::Loading => {
+                return Placeholder::loading("Loading the timeline…").into_any_element();
+            }
             Load::Failed(e) => {
                 return Placeholder::error("Unable to load the timeline")
                     .detail(e.clone())
@@ -597,7 +658,11 @@ impl ThreadView {
             _ => events.iter().filter(|e| f.keeps(e)).count() + usize::from(f == Filter::All),
         };
         let filter = self.filter;
-        let chip = |id: &'static str, label: &'static str, which: Filter, n: usize, cx: &mut Context<Self>| {
+        let chip = |id: &'static str,
+                    label: &'static str,
+                    which: Filter,
+                    n: usize,
+                    cx: &mut Context<Self>| {
             let active = filter == which;
             h_flex()
                 .id(id)
@@ -607,13 +672,20 @@ impl ThreadView {
                 .rounded(cx.theme().radius)
                 .text_sm()
                 .cursor_pointer()
-                .when(active, |el| el.bg(cx.theme().secondary).text_color(cx.theme().foreground))
+                .when(active, |el| {
+                    el.bg(cx.theme().secondary)
+                        .text_color(cx.theme().foreground)
+                })
                 .when(!active, |el| {
                     el.text_color(cx.theme().muted_foreground)
                         .hover(|el| el.text_color(cx.theme().foreground))
                 })
                 .child(label)
-                .child(div().text_color(cx.theme().muted_foreground).child(n.to_string()))
+                .child(
+                    div()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(n.to_string()),
+                )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.filter = which;
                     cx.notify();
@@ -625,12 +697,36 @@ impl ThreadView {
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(cx.theme().border)
-            .child(chip("gh-filter-all", "All", Filter::All, count(Filter::All), cx))
-            .child(chip("gh-filter-comments", "Comments", Filter::Comments, count(Filter::Comments), cx));
+            .child(chip(
+                "gh-filter-all",
+                "All",
+                Filter::All,
+                count(Filter::All),
+                cx,
+            ))
+            .child(chip(
+                "gh-filter-comments",
+                "Comments",
+                Filter::Comments,
+                count(Filter::Comments),
+                cx,
+            ));
         if self.item.pull {
             chips = chips
-                .child(chip("gh-filter-reviews", "Reviews", Filter::Reviews, count(Filter::Reviews), cx))
-                .child(chip("gh-filter-commits", "Commits", Filter::Commits, count(Filter::Commits), cx));
+                .child(chip(
+                    "gh-filter-reviews",
+                    "Reviews",
+                    Filter::Reviews,
+                    count(Filter::Reviews),
+                    cx,
+                ))
+                .child(chip(
+                    "gh-filter-commits",
+                    "Commits",
+                    Filter::Commits,
+                    count(Filter::Commits),
+                    cx,
+                ));
         }
         let mut rows: Vec<AnyElement> = Vec::new();
         if filter == Filter::All {
@@ -703,7 +799,11 @@ impl ThreadView {
         let muted = cx.theme().muted_foreground;
         let mono = cx.theme().mono_font_family.clone();
         match entry {
-            Entry::Pushed { author, time, commits } => {
+            Entry::Pushed {
+                author,
+                time,
+                commits,
+            } => {
                 let what = match commits.len() {
                     1 => "pushed 1 commit".to_string(),
                     n => format!("pushed {n} commits"),
@@ -714,15 +814,40 @@ impl ThreadView {
                         h_flex()
                             .gap_3()
                             .text_sm()
-                            .child(div().flex_none().text_color(muted).font_family(mono.clone()).child(sha.clone()))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_color(muted)
+                                    .font_family(mono.clone())
+                                    .child(sha.clone()),
+                            )
                             .child(div().min_w_0().truncate().child(message.clone()))
                     }))
                     .into_any_element();
-                event_row((Lucide::GitCommitHorizontal, muted), author, &what, *time, Some(list), cx)
+                event_row(
+                    (Lucide::GitCommitHorizontal, muted),
+                    author,
+                    &what,
+                    *time,
+                    Some(list),
+                    cx,
+                )
             }
             Entry::Event(Event::Commented { author, time, body }) => {
-                let body = card(format!("gh-comment-{}-{ix}", self.item.number).into(), body, cx).into_any_element();
-                event_row((Lucide::MessageSquare, muted), author, "commented", *time, Some(body), cx)
+                let body = card(
+                    format!("gh-comment-{}-{ix}", self.item.number).into(),
+                    body,
+                    cx,
+                )
+                .into_any_element();
+                event_row(
+                    (Lucide::MessageSquare, muted),
+                    author,
+                    "commented",
+                    *time,
+                    Some(body),
+                    cx,
+                )
             }
             Entry::Event(Event::Reviewed {
                 author,
@@ -733,41 +858,100 @@ impl ThreadView {
                 ..
             }) => {
                 let (icon, color, what) = match state {
-                    ReviewState::Approved => (Lucide::CircleCheck, cx.theme().success, "approved these changes"),
-                    ReviewState::ChangesRequested => (Lucide::CircleAlert, cx.theme().danger, "requested changes"),
-                    ReviewState::Dismissed => (Lucide::CircleX, muted, "left a review that was dismissed"),
+                    ReviewState::Approved => (
+                        Lucide::CircleCheck,
+                        cx.theme().success,
+                        "approved these changes",
+                    ),
+                    ReviewState::ChangesRequested => {
+                        (Lucide::CircleAlert, cx.theme().danger, "requested changes")
+                    }
+                    ReviewState::Dismissed => {
+                        (Lucide::CircleX, muted, "left a review that was dismissed")
+                    }
                     ReviewState::Commented => (Lucide::Eye, muted, "reviewed"),
                 };
                 let content = v_flex()
                     .gap_2()
                     .when(!body.trim().is_empty(), |el| {
-                        el.child(card(format!("gh-review-{}-{ix}", self.item.number).into(), body, cx))
+                        el.child(card(
+                            format!("gh-review-{}-{ix}", self.item.number).into(),
+                            body,
+                            cx,
+                        ))
                     })
-                    .children(
-                        comments
-                            .iter()
-                            .enumerate()
-                            .map(|(c, comment)| inline_comment(format!("gh-inline-{}-{ix}-{c}", self.item.number).into(), comment, cx)),
-                    )
+                    .children(comments.iter().enumerate().map(|(c, comment)| {
+                        inline_comment(
+                            format!("gh-inline-{}-{ix}-{c}", self.item.number).into(),
+                            comment,
+                            cx,
+                        )
+                    }))
                     .into_any_element();
                 let has_content = !body.trim().is_empty() || !comments.is_empty();
-                event_row((icon, color), author, what, *time, has_content.then_some(content), cx)
+                event_row(
+                    (icon, color),
+                    author,
+                    what,
+                    *time,
+                    has_content.then_some(content),
+                    cx,
+                )
             }
-            Entry::Event(Event::Action { actor, time, kind, detail }) => {
+            Entry::Event(Event::Action {
+                actor,
+                time,
+                kind,
+                detail,
+            }) => {
                 let (icon, color, what) = match kind {
-                    ActionKind::Merged => (Lucide::GitMerge, cx.theme().magenta, format!("merged commit {detail}")),
-                    ActionKind::Closed => (Lucide::CircleX, cx.theme().danger, "closed this".into()),
-                    ActionKind::Reopened => (Lucide::CircleDot, cx.theme().success, "reopened this".into()),
-                    ActionKind::Renamed => (Lucide::Pencil, muted, format!("changed the title to “{detail}”")),
-                    ActionKind::Labeled => (Lucide::Tag, muted, format!("added the label {detail}")),
-                    ActionKind::Unlabeled => (Lucide::Tag, muted, format!("removed the label {detail}")),
-                    ActionKind::ReviewRequested => (Lucide::Eye, muted, format!("requested a review from {detail}")),
+                    ActionKind::Merged => (
+                        Lucide::GitMerge,
+                        cx.theme().magenta,
+                        format!("merged commit {detail}"),
+                    ),
+                    ActionKind::Closed => {
+                        (Lucide::CircleX, cx.theme().danger, "closed this".into())
+                    }
+                    ActionKind::Reopened => (
+                        Lucide::CircleDot,
+                        cx.theme().success,
+                        "reopened this".into(),
+                    ),
+                    ActionKind::Renamed => (
+                        Lucide::Pencil,
+                        muted,
+                        format!("changed the title to “{detail}”"),
+                    ),
+                    ActionKind::Labeled => {
+                        (Lucide::Tag, muted, format!("added the label {detail}"))
+                    }
+                    ActionKind::Unlabeled => {
+                        (Lucide::Tag, muted, format!("removed the label {detail}"))
+                    }
+                    ActionKind::ReviewRequested => (
+                        Lucide::Eye,
+                        muted,
+                        format!("requested a review from {detail}"),
+                    ),
                     ActionKind::Assigned => (Lucide::UserPlus, muted, format!("assigned {detail}")),
-                    ActionKind::ForcePushed => (Lucide::GitCommitHorizontal, cx.theme().warning, "force-pushed the branch".into()),
-                    ActionKind::BranchDeleted => (Lucide::GitBranchMinus, muted, "deleted the branch".into()),
-                    ActionKind::ReadyForReview => (Lucide::Eye, muted, "marked this ready for review".into()),
-                    ActionKind::MarkedDraft => (Lucide::Pencil, muted, "marked this as a draft".into()),
-                    ActionKind::Referenced => (Lucide::Link, muted, format!("mentioned this in {detail}")),
+                    ActionKind::ForcePushed => (
+                        Lucide::GitCommitHorizontal,
+                        cx.theme().warning,
+                        "force-pushed the branch".into(),
+                    ),
+                    ActionKind::BranchDeleted => {
+                        (Lucide::GitBranchMinus, muted, "deleted the branch".into())
+                    }
+                    ActionKind::ReadyForReview => {
+                        (Lucide::Eye, muted, "marked this ready for review".into())
+                    }
+                    ActionKind::MarkedDraft => {
+                        (Lucide::Pencil, muted, "marked this as a draft".into())
+                    }
+                    ActionKind::Referenced => {
+                        (Lucide::Link, muted, format!("mentioned this in {detail}"))
+                    }
                 };
                 event_row((icon, color), actor, &what, *time, None, cx)
             }
@@ -815,9 +999,21 @@ fn event_row(
                         .text_sm()
                         .child(avatar(who, cx))
                         .child(div().font_semibold().child(who.to_string()))
-                        .child(div().min_w_0().truncate().text_color(muted).child(what.to_string()))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(muted)
+                                .child(what.to_string()),
+                        )
                         .child(div().flex_1())
-                        .child(div().flex_none().text_xs().text_color(muted).child(ago(time, now()))),
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(ago(time, now())),
+                        ),
                 )
                 .children(content),
         )
@@ -854,8 +1050,14 @@ fn avatar(name: &str, cx: &App) -> impl IntoElement {
         cx.theme().cyan,
         cx.theme().red,
     ];
-    let hash = name.bytes().fold(0usize, |h, b| h.wrapping_mul(31).wrapping_add(b as usize));
-    let initial = name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
+    let hash = name
+        .bytes()
+        .fold(0usize, |h, b| h.wrapping_mul(31).wrapping_add(b as usize));
+    let initial = name
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_default();
     div()
         .flex_none()
         .size(px(18.))
@@ -925,12 +1127,23 @@ fn inline_comment(id: SharedString, comment: &ReviewComment, cx: &App) -> AnyEle
                         .font_family(cx.theme().mono_font_family.clone())
                         .child(comment.path.clone()),
                 )
-                .child(div().flex_none().text_color(muted).child(match comment.line {
-                    Some(line) => format!("line {line}"),
-                    None => "outdated".into(),
-                })),
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(muted)
+                        .child(match comment.line {
+                            Some(line) => format!("line {line}"),
+                            None => "outdated".into(),
+                        }),
+                ),
         )
-        .child(div().px_3().py_2().text_sm().child(markdown(id, &comment.body)))
+        .child(
+            div()
+                .px_3()
+                .py_2()
+                .text_sm()
+                .child(markdown(id, &comment.body)),
+        )
         .into_any_element()
 }
 
@@ -951,7 +1164,9 @@ impl Render for ThreadView {
                     .child(self.render_header(cx)),
             )
             .child(div().flex_1().min_h_0().child(body))
-            .when_some(self.error.clone(), |el, e| el.child(Banner::error("gh-error", e)))
+            .when_some(self.error.clone(), |el, e| {
+                el.child(Banner::error("gh-error", e))
+            })
             .when(self.tab != Tab::Changes, |el| {
                 el.child(
                     v_flex()
@@ -959,7 +1174,11 @@ impl Render for ThreadView {
                         .gap_2()
                         .border_t_1()
                         .border_color(cx.theme().border)
-                        .child(Textarea::new(&self.comment).h(px(72.)).aria_label("Comment"))
+                        .child(
+                            Textarea::new(&self.comment)
+                                .h(px(72.))
+                                .aria_label("Comment"),
+                        )
                         .child(
                             h_flex()
                                 .gap_2()
@@ -969,7 +1188,12 @@ impl Render for ThreadView {
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
                                         .when(self.working, |el| {
-                                            el.child(h_flex().gap_2().child(Spinner::new().xsmall()).child("Working…"))
+                                            el.child(
+                                                h_flex()
+                                                    .gap_2()
+                                                    .child(Spinner::new().xsmall())
+                                                    .child("Working…"),
+                                            )
                                         }),
                                 )
                                 .child(
@@ -979,7 +1203,9 @@ impl Render for ThreadView {
                                         .icon(Lucide::MessageSquare)
                                         .label("Comment")
                                         .disabled(!can_send)
-                                        .on_click(cx.listener(|this, _, window, cx| this.send_comment(window, cx))),
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.send_comment(window, cx)
+                                        })),
                                 ),
                         ),
                 )

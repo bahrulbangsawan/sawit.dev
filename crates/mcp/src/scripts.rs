@@ -56,13 +56,19 @@ pub struct RemoveCommandArgs {
 fn project_root(dir: &str) -> Result<PathBuf, String> {
     let path = existing_dir(dir)?;
     let text = path.to_string_lossy();
-    Ok(PathBuf::from(text.trim_end_matches('/')).components().collect())
+    Ok(PathBuf::from(text.trim_end_matches('/'))
+        .components()
+        .collect())
 }
 
 pub(crate) fn groups_text(groups: &[ScriptGroup]) -> Vec<String> {
     let mut out = Vec::new();
     for g in groups {
-        let rel = if g.rel.is_empty() { String::new() } else { format!(" in {}", g.rel) };
+        let rel = if g.rel.is_empty() {
+            String::new()
+        } else {
+            format!(" in {}", g.rel)
+        };
         out.push(format!("{} ({}, {}{rel}):", g.label, g.tool, g.source));
         for s in &g.scripts {
             out.push(format!("  - {}: `{}`", s.name, s.command));
@@ -144,7 +150,11 @@ impl Sawit {
         saved.upsert(&root, command);
         tri!(saved.save(&self.run_file()).map_err(|e| e.to_string()));
         self.notify(Store::RunCommands).await;
-        ok(format!("Saved “{}” (id {id}) for {}.", a.name.trim(), root.display()))
+        ok(format!(
+            "Saved “{}” (id {id}) for {}.",
+            a.name.trim(),
+            root.display()
+        ))
     }
 
     async fn remove_command_tool(&self, a: RemoveCommandArgs) -> CallToolResult {
@@ -169,8 +179,12 @@ pub(crate) fn find_command(list: &[SavedCommand], key: &str) -> Result<String, S
     let named: Vec<&SavedCommand> = list.iter().filter(|c| c.name == key).collect();
     match named.as_slice() {
         [one] => Ok(one.id.clone()),
-        [] => Err(format!("No saved command “{key}” in this project. See list_scripts.")),
-        _ => Err(format!("Several saved commands are named “{key}”; use the id.")),
+        [] => Err(format!(
+            "No saved command “{key}” in this project. See list_scripts."
+        )),
+        _ => Err(format!(
+            "Several saved commands are named “{key}”; use the id."
+        )),
     }
 }
 
@@ -191,10 +205,7 @@ impl Sawit {
     }
 
     #[tool(description = "Remove a saved command from a project's Run panel")]
-    async fn remove_command(
-        &self,
-        Parameters(a): Parameters<RemoveCommandArgs>,
-    ) -> CallToolResult {
+    async fn remove_command(&self, Parameters(a): Parameters<RemoveCommandArgs>) -> CallToolResult {
         self.remove_command_tool(a).await
     }
 }

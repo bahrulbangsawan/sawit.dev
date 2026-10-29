@@ -17,12 +17,12 @@ use gpui_kit::component::text::TextView;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use sawit_core::CoreError;
 use sawit_core::files::{
     FileKind, TextFile, classify, language_for, language_label, read_text, write_text_atomic,
 };
 use sawit_core::format::{format_text, tool_for};
 use sawit_core::shell_config::write_text_as_admin;
-use sawit_core::CoreError;
 
 use crate::code_actions::code_block_actions;
 use crate::rt;
@@ -127,7 +127,9 @@ impl FileEditor {
                         this.disk_mtime = modified;
                         this.loaded(file, window, cx)
                     }
-                    Ok(Err(e)) => this.notice = Some(error(format!("Unable to open this file. {e}"))),
+                    Ok(Err(e)) => {
+                        this.notice = Some(error(format!("Unable to open this file. {e}")))
+                    }
                     Err(_) => {}
                 }
                 this.loading = false;
@@ -490,7 +492,11 @@ impl FileEditor {
                         );
                     }
                     Ok(Err(e)) => this.notice = Some(error(e.to_string())),
-                    Err(_) => this.notice = Some(error("The formatter stopped unexpectedly. Try again.".into())),
+                    Err(_) => {
+                        this.notice = Some(error(
+                            "The formatter stopped unexpectedly. Try again.".into(),
+                        ))
+                    }
                 }
                 cx.notify();
             });

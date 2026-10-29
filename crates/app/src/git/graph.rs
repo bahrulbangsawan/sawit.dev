@@ -151,31 +151,37 @@ impl GraphView {
         let muted = cx.theme().muted_foreground;
         let graph = canvas(
             |_, _, _| {},
-            move |bounds, _, window, _| paint_row(&row, merge, bounds, &palette, background, window),
+            move |bounds, _, window, _| {
+                paint_row(&row, merge, bounds, &palette, background, window)
+            },
         )
         .w(px(LANE_WIDTH * self.lanes.max(1) as f32 + 6.))
         .h_full()
         .flex_none();
-        let refs = commit.refs.iter().filter(|r| !r.ends_with("/HEAD")).map(|r| {
-            let (label, color) = if let Some(branch) = r.strip_prefix("HEAD -> ") {
-                (branch.to_string(), cx.theme().primary)
-            } else if let Some(tag) = r.strip_prefix("tag: ") {
-                (tag.to_string(), cx.theme().warning)
-            } else if r == "HEAD" {
-                ("HEAD".to_string(), cx.theme().primary)
-            } else {
-                (r.clone(), cx.theme().info)
-            };
-            div()
-                .flex_none()
-                .px_1()
-                .rounded(px(3.))
-                .border_1()
-                .border_color(color)
-                .text_color(color)
-                .text_xs()
-                .child(label)
-        });
+        let refs = commit
+            .refs
+            .iter()
+            .filter(|r| !r.ends_with("/HEAD"))
+            .map(|r| {
+                let (label, color) = if let Some(branch) = r.strip_prefix("HEAD -> ") {
+                    (branch.to_string(), cx.theme().primary)
+                } else if let Some(tag) = r.strip_prefix("tag: ") {
+                    (tag.to_string(), cx.theme().warning)
+                } else if r == "HEAD" {
+                    ("HEAD".to_string(), cx.theme().primary)
+                } else {
+                    (r.clone(), cx.theme().info)
+                };
+                div()
+                    .flex_none()
+                    .px_1()
+                    .rounded(px(3.))
+                    .border_1()
+                    .border_color(color)
+                    .text_color(color)
+                    .text_xs()
+                    .child(label)
+            });
         h_flex()
             .id(("graph-row", ix))
             .w_full()
@@ -196,8 +202,22 @@ impl GraphView {
                     .children(refs)
                     .child(div().min_w_0().truncate().child(commit.subject.clone())),
             )
-            .child(div().w(px(140.)).flex_none().truncate().text_color(muted).child(commit.author.clone()))
-            .child(div().w(px(96.)).flex_none().truncate().text_color(muted).child(ago(commit.time, now())))
+            .child(
+                div()
+                    .w(px(140.))
+                    .flex_none()
+                    .truncate()
+                    .text_color(muted)
+                    .child(commit.author.clone()),
+            )
+            .child(
+                div()
+                    .w(px(96.))
+                    .flex_none()
+                    .truncate()
+                    .text_color(muted)
+                    .child(ago(commit.time, now())),
+            )
             .child(
                 div()
                     .w(px(60.))
@@ -219,7 +239,9 @@ fn paint_row(
     background: Hsla,
     window: &mut Window,
 ) {
-    let x = |lane: usize| bounds.origin.x + px(LANE_WIDTH * (lane.min(MAX_LANES - 1) as f32 + 0.5) + 3.);
+    let x = |lane: usize| {
+        bounds.origin.x + px(LANE_WIDTH * (lane.min(MAX_LANES - 1) as f32 + 0.5) + 3.)
+    };
     let color = |lane: usize| palette[lane % palette.len()];
     let top = bounds.origin.y;
     let bottom = top + bounds.size.height;
@@ -275,16 +297,30 @@ impl Render for GraphView {
             .border_b_1()
             .border_color(cx.theme().border)
             .child(Icon::new(Lucide::GitGraph).small())
-            .child(div().text_sm().font_semibold().child(repo_name.unwrap_or_else(|| "Commit Graph".into())))
+            .child(
+                div()
+                    .text_sm()
+                    .font_semibold()
+                    .child(repo_name.unwrap_or_else(|| "Commit Graph".into())),
+            )
             .when_some(branch, |el, b| {
-                el.child(div().text_xs().text_color(cx.theme().muted_foreground).child(format!("on {b}")))
+                el.child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("on {b}")),
+                )
             })
             .child(div().flex_1())
             .child(
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(format!("{count} commit{}{}", if count == 1 { "" } else { "s" }, if more { " shown" } else { "" })),
+                    .child(format!(
+                        "{count} commit{}{}",
+                        if count == 1 { "" } else { "s" },
+                        if more { " shown" } else { "" }
+                    )),
             )
             .when(more, |el| {
                 el.child(
@@ -308,7 +344,9 @@ impl Render for GraphView {
                     .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
             );
         let list: AnyElement = if let Some(e) = &self.error {
-            Placeholder::error("Unable to read the history").detail(e.clone()).into_any_element()
+            Placeholder::error("Unable to read the history")
+                .detail(e.clone())
+                .into_any_element()
         } else if self.store.read(cx).repo.is_none() {
             Placeholder::new(Lucide::GitBranch, "No repository")
                 .detail("Open a folder that's a Git repository to see its history.")

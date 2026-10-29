@@ -30,7 +30,12 @@ pub struct DiffView {
 }
 
 impl DiffView {
-    pub fn new(store: Entity<GitStore>, file: FileChange, staged: bool, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        store: Entity<GitStore>,
+        file: FileChange,
+        staged: bool,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let subscriptions = vec![cx.observe(&store, |this, _, cx| this.reload(cx))];
         let mut this = Self {
             store,
@@ -86,7 +91,9 @@ impl DiffView {
                     Ok(Some((patch, parsed))) => {
                         this.error = None;
                         this.diff = match parsed {
-                            Ok(files) if !files.is_empty() => Some(cx.new(|cx| DiffState::new(files, cx))),
+                            Ok(files) if !files.is_empty() => {
+                                Some(cx.new(|cx| DiffState::new(files, cx)))
+                            }
                             Ok(_) => None,
                             Err(e) => {
                                 this.error = Some(format!("Unable to show this diff. {e}"));
@@ -117,7 +124,10 @@ impl Render for DiffView {
             .gap_2()
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(crate::file_icons::file_icon(std::path::Path::new(&self.file.path), cx))
+            .child(crate::file_icons::file_icon(
+                std::path::Path::new(&self.file.path),
+                cx,
+            ))
             .child(
                 div()
                     .flex_1()
@@ -143,7 +153,9 @@ impl Render for DiffView {
                         .small()
                         .icon(Lucide::FileCode)
                         .label("Open File")
-                        .on_click(cx.listener(move |_, _, _, cx| cx.emit(DiffViewEvent::OpenFile(path.clone())))),
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.emit(DiffViewEvent::OpenFile(path.clone()))
+                        })),
                 )
             })
             .child(
@@ -158,19 +170,25 @@ impl Render for DiffView {
                             paths.extend(this.file.from.clone());
                         }
                         this.store.update(cx, |s, cx| {
-                            s.run(if staged { "Unstaging…" } else { "Staging…" }, cx, move |repo, _| async move {
-                                if staged {
-                                    git::unstage(&repo, &paths).await?;
-                                } else {
-                                    git::stage(&repo, &paths).await?;
-                                }
-                                Ok(String::new())
-                            })
+                            s.run(
+                                if staged { "Unstaging…" } else { "Staging…" },
+                                cx,
+                                move |repo, _| async move {
+                                    if staged {
+                                        git::unstage(&repo, &paths).await?;
+                                    } else {
+                                        git::stage(&repo, &paths).await?;
+                                    }
+                                    Ok(String::new())
+                                },
+                            )
                         })
                     })),
             );
         let body: AnyElement = match (&self.error, &self.diff, &self.patch) {
-            (Some(e), _, _) => Placeholder::error("Unable to show the diff").detail(e.clone()).into_any_element(),
+            (Some(e), _, _) => Placeholder::error("Unable to show the diff")
+                .detail(e.clone())
+                .into_any_element(),
             (_, Some(diff), _) => Diff::new(diff).size_full().into_any_element(),
             (_, None, None) => Placeholder::loading("Reading the diff…").into_any_element(),
             (_, None, Some(_)) => Placeholder::new(Lucide::Check, "No differences")

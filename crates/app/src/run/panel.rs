@@ -358,7 +358,9 @@ impl RunPanel {
             return Err("No project is open in this window.".into());
         }
         if !self.scanned {
-            return Err("Sawit is still reading the project's scripts. Try again in a moment.".into());
+            return Err(
+                "Sawit is still reading the project's scripts. Try again in a moment.".into(),
+            );
         }
         let mut items = self.items(cx);
         if let Some(ix) = items.iter().position(|i| Self::label(i) == name) {
@@ -367,7 +369,9 @@ impl RunPanel {
         let mut same: Vec<Item> = items.into_iter().filter(|i| i.name == name).collect();
         match same.len() {
             1 => Ok(same.remove(0)),
-            0 => Err(format!("No script or saved command is called “{name}”. See app_run_list.")),
+            0 => Err(format!(
+                "No script or saved command is called “{name}”. See app_run_list."
+            )),
             _ => Err(format!(
                 "Several scripts are called “{name}”: {}. Use the full name.",
                 same.iter().map(Self::label).collect::<Vec<_>>().join(", ")

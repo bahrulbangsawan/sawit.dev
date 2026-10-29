@@ -312,7 +312,12 @@ impl ServerStore {
                 return;
             }
         }
-        let names: HashSet<String> = self.registry.instances.iter().map(|i| i.name.clone()).collect();
+        let names: HashSet<String> = self
+            .registry
+            .instances
+            .iter()
+            .map(|i| i.name.clone())
+            .collect();
         self.statuses.retain(|name, _| names.contains(name));
         match self.selected.clone() {
             Some(name) if names.contains(&name) => {}
@@ -375,7 +380,9 @@ impl ServerStore {
             return Task::ready(Err(e.to_string()));
         }
         if self.registry.get(&name).is_some() {
-            return Task::ready(Err(format!("An instance named “{name}” already exists. Choose another name.")));
+            return Task::ready(Err(format!(
+                "An instance named “{name}” already exists. Choose another name."
+            )));
         }
         let paths = self.paths.clone();
         let rx = rt::spawn(cx, async move {

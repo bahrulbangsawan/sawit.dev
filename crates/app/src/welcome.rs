@@ -262,7 +262,13 @@ impl Welcome {
                             .small()
                             .text_color(cx.theme().muted_foreground),
                     )
-                    .child(div().flex_1().truncate().text_sm().child(p.display_name().to_string()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .truncate()
+                            .text_sm()
+                            .child(p.display_name().to_string()),
+                    )
                     .child(
                         div()
                             .text_xs()

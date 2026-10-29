@@ -55,7 +55,9 @@ pub struct SchemaDiagramArgs {
     pub schema: Option<String>,
     #[schemars(description = "Database to connect to (default as in describe_schema)")]
     pub database: Option<String>,
-    #[schemars(description = "mermaid (erDiagram text, default), dbml (dbdiagram.io) or svg (drawn)")]
+    #[schemars(
+        description = "mermaid (erDiagram text, default), dbml (dbdiagram.io) or svg (drawn)"
+    )]
     #[serde(default)]
     pub format: SchemaFormat,
     #[schemars(
@@ -88,7 +90,12 @@ pub(crate) fn palette(theme: Theme) -> Palette {
 
 impl Sawit {
     /// `output_path`, or a fresh file in `<cache>/diagrams`.
-    fn output_file(&self, output_path: Option<&str>, stem: &str, ext: &str) -> Result<PathBuf, String> {
+    fn output_file(
+        &self,
+        output_path: Option<&str>,
+        stem: &str,
+        ext: &str,
+    ) -> Result<PathBuf, String> {
         if let Some(p) = output_path.map(str::trim).filter(|p| !p.is_empty()) {
             let path = expand_home(p);
             if !path.is_absolute() {
@@ -153,16 +160,26 @@ impl Sawit {
                 let path = tri!(self.output_file(a.output_path.as_deref(), "schema", "svg"));
                 let diagram = tri!(Self::render(text, a.theme).await);
                 tri!(Self::write_file(path.clone(), diagram.svg.clone()).await);
-                ok(format!("{tables} tables. {}", describe_svg(&diagram, &path, false)))
+                ok(format!(
+                    "{tables} tables. {}",
+                    describe_svg(&diagram, &path, false)
+                ))
             }
             SchemaFormat::Mermaid | SchemaFormat::Dbml => {
                 let Some(out) = a.output_path.as_deref().filter(|p| !p.trim().is_empty()) else {
                     return ok(text);
                 };
-                let ext = if matches!(a.format, SchemaFormat::Dbml) { "dbml" } else { "mmd" };
+                let ext = if matches!(a.format, SchemaFormat::Dbml) {
+                    "dbml"
+                } else {
+                    "mmd"
+                };
                 let path = tri!(self.output_file(Some(out), "schema", ext));
                 tri!(Self::write_file(path.clone(), text.clone()).await);
-                ok(format!("{tables} tables written to {}\n\n{text}", tilde(&path)))
+                ok(format!(
+                    "{tables} tables written to {}\n\n{text}",
+                    tilde(&path)
+                ))
             }
         }
     }
@@ -197,10 +214,7 @@ impl Sawit {
     #[tool(
         description = "Draw a database's tables and foreign keys: as Mermaid erDiagram text, DBML (dbdiagram.io) text, or a rendered SVG file"
     )]
-    async fn schema_diagram(
-        &self,
-        Parameters(a): Parameters<SchemaDiagramArgs>,
-    ) -> CallToolResult {
+    async fn schema_diagram(&self, Parameters(a): Parameters<SchemaDiagramArgs>) -> CallToolResult {
         self.schema_diagram_tool(a).await
     }
 }

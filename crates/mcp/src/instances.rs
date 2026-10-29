@@ -90,7 +90,11 @@ pub(crate) fn check_remove(
             inst.data_dir.display()
         ));
     }
-    check_confirm(&inst.name, confirm.unwrap_or_default(), "delete all data of")
+    check_confirm(
+        &inst.name,
+        confirm.unwrap_or_default(),
+        "delete all data of",
+    )
 }
 
 /// Binaries for `version` (or the newest) among `installed`.
@@ -153,7 +157,11 @@ impl Sawit {
         ok(lines.join("\n"))
     }
 
-    fn start_text(name: &str, inst: &Instance, outcome: sawit_core::Result<StartOutcome>) -> CallToolResult {
+    fn start_text(
+        name: &str,
+        inst: &Instance,
+        outcome: sawit_core::Result<StartOutcome>,
+    ) -> CallToolResult {
         match outcome {
             Ok(StartOutcome::Started) => ok(format!(
                 "{name} is running. DATABASE_URL={}",
@@ -212,16 +220,22 @@ impl Sawit {
         let name = a.name.trim().to_string();
         tri!(validate_name(&name).map_err(|e| e.to_string()));
         if let Some(v) = a.version.filter(|v| !DOWNLOADABLE.contains(v)) {
-            return fail(format!("PostgreSQL {v} isn't offered; choose 16, 17 or 18."));
+            return fail(format!(
+                "PostgreSQL {v} isn't offered; choose 16, 17 or 18."
+            ));
         }
         let registry = tri!(self.registry());
         if registry.get(&name).is_some() {
-            return fail(format!("An instance named \"{name}\" already exists. Choose another name."));
+            return fail(format!(
+                "An instance named \"{name}\" already exists. Choose another name."
+            ));
         }
         let taken: HashSet<u16> = registry.instances.iter().map(|i| i.port).collect();
         let port = match a.port {
             Some(p) if taken.contains(&p) => {
-                return fail(format!("Port {p} is already used by another Sawit instance."));
+                return fail(format!(
+                    "Port {p} is already used by another Sawit instance."
+                ));
             }
             Some(p) => p,
             None => self.suggest_port(&taken).await,
@@ -248,14 +262,20 @@ impl Sawit {
             managed: true,
         };
         if !inst.data_dir.join("PG_VERSION").exists() {
-            tri!(control::init_cluster(&inst).await.map_err(|e| e.to_string()));
+            tri!(
+                control::init_cluster(&inst)
+                    .await
+                    .map_err(|e| e.to_string())
+            );
         }
         // Re-read: the app may have changed the list meanwhile.
         let mut registry = tri!(self.registry());
         tri!(registry.add(inst.clone()).map_err(|e| e.to_string()));
-        tri!(registry
-            .save(&self.paths.instances_file())
-            .map_err(|e| e.to_string()));
+        tri!(
+            registry
+                .save(&self.paths.instances_file())
+                .map_err(|e| e.to_string())
+        );
         self.notify(Store::Instances).await;
         ok(format!(
             "Created {name}: PostgreSQL {} ({}{}) on port {port}. It is stopped; start it with start_instance.\nDATABASE_URL={}",
@@ -270,13 +290,18 @@ impl Sawit {
         let inst = tri!(self.instance(&a.name));
         tri!(check_remove(&inst, a.delete_data, a.confirm.as_deref()));
         if let Err(e) = control::stop(&inst).await {
-            return fail(format!("Unable to stop {} first, so it was kept. {e}", a.name));
+            return fail(format!(
+                "Unable to stop {} first, so it was kept. {e}",
+                a.name
+            ));
         }
         let mut registry = tri!(self.registry());
         registry.remove(&inst.name);
-        tri!(registry
-            .save(&self.paths.instances_file())
-            .map_err(|e| e.to_string()));
+        tri!(
+            registry
+                .save(&self.paths.instances_file())
+                .map_err(|e| e.to_string())
+        );
         self.notify(Store::Instances).await;
         if !a.delete_data {
             return ok(format!(
@@ -319,9 +344,9 @@ impl Sawit {
         match blocking(move || tail_file(&path, n)).await {
             Ok(Ok(text)) if text.trim().is_empty() => ok(format!("{shown} is empty.")),
             Ok(Ok(text)) => ok(format!("{shown} (last {n} lines):\n{text}")),
-            Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-                ok(format!("No log yet ({shown}); the instance hasn't been started by Sawit."))
-            }
+            Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => ok(format!(
+                "No log yet ({shown}); the instance hasn't been started by Sawit."
+            )),
             Ok(Err(e)) => fail(format!("Unable to read {shown}: {e}")),
             Err(e) => fail(e),
         }
@@ -468,7 +493,10 @@ mod tests {
         };
         let installed = vec![b(17), b(16)];
         assert_eq!(pick_binaries(&installed, None).unwrap().version.major, 17);
-        assert_eq!(pick_binaries(&installed, Some(16)).unwrap().version.major, 16);
+        assert_eq!(
+            pick_binaries(&installed, Some(16)).unwrap().version.major,
+            16
+        );
         assert!(pick_binaries(&installed, Some(18)).is_none());
         assert!(pick_binaries(&[], None).is_none());
     }
@@ -479,7 +507,11 @@ mod tests {
         assert_eq!(last_lines("a", 5), "a");
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("x.log");
-        std::fs::write(&path, (1..=10).map(|i| format!("line {i}\n")).collect::<String>()).unwrap();
+        std::fs::write(
+            &path,
+            (1..=10).map(|i| format!("line {i}\n")).collect::<String>(),
+        )
+        .unwrap();
         assert_eq!(tail_file(&path, 2).unwrap(), "line 9\nline 10");
     }
 }

@@ -35,18 +35,22 @@ impl ImageView {
         });
         cx.spawn(async move |this, cx| {
             let result = rx.await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(Ok((shown, size, bytes))) => {
-                        this.shown = Some(shown);
-                        this.size = size;
-                        this.bytes = bytes;
+            let _ =
+                this.update(cx, |this, cx| {
+                    match result {
+                        Ok(Ok((shown, size, bytes))) => {
+                            this.shown = Some(shown);
+                            this.size = size;
+                            this.bytes = bytes;
+                        }
+                        Ok(Err(e)) => this.error = Some(e.to_string()),
+                        Err(_) => this.error = Some(
+                            "Loading stopped unexpectedly. Close the tab and open the file again."
+                                .into(),
+                        ),
                     }
-                    Ok(Err(e)) => this.error = Some(e.to_string()),
-                    Err(_) => this.error = Some("Loading stopped unexpectedly. Close the tab and open the file again.".into()),
-                }
-                cx.notify();
-            });
+                    cx.notify();
+                });
         })
         .detach();
         Self {

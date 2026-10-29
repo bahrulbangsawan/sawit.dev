@@ -170,7 +170,11 @@ impl GitStore {
                 }
                 match status {
                     Ok(status) => {
-                        let head = status.head.clone().zip(status.branch.clone()).map(|(h, b)| format!("{h} {b}"));
+                        let head = status
+                            .head
+                            .clone()
+                            .zip(status.branch.clone())
+                            .map(|(h, b)| format!("{h} {b}"));
                         if head != this.head {
                             this.head = head;
                             cx.emit(GitEvent::HistoryChanged);
@@ -216,7 +220,9 @@ impl GitStore {
         cx.notify();
         let rx = rt::spawn(cx, f(repo, self.token.clone()));
         cx.spawn(async move |this, cx| {
-            let result = rx.await.unwrap_or_else(|_| Err(CoreError::Git("Canceled.".into())));
+            let result = rx
+                .await
+                .unwrap_or_else(|_| Err(CoreError::Git("Canceled.".into())));
             let _ = this.update(cx, |this, cx| {
                 this.busy = None;
                 match result {
@@ -355,7 +361,8 @@ fn friendly(message: &str, signed_in: bool) -> String {
         } else {
             "This remote needs a sign-in. Sign in to GitHub in the GitHub tab, or set up a Git credential helper."
         }
-    } else if lower.contains("not possible to fast-forward") || lower.contains("diverging branches") {
+    } else if lower.contains("not possible to fast-forward") || lower.contains("diverging branches")
+    {
         "Your branch and its remote have both changed. Merge the remote branch from the branch menu, then push."
     } else if lower.contains("non-fast-forward") || lower.contains("fetch first") {
         "The remote has commits you don't have. Pull first, then push."

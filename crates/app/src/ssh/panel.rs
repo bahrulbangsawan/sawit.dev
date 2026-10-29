@@ -20,7 +20,10 @@ use crate::terminal::TerminalPanel;
 
 pub enum SshEvent {
     /// Open a session to the server with this key; `new` even if one is open.
-    Connect { key: String, new: bool },
+    Connect {
+        key: String,
+        new: bool,
+    },
     /// Edit the saved server with this id in a tab.
     Edit(String),
     OpenFile(PathBuf),
@@ -173,14 +176,17 @@ impl SshPanel {
                 (success, format!("Reachable in {latency_ms} ms · {banner}"))
             }
             Some(ProbeState::Done(Probe::Down(e))) => (danger, e.clone()),
-            Some(ProbeState::Done(Probe::Indirect)) => {
-                (muted, "Reached through a jump host; not checked directly.".into())
-            }
+            Some(ProbeState::Done(Probe::Indirect)) => (
+                muted,
+                "Reached through a jump host; not checked directly.".into(),
+            ),
             Some(ProbeState::Checking) => (muted.opacity(0.5), "Checking…".into()),
             None => (muted.opacity(0.5), "Not checked yet.".into()),
         };
         let latency = match &probe {
-            Some(ProbeState::Done(Probe::Up { latency_ms, .. })) => Some(format!("{latency_ms} ms")),
+            Some(ProbeState::Done(Probe::Up { latency_ms, .. })) => {
+                Some(format!("{latency_ms} ms"))
+            }
             _ => None,
         };
         let sessions = self.terminal.read(cx).ssh_sessions(&key, cx);
@@ -296,12 +302,14 @@ fn host_menu(
     };
     let (k1, k2, k3, k4) = (key.clone(), key.clone(), key.clone(), key.clone());
     let menu = menu
-        .item(PopupMenuItem::new("Connect").on_click(act(Box::new(move |_, cx| {
-            cx.emit(SshEvent::Connect {
-                key: k1.clone(),
-                new: false,
-            })
-        }))))
+        .item(
+            PopupMenuItem::new("Connect").on_click(act(Box::new(move |_, cx| {
+                cx.emit(SshEvent::Connect {
+                    key: k1.clone(),
+                    new: false,
+                })
+            }))),
+        )
         .item(
             PopupMenuItem::new("New Session").on_click(act(Box::new(move |_, cx| {
                 cx.emit(SshEvent::Connect {
@@ -311,9 +319,8 @@ fn host_menu(
             }))),
         )
         .item(
-            PopupMenuItem::new(if copied { "Copied" } else { "Copy SSH Command" }).on_click(act(
-                Box::new(move |panel, cx| panel.copy_command(&k3, cx)),
-            )),
+            PopupMenuItem::new(if copied { "Copied" } else { "Copy SSH Command" })
+                .on_click(act(Box::new(move |panel, cx| panel.copy_command(&k3, cx)))),
         )
         .item(
             PopupMenuItem::new("Check Connection").on_click(act(Box::new(move |panel, cx| {
@@ -325,9 +332,11 @@ fn host_menu(
     match saved_id {
         Some(id) => {
             let (e, d, r) = (id.clone(), id.clone(), id);
-            menu.item(PopupMenuItem::new("Edit").on_click(act(Box::new(move |_, cx| {
-                cx.emit(SshEvent::Edit(e.clone()))
-            }))))
+            menu.item(
+                PopupMenuItem::new("Edit").on_click(act(Box::new(move |_, cx| {
+                    cx.emit(SshEvent::Edit(e.clone()))
+                }))),
+            )
             .item(
                 PopupMenuItem::new("Duplicate").on_click(act(Box::new(move |panel, cx| {
                     let id = d.clone();
@@ -337,23 +346,25 @@ fn host_menu(
                 }))),
             )
             .separator()
-            .item(PopupMenuItem::new("Delete").on_click(act(Box::new(move |panel, cx| {
-                let id = r.clone();
-                panel.store.update(cx, |s, cx| s.remove(&id, cx));
-            }))))
+            .item(
+                PopupMenuItem::new("Delete").on_click(act(Box::new(move |panel, cx| {
+                    let id = r.clone();
+                    panel.store.update(cx, |s, cx| s.remove(&id, cx));
+                }))),
+            )
         }
         None => {
             let alias = key
                 .strip_prefix("ssh-config\u{0}")
                 .unwrap_or_default()
                 .to_string();
-            menu.item(
-                PopupMenuItem::new("Save as Server").on_click(act(Box::new(move |panel, cx| {
+            menu.item(PopupMenuItem::new("Save as Server").on_click(act(Box::new(
+                move |panel, cx| {
                     let alias = alias.clone();
                     let id = panel.store.update(cx, |s, cx| s.save_alias(&alias, cx));
                     cx.emit(SshEvent::Edit(id));
-                }))),
-            )
+                },
+            ))))
         }
     }
 }

@@ -91,7 +91,9 @@ fn describe(s: &PingStats) -> String {
     }
 }
 
-fn joined<T, E: ToString>(r: Result<Result<T, E>, futures::channel::oneshot::Canceled>) -> Result<T, String> {
+fn joined<T, E: ToString>(
+    r: Result<Result<T, E>, futures::channel::oneshot::Canceled>,
+) -> Result<T, String> {
     match r {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err(e.to_string()),
@@ -101,12 +103,16 @@ fn joined<T, E: ToString>(r: Result<Result<T, E>, futures::channel::oneshot::Can
 
 impl NetworkPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let host = cx.new(|cx| InputState::new(window, cx).placeholder("Host or IP, like github.com"));
-        let subscriptions = vec![cx.subscribe_in(&host, window, |this, _, event: &InputEvent, window, cx| {
-            if matches!(event, InputEvent::PressEnter { .. }) {
-                this.ping_host(window, cx);
-            }
-        })];
+        let host =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Host or IP, like github.com"));
+        let subscriptions =
+            vec![
+                cx.subscribe_in(&host, window, |this, _, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::PressEnter { .. }) {
+                        this.ping_host(window, cx);
+                    }
+                }),
+            ];
         Self {
             states: None,
             findings: Findings::default(),
@@ -160,7 +166,9 @@ impl NetworkPanel {
                         match (ip, &gateway) {
                             (Some(ip), _) => State::Pass(format!("This Mac is {ip}")),
                             (None, Some(_)) => State::Pass("Connected".into()),
-                            (None, None) => State::Fail("No active Wi-Fi or Ethernet connection.".into()),
+                            (None, None) => {
+                                State::Fail("No active Wi-Fi or Ethernet connection.".into())
+                            }
                         },
                     );
                     if gateway.is_none() {
@@ -179,9 +187,13 @@ impl NetworkPanel {
                     this.set(
                         Step::Router,
                         match &result {
-                            Ok(s) if s.reachable() => State::Pass(format!("{gw} · {}", describe(s))),
+                            Ok(s) if s.reachable() => {
+                                State::Pass(format!("{gw} · {}", describe(s)))
+                            }
                             // Many routers ignore ping; the internet step decides.
-                            Ok(_) => State::Warn(format!("{gw} didn't answer ping. Some routers never do.")),
+                            Ok(_) => State::Warn(format!(
+                                "{gw} didn't answer ping. Some routers never do."
+                            )),
                             Err(e) => State::Warn(e.clone()),
                         },
                     );
@@ -306,7 +318,11 @@ impl NetworkPanel {
             .border_1()
             .border_color(tint.opacity(0.35))
             .bg(tint.opacity(0.08))
-            .child(div().pt(px(1.)).child(Icon::new(icon).small().text_color(tint)))
+            .child(
+                div()
+                    .pt(px(1.))
+                    .child(Icon::new(icon).small().text_color(tint)),
+            )
             .child(
                 v_flex()
                     .flex_1()
@@ -333,11 +349,41 @@ impl NetworkPanel {
     fn render_step(&self, step: Step, state: &State, cx: &App) -> impl IntoElement {
         let theme = cx.theme();
         let (mark, detail): (AnyElement, Option<&String>) = match state {
-            State::Running => (Spinner::new().xsmall().color(theme.muted_foreground).into_any_element(), None),
-            State::Pass(d) => (Icon::new(IconName::CircleCheck).xsmall().text_color(theme.success).into_any_element(), Some(d)),
-            State::Warn(d) => (Icon::new(IconName::TriangleAlert).xsmall().text_color(theme.warning).into_any_element(), Some(d)),
-            State::Fail(d) => (Icon::new(IconName::CircleX).xsmall().text_color(theme.danger).into_any_element(), Some(d)),
-            State::Skipped(d) => (Icon::new(IconName::Minus).xsmall().text_color(theme.muted_foreground).into_any_element(), Some(d)),
+            State::Running => (
+                Spinner::new()
+                    .xsmall()
+                    .color(theme.muted_foreground)
+                    .into_any_element(),
+                None,
+            ),
+            State::Pass(d) => (
+                Icon::new(IconName::CircleCheck)
+                    .xsmall()
+                    .text_color(theme.success)
+                    .into_any_element(),
+                Some(d),
+            ),
+            State::Warn(d) => (
+                Icon::new(IconName::TriangleAlert)
+                    .xsmall()
+                    .text_color(theme.warning)
+                    .into_any_element(),
+                Some(d),
+            ),
+            State::Fail(d) => (
+                Icon::new(IconName::CircleX)
+                    .xsmall()
+                    .text_color(theme.danger)
+                    .into_any_element(),
+                Some(d),
+            ),
+            State::Skipped(d) => (
+                Icon::new(IconName::Minus)
+                    .xsmall()
+                    .text_color(theme.muted_foreground)
+                    .into_any_element(),
+                Some(d),
+            ),
         };
         h_flex()
             .items_start()
@@ -366,22 +412,34 @@ impl NetworkPanel {
         let theme = cx.theme();
         let (mark, detail, tint): (AnyElement, String, Hsla) = match &row.result {
             None => (
-                Spinner::new().xsmall().color(theme.muted_foreground).into_any_element(),
+                Spinner::new()
+                    .xsmall()
+                    .color(theme.muted_foreground)
+                    .into_any_element(),
                 "Pinging…".into(),
                 theme.muted_foreground,
             ),
             Some(Ok(s)) if s.reachable() => (
-                Icon::new(IconName::CircleCheck).xsmall().text_color(theme.success).into_any_element(),
+                Icon::new(IconName::CircleCheck)
+                    .xsmall()
+                    .text_color(theme.success)
+                    .into_any_element(),
                 describe(s),
                 theme.muted_foreground,
             ),
             Some(Ok(s)) => (
-                Icon::new(IconName::CircleX).xsmall().text_color(theme.danger).into_any_element(),
+                Icon::new(IconName::CircleX)
+                    .xsmall()
+                    .text_color(theme.danger)
+                    .into_any_element(),
                 describe(s),
                 theme.danger,
             ),
             Some(Err(e)) => (
-                Icon::new(IconName::CircleX).xsmall().text_color(theme.danger).into_any_element(),
+                Icon::new(IconName::CircleX)
+                    .xsmall()
+                    .text_color(theme.danger)
+                    .into_any_element(),
                 e.clone(),
                 theme.danger,
             ),
@@ -396,8 +454,20 @@ impl NetworkPanel {
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .child(div().text_xs().font_medium().truncate().child(row.host.clone()))
-                    .child(div().text_xs().text_color(tint).whitespace_normal().child(detail)),
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_medium()
+                            .truncate()
+                            .child(row.host.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(tint)
+                            .whitespace_normal()
+                            .child(detail),
+                    ),
             )
     }
 }
@@ -495,13 +565,14 @@ impl Render for NetworkPanel {
                         h_flex()
                             .px_2()
                             .gap_1()
-                            .child(div().flex_1().child(Input::new(&self.host).small().cleanable(true)))
                             .child(
-                                Button::new("network-ping")
-                                    .small()
-                                    .label("Ping")
-                                    .on_click(cx.listener(|this, _, window, cx| this.ping_host(window, cx))),
-                            ),
+                                div()
+                                    .flex_1()
+                                    .child(Input::new(&self.host).small().cleanable(true)),
+                            )
+                            .child(Button::new("network-ping").small().label("Ping").on_click(
+                                cx.listener(|this, _, window, cx| this.ping_host(window, cx)),
+                            )),
                     )
                     .when(self.pings.is_empty(), |el| {
                         el.child(

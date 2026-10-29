@@ -90,16 +90,15 @@ impl Render for CommitView {
             Some(Ok(d)) => Ok(Some(d)),
             Some(Err(e)) => Err(e.clone()),
         };
-        let body = detail
-            .as_ref()
-            .ok()
-            .copied()
-            .flatten()
-            .and_then(|d| {
-                // The subject is the heading; show only what follows it.
-                let rest = d.body.strip_prefix(commit.subject.as_str()).unwrap_or(&d.body).trim();
-                (!rest.is_empty()).then(|| rest.to_string())
-            });
+        let body = detail.as_ref().ok().copied().flatten().and_then(|d| {
+            // The subject is the heading; show only what follows it.
+            let rest = d
+                .body
+                .strip_prefix(commit.subject.as_str())
+                .unwrap_or(&d.body)
+                .trim();
+            (!rest.is_empty()).then(|| rest.to_string())
+        });
         let committed_by = detail
             .as_ref()
             .ok()
@@ -122,14 +121,29 @@ impl Render for CommitView {
             .child(
                 h_flex()
                     .gap_2()
-                    .child(div().flex_1().min_w_0().text_lg().font_semibold().child(commit.subject.clone()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_lg()
+                            .font_semibold()
+                            .child(commit.subject.clone()),
+                    )
                     .child(
                         Button::new("commit-copy-hash")
                             .ghost()
                             .small()
-                            .icon(if self.copied { Lucide::Check } else { Lucide::Copy })
+                            .icon(if self.copied {
+                                Lucide::Check
+                            } else {
+                                Lucide::Copy
+                            })
                             .label(commit.short().to_string())
-                            .tooltip(if self.copied { "Copied" } else { "Copy Full Hash" })
+                            .tooltip(if self.copied {
+                                "Copied"
+                            } else {
+                                "Copy Full Hash"
+                            })
                             .on_click(cx.listener(|this, _, _, cx| this.copy_hash(cx))),
                     ),
             )
@@ -148,7 +162,11 @@ impl Render for CommitView {
                     .when(!parents.is_empty(), |el| {
                         el.child(format!(
                             "{} {parents}",
-                            if commit.parents.len() > 1 { "parents" } else { "parent" }
+                            if commit.parents.len() > 1 {
+                                "parents"
+                            } else {
+                                "parent"
+                            }
                         ))
                     }),
             )
@@ -165,7 +183,9 @@ impl Render for CommitView {
                 )
             });
         let changes: AnyElement = match (&detail, &self.diff) {
-            (Err(e), _) => Placeholder::error("Unable to read this commit").detail(e.clone()).into_any_element(),
+            (Err(e), _) => Placeholder::error("Unable to read this commit")
+                .detail(e.clone())
+                .into_any_element(),
             (Ok(None), _) => Placeholder::loading("Reading the commit…").into_any_element(),
             (Ok(Some(_)), Some(diff)) => Diff::new(diff).size_full().into_any_element(),
             (Ok(Some(_)), None) => Placeholder::new(Lucide::File, "No file changes")

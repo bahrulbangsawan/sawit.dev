@@ -199,7 +199,6 @@ impl Library {
         out.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         out
     }
-
 }
 
 /// `{{name}}` placeholders, in order of first appearance.

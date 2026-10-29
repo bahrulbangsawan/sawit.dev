@@ -226,19 +226,21 @@ impl Render for SqlView {
                     .child(if self.running {
                         "Running…".to_string()
                     } else {
-                        self.summary
-                            .clone()
-                            .unwrap_or_else(|| "Ready".into())
+                        self.summary.clone().unwrap_or_else(|| "Ready".into())
                     }),
             )
             .child(div().flex_1().min_h_0().map(|el| {
                 match (self.error.clone(), self.result.clone()) {
-                    (Some(e), _) => el.child(Placeholder::error("The query didn't complete").detail(e)),
+                    (Some(e), _) => {
+                        el.child(Placeholder::error("The query didn't complete").detail(e))
+                    }
                     (None, Some(table)) => el.child(DataTable::new(&table).stripe(true).small()),
-                    (None, None) if self.running => el.child(Placeholder::loading("Running query…")),
-                    (None, None) if let Some(summary) = self.summary.clone() => el.child(
-                        Placeholder::new(Lucide::Check, "Query complete").detail(summary),
-                    ),
+                    (None, None) if self.running => {
+                        el.child(Placeholder::loading("Running query…"))
+                    }
+                    (None, None) if let Some(summary) = self.summary.clone() => {
+                        el.child(Placeholder::new(Lucide::Check, "Query complete").detail(summary))
+                    }
                     (None, None) => el.child(
                         Placeholder::new(Lucide::Play, "No results yet")
                             .detail("Write a query above and press ⌘↩ to run it."),
