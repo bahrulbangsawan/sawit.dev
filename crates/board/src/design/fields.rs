@@ -48,6 +48,24 @@ pub(super) const TEXT_KEYS: &[&str] = &[
     "textAutoResize",
 ];
 
+/// The keys of a frame's auto layout: the ones [`flatten_layout`] lifts out of `node_json`'s
+/// `layout` object. A frame without auto layout has none of them, and `node.set` of any of them
+/// gives it an auto layout, so [`DesignSelection::get`](super::DesignSelection::get) counts such a
+/// frame as a value of its own for each of them, instead of leaving it out.
+pub(super) const LAYOUT_KEYS: &[&str] = &[
+    "layout",
+    "gap",
+    "crossGap",
+    "padding",
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    "mainAlign",
+    "crossAlign",
+    "wrap",
+];
+
 /// The sides of a layout's padding, in the order of its `[top, right, bottom, left]` list.
 const PADDING: [&str; 4] = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"];
 
