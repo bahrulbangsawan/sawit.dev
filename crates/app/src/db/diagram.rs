@@ -43,8 +43,15 @@ const DETAIL_ZOOM: f32 = 0.45;
 const MINIMAP: (f32, f32) = (180., 120.);
 
 enum Drag {
-    Pan { last: Point<Pixels>, moved: bool },
-    Table { ix: usize, grab: Point<f32>, moved: bool },
+    Pan {
+        last: Point<Pixels>,
+        moved: bool,
+    },
+    Table {
+        ix: usize,
+        grab: Point<f32>,
+        moved: bool,
+    },
     Minimap,
 }
 
@@ -112,7 +119,9 @@ impl DiagramView {
             }),
             cx.subscribe(&search, |this, _, event: &InputEvent, cx| match event {
                 InputEvent::Change => this.run_search(cx),
-                InputEvent::PressEnter { shift, .. } => this.step_hit(if *shift { -1 } else { 1 }, cx),
+                InputEvent::PressEnter { shift, .. } => {
+                    this.step_hit(if *shift { -1 } else { 1 }, cx)
+                }
                 _ => {}
             }),
         ];
@@ -153,7 +162,8 @@ impl DiagramView {
     /// below the saved ones).
     fn rebuild(&mut self, cx: &mut Context<Self>) {
         let Some(schemas) = self.db.read(cx).schemas.get(&self.profile).cloned() else {
-            self.error = Some("Not connected. Connect to the database, then click Reload Schema.".into());
+            self.error =
+                Some("Not connected. Connect to the database, then click Reload Schema.".into());
             cx.notify();
             return;
         };
@@ -163,7 +173,9 @@ impl DiagramView {
         let first = self.erd.tables.is_empty();
         self.erd = diagram::erd(&schemas, only);
         self.sizes = self.erd.tables.iter().map(card_size).collect();
-        let saved = load_layouts().remove(&self.layout_key()).unwrap_or_default();
+        let saved = load_layouts()
+            .remove(&self.layout_key())
+            .unwrap_or_default();
         self.place(&saved);
         self.selected = self.selected.filter(|&s| s < self.erd.tables.len());
         self.hovered = None;
@@ -377,7 +389,10 @@ impl DiagramView {
     }
 
     fn on_mouse_down(&mut self, e: &MouseDownEvent, cx: &mut Context<Self>) {
-        if self.minimap_bounds().is_some_and(|b| b.contains(&e.position)) {
+        if self
+            .minimap_bounds()
+            .is_some_and(|b| b.contains(&e.position))
+        {
             self.drag = Some(Drag::Minimap);
             self.minimap_jump(e.position, cx);
             return;
@@ -431,7 +446,9 @@ impl DiagramView {
     fn end_drag(&mut self, cx: &mut Context<Self>) {
         match self.drag.take() {
             Some(Drag::Table { moved: true, .. }) => self.save_layout(),
-            Some(Drag::Table { ix, moved: false, .. }) => {
+            Some(Drag::Table {
+                ix, moved: false, ..
+            }) => {
                 self.selected = (self.selected != Some(ix)).then_some(ix);
             }
             Some(Drag::Pan { moved: false, .. }) => self.selected = None,
@@ -465,7 +482,8 @@ impl DiagramView {
             point(tables.origin.x - pad, tables.origin.y - pad),
             size(tables.size.width + pad * 2., tables.size.height + pad * 2.),
         );
-        let scale = ((MINIMAP.0 - 12.) / world.size.width).min((MINIMAP.1 - 12.) / world.size.height);
+        let scale =
+            ((MINIMAP.0 - 12.) / world.size.width).min((MINIMAP.1 - 12.) / world.size.height);
         Some((world, scale))
     }
 
@@ -617,52 +635,59 @@ impl DiagramView {
                         .child(table.schema.clone()),
                 )
             });
-        let rows = detail.then(|| {
-            table.columns.iter().enumerate().map(move |(c, col)| {
-                let hit = self.hits.contains(&(ix, Some(c)));
-                let current = current_hit == Some((ix, Some(c)));
-                let key = if col.pk {
-                    Some((Lucide::KeyRound, theme.warning))
-                } else if col.fk {
-                    Some((Lucide::Link, theme.info))
-                } else {
-                    None
-                };
-                h_flex()
-                    .h(px(ROW_H * z))
-                    .px(px(10. * z))
-                    .gap(px(6. * z))
-                    .text_size(text)
-                    .when(hit, |el| el.bg(theme.warning.opacity(if current { 0.3 } else { 0.14 })))
-                    .child(
-                        div()
-                            .w(px(12. * z))
-                            .flex_none()
-                            .when_some(key, |el, (icon, color)| {
-                                el.child(svg().path(icon.path()).size(px(11. * z)).text_color(color))
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(theme.foreground)
-                            .when(col.pk, |el| el.font_semibold())
-                            .child(col.name.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .max_w(px(size.width * z * 0.45))
-                            .truncate()
-                            .font_family(theme.mono_font_family.clone())
-                            .text_size(px(11. * z))
-                            .text_color(theme.muted_foreground)
-                            .child(format!("{}{}", short_type(&col.data_type), if col.nullable { "?" } else { "" })),
-                    )
-            })
-        });
+        let rows =
+            detail.then(|| {
+                table.columns.iter().enumerate().map(move |(c, col)| {
+                    let hit = self.hits.contains(&(ix, Some(c)));
+                    let current = current_hit == Some((ix, Some(c)));
+                    let key = if col.pk {
+                        Some((Lucide::KeyRound, theme.warning))
+                    } else if col.fk {
+                        Some((Lucide::Link, theme.info))
+                    } else {
+                        None
+                    };
+                    h_flex()
+                        .h(px(ROW_H * z))
+                        .px(px(10. * z))
+                        .gap(px(6. * z))
+                        .text_size(text)
+                        .when(hit, |el| {
+                            el.bg(theme.warning.opacity(if current { 0.3 } else { 0.14 }))
+                        })
+                        .child(div().w(px(12. * z)).flex_none().when_some(
+                            key,
+                            |el, (icon, color)| {
+                                el.child(
+                                    svg().path(icon.path()).size(px(11. * z)).text_color(color),
+                                )
+                            },
+                        ))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(theme.foreground)
+                                .when(col.pk, |el| el.font_semibold())
+                                .child(col.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .max_w(px(size.width * z * 0.45))
+                                .truncate()
+                                .font_family(theme.mono_font_family.clone())
+                                .text_size(px(11. * z))
+                                .text_color(theme.muted_foreground)
+                                .child(format!(
+                                    "{}{}",
+                                    short_type(&col.data_type),
+                                    if col.nullable { "?" } else { "" }
+                                )),
+                        )
+                })
+            });
         v_flex()
             .id(("erd-table", ix))
             .absolute()
@@ -675,28 +700,30 @@ impl DiagramView {
             .border(px(if selected { 2. } else { 1. }))
             .border_color(border)
             .bg(theme.background)
-            .shadow_md()
             .when(dim, |el| el.opacity(0.35))
             .map(|el| {
                 if detail {
                     el.child(header)
                 } else {
-                    // Zoomed out: just the name, as large as fits.
-                    let chars = table.name.chars().count().max(4) as f32;
-                    let fit = ((size.width * z - 10.) / (chars * 0.6)).clamp(9., 13.);
+                    // Zoomed out: just the name, as large as fits, broken
+                    // only at underscores.
+                    let (fit, lines) =
+                        name_lines(&table.name, size.width * z - 8., size.height * z - 8.);
                     el.bg(theme.muted).child(
-                        div()
+                        v_flex()
                             .size_full()
-                            .flex()
                             .items_center()
                             .justify_center()
                             .p(px(4.))
-                            .text_center()
                             .text_size(px(fit))
                             .line_height(px(fit * 1.2))
                             .font_semibold()
                             .text_color(theme.foreground)
-                            .child(table.name.clone()),
+                            .children(
+                                lines
+                                    .into_iter()
+                                    .map(|l| div().max_w_full().truncate().child(l)),
+                            ),
                     )
                 }
             })
@@ -784,7 +811,10 @@ impl DiagramView {
         let cards: Vec<AnyElement> = (0..self.erd.tables.len())
             .filter(|&i| {
                 let at = self.to_screen(self.pos[i]) - view.origin;
-                let s = size(px(self.sizes[i].width * zoom), px(self.sizes[i].height * zoom));
+                let s = size(
+                    px(self.sizes[i].width * zoom),
+                    px(self.sizes[i].height * zoom),
+                );
                 // Before the first paint the viewport is unknown: draw all.
                 view.size.width == px(0.) || Bounds::new(at, s).intersects(&visible)
             })
@@ -824,8 +854,14 @@ impl DiagramView {
                 }),
             )
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| this.on_mouse_move(e, cx)))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_drag(cx)))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_drag(cx)))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.end_drag(cx)),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.end_drag(cx)),
+            )
             .child(canvas_layer)
             .children(cards)
             .child(self.render_controls(cx))
@@ -929,7 +965,11 @@ impl DiagramView {
             .enumerate()
             .map(|(i, (p, s))| (Bounds::new(*p, *s), self.selected == Some(i)))
             .collect();
-        let (fill_c, sel_c, frame_c) = (theme.muted_foreground.opacity(0.35), theme.primary, theme.primary);
+        let (fill_c, sel_c, frame_c) = (
+            theme.muted_foreground.opacity(0.35),
+            theme.primary,
+            theme.primary,
+        );
         Some(
             canvas(
                 |_, _, _| {},
@@ -941,13 +981,21 @@ impl DiagramView {
                                 inner.x + px((r.origin.x - world.origin.x) * scale),
                                 inner.y + px((r.origin.y - world.origin.y) * scale),
                             ),
-                            size(px((r.size.width * scale).max(2.)), px((r.size.height * scale).max(2.))),
+                            size(
+                                px((r.size.width * scale).max(2.)),
+                                px((r.size.height * scale).max(2.)),
+                            ),
                         )
                     };
                     for (r, sel) in &rects {
-                        window.paint_quad(fill(map(*r), if *sel { sel_c } else { fill_c }).corner_radii(px(1.5)));
+                        window.paint_quad(
+                            fill(map(*r), if *sel { sel_c } else { fill_c }).corner_radii(px(1.5)),
+                        );
                     }
-                    window.paint_quad(outline(map(seen.intersect(&world)), frame_c, BorderStyle::Solid).corner_radii(px(2.)));
+                    window.paint_quad(
+                        outline(map(seen.intersect(&world)), frame_c, BorderStyle::Solid)
+                            .corner_radii(px(2.)),
+                    );
                 },
             )
             .absolute()
@@ -1189,11 +1237,21 @@ fn paint_edge(origin: Point<Pixels>, e: &EdgeShape, zoom: f32, window: &mut Wind
     }
     // One: a bar across the line near the referenced card.
     let bar_x = b.x + px(8. * z) * e.to_dir;
-    line(point(bar_x, b.y - spread), point(bar_x, b.y + spread), window);
+    line(
+        point(bar_x, b.y - spread),
+        point(bar_x, b.y + spread),
+        window,
+    );
 }
 
 /// A dot grid that moves with the canvas; hidden when too dense.
-fn paint_grid(bounds: Bounds<Pixels>, offset: Point<Pixels>, zoom: f32, color: Hsla, window: &mut Window) {
+fn paint_grid(
+    bounds: Bounds<Pixels>,
+    offset: Point<Pixels>,
+    zoom: f32,
+    color: Hsla,
+    window: &mut Window,
+) {
     let mut step = 24. * zoom;
     while step < 12. {
         step *= 2.;
@@ -1205,7 +1263,13 @@ fn paint_grid(bounds: Bounds<Pixels>, offset: Point<Pixels>, zoom: f32, color: H
     while x < bounds.origin.x + bounds.size.width {
         let mut y = bounds.origin.y + start(offset.y);
         while y < bounds.origin.y + bounds.size.height {
-            window.paint_quad(fill(Bounds::centered_at(point(x, y), size(r * 2., r * 2.)), color).corner_radii(r));
+            window.paint_quad(
+                fill(
+                    Bounds::centered_at(point(x, y), size(r * 2., r * 2.)),
+                    color,
+                )
+                .corner_radii(r),
+            );
             y += step;
         }
         x += step;
@@ -1220,12 +1284,44 @@ fn minimap_inner(b: Bounds<Pixels>, world: Bounds<f32>, scale: f32) -> Point<Pix
     )
 }
 
+/// A zoomed-out card's label: the font size that fits the name's longest
+/// `_`-separated part into `w`, and the name packed into lines at its
+/// underscores. Whatever exceeds the lines `h` holds joins the last line,
+/// which the card truncates with an ellipsis.
+fn name_lines(name: &str, w: f32, h: f32) -> (f32, Vec<String>) {
+    let parts: Vec<&str> = name.split_inclusive('_').collect();
+    let longest = parts
+        .iter()
+        .map(|p| p.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(4) as f32;
+    let fit = (w / (longest * 0.6)).clamp(8., 13.).min((h / 1.2).max(8.));
+    let cols = ((w / (fit * 0.6)) as usize).max(1);
+    let max_lines = ((h / (fit * 1.2)) as usize).max(1);
+    let mut lines: Vec<String> = Vec::new();
+    for p in parts {
+        match lines.last_mut() {
+            Some(l) if l.chars().count() + p.chars().count() <= cols => l.push_str(p),
+            _ => lines.push(p.to_string()),
+        }
+    }
+    if lines.len() > max_lines {
+        let rest = lines.split_off(max_lines - 1).concat();
+        lines.push(rest);
+    }
+    (fit, lines)
+}
+
 fn card_size(t: &diagram::ErdTable) -> gpui_kit::Size<f32> {
     let header = (t.name.chars().count() + t.schema.chars().count()) as f32 * CHAR_W + 70.;
     let rows = t
         .columns
         .iter()
-        .map(|c| (c.name.chars().count() + short_type(&c.data_type).chars().count()) as f32 * CHAR_W + 64.)
+        .map(|c| {
+            (c.name.chars().count() + short_type(&c.data_type).chars().count()) as f32 * CHAR_W
+                + 64.
+        })
         .fold(0., f32::max);
     size(
         header.max(rows).clamp(MIN_W, MAX_W),
@@ -1291,5 +1387,17 @@ mod tests {
         let s = card_size(&t);
         assert_eq!(s.width, MAX_W);
         assert_eq!(s.height, HEADER_H + CARD_PAD + ROW_H * 2.);
+    }
+
+    #[::core::prelude::v1::test]
+    fn zoomed_out_names_break_only_at_underscores() {
+        let (_, lines) = name_lines("help_article_authors", 50., 200.);
+        assert_eq!(lines, ["help_", "article_", "authors"]);
+        let (_, lines) = name_lines("help_article_authors", 400., 200.);
+        assert_eq!(lines, ["help_article_authors"]);
+        // Too short for three lines: the rest joins the last one.
+        let (fit, lines) = name_lines("help_article_authors", 50., 12.);
+        assert_eq!(lines, ["help_article_authors"]);
+        assert_eq!(fit, 10.);
     }
 }
