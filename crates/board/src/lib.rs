@@ -2,5 +2,6 @@
 //! can be tested with plain `cargo test`; the GPUI views live in `crates/app/src/board/`.
 
 pub mod doc;
+pub mod store;
 
 pub use doc::{BoardDoc, BoardError, DocKind};

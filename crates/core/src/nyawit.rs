@@ -19,6 +19,13 @@ pub fn canvas_file(project: &Path) -> PathBuf {
     dir(project).join("canvas.excalidraw")
 }
 
+/// The native canvas's file name, here and in Sawit's own folder (no project).
+pub const BOARD_FILE: &str = "canvas.figcraft";
+
+pub fn board_file(project: &Path) -> PathBuf {
+    dir(project).join(BOARD_FILE)
+}
+
 pub fn exports_dir(project: &Path) -> PathBuf {
     dir(project).join("exports")
 }
@@ -57,6 +64,14 @@ pub fn unique(dir: &Path, name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_board_file_is_the_figcraft_canvas_in_nyawit() {
+        assert_eq!(
+            board_file(Path::new("/proj")),
+            Path::new("/proj/.nyawit/canvas.figcraft")
+        );
+    }
 
     #[test]
     fn ensure_makes_the_folder_and_ignores_it() {

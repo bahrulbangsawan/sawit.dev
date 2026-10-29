@@ -56,9 +56,9 @@ impl BoardDoc {
         Ok(Self { session })
     }
 
-    /// The file in `bytes` (a `.figcraft` archive). What the loader repaired or left out is only
-    /// logged, so a caller that may save back to the file should use
-    /// [`BoardDoc::from_bytes_with_issues`].
+    /// The file in `bytes` (a `.figcraft` archive). The notes on what the loader repaired or left
+    /// out, and on what saving would drop, are only logged, so a caller that may save back to the
+    /// file should use [`BoardDoc::from_bytes_with_issues`].
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, BoardError> {
         let (board, issues) = Self::from_bytes_with_issues(bytes)?;
         for issue in issues {
@@ -67,14 +67,40 @@ impl BoardDoc {
         Ok(board)
     }
 
-    /// Like [`BoardDoc::from_bytes`], with the loader's notes on what it repaired or left out, one
-    /// sentence each (none for a healthy file). Some mean data loss: an image, version history,
-    /// published library or branch it could not read is missing from the returned document, so
-    /// saving that document over the same file drops it.
+    /// Like [`BoardDoc::from_bytes`], with notes on what saving the returned document over the same
+    /// file would lose, one sentence each. An empty list means a save writes back everything the
+    /// loader read, bar a stored thumbnail (a preview, not content). The list holds:
+    /// - the loader's own notes: what it repaired, and what it could not read and left out (an
+    ///   image, version, branch or published library that is damaged or past its limits);
+    /// - a note for each kind of content that was read fine but that [`BoardDoc::to_bytes`] never
+    ///   writes: a version history, branches, and the images past the loader's limits (those stay
+    ///   in the file, unread).
     pub fn from_bytes_with_issues(bytes: &[u8]) -> Result<(Self, Vec<String>), BoardError> {
-        let (doc, issues) = figcraft_format::load_bytes(bytes).map_err(format_error)?;
+        let loaded = figcraft_format::load_bytes_with_versions(bytes).map_err(format_error)?;
+        let mut issues = loaded.issues;
+        if !loaded.versions.is_empty() {
+            issues.push(
+                "the file has a version history, which the canvas doesn't keep: \
+                 saving this file again drops it"
+                    .into(),
+            );
+        }
+        if !loaded.branches.is_empty() {
+            issues.push(
+                "the file has branches, which the canvas doesn't keep: \
+                 saving this file again drops them"
+                    .into(),
+            );
+        }
+        if loaded.images_past_budget > 0 {
+            issues.push(format!(
+                "images past the limit of what can be loaded stay in the file ({} of them): \
+                 saving this file again drops them",
+                loaded.images_past_budget
+            ));
+        }
         let board = Self {
-            session: Session::with_document(doc),
+            session: Session::with_document(loaded.doc),
         };
         Ok((board, issues))
     }
@@ -198,6 +224,77 @@ mod tests {
         assert!(!back.doc().unwrap().images.contains_key(&hash));
         // `from_bytes` opens it too, and only logs the issues.
         assert!(BoardDoc::from_bytes(&damaged).is_ok());
+    }
+
+    #[test]
+    fn a_version_history_is_noted_because_saving_drops_it() {
+        let board = BoardDoc::new_board("Canvas").unwrap();
+        let doc = board.doc().unwrap();
+        let history = [figcraft_format::Version::new(
+            "v1",
+            "First",
+            "",
+            1,
+            doc.clone(),
+        )];
+        let bytes = figcraft_format::save_bytes_with_versions(&doc, None, &history).unwrap();
+
+        let (board, issues) = BoardDoc::from_bytes_with_issues(&bytes).unwrap();
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(issues[0].contains("version history"), "{issues:?}");
+        // The note is true: the saved file has no history, and says nothing once it has none.
+        let saved = board.to_bytes().unwrap();
+        let loaded = figcraft_format::load_bytes_with_versions(&saved).unwrap();
+        assert!(loaded.versions.is_empty());
+        assert!(
+            BoardDoc::from_bytes_with_issues(&saved)
+                .unwrap()
+                .1
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn branches_are_noted_because_saving_drops_them() {
+        let board = BoardDoc::new_board("Canvas").unwrap();
+        let doc = board.doc().unwrap();
+        let branch = figcraft_format::Branch {
+            id: "b1".into(),
+            name: "Explore".into(),
+            time: 1,
+            client: 1,
+            state: figcraft_format::BranchState::Active,
+            base: doc.clone(),
+            head: doc.clone(),
+            versions: Vec::new(),
+        };
+        let bytes = figcraft_format::save_bytes_with_history(&doc, None, &[], &[branch]).unwrap();
+
+        let (board, issues) = BoardDoc::from_bytes_with_issues(&bytes).unwrap();
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(issues[0].contains("branches"), "{issues:?}");
+        let loaded = figcraft_format::load_bytes_with_versions(&board.to_bytes().unwrap()).unwrap();
+        assert!(loaded.branches.is_empty());
+    }
+
+    #[test]
+    fn images_past_the_loaders_limit_are_noted_because_saving_drops_them() {
+        // FigCraft's IMAGE_BUDGET reads at most 20 000 images from a file; the rest stay in the
+        // file, unread. Building 20 001 archive members takes most of a second.
+        let document = Document::new("File");
+        let document = serde_json::to_vec(&figcraft_format::to_json(&document).unwrap()).unwrap();
+        let names: Vec<String> = (0..=20_000).map(|n| format!("images/i{n}")).collect();
+        let members = std::iter::once(("document.json", document.as_slice()))
+            .chain(names.iter().map(|name| (name.as_str(), &b"x"[..])));
+        let bytes = figcraft_format::zip_files(members).unwrap();
+
+        let (_, issues) = BoardDoc::from_bytes_with_issues(&bytes).unwrap();
+        let note = |i: &&String| i.contains("past the limit");
+        assert_eq!(issues.iter().filter(note).count(), 1, "{issues:?}");
+        assert!(
+            issues.iter().any(|i| i.contains("(1 of them)")),
+            "{issues:?}"
+        );
     }
 
     #[test]
