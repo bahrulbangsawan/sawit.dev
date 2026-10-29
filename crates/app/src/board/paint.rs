@@ -1,12 +1,15 @@
 //! Painting the canvas: the page colour over the whole canvas, then the newest frame the render
-//! thread drew, wherever the view has moved it since.
+//! thread drew, wherever the view has moved it since, then the overlay over it (the selection,
+//! handles, names, guides and previews: [`overlay_paint`]).
 
 use std::sync::Arc;
 
 use figcraft_engine::ViewState;
 use figcraft_render::View;
-use gpui_kit::{Bounds, Corners, Pixels, RenderImage, Window, fill, point, px, rgb, size};
+use gpui_kit::{App, Bounds, Corners, Pixels, RenderImage, Window, fill, point, px, rgb, size};
 use sawit_board::view::placement;
+
+use super::overlay_paint::{self, Overlay};
 
 /// One paint of the canvas, worked out in its prepaint.
 pub(super) struct Painting {
@@ -18,10 +21,12 @@ pub(super) struct Painting {
     /// The images frames have replaced since the last paint, to take out of the window's sprite
     /// atlas: each frame is a new image, and the atlas would otherwise keep them all.
     pub stale: Vec<Arc<RenderImage>>,
+    /// What goes over the frame, as the view is now.
+    pub overlay: Overlay,
 }
 
 /// Paints `painting` over the canvas at `bounds`.
-pub(super) fn paint(bounds: Bounds<Pixels>, painting: Painting, window: &mut Window) {
+pub(super) fn paint(bounds: Bounds<Pixels>, painting: Painting, window: &mut Window, cx: &mut App) {
     for image in painting.stale {
         let _ = window.drop_image(image);
     }
@@ -32,6 +37,7 @@ pub(super) fn paint(bounds: Bounds<Pixels>, painting: Painting, window: &mut Win
     {
         log::error!("the canvas frame couldn't be painted: {err}");
     }
+    overlay_paint::paint(bounds.origin, painting.overlay, window, cx);
 }
 
 /// Where in the window to paint `frame`, a render of the page area it names, now that the view

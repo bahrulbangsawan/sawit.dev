@@ -3,9 +3,12 @@
 //!
 //! [`BoardView`] shows one canvas file. Each frame it asks the render thread ([`worker`]) for the
 //! view when that changed, and paints the newest frame it has, moved and scaled to the view, so
-//! pans and zooms show at once and the render catches up ([`paint`]). Edits are saved once the
-//! canvas has been still for a moment, and when the tab closes or the app quits.
+//! pans and zooms show at once and the render catches up ([`paint`]). Over it go the selection,
+//! handles, names and previews `sawit_board::overlay` lists, as the view is now
+//! ([`overlay_paint`]). Edits are saved once the canvas has been still for a moment, and when the
+//! tab closes or the app quits.
 
+mod overlay_paint;
 mod paint;
 mod worker;
 
@@ -312,8 +315,9 @@ impl BoardView {
 
     /// Each frame, before the paint: tells the engine the theme and the canvas's size, fits the
     /// view to the content the first time, asks for a render when the view or the document isn't
-    /// the one asked for last, and starts the autosave after an edit. What to paint, if there is
-    /// a document.
+    /// the one asked for last, lays out the overlay and hands the engine its frames' names as they
+    /// will be painted, and starts the autosave after an edit. What to paint, if there is a
+    /// document.
     fn prepaint(
         &mut self,
         bounds: Bounds<Pixels>,
@@ -383,10 +387,18 @@ impl BoardView {
             let at = paint::image_bounds(bounds, &frame.view, &ds.view, scale_factor);
             (frame.image.clone(), at)
         });
+        // What goes over the frame, its labels measured. The frames' names go back to the engine
+        // as they are painted: it takes a press or a hover on one as on its frame.
+        let shapes = sawit_board::overlay::overlay(&board.session);
+        let view = &board.session.ds().ok()?.view;
+        let font = &cx.theme().font_family;
+        let (overlay, names) = overlay_paint::layout(shapes, font, view, window);
+        board.session.tool.labels = names;
         let painting = Painting {
             page: screen_rgb,
             frame,
             stale: std::mem::take(&mut self.stale),
+            overlay,
         };
         self.autosave(cx);
         Some(painting)
@@ -495,9 +507,9 @@ impl Render for BoardView {
                             .ok()
                             .flatten()
                     },
-                    |bounds, painting, window, _| {
+                    |bounds, painting, window, cx| {
                         if let Some(painting) = painting {
-                            paint::paint(bounds, painting, window);
+                            paint::paint(bounds, painting, window, cx);
                         }
                     },
                 )
@@ -565,7 +577,9 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
+    use figcraft_doc::NodeId;
     use figcraft_doc::color::Color;
+    use figcraft_doc::geom::Point as PagePoint;
     use figcraft_engine::ViewState;
     use gpui_kit::component::{Theme, ThemeMode};
     use gpui_kit::{
@@ -965,6 +979,46 @@ mod tests {
         view.update(cx, |view, _| view.flush());
         assert_eq!(std::fs::read(&path).unwrap(), b"not a canvas");
         assert_eq!(names(&tmp.0), ["canvas.figcraft"]);
+    }
+
+    #[gpui_kit::test]
+    fn painted_frame_names_go_back_to_the_engine(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("names");
+        let path = tmp.0.join("design.figcraft");
+        let mut session = figcraft_engine::Session::new();
+        let frame =
+            json!({"type": "frame", "name": "Frame", "x": 0, "y": 0, "width": 200, "height": 100});
+        let made = session.execute("node.create", &frame).unwrap();
+        let frame = NodeId(made["id"].as_u64().unwrap());
+        session
+            .execute("file.saveAs", &json!({"path": path.to_str().unwrap()}))
+            .unwrap();
+        cx.update(gpui_kit::init);
+        let (_, view) = open_in_window(cx, &path);
+        // Selected, it has its outline, handles and size painted over it too.
+        view.update(cx, |view, cx| {
+            let board = view.board_mut().unwrap();
+            board.session.set_selection(vec![frame]);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let board = view.board().unwrap();
+            let labels = &board.session.tool.labels;
+            let named: Vec<NodeId> = labels.iter().map(|(id, _)| *id).collect();
+            assert_eq!(named, [frame]);
+            // Its name is just above it on the page, where a press is one on the frame.
+            let quad = labels[0].1;
+            assert!(quad.iter().all(|p| p.y < 0.0), "{quad:?}");
+            let centre = PagePoint::new(
+                quad.iter().map(|p| p.x).sum::<f64>() / 4.0,
+                quad.iter().map(|p| p.y).sum::<f64>() / 4.0,
+            );
+            let doc = board.doc().unwrap();
+            let page = doc.first_page().unwrap();
+            let pressed = figcraft_engine::tools::label_at(&doc, page, labels, centre);
+            assert_eq!(pressed, Some(frame));
+        });
     }
 
     #[test]
