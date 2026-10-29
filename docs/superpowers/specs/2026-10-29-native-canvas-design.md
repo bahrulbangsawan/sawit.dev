@@ -114,10 +114,14 @@ Any gpui-kit `Root` binding that a FigCraft binding uses (Tab, ⇧Tab, ⌘C, …
     then reveal in Finder)
   - **Save:** `file.save` (flush the autosave now), `file.saveAs` (save dialog, writes a `.figcraft` copy)
   - **Copy as:** `edit.copyAsText`, `edit.copyAsCss`, `edit.copyAsSvg`, `edit.copyAsPng` (system clipboard)
-  - **Panels:** `view.layers`, `view.design`, `view.toggleUi`
-  - **Dialogs:** `help.shortcuts`, `app.actions`
-- **Everything else** runs through `execute`. "Enabled" means the engine knows the command id or it is a
-  UI-handled id. "Checked" comes from `figcraft_engine::cmd::view::checked`.
+- **Everything else** runs through `execute`, including the commands that only ask the UI for something:
+  - `view.layers` → `ui_requests` kind `panel.layers`
+  - `view.design` → `panel.design`
+  - `app.actions` → `palette.actions`
+  - `help.shortcuts` → `panel.shortcuts`
+  - `view.toggleUi` flips `ds.view.ui_hidden`, which the view reads.
+- "Enabled" means the engine knows the command id or it is a UI-handled id. "Checked" comes from
+  `figcraft_engine::cmd::view::checked`.
 
 ## Context menu (Sawit-defined)
 
