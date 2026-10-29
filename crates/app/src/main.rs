@@ -126,6 +126,7 @@ fn main() -> std::process::ExitCode {
         shell_config::init(cx);
         db::init(cx);
         workspace::init(cx);
+        terminal::init(cx);
         theme::apply_zed_one_dark(cx);
         cx.set_global(rt::Rt(runtime));
         highlight::prewarm(cx);

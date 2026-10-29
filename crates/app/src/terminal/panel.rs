@@ -541,6 +541,13 @@ impl TerminalPanel {
         }
     }
 
+    /// A terminal tab has the keyboard.
+    pub fn has_focus(&self, window: &Window, cx: &App) -> bool {
+        self.tabs
+            .iter()
+            .any(|view| view.focus_handle(cx).contains_focused(window, cx))
+    }
+
     pub fn focus_active(&self, window: &mut Window, cx: &mut App) {
         if let Some(view) = self.tabs.get(self.active) {
             let handle = view.focus_handle(cx);
