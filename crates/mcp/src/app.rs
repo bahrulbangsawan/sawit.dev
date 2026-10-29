@@ -70,7 +70,7 @@ pub struct LayoutArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct PageArgs {
-    #[schemars(description = "canvas, mcp, changelog, git_graph, github or instance")]
+    #[schemars(description = "canvas, mcp, tools, changelog, git_graph, github or instance")]
     pub page: String,
     pub project: Option<String>,
 }
@@ -241,7 +241,7 @@ fn variant<T: serde::de::DeserializeOwned>(name: &str, choices: &str) -> Result<
 
 const PANELS: &str =
     "instances, files, git, database, run, ports, network, prompts, ssh, shell_config";
-const PAGES: &str = "canvas, mcp, changelog, git_graph, github, instance";
+const PAGES: &str = "canvas, mcp, tools, changelog, git_graph, github, instance";
 
 fn pretty(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
@@ -431,7 +431,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Open a page as a tab: canvas (Excalidraw board), mcp (install page), changelog, git_graph, github, instance (selected PostgreSQL instance)"
+        description = "Open a page as a tab: canvas (Excalidraw board), mcp (install page), tools (dev tools installer), changelog, git_graph, github, instance (selected PostgreSQL instance)"
     )]
     async fn app_open_page(&self, Parameters(a): Parameters<PageArgs>) -> CallToolResult {
         match variant::<Page>(&a.page, PAGES) {
@@ -615,7 +615,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Convert a Mermaid diagram into editable Excalidraw shapes on Sawit's canvas. (For an SVG image of a Mermaid diagram use render_mermaid)"
+        description = "Convert a Mermaid diagram into editable Excalidraw shapes on Sawit's canvas: boxes, arrows bound to them, labels. Charts (pie, gantt, xychart, quadrant, journey, sankey, architecture) are placed as one image. (For an SVG image of a Mermaid diagram use render_mermaid)"
     )]
     async fn canvas_add_mermaid(
         &self,

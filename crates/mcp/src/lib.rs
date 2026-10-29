@@ -1,7 +1,8 @@
 //! MCP server exposing Sawit to AI agents. Everything here works without the
-//! app running: local PostgreSQL instances, databases and saved connections,
-//! diagrams, ports, network checks, SSH hosts, run commands, git, prompts
-//! and file search. Tools are grouped by area, one module each, and every
+//! app running: local PostgreSQL instances, databases and saved connections
+//! (with exports, backups and CSV imports), diagrams, ports, network checks,
+//! SSH hosts, run commands, git, prompts, file search, developer tools and
+//! the MCP servers installed in AI clients. Tools are grouped by area, one module each, and every
 //! module contributes its own router (see [`Sawit::router`]).
 
 use std::path::{Path, PathBuf};
@@ -16,10 +17,13 @@ use sawit_core::instances::{AppPaths, Instance};
 
 pub mod app;
 pub mod db;
+pub mod db_admin;
+pub mod dev_tools;
 pub mod diagrams;
 pub mod files;
 pub mod git;
 pub mod instances;
+pub mod mcp_servers;
 pub mod network;
 pub mod ports;
 pub mod prompts;
@@ -65,7 +69,7 @@ const MAX_OUTPUT: usize = 100_000;
 pub const INSTRUCTIONS: &str = "\
 Sawit is a macOS developer workbench. These tools work without the Sawit app running:
 - Instances: local PostgreSQL servers managed by Sawit (list/create/start/stop/restart/remove, logs, port checks, installed binaries).
-- Databases: detect every reachable database, list/create/drop databases, describe schemas and tables, `query` (always read-only) and `execute_sql` (read-write: can modify data), saved connections, writing DATABASE_URL to a project's .env.
+- Databases: detect every reachable database, list/create/drop databases, describe schemas and tables, `query` (always read-only) and `execute_sql` (read-write: can modify data), saved connections, writing DATABASE_URL to a project's .env; export tables or queries to CSV/Excel, pg_dump backups, CSV imports, drop/truncate (with confirm) and refresh relations.
 - Diagrams: render Mermaid to SVG, and draw a database schema as Mermaid, DBML or SVG.
 - Ports: list listening dev servers and stop them.
 - Network: diagnose the internet connection, ping a host.
@@ -74,8 +78,10 @@ Sawit is a macOS developer workbench. These tools work without the Sawit app run
 - Git: status, log, diff, show, branches, stage/unstage, commit, switch.
 - Prompts: the prompt library (with {{variables}}).
 - Files: text search in a folder.
+- Dev tools: the Tools page catalog (Homebrew, Bun, uv, Claude Code, …), what is installed, installing with prerequisites (confirm=true).
+- MCP servers: the MCP page catalog and the AI clients on this Mac; install or remove a server in a client's config.
 These control the running Sawit app (start it with launch_app; app_state shows windows, tabs and terminals):
-- app_*: open files/folders, show panels, layout, tabs, pages (canvas, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
+- app_*: open files/folders, show panels, layout, tabs, pages (canvas, MCP, tools, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
 - terminal_*: run commands in Sawit's terminal and read their output, type keys (ctrl-c), close tabs.
 - canvas_*: the Excalidraw board: list, add shapes/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG.
 Most app tools take `project` to pick the window that has that folder open; otherwise the frontmost window is used.
@@ -163,7 +169,9 @@ pub(crate) fn existing_dir(dir: &str) -> Result<PathBuf, String> {
 pub(crate) fn expand_home(path: &str) -> PathBuf {
     match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
         (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
-        _ if path == "~" => std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default(),
+        _ if path == "~" => std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default(),
         _ => PathBuf::from(path),
     }
 }
@@ -201,6 +209,7 @@ impl Sawit {
     pub fn router() -> ToolRouter<Sawit> {
         Self::instances_router()
             + Self::db_router()
+            + Self::db_admin_router()
             + Self::diagrams_router()
             + Self::ports_router()
             + Self::network_router()
@@ -209,6 +218,8 @@ impl Sawit {
             + Self::git_router()
             + Self::prompts_router()
             + Self::files_router()
+            + Self::dev_tools_router()
+            + Self::mcp_servers_router()
             // App-control tools (need the app running).
             + Self::app_router()
     }
@@ -265,6 +276,13 @@ mod tests {
             "save_connection",
             "remove_connection",
             "write_env",
+            "export_table",
+            "export_query",
+            "backup_database",
+            "import_csv",
+            "drop_relation",
+            "truncate_table",
+            "refresh_materialized_view",
             // diagrams
             "render_mermaid",
             "schema_diagram",
@@ -304,6 +322,13 @@ mod tests {
             "fill_prompt",
             // files
             "search_files",
+            // dev tools
+            "list_dev_tools",
+            "install_dev_tools",
+            // mcp servers
+            "list_mcp_servers",
+            "install_mcp_server",
+            "uninstall_mcp_server",
             // app control
             "launch_app",
             "app_state",
