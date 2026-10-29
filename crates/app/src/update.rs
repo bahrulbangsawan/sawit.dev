@@ -1,6 +1,7 @@
-//! Checks GitHub Releases for a newer Sawit, downloads it in the
-//! background and offers "Restart to Update", which swaps the .app bundle
-//! after the app quits and opens the new one.
+//! Checks GitHub Releases for a newer Sawit every hour, downloads it in the
+//! background and installs it by itself when the app quits; "Restart to
+//! Update" installs it now and opens the new version.
+//! Either way the .app bundle is swapped once this process has exited.
 
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -13,7 +14,7 @@ use sawit_core::update::{Release, Version, download, latest_release, swap_script
 
 use crate::rt;
 
-const CHECK_EVERY: Duration = Duration::from_secs(4 * 60 * 60);
+const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
 /// Let startup finish before touching the network.
 const FIRST_CHECK: Duration = Duration::from_secs(5);
 
@@ -62,6 +63,12 @@ pub fn init(cx: &mut App) {
                 }
                 cx.background_executor().timer(CHECK_EVERY).await;
             }
+        })
+        .detach();
+        // A downloaded update installs on quit, without reopening the app.
+        cx.on_app_quit(|this: &mut Updater, _| {
+            this.install(false);
+            async {}
         })
         .detach();
         Updater {
@@ -135,23 +142,36 @@ impl Updater {
     /// Installs the downloaded app and relaunches, or opens the release page.
     pub fn restart(&mut self, cx: &mut Context<Self>) {
         match &self.state {
-            UpdateState::Ready { app, .. } => {
-                let Some(bundle) = &self.bundle else { return };
-                let script = swap_script(std::process::id(), bundle, app);
-                let spawned = Command::new("/bin/sh")
-                    .arg("-c")
-                    .arg(script)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .process_group(0)
-                    .spawn();
-                if spawned.is_ok() {
+            UpdateState::Ready { .. } => {
+                if self.install(true) {
                     cx.quit();
                 }
             }
             UpdateState::Available(release) => cx.open_url(&release.page),
             _ => {}
         }
+    }
+
+    /// Starts the script that swaps in the downloaded app once this process
+    /// exits (opening it if `reopen`). False if there is nothing to install.
+    fn install(&mut self, reopen: bool) -> bool {
+        let (UpdateState::Ready { app, .. }, Some(bundle)) = (&self.state, &self.bundle) else {
+            return false;
+        };
+        let script = swap_script(std::process::id(), bundle, app, reopen);
+        let spawned = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .is_ok();
+        if spawned {
+            // Once only: quitting after "Restart to Update" mustn't start a second swap.
+            self.state = UpdateState::Idle;
+        }
+        spawned
     }
 }

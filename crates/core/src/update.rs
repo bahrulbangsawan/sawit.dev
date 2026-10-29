@@ -132,10 +132,12 @@ pub async fn download(release: &Release, dir: &Path) -> Result<PathBuf> {
 }
 
 /// Shell script that waits for process `pid` to exit, replaces `current`
-/// with `new` (putting the old app back if that fails) and opens it.
-pub fn swap_script(pid: u32, current: &Path, new: &Path) -> String {
+/// with `new` (putting the old app back if that fails) and, if `reopen`,
+/// opens it.
+pub fn swap_script(pid: u32, current: &Path, new: &Path, reopen: bool) -> String {
     let old = shell_quote(current.as_os_str());
     let new = shell_quote(new.as_os_str());
+    let open = if reopen { "open \"$old\"\n" } else { "" };
     format!(
         "while kill -0 {pid} 2>/dev/null; do sleep 0.2; done\n\
          old={old}; new={new}\n\
@@ -145,7 +147,7 @@ pub fn swap_script(pid: u32, current: &Path, new: &Path) -> String {
          elif [ ! -e \"$old\" ]; then\n\
          \x20 mv \"$old.previous\" \"$old\"\n\
          fi\n\
-         open \"$old\"\n"
+         {open}"
     )
 }
 
@@ -194,7 +196,9 @@ mod tests {
         std::fs::create_dir_all(&new).unwrap();
         std::fs::write(new.join("v"), "new").unwrap();
         // A pid that isn't running, so it doesn't wait; `open` is stubbed out.
-        let script = swap_script(999_999, &current, &new).replace("open ", "true ");
+        let script = swap_script(999_999, &current, &new, false);
+        assert!(!script.contains("open "));
+        assert!(swap_script(1, &current, &new, true).contains("open "));
         let ok = std::process::Command::new("/bin/sh")
             .arg("-c")
             .arg(&script)

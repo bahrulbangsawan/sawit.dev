@@ -34,7 +34,7 @@ impl ChangelogPage {
         let (text, button) = match &u.state {
             UpdateState::Ready { release, .. } => (
                 format!(
-                    "Version {} is downloaded and ready to install.",
+                    "Version {} is downloaded. It installs when you quit Sawit, or restart now.",
                     release.version
                 ),
                 Some("Restart to Update"),
