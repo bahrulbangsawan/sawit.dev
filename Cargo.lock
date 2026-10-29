@@ -6698,7 +6698,7 @@ dependencies = [
 
 [[package]]
 name = "sawit"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "brotli-decompressor",
  "futures",
@@ -6723,7 +6723,7 @@ dependencies = [
 
 [[package]]
 name = "sawit-core"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "alacritty_terminal",
  "futures",
@@ -6749,7 +6749,7 @@ dependencies = [
 
 [[package]]
 name = "sawit-mcp"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "futures",
  "rmcp",

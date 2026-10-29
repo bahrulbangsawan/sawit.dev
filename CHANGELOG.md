@@ -3,6 +3,16 @@
 Every change to Sawit, by version. Each push to `main` is a new release: the patch version is bumped and
 its section is written automatically by `.githooks/pre-push` (`scripts/release.sh`) from the commit messages.
 
+## [0.0.5] - 2026-10-29
+
+### Fixes
+
+- retry hdiutil when building the DMG in CI
+
+### Performance
+
+- shrink the app from 44 MB to 33 MB
+
 ## [0.0.4] - 2026-10-29
 
 ### Features
