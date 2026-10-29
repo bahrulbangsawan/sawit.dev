@@ -8,6 +8,7 @@ pub mod input;
 pub mod policy;
 pub mod skeleton;
 pub mod store;
+pub mod toolbar;
 pub mod view;
 
 pub use doc::{BoardDoc, BoardError, DocKind};
