@@ -3,6 +3,7 @@
 
 pub mod app_control;
 pub mod binaries;
+pub mod browser;
 pub mod cli;
 mod cmd;
 pub mod control;
