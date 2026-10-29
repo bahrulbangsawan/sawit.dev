@@ -297,11 +297,13 @@ impl NonEmptyOr for str {
 
 /// The tool a command line runs: its program, or for an interpreter
 /// running a launcher script (`node /opt/homebrew/bin/pnpm dev`), that
-/// launcher.
+/// launcher. A bare word after it is a subcommand (`deno task dev`), not
+/// a script.
 pub fn tool(args: &str) -> &str {
     let name = program(args);
     if INTERPRETERS.contains(&name)
         && let Some(script) = args.split_whitespace().nth(1)
+        && script.contains('/')
     {
         let script = program(script);
         if LAUNCHERS.contains(&script) && !INTERPRETERS.contains(&script) {
@@ -708,6 +710,9 @@ mod tests {
         assert_eq!(tool("/usr/bin/python3.12 manage.py runserver"), "python");
         assert_eq!(tool("-zsh"), "zsh");
         assert_eq!(tool("node22 x.js"), "node");
+        // `task` is also go-task's name; here it is deno's subcommand.
+        assert_eq!(tool("deno task dev"), "deno");
+        assert_eq!(short_command("deno task dev"), "deno task dev");
         assert_eq!(short_command("node /opt/homebrew/bin/pnpm dev"), "pnpm dev");
         assert_eq!(short_command("sh -c vite --port 3000"), "vite --port 3000");
         assert_eq!(
