@@ -469,3 +469,149 @@ SAWIT_HOME=$S/home SAWIT_NATIVE_CANVAS=1 RUST_LOG=sawit=debug target/debug/sawit
 - [ ] **Step 5: Stop only this instance** with `/bin/kill <pid>` (`pgrep -f "$S/home"`), then run the full gates:
 Run: `cargo test --workspace`
 Expected: all pass.
+
+#### Task 7 notes: live check (2026-10-30, at `976c41d`, lane 4)
+
+All checks passed, and `cargo test --workspace` passes: 852 passed, 9 ignored, 0 failed. Machine:
+Apple M3 (8 cores, 16 GB), macOS 26.6.1, window scale factor 2. Every number below comes from the
+debug build **under build load** (R-LOAD). Other lanes were compiling, and `vm.loadavg` was 2.7–4.6
+during the runs (per run in the table).
+
+**Launch recipe.** When a later plan says "launch as in Plan 1 Task 7", it means this recipe. It
+replaces Steps 1, 2 and 5 above, as Plan 1 rulings C4, C6 and C7 amend them:
+
+```bash
+cargo build -p sawit                       # in the checkout or lane under test
+S=<scratch dir>/live-<task>; mkdir -p "$S/home" "$S/proj"
+# The example document. Skip this line for an empty board: the first save then creates .nyawit/ and its .gitignore.
+mkdir -p "$S/proj/.nyawit" && cp ~/.cargo/git/checkouts/figcraft-bc55fa7002b5fc9c/0971d09/examples/ridgeline-app.figcraft "$S/proj/.nyawit/canvas.figcraft"
+SAWIT_HOME=$S/home SAWIT_NATIVE_CANVAS=1 RUST_LOG=sawit=debug target/debug/sawit --foreground "$S/proj" 2>"$S/sawit.log" &
+PID=$!
+# Once the app is up: $S/home/sawit.sock, or /tmp/sawit-$USER-<hash>.sock when that path is 100 bytes or more.
+SOCK=$(lsof -p $PID -a -U | grep -o '/[^ ]*\.sock$')
+ctl() { python3 -I -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(b"sawit-control/1\n"+sys.argv[2].encode()); s.shutdown(socket.SHUT_WR); print(s.makefile().read(), end="")' "$SOCK" "$1"; }
+ctl "{\"cmd\":\"open_page\",\"page\":\"canvas\",\"project\":\"$S/proj\"}"
+ctl '{"cmd":"canvas","op":{"op":"get"}}'    # each reply is one line: "ok <json>" or "error: <message>"
+/bin/kill $PID                              # this PID only: `kill` is aliased, and a broad pgrep finds the user's app
+```
+
+- `--foreground` keeps the app in this process. `$PID` is then the window's process, and stderr
+  (the `canvas render … ms` lines) goes to the log. Without the flag, the binary starts itself
+  again with stderr sent to `/dev/null`.
+- Screenshots: list `$PID`'s windows with `CGWindowListCopyWindowInfo` (a few lines of Swift), and
+  take the 1280×801 one with `screencapture -x -o -l <window id>`. A covered window doesn't
+  repaint, and only `{"cmd":"focus"}` makes the control server raise the window.
+- A `get` that answers `type: "other"` with numeric-string ids is how a check tells the native
+  canvas from the web one (C8).
+- Drop `SAWIT_NATIVE_CANVAS=1` once Plan 8 Task 1 has removed the flag.
+
+**Answers (Steps 2–3, C8, and the checks carried over from Task 6).**
+
+- Build: `cargo build -p sawit` succeeds. Its only linker line is the known R-EHFRAME warning.
+- (a) `open_page canvas` answers `{"tab":0}`. `state` then lists exactly one tab: kind `canvas`,
+  active, with `canvas_open: true`.
+- C8: `get` answers `ok:true` with the page's 4 top-level layers (Components, Home — Light,
+  Trail — Light and Home — Dark). All are `type: "other"`, with ids `"349"`, `"68"`, `"239"` and
+  `"178"`: this is the native canvas.
+- (b) A second `open_page canvas` leaves the tab count (1) and the active index (0) unchanged.
+  `get` answers the same ids.
+- Step 3: the screenshot shows the example zoomed to fit on a 1040×471 pt canvas. The zoom is
+  0.3073, which is (471 − 2·64)/1116.3, set by the content's height. The view is centred on the
+  content at (19.5, 558.15). `view.zoomIn` answers `{"zoom":0.5}`, and the next screenshot shows
+  the canvas zoomed in about the middle of the view.
+- (c) `text.create {x:0, y:0, text:"p1t7-autosave"}` answers `ok:true` with `result.id` 350. The
+  next `get` lists `"350"`. The file's `document.json` holds the text 0.47 s after the op.
+- Opening the file wrote nothing. More than 120 view commands left it byte-identical, because view
+  changes aren't edits.
+- Also checked over the socket (beyond the steps above):
+  - **Empty board.** A project with no canvas file (a second project in the window) opens an
+    empty board with the dot grid. `get` answers `[]`, and nothing is written. The first
+    `board.sticky` answers `{"id":2,"text":3}`. 0.42 s later `.nyawit/` exists, with its
+    `.gitignore` and the canvas.
+  - **Closing the tab saves.** `text.create`, then `close_tab` at once. The text was in the file
+    17 ms after the op, before the 300 ms autosave could run. `canvas_open` turned false (the view
+    was released), and reopening listed the text again.
+  - **A failed save.** With `.nyawit/` read-only, `text.create` shows the toast "The canvas
+    couldn't be saved to …/canvas.figcraft: Permission denied (os error 13)". The file stays as it
+    was, and the document keeps the text. Once the folder was writable again, closing the tab wrote
+    the text.
+  - **A truncated file.** With `canvas.figcraft` cut to its first 20,000 bytes, the tab shows "The
+    canvas couldn't be opened." with "not a valid FigCraft file: invalid Zip archive: Could not
+    find EOCD". `get` and `command` answer `ok:false` with the path and that reason. The file is
+    byte-identical after an attempted edit and after closing the tab, and nothing is written beside
+    it.
+  - **The log.** All 130 lines of the debug log are `canvas render` lines: one for each render that
+    an opened canvas, a resize, a view change or an edit called for. There are no warnings or
+    errors.
+
+**Render times (Step 4): debug build, under build load.** Each sample is the one
+`canvas render … ms` line caused by one control command; the commands went one at a time.
+Percentiles are nearest-rank. Each frame size is the canvas plus 256 pt of overscan on every side,
+at 2×.
+
+| Run | Canvas (pt) | Frame (device px) | Renders | p50 (ms) | p95 (ms) | min–max (ms) | `vm.loadavg` before → after |
+|---|---|---|---|---|---|---|---|
+| First render after launch (cold) | 1040×471 | ≈3105×1967 | 1 | 395.2 | – | – | { 2.70 3.15 3.04 } |
+| **Fit view**: `view.zoomFit` after each `view.zoomIn` | 1040×471 | ≈3105×1967 (6.1 Mpx) | 20 | **147.4** | **177.6** | 122.9–183.9 | { 2.90 2.93 2.96 } → { 3.63 3.10 3.02 } |
+| `view.zoomIn`/`view.zoomOut` cycles from fit (Plan 8's method) | 1040×471 | 6.1 Mpx | 20 | 149.9 | 188.4 | 105.8–192.8 | { 3.67 3.13 3.03 } → { 4.57 3.32 3.10 } |
+| **Fit view**, with the sidebar and terminal hidden | 1280×711 | ≈3585×2447 (8.8 Mpx) | 20 | **179.2** | **183.9** | 165.6–185.0 | { 4.48 3.42 3.14 } → { 4.04 3.39 3.13 } |
+| Zoom cycles from fit, with the sidebar and terminal hidden | 1280×711 | 8.8 Mpx | 20 | 164.7 | 186.7 | 141.9–187.4 | { 4.04 3.39 3.13 } → { 3.57 3.31 3.11 } |
+
+- Single edits, with the sidebar and terminal hidden: `text.create` took 146.0 ms and
+  `board.sticky` 135.9 ms.
+- What a line times: `Retained::render`, whose FigCraft crates are at opt-level 3 since Task 5,
+  plus `sawit_board::view::to_bgra` and the image wrap. The dev profile builds those two at
+  opt-level 0.
+  - A verbatim copy of `to_bgra`, timed alone on these frame sizes, takes 84 ms (6.1 Mpx) and
+    119 ms (8.8 Mpx) at opt-level 0 with debug assertions, and 1.5 ms and 2.2 ms at opt-level 3.
+  - So most of each debug line is that conversion. That is why a small edit costs about as much as
+    a zoom here.
+  - These numbers are only indicative. Plan 8 Task 4 measures the budget on the release build,
+    where the conversion takes about 2 ms.
+- Idle: with the design canvas showing and no input, `top`'s 1 s samples of the app read 0.5–1.6 %
+  CPU over 10 s. No render line appeared, so nothing redraws continuously.
+- Observations for later plans:
+  - A save writes `document.json` only, so the example's `thumbnail.png` isn't kept (58,167 →
+    28,664 bytes). The thumbnail is FigCraft's recent-files preview, which it reads as optional
+    (figcraft-format `thumbnail.rs`), so no content is lost. It matters to Plan 7's in-place saves
+    of third-party `.figcraft` files (R-D14).
+  - After a failed save, nothing retries until the next edit or flush (closing the tab, quitting).
+    This is what `BoardView::flush` documents.
+
+#### Hand checks (pending — needs the user)
+
+Launch with the recipe above, and run its `open_page` line.
+
+1. **Autosave while the window is covered or minimised.** This comes from Task 6's review: an op
+   sent while the window's display link is stopped.
+   - Minimise the Sawit window (⌘M), or cover it completely with another app's window.
+   - Run `ctl '{"cmd":"canvas","op":{"op":"command","command":"text.create","params":{"x":0,"y":0,"text":"covered-save"}}}'`.
+     Expect `ok:true`.
+   - Wait 2 s with the window still minimised or covered. Then run
+     `unzip -p "$S/proj/.nyawit/canvas.figcraft" document.json | grep -c covered-save`. Expect 1
+     or more.
+   - Bring the window back. Expect no crash and no blank canvas: the canvas redraws at once.
+   - Run `ctl '{"cmd":"canvas","op":{"op":"command","command":"view.zoomSelection"}}'`. Expect the
+     new text to show.
+2. **Panning with the trackpad.** Scroll with two fingers over the canvas.
+   - The content follows the fingers and moves at once. The last frame moves with them until the
+     new render arrives.
+   - A fast pan of more than about 256 pt shows the page colour at the leading edge for a moment,
+     then the content fills in.
+   - Nothing jumps or flickers when a new frame replaces the moved one.
+   - A debug render takes 0.1–0.2 s. To judge smoothness, also try a release build: run
+     `cargo build --release -p sawit`, then the same launch with `target/release/sawit`.
+3. **Zooming with gestures.** Pinch, and scroll with two fingers while holding ⌘.
+   - Both zoom about the pointer: the spot under the pointer stays under it.
+   - During the gesture the image is a little soft, because it renders at half resolution. About
+     0.15 s after the fingers stop, it is sharp again.
+   - At rest, text and 1 px lines are crisp, with no half-pixel blur.
+4. **Opening the canvas by hand.** Put the canvas tab in the background, press ⌃⌘C, and then click
+   the title bar's Canvas button. Expect each to bring the same canvas tab forward, with no second
+   canvas tab.
+5. **Quitting right after an edit (needs Plan 2's editing).** For now, an edit made over the socket
+   is saved 0.3 s later, which is too soon to press ⌘Q first.
+   - Once Plan 2 lands, move a layer with the mouse and press ⌘Q at once.
+   - Relaunch and open the canvas. Expect the move to be kept, which shows that the quit hook saved
+     it.
+   - Closing the tab uses the same save, and that was checked live above.
