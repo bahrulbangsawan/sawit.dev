@@ -1,7 +1,7 @@
 //! Developer tools that install with a one-line cURL script (Claude Code,
 //! Bun, uv, …): the catalog, which of them are already installed, the order
-//! to install a selection in (prerequisites first), and running an
-//! installer while streaming its output.
+//! to install a selection in (prerequisites first), the latest released
+//! versions, and running an installer or upgrade while streaming its output.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -58,6 +58,27 @@ pub struct Tool {
     pub interactive: bool,
     /// `bin --version` prints something useful (and returns quickly).
     pub version: bool,
+    /// Where its latest release is published.
+    pub latest: Latest,
+    /// Updates an installed copy; `install` when `None`.
+    pub upgrade: Option<&'static str>,
+}
+
+/// Where a tool's latest version can be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Latest {
+    None,
+    /// An npm package name.
+    Npm(&'static str),
+    /// A GitHub `owner/repo`; its latest release's tag.
+    GitHub(&'static str),
+}
+
+impl Tool {
+    /// The command that brings an installed copy up to date.
+    pub fn upgrade_command(&self) -> &'static str {
+        self.upgrade.unwrap_or(self.install)
+    }
 }
 
 const fn tool(
@@ -79,11 +100,15 @@ const fn tool(
         needs: &[],
         interactive: false,
         version: true,
+        latest: Latest::None,
+        upgrade: None,
     }
 }
 
 pub static TOOLS: &[Tool] = &[
     Tool {
+        latest: Latest::GitHub("Homebrew/brew"),
+        upgrade: Some("brew update"),
         interactive: true,
         also: &["/opt/homebrew/bin/brew", "/usr/local/bin/brew"],
         ..tool(
@@ -108,6 +133,8 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        latest: Latest::Npm("pnpm"),
+        upgrade: Some("pnpm self-update"),
         also: &["~/Library/pnpm/pnpm"],
         ..tool(
             "pnpm",
@@ -119,6 +146,7 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        latest: Latest::Npm("npm"),
         needs: &["node"],
         ..tool(
             "npm",
@@ -130,6 +158,8 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        latest: Latest::GitHub("astral-sh/uv"),
+        upgrade: Some("uv self update"),
         also: &["~/.local/bin/uv"],
         ..tool(
             "uv",
@@ -152,6 +182,8 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        latest: Latest::GitHub("oven-sh/bun"),
+        upgrade: Some("bun upgrade"),
         also: &["~/.bun/bin/bun"],
         ..tool(
             "bun",
@@ -163,6 +195,8 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        latest: Latest::GitHub("denoland/deno"),
+        upgrade: Some("deno upgrade"),
         also: &["~/.deno/bin/deno"],
         ..tool(
             "deno",
@@ -186,6 +220,8 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        latest: Latest::GitHub("rust-lang/rust"),
+        upgrade: Some("rustup update stable"),
         also: &["~/.cargo/bin/rustc"],
         ..tool(
             "rust",
@@ -197,6 +233,8 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        latest: Latest::Npm("@anthropic-ai/claude-code"),
+        upgrade: Some("claude update"),
         also: &["~/.local/bin/claude"],
         ..tool(
             "claude-code",
@@ -208,6 +246,7 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        latest: Latest::Npm("@openai/codex"),
         also: &["~/.local/bin/codex"],
         ..tool(
             "codex",
@@ -230,6 +269,8 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        latest: Latest::Npm("opencode-ai"),
+        upgrade: Some("opencode upgrade"),
         also: &["~/.opencode/bin/opencode"],
         ..tool(
             "opencode",
@@ -241,6 +282,7 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        latest: Latest::Npm("@sourcegraph/amp"),
         also: &["~/.local/bin/amp", "~/.amp/bin/amp"],
         ..tool(
             "amp",
@@ -285,6 +327,7 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        latest: Latest::Npm("@google/gemini-cli"),
         needs: &["node"],
         ..tool(
             "gemini",
@@ -319,6 +362,7 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        latest: Latest::GitHub("zed-industries/zed"),
         also: &["/Applications/Zed.app", "~/Applications/Zed.app"],
         ..tool(
             "zed",
@@ -330,6 +374,7 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        latest: Latest::GitHub("starship/starship"),
         also: &["~/.local/bin/starship"],
         ..tool(
             "starship",
@@ -341,6 +386,8 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        latest: Latest::GitHub("superfly/flyctl"),
+        upgrade: Some("flyctl version upgrade"),
         also: &["~/.fly/bin/flyctl"],
         ..tool(
             "flyio",
@@ -507,10 +554,95 @@ fn short_version(text: &str) -> Option<String> {
     Some(word.to_string())
 }
 
+/// The version in a release tag ("v1.2.3", "bun-v1.2.3" → "1.2.3").
+fn tag_version(tag: &str) -> Option<String> {
+    let start = tag.find(|c: char| c.is_ascii_digit())?;
+    Some(tag[start..].trim().to_string())
+}
+
+/// `tool`'s latest released version, or `None` when it can't be read.
+async fn latest_version(tool: &Tool) -> Option<String> {
+    let (args, url): (&[&str], String) = match tool.latest {
+        Latest::None => return None,
+        Latest::Npm(pkg) => (
+            &["-fsSL"],
+            format!("https://registry.npmjs.org/{pkg}/latest"),
+        ),
+        // The release page redirects to its tag; no rate-limited API call.
+        Latest::GitHub(repo) => (
+            &["-fsSLI", "-o", "/dev/null", "-w", "%{url_effective}"],
+            format!("https://github.com/{repo}/releases/latest"),
+        ),
+    };
+    let out = crate::cmd::run(
+        "/usr/bin/curl",
+        args.iter()
+            .copied()
+            .chain(["--max-time", "8", url.as_str()]),
+        Duration::from_secs(10),
+    )
+    .await
+    .ok()?;
+    if out.code != Some(0) {
+        return None;
+    }
+    match tool.latest {
+        Latest::Npm(_) => {
+            let v: serde_json::Value = serde_json::from_str(&out.stdout).ok()?;
+            Some(v["version"].as_str()?.to_string())
+        }
+        _ => tag_version(out.stdout.trim().rsplit_once("/tag/")?.1),
+    }
+}
+
+/// The latest released version of every tool that publishes one, fetched
+/// at once; tools that fail are left out.
+pub async fn latest_versions() -> HashMap<&'static str, String> {
+    futures::future::join_all(
+        TOOLS
+            .iter()
+            .map(|t| async move { Some((t.id, latest_version(t).await?)) }),
+    )
+    .await
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// `latest` is a higher dotted version than `installed`. Pre-release and
+/// build suffixes ("-beta.1", "+abc") are ignored; missing parts count as 0.
+pub fn is_newer(latest: &str, installed: &str) -> bool {
+    fn parts(v: &str) -> Vec<u64> {
+        let core = v.trim().trim_start_matches('v');
+        let core = core.split(['-', '+', ' ']).next().unwrap_or_default();
+        core.split('.')
+            .map_while(|p| {
+                let digits: String = p.chars().take_while(|c| c.is_ascii_digit()).collect();
+                digits.parse().ok()
+            })
+            .collect()
+    }
+    let (a, b) = (parts(latest), parts(installed));
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    let n = a.len().max(b.len());
+    let at = |v: &[u64], i: usize| v.get(i).copied().unwrap_or(0);
+    (0..n)
+        .map(|i| at(&a, i).cmp(&at(&b, i)))
+        .find(|o| o.is_ne())
+        .is_some_and(|o| o.is_gt())
+}
+
 /// Runs `tool`'s installer, sending each line it prints to `on_line`.
 /// Fails with the last lines of output when it exits non-zero.
 pub async fn install(tool: &Tool, on_line: impl Fn(String) + Send + Sync) -> Result<()> {
-    let script = format!("{PRELUDE}set -e\n{}\n", tool.install);
+    run(tool, tool.install, on_line).await
+}
+
+/// Runs `command` (`tool`'s installer or upgrade) like [`install`].
+pub async fn run(tool: &Tool, command: &str, on_line: impl Fn(String) + Send + Sync) -> Result<()> {
+    let script = format!("{PRELUDE}set -e\n{command}\n");
     let mut cmd = shell();
     cmd.arg("-c")
         .arg(script)
@@ -650,6 +782,45 @@ mod tests {
             Some("0.12.1")
         );
         assert_eq!(short_version("nothing here"), None);
+    }
+
+    #[test]
+    fn tags() {
+        assert_eq!(tag_version("v2.9.8").as_deref(), Some("2.9.8"));
+        assert_eq!(tag_version("bun-v1.4.4").as_deref(), Some("1.4.4"));
+        assert_eq!(tag_version("7.0.11").as_deref(), Some("7.0.11"));
+        assert_eq!(tag_version("nightly"), None);
+    }
+
+    #[test]
+    fn newer() {
+        assert!(is_newer("1.3.0", "1.2.9"));
+        assert!(is_newer("1.10.0", "1.9.0"));
+        assert!(is_newer("2.0", "1.99.1"));
+        assert!(is_newer("1.2.3.1", "1.2.3"));
+        assert!(!is_newer("1.2.3", "1.2.3"));
+        assert!(!is_newer("1.2", "1.2.0"));
+        assert!(!is_newer("1.2.3", "1.3.0"));
+        assert!(!is_newer("1.3.0-beta.1", "1.3.0"));
+        assert!(is_newer("v1.3.0-rc.1", "1.2.0"));
+        assert!(!is_newer(
+            "0.0.1793260836-gdb4c2d",
+            "0.0.1793260836-gdb4c2d"
+        ));
+        assert!(!is_newer("nightly", "1.0.0"));
+    }
+
+    /// Hits the network: `cargo test -p sawit-core dev_tools -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn latest_lookups() {
+        let latest = latest_versions().await;
+        for id in ["bun", "deno", "pnpm", "claude-code"] {
+            let v = latest
+                .get(id)
+                .unwrap_or_else(|| panic!("no latest for {id}"));
+            assert!(v.starts_with(|c: char| c.is_ascii_digit()), "{id}: {v}");
+        }
     }
 
     #[test]
