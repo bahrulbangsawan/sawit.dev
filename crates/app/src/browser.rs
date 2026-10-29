@@ -194,7 +194,7 @@ impl BrowserView {
             }
             FromPage::Load { started, url } => {
                 self.loading = started;
-                if started {
+                if started && url != "about:blank" {
                     // Marks where each page's messages begin.
                     self.logs.push_console(ConsoleEntry {
                         level: "info".into(),
@@ -486,7 +486,7 @@ impl BrowserView {
                     .icon(Lucide::ChevronLeft)
                     .tooltip("Back")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        let _ = this.apply(BrowserOp::Back, cx);
+                        drop(this.apply(BrowserOp::Back, cx));
                     })),
             )
             .child(
@@ -496,7 +496,7 @@ impl BrowserView {
                     .icon(Lucide::ChevronRight)
                     .tooltip("Forward")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        let _ = this.apply(BrowserOp::Forward, cx);
+                        drop(this.apply(BrowserOp::Forward, cx));
                     })),
             )
             .child(
@@ -513,7 +513,7 @@ impl BrowserView {
                             this.loading = false;
                             cx.notify();
                         } else {
-                            let _ = this.apply(BrowserOp::Reload, cx);
+                            drop(this.apply(BrowserOp::Reload, cx));
                         }
                     })),
             )
@@ -525,7 +525,7 @@ impl BrowserView {
                     .icon(Lucide::Code)
                     .tooltip("Web Inspector")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        let _ = this.apply(BrowserOp::Devtools, cx);
+                        drop(this.apply(BrowserOp::Devtools, cx));
                     })),
             )
     }

@@ -374,8 +374,11 @@
             if (["link", "clickable", "label", "paragraph"].includes(r)) visitControlsOnly(el, depth + 1);
             return;
           }
+          const at = lines.length;
           if (!line(depth, text + ":")) return;
           for (const child of children(el)) visit(child, depth + 1);
+          // Nothing inside: no colon.
+          if (lines.length === at + 1) lines[at] = lines[at].slice(0, -1);
           return;
         }
       }
@@ -582,6 +585,10 @@
     key = KEY_ALIASES[key.toLowerCase()] || (key.length === 1 ? key : key[0].toUpperCase() + key.slice(1));
     if (key.length > 1 && !KEY_CODES[key] && !/^F\d+$/.test(key)) throw new Error("Unknown key “" + op.key + "”. Use Enter, Tab, Escape, Backspace, Delete, Space, arrows, Home, End, PageUp, PageDown or one character.");
     const mods = new Set(parts.map((p) => p.toLowerCase()));
+    const MODIFIERS = ["meta", "cmd", "command", "ctrl", "control", "alt", "option", "shift"];
+    for (const mod of mods) {
+      if (!MODIFIERS.includes(mod)) throw new Error("Unknown modifier “" + mod + "”. Use Meta, Ctrl, Alt or Shift.");
+    }
     const meta = mods.has("meta") || mods.has("cmd") || mods.has("command");
     const ctrl = mods.has("ctrl") || mods.has("control");
     const alt = mods.has("alt") || mods.has("option");
