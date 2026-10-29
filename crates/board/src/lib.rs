@@ -5,6 +5,8 @@ pub mod context_bar;
 pub mod design;
 pub mod doc;
 pub mod skeleton;
+pub mod input;
+pub mod policy;
 pub mod store;
 pub mod view;
 
