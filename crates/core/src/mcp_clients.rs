@@ -1,4 +1,5 @@
-//! Installing the `sawit-mcp` server into AI clients: Claude Code (every
+//! Installing MCP servers (the bundled `sawit-mcp`, and the catalog in
+//! `mcp_catalog`) into AI clients: Claude Code (every
 //! profile — the default `~/.claude.json` and each `CLAUDE_CONFIG_DIR`
 //! folder such as `~/.claude-work`), Claude Desktop, Codex (and `CODEX_HOME`
 //! profiles), Cursor, Windsurf, Gemini CLI, Zed, opencode and VS Code.
@@ -7,7 +8,9 @@
 //! installed (they rewrite their config files while running); everything
 //! else, and those two without a CLI, by editing the config file in place —
 //! other settings, key order and TOML comments are kept, and the original is
-//! backed up once next to it.
+//! backed up once next to it. Remote servers are written in each client's
+//! own format; clients that only run local programs get the `mcp-remote`
+//! bridge.
 
 use std::path::{Path, PathBuf};
 
@@ -368,60 +371,250 @@ pub fn discover(home: &Path, claude_config_dir: Option<PathBuf>) -> Vec<Target> 
     out
 }
 
-/// Where the server entry lives in a JSON client config, and its value.
-pub fn entry(client: Client, server: &Path) -> (&'static str, Value) {
-    let cmd = server.display().to_string();
-    match client {
-        Client::ClaudeCode => (
-            "mcpServers",
-            json!({"type": "stdio", "command": cmd, "args": [], "env": {}}),
-        ),
-        Client::Zed => (
-            "context_servers",
-            json!({"command": cmd, "args": [], "env": {}}),
-        ),
-        Client::OpenCode | Client::KiloCode => (
-            "mcp",
-            json!({"type": "local", "command": [cmd], "enabled": true}),
-        ),
-        Client::VsCode | Client::VsCodeInsiders => (
-            "servers",
-            json!({"type": "stdio", "command": cmd, "args": []}),
-        ),
-        // A flat, dotted key in Amp's settings.
-        Client::Amp => ("amp.mcpServers", json!({"command": cmd, "args": []})),
-        Client::CopilotCli => (
-            "mcpServers",
-            json!({"type": "local", "command": cmd, "args": [], "env": {}, "tools": ["*"]}),
-        ),
-        Client::FactoryDroid => (
-            "mcpServers",
-            json!({"type": "stdio", "command": cmd, "args": [], "disabled": false}),
-        ),
-        Client::Cursor => (
-            "mcpServers",
-            json!({"type": "stdio", "command": cmd, "args": []}),
-        ),
-        Client::Kiro => (
-            "mcpServers",
-            json!({"command": cmd, "args": [], "disabled": false}),
-        ),
-        Client::Cline => (
-            "mcpServers",
-            json!({"command": cmd, "args": [], "disabled": false, "autoApprove": []}),
-        ),
-        Client::RooCode => (
-            "mcpServers",
-            json!({"command": cmd, "args": [], "disabled": false, "alwaysAllow": []}),
-        ),
-        _ => ("mcpServers", json!({"command": cmd, "args": []})),
+/// How a server is reached.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Transport {
+    /// A program on this Mac.
+    Stdio {
+        command: String,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+    },
+    /// A remote (streamable HTTP) server.
+    Http {
+        url: String,
+        headers: Vec<(String, String)>,
+    },
+}
+
+/// A server to install: its name in every config, and how to reach it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Spec {
+    pub name: String,
+    pub transport: Transport,
+    /// `npx` for the `mcp-remote` bridge, which clients without remote
+    /// support use. An absolute path when found: GUI clients get a minimal
+    /// `PATH`.
+    pub npx: String,
+}
+
+impl Spec {
+    /// The bundled `sawit-mcp`.
+    pub fn sawit(server: &Path) -> Spec {
+        Spec::stdio(SERVER_NAME, server.display().to_string(), Vec::new())
     }
+
+    pub fn stdio(name: &str, command: impl Into<String>, args: Vec<String>) -> Spec {
+        Spec {
+            name: name.into(),
+            transport: Transport::Stdio {
+                command: command.into(),
+                args,
+                env: Vec::new(),
+            },
+            npx: "npx".into(),
+        }
+    }
+
+    pub fn http(name: &str, url: impl Into<String>) -> Spec {
+        Spec {
+            name: name.into(),
+            transport: Transport::Http {
+                url: url.into(),
+                headers: Vec::new(),
+            },
+            npx: "npx".into(),
+        }
+    }
+
+    pub fn header(mut self, key: &str, value: &str) -> Spec {
+        if let Transport::Http { headers, .. } = &mut self.transport {
+            headers.push((key.into(), value.into()));
+        }
+        self
+    }
+
+    pub fn with_npx(mut self, npx: impl Into<String>) -> Spec {
+        self.npx = npx.into();
+        self
+    }
+
+    pub fn is_remote(&self) -> bool {
+        matches!(self.transport, Transport::Http { .. })
+    }
+
+    /// What identifies this server in a config entry: the URL; else the
+    /// arguments, since the command may be found at another path; else, for
+    /// a server without arguments, the command itself.
+    fn key(&self) -> String {
+        match &self.transport {
+            Transport::Http { url, .. } => url.clone(),
+            Transport::Stdio { command, args, .. } if args.is_empty() => command.clone(),
+            Transport::Stdio { args, .. } => args.join(" "),
+        }
+    }
+
+    /// `VAR` in an `Authorization: Bearer ${VAR}` header, the only header.
+    fn bearer_env(&self) -> Option<&str> {
+        let Transport::Http { headers, .. } = &self.transport else {
+            return None;
+        };
+        match headers.as_slice() {
+            [(k, v)] if k.eq_ignore_ascii_case("authorization") => v
+                .strip_prefix("Bearer ${")
+                .and_then(|v| v.strip_suffix('}')),
+            _ => None,
+        }
+    }
+
+    /// The server as a program to run: itself, or for a remote server the
+    /// `mcp-remote` bridge.
+    fn as_stdio(&self) -> (String, Vec<String>, Vec<(String, String)>) {
+        match &self.transport {
+            Transport::Stdio { command, args, env } => (command.clone(), args.clone(), env.clone()),
+            Transport::Http { url, headers } => {
+                let mut args = vec!["-y".to_string(), "mcp-remote".into(), url.clone()];
+                for (k, v) in headers {
+                    args.push("--header".into());
+                    args.push(format!("{k}:{v}"));
+                }
+                (self.npx.clone(), args, Vec::new())
+            }
+        }
+    }
+}
+
+/// The key holding the servers in a JSON client config.
+fn servers_key(client: Client) -> &'static str {
+    match client {
+        Client::Zed => "context_servers",
+        Client::OpenCode | Client::KiloCode => "mcp",
+        Client::VsCode | Client::VsCodeInsiders => "servers",
+        // A flat, dotted key in Amp's settings.
+        Client::Amp => "amp.mcpServers",
+        _ => "mcpServers",
+    }
+}
+
+fn object(pairs: &[(String, String)]) -> Value {
+    Value::Object(
+        pairs
+            .iter()
+            .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+            .collect(),
+    )
+}
+
+/// A remote server in the client's own format, or `None` when the client
+/// only runs local programs (it gets the `mcp-remote` bridge instead).
+fn http_entry(client: Client, url: &str, headers: &[(String, String)]) -> Option<Value> {
+    let mut v = match client {
+        Client::ClaudeCode | Client::VsCode | Client::VsCodeInsiders => {
+            json!({"type": "http", "url": url})
+        }
+        Client::Cursor | Client::Amp | Client::Zed => json!({"url": url}),
+        Client::Gemini | Client::Qwen => json!({"httpUrl": url}),
+        Client::Windsurf | Client::Antigravity => json!({"serverUrl": url}),
+        Client::OpenCode | Client::KiloCode => {
+            json!({"type": "remote", "url": url, "enabled": true})
+        }
+        Client::CopilotCli => json!({"type": "http", "url": url, "tools": ["*"]}),
+        Client::FactoryDroid => json!({"type": "http", "url": url, "disabled": false}),
+        Client::Kiro => json!({"url": url, "disabled": false}),
+        Client::Cline => json!({"type": "streamableHttp", "url": url, "disabled": false}),
+        Client::RooCode => json!({"type": "streamable-http", "url": url}),
+        _ => return None,
+    };
+    if !headers.is_empty() {
+        v["headers"] = object(headers);
+    }
+    Some(v)
+}
+
+/// Where the server entry lives in a JSON client config, and its value.
+pub fn entry(client: Client, spec: &Spec) -> (&'static str, Value) {
+    let key = servers_key(client);
+    if let Transport::Http { url, headers } = &spec.transport
+        && let Some(v) = http_entry(client, url, headers)
+    {
+        return (key, v);
+    }
+    let (cmd, args, env) = spec.as_stdio();
+    let env = object(&env);
+    let v = match client {
+        Client::ClaudeCode => json!({"type": "stdio", "command": cmd, "args": args, "env": env}),
+        Client::Zed => json!({"command": cmd, "args": args, "env": env}),
+        Client::OpenCode | Client::KiloCode => {
+            let mut command = vec![cmd];
+            command.extend(args);
+            json!({"type": "local", "command": command, "enabled": true})
+        }
+        Client::VsCode | Client::VsCodeInsiders => {
+            json!({"type": "stdio", "command": cmd, "args": args})
+        }
+        Client::CopilotCli => {
+            json!({"type": "local", "command": cmd, "args": args, "env": env, "tools": ["*"]})
+        }
+        Client::FactoryDroid => {
+            json!({"type": "stdio", "command": cmd, "args": args, "disabled": false})
+        }
+        Client::Cursor => json!({"type": "stdio", "command": cmd, "args": args}),
+        Client::Kiro => json!({"command": cmd, "args": args, "disabled": false}),
+        Client::Cline => {
+            json!({"command": cmd, "args": args, "disabled": false, "autoApprove": []})
+        }
+        Client::RooCode => {
+            json!({"command": cmd, "args": args, "disabled": false, "alwaysAllow": []})
+        }
+        _ => json!({"command": cmd, "args": args}),
+    };
+    let mut v = v;
+    if let (Some(obj), Value::Object(env)) = (v.as_object_mut(), &env)
+        && !env.is_empty()
+        && !obj.contains_key("env")
+        && obj.contains_key("args")
+    {
+        obj.insert("env".into(), Value::Object(env.clone()));
+    }
+    (key, v)
+}
+
+/// Every command, argument and URL in a JSON entry, space-separated.
+fn signature(v: &Value) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for key in ["command", "args", "url", "httpUrl", "serverUrl"] {
+        match v.get(key) {
+            Some(Value::String(s)) => parts.push(s.clone()),
+            Some(Value::Array(a)) => {
+                parts.extend(a.iter().filter_map(|x| x.as_str().map(String::from)))
+            }
+            _ => {}
+        }
+    }
+    parts.join(" ")
+}
+
+fn toml_signature(item: &toml_edit::Item) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for key in ["command", "args", "url"] {
+        match item.get(key) {
+            Some(i) if i.is_str() => parts.push(i.as_str().unwrap_or_default().into()),
+            Some(i) => {
+                if let Some(a) = i.as_array() {
+                    parts.extend(a.iter().filter_map(|x| x.as_str().map(String::from)));
+                }
+            }
+            None => {}
+        }
+    }
+    parts.join(" ")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
     Installed,
-    /// Installed, but pointing at another binary (e.g. an older build).
+    /// Installed under this name, but pointing elsewhere (an older build,
+    /// another region): what it points at.
     Outdated(String),
     NotInstalled,
     /// The config can't be read safely (comments, syntax errors).
@@ -456,12 +649,12 @@ fn read_toml(path: &Path) -> std::result::Result<toml_edit::DocumentMut, String>
         .map_err(|e| e.to_string())
 }
 
-/// Whether `server` is installed for `target`.
-pub fn status(target: &Target, server: &Path) -> Status {
-    let wanted = server.display().to_string();
+/// Whether `spec` is installed for `target`.
+pub fn status(target: &Target, spec: &Spec) -> Status {
+    let wanted = spec.key();
     if !target.client.editable() {
         let text = std::fs::read_to_string(&target.config).unwrap_or_default();
-        return if text.contains(SERVER_NAME) && text.contains(&wanted) {
+        return if text.contains(&spec.name) && text.contains(&wanted) {
             Status::Installed
         } else {
             Status::Manual
@@ -471,38 +664,24 @@ pub fn status(target: &Target, server: &Path) -> Status {
         match read_toml(&target.config) {
             Ok(doc) => doc
                 .get("mcp_servers")
-                .and_then(|t| t.get(SERVER_NAME))
-                .map(|s| {
-                    s.get("command")
-                        .and_then(|c| c.as_str())
-                        .unwrap_or_default()
-                        .to_string()
-                }),
+                .and_then(|t| t.get(&spec.name))
+                .map(toml_signature),
             Err(e) => return Status::Unreadable(e),
         }
     } else {
-        let (key, _) = entry(target.client, server);
         match read_json(&target.config) {
             Ok(map) => map
                 .as_ref()
-                .and_then(|m| m.get(key))
-                .and_then(|s| s.get(SERVER_NAME))
-                .map(|s| match &s["command"] {
-                    Value::String(c) => c.clone(),
-                    Value::Array(a) => a
-                        .first()
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    _ => String::new(),
-                }),
+                .and_then(|m| m.get(servers_key(target.client)))
+                .and_then(|s| s.get(&spec.name))
+                .map(signature),
             Err(e) => return Status::Unreadable(e),
         }
     };
     match found {
         None => Status::NotInstalled,
-        Some(cmd) if cmd == wanted => Status::Installed,
-        Some(cmd) => Status::Outdated(cmd),
+        Some(sig) if sig.contains(&wanted) => Status::Installed,
+        Some(sig) => Status::Outdated(sig),
     }
 }
 
@@ -524,21 +703,56 @@ fn write_config(config: &Path, text: &str) -> Result<()> {
     write_text_atomic(config, text)
 }
 
-fn manual(target: &Target, server: &Path, why: &str) -> CoreError {
+fn manual(target: &Target, spec: &Spec, why: &str) -> CoreError {
     CoreError::Config(format!(
         "{} can't be changed automatically ({why}). Add it manually:\n{}",
         target.config.display(),
-        snippet(target, server)
+        snippet(target, spec)
     ))
 }
 
-/// Adds or updates the server by editing the config file.
-pub fn install_file(target: &Target, server: &Path) -> Result<()> {
-    if !target.client.editable() {
-        return Err(manual(target, server, "YAML/script format"));
+fn toml_strings<'a>(items: impl IntoIterator<Item = &'a String>) -> toml_edit::Array {
+    items.into_iter().map(|s| s.as_str()).collect()
+}
+
+fn toml_table(pairs: &[(String, String)]) -> toml_edit::InlineTable {
+    pairs
+        .iter()
+        .map(|(k, v)| (k.as_str(), toml_edit::Value::from(v.as_str())))
+        .collect()
+}
+
+/// Codex's `[mcp_servers.<name>]` table.
+fn codex_table(spec: &Spec) -> toml_edit::Table {
+    let mut table = toml_edit::Table::new();
+    match &spec.transport {
+        Transport::Stdio { command, args, env } => {
+            table["command"] = toml_edit::value(command.as_str());
+            table["args"] = toml_edit::value(toml_strings(args));
+            if !env.is_empty() {
+                table["env"] = toml_edit::value(toml_table(env));
+            }
+        }
+        Transport::Http { url, headers } => {
+            table["url"] = toml_edit::value(url.as_str());
+            if let Some(var) = spec.bearer_env() {
+                table["bearer_token_env_var"] = toml_edit::value(var);
+            } else if !headers.is_empty() {
+                table["http_headers"] = toml_edit::value(toml_table(headers));
+            }
+        }
     }
+    table
+}
+
+/// Adds or updates the server by editing the config file.
+pub fn install_file(target: &Target, spec: &Spec) -> Result<()> {
+    if !target.client.editable() {
+        return Err(manual(target, spec, "YAML/script format"));
+    }
+    let legacy = spec.name == SERVER_NAME;
     if target.client == Client::Codex {
-        let mut doc = read_toml(&target.config).map_err(|e| manual(target, server, &e))?;
+        let mut doc = read_toml(&target.config).map_err(|e| manual(target, spec, &e))?;
         let servers = doc
             .entry("mcp_servers")
             .or_insert_with(|| {
@@ -547,34 +761,35 @@ pub fn install_file(target: &Target, server: &Path) -> Result<()> {
                 toml_edit::Item::Table(t)
             })
             .as_table_mut()
-            .ok_or_else(|| manual(target, server, "mcp_servers is not a table"))?;
-        let mut table = toml_edit::Table::new();
-        table["command"] = toml_edit::value(server.display().to_string());
-        table["args"] = toml_edit::value(toml_edit::Array::new());
-        servers[SERVER_NAME] = toml_edit::Item::Table(table);
-        servers.remove(LEGACY_SERVER_NAME);
+            .ok_or_else(|| manual(target, spec, "mcp_servers is not a table"))?;
+        servers[spec.name.as_str()] = toml_edit::Item::Table(codex_table(spec));
+        if legacy {
+            servers.remove(LEGACY_SERVER_NAME);
+        }
         return write_config(&target.config, &doc.to_string());
     }
     let mut map = read_json(&target.config)
-        .map_err(|e| manual(target, server, &e))?
+        .map_err(|e| manual(target, spec, &e))?
         .unwrap_or_default();
-    let (key, value) = entry(target.client, server);
+    let (key, value) = entry(target.client, spec);
     let servers = map.entry(key).or_insert_with(|| Value::Object(Map::new()));
     let Value::Object(servers) = servers else {
-        return Err(manual(target, server, &format!("{key} is not an object")));
+        return Err(manual(target, spec, &format!("{key} is not an object")));
     };
-    servers.insert(SERVER_NAME.into(), value);
-    servers.remove(LEGACY_SERVER_NAME);
+    servers.insert(spec.name.clone(), value);
+    if legacy {
+        servers.remove(LEGACY_SERVER_NAME);
+    }
     let text = serde_json::to_string_pretty(&Value::Object(map))
         .map_err(|e| CoreError::Config(e.to_string()))?;
     write_config(&target.config, &format!("{text}\n"))
 }
 
 /// Removes the server entry (other servers and settings stay).
-pub fn uninstall_file(target: &Target) -> Result<()> {
+pub fn uninstall_file(target: &Target, name: &str) -> Result<()> {
     if !target.client.editable() {
         return Err(CoreError::Config(format!(
-            "Remove the `{SERVER_NAME}` entry from {} manually.",
+            "Remove the `{name}` entry from {} manually.",
             target.config.display()
         )));
     }
@@ -584,47 +799,62 @@ pub fn uninstall_file(target: &Target) -> Result<()> {
     if target.client == Client::Codex {
         let mut doc = read_toml(&target.config).map_err(CoreError::Config)?;
         if let Some(servers) = doc.get_mut("mcp_servers").and_then(|t| t.as_table_mut()) {
-            servers.remove(SERVER_NAME);
+            servers.remove(name);
         }
         return write_config(&target.config, &doc.to_string());
     }
     let Some(mut map) = read_json(&target.config).map_err(CoreError::Config)? else {
         return Ok(());
     };
-    let (key, _) = entry(target.client, Path::new(""));
-    if let Some(Value::Object(servers)) = map.get_mut(key) {
-        servers.remove(SERVER_NAME);
+    if let Some(Value::Object(servers)) = map.get_mut(servers_key(target.client)) {
+        servers.remove(name);
     }
     let text = serde_json::to_string_pretty(&Value::Object(map))
         .map_err(|e| CoreError::Config(e.to_string()))?;
     write_config(&target.config, &format!("{text}\n"))
 }
 
+fn yaml_list(items: &[String]) -> String {
+    let quoted: Vec<String> = items.iter().map(|a| format!("{a:?}")).collect();
+    format!("[{}]", quoted.join(", "))
+}
+
 /// What to paste by hand when the file can't be edited safely.
-pub fn snippet(target: &Target, server: &Path) -> String {
-    let cmd = server.display();
+pub fn snippet(target: &Target, spec: &Spec) -> String {
+    let name = &spec.name;
+    let (cmd, args, _) = spec.as_stdio();
     match target.client {
         Client::Goose => {
             return format!(
-                "extensions:\n  {SERVER_NAME}:\n    type: stdio\n    name: {SERVER_NAME}\n    cmd: {cmd}\n    args: []\n    enabled: true\n    envs: {{}}\n    timeout: 300\n"
+                "extensions:\n  {name}:\n    type: stdio\n    name: {name}\n    cmd: {cmd}\n    args: {}\n    enabled: true\n    envs: {{}}\n    timeout: 300\n",
+                yaml_list(&args)
             );
         }
         Client::Continue => {
             return format!(
-                "mcpServers:\n  - name: {SERVER_NAME}\n    type: stdio\n    command: {cmd}\n    args: []\n"
+                "mcpServers:\n  - name: {name}\n    type: stdio\n    command: {cmd}\n    args: {}\n",
+                yaml_list(&args)
             );
         }
-        Client::Crush => return format!("mcp add {SERVER_NAME} --command {cmd}\n"),
+        Client::Crush => {
+            let mut line = format!("mcp add {name} --command {cmd}");
+            for a in &args {
+                line.push_str(&format!(" --arg {a}"));
+            }
+            return format!("{line}\n");
+        }
         _ => {}
     }
     if target.client == Client::Codex {
-        return format!(
-            "[mcp_servers.{SERVER_NAME}]\ncommand = \"{}\"\nargs = []",
-            server.display()
-        );
+        let mut doc = toml_edit::DocumentMut::new();
+        let mut servers = toml_edit::Table::new();
+        servers.set_implicit(true);
+        servers[name.as_str()] = toml_edit::Item::Table(codex_table(spec));
+        doc["mcp_servers"] = toml_edit::Item::Table(servers);
+        return doc.to_string().trim_end().to_string();
     }
-    let (key, value) = entry(target.client, server);
-    let wrapped = json!({ key: { SERVER_NAME: value } });
+    let (key, value) = entry(target.client, spec);
+    let wrapped = json!({ key: { name.as_str(): value } });
     serde_json::to_string_pretty(&wrapped).unwrap_or_default()
 }
 
@@ -637,7 +867,7 @@ pub struct CliCall {
     pub env: Vec<(String, Option<PathBuf>)>,
 }
 
-fn cli_call(target: &Target, cli: &Path, args: Vec<String>) -> Option<CliCall> {
+pub(crate) fn cli_call(target: &Target, cli: &Path, args: Vec<String>) -> Option<CliCall> {
     let var = target.client.profile_var()?;
     Some(CliCall {
         program: cli.to_path_buf(),
@@ -646,21 +876,57 @@ fn cli_call(target: &Target, cli: &Path, args: Vec<String>) -> Option<CliCall> {
     })
 }
 
-pub fn cli_add(target: &Target, server: &Path, cli: &Path) -> Option<CliCall> {
-    let server = server.display().to_string();
-    let args: Vec<&str> = match target.client {
-        Client::ClaudeCode => vec!["mcp", "add", "--scope", "user", SERVER_NAME, "--", &server],
-        Client::Codex => vec!["mcp", "add", SERVER_NAME, "--", &server],
+pub fn cli_add(target: &Target, spec: &Spec, cli: &Path) -> Option<CliCall> {
+    let name = spec.name.clone();
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let args: Vec<String> = match (target.client, &spec.transport) {
+        (Client::ClaudeCode, Transport::Stdio { command, args, env }) => {
+            let mut v = s(&["mcp", "add", "--scope", "user"]);
+            v.push(name);
+            for (k, val) in env {
+                v.extend(["-e".into(), format!("{k}={val}")]);
+            }
+            v.push("--".into());
+            v.push(command.clone());
+            v.extend(args.iter().cloned());
+            v
+        }
+        (Client::ClaudeCode, Transport::Http { url, headers }) => {
+            let mut v = s(&["mcp", "add", "--scope", "user", "--transport", "http"]);
+            v.extend([name, url.clone()]);
+            for (k, val) in headers {
+                v.extend(["--header".into(), format!("{k}: {val}")]);
+            }
+            v
+        }
+        (Client::Codex, Transport::Stdio { command, args, env }) => {
+            let mut v = s(&["mcp", "add"]);
+            v.push(name);
+            for (k, val) in env {
+                v.extend(["--env".into(), format!("{k}={val}")]);
+            }
+            v.push("--".into());
+            v.push(command.clone());
+            v.extend(args.iter().cloned());
+            v
+        }
+        (Client::Codex, Transport::Http { url, headers }) => {
+            let mut v = s(&["mcp", "add"]);
+            v.extend([name, "--url".into(), url.clone()]);
+            match spec.bearer_env() {
+                Some(var) => v.extend(["--bearer-token-env-var".into(), var.into()]),
+                // Other headers: only the config file can hold them.
+                None if !headers.is_empty() => return None,
+                None => {}
+            }
+            v
+        }
         _ => return None,
     };
-    cli_call(target, cli, args.into_iter().map(String::from).collect())
+    cli_call(target, cli, args)
 }
 
-pub fn cli_remove(target: &Target, cli: &Path) -> Option<CliCall> {
-    cli_remove_named(target, cli, SERVER_NAME)
-}
-
-fn cli_remove_named(target: &Target, cli: &Path, name: &str) -> Option<CliCall> {
+pub fn cli_remove(target: &Target, cli: &Path, name: &str) -> Option<CliCall> {
     let args: Vec<&str> = match target.client {
         Client::ClaudeCode => vec!["mcp", "remove", "--scope", "user", name],
         Client::Codex => vec!["mcp", "remove", name],
@@ -669,49 +935,61 @@ fn cli_remove_named(target: &Target, cli: &Path, name: &str) -> Option<CliCall> 
     cli_call(target, cli, args.into_iter().map(String::from).collect())
 }
 
-async fn run_cli(call: &CliCall) -> Result<std::process::Output> {
+pub(crate) async fn run_cli(
+    call: &CliCall,
+    timeout: std::time::Duration,
+) -> Result<std::process::Output> {
     let mut cmd = tokio::process::Command::new(&call.program);
-    cmd.args(&call.args).stdin(std::process::Stdio::null());
+    cmd.args(&call.args)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
     for (k, v) in &call.env {
         match v {
             Some(v) => cmd.env(k, v),
             None => cmd.env_remove(k),
         };
     }
-    let out = tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output())
+    let out = tokio::time::timeout(timeout, cmd.output())
         .await
-        .map_err(|_| CoreError::Config("The client's CLI didn't finish within 30 seconds. Try again, or add the server manually.".into()))??;
+        .map_err(|_| CoreError::Config(format!("The client's CLI didn't finish within {} seconds. Try again, or add the server manually.", timeout.as_secs())))??;
     Ok(out)
+}
+
+const CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn cli_error(target: &Target, out: &std::process::Output) -> CoreError {
+    CoreError::Command {
+        program: target.client.cli().unwrap_or_default().into(),
+        code: out.status.code(),
+        stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+    }
 }
 
 /// Installs (or re-points) the server for `target`: through the client's
 /// CLI when `cli` is given and supported, else by editing the file.
-pub async fn install(target: &Target, server: &Path, cli: Option<&Path>) -> Result<()> {
+pub async fn install(target: &Target, spec: &Spec, cli: Option<&Path>) -> Result<()> {
     if let Some(cli) = cli
-        && let Some(add) = cli_add(target, server, cli)
+        && let Some(add) = cli_add(target, spec, cli)
     {
-        if status(target, server) != Status::NotInstalled
-            && let Some(remove) = cli_remove(target, cli)
+        if status(target, spec) != Status::NotInstalled
+            && let Some(remove) = cli_remove(target, cli, &spec.name)
         {
-            run_cli(&remove).await?;
+            run_cli(&remove, CLI_TIMEOUT).await?;
         }
-        let out = run_cli(&add).await?;
+        let out = run_cli(&add, CLI_TIMEOUT).await?;
         if !out.status.success() {
-            return Err(CoreError::Command {
-                program: target.client.cli().unwrap_or_default().into(),
-                code: out.status.code(),
-                stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-            });
+            return Err(cli_error(target, &out));
         }
-        if has_legacy(target)
-            && let Some(remove) = cli_remove_named(target, cli, LEGACY_SERVER_NAME)
+        if spec.name == SERVER_NAME
+            && has_legacy(target)
+            && let Some(remove) = cli_remove(target, cli, LEGACY_SERVER_NAME)
         {
             // Best effort: the new entry is already in place.
-            let _ = run_cli(&remove).await;
+            let _ = run_cli(&remove, CLI_TIMEOUT).await;
         }
         return Ok(());
     }
-    install_file(target, server)
+    install_file(target, spec)
 }
 
 /// Whether the config still has the pre-rename (PG Desk) entry.
@@ -723,30 +1001,25 @@ fn has_legacy(target: &Target) -> bool {
                 .is_some()
         });
     }
-    let (key, _) = entry(target.client, Path::new(""));
     read_json(&target.config).is_ok_and(|map| {
         map.as_ref()
-            .and_then(|m| m.get(key))
+            .and_then(|m| m.get(servers_key(target.client)))
             .and_then(|s| s.get(LEGACY_SERVER_NAME))
             .is_some()
     })
 }
 
-pub async fn uninstall(target: &Target, cli: Option<&Path>) -> Result<()> {
+pub async fn uninstall(target: &Target, name: &str, cli: Option<&Path>) -> Result<()> {
     if let Some(cli) = cli
-        && let Some(remove) = cli_remove(target, cli)
+        && let Some(remove) = cli_remove(target, cli, name)
     {
-        let out = run_cli(&remove).await?;
+        let out = run_cli(&remove, CLI_TIMEOUT).await?;
         if !out.status.success() {
-            return Err(CoreError::Command {
-                program: target.client.cli().unwrap_or_default().into(),
-                code: out.status.code(),
-                stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-            });
+            return Err(cli_error(target, &out));
         }
         return Ok(());
     }
-    uninstall_file(target)
+    uninstall_file(target, name)
 }
 
 #[cfg(test)]
@@ -826,8 +1099,8 @@ mod tests {
         let targets = discover(h.path(), None);
         let t = find(&targets, Client::ClaudeCode, "default");
         let server = Path::new("/Apps/Sawit.app/Contents/MacOS/sawit-mcp");
-        assert_eq!(status(t, server), Status::NotInstalled);
-        install_file(t, server).unwrap();
+        assert_eq!(status(t, &Spec::sawit(server)), Status::NotInstalled);
+        install_file(t, &Spec::sawit(server)).unwrap();
         let text = fs::read_to_string(&t.config).unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["numStartups"], 3);
@@ -839,32 +1112,32 @@ mod tests {
         // Original key order kept, new key appended.
         let keys: Vec<_> = v.as_object().unwrap().keys().cloned().collect();
         assert_eq!(keys, ["numStartups", "projects", "mcpServers"]);
-        assert_eq!(status(t, server), Status::Installed);
+        assert_eq!(status(t, &Spec::sawit(server)), Status::Installed);
         // Backed up once, before the first change.
         let backup = fs::read_to_string(backup_path(&t.config)).unwrap();
         assert_eq!(backup, r#"{"numStartups": 3, "projects": {}}"#);
-        install_file(t, server).unwrap();
+        install_file(t, &Spec::sawit(server)).unwrap();
         assert_eq!(fs::read_to_string(backup_path(&t.config)).unwrap(), backup);
 
         // A different binary is reported, then replaced.
         let other = Path::new("/old/sawit-mcp");
         assert_eq!(
-            status(t, other),
+            status(t, &Spec::sawit(other)),
             Status::Outdated(server.display().to_string())
         );
 
-        uninstall_file(t).unwrap();
+        uninstall_file(t, SERVER_NAME).unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&t.config).unwrap()).unwrap();
         assert!(v["mcpServers"].get("sawit").is_none());
         assert_eq!(v["numStartups"], 3);
-        assert_eq!(status(t, server), Status::NotInstalled);
+        assert_eq!(status(t, &Spec::sawit(server)), Status::NotInstalled);
     }
 
     #[test]
     fn each_client_gets_its_own_entry_shape() {
         let server = "/bin/sawit-mcp";
-        let shape = |c| entry(c, Path::new(server));
+        let shape = |c| entry(c, &Spec::sawit(Path::new(server)));
         assert_eq!(shape(Client::ClaudeDesktop).0, "mcpServers");
         assert_eq!(shape(Client::Cursor).1["command"], server);
         assert_eq!(shape(Client::Zed).0, "context_servers");
@@ -881,8 +1154,11 @@ mod tests {
         let targets = discover(h.path(), None);
         let t = find(&targets, Client::Cursor, "default");
         assert!(!t.config.exists());
-        install_file(t, Path::new("/bin/sawit-mcp")).unwrap();
-        assert_eq!(status(t, Path::new("/bin/sawit-mcp")), Status::Installed);
+        install_file(t, &Spec::sawit(Path::new("/bin/sawit-mcp"))).unwrap();
+        assert_eq!(
+            status(t, &Spec::sawit(Path::new("/bin/sawit-mcp"))),
+            Status::Installed
+        );
     }
 
     #[test]
@@ -903,9 +1179,12 @@ mod tests {
         for client in [Client::Cursor, Client::Codex] {
             let t = find(&targets, client, "default");
             assert!(has_legacy(t));
-            install_file(t, Path::new("/bin/sawit-mcp")).unwrap();
+            install_file(t, &Spec::sawit(Path::new("/bin/sawit-mcp"))).unwrap();
             assert!(!has_legacy(t));
-            assert_eq!(status(t, Path::new("/bin/sawit-mcp")), Status::Installed);
+            assert_eq!(
+                status(t, &Spec::sawit(Path::new("/bin/sawit-mcp"))),
+                Status::Installed
+            );
         }
         let text = fs::read_to_string(h.path().join(".cursor/mcp.json")).unwrap();
         assert!(text.contains("\"other\""), "{text}");
@@ -922,7 +1201,7 @@ mod tests {
         .unwrap();
         let targets = discover(h.path(), None);
         let t = find(&targets, Client::Codex, "default");
-        install_file(t, Path::new("/bin/sawit-mcp")).unwrap();
+        install_file(t, &Spec::sawit(Path::new("/bin/sawit-mcp"))).unwrap();
         let text = fs::read_to_string(&config).unwrap();
         assert!(text.starts_with("# my model\nmodel = \"o3\""), "{text}");
         assert!(text.contains("[mcp_servers.other]"));
@@ -930,8 +1209,11 @@ mod tests {
             text.contains("[mcp_servers.sawit]\ncommand = \"/bin/sawit-mcp\""),
             "{text}"
         );
-        assert_eq!(status(t, Path::new("/bin/sawit-mcp")), Status::Installed);
-        uninstall_file(t).unwrap();
+        assert_eq!(
+            status(t, &Spec::sawit(Path::new("/bin/sawit-mcp"))),
+            Status::Installed
+        );
+        uninstall_file(t, SERVER_NAME).unwrap();
         let text = fs::read_to_string(&config).unwrap();
         assert!(!text.contains("sawit"), "{text}");
         assert!(text.contains("[mcp_servers.other]"));
@@ -946,13 +1228,13 @@ mod tests {
         let targets = discover(h.path(), None);
         let t = find(&targets, Client::Zed, "default");
         assert!(matches!(
-            status(t, Path::new("/bin/x")),
+            status(t, &Spec::sawit(Path::new("/bin/x"))),
             Status::Unreadable(_)
         ));
-        let err = install_file(t, Path::new("/bin/x")).unwrap_err();
+        let err = install_file(t, &Spec::sawit(Path::new("/bin/x"))).unwrap_err();
         assert!(err.to_string().contains("manual"), "{err}");
         assert_eq!(fs::read_to_string(&config).unwrap(), original);
-        assert!(snippet(t, Path::new("/bin/x")).contains("context_servers"));
+        assert!(snippet(t, &Spec::sawit(Path::new("/bin/x"))).contains("context_servers"));
     }
 
     #[test]
@@ -961,7 +1243,7 @@ mod tests {
         let targets = discover(h.path(), None);
         let server = Path::new("/bin/sawit-mcp");
         let default = find(&targets, Client::ClaudeCode, "default");
-        let inv = cli_add(default, server, Path::new("/usr/bin/claude")).unwrap();
+        let inv = cli_add(default, &Spec::sawit(server), Path::new("/usr/bin/claude")).unwrap();
         assert_eq!(
             inv.args,
             [
@@ -977,7 +1259,7 @@ mod tests {
         // The default profile must not inherit the app's CLAUDE_CONFIG_DIR.
         assert_eq!(inv.env, vec![("CLAUDE_CONFIG_DIR".to_string(), None)]);
         let work = find(&targets, Client::ClaudeCode, "work");
-        let inv = cli_add(work, server, Path::new("/usr/bin/claude")).unwrap();
+        let inv = cli_add(work, &Spec::sawit(server), Path::new("/usr/bin/claude")).unwrap();
         assert_eq!(
             inv.env,
             vec![(
@@ -986,12 +1268,12 @@ mod tests {
             )]
         );
         let codex = find(&targets, Client::Codex, "default");
-        let inv = cli_add(codex, server, Path::new("/usr/bin/codex")).unwrap();
+        let inv = cli_add(codex, &Spec::sawit(server), Path::new("/usr/bin/codex")).unwrap();
         assert_eq!(inv.args, ["mcp", "add", "sawit", "--", "/bin/sawit-mcp"]);
         assert_eq!(inv.env, vec![("CODEX_HOME".to_string(), None)]);
         // Clients without a CLI path aren't driven by one.
         let desktop = find(&targets, Client::ClaudeDesktop, "default");
-        assert!(cli_add(desktop, server, Path::new("/x")).is_none());
+        assert!(cli_add(desktop, &Spec::sawit(server), Path::new("/x")).is_none());
     }
 
     #[tokio::test]
@@ -1015,14 +1297,14 @@ mod tests {
         unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", "/somewhere/else") };
         install(
             find(&targets, Client::ClaudeCode, "default"),
-            server,
+            &Spec::sawit(server),
             Some(&cli),
         )
         .await
         .unwrap();
         install(
             find(&targets, Client::ClaudeCode, "work"),
-            server,
+            &Spec::sawit(server),
             Some(&cli),
         )
         .await
@@ -1167,18 +1449,24 @@ mod tests {
     #[test]
     fn agent_specific_entry_shapes() {
         let s = Path::new("/bin/sawit-mcp");
-        assert_eq!(entry(Client::Amp, s).0, "amp.mcpServers");
-        let copilot = entry(Client::CopilotCli, s).1;
+        assert_eq!(entry(Client::Amp, &Spec::sawit(s)).0, "amp.mcpServers");
+        let copilot = entry(Client::CopilotCli, &Spec::sawit(s)).1;
         assert_eq!(copilot["type"], "local");
         assert_eq!(copilot["tools"][0], "*");
-        assert_eq!(entry(Client::FactoryDroid, s).1["type"], "stdio");
-        assert_eq!(entry(Client::Kiro, s).1["disabled"], false);
-        assert_eq!(entry(Client::KiloCode, s).0, "mcp");
-        assert_eq!(entry(Client::KiloCode, s).1["command"][0], "/bin/sawit-mcp");
-        assert_eq!(entry(Client::VsCodeInsiders, s).0, "servers");
-        assert_eq!(entry(Client::Cursor, s).1["type"], "stdio");
         assert_eq!(
-            entry(Client::RooCode, s).1["alwaysAllow"],
+            entry(Client::FactoryDroid, &Spec::sawit(s)).1["type"],
+            "stdio"
+        );
+        assert_eq!(entry(Client::Kiro, &Spec::sawit(s)).1["disabled"], false);
+        assert_eq!(entry(Client::KiloCode, &Spec::sawit(s)).0, "mcp");
+        assert_eq!(
+            entry(Client::KiloCode, &Spec::sawit(s)).1["command"][0],
+            "/bin/sawit-mcp"
+        );
+        assert_eq!(entry(Client::VsCodeInsiders, &Spec::sawit(s)).0, "servers");
+        assert_eq!(entry(Client::Cursor, &Spec::sawit(s)).1["type"], "stdio");
+        assert_eq!(
+            entry(Client::RooCode, &Spec::sawit(s)).1["alwaysAllow"],
             serde_json::json!([])
         );
     }
@@ -1189,7 +1477,7 @@ mod tests {
         fs::create_dir_all(h.path().join(".config/amp")).unwrap();
         let targets = discover(h.path(), None);
         let t = find(&targets, Client::Amp, "default");
-        install_file(t, Path::new("/bin/sawit-mcp")).unwrap();
+        install_file(t, &Spec::sawit(Path::new("/bin/sawit-mcp"))).unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&t.config).unwrap()).unwrap();
         assert_eq!(v["amp.mcpServers"]["sawit"]["command"], "/bin/sawit-mcp");
@@ -1207,18 +1495,21 @@ mod tests {
         let server = Path::new("/bin/sawit-mcp");
         let goose = find(&targets, Client::Goose, "default");
         assert!(!goose.client.editable());
-        assert!(matches!(status(goose, server), Status::Manual));
-        assert!(install_file(goose, server).is_err());
+        assert!(matches!(
+            status(goose, &Spec::sawit(server)),
+            Status::Manual
+        ));
+        assert!(install_file(goose, &Spec::sawit(server)).is_err());
         assert_eq!(
             fs::read_to_string(&goose.config).unwrap(),
             "GOOSE_MODEL: x\n"
         );
-        assert!(snippet(goose, server).contains("cmd: /bin/sawit-mcp"));
+        assert!(snippet(goose, &Spec::sawit(server)).contains("cmd: /bin/sawit-mcp"));
         // Pasted in by hand: reported as installed.
-        fs::write(&goose.config, snippet(goose, server)).unwrap();
-        assert_eq!(status(goose, server), Status::Installed);
+        fs::write(&goose.config, snippet(goose, &Spec::sawit(server))).unwrap();
+        assert_eq!(status(goose, &Spec::sawit(server)), Status::Installed);
         let cont = find(&targets, Client::Continue, "default");
-        assert!(snippet(cont, server).contains("- name: sawit"));
+        assert!(snippet(cont, &Spec::sawit(server)).contains("- name: sawit"));
     }
 
     #[test]
@@ -1229,5 +1520,130 @@ mod tests {
         }
         assert_eq!(Client::ClaudeCode.category(), Category::Agent);
         assert_eq!(Client::Cursor.category(), Category::Editor);
+    }
+
+    #[test]
+    fn remote_servers_use_each_clients_format_or_the_bridge() {
+        let spec = Spec::http("mobbin", "https://api.mobbin.com/mcp").with_npx("/opt/bin/npx");
+        let url = "https://api.mobbin.com/mcp";
+        assert_eq!(
+            entry(Client::ClaudeCode, &spec).1,
+            json!({"type": "http", "url": url})
+        );
+        assert_eq!(entry(Client::Gemini, &spec).1["httpUrl"], url);
+        assert_eq!(entry(Client::Windsurf, &spec).1["serverUrl"], url);
+        assert_eq!(entry(Client::OpenCode, &spec).1["type"], "remote");
+        assert_eq!(
+            entry(Client::Zed, &spec),
+            ("context_servers", json!({"url": url}))
+        );
+        // Claude Desktop only runs programs: the mcp-remote bridge.
+        assert_eq!(
+            entry(Client::ClaudeDesktop, &spec).1,
+            json!({"command": "/opt/bin/npx", "args": ["-y", "mcp-remote", url]})
+        );
+        let keyed =
+            Spec::http("es", "https://es.dev/mcp").header("Authorization", "Bearer ${ES_KEY}");
+        assert_eq!(
+            entry(Client::Cursor, &keyed).1["headers"]["Authorization"],
+            "Bearer ${ES_KEY}"
+        );
+        assert_eq!(
+            entry(Client::ClaudeDesktop, &keyed).1["args"],
+            json!([
+                "-y",
+                "mcp-remote",
+                "https://es.dev/mcp",
+                "--header",
+                "Authorization:Bearer ${ES_KEY}"
+            ])
+        );
+    }
+
+    #[test]
+    fn remote_servers_install_and_report_status() {
+        let h = home();
+        let targets = discover(h.path(), None);
+        let spec = Spec::http("aws", "https://aws-mcp.us-east-1.api.aws/mcp");
+        for client in [Client::ClaudeCode, Client::ClaudeDesktop, Client::Codex] {
+            let t = find(&targets, client, "default");
+            assert_eq!(status(t, &spec), Status::NotInstalled);
+            install_file(t, &spec).unwrap();
+            assert_eq!(status(t, &spec), Status::Installed, "{client:?}");
+            // Another region is the same server pointing elsewhere.
+            let other = Spec::http("aws", "https://aws-mcp.eu-west-1.api.aws/mcp");
+            assert!(
+                matches!(status(t, &other), Status::Outdated(_)),
+                "{client:?}"
+            );
+            uninstall_file(t, "aws").unwrap();
+            assert_eq!(status(t, &spec), Status::NotInstalled);
+        }
+        let codex = find(&targets, Client::Codex, "default");
+        let keyed =
+            Spec::http("es", "https://es.dev/mcp").header("Authorization", "Bearer ${ES_KEY}");
+        install_file(codex, &keyed).unwrap();
+        let text = fs::read_to_string(&codex.config).unwrap();
+        assert!(text.contains("url = \"https://es.dev/mcp\""), "{text}");
+        assert!(text.contains("bearer_token_env_var = \"ES_KEY\""), "{text}");
+        // A local server added by hand with a bare `npx` is still recognised.
+        let claude = find(&targets, Client::ClaudeCode, "default");
+        install_file(
+            claude,
+            &Spec::stdio(
+                "rea",
+                "npx",
+                vec!["-y".into(), "rea-agents@6.3.0".into(), "mcp".into()],
+            ),
+        )
+        .unwrap();
+        let resolved = Spec::stdio(
+            "rea",
+            "/opt/homebrew/bin/npx",
+            vec!["-y".into(), "rea-agents@6.3.0".into(), "mcp".into()],
+        );
+        assert_eq!(status(claude, &resolved), Status::Installed);
+    }
+
+    #[test]
+    fn remote_servers_go_through_the_cli() {
+        let h = home();
+        let targets = discover(h.path(), None);
+        let spec =
+            Spec::http("es", "https://es.dev/mcp").header("Authorization", "Bearer ${ES_KEY}");
+        let claude = find(&targets, Client::ClaudeCode, "work");
+        let call = cli_add(claude, &spec, Path::new("/bin/claude")).unwrap();
+        assert_eq!(
+            call.args,
+            [
+                "mcp",
+                "add",
+                "--scope",
+                "user",
+                "--transport",
+                "http",
+                "es",
+                "https://es.dev/mcp",
+                "--header",
+                "Authorization: Bearer ${ES_KEY}"
+            ]
+        );
+        let codex = find(&targets, Client::Codex, "default");
+        let call = cli_add(codex, &spec, Path::new("/bin/codex")).unwrap();
+        assert_eq!(
+            call.args,
+            [
+                "mcp",
+                "add",
+                "es",
+                "--url",
+                "https://es.dev/mcp",
+                "--bearer-token-env-var",
+                "ES_KEY"
+            ]
+        );
+        // Codex's CLI can't take other headers: the file is edited instead.
+        let custom = Spec::http("x", "https://x.dev/mcp").header("X-Team", "a");
+        assert!(cli_add(codex, &custom, Path::new("/bin/codex")).is_none());
     }
 }
