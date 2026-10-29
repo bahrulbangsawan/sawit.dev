@@ -14,6 +14,7 @@ pub mod policy;
 pub mod shortcuts;
 pub mod skeleton;
 pub mod store;
+pub mod summary;
 pub mod toolbar;
 pub mod view;
 

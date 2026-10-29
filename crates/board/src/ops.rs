@@ -2,9 +2,14 @@
 //! wire contract"), run on a [`BoardDoc`] and answered as JSON.
 //!
 //! Every answer is `{ok: true, ...}` or `{ok: false, error}`, and an op never panics: a failure of
-//! the engine, or an op that is malformed, is an `error` the agent can read. For now there are two
-//! ops, `get` and `command`; the others of the contract get their own answer, "<op> is not
-//! supported yet".
+//! the engine, or an op that is malformed, is an `error` the agent can read. The ops are `get`,
+//! `add`, `update`, `delete`, `clear`, `replace`, `command` and `commands`; the others of the
+//! contract get their own answer, "<op> is not supported yet".
+//!
+//! Each op that draws, changes or removes layers (all but `command`, which is the engine's) is one
+//! undo step, and when the engine refuses a part of it, none of it is done. A layer is named by the
+//! id an agent gave it when it drew it, or by its node id ([`skeleton::resolve`]): an agent's id
+//! wins.
 //!
 //! A canvas holds one document, and the view saves the one on show over the canvas's file, so no
 //! `command` op may leave another document open or on show. The ones that do that by name are
@@ -12,13 +17,19 @@
 //! command that does it anyway (`file.recover`, `version.duplicate`, `branch.create`...) is undone
 //! and answers an error.
 
+use std::ffi::OsStr;
 use std::fmt::Display;
+use std::path::Path;
 
-use figcraft_engine::{EngineError, Session};
-use serde_json::{Value, json};
+use figcraft_doc::{BoardItem, Document, NodeId};
+use figcraft_engine::{EngineError, Result as EngineResult, Session};
+use serde::Deserialize;
+use serde_json::{Map, Value, json};
 use thiserror::Error;
 
 use crate::doc::{BoardDoc, BoardError};
+use crate::skeleton::{self, Applied, Label, Skeleton};
+use crate::{policy, summary};
 
 /// The commands the `command` op refuses: they switch, open, close or write documents behind the
 /// canvas's store. Sawit does these itself.
@@ -40,24 +51,58 @@ const HANDLED_BY_SAWIT: &[&str] = &[
     "doc.previousTab",
 ];
 
+/// The commands that open a document in the session. The `command` op never leaves one open
+/// ([`Documents`] undoes it), so none of these can succeed through it.
+const OPENS_DOCUMENTS: &[&str] = &["file.recover", "version.duplicate", "branch.open"];
+
 /// The command that runs other commands as its steps.
 const BATCH: &str = "command.batch";
 
 /// Runs `op` (an object whose `op` is the op's name) on `board` and answers it: `{ok: true, ...}`,
 /// or `{ok: false, error}`.
 ///
-/// - `get` answers `{ok, elements}`: the top-level layers of the page on show, back to front, as
-///   `{id, type: "other", name, x, y, width, height}`. The `id` is the layer's FigCraft node id as a
-///   string, and the box is its bounds in page coordinates.
+/// - `get` answers `{ok, elements}`: a summary ([`summary::summarize`]) of each top-level layer of
+///   the page on show, back to front.
+/// - `add` (`{elements: [Skeleton]}`) draws the elements ([`skeleton::apply`]) and answers
+///   `{ok, added, ids, notes?}`: the node id of each element drawn, in the order they were given,
+///   and a note for each one skipped. A skipped element has no id, so `ids[i]` is `elements[i]`
+///   only when nothing before it was skipped. What an element leaves out is its default: a missing
+///   `x` or `y` is 0, and an arrow or a line with no points, size or end is drawn 100 long.
+/// - `update` (`{elements: [{id, ...}]}`) changes the layers the ids name, and answers
+///   `{ok, updated, missing, notes?}`: how many it found, and the ids it didn't. An element can
+///   change:
+///   - `x`, `y`, `width` and `height`: the layer's box, in page coordinates, as `get` gives it;
+///   - `text` (or `label.text`): a connector's label, the note of a sticky, the text of a shape or
+///     of a text layer;
+///   - `name`: the layer's name, a section's title;
+///   - `backgroundColor` and `strokeColor`, by the rules `add` colours by ([`skeleton::set_colors`]).
+///
+///   The rest of an element is ignored. So is a `text` that a layer has no place for (ink, a
+///   section), with a note.
+/// - `delete` (`{ids}`) answers `{ok, deleted, missing}`. A connector's label goes with it.
+/// - `clear` deletes every top-level layer of the page on show, and answers `{ok}`.
+/// - `replace` (`{path}`) loads the `.figcraft` file at `path` in place of the canvas's pages and
+///   answers `{ok, elements}` as `get` does. It runs in the canvas's own session, so the canvas
+///   stays what it is (a board, with its file), and undo brings the old pages back. A file that
+///   can't be read is an error and changes nothing. Excalidraw (a `scene`, or an `.excalidraw`
+///   file) is for the importer to take, and is refused until it does.
 /// - `command` (`{command, params?}`) runs engine command `command` and answers `{ok, result}`,
 ///   or the engine's own `error`. It refuses the commands Sawit handles itself, as the steps of a
 ///   `command.batch` too ("<id> is handled by Sawit"). A command that would leave the canvas with
 ///   another document open or on show is undone and answers "<id> would open or switch documents;
 ///   the canvas keeps its one document".
+/// - `commands` answers `{ok, commands: [{id, label, params}]}`: the engine's commands that
+///   `command` runs and that the canvas doesn't hide, with the parameters each documents.
 pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
     match op.get("op").and_then(Value::as_str) {
         Some("get") => get(board),
+        Some("add") => add(board, op),
+        Some("update") => update(board, op),
+        Some("delete") => delete(board, op),
+        Some("clear") => clear(board),
+        Some("replace") => replace(board, op),
         Some("command") => command(board, op),
+        Some("commands") => commands(),
         Some(other) => failure(format!("{other} is not supported yet")),
         None => failure(r#"an op needs a name, like {"op": "get"}"#),
     }
@@ -69,35 +114,374 @@ fn failure(error: impl Display) -> Value {
 }
 
 fn get(board: &BoardDoc) -> Value {
-    match layers(board) {
+    match summaries(board) {
         Ok(elements) => json!({"ok": true, "elements": elements}),
         Err(error) => failure(error),
     }
 }
 
-/// The top-level layers of the page on show, back to front.
-fn layers(board: &BoardDoc) -> Result<Vec<Value>, BoardError> {
+/// The summaries of the layers of the page on show.
+fn summaries(board: &BoardDoc) -> Result<Vec<Value>, BoardError> {
     let ds = board.session.ds()?;
-    let doc = &ds.doc;
-    let Some(page) = doc.node(ds.page) else {
-        return Ok(Vec::new());
+    Ok(summary::summarize(&ds.doc, ds.page))
+}
+
+/// The top-level layers of the page on show, a connector's label among them.
+fn page_layers(board: &BoardDoc) -> Result<Vec<NodeId>, BoardError> {
+    let ds = board.session.ds()?;
+    let page = ds.doc.node(ds.page);
+    Ok(page.map(|page| page.children.clone()).unwrap_or_default())
+}
+
+/// An id as text: a string that isn't empty, or a number (the engine's node ids are numbers).
+fn id_text(id: &Value) -> Option<String> {
+    match id {
+        Value::String(id) if !id.is_empty() => Some(id.clone()),
+        Value::Number(id) => Some(id.to_string()),
+        _ => None,
+    }
+}
+
+/// The layer `id` names, for an op: an agent's id, else a node id ([`skeleton::resolve`]), if it
+/// is a layer of a page. The page is no element, though its node id is a number like the others'.
+fn layer_named(doc: &Document, id: &str) -> Option<NodeId> {
+    let layer = skeleton::resolve(doc, id)?;
+    let is_page = doc.node(layer)?.is_page();
+    (!is_page && doc.page_of(layer).is_some()).then_some(layer)
+}
+
+fn add(board: &mut BoardDoc, op: &Value) -> Value {
+    let items = match skeletons(op) {
+        Ok(items) => items,
+        Err(error) => return failure(format!("add: {error}")),
     };
-    Ok(page
-        .children
+    match skeleton::apply(board, &items, (0.0, 0.0)) {
+        Ok(applied) => added(&applied),
+        Err(error) => failure(format!("add: {error}")),
+    }
+}
+
+/// The elements of an `add`, each read as a [`Skeleton`].
+fn skeletons(op: &Value) -> Result<Vec<Skeleton>, String> {
+    let items = op.get("elements").and_then(Value::as_array).ok_or(
+        r#"it needs the elements to draw, like {"elements": [{"type": "rectangle", "x": 0, "y": 0}]}"#,
+    )?;
+    items
         .iter()
-        .filter_map(|&id| {
-            let (node, bounds) = (doc.node(id)?, doc.world_bounds(id)?);
-            Some(json!({
-                "id": id.to_string(),
-                "type": "other",
-                "name": node.name,
-                "x": bounds.x0,
-                "y": bounds.y0,
-                "width": bounds.width(),
-                "height": bounds.height(),
-            }))
+        .enumerate()
+        .map(|(index, item)| {
+            Skeleton::deserialize(item).map_err(|error| format!("elements[{index}]: {error}"))
         })
-        .collect())
+        .collect()
+}
+
+/// `{ok, added, ids}` for what `apply` made, and the `notes` on what it skipped when it skipped
+/// something.
+fn added(applied: &Applied) -> Value {
+    let mut reply = json!({"ok": true, "added": applied.ids.len(), "ids": applied.ids});
+    if !applied.notes.is_empty() {
+        reply["notes"] = json!(applied.notes);
+    }
+    reply
+}
+
+/// One element of an `update`: the layer it names, and what it changes.
+struct Change {
+    id: String,
+    fields: Fields,
+}
+
+/// What an `update` element can change. What it leaves out stays as it is, and any other key is
+/// ignored.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct Fields {
+    x: Option<f64>,
+    y: Option<f64>,
+    width: Option<f64>,
+    height: Option<f64>,
+    text: Option<String>,
+    label: Option<Label>,
+    name: Option<String>,
+    #[serde(rename = "backgroundColor")]
+    background_color: Option<String>,
+    #[serde(rename = "strokeColor")]
+    stroke_color: Option<String>,
+}
+
+impl Change {
+    fn read(item: &Value) -> Result<Self, String> {
+        let id = item
+            .get("id")
+            .and_then(id_text)
+            .ok_or("it needs the `id` of a layer")?;
+        let fields = Fields::deserialize(item).map_err(|error| error.to_string())?;
+        Ok(Self { id, fields })
+    }
+
+    /// The text to set: `text`, else the `label`'s, as for a shape in a skeleton.
+    fn text(&self) -> Option<&str> {
+        let label = self.fields.label.as_ref().map(|label| label.text.as_str());
+        self.fields.text.as_deref().or(label)
+    }
+}
+
+/// The elements of an `update`.
+fn changes(op: &Value) -> Result<Vec<Change>, String> {
+    let items = op
+        .get("elements")
+        .and_then(Value::as_array)
+        .ok_or(r#"it needs the changes to make, like {"elements": [{"id": "a", "x": 10}]}"#)?;
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            Change::read(item).map_err(|error| format!("elements[{index}]: {error}"))
+        })
+        .collect()
+}
+
+fn update(board: &mut BoardDoc, op: &Value) -> Value {
+    let changes = match changes(op) {
+        Ok(changes) => changes,
+        Err(error) => return failure(format!("update: {error}")),
+    };
+    let (mut updated, mut missing, mut notes) = (0, Vec::new(), Vec::new());
+    let result = board.session.grouped("Update elements", |session| {
+        for (index, change) in changes.iter().enumerate() {
+            let Some(layer) = layer_named(session.doc()?, &change.id) else {
+                missing.push(change.id.clone());
+                continue;
+            };
+            change_layer(session, layer, index, change, &mut notes).map_err(|error| {
+                EngineError::Other(format!("elements[{index}] ({}): {error}", change.id))
+            })?;
+            updated += 1;
+        }
+        Ok(())
+    });
+    match result {
+        Ok(()) => {
+            let mut reply = json!({"ok": true, "updated": updated, "missing": missing});
+            if !notes.is_empty() {
+                reply["notes"] = json!(notes);
+            }
+            reply
+        }
+        Err(error) => failure(format!("update: {error}")),
+    }
+}
+
+/// The numbers of `pairs` that are given, as params.
+fn numbers<const N: usize>(pairs: [(&str, Option<f64>); N]) -> Map<String, Value> {
+    pairs
+        .into_iter()
+        .filter_map(|(key, number)| Some((key.to_string(), json!(number?))))
+        .collect()
+}
+
+/// Makes `change`, element `index` of an `update`, to `layer`: its size, then its place (so that
+/// it ends with the top-left it was given), its text, its name (which wins over what the text
+/// would name the layer) and its colours.
+///
+/// A place is in page coordinates, the ones `get` shows and `add` takes, whatever the layer is
+/// inside of: `node.set`'s `x` and `y` are the parent's, and a layer put into a frame by its
+/// `frameId` would land elsewhere.
+fn change_layer(
+    session: &mut Session,
+    layer: NodeId,
+    index: usize,
+    change: &Change,
+    notes: &mut Vec<String>,
+) -> EngineResult<()> {
+    let fields = &change.fields;
+    let size = numbers([("width", fields.width), ("height", fields.height)]);
+    if !size.is_empty() {
+        session.execute("node.set", &json!({"ids": [layer], "props": size}))?;
+    }
+    let mut at = numbers([("x", fields.x), ("y", fields.y)]);
+    if !at.is_empty() {
+        at.insert("ids".into(), json!([layer]));
+        session.execute("transform.moveTo", &Value::Object(at))?;
+    }
+    if let Some(text) = change.text()
+        && !set_text(session, layer, text)?
+    {
+        let kind = summary::element_type(session.doc()?, layer);
+        notes.push(format!(
+            "elements[{index}]: `text` is ignored, because a layer of type {kind} has no text"
+        ));
+    }
+    if let Some(name) = &fields.name {
+        let props = json!({"name": name});
+        session.execute("node.set", &json!({"ids": [layer], "props": props}))?;
+    }
+    if fields.background_color.is_some() || fields.stroke_color.is_some() {
+        skeleton::set_colors(
+            session,
+            layer,
+            fields.background_color.as_deref(),
+            fields.stroke_color.as_deref(),
+        )?;
+    }
+    Ok(())
+}
+
+/// Sets the text of `layer`: the label of a connector (an empty one removes it), the note of a
+/// sticky, the text of a shape or of a text layer. `false` when the layer has no text to set.
+fn set_text(session: &mut Session, layer: NodeId, text: &str) -> EngineResult<bool> {
+    enum Place {
+        Label,
+        Layer(NodeId),
+        Nowhere,
+    }
+    let place = {
+        let doc = session.doc()?;
+        match doc.node(layer).and_then(|node| node.board.as_ref()) {
+            Some(BoardItem::Connector(_) | BoardItem::Label { .. }) => Place::Label,
+            _ => summary::text_layer(doc, layer).map_or(Place::Nowhere, Place::Layer),
+        }
+    };
+    match place {
+        Place::Label => {
+            session.execute("board.label", &json!({"id": layer, "text": text}))?;
+        }
+        Place::Layer(text_layer) => {
+            let props = json!({"characters": text});
+            session.execute("node.set", &json!({"ids": [text_layer], "props": props}))?;
+        }
+        Place::Nowhere => return Ok(false),
+    }
+    Ok(true)
+}
+
+fn delete(board: &mut BoardDoc, op: &Value) -> Value {
+    let ids = match id_list(op) {
+        Ok(ids) => ids,
+        Err(error) => return failure(format!("delete: {error}")),
+    };
+    let doc = match board.doc() {
+        Ok(doc) => doc,
+        Err(error) => return failure(format!("delete: {error}")),
+    };
+    let (mut found, mut missing) = (Vec::new(), Vec::new());
+    for id in ids {
+        match layer_named(&doc, &id) {
+            Some(layer) if !found.contains(&layer) => found.push(layer),
+            Some(_) => {}
+            None => missing.push(id),
+        }
+    }
+    // Without layers the engine's delete takes the selection, so it isn't asked.
+    if !found.is_empty() {
+        let selection = board.session.selection();
+        if let Err(error) = board.execute("edit.delete", &json!({"ids": found})) {
+            return failure(format!("delete: {error}"));
+        }
+        // The selection is the user's: what the deletion left of it stays selected.
+        if !selection.is_empty() {
+            board.session.set_selection(selection);
+        }
+    }
+    json!({"ok": true, "deleted": found.len(), "missing": missing})
+}
+
+/// The `ids` of a `delete`, each an id as [`id_text`] reads it.
+fn id_list(op: &Value) -> Result<Vec<String>, String> {
+    let ids = op
+        .get("ids")
+        .and_then(Value::as_array)
+        .ok_or(r#"it needs the ids to delete, like {"ids": ["a", "b"]}"#)?;
+    ids.iter()
+        .enumerate()
+        .map(|(index, id)| id_text(id).ok_or_else(|| format!("ids[{index}] is not an id")))
+        .collect()
+}
+
+fn clear(board: &mut BoardDoc) -> Value {
+    let layers = match page_layers(board) {
+        Ok(layers) => layers,
+        Err(error) => return failure(format!("clear: {error}")),
+    };
+    // Without layers the engine's delete takes the selection, so it isn't asked.
+    if layers.is_empty() {
+        return json!({"ok": true});
+    }
+    let cleared = board.session.grouped("Clear canvas", |session| {
+        session.execute("edit.delete", &json!({"ids": layers}))
+    });
+    match cleared {
+        Ok(_) => json!({"ok": true}),
+        Err(error) => failure(format!("clear: {error}")),
+    }
+}
+
+fn replace(board: &mut BoardDoc, op: &Value) -> Value {
+    if op.get("scene").is_some_and(|scene| !scene.is_null()) {
+        return failure("replace: an Excalidraw scene can't be loaded yet");
+    }
+    let Some(path) = op.get("path").and_then(Value::as_str) else {
+        return failure(
+            r#"replace needs the file to load, like {"op": "replace", "path": "/path/to/board.figcraft"}"#,
+        );
+    };
+    let extension = Path::new(path).extension().and_then(OsStr::to_str);
+    match extension.map(str::to_ascii_lowercase).as_deref() {
+        Some("figcraft") => {}
+        Some("excalidraw") => return failure("replace: an .excalidraw file can't be loaded yet"),
+        _ => {
+            return failure(format!(
+                "replace: {path} is not a .figcraft or .excalidraw file"
+            ));
+        }
+    }
+    match replace_pages(board, path) {
+        Ok(()) => get(board),
+        Err(error) => failure(format!("replace: {error}")),
+    }
+}
+
+/// Replaces the pages of the canvas with those of the `.figcraft` file at `path`, in the canvas's
+/// own session as one undo step: the file's pages are added to the document, then the old ones are
+/// deleted. A file that can't be read fails the step, and the canvas is as it was.
+///
+/// The canvas keeps its document, so it stays a board (a design file's frames come in as layers of
+/// one), keeps its file and what is saved of it, and undo brings the old pages back.
+fn replace_pages(board: &mut BoardDoc, path: &str) -> Result<(), BoardError> {
+    board.session.grouped("Replace canvas", |session| {
+        let old = session.doc()?.pages.clone();
+        session.execute("file.import", &json!({"path": path}))?;
+        for page in old {
+            session.execute("page.delete", &json!({"id": page}))?;
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn commands() -> Value {
+    let commands: Vec<Value> = figcraft_engine::cmd::all_commands()
+        .iter()
+        .filter(|command| listed(command.id))
+        .map(|command| json!({"id": command.id, "label": command.label, "params": command.params}))
+        .collect();
+    json!({"ok": true, "commands": commands})
+}
+
+/// Whether the `commands` op offers command `id`: the canvas doesn't hide it, and the `command`
+/// op runs it to a result. That one rule leaves out what Sawit does itself ([`HANDLED_BY_SAWIT`],
+/// the save and the like) and what only opens a document ([`OPENS_DOCUMENTS`]), so every command
+/// listed is one an agent can call.
+fn listed(id: &str) -> bool {
+    !policy::is_hidden(id) && handled(id).is_none() && !OPENS_DOCUMENTS.contains(&id)
+}
+
+/// The command in [`HANDLED_BY_SAWIT`] that `id` is, if it is one.
+fn handled(id: &str) -> Option<&'static str> {
+    HANDLED_BY_SAWIT
+        .iter()
+        .find(|handled| **handled == id)
+        .copied()
 }
 
 fn command(board: &mut BoardDoc, op: &Value) -> Value {
@@ -139,8 +523,8 @@ enum Failed {
 /// The command in [`HANDLED_BY_SAWIT`] that running `id` with `params` would reach, if any: `id`
 /// itself, or a step of a `command.batch`, however deeply batches are nested.
 fn refused(id: &str, params: &Value) -> Option<&'static str> {
-    if let Some(handled) = HANDLED_BY_SAWIT.iter().find(|handled| **handled == id) {
-        return Some(*handled);
+    if let Some(handled) = handled(id) {
+        return Some(handled);
     }
     if id != BATCH {
         return None;
@@ -229,9 +613,12 @@ fn batch(board: &mut BoardDoc, params: &Value) -> Result<Value, Failed> {
 mod tests {
     use std::sync::Arc;
 
+    use figcraft_color::{Color, Paint};
+    use figcraft_doc::{BoardItem, Document, NodeId};
     use serde_json::json;
 
     use super::*;
+    use crate::doc::DocKind;
     use crate::policy;
 
     fn board() -> BoardDoc {
@@ -316,7 +703,7 @@ mod tests {
         for element in &elements {
             let id = element["id"].as_str().expect("an id string");
             assert!(id.parse::<u64>().is_ok(), "{id} is not a number");
-            assert_eq!(element["type"], json!("other"));
+            assert_eq!(element["type"], json!("sticky"));
         }
         let ids: Vec<String> = top_level.iter().map(ToString::to_string).collect();
         assert_eq!(elements[0]["id"], json!(ids[0]));
@@ -810,6 +1197,980 @@ mod tests {
         }
     }
 
+    /// A design file, which takes no board objects.
+    fn design() -> BoardDoc {
+        let bytes = figcraft_format::save_bytes(&Document::new("Design"), None).unwrap();
+        BoardDoc::from_bytes(&bytes).unwrap()
+    }
+
+    /// Sends `op`, which has to answer `{ok: true, ...}`.
+    fn ask(board: &mut BoardDoc, op: Value) -> Value {
+        let reply = run(board, &op);
+        assert_eq!(reply["ok"], json!(true), "{op}: {reply}");
+        reply
+    }
+
+    /// Sends `op`, which has to answer `{ok: false, error}`, and gives the error.
+    fn refusal(board: &mut BoardDoc, op: Value) -> String {
+        let reply = run(board, &op);
+        assert_eq!(reply["ok"], json!(false), "{op}: {reply}");
+        let error = reply["error"].as_str().expect("an error string");
+        error.to_string()
+    }
+
+    /// Adds `elements` with the `add` op and gives the ids it answered.
+    fn add(board: &mut BoardDoc, elements: Value) -> Vec<String> {
+        let reply = ask(board, json!({"op": "add", "elements": elements}));
+        let ids = reply["ids"].as_array().expect("ids");
+        ids.iter()
+            .map(|id| id.as_str().unwrap().to_string())
+            .collect()
+    }
+
+    /// The element `get` lists under `id`.
+    fn listed(board: &mut BoardDoc, id: &str) -> Value {
+        let found = elements(board).into_iter().find(|e| e["id"] == json!(id));
+        found.unwrap_or_else(|| panic!("{id} is not listed"))
+    }
+
+    /// The layers of the page on show, labels among them.
+    fn layers_on_page(board: &BoardDoc) -> usize {
+        let ds = board.session.ds().unwrap();
+        ds.doc.node(ds.page).unwrap().children.len()
+    }
+
+    /// How many connector labels the document holds.
+    fn labels(board: &BoardDoc) -> usize {
+        let doc = board.doc().unwrap();
+        doc.nodes()
+            .filter(|n| matches!(n.board, Some(BoardItem::Label { .. })))
+            .count()
+    }
+
+    /// The first solid fill and stroke of layer `id`, as `#RRGGBB`.
+    fn paints(board: &BoardDoc, id: &str) -> (Option<String>, Option<String>) {
+        let doc = board.doc().unwrap();
+        let node = doc.node(id.parse().unwrap()).unwrap();
+        let first = |paints: &[Paint]| paints.iter().find_map(Paint::solid_color);
+        let (fill, stroke) = (first(&node.fills), first(&node.strokes));
+        (fill.map(Color::to_css_hex), stroke.map(Color::to_css_hex))
+    }
+
+    #[test]
+    fn get_summarises_types_and_text() {
+        let mut board = board();
+        let ids = add(
+            &mut board,
+            json!([
+                {"type": "sticky", "id": "s", "x": 0, "y": 0, "text": "hi"},
+                {"type": "diamond", "id": "d", "x": 400, "y": 0},
+                {"type": "arrow", "start": {"id": "s"}, "end": {"id": "d"}, "label": {"text": "yes"}},
+            ]),
+        );
+
+        // Three elements: the connector's label is a layer of its own, but not an element (P7-C4).
+        assert_eq!(layers_on_page(&board), 4);
+        let elements = elements(&mut board);
+        assert_eq!(elements.len(), 3, "{elements:?}");
+        let types: Vec<&str> = elements
+            .iter()
+            .map(|e| e["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(types, ["sticky", "diamond", "connector"]);
+        let listed_ids: Vec<&str> = elements.iter().map(|e| e["id"].as_str().unwrap()).collect();
+        assert_eq!(listed_ids, ids);
+
+        assert_eq!(elements[0]["text"], json!("hi"));
+        assert!(elements[1].get("text").is_none(), "{}", elements[1]);
+        // The connector says what it joins, and its text is its label's.
+        assert_eq!(elements[2]["from"], json!(ids[0]));
+        assert_eq!(elements[2]["to"], json!(ids[1]));
+        assert_eq!(elements[2]["text"], json!("yes"));
+        for element in &elements {
+            for key in ["x", "y", "width", "height"] {
+                assert!(element[key].is_number(), "{key} of {element}");
+            }
+        }
+    }
+
+    #[test]
+    fn add_returns_ids_in_order() {
+        let mut board = board();
+        // Made in another order (shapes before text, text before what joins them), answered in
+        // this one.
+        let reply = ask(
+            &mut board,
+            json!({"op": "add", "elements": [
+                {"type": "arrow", "start": {"id": "a"}, "end": {"id": "b"}},
+                {"type": "text", "x": 0, "y": -50, "text": "Title"},
+                {"type": "rectangle", "id": "b", "x": 300, "y": 0, "width": 100, "height": 60},
+                {"type": "rectangle", "id": "a", "x": 0, "y": 0, "width": 100, "height": 60},
+            ]}),
+        );
+        assert_eq!(reply["added"], json!(4));
+        assert!(reply.get("notes").is_none(), "{reply}");
+        let ids: Vec<String> = reply["ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| id.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(ids.len(), 4);
+        let at = |board: &mut BoardDoc, id: &String| {
+            let element = listed(board, id);
+            (element["type"].clone(), element["x"].clone())
+        };
+        assert_eq!(at(&mut board, &ids[0]).0, json!("connector"));
+        assert_eq!(at(&mut board, &ids[1]), (json!("text"), json!(0.0)));
+        assert_eq!(at(&mut board, &ids[2]), (json!("rectangle"), json!(300.0)));
+        assert_eq!(at(&mut board, &ids[3]), (json!("rectangle"), json!(0.0)));
+        // The arrow joins the two rectangles by the ids the agent gave them.
+        let connector = listed(&mut board, &ids[0]);
+        assert_eq!(connector["from"], json!(ids[3]));
+        assert_eq!(connector["to"], json!(ids[2]));
+    }
+
+    #[test]
+    fn add_notes_what_it_skips() {
+        let mut board = board();
+        let reply = ask(
+            &mut board,
+            json!({"op": "add", "elements": [
+                {"type": "hologram", "x": 0, "y": 0},
+                {"type": "rectangle", "x": 0, "y": 0},
+            ]}),
+        );
+        // Skipped with a note, not an error, and the rest is drawn.
+        assert_eq!(reply["added"], json!(1));
+        assert_eq!(reply["ids"].as_array().map(Vec::len), Some(1));
+        let notes = reply["notes"].as_array().expect("notes");
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].as_str().unwrap().contains("hologram"), "{notes:?}");
+        assert_eq!(elements(&mut board).len(), 1);
+
+        // Nothing to add adds nothing.
+        let reply = ask(&mut board, json!({"op": "add", "elements": []}));
+        assert_eq!(reply, json!({"ok": true, "added": 0, "ids": []}));
+    }
+
+    #[test]
+    fn add_reports_malformed_elements() {
+        let mut board = board();
+        let before = board.doc().unwrap();
+        for op in [
+            json!({"op": "add"}),
+            json!({"op": "add", "elements": null}),
+            json!({"op": "add", "elements": "rectangle"}),
+            json!({"op": "add", "elements": {"type": "rectangle"}}),
+            json!({"op": "add", "elements": ["rectangle"]}),
+            json!({"op": "add", "elements": [{"type": "rectangle", "x": "far away"}]}),
+            json!({"op": "add", "elements": [{"type": "rectangle", "x": 0, "y": 0}, 5]}),
+        ] {
+            let error = refusal(&mut board, op.clone());
+            assert!(error.contains("elements"), "{op}: {error}");
+        }
+        // The engine refusing an element fails the whole call, and says which one.
+        let error = refusal(
+            &mut board,
+            json!({"op": "add", "elements": [
+                {"type": "rectangle", "x": 0, "y": 0},
+                {"type": "rectangle", "x": 0, "y": 0, "width": 0},
+            ]}),
+        );
+        assert!(error.contains("elements[1]"), "{error}");
+        assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
+        assert_eq!(board.session.undo_depth(), (0, 0));
+    }
+
+    #[test]
+    fn add_to_a_design_file_is_refused() {
+        let mut design = design();
+        let before = design.doc().unwrap();
+        let error = refusal(
+            &mut design,
+            json!({"op": "add", "elements": [{"type": "rectangle", "x": 0, "y": 0}]}),
+        );
+        assert!(error.contains("board"), "{error}");
+        assert!(Arc::ptr_eq(&before, &design.doc().unwrap()));
+    }
+
+    #[test]
+    fn update_moves_and_relabels() {
+        let mut board = board();
+        let ids = add(
+            &mut board,
+            json!([{"type": "sticky", "id": "s", "x": 0, "y": 20, "text": "Old"}]),
+        );
+
+        let reply = ask(
+            &mut board,
+            json!({"op": "update", "elements": [{"id": ids[0], "x": 500, "text": "New"}]}),
+        );
+
+        assert_eq!(reply, json!({"ok": true, "updated": 1, "missing": []}));
+        let element = listed(&mut board, &ids[0]);
+        assert_eq!(element["x"], json!(500.0));
+        // What the element didn't name stays.
+        assert_eq!(element["y"], json!(20.0));
+        assert_eq!(element["text"], json!("New"));
+    }
+
+    #[test]
+    fn update_reports_missing() {
+        let mut board = board();
+        let ids = add(
+            &mut board,
+            json!([{"type": "rectangle", "id": "box", "x": 0, "y": 0}]),
+        );
+        let before = board.doc().unwrap();
+
+        let reply = ask(
+            &mut board,
+            json!({"op": "update", "elements": [{"id": "nope", "x": 5}]}),
+        );
+        assert_eq!(
+            reply,
+            json!({"ok": true, "updated": 0, "missing": ["nope"]})
+        );
+        // Nothing changed, so there is no step to undo.
+        assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
+        assert_eq!(board.session.undo_depth(), (1, 0));
+
+        // What is there is updated, what isn't is named, in the order it was given. The page
+        // is no element, though its node id is a number like the others'.
+        let page = board.doc().unwrap().first_page().unwrap().to_string();
+        let reply = ask(
+            &mut board,
+            json!({"op": "update", "elements": [
+                {"id": "gone", "x": 1}, {"id": "box", "x": 5}, {"id": page, "x": 5}, {"id": ids[0], "y": 7},
+            ]}),
+        );
+        assert_eq!(reply["updated"], json!(2));
+        assert_eq!(reply["missing"], json!(["gone", page]));
+        let element = listed(&mut board, &ids[0]);
+        assert_eq!(
+            (element["x"].clone(), element["y"].clone()),
+            (json!(5.0), json!(7.0))
+        );
+    }
+
+    #[test]
+    fn update_changes_size_text_name_and_colours() {
+        let mut board = board();
+        let ids = add(
+            &mut board,
+            json!([
+                {"type": "rectangle", "id": "box", "x": 0, "y": 0, "width": 100, "height": 60,
+                 "label": {"text": "Old"}},
+                {"type": "sticky", "id": "note", "x": 300, "y": 0, "text": "Old"},
+                {"type": "text", "id": "title", "x": 0, "y": -100, "text": "Old"},
+                {"type": "frame", "id": "area", "x": 0, "y": 300, "width": 200, "height": 100,
+                 "name": "Old"},
+                {"type": "arrow", "id": "link", "start": {"id": "box"}, "end": {"id": "note"}},
+            ]),
+        );
+
+        let reply = ask(
+            &mut board,
+            json!({"op": "update", "elements": [
+                {"id": "box", "x": 20, "y": 40, "width": 140, "height": 80, "text": "Box",
+                 "backgroundColor": "#2f9e44", "strokeColor": "#e03131"},
+                {"id": "note", "label": {"text": "Note"}, "backgroundColor": "pink"},
+                {"id": "title", "text": "Title", "strokeColor": "#e03131"},
+                {"id": "area", "name": "Area", "width": 250},
+                {"id": "link", "text": "uses", "strokeColor": "#1971c2"},
+            ]}),
+        );
+        assert_eq!(reply, json!({"ok": true, "updated": 5, "missing": []}));
+
+        let shape = listed(&mut board, &ids[0]);
+        assert_eq!(
+            [&shape["x"], &shape["y"], &shape["width"], &shape["height"]],
+            [&json!(20.0), &json!(40.0), &json!(140.0), &json!(80.0)]
+        );
+        assert_eq!(shape["text"], json!("Box"));
+        assert_eq!(shape["color"], json!("#2F9E44"));
+        // The stroke is the outline's, the layer inside the shape.
+        let doc = board.doc().unwrap();
+        let outline = doc.node(ids[0].parse().unwrap()).unwrap().children[0];
+        assert_eq!(
+            paints(&board, &outline.to_string()).1.as_deref(),
+            Some("#E03131")
+        );
+
+        let sticky = listed(&mut board, &ids[1]);
+        assert_eq!(sticky["text"], json!("Note"));
+        assert_eq!(sticky["color"], json!("#F7B9DA"));
+
+        // A text layer's colour is its `strokeColor` (P7-C24).
+        let text = listed(&mut board, &ids[2]);
+        assert_eq!(text["text"], json!("Title"));
+        assert_eq!(text["color"], json!("#E03131"));
+        assert_eq!(paints(&board, &ids[2]).1, None);
+
+        let frame = listed(&mut board, &ids[3]);
+        assert_eq!(frame["name"], json!("Area"));
+        assert_eq!(frame["width"], json!(250.0));
+
+        // A connector's text is a label, made on the way.
+        let connector = listed(&mut board, &ids[4]);
+        assert_eq!(connector["text"], json!("uses"));
+        assert_eq!(connector["color"], json!("#1971C2"));
+        assert_eq!(labels(&board), 1);
+        let reply = ask(
+            &mut board,
+            json!({"op": "update", "elements": [{"id": "link", "text": ""}]}),
+        );
+        assert_eq!(reply["updated"], json!(1));
+        assert!(listed(&mut board, &ids[4]).get("text").is_none());
+        assert_eq!(labels(&board), 0);
+    }
+
+    #[test]
+    fn update_colours_by_the_rules_apply_uses() {
+        // One helper colours what `add` draws and what `update` changes (P7-C12), so naming the
+        // colours when drawing and naming them afterwards give the same document.
+        let bare = json!([
+            {"type": "rectangle", "x": 0, "y": 0},
+            {"type": "rectangle", "x": 300, "y": 0},
+            {"type": "sticky", "x": 600, "y": 0},
+            {"type": "text", "x": 0, "y": 300, "text": "t"},
+            {"type": "arrow", "x": 0, "y": 400, "width": 100, "height": 0},
+            {"type": "freedraw", "x": 0, "y": 500, "points": [[0, 0], [30, 40], [60, 0]]},
+            {"type": "frame", "x": 0, "y": 600, "width": 200, "height": 100},
+        ]);
+        let colours = [
+            json!({"backgroundColor": "#74c0fc", "strokeColor": "#e03131"}),
+            json!({"backgroundColor": "transparent", "strokeColor": "#2f9e44"}),
+            json!({"backgroundColor": "violet"}),
+            json!({"backgroundColor": "#ff0000", "strokeColor": "#1971c2"}),
+            // A connector has no fill: the background would recolour its line, so it is ignored.
+            json!({"backgroundColor": "#ffc9c9", "strokeColor": "#9c36b5"}),
+            json!({"backgroundColor": "#ffc9c9", "strokeColor": "#e8590c"}),
+            json!({"backgroundColor": "#d3f9d8", "strokeColor": "#2f9e44"}),
+        ];
+
+        let mut drawn = board();
+        let mut elements = bare.clone();
+        for (element, colours) in elements.as_array_mut().unwrap().iter_mut().zip(&colours) {
+            element
+                .as_object_mut()
+                .unwrap()
+                .extend(colours.as_object().unwrap().clone());
+        }
+        add(&mut drawn, elements);
+
+        let mut changed = board();
+        let ids = add(&mut changed, bare);
+        let patches: Vec<Value> = ids
+            .iter()
+            .zip(&colours)
+            .map(|(id, colours)| {
+                let mut patch = colours.clone();
+                patch["id"] = json!(id);
+                patch
+            })
+            .collect();
+        ask(&mut changed, json!({"op": "update", "elements": patches}));
+
+        let (left, right) = (drawn.doc().unwrap(), changed.doc().unwrap());
+        for (a, b) in left.nodes().zip(right.nodes()) {
+            assert_eq!(a, b, "layer {} ({}) differs", a.id, a.name);
+        }
+        assert!(
+            *left == *right,
+            "the layers are alike but the documents differ"
+        );
+        // And the colours are not nothing: the connector's line is its stroke, not its background.
+        assert_eq!(paints(&changed, &ids[4]).1.as_deref(), Some("#9C36B5"));
+        assert_eq!(paints(&changed, &ids[1]).0, None);
+    }
+
+    #[test]
+    fn update_places_layers_in_page_coordinates() {
+        let mut board = board();
+        let ids = add(
+            &mut board,
+            json!([
+                {"type": "frame", "id": "area", "x": 100, "y": 100, "width": 400, "height": 300},
+                {"type": "rectangle", "id": "inner", "x": 150, "y": 160, "width": 50, "height": 50,
+                 "frameId": "area"},
+            ]),
+        );
+        let inner: NodeId = ids[1].parse().unwrap();
+        let doc = board.doc().unwrap();
+        assert_eq!(
+            doc.node(inner).unwrap().parent,
+            Some(ids[0].parse().unwrap())
+        );
+        // It is inside the frame, so `get` lists the frame alone.
+        assert_eq!(elements(&mut board).len(), 1);
+
+        ask(
+            &mut board,
+            json!({"op": "update", "elements": [{"id": "inner", "x": 300, "width": 80}]}),
+        );
+
+        // Where `add` put it is where `update` puts it: the page's coordinates, not the frame's.
+        let bounds = board.doc().unwrap().world_bounds(inner).unwrap();
+        assert_eq!(
+            [bounds.x0, bounds.y0, bounds.width(), bounds.height()],
+            [300.0, 160.0, 80.0, 50.0]
+        );
+    }
+
+    #[test]
+    fn update_finds_layers_by_agent_id_and_by_node_id() {
+        let mut board = board();
+        let ids = add(
+            &mut board,
+            json!([
+                {"type": "rectangle", "id": "a", "x": 0, "y": 0},
+                {"type": "rectangle", "id": "b", "x": 0, "y": 200},
+                {"type": "rectangle", "id": "c", "x": 0, "y": 400},
+            ]),
+        );
+        let number: u64 = ids[2].parse().unwrap();
+
+        let reply = ask(
+            &mut board,
+            json!({"op": "update", "elements": [
+                {"id": "a", "x": 11}, {"id": ids[1], "x": 22}, {"id": number, "x": 33},
+            ]}),
+        );
+        assert_eq!(reply, json!({"ok": true, "updated": 3, "missing": []}));
+        let xs: Vec<Value> = ids
+            .iter()
+            .map(|id| listed(&mut board, id)["x"].clone())
+            .collect();
+        assert_eq!(xs, [json!(11.0), json!(22.0), json!(33.0)]);
+
+        // An agent's id wins over a node id that looks the same (a node is called "1" too).
+        add(
+            &mut board,
+            json!([{"type": "rectangle", "id": ids[0], "x": 0, "y": 600}]),
+        );
+        ask(
+            &mut board,
+            json!({"op": "update", "elements": [{"id": ids[0], "x": 99}]}),
+        );
+        assert_eq!(listed(&mut board, &ids[0])["x"], json!(11.0));
+        let theirs = elements(&mut board)
+            .into_iter()
+            .find(|e| e["y"] == json!(600.0))
+            .unwrap();
+        assert_eq!(theirs["x"], json!(99.0));
+    }
+
+    #[test]
+    fn update_is_one_undo_step_and_fails_whole() {
+        let mut board = board();
+        let ids = add(
+            &mut board,
+            json!([
+                {"type": "rectangle", "id": "a", "x": 0, "y": 0},
+                {"type": "rectangle", "id": "b", "x": 0, "y": 200},
+            ]),
+        );
+        ask(
+            &mut board,
+            json!({"op": "update", "elements": [{"id": "a", "x": 50, "text": "A"}, {"id": "b", "x": 60}]}),
+        );
+        // Two elements, three changes, one step.
+        assert_eq!(board.session.undo_depth(), (2, 0));
+        assert_eq!(board.session.undo_labels(1), ["Update elements"]);
+        ask(&mut board, json!({"op": "command", "command": "edit.undo"}));
+        assert_eq!(listed(&mut board, &ids[0])["x"], json!(0.0));
+        assert_eq!(listed(&mut board, &ids[1])["x"], json!(0.0));
+        assert!(listed(&mut board, &ids[0]).get("text").is_none());
+
+        // What the engine refuses fails the call whole, naming the element: the first element's
+        // change is not kept.
+        let before = board.doc().unwrap();
+        let steps = board.session.undo_depth();
+        let error = refusal(
+            &mut board,
+            json!({"op": "update", "elements": [
+                {"id": "a", "x": 50}, {"id": "b", "backgroundColor": "not a colour"},
+            ]}),
+        );
+        assert!(
+            error.contains("elements[1]") && error.contains("b"),
+            "{error}"
+        );
+        assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
+        assert_eq!(board.session.undo_depth(), steps);
+    }
+
+    #[test]
+    fn update_reports_malformed_input() {
+        let mut board = board();
+        add(
+            &mut board,
+            json!([{"type": "rectangle", "id": "a", "x": 0, "y": 0}]),
+        );
+        let before = board.doc().unwrap();
+        for op in [
+            json!({"op": "update"}),
+            json!({"op": "update", "elements": "a"}),
+            json!({"op": "update", "elements": [{"x": 5}]}),
+            json!({"op": "update", "elements": [{"id": ""}]}),
+            json!({"op": "update", "elements": [{"id": null, "x": 5}]}),
+            json!({"op": "update", "elements": ["a"]}),
+            json!({"op": "update", "elements": [{"id": "a", "x": "far"}]}),
+            json!({"op": "update", "elements": [{"id": "a", "text": 5}]}),
+        ] {
+            let error = refusal(&mut board, op.clone());
+            assert!(error.contains("elements"), "{op}: {error}");
+        }
+        assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
+    }
+
+    #[test]
+    fn update_notes_text_that_a_layer_cannot_take() {
+        let mut board = board();
+        let ids = add(
+            &mut board,
+            json!([
+                {"type": "freedraw", "x": 0, "y": 0, "points": [[0, 0], [30, 40], [60, 0]]},
+                {"type": "rectangle", "x": 200, "y": 0},
+            ]),
+        );
+        let reply = ask(
+            &mut board,
+            json!({"op": "update", "elements": [
+                {"id": ids[0], "text": "ink can't say it", "x": 5}, {"id": ids[1], "text": "a shape can"},
+            ]}),
+        );
+        // It is not an error: the rest of the element, and the others, are updated.
+        assert_eq!(reply["updated"], json!(2));
+        let notes = reply["notes"].as_array().expect("notes");
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes[0].as_str().unwrap().contains("elements[0]"),
+            "{notes:?}"
+        );
+        assert_eq!(listed(&mut board, &ids[0])["x"], json!(5.0));
+        assert_eq!(listed(&mut board, &ids[1])["text"], json!("a shape can"));
+    }
+
+    #[test]
+    fn the_users_selection_survives_update_and_delete() {
+        let mut board = board();
+        let ids = add(
+            &mut board,
+            json!([
+                {"type": "rectangle", "id": "a", "x": 0, "y": 0},
+                {"type": "rectangle", "id": "b", "x": 300, "y": 0},
+                {"type": "rectangle", "id": "c", "x": 600, "y": 0},
+            ]),
+        );
+        let nodes: Vec<NodeId> = ids.iter().map(|id| id.parse().unwrap()).collect();
+        board.session.set_selection(vec![nodes[0], nodes[2]]);
+
+        ask(
+            &mut board,
+            json!({"op": "update", "elements": [{"id": "b", "x": 5, "text": "B", "backgroundColor": "red"}]}),
+        );
+        assert_eq!(board.session.selection(), [nodes[0], nodes[2]]);
+
+        // What is deleted leaves the selection, and what isn't deleted stays in it.
+        ask(&mut board, json!({"op": "delete", "ids": ["b", "c"]}));
+        assert_eq!(board.session.selection(), [nodes[0]]);
+    }
+
+    #[test]
+    fn delete_removes_connector_label() {
+        let mut board = board();
+        let ids = add(
+            &mut board,
+            json!([
+                {"type": "rectangle", "id": "a", "x": 0, "y": 0},
+                {"type": "rectangle", "id": "b", "x": 400, "y": 0},
+                {"type": "arrow", "id": "ab", "start": {"id": "a"}, "end": {"id": "b"},
+                 "label": {"text": "yes"}},
+            ]),
+        );
+        assert_eq!(labels(&board), 1);
+        assert_eq!(layers_on_page(&board), 4);
+
+        let reply = ask(&mut board, json!({"op": "delete", "ids": [ids[2]]}));
+
+        assert_eq!(reply, json!({"ok": true, "deleted": 1, "missing": []}));
+        // The label went with its connector, and the shapes it joined stay.
+        assert_eq!(labels(&board), 0);
+        assert_eq!(layers_on_page(&board), 2);
+        let types: Vec<String> = elements(&mut board)
+            .iter()
+            .map(|e| e["type"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(types, ["rectangle", "rectangle"]);
+        // One step takes it back, label and all.
+        ask(&mut board, json!({"op": "command", "command": "edit.undo"}));
+        assert_eq!((labels(&board), layers_on_page(&board)), (1, 4));
+    }
+
+    #[test]
+    fn delete_reports_missing_and_counts_what_it_found() {
+        let mut board = board();
+        let ids = add(
+            &mut board,
+            json!([
+                {"type": "rectangle", "id": "a", "x": 0, "y": 0},
+                {"type": "rectangle", "id": "b", "x": 300, "y": 0},
+                {"type": "rectangle", "id": "c", "x": 600, "y": 0},
+            ]),
+        );
+        let page = board.doc().unwrap().first_page().unwrap().to_string();
+        let number: u64 = ids[2].parse().unwrap();
+
+        // By an agent's id, by a node id, twice the same layer, a layer that isn't there, and the
+        // page, which is no element.
+        let reply = ask(
+            &mut board,
+            json!({"op": "delete", "ids": ["a", ids[0], "nope", page, number, "b"]}),
+        );
+
+        assert_eq!(reply["deleted"], json!(3));
+        assert_eq!(reply["missing"], json!(["nope", page]));
+        assert!(elements(&mut board).is_empty());
+        assert_eq!(board.doc().unwrap().pages.len(), 1);
+
+        // Nothing found, nothing done.
+        let before = board.doc().unwrap();
+        let reply = ask(&mut board, json!({"op": "delete", "ids": ["x", "y"]}));
+        assert_eq!(
+            reply,
+            json!({"ok": true, "deleted": 0, "missing": ["x", "y"]})
+        );
+        let reply = ask(&mut board, json!({"op": "delete", "ids": []}));
+        assert_eq!(reply, json!({"ok": true, "deleted": 0, "missing": []}));
+        assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
+    }
+
+    #[test]
+    fn delete_never_falls_back_to_the_selection() {
+        // The engine's delete takes the selection when it is given no layers.
+        let mut board = board();
+        let ids = add(&mut board, json!([{"type": "rectangle", "x": 0, "y": 0}]));
+        board.session.set_selection(vec![ids[0].parse().unwrap()]);
+        for ids in [json!([]), json!(["nope"])] {
+            ask(&mut board, json!({"op": "delete", "ids": ids}));
+        }
+        assert_eq!(elements(&mut board).len(), 1);
+    }
+
+    #[test]
+    fn delete_reports_malformed_input() {
+        let mut board = board();
+        add(&mut board, json!([{"type": "rectangle", "x": 0, "y": 0}]));
+        for op in [
+            json!({"op": "delete"}),
+            json!({"op": "delete", "ids": "a"}),
+            json!({"op": "delete", "ids": ["a", {"id": "b"}]}),
+            json!({"op": "delete", "ids": [null]}),
+        ] {
+            let error = refusal(&mut board, op.clone());
+            assert!(error.contains("ids"), "{op}: {error}");
+        }
+        assert_eq!(elements(&mut board).len(), 1);
+    }
+
+    #[test]
+    fn clear_is_one_undo_step() {
+        let mut board = board();
+        add(
+            &mut board,
+            json!([
+                {"type": "sticky", "id": "s", "x": 0, "y": 0, "text": "hi"},
+                {"type": "ellipse", "id": "e", "x": 400, "y": 0},
+                {"type": "arrow", "start": {"id": "s"}, "end": {"id": "e"}, "label": {"text": "yes"}},
+                {"type": "freedraw", "x": 0, "y": 500, "points": [[0, 0], [30, 40], [60, 0]]},
+            ]),
+        );
+        let (layers, steps) = (layers_on_page(&board), board.session.undo_depth().0);
+        assert_eq!((elements(&mut board).len(), layers), (4, 5));
+
+        let reply = ask(&mut board, json!({"op": "clear"}));
+
+        assert_eq!(reply, json!({"ok": true}));
+        assert!(elements(&mut board).is_empty());
+        // Every layer is gone, the connector's label too, in one step.
+        assert_eq!(layers_on_page(&board), 0);
+        assert_eq!(board.session.undo_depth(), (steps + 1, 0));
+        ask(&mut board, json!({"op": "command", "command": "edit.undo"}));
+        assert_eq!(layers_on_page(&board), layers);
+        assert_eq!(elements(&mut board).len(), 4);
+        assert_eq!(board.session.undo_depth(), (steps, 1));
+    }
+
+    #[test]
+    fn clear_of_an_empty_page_changes_nothing_and_only_that_page_is_cleared() {
+        let mut board = board();
+        let before = board.doc().unwrap();
+        // The selection is empty too, which is what the engine's delete would fall back to.
+        assert_eq!(ask(&mut board, json!({"op": "clear"})), json!({"ok": true}));
+        assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
+        assert_eq!(board.session.undo_depth(), (0, 0));
+
+        add(&mut board, json!([{"type": "rectangle", "x": 0, "y": 0}]));
+        board.execute("page.add", &json!({})).unwrap();
+        add(&mut board, json!([{"type": "rectangle", "x": 0, "y": 0}]));
+        ask(&mut board, json!({"op": "clear"}));
+        assert!(elements(&mut board).is_empty());
+        board.execute("page.select", &json!({"index": 0})).unwrap();
+        assert_eq!(elements(&mut board).len(), 1);
+    }
+
+    /// A board file of two pages, a sticky on each.
+    fn two_page_file(dir: &std::path::Path) -> String {
+        let mut other = BoardDoc::new_board("Two pages").unwrap();
+        other
+            .execute("board.sticky", &json!({"x": 0, "y": 0, "text": "first"}))
+            .unwrap();
+        other
+            .execute("page.add", &json!({"name": "Second"}))
+            .unwrap();
+        other
+            .execute("board.sticky", &json!({"x": 0, "y": 0, "text": "second"}))
+            .unwrap();
+        let path = dir.join("two.figcraft");
+        std::fs::write(&path, other.to_bytes().unwrap()).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn replace_loads_a_figcraft_file_as_one_undo_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = other_board_file(dir.path());
+        let mut board = board();
+        add(
+            &mut board,
+            json!([{"type": "sticky", "x": 0, "y": 0, "text": "mine"}]),
+        );
+        // Two pages of its own: both are replaced.
+        board
+            .execute("page.add", &json!({"name": "Notes"}))
+            .unwrap();
+        board.execute("page.select", &json!({"index": 0})).unwrap();
+        let (uid, steps) = (board.session.ds().unwrap().uid, board.session.undo_depth());
+
+        let reply = ask(&mut board, json!({"op": "replace", "path": other}));
+
+        // The canvas shows the file's page, and says what is on it as `get` does.
+        let now = elements(&mut board);
+        assert_eq!(now.len(), 2, "{now:?}");
+        assert!(now.iter().all(|e| e["text"] == json!("other")), "{now:?}");
+        assert_eq!(reply["elements"], json!(now));
+        assert_eq!(board.doc().unwrap().pages.len(), 1);
+        assert!(board.session.selection().is_empty());
+        // In the canvas's own session: one document, the one it had, and still a board.
+        assert_eq!(board.session.docs.len(), 1);
+        assert_eq!(board.session.ds().unwrap().uid, uid);
+        assert_eq!(board.kind(), DocKind::Board);
+        // One step: undo brings the old board back, pages and all, and redo the file's.
+        assert_eq!(board.session.undo_depth(), (steps.0 + 1, 0));
+        assert_eq!(board.session.undo_labels(1), ["Replace canvas"]);
+        ask(&mut board, json!({"op": "command", "command": "edit.undo"}));
+        assert_eq!(board.doc().unwrap().pages.len(), 2);
+        let back = elements(&mut board);
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0]["text"], json!("mine"));
+        ask(&mut board, json!({"op": "command", "command": "edit.redo"}));
+        assert_eq!(elements(&mut board).len(), 2);
+    }
+
+    #[test]
+    fn replace_takes_every_page_of_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = two_page_file(dir.path());
+        let mut board = board();
+        add(&mut board, json!([{"type": "rectangle", "x": 0, "y": 0}]));
+
+        ask(&mut board, json!({"op": "replace", "path": path}));
+
+        // The first page is on show, and the old page is gone.
+        let doc = board.doc().unwrap();
+        let names: Vec<&str> = doc
+            .pages
+            .iter()
+            .map(|page| doc.node(*page).unwrap().name.as_str())
+            .collect();
+        assert_eq!(names, ["Page 1", "Second"]);
+        let now = elements(&mut board);
+        assert_eq!(now.len(), 1);
+        assert_eq!(now[0]["text"], json!("first"));
+    }
+
+    #[test]
+    fn replace_keeps_a_design_file_a_board() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = design();
+        file.execute(
+            "node.create",
+            &json!({"type": "frame", "x": 0, "y": 0, "name": "Screen"}),
+        )
+        .unwrap();
+        let path = dir.path().join("design.figcraft");
+        std::fs::write(&path, file.to_bytes().unwrap()).unwrap();
+        let mut board = board();
+
+        let reply = ask(&mut board, json!({"op": "replace", "path": path}));
+
+        assert_eq!(board.kind(), DocKind::Board);
+        assert_eq!(reply["elements"][0]["name"], json!("Screen"));
+        assert_eq!(reply["elements"][0]["type"], json!("frame"));
+    }
+
+    #[test]
+    fn replace_of_a_missing_or_bad_file_is_an_error_and_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("bad.figcraft");
+        std::fs::write(&bad, b"not a figcraft file").unwrap();
+        let missing = dir.path().join("missing.figcraft");
+        let mut board = board();
+        add(
+            &mut board,
+            json!([{"type": "sticky", "x": 0, "y": 0, "text": "mine"}]),
+        );
+        let (before, steps) = (board.doc().unwrap(), board.session.undo_depth());
+
+        let error = refusal(&mut board, json!({"op": "replace", "path": missing}));
+        assert!(
+            error.starts_with("replace:") && error.contains("missing.figcraft"),
+            "{error}"
+        );
+        let error = refusal(&mut board, json!({"op": "replace", "path": bad}));
+        assert!(error.starts_with("replace:"), "{error}");
+
+        // Not a new, empty board over the canvas: it is as it was.
+        assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
+        assert_eq!(board.session.undo_depth(), steps);
+        assert_eq!(elements(&mut board).len(), 1);
+    }
+
+    #[test]
+    fn replace_leaves_excalidraw_to_the_importer_for_now() {
+        let mut board = board();
+        add(
+            &mut board,
+            json!([{"type": "sticky", "x": 0, "y": 0, "text": "mine"}]),
+        );
+        let before = board.doc().unwrap();
+        for op in [
+            json!({"op": "replace", "scene": {"type": "excalidraw", "elements": []}}),
+            json!({"op": "replace", "scene": {"elements": []}, "path": "/tmp/a.figcraft"}),
+            json!({"op": "replace", "path": "/tmp/board.excalidraw"}),
+            json!({"op": "replace", "path": "/tmp/BOARD.Excalidraw"}),
+        ] {
+            let error = refusal(&mut board, op.clone());
+            assert!(error.starts_with("replace:"), "{op}: {error}");
+        }
+        // Nor does a path that is neither kind of file, or no path, run anything.
+        for op in [
+            json!({"op": "replace"}),
+            json!({"op": "replace", "path": 5}),
+        ] {
+            let error = refusal(&mut board, op.clone());
+            assert!(error.starts_with("replace needs"), "{op}: {error}");
+        }
+        for path in ["/tmp/board.png", "/tmp/board.figcraft.bak", "/tmp/board"] {
+            let error = refusal(&mut board, json!({"op": "replace", "path": path}));
+            let expected = format!("replace: {path} is not a .figcraft or .excalidraw file");
+            assert_eq!(error, expected);
+        }
+        assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
+        assert_eq!(board.session.undo_depth(), (1, 0));
+    }
+
+    /// Every id `commands` lists, with the whole reply checked.
+    fn listed_commands(board: &mut BoardDoc) -> Vec<Value> {
+        let reply = ask(board, json!({"op": "commands"}));
+        reply["commands"].as_array().expect("commands").clone()
+    }
+
+    #[test]
+    fn commands_hide_hidden_ids() {
+        let mut board = board();
+        let commands = listed_commands(&mut board);
+        let ids: Vec<&str> = commands.iter().map(|c| c["id"].as_str().unwrap()).collect();
+
+        // Nothing the canvas hides: no file.new, nor any other hidden id, nor a plugin's.
+        assert!(!ids.contains(&"file.new"));
+        assert!(!ids.contains(&"plugins.manage"));
+        for id in &ids {
+            assert!(!policy::is_hidden(id), "{id} is hidden");
+        }
+        // Saving is Sawit's: `command` refuses it, so it isn't offered (P7-C11).
+        assert!(!ids.contains(&"file.save"));
+        assert!(!ids.contains(&"file.saveAs"));
+
+        // What an agent can do is there, as {id, label, params}.
+        let sticky = commands
+            .iter()
+            .find(|c| c["id"] == json!("board.sticky"))
+            .unwrap();
+        assert_eq!(sticky["label"], json!("Sticky note"));
+        assert!(
+            sticky["params"].as_str().unwrap().contains("text?"),
+            "{sticky}"
+        );
+        for command in &commands {
+            let keys: Vec<&String> = command.as_object().unwrap().keys().collect();
+            assert_eq!(keys, ["id", "label", "params"], "{command}");
+            assert!(command.as_object().unwrap().values().all(Value::is_string));
+        }
+        assert!(ids.len() > 200, "{} commands", ids.len());
+    }
+
+    #[test]
+    fn commands_lists_only_what_the_command_op_runs() {
+        let mut board = board();
+        let commands = listed_commands(&mut board);
+        let ids: Vec<&str> = commands.iter().map(|c| c["id"].as_str().unwrap()).collect();
+
+        // The one rule: nothing is offered that `command` refuses, up front or by the guard that
+        // undoes a command that opens a document.
+        for id in &ids {
+            assert_eq!(
+                refused(id, &Value::Null),
+                None,
+                "{id} is listed but refused"
+            );
+            assert!(!OPENS_DOCUMENTS.contains(id), "{id} opens a document");
+        }
+        for id in HANDLED_BY_SAWIT.iter().chain(OPENS_DOCUMENTS) {
+            assert!(!ids.contains(id), "{id} is listed");
+        }
+        // Every other command of the engine is, except what the policy hides.
+        let engine = figcraft_engine::cmd::all_commands();
+        let unlisted: Vec<&str> = engine
+            .iter()
+            .map(|c| c.id)
+            .filter(|id| !ids.contains(id))
+            .collect();
+        for id in &unlisted {
+            assert!(
+                policy::is_hidden(id)
+                    || HANDLED_BY_SAWIT.contains(id)
+                    || OPENS_DOCUMENTS.contains(id),
+                "{id} is not listed, and nothing says why"
+            );
+        }
+        let mut unique = ids.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len(), "an id is listed twice");
+    }
+
+    #[test]
+    fn commands_that_open_documents_are_real_engine_ids() {
+        // A rename in the engine would leave a stale id here, and the command in the list.
+        for id in OPENS_DOCUMENTS {
+            assert!(figcraft_engine::cmd::find_command(id).is_some(), "{id}");
+        }
+    }
+
     #[test]
     fn without_a_document_ops_answer_with_an_error() {
         let mut board = BoardDoc {
@@ -817,6 +2178,11 @@ mod tests {
         };
         for op in [
             json!({"op": "get"}),
+            json!({"op": "add", "elements": []}),
+            json!({"op": "update", "elements": []}),
+            json!({"op": "delete", "ids": []}),
+            json!({"op": "clear"}),
+            json!({"op": "replace", "path": "/tmp/canvas.figcraft"}),
             json!({"op": "command", "command": "board.sticky", "params": {"x": 0, "y": 0}}),
         ] {
             let reply = run(&mut board, &op);
