@@ -7,7 +7,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
-use crate::kebun::{BakarArgs, ListWhat};
+use crate::kebun::{BakarArgs, DbJob, ListWhat, PasangArgs};
 use crate::{CoreError, Result, cmd};
 
 /// Where "Install CLI" puts the command.
@@ -19,9 +19,13 @@ sawit — open folders and files in Sawit, query databases, clear ports
 Usage:
   sawit [options] [path[:line[:column]] ...]
   sawit <db> [table] [\"sql\"]
-  sawit list [instances|db|ports|connections]
+  sawit list [instances|db|ports|connections|tools]
   sawit bakar ports [port ...] [-y]
   sawit bakar instances [name ...] [-y]
+  sawit panen <db> <table|\"sql\"> <file.csv|file.xlsx> [-y]
+  sawit backup <db> [schema|schema.table] <file.sql|file.dump> [-y]
+  sawit tanam <db> <table> <file.csv>
+  sawit pasang <tool ...> [-y]
 
 Examples:
   sawit .                  open this folder as a project (joins the open
@@ -44,6 +48,23 @@ Kebun (databases), no app needed:
                            SIGTERM, then SIGKILL for the stubborn)
   sawit bakar ports 3000   stop whatever listens on :3000
   sawit bakar instances    stop running Sawit instances (data is kept)
+
+  sawit panen kyzn leads leads.xlsx        export a table (CSV or Excel)
+  sawit panen kyzn \"select * from leads where phone is null\" x.csv
+                                           export a query (read-only)
+  sawit backup kyzn kyzn.dump              pg_dump the database (.dump is
+                                           pg_restore's format, else SQL)
+  sawit backup kyzn crm.leads leads.sql    one schema or table
+  sawit tanam kyzn leads leads.csv         load a CSV file into a table
+  An existing file is replaced only after asking (or with -y).
+  Aliases: panen = export, ekspor · backup = dump, cadangkan ·
+  tanam = import, impor · pasang = install. `sawit ./panen` opens a
+  folder named panen.
+
+Tools (the app's Tools page):
+  sawit list tools         package managers, runtimes, AI agents (alat)
+  sawit pasang bun uv      run their official install scripts, prerequisites
+                           first (asks first; -y to skip)
 
 Options:
   -n, --new         always open in a new window
@@ -80,6 +101,10 @@ pub enum Invocation {
     List(ListWhat),
     /// `sawit bakar …`.
     Bakar(BakarArgs),
+    /// `sawit panen|backup|tanam …`.
+    DbJob(DbJob),
+    /// `sawit pasang …`.
+    Pasang(PasangArgs),
     Open {
         request: OpenRequest,
         /// `-` was given: the CLI turns stdin into a file target.
@@ -103,6 +128,13 @@ pub fn parse_args(
         }
         Some("bakar") if words.len() == args.len() => {
             return BakarArgs::parse(&words[1..]).map(Invocation::Bakar);
+        }
+        Some("install" | "pasang") if words.len() == args.len() => {
+            return PasangArgs::parse(&words[1..]).map(Invocation::Pasang);
+        }
+        Some(word) if words.len() == args.len() && DbJob::kind(word).is_some() => {
+            let kind = DbJob::kind(word).expect("checked");
+            return DbJob::parse(kind, &words[1..], cwd).map(Invocation::DbJob);
         }
         _ => {}
     }
@@ -317,7 +349,10 @@ pub fn install_link(link: &Path, exe: &Path) -> std::io::Result<()> {
     if link_state(link, exe) == LinkState::Blocked {
         return Err(std::io::Error::new(
             std::io::ErrorKind::AlreadyExists,
-            format!("{} already exists and isn't a symlink. Move or delete it, then try again.", link.display()),
+            format!(
+                "{} already exists and isn't a symlink. Move or delete it, then try again.",
+                link.display()
+            ),
         ));
     }
     if let Some(dir) = link.parent() {
@@ -447,7 +482,10 @@ mod tests {
     #[test]
     fn subcommands() {
         assert_eq!(parse(&["list"]), Ok(Invocation::List(ListWhat::All)));
-        assert_eq!(parse(&["ls", "ports"]), Ok(Invocation::List(ListWhat::Ports)));
+        assert_eq!(
+            parse(&["ls", "ports"]),
+            Ok(Invocation::List(ListWhat::Ports))
+        );
         assert!(parse(&["list", "hutan"]).is_err());
         let Ok(Invocation::Bakar(bakar)) = parse(&["bakar", "ports", "-y"]) else {
             panic!()
@@ -456,6 +494,41 @@ mod tests {
         assert!(parse(&["bakar"]).is_err());
         // `sawit ./list` still opens a folder named list.
         assert!(matches!(parse(&["./list"]), Ok(Invocation::Open { .. })));
+        assert_eq!(
+            parse(&["ls", "alat"]),
+            Ok(Invocation::List(ListWhat::Tools))
+        );
+    }
+
+    #[test]
+    fn job_subcommands() {
+        let Ok(Invocation::DbJob(job)) = parse(&["export", "kyzn", "leads", "leads.csv"]) else {
+            panic!()
+        };
+        assert_eq!(job.kind, crate::kebun::DbJobKind::Export);
+        assert_eq!(job.path, PathBuf::from("/nope/leads.csv"));
+        assert!(!job.yes);
+        let Ok(Invocation::DbJob(job)) = parse(&["dump", "kyzn", "k.dump", "-y"]) else {
+            panic!()
+        };
+        assert_eq!(job.kind, crate::kebun::DbJobKind::Backup);
+        assert!(job.yes);
+        assert!(matches!(
+            parse(&["impor", "kyzn", "leads", "a.csv"]),
+            Ok(Invocation::DbJob(_))
+        ));
+        assert!(parse(&["panen", "kyzn"]).is_err());
+        assert!(parse(&["tanam"]).is_err());
+        let id = crate::dev_tools::TOOLS[0].id;
+        let Ok(Invocation::Pasang(p)) = parse(&["install", id]) else {
+            panic!()
+        };
+        assert_eq!(p.tools, [id]);
+        assert!(parse(&["pasang"]).is_err());
+        assert!(parse(&["pasang", "nope-tool"]).is_err());
+        // The escape still opens folders with these names.
+        assert!(matches!(parse(&["./panen"]), Ok(Invocation::Open { .. })));
+        assert!(matches!(parse(&["./pasang"]), Ok(Invocation::Open { .. })));
     }
 
     #[test]

@@ -1,6 +1,8 @@
 //! The `sawit` command's terminal tools, which work without the app:
-//! `sawit <db> [table] ["sql"]` like psql, `sawit list`, and `sawit bakar`
-//! ("burn": stop dev servers or instances, like the `kill-dev` script).
+//! `sawit <db> [table] ["sql"]` like psql, `sawit list`, `sawit bakar`
+//! ("burn": stop dev servers or instances, like the `kill-dev` script),
+//! `sawit panen|backup|tanam` (export, `pg_dump`, CSV import) and
+//! `sawit pasang` (install developer tools).
 //! The wording riffs on Indonesia's forest fires (karhutla) and the palm-oil
 //! plantations (kebun sawit) behind them.
 
@@ -20,7 +22,22 @@ use crate::ports::PortJob;
 use crate::probe;
 
 /// Words `sawit` takes as commands rather than database names.
-const SUBCOMMANDS: &[&str] = &["list", "ls", "bakar"];
+const SUBCOMMANDS: &[&str] = &[
+    "list",
+    "ls",
+    "bakar",
+    "export",
+    "ekspor",
+    "panen",
+    "backup",
+    "dump",
+    "cadangkan",
+    "import",
+    "impor",
+    "tanam",
+    "install",
+    "pasang",
+];
 
 /// Rows printed per result set at most.
 const MAX_ROWS: usize = 10_000;
@@ -114,6 +131,8 @@ pub enum ListWhat {
     Databases,
     Ports,
     Connections,
+    /// Developer tools (only when asked: detecting them takes a moment).
+    Tools,
 }
 
 impl ListWhat {
@@ -126,16 +145,17 @@ impl ListWhat {
             Some("connections" | "connection" | "conn" | "koneksi" | "konsesi") => {
                 ListWhat::Connections
             }
+            Some("tools" | "tool" | "alat" | "perkakas") => ListWhat::Tools,
             Some(other) => {
                 return Err(format!(
-                    "`sawit list {other}`? Tidak ada di peta. Pilih: instances, db, ports, connections."
+                    "`sawit list {other}`? Tidak ada di peta. Pilih: instances, db, ports, connections, tools."
                 ));
             }
         })
     }
 
     fn shows(self, part: ListWhat) -> bool {
-        self == ListWhat::All || self == part
+        self == part || (self == ListWhat::All && part != ListWhat::Tools)
     }
 }
 
@@ -176,7 +196,9 @@ impl BakarArgs {
                     "`sawit bakar {other}`? Yang boleh dibakar cuma ports dan instances."
                 ));
             }
-            None => return Err("bakar apa? `sawit bakar ports` atau `sawit bakar instances`.".into()),
+            None => {
+                return Err("bakar apa? `sawit bakar ports` atau `sawit bakar instances`.".into());
+            }
         };
         let targets: Vec<String> = words[1..].iter().map(|w| w.to_string()).collect();
         if what == BakarWhat::Ports
@@ -188,6 +210,113 @@ impl BakarArgs {
     }
 }
 
+/// What `sawit panen|backup|tanam` does with a database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DbJobKind {
+    /// A table or query to CSV/Excel.
+    Export,
+    /// `pg_dump` of the database, a schema or a table.
+    Backup,
+    /// A CSV file into a table.
+    Import,
+}
+
+/// `sawit panen <db> <table|"sql"> <file>`, `sawit backup <db>
+/// [schema|schema.table] <file>`, `sawit tanam <db> <table> <file.csv>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbJob {
+    pub kind: DbJobKind,
+    pub db: String,
+    /// The table, SQL, schema or `schema.table`.
+    pub object: Option<String>,
+    pub path: PathBuf,
+    /// Replace an existing file without asking.
+    pub yes: bool,
+}
+
+impl DbJob {
+    /// The job a subcommand word names, if it names one.
+    pub fn kind(word: &str) -> Option<DbJobKind> {
+        match word {
+            "export" | "ekspor" | "panen" => Some(DbJobKind::Export),
+            "backup" | "dump" | "cadangkan" => Some(DbJobKind::Backup),
+            "import" | "impor" | "tanam" => Some(DbJobKind::Import),
+            _ => None,
+        }
+    }
+
+    pub fn parse(kind: DbJobKind, args: &[&str], cwd: &Path) -> Result<DbJob, String> {
+        let mut words = Vec::new();
+        let mut yes = false;
+        for &arg in args {
+            match arg {
+                "-y" | "--yes" | "--ya" => yes = true,
+                _ if arg.starts_with('-') && arg.len() > 1 => {
+                    return Err(format!("opsi tak dikenal: {arg} (yang ada cuma -y)"));
+                }
+                _ => words.push(arg),
+            }
+        }
+        let usage = match kind {
+            DbJobKind::Export => "sawit panen <db> <tabel|\"sql\"> <file.csv|file.xlsx>",
+            DbJobKind::Backup => "sawit backup <db> [schema|schema.tabel] <file.sql|file.dump>",
+            DbJobKind::Import => "sawit tanam <db> <tabel> <file.csv>",
+        };
+        let (db, object, file) = match (kind, words.as_slice()) {
+            (DbJobKind::Backup, [db, file]) => (*db, None, *file),
+            (_, [db, object, file]) => (*db, Some(*object), *file),
+            _ => return Err(format!("cara pakainya: {usage}")),
+        };
+        let path = crate::cli::absolute(cwd, Path::new(file));
+        if kind == DbJobKind::Export && db::ExportFormat::for_path(&path).is_err() {
+            return Err(format!(
+                "“{file}”: hasil panen cuma bisa .csv atau .xlsx. Karung lain belum ada izinnya."
+            ));
+        }
+        Ok(DbJob {
+            kind,
+            db: db.into(),
+            object: object.map(Into::into),
+            path,
+            yes,
+        })
+    }
+}
+
+/// `sawit pasang <tool…> [-y]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasangArgs {
+    pub tools: Vec<String>,
+    pub yes: bool,
+}
+
+impl PasangArgs {
+    pub fn parse(args: &[&str]) -> Result<PasangArgs, String> {
+        let mut tools = Vec::new();
+        let mut yes = false;
+        for &arg in args {
+            match arg {
+                "-y" | "--yes" | "--ya" => yes = true,
+                _ if arg.starts_with('-') => {
+                    return Err(format!("opsi tak dikenal: {arg} (yang ada cuma -y)"));
+                }
+                _ if crate::dev_tools::find(arg).is_none() => {
+                    return Err(format!(
+                        "“{arg}” tidak ada di katalog bibit. Lihat `sawit list tools`."
+                    ));
+                }
+                _ => tools.push(arg.to_string()),
+            }
+        }
+        if tools.is_empty() {
+            return Err(
+                "pasang apa? Contoh: `sawit pasang bun uv`. Lihat `sawit list tools`.".into(),
+            );
+        }
+        Ok(PasangArgs { tools, yes })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SQL
 // ---------------------------------------------------------------------------
@@ -195,11 +324,47 @@ impl BakarArgs {
 /// First words of complete statements; anything else after a table name is
 /// a filter.
 const SQL_STARTS: &[&str] = &[
-    "select", "with", "insert", "update", "delete", "merge", "explain", "show", "table", "values",
-    "create", "alter", "drop", "truncate", "copy", "set", "reset", "begin", "start", "commit",
-    "rollback", "grant", "revoke", "analyze", "vacuum", "refresh", "call", "do", "comment",
-    "lock", "listen", "notify", "prepare", "execute", "deallocate", "discard", "reindex",
-    "cluster", "declare", "fetch", "close",
+    "select",
+    "with",
+    "insert",
+    "update",
+    "delete",
+    "merge",
+    "explain",
+    "show",
+    "table",
+    "values",
+    "create",
+    "alter",
+    "drop",
+    "truncate",
+    "copy",
+    "set",
+    "reset",
+    "begin",
+    "start",
+    "commit",
+    "rollback",
+    "grant",
+    "revoke",
+    "analyze",
+    "vacuum",
+    "refresh",
+    "call",
+    "do",
+    "comment",
+    "lock",
+    "listen",
+    "notify",
+    "prepare",
+    "execute",
+    "deallocate",
+    "discard",
+    "reindex",
+    "cluster",
+    "declare",
+    "fetch",
+    "close",
 ];
 
 /// Clauses that may follow `SELECT * FROM table` as they are.
@@ -296,7 +461,10 @@ pub async fn find(name: &str, paths: &AppPaths, cwd: &Path) -> Result<Option<Keb
         return Ok(Some(found.clone()));
     }
     let mut partial: Vec<&Kebun> = Vec::new();
-    for k in candidates.iter().filter(|k| k.profile.database.starts_with(name)) {
+    for k in candidates
+        .iter()
+        .filter(|k| k.profile.database.starts_with(name))
+    {
         if !partial.iter().any(|p| p.same_place(k)) {
             partial.push(k);
         }
@@ -497,7 +665,10 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
                 "  {:<16} :{:<6} {status}  {}",
                 inst.name,
                 inst.port,
-                ink.gray(&format!("postgres://postgres@localhost:{}/postgres", inst.port))
+                ink.gray(&format!(
+                    "postgres://postgres@localhost:{}/postgres",
+                    inst.port
+                ))
             );
         }
     }
@@ -549,7 +720,11 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
                         tag
                     );
                     if let Some(cwd) = &job.cwd {
-                        println!("  {:<14} {}", "", ink.gray(&format!("└ {}", tilde(Path::new(cwd)))));
+                        println!(
+                            "  {:<14} {}",
+                            "",
+                            ink.gray(&format!("└ {}", tilde(Path::new(cwd))))
+                        );
                     }
                 }
                 println!(
@@ -569,6 +744,32 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
         for k in profiles {
             println!("  {}  {}", k.profile.name, ink.gray(&k.profile.url()));
         }
+    }
+    if what.shows(ListWhat::Tools) {
+        let found = crate::dev_tools::detect().await;
+        for category in crate::dev_tools::Category::ALL {
+            ink.section(&format!("🧰 {}", category.title()));
+            for t in crate::dev_tools::TOOLS
+                .iter()
+                .filter(|t| t.category == category)
+            {
+                let state = match found.get(t.id) {
+                    Some(f) => ink.green(&format!(
+                        "terpasang{}",
+                        f.version
+                            .as_ref()
+                            .map(|v| format!(" {v}"))
+                            .unwrap_or_default()
+                    )),
+                    None => ink.gray("belum"),
+                };
+                println!("  {:<14} {:<22} {state}", t.id, clip(t.name, 22));
+            }
+        }
+        println!(
+            "  {}",
+            ink.gray("Pasang dengan `sawit pasang <id…>`; prasyaratnya ikut ditanam duluan.")
+        );
     }
     println!();
     0
@@ -629,7 +830,10 @@ async fn bakar_ports(args: BakarArgs, paths: &AppPaths) -> i32 {
         victims.extend(jobs.iter().filter(|j| burnable(j, &instance_ports)));
     }
     for port in args.targets.iter().filter_map(|t| t.parse::<u16>().ok()) {
-        let Some(job) = jobs.iter().find(|j| j.ports.iter().any(|(p, _)| *p == port)) else {
+        let Some(job) = jobs
+            .iter()
+            .find(|j| j.ports.iter().any(|(p, _)| *p == port))
+        else {
             ink.warn(&format!(":{port} tidak ada api di sana."));
             continue;
         };
@@ -668,7 +872,10 @@ async fn bakar_ports(args: BakarArgs, paths: &AppPaths) -> i32 {
             ink.gray(&format!("PID {}{family}", job.root))
         );
         if let Some(cwd) = &job.cwd {
-            println!("       {}", ink.gray(&format!("└ {}", tilde(Path::new(cwd)))));
+            println!(
+                "       {}",
+                ink.gray(&format!("└ {}", tilde(Path::new(cwd))))
+            );
         }
     }
     println!();
@@ -692,7 +899,10 @@ async fn bakar_ports(args: BakarArgs, paths: &AppPaths) -> i32 {
         }
     }
 
-    let pids: Vec<u32> = victims.iter().flat_map(|j| j.pids.iter().copied()).collect();
+    let pids: Vec<u32> = victims
+        .iter()
+        .flat_map(|j| j.pids.iter().copied())
+        .collect();
     let mut refused = Vec::new();
     for &pid in &pids {
         if let Err(e) = probe::terminate(pid, false) {
@@ -700,7 +910,11 @@ async fn bakar_ports(args: BakarArgs, paths: &AppPaths) -> i32 {
         }
     }
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let survivors: Vec<u32> = pids.iter().copied().filter(|&p| probe::is_alive(p)).collect();
+    let survivors: Vec<u32> = pids
+        .iter()
+        .copied()
+        .filter(|&p| probe::is_alive(p))
+        .collect();
     if !survivors.is_empty() {
         ink.warn(&format!(
             "{} proses tidak padam disiram SIGTERM. Kirim water bombing (SIGKILL).",
@@ -805,6 +1019,230 @@ async fn bakar_instances(args: BakarArgs, paths: &AppPaths) -> i32 {
     );
     ink.footer("Selesai. Datanya aman, tidak seperti hutannya.");
     i32::from(out > 0)
+}
+
+/// Whether `path` may be written: new, or replacing it was allowed.
+fn may_write(path: &Path, yes: bool, ink: &Ink) -> bool {
+    if yes || !path.exists() {
+        return true;
+    }
+    match confirm(&format!("{} sudah ada. Timpa?", tilde(path))) {
+        Some(answer) => answer,
+        None => {
+            eprintln!(
+                "{} {} sudah ada dan tidak ada saksi (stdin bukan terminal). Tambahkan -y untuk menimpa.",
+                ink.red("🔥"),
+                tilde(path)
+            );
+            false
+        }
+    }
+}
+
+/// `sawit panen|backup|tanam …`.
+pub async fn db_job(job: DbJob, paths: &AppPaths, cwd: &Path) -> i32 {
+    let ink = Ink::stderr();
+    if job.kind != DbJobKind::Import && !may_write(&job.path, job.yes, &ink) {
+        return 1;
+    }
+    let kebun = match find(&job.db, paths, cwd).await {
+        Ok(Some(kebun)) => kebun,
+        Ok(None) => {
+            eprintln!(
+                "{} Kebun “{}” tidak ada di peta. Lihat `sawit list db`.",
+                ink.red("🔥"),
+                job.db
+            );
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("{} {e}", ink.red("🔥"));
+            return 1;
+        }
+    };
+    let p = &kebun.profile;
+    eprintln!(
+        "{}",
+        ink.gray(&format!(
+            "🌴 {} · {}:{} · {}",
+            p.database, p.host, p.port, kebun.via
+        ))
+    );
+    let client = match db::connect(p, kebun.password.as_deref()).await {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("{} Gagal masuk kebun {}: {e}", ink.red("🔥"), p.database);
+            return 1;
+        }
+    };
+    let started = std::time::Instant::now();
+    let object = job.object.as_deref();
+    let split = |o: &str| match o.split_once('.') {
+        Some((schema, table)) => (Some(schema.to_string()), table.to_string()),
+        None => (None, o.to_string()),
+    };
+    let done = match job.kind {
+        DbJobKind::Export => {
+            let object = object.unwrap_or_default();
+            let result = if object.contains(char::is_whitespace) {
+                db::export_query(&client, object, &job.path).await
+            } else {
+                let (schema, table) = split(object);
+                db::export_table(&client, schema.as_deref(), &table, &job.path).await
+            };
+            result.map(|s| {
+                let mut text = format!("dipanen {} baris ke {}", s.rows, tilde(&job.path));
+                if s.truncated {
+                    text.push_str(
+                        " · karung Excel penuh (1.048.576 baris), pakai .csv untuk semuanya",
+                    );
+                }
+                text
+            })
+        }
+        DbJobKind::Backup => {
+            let scope = match object {
+                None => Ok(db::BackupScope::Database),
+                Some(o) => match db::load_schema(&client).await {
+                    Ok(schemas) if !o.contains('.') && schemas.iter().any(|s| s.name == o) => {
+                        Ok(db::BackupScope::Schema(o.into()))
+                    }
+                    Ok(schemas) => {
+                        let (schema, table) = split(o);
+                        db::find_relation(&schemas, schema.as_deref(), &table).map(|(s, r)| {
+                            db::BackupScope::Table {
+                                schema: s.into(),
+                                table: r.name.clone(),
+                            }
+                        })
+                    }
+                    Err(e) => Err(e),
+                },
+            };
+            match scope {
+                Ok(scope) => {
+                    let roots =
+                        crate::binaries::SearchRoots::detect(paths.managed_bin_root()).await;
+                    let binaries = crate::binaries::discover(&roots).await;
+                    db::backup(
+                        &client,
+                        p,
+                        kebun.password.as_deref(),
+                        &binaries,
+                        &scope,
+                        &job.path,
+                    )
+                    .await
+                    .map(|()| {
+                        let size = std::fs::metadata(&job.path).map(|m| m.len()).unwrap_or(0);
+                        format!(
+                            "bibit cadangan disimpan di {} ({} KB)",
+                            tilde(&job.path),
+                            size.div_ceil(1024)
+                        )
+                    })
+                }
+                Err(e) => Err(e),
+            }
+        }
+        DbJobKind::Import => {
+            let (schema, table) = split(object.unwrap_or_default());
+            match db::load_schema(&client).await.and_then(|schemas| {
+                db::find_relation(&schemas, schema.as_deref(), &table)
+                    .map(|(s, r)| (s.to_string(), r.name.clone()))
+            }) {
+                Ok((schema, table)) => db::import_csv(&client, &schema, &table, &job.path)
+                    .await
+                    .map(|n| format!("ditanam {n} baris di {schema}.{table}")),
+                Err(e) => Err(e),
+            }
+        }
+    };
+    match done {
+        Ok(text) => {
+            eprintln!(
+                "{}",
+                ink.gray(&format!("🌾 {text} · {} ms", started.elapsed().as_millis()))
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("{} Gagal: {e}", ink.red("🔥"));
+            1
+        }
+    }
+}
+
+/// `sawit pasang <tool…>`.
+pub async fn pasang(args: PasangArgs) -> i32 {
+    use crate::dev_tools;
+    let ink = Ink::stdout();
+    ink.header(
+        "🌱 Pasang Bibit (tools)",
+        "skrip instal resmi tiap alat (curl … | sh). Prasyarat ditanam duluan",
+    );
+    let found = dev_tools::detect().await;
+    for id in args.tools.iter().filter(|t| found.contains_key(t.as_str())) {
+        ink.empty(&format!("{id} sudah terpasang"));
+    }
+    let wanted: Vec<&str> = args.tools.iter().map(|t| t.as_str()).collect();
+    let plan: Vec<_> = dev_tools::plan(&wanted, &|id| found.contains_key(id))
+        .into_iter()
+        .filter(|t| !found.contains_key(t.id))
+        .collect();
+    if plan.is_empty() {
+        ink.footer("Tidak ada yang perlu dipasang.");
+        return 0;
+    }
+    ink.section(&format!("Bibit ({})", plan.len()));
+    for (ix, t) in plan.iter().enumerate() {
+        println!(
+            "  {} {:<14} {}",
+            ink.gray(&format!("{:>3}.", ix + 1)),
+            t.id,
+            ink.gray(t.install)
+        );
+    }
+    println!();
+    if !args.yes {
+        match confirm(&format!("Jalankan {} skrip instal di atas?", plan.len())) {
+            Some(true) => {}
+            Some(false) => {
+                ink.footer("Batal. Lahan dibiarkan kosong.");
+                return 0;
+            }
+            None => {
+                println!(
+                    "  {} Tidak ada saksi (stdin bukan terminal). Tambahkan -y kalau memang mau memasang.",
+                    ink.red("✗")
+                );
+                return 1;
+            }
+        }
+    }
+    for tool in plan {
+        if tool.interactive {
+            // It asks for a password, which the installer can't read here.
+            ink.warn(&format!(
+                "{} minta kata sandi. Jalankan sendiri, lalu ulangi:\n      {}",
+                tool.id, tool.install
+            ));
+            ink.footer("Berhenti di sini; yang berikutnya mungkin butuh dia.");
+            return 1;
+        }
+        println!("  {} {}", ink.yellow("⏳"), tool.name);
+        let gray = |line: String| println!("     {}", ink.gray(&clip(&line, 100)));
+        match dev_tools::install(tool, gray).await {
+            Ok(()) => println!("  {} {} terpasang", ink.green("✓"), tool.id),
+            Err(e) => {
+                println!("  {} {}: {e}", ink.red("✗"), tool.id);
+                ink.footer("Gagal tumbuh. Sisanya tidak ditanam.");
+                return 1;
+            }
+        }
+    }
+    ink.footer("Selesai. Buka terminal baru supaya PATH-nya ikut segar.");
+    0
 }
 
 /// Asks on the terminal; `None` when stdin isn't one.
@@ -948,11 +1386,11 @@ mod tests {
                 Some("select * from leads where phone is null")
             )
         );
+        assert_eq!(q(&["kyzn", "select 1"]), qa("kyzn", None, Some("select 1")));
         assert_eq!(
-            q(&["kyzn", "select 1"]),
-            qa("kyzn", None, Some("select 1"))
+            q(&["kyzn", "crm.leads"]),
+            qa("kyzn", Some("crm.leads"), None)
         );
-        assert_eq!(q(&["kyzn", "crm.leads"]), qa("kyzn", Some("crm.leads"), None));
     }
 
     #[test]
@@ -990,7 +1428,10 @@ mod tests {
             "SELECT * FROM \"leads\" LIMIT 100"
         );
         assert_eq!(
-            plan_sql(Some("leads"), Some("select * from leads where phone is null")),
+            plan_sql(
+                Some("leads"),
+                Some("select * from leads where phone is null")
+            ),
             "select * from leads where phone is null"
         );
         assert_eq!(
@@ -1006,7 +1447,10 @@ mod tests {
             "(select 1) union (select 2)"
         );
         assert_eq!(
-            plan_sql(Some("\"Leads\""), Some("WITH x AS (select 1) select * from x")),
+            plan_sql(
+                Some("\"Leads\""),
+                Some("WITH x AS (select 1) select * from x")
+            ),
             "WITH x AS (select 1) select * from x"
         );
         assert_eq!(plan_sql(None, Some("select 1")), "select 1");
@@ -1044,5 +1488,72 @@ mod tests {
         assert!(BakarArgs::parse(&["hutan"]).is_err());
         assert!(BakarArgs::parse(&["ports", "dev"]).is_err());
         assert!(BakarArgs::parse(&["ports", "--force"]).is_err());
+    }
+
+    #[test]
+    fn list_tools_only_when_asked() {
+        assert_eq!(ListWhat::parse(Some("perkakas")), Ok(ListWhat::Tools));
+        assert_eq!(ListWhat::parse(Some("tools")), Ok(ListWhat::Tools));
+        assert!(ListWhat::Tools.shows(ListWhat::Tools));
+        assert!(!ListWhat::All.shows(ListWhat::Tools));
+        assert!(ListWhat::All.shows(ListWhat::Ports));
+    }
+
+    #[test]
+    fn db_job_words() {
+        let cwd = Path::new("/w");
+        assert_eq!(DbJob::kind("panen"), Some(DbJobKind::Export));
+        assert_eq!(DbJob::kind("dump"), Some(DbJobKind::Backup));
+        assert_eq!(DbJob::kind("tanam"), Some(DbJobKind::Import));
+        assert_eq!(DbJob::kind("hutan"), None);
+        assert_eq!(
+            DbJob::parse(DbJobKind::Export, &["kyzn", "leads", "out.xlsx", "-y"], cwd),
+            Ok(DbJob {
+                kind: DbJobKind::Export,
+                db: "kyzn".into(),
+                object: Some("leads".into()),
+                path: PathBuf::from("/w/out.xlsx"),
+                yes: true,
+            })
+        );
+        assert!(DbJob::parse(DbJobKind::Export, &["kyzn", "leads", "out.json"], cwd).is_err());
+        assert!(DbJob::parse(DbJobKind::Export, &["kyzn", "out.csv"], cwd).is_err());
+        let backup = DbJob::parse(DbJobKind::Backup, &["kyzn", "/b/kyzn.dump"], cwd).unwrap();
+        assert_eq!(backup.object, None);
+        assert_eq!(backup.path, PathBuf::from("/b/kyzn.dump"));
+        let table = DbJob::parse(DbJobKind::Backup, &["kyzn", "crm.leads", "x.sql"], cwd).unwrap();
+        assert_eq!(table.object.as_deref(), Some("crm.leads"));
+        assert!(DbJob::parse(DbJobKind::Import, &["kyzn", "leads.csv"], cwd).is_err());
+        assert!(
+            DbJob::parse(
+                DbJobKind::Import,
+                &["kyzn", "leads", "a.csv", "--force"],
+                cwd
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn pasang_words() {
+        let id = crate::dev_tools::TOOLS[0].id;
+        assert_eq!(
+            PasangArgs::parse(&[id, "-y"]),
+            Ok(PasangArgs {
+                tools: vec![id.into()],
+                yes: true
+            })
+        );
+        assert!(PasangArgs::parse(&[]).is_err());
+        assert!(PasangArgs::parse(&["-y"]).is_err());
+        assert!(PasangArgs::parse(&["sawit-palsu"]).is_err());
+        assert!(PasangArgs::parse(&[id, "--force"]).is_err());
+    }
+
+    #[test]
+    fn job_words_are_not_databases() {
+        assert_eq!(q(&["panen", "kyzn", "a.csv"]), None);
+        assert_eq!(q(&["backup", "kyzn"]), None);
+        assert_eq!(q(&["pasang", "bun"]), None);
     }
 }

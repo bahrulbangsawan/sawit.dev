@@ -16,11 +16,11 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use gpui_kit::component::TitleBar;
 use gpui_kit::*;
+use sawit_core::app_control::{self, Command as ControlCommand, reply_error, reply_ok};
 use sawit_core::cli::{
     CLI_LINK, Invocation, OpenRequest, REPLY_DONE, REPLY_ERROR, REPLY_OK, Target, USAGE, decode,
     encode, install_link, install_link_as_admin, parse_args,
 };
-use sawit_core::app_control::{self, Command as ControlCommand, reply_error, reply_ok};
 use sawit_core::cli::{LinkState, link_state};
 use sawit_core::instances::AppPaths;
 use sawit_core::kebun;
@@ -55,6 +55,12 @@ pub fn command_line() -> OpenRequest {
         }
         Ok(Invocation::Bakar(bakar)) => {
             std::process::exit(kebun::block_on(kebun::bakar(bakar, &paths)));
+        }
+        Ok(Invocation::DbJob(job)) => {
+            std::process::exit(kebun::block_on(kebun::db_job(job, &paths, &cwd)));
+        }
+        Ok(Invocation::Pasang(args)) => {
+            std::process::exit(kebun::block_on(kebun::pasang(args)));
         }
         Ok(Invocation::Help) => {
             print!("{USAGE}");
@@ -547,7 +553,11 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
                 return Err(format!("{} isn't an absolute path.", path.display()));
             }
             let request = OpenRequest {
-                targets: vec![Target { path: path.clone(), line, column }],
+                targets: vec![Target {
+                    path: path.clone(),
+                    line,
+                    column,
+                }],
                 new_window,
                 ..OpenRequest::default()
             };
