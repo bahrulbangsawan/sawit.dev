@@ -1,6 +1,6 @@
 //! Project file tree (left panel), loaded lazily per folder.
 
-mod ops;
+pub(crate) mod ops;
 pub mod search;
 
 use std::collections::{HashMap, HashSet};
@@ -76,7 +76,10 @@ pub enum FilesEvent {
     OpenFile(PathBuf),
     RootChanged(PathBuf),
     /// A file or folder was renamed or moved; its open tabs follow it.
-    Moved { from: PathBuf, to: PathBuf },
+    Moved {
+        from: PathBuf,
+        to: PathBuf,
+    },
     OpenTerminal(PathBuf),
     FindInFolder(PathBuf),
     ViewHistory(PathBuf),
@@ -370,7 +373,10 @@ impl FilesPanel {
             (None, crate::file_icons::file_icon(&entry.path, cx))
         };
         let name = entry.name.clone();
-        let cut = self.clip.as_ref().is_some_and(|c| c.cut && c.path == entry.path);
+        let cut = self
+            .clip
+            .as_ref()
+            .is_some_and(|c| c.cut && c.path == entry.path);
         let path = entry.path.clone();
         let menu = self.menu_state();
         let focus = self.focus.clone();
@@ -418,18 +424,25 @@ impl FilesPanel {
             Some(Edit {
                 kind: EditKind::New { dir: true },
                 ..
-            }) => Icon::new(IconName::Folder).xsmall().text_color(muted).into_any_element(),
+            }) => Icon::new(IconName::Folder)
+                .xsmall()
+                .text_color(muted)
+                .into_any_element(),
             Some(Edit {
                 kind: EditKind::Rename(path),
                 ..
-            }) if path.is_dir() => {
-                Icon::new(IconName::Folder).xsmall().text_color(muted).into_any_element()
-            }
+            }) if path.is_dir() => Icon::new(IconName::Folder)
+                .xsmall()
+                .text_color(muted)
+                .into_any_element(),
             Some(Edit {
                 kind: EditKind::Rename(path),
                 ..
             }) => crate::file_icons::file_icon(path, cx),
-            _ => Icon::new(IconName::File).xsmall().text_color(muted).into_any_element(),
+            _ => Icon::new(IconName::File)
+                .xsmall()
+                .text_color(muted)
+                .into_any_element(),
         };
         h_flex()
             .id(("file-row", ix))
@@ -444,9 +457,9 @@ impl FilesPanel {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .on_action(cx.listener(|this, _: &Escape, window, cx| {
-                        this.cancel_edit(window, cx)
-                    }))
+                    .on_action(
+                        cx.listener(|this, _: &Escape, window, cx| this.cancel_edit(window, cx)),
+                    )
                     .child(Input::new(&e.input).xsmall())
             }))
             .into_any_element()
@@ -597,7 +610,9 @@ impl Render for FilesPanel {
                                         .small()
                                         .primary()
                                         .label("Open Folder…")
-                                        .on_click(cx.listener(|this, _, _, cx| this.prompt_open(cx))),
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.prompt_open(cx)),
+                                        ),
                                 ),
                         ),
                         (Some(root), Some(e)) => {
@@ -662,7 +677,11 @@ fn file_menu(menu: PopupMenu, focus: FocusHandle, can: MenuState) -> PopupMenu {
         .menu("Copy Relative Path", Box::new(CopyRelativePath))
         .separator()
         .menu_with_disabled("Add to .gitignore", Box::new(AddToGitignore), !can.git)
-        .menu_with_disabled("Add to .git/info/exclude", Box::new(AddToGitExclude), !can.git)
+        .menu_with_disabled(
+            "Add to .git/info/exclude",
+            Box::new(AddToGitExclude),
+            !can.git,
+        )
         .menu_with_disabled("View History", Box::new(ViewHistory), !can.git)
         .separator()
         .menu("Rename", Box::new(Rename))
@@ -757,9 +776,9 @@ impl FilesPanel {
     ) {
         // Rename selects the name without its extension.
         let stem = match &kind {
-            EditKind::Rename(path) if !path.is_dir() => Path::new(name)
-                .file_stem()
-                .map_or(name.len(), |s| s.len()),
+            EditKind::Rename(path) if !path.is_dir() => {
+                Path::new(name).file_stem().map_or(name.len(), |s| s.len())
+            }
             _ => name.len(),
         };
         let input = cx.new(|cx| {
@@ -768,13 +787,15 @@ impl FilesPanel {
             state.set_selected_range(0..stem, cx);
             state
         });
-        let subscription = cx.subscribe_in(&input, window, |this, _, e: &InputEvent, window, cx| {
-            match e {
+        let subscription = cx.subscribe_in(
+            &input,
+            window,
+            |this, _, e: &InputEvent, window, cx| match e {
                 InputEvent::PressEnter { .. } => this.confirm_edit(window, cx),
                 InputEvent::Blur => this.cancel_edit(window, cx),
                 _ => {}
-            }
-        });
+            },
+        );
         input.update(cx, |s, cx| s.focus(window, cx));
         self.error = None;
         self.edit = Some(Edit {
@@ -887,18 +908,36 @@ impl FilesPanel {
         let (Some(clip), Some(dir)) = (self.clip.clone(), self.target_dir()) else {
             return;
         };
-        let Some(name) = clip.path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+        let Some(name) = clip
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+        else {
             return;
         };
         if clip.cut {
             let to = dir.join(&name);
             if to != clip.path {
                 self.clip = None;
-                self.run(Op::Move { from: clip.path, to }, Step::Do, cx);
+                self.run(
+                    Op::Move {
+                        from: clip.path,
+                        to,
+                    },
+                    Step::Do,
+                    cx,
+                );
             }
         } else {
             let to = files::free_name(&dir, &name, clip.path.is_dir());
-            self.run(Op::Copy { from: clip.path, to }, Step::Do, cx);
+            self.run(
+                Op::Copy {
+                    from: clip.path,
+                    to,
+                },
+                Step::Do,
+                cx,
+            );
         }
     }
 
