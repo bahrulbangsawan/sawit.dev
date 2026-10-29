@@ -61,6 +61,9 @@ Expected: all pass. Record any pre-existing failure in this plan before going on
 Run: `cargo build --release -p sawit && ls -l target/release/sawit`
 Expected: the build succeeds. Record the byte size here.
 
+> **Baseline (2026-10-29, at `0f5df5e`):** fmt, clippy and `cargo test --workspace` all pass
+> (449 passed, 9 ignored, no pre-existing failures). `target/release/sawit` is **35,670,592 bytes**.
+
 ### Task 1: `sawit-board` crate and `BoardDoc`
 
 **Files:**
