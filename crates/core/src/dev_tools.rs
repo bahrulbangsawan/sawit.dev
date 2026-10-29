@@ -52,6 +52,9 @@ pub struct Tool {
     pub also: &'static [&'static str],
     /// The install command, run by the login shell.
     pub install: &'static str,
+    /// The command that removes what `install` put in place, when there is
+    /// one (npm ships with Node.js, so it has none).
+    pub uninstall: Option<&'static str>,
     /// Ids of tools that must be installed first.
     pub needs: &'static [&'static str],
     /// Asks for the user's password, so it runs in the terminal instead.
@@ -97,6 +100,7 @@ const fn tool(
         bin,
         also: &[],
         install,
+        uninstall: None,
         needs: &[],
         interactive: false,
         version: true,
@@ -109,6 +113,9 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         latest: Latest::GitHub("Homebrew/brew"),
         upgrade: Some("brew update"),
+        uninstall: Some(
+            r#"/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/uninstall.sh)""#,
+        ),
         interactive: true,
         also: &["/opt/homebrew/bin/brew", "/usr/local/bin/brew"],
         ..tool(
@@ -121,6 +128,7 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        uninstall: Some(r#"rm -rf "$NVM_DIR""#),
         also: &["~/.nvm/nvm.sh"],
         version: false,
         ..tool(
@@ -135,6 +143,7 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         latest: Latest::Npm("pnpm"),
         upgrade: Some("pnpm self-update"),
+        uninstall: Some(r#"rm -rf "$HOME/Library/pnpm""#),
         also: &["~/Library/pnpm/pnpm"],
         ..tool(
             "pnpm",
@@ -160,6 +169,11 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         latest: Latest::GitHub("astral-sh/uv"),
         upgrade: Some("uv self update"),
+        uninstall: Some(
+            r#"uv cache clean || true
+rm -rf "$(uv python dir)" "$(uv tool dir)"
+rm -f "$HOME/.local/bin/uv" "$HOME/.local/bin/uvx""#,
+        ),
         also: &["~/.local/bin/uv"],
         ..tool(
             "uv",
@@ -171,6 +185,11 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        uninstall: Some(
+            r#"nvm deactivate >/dev/null 2>&1 || true
+nvm uninstall "$(nvm version default)"
+nvm unalias default"#,
+        ),
         needs: &["nvm"],
         ..tool(
             "node",
@@ -184,6 +203,7 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         latest: Latest::GitHub("oven-sh/bun"),
         upgrade: Some("bun upgrade"),
+        uninstall: Some(r#"rm -rf "$HOME/.bun""#),
         also: &["~/.bun/bin/bun"],
         ..tool(
             "bun",
@@ -197,6 +217,7 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         latest: Latest::GitHub("denoland/deno"),
         upgrade: Some("deno upgrade"),
+        uninstall: Some(r#"rm -rf "$HOME/.deno""#),
         also: &["~/.deno/bin/deno"],
         ..tool(
             "deno",
@@ -208,6 +229,7 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        uninstall: Some("uv python uninstall --all"),
         needs: &["uv"],
         also: &["~/.local/bin/python3"],
         ..tool(
@@ -222,6 +244,7 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         latest: Latest::GitHub("rust-lang/rust"),
         upgrade: Some("rustup update stable"),
+        uninstall: Some("rustup self uninstall -y"),
         also: &["~/.cargo/bin/rustc"],
         ..tool(
             "rust",
@@ -235,6 +258,10 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         latest: Latest::Npm("@anthropic-ai/claude-code"),
         upgrade: Some("claude update"),
+        uninstall: Some(
+            r#"rm -f "$HOME/.local/bin/claude"
+rm -rf "$HOME/.local/share/claude""#,
+        ),
         also: &["~/.local/bin/claude"],
         ..tool(
             "claude-code",
@@ -247,6 +274,7 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         latest: Latest::Npm("@openai/codex"),
+        uninstall: Some(r#"rm -f "$HOME/.local/bin/codex""#),
         also: &["~/.local/bin/codex"],
         ..tool(
             "codex",
@@ -258,6 +286,7 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        uninstall: Some(r#"rm -f "$HOME/.local/bin/omp""#),
         also: &["~/.local/bin/omp"],
         ..tool(
             "omp",
@@ -271,6 +300,7 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         latest: Latest::Npm("opencode-ai"),
         upgrade: Some("opencode upgrade"),
+        uninstall: Some(r#"rm -rf "$HOME/.opencode""#),
         also: &["~/.opencode/bin/opencode"],
         ..tool(
             "opencode",
@@ -283,6 +313,10 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         latest: Latest::Npm("@sourcegraph/amp"),
+        uninstall: Some(
+            r#"rm -f "$HOME/.local/bin/amp"
+rm -rf "$HOME/.amp""#,
+        ),
         also: &["~/.local/bin/amp", "~/.amp/bin/amp"],
         ..tool(
             "amp",
@@ -294,6 +328,10 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        uninstall: Some(
+            r#"rm -f "$HOME/.local/bin/cursor-agent" "$HOME/.local/bin/agent"
+rm -rf "$HOME/.local/share/cursor-agent""#,
+        ),
         also: &["~/.local/bin/cursor-agent"],
         ..tool(
             "cursor",
@@ -305,6 +343,7 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        uninstall: Some(r#"rm -f "$HOME/.local/bin/droid""#),
         also: &["~/.local/bin/droid"],
         ..tool(
             "droid",
@@ -316,6 +355,7 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        uninstall: Some(r#"rm -f "$HOME/.local/bin/kiro-cli""#),
         also: &["~/.local/bin/kiro-cli"],
         ..tool(
             "kiro",
@@ -328,6 +368,7 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         latest: Latest::Npm("@google/gemini-cli"),
+        uninstall: Some("npm uninstall -g @google/gemini-cli"),
         needs: &["node"],
         ..tool(
             "gemini",
@@ -339,6 +380,7 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        uninstall: Some(r#"rm -f "$HOME/.local/bin/herdr""#),
         also: &["~/.local/bin/herdr"],
         ..tool(
             "herdr",
@@ -350,6 +392,10 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        uninstall: Some(
+            r#"rm -f "$(command -v cap)"
+rm -rf "/Applications/Cap.app" "$HOME/Applications/Cap.app""#,
+        ),
         also: &["/Applications/Cap.app", "~/Applications/Cap.app"],
         version: false,
         ..tool(
@@ -363,6 +409,10 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         latest: Latest::GitHub("zed-industries/zed"),
+        uninstall: Some(
+            r#"rm -f "$HOME/.local/bin/zed"
+rm -rf "/Applications/Zed.app" "$HOME/Applications/Zed.app""#,
+        ),
         also: &["/Applications/Zed.app", "~/Applications/Zed.app"],
         ..tool(
             "zed",
@@ -375,6 +425,7 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         latest: Latest::GitHub("starship/starship"),
+        uninstall: Some(r#"rm -f "$HOME/.local/bin/starship""#),
         also: &["~/.local/bin/starship"],
         ..tool(
             "starship",
@@ -388,6 +439,7 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         latest: Latest::GitHub("superfly/flyctl"),
         upgrade: Some("flyctl version upgrade"),
+        uninstall: Some(r#"rm -rf "$HOME/.fly""#),
         also: &["~/.fly/bin/flyctl"],
         ..tool(
             "flyio",
@@ -668,13 +720,83 @@ pub fn is_newer(latest: &str, installed: &str) -> bool {
 }
 
 /// Runs `tool`'s installer, sending each line it prints to `on_line`.
-/// Fails with the last lines of output when it exits non-zero.
+/// Fails with the last lines of output when it exits non-zero. Dropping
+/// the future stops the installer and everything it started.
 pub async fn install(tool: &Tool, on_line: impl Fn(String) + Send + Sync) -> Result<()> {
-    run(tool, tool.install, on_line).await
+    run_script(tool.name, tool.install, on_line).await
 }
 
 /// Runs `command` (`tool`'s installer or upgrade) like [`install`].
 pub async fn run(tool: &Tool, command: &str, on_line: impl Fn(String) + Send + Sync) -> Result<()> {
+    run_script(tool.name, command, on_line).await
+}
+
+/// How to remove the copy of `tool` found at `found`: `brew uninstall`
+/// when Homebrew put it there, the tool's own command when its installer
+/// did (under the home folder, or at one of its known locations), and
+/// `None` for anything else, which Sawit leaves alone.
+pub fn uninstall_command(tool: &Tool, found: &std::path::Path) -> Option<String> {
+    let real = std::fs::canonicalize(found).unwrap_or_else(|_| found.to_path_buf());
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    uninstall_command_in(tool, found, &real, &home)
+}
+
+fn uninstall_command_in(
+    tool: &Tool,
+    found: &std::path::Path,
+    real: &std::path::Path,
+    home: &std::path::Path,
+) -> Option<String> {
+    let parts: Vec<_> = real
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect();
+    if tool.id != "homebrew"
+        && let Some(ix) = parts.iter().position(|p| p == "Cellar")
+        && let Some(formula) = parts.get(ix + 1)
+    {
+        return Some(format!("brew uninstall {formula}"));
+    }
+    let ours = found.starts_with(home)
+        || real.starts_with(home)
+        || tool.also.iter().any(|p| expand(p) == found);
+    ours.then_some(tool.uninstall).flatten().map(String::from)
+}
+
+/// Runs an uninstall `command` for `tool`, like [`install`].
+pub async fn uninstall(
+    tool: &Tool,
+    command: &str,
+    on_line: impl Fn(String) + Send + Sync,
+) -> Result<()> {
+    run_script(tool.name, command, on_line).await
+}
+
+/// The tools that need `id` installed first.
+pub fn dependents(id: &str) -> Vec<&'static Tool> {
+    TOOLS.iter().filter(|t| t.needs.contains(&id)).collect()
+}
+
+/// Ends the process group `shell()` started (curl, bash and whatever the
+/// script spawned) when the run is dropped before it exits.
+struct KillGroup(Option<i32>);
+
+impl Drop for KillGroup {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(pid) = self.0 {
+            unsafe {
+                libc::killpg(pid, libc::SIGTERM);
+            }
+        }
+    }
+}
+
+async fn run_script(
+    name: &str,
+    command: &str,
+    on_line: impl Fn(String) + Send + Sync,
+) -> Result<()> {
     let script = format!("{PRELUDE}set -e\n{command}\n");
     let mut cmd = shell();
     cmd.arg("-c")
@@ -682,6 +804,8 @@ pub async fn run(tool: &Tool, command: &str, on_line: impl Fn(String) + Send + S
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = cmd.spawn()?;
+    // `setsid` made the shell a group leader, so its pid is the group's.
+    let mut group = KillGroup(child.id().map(|pid| pid as i32));
     let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
     let tail = std::sync::Mutex::new(Vec::<String>::new());
     let read = |pipe: Option<Box<dyn AsyncRead + Unpin + Send>>| {
@@ -712,25 +836,26 @@ pub async fn run(tool: &Tool, command: &str, on_line: impl Fn(String) + Send + S
             }
         }
     };
-    let run = async {
+    let wait = async {
         futures::join!(
             read(stdout.map(|p| Box::new(p) as Box<dyn AsyncRead + Unpin + Send>)),
             read(stderr.map(|p| Box::new(p) as Box<dyn AsyncRead + Unpin + Send>)),
         );
         child.wait().await
     };
-    let status = tokio::time::timeout(Duration::from_secs(15 * 60), run)
+    let status = tokio::time::timeout(Duration::from_secs(15 * 60), wait)
         .await
         .map_err(|_| CoreError::Command {
-            program: tool.name.into(),
+            program: name.into(),
             code: None,
             stderr: "timed out after 15 minutes".into(),
         })??;
+    group.0 = None;
     if status.success() {
         Ok(())
     } else {
         Err(CoreError::Command {
-            program: tool.name.into(),
+            program: name.into(),
             code: status.code(),
             stderr: tail.into_inner().unwrap().join("\n"),
         })
@@ -776,6 +901,79 @@ mod tests {
                 assert!(find(need).is_some(), "{} needs unknown {need}", t.id);
             }
         }
+    }
+
+    #[test]
+    fn everything_but_npm_can_be_uninstalled() {
+        for t in TOOLS {
+            assert_eq!(t.uninstall.is_none(), t.id == "npm", "{}", t.id);
+        }
+        let ids: Vec<_> = dependents("node").iter().map(|t| t.id).collect();
+        assert_eq!(ids, ["npm", "gemini"]);
+    }
+
+    #[test]
+    fn uninstall_follows_who_installed_it() {
+        let home = std::path::Path::new("/Users/me");
+        let p = std::path::Path::new;
+        let uv = find("uv").unwrap();
+        // Homebrew's copy: brew removes it, not uv's own script.
+        assert_eq!(
+            uninstall_command_in(
+                uv,
+                p("/opt/homebrew/bin/uv"),
+                p("/opt/homebrew/Cellar/uv/0.12.1/bin/uv"),
+                home
+            )
+            .as_deref(),
+            Some("brew uninstall uv")
+        );
+        // The installer's copy under the home folder.
+        assert_eq!(
+            uninstall_command_in(
+                uv,
+                p("/Users/me/.local/bin/uv"),
+                p("/Users/me/.local/bin/uv"),
+                home
+            ),
+            uv.uninstall.map(String::from)
+        );
+        // Somewhere else: left alone.
+        assert_eq!(
+            uninstall_command_in(uv, p("/usr/local/bin/uv"), p("/usr/local/bin/uv"), home),
+            None
+        );
+        // Homebrew itself, at its known location.
+        let brew = find("homebrew").unwrap();
+        assert!(
+            uninstall_command_in(
+                brew,
+                p("/opt/homebrew/bin/brew"),
+                p("/opt/homebrew/bin/brew"),
+                home
+            )
+            .is_some_and(|c| c.contains("uninstall.sh"))
+        );
+    }
+
+    #[tokio::test]
+    async fn dropping_a_run_stops_everything_it_started() {
+        let marker = format!("sleep 31.{}", std::process::id());
+        let script = format!("{marker} & {marker}");
+        let alive = || {
+            std::process::Command::new("/usr/bin/pgrep")
+                .args(["-f", &marker])
+                .output()
+                .is_ok_and(|o| o.status.success())
+        };
+        let run = run_script("test", &script, |_| {});
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1500), run)
+                .await
+                .is_err()
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!alive(), "the script's processes outlived the run");
     }
 
     #[test]

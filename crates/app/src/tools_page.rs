@@ -3,11 +3,14 @@
 //! is missing; prerequisites (nvm before Node.js, uv before Python) are
 //! queued first. Rows change state as soon as they are queued and show
 //! "Installed" the moment the installer succeeds; the next detection
-//! confirms it. Installed tools with a newer release offer an upgrade.
+//! confirms it. Installed tools with a newer release offer an upgrade, any
+//! installed tool can be uninstalled, and the installer, upgrade or
+//! uninstaller that is running can be stopped.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use futures::StreamExt as _;
+use futures::future::{AbortHandle, abortable};
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
@@ -17,7 +20,8 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::dev_tools::{
-    Category, Found, TOOLS, Tool, detect, find, is_newer, latest_versions, plan, run,
+    Category, Found, TOOLS, Tool, dependents, detect, find, is_newer, latest_versions, plan, run,
+    uninstall, uninstall_command,
 };
 
 use crate::rt;
@@ -33,13 +37,25 @@ enum State {
         for_: Option<&'static str>,
     },
     Installing,
+    Uninstalling,
     /// The installer succeeded; shown as installed before detection agrees.
     Done,
+    /// The uninstaller succeeded; shown as removed before detection agrees.
+    Removed,
+    /// Stopped while it ran.
+    Stopped,
     Failed(String),
     /// Not run because a prerequisite isn't installed.
     Skipped(&'static str),
     /// Handed to the terminal (it asks for a password).
     InTerminal,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Job {
+    Install,
+    /// Runs this command.
+    Uninstall(String),
 }
 
 pub enum ToolsEvent {
@@ -59,8 +75,10 @@ pub struct ToolsPage {
     logs: HashMap<&'static str, Vec<String>>,
     selected: HashSet<&'static str>,
     expanded: HashSet<&'static str>,
-    queue: VecDeque<&'static Tool>,
-    running: Option<&'static str>,
+    queue: VecDeque<(&'static Tool, Job)>,
+    running: Option<(&'static str, Job)>,
+    /// Stops the running job.
+    stop: Option<AbortHandle>,
     /// Progress through the current run of the queue.
     batch: (usize, usize),
     /// Made on the first render, which has the window an input needs.
@@ -139,6 +157,7 @@ impl ToolsPage {
             expanded: HashSet::new(),
             queue: VecDeque::new(),
             running: None,
+            stop: None,
             batch: (0, 0),
             search: None,
             _search: None,
@@ -173,9 +192,20 @@ impl ToolsPage {
                     this.loading = false;
                     // Detection now agrees with these; the rest keep their
                     // optimistic or failed state.
+                    for (id, s) in this.states.iter_mut() {
+                        if *s == State::Removed
+                            && let Some(f) = this.found.get(id)
+                        {
+                            *s = State::Failed(format!(
+                                "Still found at {}: that copy was installed another way (Homebrew, say).",
+                                tilde(&f.path)
+                            ));
+                        }
+                    }
                     this.states.retain(|id, s| {
-                        !(this.found.contains_key(id)
-                            && matches!(s, State::Done | State::InTerminal | State::Skipped(_)))
+                        let found = this.found.contains_key(id);
+                        !(found && matches!(s, State::Done | State::InTerminal | State::Skipped(_))
+                            || !found && *s == State::Removed)
                     });
                     this.selected.retain(|id| !this.found.contains_key(id));
                     cx.notify();
@@ -186,9 +216,14 @@ impl ToolsPage {
         cx.notify();
     }
 
-    /// Installed per detection, or the installer just succeeded.
+    /// Installed per detection, or the installer just succeeded; not when
+    /// the uninstaller just did.
     fn installed(&self, id: &str) -> bool {
-        self.found.contains_key(id) || self.states.get(id) == Some(&State::Done)
+        match self.states.get(id) {
+            Some(State::Done) => true,
+            Some(State::Removed) => false,
+            _ => self.found.contains_key(id),
+        }
     }
 
     /// The newer release an installed tool can upgrade to.
@@ -224,7 +259,7 @@ impl ToolsPage {
     fn busy(&self, id: &str) -> bool {
         matches!(
             self.states.get(id),
-            Some(State::Queued { .. } | State::Installing)
+            Some(State::Queued { .. } | State::Installing | State::Uninstalling)
         )
     }
 
@@ -267,11 +302,71 @@ impl ToolsPage {
                 })
                 .flatten();
             self.states.insert(tool.id, State::Queued { for_ });
-            self.queue.push_back(tool);
+            self.queue.push_back((tool, Job::Install));
             self.batch.1 += 1;
         }
         self.pump(cx);
         cx.notify();
+    }
+
+    /// Asks, then queues `tool`'s uninstaller (or hands it to the terminal
+    /// when it asks for a password).
+    fn confirm_uninstall(
+        &mut self,
+        tool: &'static Tool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(command) = self.uninstall_command(tool) else {
+            return;
+        };
+        let needed_by: Vec<&str> = dependents(tool.id)
+            .into_iter()
+            .filter(|t| self.installed(t.id))
+            .map(|t| t.name)
+            .collect();
+        let mut detail = format!("Runs: {command}");
+        if !needed_by.is_empty() {
+            detail = format!(
+                "{} need{} it and will stop working.\n\n{detail}",
+                needed_by.join(", "),
+                if needed_by.len() == 1 { "s" } else { "" }
+            );
+        }
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!("Uninstall {}?", tool.name),
+            Some(&detail),
+            &["Uninstall", "Cancel"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if matches!(answer.await, Ok(0)) {
+                let _ = this.update(cx, |this, cx| {
+                    if tool.interactive && !command.starts_with("brew ") {
+                        this.states.insert(tool.id, State::InTerminal);
+                        cx.emit(ToolsEvent::RunInTerminal(command));
+                        cx.notify();
+                        return;
+                    }
+                    if this.running.is_none() && this.queue.is_empty() {
+                        this.batch = (0, 0);
+                    }
+                    this.selected.remove(tool.id);
+                    this.states.insert(tool.id, State::Queued { for_: None });
+                    this.queue.push_back((tool, Job::Uninstall(command)));
+                    this.batch.1 += 1;
+                    this.pump(cx);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// How to remove the copy detection found, if Sawit can.
+    fn uninstall_command(&self, tool: &Tool) -> Option<String> {
+        uninstall_command(tool, &self.found.get(tool.id)?.path)
     }
 
     /// Starts the next queued installer unless one is running.
@@ -279,36 +374,49 @@ impl ToolsPage {
         if self.running.is_some() {
             return;
         }
-        let tool = loop {
-            let Some(tool) = self.queue.pop_front() else {
+        let (tool, job) = loop {
+            let Some((tool, job)) = self.queue.pop_front() else {
                 // The queue is done: let detection confirm the results.
                 if self.batch.1 > 0 {
                     self.reload(cx);
                 }
                 return;
             };
+            if matches!(job, Job::Uninstall(_)) {
+                break (tool, job);
+            }
             match tool.needs.iter().find(|n| !self.installed(n)) {
                 Some(need) => {
                     let name = find(need).map_or(*need, |t| t.name);
                     self.states.insert(tool.id, State::Skipped(name));
                     self.batch.0 += 1;
                 }
-                None => break tool,
+                None => break (tool, job),
             }
         };
         let id = tool.id;
-        self.running = Some(id);
-        self.states.insert(id, State::Installing);
-        let command = self.command(tool);
+        self.running = Some((id, job.clone()));
+        let (state, command) = match &job {
+            Job::Install => (State::Installing, self.command(tool).to_string()),
+            Job::Uninstall(command) => (State::Uninstalling, command.clone()),
+        };
+        self.states.insert(id, state);
         self.logs.insert(id, vec![format!("$ {command}")]);
+        let finished = job.clone();
         let (tx, mut lines) = futures::channel::mpsc::unbounded::<String>();
-        let done = rt::spawn(cx, async move {
-            run(tool, command, move |line| {
+        let (run, stop) = abortable(async move {
+            let on_line = move |line| {
                 let _ = tx.unbounded_send(line);
-            })
-            .await
+            };
+            match job {
+                Job::Install => run(tool, &command, on_line).await,
+                Job::Uninstall(command) => uninstall(tool, &command, on_line).await,
+            }
             .map_err(|e| e.to_string())
         });
+        self.stop = Some(stop);
+        // `None` when it was stopped.
+        let done = rt::spawn(cx, async move { run.await.ok() });
         cx.spawn(async move |this, cx| {
             // Ends when the installer exits and drops the sender.
             while let Some(line) = lines.next().await {
@@ -326,22 +434,36 @@ impl ToolsPage {
             }
             let result = done
                 .await
-                .unwrap_or_else(|_| Err("The installer stopped.".into()));
-            let _ = this.update(cx, |this, cx| this.finish(id, result, cx));
+                .unwrap_or_else(|_| Some(Err("The installer stopped.".into())));
+            let _ = this.update(cx, |this, cx| this.finish(id, finished, result, cx));
         })
         .detach();
     }
 
-    fn finish(&mut self, id: &'static str, result: Result<(), String>, cx: &mut Context<Self>) {
+    fn finish(
+        &mut self,
+        id: &'static str,
+        job: Job,
+        result: Option<Result<(), String>>,
+        cx: &mut Context<Self>,
+    ) {
         self.running = None;
+        self.stop = None;
         self.batch.0 += 1;
         match result {
-            Ok(()) => {
+            None => {
+                self.states.insert(id, State::Stopped);
+            }
+            Some(Ok(())) => {
                 self.upgrades.remove(id);
-                self.states.insert(id, State::Done);
+                let done = match job {
+                    Job::Install => State::Done,
+                    Job::Uninstall(_) => State::Removed,
+                };
+                self.states.insert(id, done);
                 self.expanded.remove(id);
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 self.states.insert(id, State::Failed(e));
                 self.expanded.insert(id);
             }
@@ -350,9 +472,18 @@ impl ToolsPage {
         cx.notify();
     }
 
+    /// Stops the running installer or uninstaller and everything it
+    /// started; the queue moves on.
+    fn stop_running(&mut self, cx: &mut Context<Self>) {
+        if let Some(stop) = self.stop.take() {
+            stop.abort();
+        }
+        cx.notify();
+    }
+
     /// Drops everything still waiting; the running installer finishes.
     fn stop_queue(&mut self, cx: &mut Context<Self>) {
-        for tool in self.queue.drain(..) {
+        for (tool, _) in self.queue.drain(..) {
             self.states.remove(tool.id);
             self.upgrades.remove(tool.id);
         }
@@ -361,7 +492,7 @@ impl ToolsPage {
     }
 
     fn dequeue(&mut self, id: &str, cx: &mut Context<Self>) {
-        if let Some(ix) = self.queue.iter().position(|t| t.id == id) {
+        if let Some(ix) = self.queue.iter().position(|(t, _)| t.id == id) {
             self.queue.remove(ix);
             self.states.remove(id);
             self.upgrades.remove(id);
@@ -493,7 +624,10 @@ impl ToolsPage {
     /// "Installing Node.js · 2 of 5" and a bar, while the queue runs.
     fn render_progress(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (done, total) = self.batch;
-        let running = self.running.and_then(find);
+        let running = self
+            .running
+            .as_ref()
+            .and_then(|(id, job)| Some((find(id)?, job)));
         if running.is_none() && self.queue.is_empty() {
             return None;
         }
@@ -516,9 +650,9 @@ impl ToolsPage {
                         .gap_2()
                         .text_sm()
                         .child(Spinner::new().xsmall().color(muted))
-                        .when_some(running, |el, t| el.child(logo(t.id, 16., cx)))
+                        .when_some(running, |el, (t, _)| el.child(logo(t.id, 16., cx)))
                         .child(div().flex_1().child(match running {
-                            Some(t) => format!(
+                            Some((t, Job::Install)) => format!(
                                 "{} {} · {} of {total}",
                                 if self.upgrades.contains(t.id) {
                                     "Upgrading"
@@ -528,6 +662,9 @@ impl ToolsPage {
                                 t.name,
                                 done + 1
                             ),
+                            Some((t, Job::Uninstall(_))) => {
+                                format!("Uninstalling {} · {} of {total}", t.name, done + 1)
+                            }
                             None => format!("{done} of {total} done"),
                         }))
                         .when(!self.queue.is_empty(), |el| {
@@ -583,6 +720,9 @@ impl ToolsPage {
             (Some(State::Queued { for_: None }), _) => ("Queued".into(), muted),
             (Some(State::Installing), _) if upgrading => ("Upgrading…".into(), theme.warning),
             (Some(State::Installing), _) => ("Installing…".into(), theme.warning),
+            (Some(State::Uninstalling), _) => ("Uninstalling…".into(), theme.warning),
+            (Some(State::Removed), _) => ("Uninstalled · restart shell".into(), muted),
+            (Some(State::Stopped), _) => ("Stopped".into(), theme.warning),
             (Some(State::Failed(_)), _) => ("Failed".into(), theme.danger),
             (Some(State::Skipped(need)), _) => (format!("Skipped · {need} missing"), theme.danger),
             (Some(State::InTerminal), _) => ("In terminal".into(), theme.warning),
@@ -610,12 +750,17 @@ impl ToolsPage {
         };
 
         let action = match &state {
-            Some(State::Installing) => Button::new(("tool-busy", ix))
+            Some(State::Installing | State::Uninstalling) => Button::new(("tool-stop", ix))
                 .ghost()
                 .xsmall()
-                .label(if upgrading { "Upgrading" } else { "Installing" })
-                .loading(true)
-                .disabled(true),
+                .icon(Lucide::CircleStop)
+                .label("Stop")
+                .tooltip(match state {
+                    Some(State::Installing) if upgrading => "Stop the Upgrade",
+                    Some(State::Installing) => "Stop the Installer",
+                    _ => "Stop the Uninstaller",
+                })
+                .on_click(cx.listener(|this, _, _, cx| this.stop_running(cx))),
             Some(State::Queued { .. }) => Button::new(("tool-dequeue", ix))
                 .ghost()
                 .xsmall()
@@ -654,6 +799,7 @@ impl ToolsPage {
                 .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&[id], cx))),
         };
 
+        let can_uninstall = installed && !busy && self.uninstall_command(tool).is_some();
         let checkbox = if installed || busy || tool.interactive {
             div().size(px(16.)).flex_none().into_any_element()
         } else {
@@ -693,9 +839,8 @@ impl ToolsPage {
         });
 
         let log = self.logs.get(id);
-        let last_line = log
-            .filter(|_| state == Some(State::Installing))
-            .and_then(|l| l.last().cloned());
+        let running = matches!(state, Some(State::Installing | State::Uninstalling));
+        let last_line = log.filter(|_| running).and_then(|l| l.last().cloned());
         let expanded = self.expanded.contains(id) && log.is_some();
         let command = if newer.is_some() || upgrading {
             tool.upgrade_command()
@@ -709,9 +854,7 @@ impl ToolsPage {
             .gap_1()
             .border_b_1()
             .border_color(cx.theme().border)
-            .when(state == Some(State::Installing), |el| {
-                el.bg(cx.theme().list_hover)
-            })
+            .when(running, |el| el.bg(cx.theme().list_hover))
             .child(
                 h_flex()
                     .gap_3()
@@ -784,7 +927,7 @@ impl ToolsPage {
                             .text_xs()
                             .text_color(color)
                             .child(match state {
-                                Some(State::Installing) => {
+                                Some(State::Installing | State::Uninstalling) => {
                                     Spinner::new().xsmall().color(color).into_any_element()
                                 }
                                 _ => div()
@@ -818,6 +961,20 @@ impl ToolsPage {
                                                 this.expanded.insert(id);
                                             }
                                             cx.notify();
+                                        })),
+                                )
+                            })
+                            .when(can_uninstall, |el| {
+                                el.child(
+                                    Button::new(("tool-uninstall", ix))
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(
+                                            Icon::new(Lucide::Trash).text_color(cx.theme().danger),
+                                        )
+                                        .tooltip(format!("Uninstall {}", tool.name))
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.confirm_uninstall(tool, window, cx)
                                         })),
                                 )
                             })

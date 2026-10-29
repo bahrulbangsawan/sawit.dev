@@ -380,6 +380,7 @@ impl Workspace {
                     ShellConfigEvent::OpenTerminal(dir) => {
                         this.open_terminal_in(dir.clone(), window, cx)
                     }
+                    ShellConfigEvent::SignInToGitHub => this.open_github(window, cx),
                 },
             ),
             // Server tabs follow renames and close when deleted.
@@ -2597,7 +2598,10 @@ mod tests {
                 .map(|k| page_key(k.modifiers(), k.key()))
                 .collect();
             let keys = keys.join(" ");
-            assert!(!global.contains(&keys.as_str()), "{keys} is taken by the app");
+            assert!(
+                !global.contains(&keys.as_str()),
+                "{keys} is taken by the app"
+            );
             assert!(seen.insert(keys.clone()), "{keys} is bound twice");
         }
         // A chord's first keystroke can't be a shortcut of its own.
@@ -2610,7 +2614,14 @@ mod tests {
     #[test]
     fn the_canvas_passes_on_app_shortcuts_but_not_its_own() {
         let keys = canvas_passthrough_keys();
-        for k in ["cmd-j", "shift-cmd-j", "cmd-1", "ctrl-cmd-c", "ctrl-tab", "cmd-o"] {
+        for k in [
+            "cmd-j",
+            "shift-cmd-j",
+            "cmd-1",
+            "ctrl-cmd-c",
+            "ctrl-tab",
+            "cmd-o",
+        ] {
             assert!(keys.iter().any(|x| x == k), "{k} missing");
         }
         // Excalidraw's own: reset zoom, add link; ⇧⌘↩ is handled by the page.

@@ -2,12 +2,15 @@
 //! servers such as AWS, Cloudflare and Neon, and local ones run with npx),
 //! each installed into any AI client and profile found on this Mac. Remote
 //! servers that need an account are signed in here through Claude Code's
-//! and Codex's own `mcp login`, profile by profile.
+//! and Codex's own `mcp login`, profile by profile. A server can be removed
+//! from every client in one go, and an install or removal that hangs can be
+//! stopped.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use futures::StreamExt as _;
+use futures::future::{AbortHandle, abortable};
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
@@ -48,6 +51,8 @@ pub struct McpPage {
     programs: HashMap<&'static str, PathBuf>,
     region: String,
     busy: HashSet<Pair>,
+    /// Stops the install or removal running for a pair.
+    stops: HashMap<Pair, AbortHandle>,
     errors: HashMap<Pair, String>,
     loading: bool,
     sheet: Option<Sheet>,
@@ -206,6 +211,7 @@ impl McpPage {
             programs: HashMap::new(),
             region: DEFAULT_AWS_REGION.into(),
             busy: HashSet::new(),
+            stops: HashMap::new(),
             errors: HashMap::new(),
             loading: true,
             sheet: None,
@@ -349,20 +355,35 @@ impl McpPage {
         self.errors.remove(&pair);
         let spec = self.spec(s);
         let cli = self.cli_for(target.client);
+        let (run, stop) = abortable({
+            let (target, spec) = (target.clone(), spec.clone());
+            async move {
+                if remove {
+                    uninstall(&target, &spec.name, cli.as_deref()).await
+                } else {
+                    install(&target, &spec, cli.as_deref()).await
+                }
+            }
+        });
+        self.stops.insert(pair, stop);
         let rx = rt::spawn(cx, async move {
-            let result = if remove {
-                uninstall(&target, &spec.name, cli.as_deref()).await
-            } else {
-                install(&target, &spec, cli.as_deref()).await
-            };
+            // `None` when it was stopped; the config is read again either way.
+            let result = run.await.ok();
             (result, status(&target, &spec))
         });
         cx.spawn(async move |this, cx| {
             if let Ok((result, new_status)) = rx.await {
                 let _ = this.update(cx, |this, cx| {
                     this.busy.remove(&pair);
-                    if let Err(e) = result {
-                        this.errors.insert(pair, e.to_string());
+                    this.stops.remove(&pair);
+                    match result {
+                        Some(Err(e)) => {
+                            this.errors.insert(pair, e.to_string());
+                        }
+                        None => {
+                            this.errors.insert(pair, "Stopped.".into());
+                        }
+                        Some(Ok(())) => {}
                     }
                     this.status.insert(pair, new_status);
                     if !remove && SERVERS[s].auth == Auth::Browser {
@@ -435,6 +456,64 @@ impl McpPage {
             }
         }
         cx.notify();
+    }
+
+    /// Stops every install or removal running for server `s`.
+    fn stop(&mut self, s: usize, cx: &mut Context<Self>) {
+        for (_, stop) in self.stops.iter().filter(|((x, _), _)| *x == s) {
+            stop.abort();
+        }
+        cx.notify();
+    }
+
+    /// The targets server `s` can be removed from here (not the ones edited
+    /// by hand).
+    fn removable(&self, s: usize) -> Vec<usize> {
+        (0..self.targets.len())
+            .filter(|&t| {
+                self.targets[t].client.editable()
+                    && matches!(
+                        self.status.get(&(s, t)),
+                        Some(Status::Installed | Status::Outdated(_))
+                    )
+            })
+            .collect()
+    }
+
+    /// Asks, then removes server `s` from every client it's installed in.
+    fn confirm_uninstall(&mut self, s: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let targets = self.removable(s);
+        if targets.is_empty() {
+            return;
+        }
+        let names: Vec<String> = targets
+            .iter()
+            .map(|&t| target_label(&self.targets[t]))
+            .collect();
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!(
+                "Uninstall {} from {}?",
+                SERVERS[s].name,
+                plural(targets.len(), "client", "clients")
+            ),
+            Some(&format!(
+                "Its entry is removed from: {}. Restart those clients to drop it.",
+                names.join(", ")
+            )),
+            &["Uninstall", "Cancel"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if matches!(answer.await, Ok(0)) {
+                let _ = this.update(cx, |this, cx| {
+                    for t in targets {
+                        this.act((s, t), true, cx);
+                    }
+                });
+            }
+        })
+        .detach();
     }
 
     fn install_selected(&mut self, remove: bool, cx: &mut Context<Self>) {
@@ -899,6 +978,35 @@ impl McpPage {
                                     })
                                     .child(summary),
                             )
+                            .when(busy, |el| {
+                                el.child(
+                                    Button::new(("mcp-stop", s))
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(Lucide::CircleStop)
+                                        .label("Stop")
+                                        .tooltip("Stop Installing or Removing")
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| this.stop(s, cx)),
+                                        ),
+                                )
+                            })
+                            .when(!busy && !self.removable(s).is_empty(), |el| {
+                                el.child(
+                                    Button::new(("mcp-uninstall", s))
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(Icon::new(Lucide::Trash).text_color(theme.danger))
+                                        .tooltip(format!(
+                                            "Uninstall {} from Every Client",
+                                            server.name
+                                        ))
+                                        .disabled(self.loading)
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.confirm_uninstall(s, window, cx)
+                                        })),
+                                )
+                            })
                             .child(
                                 Button::new(("mcp-open", s))
                                     .when(installed + other == 0, |b| b.primary())
