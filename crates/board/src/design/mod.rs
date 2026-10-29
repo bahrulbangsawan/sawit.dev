@@ -13,6 +13,10 @@ use figcraft_doc::{Document, NodeId, NodeKind};
 use serde_json::{Map, Value, json};
 
 mod fields;
+mod lists;
+
+pub mod effects;
+pub mod paints;
 
 pub use fields::{DEFAULTS, parse_number};
 
