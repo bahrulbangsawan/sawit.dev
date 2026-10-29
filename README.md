@@ -30,9 +30,9 @@
 </p>
 
 <p align="center">
-  <img src="docs/media/demo.gif" alt="Sawit demo: instances, port conflict detection, table, SQL editor, schema diagram, code editor with terminal, listening ports, and network diagnosis" width="100%">
+  <img src="docs/media/demo.gif" alt="Sawit demo: welcome screen, instances, port conflict detection, table with export, SQL editor, schema diagram, code editor with terminal, Markdown preview, listening ports, network diagnosis, git graph, Dev Tools, MCP servers and the canvas" width="100%">
   <br>
-  <sub>▶︎ <a href="docs/media/demo.mp4">Watch the demo video (MP4)</a>: instance → port conflict → table → SQL → schema diagram → code + terminal → ports → network</sub>
+  <sub>▶︎ <a href="docs/media/demo.mp4">Watch the demo video (MP4)</a>: welcome → instance → port conflict → table → SQL → schema diagram → code + terminal → Markdown → ports → network → git → dev tools → MCP → canvas</sub>
 </p>
 
 ---
@@ -61,7 +61,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 💬 **Prompt library** | Save the prompts you reuse, with tags and `{{variables}}` to fill in before copying. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports and `sawit backup` dumps. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (94 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (96 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 
 ## Install
 
@@ -221,12 +221,25 @@ explained. A conflict on the same address can't be forced.
 
 ### Canvas
 
+<img src="docs/media/canvas.png" alt="Canvas: a Mermaid flowchart of the demo app turned into editable Excalidraw shapes, with boxes for the browser, acme-store, the checkout API, payments, acme-admin, an AI agent and the shop database" width="100%">
+
 - Click **Canvas** in the title bar for an [Excalidraw](https://excalidraw.com) whiteboard, fully offline. It saves
   by itself in the format excalidraw.com opens, and exports land in `~/Downloads`.
 - Excalidraw's **Mermaid to Excalidraw** tool (and the `canvas_add_mermaid` MCP tool) turns Mermaid into
   **editable shapes**: boxes, arrows bound to them, and labels. Charts (pie, Gantt, XY,
   quadrant, journey, Sankey, architecture) are placed as one image. Pele, the renderer the rest of the app uses,
   does the conversion.
+
+### Git
+
+<img src="docs/media/git.png" alt="Git tab with the branch, a commit message box, staged and changed files, next to the commit graph with branches, tags, authors and dates" width="100%">
+
+- The **Git** tab shows the branch with fetch, pull and push, a commit message box (<kbd>⌘</kbd><kbd>↩</kbd>
+  commits, **Amend** rewrites the last commit), and staged, changed and conflicted files. Click a file for its diff.
+- The **Commit Graph** page draws branches, merges and tags with their authors and dates. On the **GitHub** page,
+  sign in to read and comment on the repository's pull requests and issues, merge or close them, open new ones,
+  and clone your repositories.
+- Agents get the same through `git_status`, `git_diff`, `git_commit` and the other git tools.
 
 ### Listening ports
 
@@ -396,7 +409,7 @@ sawit pasang bun uv                          # "plant": install dev tools, prere
 
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 94 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 96 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it).
 
 | Area | Tools |
@@ -414,7 +427,7 @@ except the app-control ones, which drive the running app (`launch_app` starts it
 | Files | `search_files` |
 | Dev tools | `list_dev_tools`, `install_dev_tools` |
 | MCP servers | `list_mcp_servers`, `install_mcp_server`, `uninstall_mcp_server` |
-| App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page`, `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql`, `app_open_diagram`, `app_open_prompt` |
+| App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page`, `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
 | Terminal (app running) | `terminal_run`, `terminal_read`, `terminal_input`, `terminal_close` |
 | Canvas (app running) | `canvas_get`, `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear`, `canvas_load`, `canvas_export` |
 
