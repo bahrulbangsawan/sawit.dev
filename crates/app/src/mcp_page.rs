@@ -386,7 +386,7 @@ impl Render for McpPage {
             .child(
                 h_flex()
                     .gap_2()
-                    .child(div().text_lg().font_semibold().flex_1().child("MCP server"))
+                    .child(div().text_lg().font_semibold().flex_1().child("MCP Server"))
                     .child(
                         Button::new("mcp-reload")
                             .ghost()
@@ -426,7 +426,7 @@ impl Render for McpPage {
                     })
                     .child(tilde(&self.server))
                     .when(!self.server_exists && !self.loading, |el| {
-                        el.child("— not built yet: cargo build --release -p sawit-mcp")
+                        el.child("— not found. Build it with: cargo build --release -p sawit-mcp")
                     }),
             );
         let body = if self.loading {
@@ -440,7 +440,7 @@ impl Render for McpPage {
                 .text_sm()
                 .text_color(muted)
                 .child(
-                    "No MCP clients detected (Claude Code, Codex, Claude Desktop, Cursor, Zed, …).",
+                    "No MCP clients found. Install Claude Code, Codex, Claude Desktop, Cursor or Zed, then click Detect Again.",
                 )
                 .into_any_element()
         } else {

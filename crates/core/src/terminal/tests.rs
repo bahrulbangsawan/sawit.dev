@@ -214,6 +214,31 @@ fn session_renders_program_output() {
 }
 
 #[test]
+fn text_tail_keeps_scrollback_and_joins_wrapped_rows() {
+    let size = GridSize {
+        cols: 10,
+        rows: 3,
+        cell_width: 8,
+        cell_height: 16,
+    };
+    let cmd = Command {
+        program: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            "printf 'one\\ntwo\\nthree\\nfour\\n0123456789abcdef\\nend'; sleep 2".into(),
+        ],
+        ..Command::default()
+    };
+    let (session, _events) = Session::spawn(cmd, size).unwrap();
+    wait_for(&session, &Palette::default(), "end");
+    assert_eq!(
+        session.text_tail(100),
+        "one\ntwo\nthree\nfour\n0123456789abcdef\nend"
+    );
+    assert_eq!(session.text_tail(2), "0123456789abcdef\nend");
+}
+
+#[test]
 fn session_echoes_input_and_resizes() {
     let size = GridSize {
         cols: 20,
@@ -322,4 +347,209 @@ fn scroll_accumulator_keeps_fractions() {
     let lines: Vec<i32> = (0..10).map(|_| acc.add(5.0, 17.0)).collect();
     assert_eq!(lines.iter().sum::<i32>(), 2); // 50px / 17px
     assert_eq!(acc.add(-40.0, 17.0), -1);
+}
+
+#[test]
+fn shell_langs_are_recognized() {
+    for lang in [
+        "bash", "sh", "zsh", "csh", "dash", "ksh", "tcsh", "shh", "Shell", " BASH ",
+    ] {
+        assert!(is_shell_lang(lang), "{lang}");
+    }
+    for lang in ["rust", "sql", "", "python"] {
+        assert!(!is_shell_lang(lang), "{lang}");
+    }
+    assert_eq!(is_shell_lang("powershell"), cfg!(windows));
+}
+
+#[test]
+fn shell_commands_strip_prompts_and_output() {
+    assert_eq!(
+        shell_commands("npm install\nnpm test\n"),
+        "npm install\nnpm test"
+    );
+    assert_eq!(
+        shell_commands("$ echo hi\nhi\n  $ ls -la\nfile\n"),
+        "echo hi\nls -la"
+    );
+    assert_eq!(shell_commands("echo $HOME"), "echo $HOME");
+}
+
+#[test]
+fn run_bytes_press_enter_after_each_line() {
+    assert_eq!(run_bytes("ls"), b"ls\r");
+    assert_eq!(run_bytes("cd x\nls"), b"cd x\rls\r");
+    assert_eq!(run_bytes("a\r\nb"), b"a\rb\r");
+    assert_eq!(run_bytes("a\x1b[2Jb"), b"a[2Jb\r");
+}
+
+#[test]
+fn cd_bytes_quote_the_path() {
+    let dir = std::path::Path::new("/tmp/it's here");
+    assert_eq!(
+        cd_bytes(dir, 0, 200),
+        b"\x15 cd -- '/tmp/it'\\''s here' && printf '\\033[01A\\r\\033[J'\r".to_vec()
+    );
+    // 10 prompt columns + 54 command chars on a 40-column screen: two rows.
+    assert!(
+        String::from_utf8(cd_bytes(dir, 10, 40))
+            .unwrap()
+            .contains("[02A")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_at_prompt_until_it_runs_a_command_then_cds() {
+    let size = GridSize {
+        cols: 300,
+        rows: 6,
+        cell_width: 8,
+        cell_height: 16,
+    };
+    let mut env = std::collections::HashMap::new();
+    env.insert("PS1".to_string(), "$ ".to_string());
+    let cmd = Command {
+        program: "/bin/sh".into(),
+        args: vec!["-i".into()],
+        env,
+        ..Command::default()
+    };
+    let (session, _events) = Session::spawn(cmd, size).unwrap();
+    let palette = Palette::default();
+    wait_for(&session, &palette, "$");
+    assert!(session.at_prompt());
+
+    session.write(run_bytes("sleep 2"));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while session.at_prompt() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        !session.at_prompt(),
+        "a running command is in the foreground"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path().canonicalize().unwrap().join("it's here");
+    std::fs::create_dir(&dir).unwrap();
+    session.write(b"\x03".to_vec());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !session.at_prompt() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    session.cd(&dir);
+    session.write(run_bytes("pwd"));
+    let snap = wait_for(&session, &palette, "it's here\n");
+    assert!(
+        snap.text().lines().any(|l| l == dir.to_string_lossy()),
+        "{:?}",
+        snap.text()
+    );
+    assert!(!snap.text().contains("cd --"), "{:?}", snap.text());
+}
+
+#[cfg(unix)]
+#[test]
+fn cd_echo_is_erased_even_when_it_wraps() {
+    let size = GridSize {
+        cols: 30,
+        rows: 8,
+        cell_width: 8,
+        cell_height: 16,
+    };
+    let mut env = std::collections::HashMap::new();
+    env.insert("PS1".to_string(), "prompt$ ".to_string());
+    let cmd = Command {
+        program: "/bin/sh".into(),
+        args: vec!["-i".into()],
+        env,
+        ..Command::default()
+    };
+    let (session, _events) = Session::spawn(cmd, size).unwrap();
+    let palette = Palette::default();
+    wait_for(&session, &palette, "prompt$");
+    session.write(run_bytes("echo before"));
+    wait_for(&session, &palette, "before\nprompt$");
+    let dir = tempfile::tempdir().unwrap();
+    session.cd(dir.path());
+    session.write(run_bytes("echo after"));
+    let snap = wait_for(&session, &palette, "after\nprompt$");
+    let text = snap.text();
+    assert!(
+        !text.contains("cd --") && !text.contains("printf"),
+        "{text:?}"
+    );
+    // The old prompt line is gone too: one prompt between the two echoes.
+    assert!(
+        text.contains("before\nprompt$ echo after\nafter"),
+        "{text:?}"
+    );
+}
+
+#[test]
+fn dropped_paths_are_quoted_and_spaced() {
+    use std::path::PathBuf;
+    let plain = Modes::default();
+    let paths = [PathBuf::from("/a/b.txt"), PathBuf::from("/x/my file's.md")];
+    assert_eq!(
+        drop_bytes(&paths, plain),
+        b"/a/b.txt '/x/my file'\\''s.md' ".to_vec()
+    );
+    let bracketed = Modes {
+        bracketed_paste: true,
+        ..Modes::default()
+    };
+    assert_eq!(
+        drop_bytes(&paths[..1], bracketed),
+        b"\x1b[200~/a/b.txt \x1b[201~".to_vec()
+    );
+    assert_eq!(shell_quote(std::path::Path::new("")), "''");
+}
+
+#[test]
+fn selection_copies_cells_words_and_lines() {
+    let size = GridSize {
+        cols: 40,
+        rows: 4,
+        cell_width: 8,
+        cell_height: 16,
+    };
+    let cmd = Command {
+        program: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            "printf 'hello big world\\nsecond'; sleep 2".into(),
+        ],
+        ..Command::default()
+    };
+    let (session, _events) = Session::spawn(cmd, size).unwrap();
+    let palette = Palette::default();
+    wait_for(&session, &palette, "second");
+    assert_eq!(session.selection_text(), None);
+
+    // Drag from the left of "big" to the right half of its "g".
+    session.select_start(6, 0, false, SelectKind::Cell);
+    session.select_extend(8, 0, true);
+    assert_eq!(session.selection_text().as_deref(), Some("big"));
+    let snap = session.snapshot(&palette);
+    let selected: String = snap.lines[0]
+        .iter()
+        .filter(|c| c.selected)
+        .map(|c| c.ch)
+        .collect();
+    assert_eq!(selected, "big");
+
+    // A click without a drag selects nothing.
+    session.select_start(6, 0, false, SelectKind::Cell);
+    assert_eq!(session.selection_text(), None);
+
+    session.select_start(12, 0, false, SelectKind::from_clicks(2));
+    assert_eq!(session.selection_text().as_deref(), Some("world"));
+
+    session.select_start(2, 1, false, SelectKind::from_clicks(3));
+    assert_eq!(session.selection_text().as_deref(), Some("second\n"));
+
+    session.clear_selection();
+    assert_eq!(session.selection_text(), None);
 }

@@ -40,7 +40,7 @@ pub async fn install_managed_from(
         .map_err(|e| CoreError::Download(e.to_string()))?;
     if !target.join("bin").is_dir() {
         let nested = single_subdir_with_bin(&target).ok_or_else(|| {
-            CoreError::Download(format!("no bin/ directory in archive for {version}"))
+            CoreError::Download(format!("The PostgreSQL {version} archive has no bin/ folder."))
         })?;
         let staging = managed_root.join(format!(".staging-{version}"));
         tokio::fs::rename(&nested, &staging).await?;

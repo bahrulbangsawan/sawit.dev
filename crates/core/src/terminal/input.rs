@@ -205,6 +205,104 @@ pub fn paste_bytes(text: &str, modes: Modes) -> Vec<u8> {
     }
 }
 
+/// Whether a Markdown code block in `lang` holds commands to run in a shell.
+/// PowerShell and cmd blocks only count on Windows, where the shell can run them.
+pub fn is_shell_lang(lang: &str) -> bool {
+    let lang = lang.trim().to_ascii_lowercase();
+    let unix = matches!(
+        lang.as_str(),
+        "sh" | "shh"
+            | "shell"
+            | "bash"
+            | "zsh"
+            | "csh"
+            | "dash"
+            | "ksh"
+            | "tcsh"
+            | "fish"
+            | "console"
+            | "shell-session"
+            | "shellsession"
+    );
+    let windows = matches!(
+        lang.as_str(),
+        "powershell" | "pwsh" | "ps1" | "cmd" | "bat" | "batch"
+    );
+    unix || (cfg!(windows) && windows)
+}
+
+/// The commands in a shell code block. When some lines start with a `$ `
+/// prompt (a transcript with output), only those lines are kept, without it.
+pub fn shell_commands(code: &str) -> String {
+    let prompted: Vec<&str> = code
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim_start();
+            l.strip_prefix("$ ").or((l == "$").then_some(""))
+        })
+        .collect();
+    let text = if prompted.is_empty() {
+        code.lines().collect::<Vec<_>>().join("\n")
+    } else {
+        prompted.join("\n")
+    };
+    text.trim_matches('\n').to_string()
+}
+
+/// Bytes that type `commands` into a shell and press Enter after each line.
+/// Return (`\r`) is Enter on every PTY: Unix shells and Windows ConPTY alike.
+/// Sent unbracketed on purpose, so each line runs instead of being pasted.
+pub fn run_bytes(commands: &str) -> Vec<u8> {
+    let mut text = commands.replace("\r\n", "\r").replace('\n', "\r");
+    text.retain(|c| c != '\x1b');
+    text.push('\r');
+    text.into_bytes()
+}
+
+/// Bytes that clear the prompt line and `cd` a POSIX shell into `dir`, then
+/// erase the echoed command so only the next prompt shows. `prompt_col` is
+/// where the cursor sits after the prompt and `cols` the screen width: they
+/// tell how many rows the echo takes. The leading space keeps the command out
+/// of history (`ignorespace`).
+pub fn cd_bytes(dir: &std::path::Path, prompt_col: usize, cols: usize) -> Vec<u8> {
+    let command = |rows: usize| {
+        format!(
+            " cd -- {} && printf '\\033[{rows:02}A\\r\\033[J'",
+            shell_quote(dir)
+        )
+    };
+    // The row count is fixed-width, so measuring with 0 gives the real length.
+    let len = prompt_col + command(0).chars().count();
+    let rows = len.div_ceil(cols.max(1)).clamp(1, 99);
+    run_bytes(&format!("\x15{}", command(rows)))
+}
+
+/// A path as one shell word: as is when it is plain, else single-quoted.
+pub fn shell_quote(path: &std::path::Path) -> String {
+    let text = path.to_string_lossy();
+    let plain = !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_alphanumeric() || "/._-+,:@%=~".contains(c));
+    if plain {
+        text.into_owned()
+    } else {
+        format!("'{}'", text.replace('\'', r"'\''"))
+    }
+}
+
+/// Bytes for files dropped on a terminal: their quoted paths, space
+/// separated with a trailing space, pasted like Terminal.app does.
+pub fn drop_bytes(paths: &[std::path::PathBuf], modes: Modes) -> Vec<u8> {
+    let mut text = paths
+        .iter()
+        .map(|p| shell_quote(p))
+        .collect::<Vec<_>>()
+        .join(" ");
+    text.push(' ');
+    paste_bytes(&text, modes)
+}
+
 /// Turns pixel scroll deltas into whole lines, carrying the remainder so slow
 /// trackpad scrolling still moves.
 #[derive(Debug, Clone, Copy, Default)]

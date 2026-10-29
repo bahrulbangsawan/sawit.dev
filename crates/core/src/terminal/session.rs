@@ -8,7 +8,8 @@ use std::sync::{Arc, OnceLock};
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::Point;
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
@@ -87,6 +88,27 @@ pub struct CellView {
     pub strikeout: bool,
     /// Second half of a wide character; draw nothing.
     pub spacer: bool,
+    /// Inside the mouse selection.
+    pub selected: bool,
+}
+
+/// What a selection snaps to: double click picks words, triple click lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectKind {
+    Cell,
+    Word,
+    Line,
+}
+
+impl SelectKind {
+    /// From a mouse click count (1, 2, 3, then repeating).
+    pub fn from_clicks(count: usize) -> Self {
+        match count {
+            2 => SelectKind::Word,
+            n if n >= 3 => SelectKind::Line,
+            _ => SelectKind::Cell,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +160,24 @@ pub fn multiplexer_markers(names: impl Iterator<Item = String>) -> Vec<String> {
         .collect();
     found.sort();
     found
+}
+
+/// The user's shell: `$SHELL` as a login shell on macOS/Linux, PowerShell on
+/// Windows.
+pub fn default_shell() -> (String, Vec<String>) {
+    if cfg!(windows) {
+        ("powershell.exe".to_string(), vec!["-NoLogo".to_string()])
+    } else {
+        let fallback = if cfg!(target_os = "macos") {
+            "/bin/zsh"
+        } else {
+            "/bin/sh"
+        };
+        (
+            std::env::var("SHELL").unwrap_or_else(|_| fallback.into()),
+            vec!["-l".to_string()],
+        )
+    }
 }
 
 /// Runs `program` through `/usr/bin/env -u NAME…` when there is something to unset.
@@ -215,6 +255,10 @@ pub struct Session {
     term: Arc<FairMutex<Term<Listener>>>,
     pty: EventLoopSender,
     size: Arc<FairMutex<GridSize>>,
+    /// The program's pid and a handle on the PTY master, to ask whether the
+    /// program itself (not a job it started) is in the foreground.
+    #[cfg(unix)]
+    foreground: Option<(u32, std::fs::File)>,
 }
 
 impl Session {
@@ -240,16 +284,18 @@ impl Session {
         env.entry("TERM_PROGRAM".into())
             .or_insert_with(|| "sawit".into());
         let (program, args) = if cmd.program.is_empty() {
-            (
-                std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into()),
-                vec!["-l".to_string()],
-            )
+            default_shell()
         } else {
             (cmd.program.clone(), cmd.args.clone())
         };
-        let unset =
-            multiplexer_markers(std::env::vars_os().filter_map(|(k, _)| k.into_string().ok()));
-        let (program, args) = wrap_unsetting(&program, &args, &unset);
+        // `/usr/bin/env -u` is Unix-only; Windows has no multiplexers to hide.
+        let (program, args) = if cfg!(unix) {
+            let unset =
+                multiplexer_markers(std::env::vars_os().filter_map(|(k, _)| k.into_string().ok()));
+            wrap_unsetting(&program, &args, &unset)
+        } else {
+            (program, args)
+        };
         let shell = tty::Shell::new(program, args);
         let options = tty::Options {
             shell: Some(shell),
@@ -258,6 +304,12 @@ impl Session {
             env,
         };
         let pty = tty::new(&options, size.into(), 0).map_err(CoreError::Io)?;
+        #[cfg(unix)]
+        let foreground = pty
+            .file()
+            .try_clone()
+            .ok()
+            .map(|file| (pty.child().id(), file));
 
         let config = Config {
             scrolling_history: 10_000,
@@ -274,6 +326,8 @@ impl Session {
                 term,
                 pty: sender,
                 size: size_cell,
+                #[cfg(unix)]
+                foreground,
             },
             rx,
         ))
@@ -281,6 +335,111 @@ impl Session {
 
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
         let _ = self.pty.send(Msg::Input(bytes.into()));
+    }
+
+    /// Types a `cd` into `dir` at the shell prompt, leaving no trace of it on
+    /// screen. Only call when `at_prompt`.
+    pub fn cd(&self, dir: &std::path::Path) {
+        let (col, cols) = {
+            let term = self.term.lock();
+            (term.grid().cursor.point.column.0, term.columns())
+        };
+        self.write(super::input::cd_bytes(dir, col, cols));
+    }
+
+    /// Whether the program started in this PTY is in the foreground: for a
+    /// shell, it is at its prompt rather than running a command. Always false
+    /// where that cannot be told (Windows).
+    pub fn at_prompt(&self) -> bool {
+        #[cfg(unix)]
+        if let Some((pid, file)) = &self.foreground {
+            use std::os::fd::AsRawFd;
+            // The program leads its own session, so its group id is its pid.
+            let pgrp = unsafe { libc::tcgetpgrp(file.as_raw_fd()) };
+            return pgrp > 0 && pgrp as u32 == *pid;
+        }
+        false
+    }
+
+    /// The process group running in the foreground when it is not the
+    /// program itself: for a shell, the command it is running.
+    pub fn foreground_job(&self) -> Option<u32> {
+        #[cfg(unix)]
+        if let Some((pid, file)) = &self.foreground {
+            use std::os::fd::AsRawFd;
+            let pgrp = unsafe { libc::tcgetpgrp(file.as_raw_fd()) };
+            return (pgrp > 0 && pgrp as u32 != *pid).then_some(pgrp as u32);
+        }
+        None
+    }
+
+    /// Starts a selection at screen cell (`col`, `row`); `right_half` is
+    /// which half of the cell the mouse is over.
+    pub fn select_start(&self, col: usize, row: usize, right_half: bool, kind: SelectKind) {
+        let mut term = self.term.lock();
+        let point = grid_point(&term, col, row);
+        let ty = match kind {
+            SelectKind::Cell => SelectionType::Simple,
+            SelectKind::Word => SelectionType::Semantic,
+            SelectKind::Line => SelectionType::Lines,
+        };
+        term.selection = Some(Selection::new(ty, point, side(right_half)));
+    }
+
+    /// Moves the end of the selection to screen cell (`col`, `row`).
+    pub fn select_extend(&self, col: usize, row: usize, right_half: bool) {
+        let mut term = self.term.lock();
+        let point = grid_point(&term, col, row);
+        if let Some(selection) = term.selection.as_mut() {
+            selection.update(point, side(right_half));
+        }
+    }
+
+    pub fn clear_selection(&self) {
+        self.term.lock().selection = None;
+    }
+
+    /// The selected text, if anything is selected.
+    pub fn selection_text(&self) -> Option<String> {
+        let term = self.term.lock();
+        if term.selection.as_ref().is_none_or(|s| s.is_empty()) {
+            return None;
+        }
+        term.selection_to_string().filter(|t| !t.is_empty())
+    }
+
+    /// The last `max_lines` lines of scrollback and screen as plain text,
+    /// soft-wrapped rows joined, trailing blank lines dropped.
+    pub fn text_tail(&self, max_lines: usize) -> String {
+        let term = self.term.lock();
+        let grid = term.grid();
+        let cols = grid.columns();
+        let mut lines: Vec<String> = Vec::new();
+        let mut current = String::new();
+        for row in -(grid.history_size() as i32)..grid.screen_lines() as i32 {
+            let row = &grid[Line(row)];
+            for col in 0..cols {
+                let cell = &row[Column(col)];
+                if !cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    current.push(cell.c);
+                    current.extend(cell.zerowidth().into_iter().flatten());
+                }
+            }
+            if !row[Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
+                lines.push(std::mem::take(&mut current).trim_end().to_string());
+            }
+        }
+        if !current.is_empty() {
+            lines.push(current.trim_end().to_string());
+        }
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+        let skip = lines.len().saturating_sub(max_lines);
+        lines[skip..].join("\n")
     }
 
     pub fn resize(&self, size: GridSize) {
@@ -368,7 +527,11 @@ impl Session {
             underline: false,
             strikeout: false,
             spacer: false,
+            selected: false,
         };
+        let selection = content.selection;
+        let cursor_at = content.cursor.point;
+        let cursor_shape = content.cursor.shape;
         let mut lines = vec![vec![blank; cols]; rows];
         let offset = content.display_offset as i32;
         for indexed in content.display_iter {
@@ -377,6 +540,8 @@ impl Session {
             if row < 0 || row as usize >= rows || col >= cols {
                 continue;
             }
+            let selected =
+                selection.is_some_and(|s| s.contains_cell(&indexed, cursor_at, cursor_shape));
             let cell = indexed.cell;
             let flags = cell.flags;
             let mut fg = resolve(cell.fg, true);
@@ -413,6 +578,7 @@ impl Session {
                 underline: flags.intersects(Flags::ALL_UNDERLINES),
                 strikeout: flags.contains(Flags::STRIKEOUT),
                 spacer: flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER),
+                selected,
             };
         }
 
@@ -451,6 +617,17 @@ impl Drop for Session {
     fn drop(&mut self) {
         let _ = self.pty.send(Msg::Shutdown);
     }
+}
+
+/// Screen cell to grid point, following the scrollback position.
+fn grid_point<T>(term: &Term<T>, col: usize, row: usize) -> Point {
+    let offset = term.grid().display_offset() as i32;
+    let last_col = term.columns().saturating_sub(1);
+    Point::new(Line(row as i32 - offset), Column(col.min(last_col)))
+}
+
+fn side(right_half: bool) -> Side {
+    if right_half { Side::Right } else { Side::Left }
 }
 
 fn modes_of(mode: TermMode) -> Modes {

@@ -654,6 +654,28 @@ fn parse_node(
                 })
             }
             local_name!("style") | local_name!("script") => None,
+            // Sawit patch: `<pre>` is a code block (like a Markdown fence), so
+            // it gets code styling and the TextView's code block actions. The
+            // language comes from `class="language-x"` on `<pre>` or `<code>`.
+            local_name!("pre") => {
+                let mut children = vec![];
+                consume_paragraph(&mut children, paragraph);
+
+                let mut code = HtmlParagraph::default();
+                for child in node.children.borrow().iter() {
+                    parse_paragraph(&mut code, child);
+                }
+                let text = code.take().text();
+                children.push(BlockNode::CodeBlock(node::CodeBlock::new(
+                    text.into(),
+                    pre_lang(node).map(Into::into),
+                    None::<node::Span>,
+                )));
+                Some(BlockNode::Root {
+                    children,
+                    span: None,
+                })
+            }
             _ => {
                 if BLOCK_ELEMENTS.contains(&name.local.trim()) {
                     let mut children: Vec<BlockNode> = vec![];
@@ -704,6 +726,31 @@ fn parse_node(
         | NodeData::Comment { .. }
         | NodeData::ProcessingInstruction { .. } => None,
     }
+}
+
+/// Language named by a `language-x` or `lang-x` class on `<pre>` or its
+/// first `<code>` child (the convention highlighters and Markdown renderers use).
+fn pre_lang(pre: &Rc<Node>) -> Option<String> {
+    fn class_lang(node: &Node) -> Option<String> {
+        let NodeData::Element { ref attrs, .. } = node.data else {
+            return None;
+        };
+        let class = attr_value(attrs, local_name!("class"))?;
+        class.split_whitespace().find_map(|c| {
+            c.strip_prefix("language-")
+                .or_else(|| c.strip_prefix("lang-"))
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+        })
+    }
+    class_lang(pre).or_else(|| {
+        pre.children.borrow().iter().find_map(|child| match child.data {
+            NodeData::Element { ref name, .. } if name.local == local_name!("code") => {
+                class_lang(child)
+            }
+            _ => None,
+        })
+    })
 }
 
 fn consume_children_nodes(
@@ -797,7 +844,6 @@ mod tests {
 
     #[test]
     fn test_pre_text_stays_text() {
-        let mut cx = NodeContext::default();
         for (html, text) in [
             // Escaped markup is text, not elements.
             (
@@ -812,11 +858,40 @@ mod tests {
             // A comment is left out, and the line feed after it kept.
             ("<pre><!-- note -->\none</pre>", "\none"),
         ] {
+            assert_eq!(pre_code(html), text, "{html}");
+        }
+    }
+
+    /// The code of the one code block `html` (a `<pre>`) parses to.
+    fn pre_code(html: &str) -> String {
+        let mut cx = NodeContext::default();
+        let document = super::parse(html, &mut cx).unwrap();
+        find_code_block(&document.blocks)
+            .unwrap_or_else(|| panic!("expected a code block, got {:?}", document.blocks))
+            .code()
+            .to_string()
+    }
+
+    fn find_code_block(blocks: &[BlockNode]) -> Option<&node::CodeBlock> {
+        blocks.iter().find_map(|block| match block {
+            BlockNode::CodeBlock(code) => Some(code),
+            BlockNode::Root { children, .. } => find_code_block(children),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn test_pre_lang_from_class() {
+        let mut cx = NodeContext::default();
+        for (html, lang) in [
+            ("<pre class=\"language-bash\">ls</pre>", Some("bash")),
+            ("<pre><code class=\"hljs language-zsh\">ls</code></pre>", Some("zsh")),
+            ("<pre><code class=\"lang-sh\">ls</code></pre>", Some("sh")),
+            ("<pre><code>ls</code></pre>", None),
+        ] {
             let document = super::parse(html, &mut cx).unwrap();
-            let BlockNode::Paragraph(paragraph) = &document.blocks[0] else {
-                panic!("expected one paragraph, got {:?}", document.blocks);
-            };
-            assert_eq!(paragraph.text(), text, "{html}");
+            let code = find_code_block(&document.blocks).unwrap();
+            assert_eq!(code.lang().as_deref(), lang, "{html}");
         }
     }
 
@@ -841,6 +916,10 @@ mod tests {
             // Outside `<pre>`, whitespace is collapsed as before.
             ("<p><code>one\n   two</code></p>", "one two"),
         ] {
+            if html.starts_with("<pre") {
+                assert_eq!(pre_code(html), text, "{html}");
+                continue;
+            }
             let document = super::parse(html, &mut cx).unwrap();
             let BlockNode::Paragraph(paragraph) = &document.blocks[0] else {
                 panic!("expected one paragraph, got {:?}", document.blocks);

@@ -1,5 +1,5 @@
-//! Sidebar list of saved prompts: search (`#tag` too), new, WhatsApp
-//! import, and one-click copy.
+//! Sidebar list of saved prompts: search (`#tag` too), new, and one-click
+//! copy.
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
@@ -10,6 +10,7 @@ use gpui_kit::*;
 use sawit_core::prompts::{fill, variables};
 
 use super::store::PromptStore;
+use crate::states::{Banner, Placeholder};
 
 pub enum PromptsEvent {
     Open(String),
@@ -61,26 +62,6 @@ impl PromptsPanel {
     fn new_prompt(&mut self, cx: &mut Context<Self>) {
         let id = self.store.update(cx, |s, cx| s.create(cx));
         cx.emit(PromptsEvent::Open(id));
-    }
-
-    fn import(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some("Choose a WhatsApp chat export (_chat.txt)".into()),
-        });
-        let store = self.store.clone();
-        cx.spawn(async move |_, cx| {
-            let Ok(Ok(Some(paths))) = rx.await else {
-                return;
-            };
-            let Some(path) = paths.into_iter().next() else {
-                return;
-            };
-            store.update(cx, |s, cx| s.import_whatsapp_file(path, cx));
-        })
-        .detach();
     }
 
     /// Copies a prompt as-is (variables stay as `{{name}}`; fill them in
@@ -175,7 +156,7 @@ impl PromptsPanel {
                     .xsmall()
                     .icon(if copied { Lucide::Check } else { Lucide::Copy })
                     .tooltip(if has_vars {
-                        "Copy as is (fill variables in the prompt tab)"
+                        "Copy As Is (Open the Prompt to Fill Variables)"
                     } else {
                         "Copy"
                     })
@@ -193,12 +174,13 @@ impl Render for PromptsPanel {
         let results = self.results(cx);
         let store = self.store.read(cx);
         let total = store.library.items.len();
+        let query = self.search.read(cx).value().to_string();
         let message = store
             .load_error
             .clone()
             .map(|e| {
                 (
-                    format!("prompts.json can't be read, so it won't be overwritten: {e}"),
+                    format!("Unable to read prompts.json. Sawit won't save over it until the file is fixed or moved. {e}"),
                     true,
                 )
             })
@@ -220,40 +202,24 @@ impl Render for PromptsPanel {
                             .text_xs()
                             .font_semibold()
                             .text_color(cx.theme().muted_foreground)
-                            .child(format!("PROMPT · {total}")),
-                    )
-                    .child(
-                        Button::new("prompt-import")
-                            .ghost()
-                            .xsmall()
-                            .icon(Lucide::Download)
-                            .tooltip("Import from a WhatsApp chat export (_chat.txt)")
-                            .on_click(cx.listener(|this, _, _, cx| this.import(cx))),
+                            .child(format!("PROMPTS · {total}")),
                     )
                     .child(
                         Button::new("prompt-new")
                             .ghost()
                             .xsmall()
                             .icon(IconName::Plus)
-                            .tooltip("New prompt")
+                            .tooltip("New Prompt")
                             .on_click(cx.listener(|this, _, _, cx| this.new_prompt(cx))),
                     ),
             )
             .child(div().p_2().child(Input::new(&self.search).small().cleanable(true)))
             .when_some(message, |el, (text, error)| {
-                el.child(
-                    div()
-                        .px_2()
-                        .pb_1()
-                        .text_xs()
-                        .whitespace_normal()
-                        .text_color(if error {
-                            cx.theme().danger
-                        } else {
-                            cx.theme().muted_foreground
-                        })
-                        .child(text),
-                )
+                el.child(if error {
+                    Banner::error("prompts-message", text)
+                } else {
+                    Banner::info("prompts-message", text)
+                })
             })
             .child(
                 div()
@@ -279,18 +245,31 @@ impl Render for PromptsPanel {
                         )
                     })
                     .when(count == 0, |el| {
-                        el.child(
-                            div()
-                                .p_2()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .whitespace_normal()
-                                .child(if total == 0 {
-                                    "No prompts yet. Click + to create one, or import from WhatsApp (Export Chat → _chat.txt)."
-                                } else {
-                                    "No matching prompts."
-                                }),
-                        )
+                        el.child(if total == 0 {
+                            Placeholder::new(Lucide::MessageSquareText, "No prompts yet")
+                                .compact()
+                                .detail("Save prompts you reuse. Add {{variables}} to fill in each time.")
+                                .action(
+                                    Button::new("empty-new-prompt")
+                                        .small()
+                                        .primary()
+                                        .icon(IconName::Plus)
+                                        .label("New Prompt")
+                                        .on_click(cx.listener(|this, _, _, cx| this.new_prompt(cx))),
+                                )
+                        } else {
+                            Placeholder::new(IconName::Search, "No matching prompts")
+                                .compact()
+                                .detail(format!("Nothing matches “{}”.", query.trim()))
+                                .action(
+                                    Button::new("clear-prompt-search")
+                                        .small()
+                                        .label("Clear Search")
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.search.update(cx, |s, cx| s.set_value("", window, cx));
+                                        })),
+                                )
+                        })
                     }),
             )
     }

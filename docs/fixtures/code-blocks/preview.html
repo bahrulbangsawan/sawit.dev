@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head><title>HTML code blocks</title></head>
+<body>
+<h1>HTML code blocks</h1>
+<p>Switch this file to <b>Preview</b>. Each <code>&lt;pre&gt;</code> becomes a code block.</p>
+
+<h2>Language on &lt;code&gt; (highlight.js / Prism style): Run + Copy</h2>
+<pre><code class="hljs language-bash">echo "OK html bash"</code></pre>
+
+<h2>Language on &lt;pre&gt;: Run + Copy</h2>
+<pre class="language-zsh">echo "OK html zsh"</pre>
+
+<h2>lang- prefix: Run + Copy</h2>
+<pre><code class="lang-sh">echo "OK html lang-sh"</code></pre>
+
+<h2>Transcript: only $ lines run</h2>
+<pre><code class="language-console">$ echo "OK html console"
+OK html console</code></pre>
+
+<h2>Whitespace is kept</h2>
+<pre><code class="language-bash">for i in 1 2 3; do
+    echo "indent kept $i"
+done</code></pre>
+
+<h2>Escaped markup stays text</h2>
+<pre><code class="language-bash">echo "&lt;b&gt;not bold&lt;/b&gt; &amp;amp;"</code></pre>
+
+<h2>SQL: Copy only</h2>
+<pre><code class="language-sql">SELECT id, name FROM users WHERE active ORDER BY name;</code></pre>
+
+<h2>Plain &lt;pre&gt; with no language: Copy only</h2>
+<pre>plain preformatted text
+   with    spacing kept</pre>
+
+<h2>Inline code has no buttons</h2>
+<p>Run <code>echo inline</code> yourself.</p>
+</body>
+</html>

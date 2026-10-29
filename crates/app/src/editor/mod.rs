@@ -1,6 +1,9 @@
 //! A text file open in a center tab: code editor with highlighting, soft
 //! wrap, dirty tracking, Cmd-S to save, Shift-Cmd-I to format, and a live
-//! preview (side by side or alone) for Markdown, HTML and SVG.
+//! preview (side by side or alone) for Markdown, HTML, SVG and Mermaid.
+
+mod diagrams;
+pub(crate) use diagrams::palette;
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -18,7 +21,10 @@ use sawit_core::files::{
     FileKind, TextFile, classify, language_for, language_label, read_text, write_text_atomic,
 };
 use sawit_core::format::{format_text, tool_for};
+use sawit_core::shell_config::write_text_as_admin;
+use sawit_core::CoreError;
 
+use crate::code_actions::code_block_actions;
 use crate::rt;
 
 actions!(file_editor, [Save, Format]);
@@ -75,12 +81,18 @@ pub struct FileEditor {
     /// Text the preview renders (lags typing by `PREVIEW_DEBOUNCE`).
     preview: SharedString,
     preview_scheduled: bool,
+    /// The SVG preview image and the text it was built from.
+    svg_image: Option<(SharedString, Arc<Image>)>,
+    /// Mermaid diagrams rendered from `preview`.
+    diagrams: diagrams::Diagrams,
     /// Modification time of the file as last loaded or saved.
     disk_mtime: Option<SystemTime>,
     /// Already told the user the file changed under unsaved edits.
     warned_disk_change: bool,
     /// 1-based line/column from `go_to` before the text finished loading.
     pending_cursor: Option<(u32, u32)>,
+    /// Cursor line/column the toolbar last showed.
+    shown_cursor: Option<(u32, u32)>,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -93,7 +105,7 @@ impl FileEditor {
         cx: &mut Context<Self>,
     ) -> Self {
         let read_path = path.clone();
-        let rx = rt::spawn(cx, async move {
+        let rx = rt::spawn_blocking(cx, move || {
             let modified = mtime(&read_path);
             // `sawit new.rs` opens an empty buffer; saving creates the file.
             if !read_path.exists() {
@@ -115,7 +127,7 @@ impl FileEditor {
                         this.disk_mtime = modified;
                         this.loaded(file, window, cx)
                     }
-                    Ok(Err(e)) => this.notice = Some(error(format!("Failed to open: {e}"))),
+                    Ok(Err(e)) => this.notice = Some(error(format!("Unable to open this file. {e}"))),
                     Err(_) => {}
                 }
                 this.loading = false;
@@ -127,8 +139,9 @@ impl FileEditor {
         Self {
             language: language_for(&path),
             mode: match kind {
-                // Markdown reads best side by side; HTML/SVG start as code.
-                FileKind::Markdown => ViewMode::Split,
+                // Markdown and diagrams read best side by side; HTML/SVG
+                // start as code.
+                FileKind::Markdown | FileKind::Mermaid => ViewMode::Split,
                 _ => ViewMode::Code,
             },
             kind,
@@ -143,9 +156,12 @@ impl FileEditor {
             formatting: false,
             preview: SharedString::default(),
             preview_scheduled: false,
+            svg_image: None,
+            diagrams: Default::default(),
             disk_mtime: None,
             warned_disk_change: false,
             pending_cursor: None,
+            shown_cursor: None,
             focus: cx.focus_handle(),
             _subscriptions: Vec::new(),
         }
@@ -159,7 +175,7 @@ impl FileEditor {
                     return;
                 };
                 let rx = window
-                    .update(|_, cx| rt::spawn(cx, async move { mtime(&path) }))
+                    .update(|_, cx| rt::spawn_blocking(cx, move || mtime(&path)))
                     .ok();
                 let Some(Ok(now)) = (match rx {
                     Some(rx) => Some(rx.await),
@@ -193,7 +209,7 @@ impl FileEditor {
             if !self.warned_disk_change {
                 self.warned_disk_change = true;
                 self.notice = Some(error(
-                    "This file was deleted from disk; ⌘S will create it again.".into(),
+                    "This file was deleted from disk. Press ⌘S to save it again.".into(),
                 ));
                 cx.notify();
             }
@@ -203,7 +219,7 @@ impl FileEditor {
             if !self.warned_disk_change {
                 self.warned_disk_change = true;
                 self.notice = Some(error(
-                    "The file changed on disk, but there are unsaved changes here. ⌘S will overwrite the version on disk."
+                    "This file changed on disk while you have unsaved changes. Press ⌘S to overwrite the version on disk."
                         .into(),
                 ));
                 cx.notify();
@@ -213,7 +229,7 @@ impl FileEditor {
         // Clean buffer: take the new contents, like Zed does.
         self.disk_mtime = Some(now);
         let path = self.path.clone();
-        let rx = rt::spawn(cx, async move { read_text(&path) });
+        let rx = rt::spawn_blocking(cx, move || read_text(&path));
         cx.spawn_in(window, async move |this, window| {
             let Ok(Ok(file)) = rx.await else { return };
             let _ = this.update_in(window, |this, window, cx| {
@@ -230,10 +246,11 @@ impl FileEditor {
                 });
                 // set_value doesn't emit Change, so refresh the preview here.
                 this.preview = file.text.clone().into();
+                this.refresh_diagrams(cx);
                 this.saved_text = file.text;
                 this.dirty = false;
                 this.warned_disk_change = false;
-                this.flash("Reloaded: the file changed on disk.".into(), cx);
+                this.flash("Reloaded because the file changed on disk.".into(), cx);
                 cx.emit(FileEditorEvent::Changed);
                 cx.notify();
             });
@@ -251,7 +268,7 @@ impl FileEditor {
     pub fn previewable(&self) -> bool {
         matches!(
             self.kind,
-            FileKind::Markdown | FileKind::Html | FileKind::Svg
+            FileKind::Markdown | FileKind::Html | FileKind::Svg | FileKind::Mermaid
         )
     }
 
@@ -286,6 +303,8 @@ impl FileEditor {
                 // Long lines wrap: no horizontal scrolling.
                 .soft_wrap(true)
                 .default_value(text.clone());
+            // Parses off the UI thread; see crate::highlight.
+            crate::highlight::install(&mut state, cx);
             // No scrollbar: trackpad/wheel scrolling only, like a clean Zed pane.
             state.set_scrollbar_renderer(Some(Rc::new(|_, _, _| div().into_any_element())));
             state
@@ -304,10 +323,19 @@ impl FileEditor {
                     cx.notify();
                 }
             }),
-            // Cursor moves re-render the "Ln, Col" in the toolbar.
-            cx.observe(&state, |_, _, cx| cx.notify()),
+            // Cursor moves re-render the "Ln, Col" in the toolbar. The state
+            // also notifies on every cursor blink; those change nothing here.
+            cx.observe(&state, |this, state, cx| {
+                let pos = state.read(cx).cursor_position();
+                let pos = (pos.line, pos.character);
+                if this.shown_cursor != Some(pos) {
+                    this.shown_cursor = Some(pos);
+                    cx.notify();
+                }
+            }),
         ];
         self.preview = text.clone().into();
+        self.refresh_diagrams(cx);
         self.saved_text = text;
         state.update(cx, |s, cx| s.focus(window, cx));
         self.state = Some(state);
@@ -343,6 +371,7 @@ impl FileEditor {
                 this.preview_scheduled = false;
                 if let Some(state) = &this.state {
                     this.preview = state.read(cx).value();
+                    this.refresh_diagrams(cx);
                     cx.notify();
                 }
             });
@@ -372,7 +401,14 @@ impl FileEditor {
         let path = self.path.clone();
         let to_write = text.clone();
         let rx = rt::spawn(cx, async move {
-            write_text_atomic(&path, &to_write).map(|()| mtime(&path))
+            let written = match write_text_atomic(&path, &to_write) {
+                // Root-owned (e.g. /etc/zshrc): ask for the admin password.
+                Err(CoreError::Io(e)) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                    write_text_as_admin(&path, &to_write).await
+                }
+                other => other,
+            };
+            written.map(|()| mtime(&path))
         });
         cx.spawn(async move |this, cx| {
             let result = rx.await;
@@ -387,8 +423,8 @@ impl FileEditor {
                         this.disk_mtime = written;
                         this.warned_disk_change = false;
                     }
-                    Ok(Err(e)) => this.notice = Some(error(format!("Failed to save: {e}"))),
-                    Err(_) => this.notice = Some(error("Failed to save: runtime stopped.".into())),
+                    Ok(Err(e)) => this.notice = Some(error(format!("Unable to save. {e}"))),
+                    Err(_) => this.notice = Some(error("Unable to save. Try again.".into())),
                 }
                 cx.emit(FileEditorEvent::Changed);
                 cx.notify();
@@ -454,7 +490,7 @@ impl FileEditor {
                         );
                     }
                     Ok(Err(e)) => this.notice = Some(error(e.to_string())),
-                    Err(_) => this.notice = Some(error("Formatter stopped.".into())),
+                    Err(_) => this.notice = Some(error("The formatter stopped unexpectedly. Try again.".into())),
                 }
                 cx.notify();
             });
@@ -544,6 +580,7 @@ impl FileEditor {
                 el.child(format!("Ln {}, Col {}", pos.line + 1, pos.character + 1))
             })
             .child(language_label(&self.language))
+            .children(self.download_button(cx))
             .when(self.read_only, |el| {
                 el.child(Icon::new(Lucide::Lock).xsmall())
             })
@@ -555,7 +592,7 @@ impl FileEditor {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::WandSparkles)
-                            .tooltip("Format (⇧⌘I)")
+                            .tooltip("Format Document (⇧⌘I)")
                             .loading(self.formatting)
                             .disabled(self.read_only)
                             .on_click(
@@ -566,7 +603,7 @@ impl FileEditor {
             )
     }
 
-    fn render_preview(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_preview(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let id = ElementId::Name(format!("preview\u{0}{}", self.path.display()).into());
         let dir = self
             .path
@@ -575,10 +612,19 @@ impl FileEditor {
             .unwrap_or_default();
         let body = match self.kind {
             FileKind::Svg => {
-                let image = Arc::new(Image::from_bytes(
-                    ImageFormat::Svg,
-                    self.preview.as_bytes().to_vec(),
-                ));
+                // Built once per preview text, not per frame: a fresh Image
+                // copies and hashes the whole file every render.
+                let image = match &self.svg_image {
+                    Some((text, image)) if *text == self.preview => image.clone(),
+                    _ => {
+                        let image = Arc::new(Image::from_bytes(
+                            ImageFormat::Svg,
+                            self.preview.as_bytes().to_vec(),
+                        ));
+                        self.svg_image = Some((self.preview.clone(), image.clone()));
+                        image
+                    }
+                };
                 return div()
                     .size_full()
                     .p_6()
@@ -589,19 +635,28 @@ impl FileEditor {
                     .child(img(image).max_w_full().max_h_full())
                     .into_any_element();
             }
+            FileKind::Mermaid => return self.render_diagram(cx),
             FileKind::Html => TextView::html(id, self.preview.clone()),
-            _ => TextView::markdown(id, self.preview.clone()),
+            _ => TextView::markdown(id, self.diagrams.markdown.clone()),
         };
+        let images = self.diagrams.images.clone();
+        let this = cx.entity().downgrade();
         div()
             .size_full()
             .bg(cx.theme().background)
             .child(
                 body.scrollable(true)
                     .selectable(true)
-                    .image_source(move |uri| resolve_image(&dir, uri))
-                    .on_link_click(|url, _, _, cx| {
+                    .code_block_actions(code_block_actions)
+                    .image_source(move |uri| {
+                        diagrams::Diagrams::image(&images, uri)
+                            .unwrap_or_else(|| resolve_image(&dir, uri))
+                    })
+                    .on_link_click(move |url, _, _, cx| {
                         if url.starts_with("http://") || url.starts_with("https://") {
                             cx.open_url(url);
+                        } else {
+                            let _ = this.update(cx, |this, cx| this.diagram_link(url, cx));
                         }
                     })
                     .p_6(),

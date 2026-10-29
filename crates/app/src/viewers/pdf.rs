@@ -14,6 +14,7 @@ use sawit_core::pdf::{Bitmap, page_sizes, render_page};
 use super::image::file_name;
 use super::toolbar;
 use crate::rt;
+use crate::states::Placeholder;
 
 /// Page width at 100%, in points.
 const BASE_WIDTH: f32 = 820.;
@@ -33,12 +34,15 @@ pub struct PdfView {
     pages: HashMap<PageKey, Arc<RenderImage>>,
     recent: VecDeque<PageKey>,
     pending: HashSet<PageKey>,
+    /// Pages dropped from the cache whose GPU textures the next render frees
+    /// (dropping the Arc alone leaves them in the atlas).
+    evicted: Vec<Arc<RenderImage>>,
 }
 
 impl PdfView {
     pub fn new(path: PathBuf, cx: &mut Context<Self>) -> Self {
         let source = path.clone();
-        let rx = rt::spawn(cx, async move { page_sizes(&source) });
+        let rx = rt::spawn_blocking(cx, move || page_sizes(&source));
         cx.spawn(async move |this, cx| {
             let result = rx.await;
             let _ = this.update(cx, |this, cx| {
@@ -48,7 +52,7 @@ impl PdfView {
                         this.sizes = Some(sizes);
                     }
                     Ok(Err(e)) => this.error = Some(e.to_string()),
-                    Err(_) => this.error = Some("Runtime stopped.".into()),
+                    Err(_) => this.error = Some("Loading stopped unexpectedly. Close the tab and open the file again.".into()),
                 }
                 cx.notify();
             });
@@ -63,6 +67,7 @@ impl PdfView {
             pages: HashMap::new(),
             recent: VecDeque::new(),
             pending: HashSet::new(),
+            evicted: Vec::new(),
         }
     }
 
@@ -91,7 +96,7 @@ impl PdfView {
             return;
         }
         let path = self.path.clone();
-        let rx = rt::spawn(cx, async move { render_page(&path, key.0, key.1) });
+        let rx = rt::spawn_blocking(cx, move || render_page(&path, key.0, key.1));
         cx.spawn(async move |this, cx| {
             let result = rx.await;
             let _ = this.update(cx, |this, cx| {
@@ -102,8 +107,10 @@ impl PdfView {
                             this.pages.insert(key, Arc::new(image));
                             this.recent.push_back(key);
                             while this.recent.len() > CACHE_PAGES {
-                                if let Some(old) = this.recent.pop_front() {
-                                    this.pages.remove(&old);
+                                if let Some(old) = this.recent.pop_front()
+                                    && let Some(image) = this.pages.remove(&old)
+                                {
+                                    this.evicted.push(image);
                                 }
                             }
                         }
@@ -164,7 +171,10 @@ fn to_render_image(bitmap: Bitmap) -> Option<RenderImage> {
 }
 
 impl Render for PdfView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        for image in self.evicted.drain(..) {
+            let _ = window.drop_image(image);
+        }
         let pages = self.sizes.as_ref().map(Vec::len);
         let bar = toolbar(self.title(), cx)
             .children(pages.map(|n| format!("{n} pages")))
@@ -193,19 +203,11 @@ impl Render for PdfView {
                     .on_click(cx.listener(|this, _, _, cx| this.zoom(1, cx))),
             );
         let body = if let Some(e) = &self.error {
-            div()
-                .p_3()
-                .text_sm()
-                .text_color(cx.theme().danger)
-                .child(e.clone())
+            Placeholder::error("Unable to open this PDF")
+                .detail(e.clone())
                 .into_any_element()
         } else if self.sizes.is_none() {
-            div()
-                .p_3()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child("Loading…")
-                .into_any_element()
+            Placeholder::loading("Opening PDF…").into_any_element()
         } else {
             let this = cx.entity();
             list(self.list.clone(), move |ix, window, cx| {

@@ -11,6 +11,7 @@ use sawit_core::media::{displayable, pixel_size};
 
 use super::{file_size_label, toolbar};
 use crate::rt;
+use crate::states::Placeholder;
 
 pub struct ImageView {
     pub path: PathBuf,
@@ -42,7 +43,7 @@ impl ImageView {
                         this.bytes = bytes;
                     }
                     Ok(Err(e)) => this.error = Some(e.to_string()),
-                    Err(_) => this.error = Some("Runtime stopped.".into()),
+                    Err(_) => this.error = Some("Loading stopped unexpectedly. Close the tab and open the file again.".into()),
                 }
                 cx.notify();
             });
@@ -104,18 +105,10 @@ impl Render for ImageView {
                     })),
             );
         let body = match (&self.shown, &self.error) {
-            (_, Some(e)) => div()
-                .p_3()
-                .text_sm()
-                .text_color(cx.theme().danger)
-                .child(e.clone())
+            (_, Some(e)) => Placeholder::error("Unable to open this image")
+                .detail(e.clone())
                 .into_any_element(),
-            (None, None) => div()
-                .p_3()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child("Loading…")
-                .into_any_element(),
+            (None, None) => Placeholder::loading("Opening image…").into_any_element(),
             (Some(shown), None) => {
                 let image = img(shown.clone());
                 if self.actual_size {

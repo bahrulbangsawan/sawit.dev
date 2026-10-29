@@ -1,7 +1,9 @@
 //! Database sidebar: connections (from a URL, a project's .env, or a Sawit
-//! instance) and their schema → table/view → column tree.
+//! instance) and their schema → table/view → column, index and constraint
+//! tree, with a table-name filter and per-connection settings.
 
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
@@ -9,21 +11,37 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sawit_core::db::{ConnProfile, RelKind};
+use sawit_core::db::{ConnProfile, RelKind, Relation};
 
 use super::store::DbStore;
 use crate::servers::ServerStore;
+use crate::states::{Banner, Placeholder};
 
 #[derive(Clone)]
+#[allow(clippy::enum_variant_names)] // Each one opens a tab.
 pub enum DbEvent {
     OpenTable {
         profile: String,
         schema: String,
         table: String,
     },
+    /// A SQL editor tab, optionally starting with `sql`.
     OpenSql {
         profile: String,
+        sql: Option<String>,
     },
+    /// The schema's tables and foreign keys as a diagram (and DBML).
+    OpenDiagram { profile: String, schema: String },
+}
+
+impl DbEvent {
+    pub fn profile(&self) -> &str {
+        match self {
+            DbEvent::OpenTable { profile, .. }
+            | DbEvent::OpenSql { profile, .. }
+            | DbEvent::OpenDiagram { profile, .. } => profile,
+        }
+    }
 }
 
 impl EventEmitter<DbEvent> for DatabasePanel {}
@@ -33,7 +51,13 @@ pub struct DatabasePanel {
     servers: Entity<ServerStore>,
     url_input: Entity<InputState>,
     show_url: bool,
+    /// Filters relations by name.
+    search: Entity<InputState>,
+    /// The connection whose settings are open.
+    settings: Option<SettingsForm>,
     expanded: HashSet<String>,
+    /// The tree lines, flattened once per render for the virtual list.
+    nodes: Rc<Vec<Node>>,
     scroll: UniformListScrollHandle,
     error: Option<String>,
     _subscriptions: Vec<Subscription>,
@@ -49,8 +73,14 @@ impl DatabasePanel {
         let url_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder("postgres://user:pass@localhost:5432/db")
         });
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Filter tables"));
         let subscriptions = vec![
             cx.observe(&store, |_, _, cx| cx.notify()),
+            cx.subscribe(&search, |_, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            }),
             cx.subscribe(&url_input, |this, input, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::PressEnter { .. }) {
                     let url = input.read(cx).value().to_string();
@@ -63,7 +93,10 @@ impl DatabasePanel {
             servers,
             url_input,
             show_url: false,
+            search,
+            settings: None,
             expanded: HashSet::new(),
+            nodes: Rc::default(),
             scroll: UniformListScrollHandle::new(),
             error: None,
             _subscriptions: subscriptions,
@@ -129,7 +162,7 @@ impl DatabasePanel {
             })
             .collect();
         if running.is_empty() {
-            self.error = Some("No Sawit instances are running.".into());
+            self.error = Some("No Sawit instances are running. Start one, then try again.".into());
         } else {
             self.error = None;
             for p in running {
@@ -137,6 +170,90 @@ impl DatabasePanel {
                 self.store.update(cx, |s, cx| s.add_profile(p, cx));
             }
         }
+        cx.notify();
+    }
+
+    fn open_settings(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(profile) = self.store.read(cx).profile(name).cloned() else {
+            return;
+        };
+        let label = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(profile.name.clone())
+                .default_value(profile.label.clone().unwrap_or_default())
+        });
+        let url = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("postgres://user@localhost:5432/db")
+                .default_value(profile.connection_string())
+        });
+        let password = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Leave empty to keep the saved one")
+                .masked(true)
+        });
+        let subscriptions = [&label, &url, &password]
+            .into_iter()
+            .map(|input| {
+                cx.subscribe(input, |this, _, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::PressEnter { .. }) {
+                        this.save_settings(cx);
+                    }
+                })
+            })
+            .collect();
+        label.update(cx, |s, cx| s.focus(window, cx));
+        self.show_url = false;
+        self.settings = Some(SettingsForm {
+            profile: profile.name,
+            label,
+            url,
+            password,
+            error: None,
+            confirm_remove: false,
+            _subscriptions: subscriptions,
+        });
+        cx.notify();
+    }
+
+    fn save_settings(&mut self, cx: &mut Context<Self>) {
+        let Some(form) = &self.settings else {
+            return;
+        };
+        let (name, label, url, password) = (
+            form.profile.clone(),
+            form.label.read(cx).value().to_string(),
+            form.url.read(cx).value().to_string(),
+            form.password.read(cx).value().to_string(),
+        );
+        let result = self.store.update(cx, |s, cx| {
+            s.update_profile(&name, &label, &url, Some(password), cx)
+        });
+        match result {
+            Ok(()) => self.settings = None,
+            Err(e) => {
+                if let Some(form) = &mut self.settings {
+                    form.error = Some(e);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// The first click asks; the second removes.
+    fn remove_from_settings(&mut self, cx: &mut Context<Self>) {
+        let Some(form) = &mut self.settings else {
+            return;
+        };
+        if !form.confirm_remove {
+            form.confirm_remove = true;
+            cx.notify();
+            return;
+        }
+        let name = form.profile.clone();
+        self.settings = None;
+        self.expanded.remove(&name);
+        self.store.update(cx, |s, cx| s.remove(&name, cx));
         cx.notify();
     }
 
@@ -148,19 +265,56 @@ impl DatabasePanel {
     }
 }
 
+/// The Connection Settings form for one profile.
+struct SettingsForm {
+    profile: String,
+    label: Entity<InputState>,
+    url: Entity<InputState>,
+    password: Entity<InputState>,
+    error: Option<String>,
+    /// "Remove" was clicked once; the next click removes.
+    confirm_remove: bool,
+    _subscriptions: Vec<Subscription>,
+}
+
+/// The collapsible groups under a table, after its columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Facet {
+    Indexes,
+    Constraints,
+}
+
+impl Facet {
+    fn label(self) -> &'static str {
+        match self {
+            Facet::Indexes => "Indexes",
+            Facet::Constraints => "Constraints",
+        }
+    }
+}
+
 /// One visible line of the connection tree.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Node {
     Profile {
+        /// The profile's key.
         name: String,
+        /// What to show: the custom label, else `name`.
+        label: String,
+        /// The connection string, for the tooltip.
+        url: String,
         connected: bool,
-        connecting: bool,
+        /// Connecting now or waiting to retry.
+        pending: bool,
+        /// Status when not connected ("idle", "retrying in 4s").
+        status: Option<String>,
     },
     Error {
         message: String,
     },
     Schema {
         key: String,
+        profile: String,
         name: String,
         open: bool,
         count: usize,
@@ -178,22 +332,109 @@ pub enum Node {
         key: String,
         name: String,
         detail: String,
+        /// Part of the primary key.
+        primary: bool,
+    },
+    Group {
+        key: String,
+        facet: Facet,
+        count: usize,
+        open: bool,
+    },
+    /// An index or constraint; `definition` is its full SQL.
+    Item {
+        key: String,
+        facet: Facet,
+        name: String,
+        detail: String,
+        definition: String,
     },
 }
 
+/// The lines under an open relation: columns, then its indexes and
+/// constraints as groups (tables and materialized views only).
+fn relation_children(rkey: &str, rel: &Relation, expanded: &HashSet<String>, out: &mut Vec<Node>) {
+    for (cix, col) in rel.columns.iter().enumerate() {
+        out.push(Node::Column {
+            key: format!("{rkey}\u{0}{cix}"),
+            name: col.name.clone(),
+            detail: format!(
+                "{}{}",
+                col.data_type,
+                if col.nullable { "" } else { " not null" }
+            ),
+            primary: rel.primary_key.contains(&col.name),
+        });
+    }
+    let facets: &[Facet] = match rel.kind {
+        RelKind::Table => &[Facet::Indexes, Facet::Constraints],
+        RelKind::MaterializedView => &[Facet::Indexes],
+        RelKind::View | RelKind::Foreign => &[],
+    };
+    for &facet in facets {
+        let gkey = format!("{rkey}\u{0}{}", facet.label());
+        let count = match facet {
+            Facet::Indexes => rel.indexes.len(),
+            Facet::Constraints => rel.constraints.len(),
+        };
+        let open = count > 0 && expanded.contains(&gkey);
+        out.push(Node::Group {
+            key: gkey.clone(),
+            facet,
+            count,
+            open,
+        });
+        if !open {
+            continue;
+        }
+        match facet {
+            Facet::Indexes => out.extend(rel.indexes.iter().map(|ix| Node::Item {
+                key: format!("{gkey}\u{0}{}", ix.name),
+                facet,
+                name: ix.name.clone(),
+                detail: match (ix.primary, ix.unique) {
+                    (true, _) => format!("primary {}", ix.method),
+                    (false, true) => format!("unique {}", ix.method),
+                    _ => ix.method.clone(),
+                },
+                definition: ix.definition.clone(),
+            })),
+            Facet::Constraints => out.extend(rel.constraints.iter().map(|c| Node::Item {
+                key: format!("{gkey}\u{0}{}", c.name),
+                facet,
+                name: c.name.clone(),
+                detail: c.kind.label().into(),
+                definition: c.definition.clone(),
+            })),
+        }
+    }
+}
+
 /// Flattens the tree into the lines currently visible. `public` schemas
-/// start open; toggling a key flips its default.
-pub fn flatten(store: &DbStore, expanded: &HashSet<String>) -> Vec<Node> {
+/// start open; toggling a key flips its default. A non-empty `query` keeps
+/// only relations whose name contains it (any case), with their schemas
+/// open.
+pub fn flatten(store: &DbStore, expanded: &HashSet<String>, query: &str) -> Vec<Node> {
+    let query = query.trim().to_lowercase();
     let mut out = Vec::new();
     for profile in &store.profiles.items {
         let name = profile.name.clone();
+        let state = store.state(&name);
         out.push(Node::Profile {
             name: name.clone(),
+            label: profile.display_name().to_string(),
+            url: profile.connection_string(),
             connected: store.is_connected(&name),
-            connecting: store.connecting.contains(&name),
+            pending: state.is_pending(),
+            status: state.label(std::time::Instant::now()),
         });
-        if let Some(e) = store.errors.get(&name) {
-            out.push(Node::Error { message: e.clone() });
+        if let Some(e) = state
+            .error()
+            .or(store.notices.get(&name).map(String::as_str))
+        {
+            out.push(Node::Error {
+                message: e.to_string(),
+            });
         }
         if !expanded.contains(&name) {
             continue;
@@ -203,17 +444,26 @@ pub fn flatten(store: &DbStore, expanded: &HashSet<String>) -> Vec<Node> {
         };
         for schema in schemas {
             let skey = format!("{name}\u{0}{}", schema.name);
-            let sopen = (schema.name == "public") != expanded.contains(&skey);
+            let matching: Vec<&Relation> = schema
+                .relations
+                .iter()
+                .filter(|r| query.is_empty() || r.name.to_lowercase().contains(&query))
+                .collect();
+            if !query.is_empty() && matching.is_empty() {
+                continue;
+            }
+            let sopen = !query.is_empty() || (schema.name == "public") != expanded.contains(&skey);
             out.push(Node::Schema {
                 key: skey.clone(),
+                profile: name.clone(),
                 name: schema.name.clone(),
                 open: sopen,
-                count: schema.relations.len(),
+                count: matching.len(),
             });
             if !sopen {
                 continue;
             }
-            for rel in &schema.relations {
+            for rel in matching {
                 let rkey = format!("{skey}\u{0}{}", rel.name);
                 // Columns of a relation the role cannot read stay hidden too.
                 let ropen = rel.readable && expanded.contains(&rkey);
@@ -227,17 +477,7 @@ pub fn flatten(store: &DbStore, expanded: &HashSet<String>) -> Vec<Node> {
                     readable: rel.readable,
                 });
                 if ropen {
-                    for (cix, col) in rel.columns.iter().enumerate() {
-                        out.push(Node::Column {
-                            key: format!("{rkey}\u{0}{cix}"),
-                            name: col.name.clone(),
-                            detail: format!(
-                                "{}{}",
-                                col.data_type,
-                                if col.nullable { "" } else { " not null" }
-                            ),
-                        });
-                    }
+                    relation_children(&rkey, rel, expanded, &mut out);
                 }
             }
         }
@@ -267,20 +507,69 @@ impl DatabasePanel {
         match node {
             Node::Profile {
                 name,
+                label,
+                url,
                 connected,
-                connecting,
+                pending,
+                status,
             } => {
                 let color = if *connected {
                     cx.theme().success
+                } else if *pending {
+                    cx.theme().warning
                 } else {
                     muted
                 };
                 let (n1, n2, n3, n4) = (name.clone(), name.clone(), name.clone(), name.clone());
+                let n5 = name.clone();
+                // The full name and where it points, since both truncate.
+                let tip: SharedString = if label == url {
+                    label.clone().into()
+                } else {
+                    format!("{label}\n{url}").into()
+                };
                 row(("db-profile", ix), 0, cx)
                     .child(div().size(px(7.)).rounded_full().bg(color))
-                    .child(div().flex_1().truncate().child(name.clone()))
-                    .when(*connecting, |el| {
-                        el.child(div().text_xs().text_color(muted).child("…"))
+                    .child(
+                        div()
+                            .id(("db-profile-name", ix))
+                            .flex_1()
+                            .truncate()
+                            .child(label.clone())
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(tip.clone())
+                                    .build(window, cx)
+                            }),
+                    )
+                    .when_some(status.clone(), |el, status| {
+                        el.child(div().text_xs().text_color(muted).child(status))
+                    })
+                    .child(if *connected || *pending {
+                        Button::new(("db-disconnect", ix))
+                            .ghost()
+                            .xsmall()
+                            .icon(Lucide::Unplug)
+                            .tooltip(if *pending {
+                                "Stop Connecting"
+                            } else {
+                                "Disconnect"
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.store.update(cx, |s, cx| s.disconnect(&n5, cx));
+                            }))
+                    } else {
+                        Button::new(("db-connect", ix))
+                            .ghost()
+                            .xsmall()
+                            .icon(Lucide::Plug)
+                            .tooltip("Connect")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.store.update(cx, |s, cx| s.connect(&n5, cx));
+                                this.expanded.insert(n5.clone());
+                                cx.notify();
+                            }))
                     })
                     .when(*connected, |el| {
                         el.child(
@@ -293,6 +582,7 @@ impl DatabasePanel {
                                     cx.stop_propagation();
                                     cx.emit(DbEvent::OpenSql {
                                         profile: n1.clone(),
+                                        sql: None,
                                     });
                                 })),
                         )
@@ -309,14 +599,14 @@ impl DatabasePanel {
                         )
                     })
                     .child(
-                        Button::new(("db-remove", ix))
+                        Button::new(("db-settings", ix))
                             .ghost()
                             .xsmall()
-                            .icon(Lucide::X)
-                            .tooltip("Remove Connection (also deletes its password from Keychain)")
-                            .on_click(cx.listener(move |this, _, _, cx| {
+                            .icon(Lucide::Settings2)
+                            .tooltip("Connection Settings")
+                            .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
-                                this.store.update(cx, |s, cx| s.remove(&n3, cx))
+                                this.open_settings(&n3, window, cx);
                             })),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -349,11 +639,13 @@ impl DatabasePanel {
             }
             Node::Schema {
                 key,
+                profile,
                 name,
                 open,
                 count,
             } => {
                 let k = key.clone();
+                let (profile, schema) = (profile.clone(), name.clone());
                 row(
                     ElementId::Name(format!("db-schema\u{0}{key}").into()),
                     1,
@@ -369,6 +661,21 @@ impl DatabasePanel {
                 )
                 .child(div().truncate().child(name.clone()))
                 .child(div().text_xs().text_color(muted).child(count.to_string()))
+                .child(div().flex_1())
+                .child(
+                    Button::new(ElementId::Name(format!("db-diagram\u{0}{key}").into()))
+                        .ghost()
+                        .xsmall()
+                        .icon(Lucide::Waypoints)
+                        .tooltip("Show Schema Diagram")
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.stop_propagation();
+                            cx.emit(DbEvent::OpenDiagram {
+                                profile: profile.clone(),
+                                schema: schema.clone(),
+                            });
+                        })),
+                )
                 .on_click(cx.listener(move |this, _, _, cx| this.toggle(k.clone(), cx)))
                 .into_any_element()
             }
@@ -384,7 +691,8 @@ impl DatabasePanel {
                 let id = |part: &str| ElementId::Name(format!("{part}\u{0}{key}").into());
                 let icon = match kind {
                     RelKind::Table | RelKind::Foreign => Icon::new(Lucide::Table),
-                    RelKind::View | RelKind::MaterializedView => Icon::new(Lucide::Eye),
+                    RelKind::View => Icon::new(Lucide::Eye),
+                    RelKind::MaterializedView => Icon::new(Lucide::Layers),
                 };
                 if !readable {
                     // Disabled: nothing to open, the tooltip says why.
@@ -405,7 +713,7 @@ impl DatabasePanel {
                         .child(Icon::new(Lucide::Lock).xsmall())
                         .tooltip(|window, cx| {
                             gpui_kit::component::tooltip::Tooltip::new(
-                                "This role has no SELECT permission",
+                                "No SELECT permission for this role",
                             )
                             .build(window, cx)
                         })
@@ -439,21 +747,177 @@ impl DatabasePanel {
                     }))
                     .into_any_element()
             }
-            Node::Column { key, name, detail } => {
-                row(ElementId::Name(format!("db-col\u{0}{key}").into()), 4, cx)
+            Node::Column {
+                key,
+                name,
+                detail,
+                primary,
+            } => row(ElementId::Name(format!("db-col\u{0}{key}").into()), 4, cx)
+                .cursor_default()
+                // The name keeps its room; the type truncates first.
+                .child(div().flex_shrink_0().max_w(relative(0.7)).truncate().child(name.clone()))
+                .when(*primary, |el| {
+                    el.child(Icon::new(Lucide::KeyRound).xsmall().text_color(muted))
+                })
+                .child(div().min_w_0().text_xs().text_color(muted).truncate().child(detail.clone()))
+                .into_any_element(),
+            Node::Group {
+                key,
+                facet,
+                count,
+                open,
+            } => {
+                let k = key.clone();
+                let empty = *count == 0;
+                row(ElementId::Name(format!("db-group\u{0}{key}").into()), 4, cx)
+                    .text_color(muted)
+                    .child(
+                        Icon::new(if *open {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .xsmall()
+                        .when(empty, |i| i.invisible()),
+                    )
+                    .child(
+                        Icon::new(match facet {
+                            Facet::Indexes => Lucide::ListTree,
+                            Facet::Constraints => Lucide::ShieldCheck,
+                        })
+                        .xsmall(),
+                    )
+                    .child(facet.label())
+                    .child(div().text_xs().child(count.to_string()))
+                    .when(empty, |el| el.cursor_default())
+                    .when(!empty, |el| {
+                        el.on_click(cx.listener(move |this, _, _, cx| this.toggle(k.clone(), cx)))
+                    })
+                    .into_any_element()
+            }
+            Node::Item {
+                key,
+                name,
+                detail,
+                definition,
+                ..
+            } => {
+                let full: SharedString = definition.clone().into();
+                row(ElementId::Name(format!("db-item\u{0}{key}").into()), 6, cx)
+                    .cursor_default()
                     .child(div().truncate().child(name.clone()))
-                    .child(div().text_xs().text_color(muted).child(detail.clone()))
+                    .child(div().text_xs().text_color(muted).flex_shrink_0().child(detail.clone()))
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(window, cx)
+                    })
                     .into_any_element()
             }
         }
     }
 }
 
+impl DatabasePanel {
+    fn render_settings(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let form = self.settings.as_ref()?;
+        let muted = cx.theme().muted_foreground;
+        let title = self
+            .store
+            .read(cx)
+            .profile(&form.profile)
+            .map(|p| p.display_name().to_string())
+            .unwrap_or_default();
+        let field = |label: &'static str, input: &Entity<InputState>, hint: &'static str| {
+            v_flex()
+                .gap_1()
+                .child(div().text_xs().font_medium().child(label))
+                .child(Input::new(input).small())
+                .child(div().text_xs().text_color(muted).child(hint))
+        };
+        let confirm = form.confirm_remove;
+        Some(
+            v_flex()
+                .p_2()
+                .gap_3()
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .child(
+                    v_flex()
+                        .child(div().text_sm().font_semibold().child("Connection Settings"))
+                        .child(div().text_xs().text_color(muted).truncate().child(title)),
+                )
+                .child(field(
+                    "Name",
+                    &form.label,
+                    "Shown in the sidebar. Leave empty to use the connection details.",
+                ))
+                .child(field(
+                    "Connection string",
+                    &form.url,
+                    "Change the host, database or SSL settings here. Saving reconnects.",
+                ))
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(div().text_xs().font_medium().child("Password"))
+                        .child(Input::new(&form.password).small().mask_toggle())
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(muted)
+                                .child("Stored in Keychain, never shown."),
+                        ),
+                )
+                .when_some(form.error.clone(), |el, e| {
+                    el.child(div().text_xs().text_color(cx.theme().danger).child(e))
+                })
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .child(
+                            Button::new("db-settings-save")
+                                .small()
+                                .primary()
+                                .label("Save")
+                                .on_click(cx.listener(|this, _, _, cx| this.save_settings(cx))),
+                        )
+                        .child(
+                            Button::new("db-settings-cancel")
+                                .small()
+                                .label("Cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.settings = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(div().flex_1())
+                        .child(
+                            Button::new("db-settings-remove")
+                                .small()
+                                .danger()
+                                .when(!confirm, |b| b.ghost())
+                                .icon(Lucide::Trash)
+                                .label(if confirm { "Confirm Remove" } else { "Remove" })
+                                .tooltip("Removes the connection and its Keychain password")
+                                .on_click(cx.listener(|this, _, _, cx| this.remove_from_settings(cx))),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+}
+
 impl Render for DatabasePanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let query = self.search.read(cx).value().trim().to_string();
         let store = self.store.read(cx);
-        let node_count = flatten(store, &self.expanded).len();
+        self.nodes = Rc::new(flatten(store, &self.expanded, &query));
+        let node_count = self.nodes.len();
         let empty = store.profiles.items.is_empty();
+        // Something is loaded to search, and nothing in it matches.
+        let no_match = !query.is_empty()
+            && !store.schemas.is_empty()
+            && !self.nodes.iter().any(|n| matches!(n, Node::Relation { .. }));
+        let settings = self.render_settings(cx);
 
         v_flex()
             .size_full()
@@ -473,6 +937,7 @@ impl Render for DatabasePanel {
                             .icon(IconName::Plus)
                             .tooltip("Add from DATABASE_URL")
                             .on_click(cx.listener(|this, _, window, cx| {
+                                this.settings = None;
                                 this.show_url = !this.show_url;
                                 if this.show_url {
                                     this.url_input.update(cx, |s, cx| s.focus(window, cx));
@@ -513,15 +978,51 @@ impl Render for DatabasePanel {
                         ),
                 )
             })
+            .children(settings)
+            .when(!empty, |el| {
+                el.child(
+                    div()
+                        .px_2()
+                        .py_1p5()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            Input::new(&self.search)
+                                .small()
+                                .prefix(Icon::new(IconName::Search).xsmall())
+                                .cleanable(true),
+                        ),
+                )
+            })
             .when_some(self.error.clone(), |el, e| {
-                el.child(div().px_2().py_1().text_xs().text_color(cx.theme().danger).whitespace_normal().child(e))
+                el.child(Banner::error("db-error", e).on_dismiss(cx.listener(|this, _, _, cx| {
+                    this.error = None;
+                    cx.notify();
+                })))
             })
             .child(
                 v_flex()
                     .flex_1()
                     .min_h_0()
                     .py_1()
-                    .when(!empty, |el| {
+                    .when(no_match, |el| {
+                        el.child(
+                            Placeholder::new(IconName::Search, "No matching tables")
+                                .compact()
+                                .detail(format!(
+                                    "No table or view in an open connection matches “{query}”."
+                                ))
+                                .action(
+                                    Button::new("db-clear-search")
+                                        .small()
+                                        .label("Clear Filter")
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.search.update(cx, |s, cx| s.set_value("", window, cx));
+                                        })),
+                                ),
+                        )
+                    })
+                    .when(!empty && !no_match, |el| {
                         // Virtual: only visible lines are built, so schemas
                         // with thousands of tables stay cheap.
                         el.child(
@@ -529,7 +1030,7 @@ impl Render for DatabasePanel {
                                 "db-tree",
                                 node_count,
                                 cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                                    let nodes = flatten(this.store.read(cx), &this.expanded);
+                                    let nodes = this.nodes.clone();
                                     range
                                         .filter_map(|ix| {
                                             nodes.get(ix).map(|n| this.render_node(ix, n, cx))
@@ -541,13 +1042,34 @@ impl Render for DatabasePanel {
                             .size_full(),
                         )
                     })
-                    .when(empty, |el| {
+                    .when(empty && !self.show_url, |el| {
                         el.child(
-                            div()
-                                .p_2()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("No connections yet. Add one from a DATABASE_URL, a .env file, or a running Sawit instance."),
+                            Placeholder::new(Lucide::Database, "No connections yet")
+                                .compact()
+                                .detail("Connect with a DATABASE_URL, a .env file, or a running Sawit instance.")
+                                .action(
+                                    Button::new("empty-db-url")
+                                        .small()
+                                        .primary()
+                                        .label("Add URL")
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.show_url = true;
+                                            this.url_input.update(cx, |s, cx| s.focus(window, cx));
+                                            cx.notify();
+                                        })),
+                                )
+                                .action(
+                                    Button::new("empty-db-env")
+                                        .small()
+                                        .label("Import .env")
+                                        .on_click(cx.listener(|this, _, _, cx| this.import_env(cx))),
+                                )
+                                .action(
+                                    Button::new("empty-db-instances")
+                                        .small()
+                                        .label("Connect Instances")
+                                        .on_click(cx.listener(|this, _, _, cx| this.add_instances(cx))),
+                                ),
                         )
                     }),
             )
@@ -557,10 +1079,16 @@ impl Render for DatabasePanel {
 #[cfg(test)]
 mod tests {
     // Not a glob: `gpui_kit::*` exports a `test` macro that shadows #[test].
-    use super::{Node, flatten};
+    use super::{Facet, Node, flatten};
+    use crate::db::lifecycle::ConnState;
     use crate::db::store::DbStore;
-    use sawit_core::db::{ColumnInfo, ConnProfile, Profiles, RelKind, Relation, SchemaInfo};
+    use sawit_core::db::FailureKind;
+    use sawit_core::db::{
+        ColumnInfo, ConnProfile, Constraint, ConstraintKind, IndexInfo, Profiles, RelKind,
+        Relation, SchemaInfo,
+    };
     use std::collections::HashSet;
+    use std::time::{Duration, Instant};
 
     fn rel(name: &str, readable: bool) -> Relation {
         Relation {
@@ -572,6 +1100,7 @@ mod tests {
                 nullable: false,
             }],
             readable,
+            ..Relation::default()
         }
     }
 
@@ -604,6 +1133,8 @@ mod tests {
                 Node::Schema { name, .. } => format!("s:{name}"),
                 Node::Relation { name, .. } => format!("r:{name}"),
                 Node::Column { name, .. } => format!("c:{name}"),
+                Node::Group { facet, count, .. } => format!("g:{}:{count}", facet.label()),
+                Node::Item { name, .. } => format!("i:{name}"),
             })
             .collect()
     }
@@ -612,7 +1143,7 @@ mod tests {
     fn collapsed_profile_shows_only_itself() {
         let (store, name) = store();
         assert_eq!(
-            names(&flatten(&store, &HashSet::new())),
+            names(&flatten(&store, &HashSet::new(), "")),
             vec![format!("p:{name}")]
         );
     }
@@ -622,7 +1153,7 @@ mod tests {
         let (store, name) = store();
         let expanded = HashSet::from([name.clone()]);
         assert_eq!(
-            names(&flatten(&store, &expanded)),
+            names(&flatten(&store, &expanded, "")),
             vec![
                 format!("p:{name}"),
                 "s:audit".into(),
@@ -639,7 +1170,7 @@ mod tests {
         let secret = format!("{name}\u{0}public\u{0}secret");
         let users = format!("{name}\u{0}public\u{0}users");
         let expanded = HashSet::from([name.clone(), secret, users]);
-        let nodes = flatten(&store, &expanded);
+        let nodes = flatten(&store, &expanded, "");
         assert!(nodes.iter().any(|n| matches!(
             n,
             Node::Relation { name, readable: false, open: false, .. } if name == "secret"
@@ -657,7 +1188,128 @@ mod tests {
     #[test]
     fn errors_get_their_own_line() {
         let (mut store, name) = store();
-        store.errors.insert(name.clone(), "FATAL: no\nmore".into());
-        assert_eq!(names(&flatten(&store, &HashSet::new()))[1], "error");
+        store.set_state(
+            &name,
+            ConnState::Failed {
+                error: "Check the user name and password.\nFATAL: no".into(),
+                kind: FailureKind::Auth,
+            },
+        );
+        assert_eq!(names(&flatten(&store, &HashSet::new(), ""))[1], "error");
+        // Schema reload problems show the same way.
+        store.set_state(&name, ConnState::Idle);
+        store
+            .notices
+            .insert(name.clone(), "Unable to reload".into());
+        assert_eq!(names(&flatten(&store, &HashSet::new(), ""))[1], "error");
+    }
+
+    #[test]
+    fn each_connection_state_shows_its_status() {
+        let (mut store, name) = store();
+        let now = Instant::now();
+        let profile_line = |store: &DbStore| match &flatten(store, &HashSet::new(), "")[0] {
+            Node::Profile {
+                connected,
+                pending,
+                status,
+                ..
+            } => (*connected, *pending, status.clone()),
+            other => panic!("{other:?}"),
+        };
+        // Opening the app: every connection idle, nothing connecting.
+        assert_eq!(profile_line(&store), (false, false, Some("idle".into())));
+        store.set_state(&name, ConnState::Connecting { attempt: 0 });
+        assert_eq!(
+            profile_line(&store),
+            (false, true, Some("connecting…".into()))
+        );
+        store.set_state(&name, ConnState::Connecting { attempt: 3 });
+        assert_eq!(profile_line(&store).2.as_deref(), Some("reconnecting 3/8…"));
+        store.set_state(
+            &name,
+            ConnState::Retrying {
+                attempt: 2,
+                retry_at: now + Duration::from_secs(4),
+                error: "Connection lost".into(),
+            },
+        );
+        let nodes = flatten(&store, &HashSet::new(), "");
+        assert!(matches!(&nodes[0], Node::Profile { pending: true, .. }));
+        assert!(matches!(&nodes[1], Node::Error { message } if message == "Connection lost"));
+        store.set_state(&name, ConnState::Inactive);
+        assert_eq!(
+            profile_line(&store),
+            (false, false, Some("inactive".into()))
+        );
+        store.set_state(&name, ConnState::Disconnected);
+        assert_eq!(
+            profile_line(&store),
+            (false, false, Some("disconnected".into()))
+        );
+        // "Connected" with no live client (it just dropped) isn't shown as connected.
+        store.set_state(&name, ConnState::Connected);
+        assert_eq!(profile_line(&store), (false, false, None));
+    }
+
+    #[test]
+    fn filter_keeps_matching_relations_and_opens_their_schemas() {
+        let (store, name) = store();
+        let expanded = HashSet::from([name.clone()]);
+        // `audit` starts closed but opens for a match; `public` has none.
+        assert_eq!(
+            names(&flatten(&store, &expanded, " LO ")),
+            vec![format!("p:{name}"), "s:audit".into(), "r:log".into()]
+        );
+        assert_eq!(
+            names(&flatten(&store, &expanded, "zzz")),
+            vec![format!("p:{name}")]
+        );
+    }
+
+    #[test]
+    fn tables_list_indexes_and_constraints_after_columns() {
+        let (mut store, name) = store();
+        let users = &mut store.schemas.get_mut(&name).unwrap()[1].relations[0];
+        users.primary_key = vec!["id".into()];
+        users.indexes = vec![IndexInfo {
+            name: "users_pkey".into(),
+            method: "btree".into(),
+            unique: true,
+            primary: true,
+            definition: "CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id)".into(),
+        }];
+        users.constraints = vec![Constraint {
+            name: "users_pkey".into(),
+            kind: ConstraintKind::PrimaryKey,
+            definition: "PRIMARY KEY (id)".into(),
+        }];
+        let rkey = format!("{name}\u{0}public\u{0}users");
+        let mut expanded = HashSet::from([name.clone(), rkey.clone()]);
+        let lines = names(&flatten(&store, &expanded, ""));
+        assert_eq!(
+            lines[3..7],
+            ["r:users", "c:id", "g:Indexes:1", "g:Constraints:1"].map(String::from)
+        );
+        expanded.insert(format!("{rkey}\u{0}Indexes"));
+        let nodes = flatten(&store, &expanded, "");
+        assert!(nodes.iter().any(|n| matches!(
+            n,
+            Node::Item { facet: Facet::Indexes, detail, .. } if detail == "primary btree"
+        )));
+        assert!(nodes.iter().any(|n| matches!(n, Node::Column { primary: true, .. })));
+    }
+
+    #[test]
+    fn views_have_no_index_or_constraint_groups() {
+        let (mut store, name) = store();
+        store.schemas.get_mut(&name).unwrap()[1].relations[0].kind = RelKind::View;
+        let rkey = format!("{name}\u{0}public\u{0}users");
+        let expanded = HashSet::from([name.clone(), rkey]);
+        assert!(
+            !flatten(&store, &expanded, "")
+                .iter()
+                .any(|n| matches!(n, Node::Group { .. }))
+        );
     }
 }

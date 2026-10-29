@@ -680,7 +680,7 @@ async fn run_cli(call: &CliCall) -> Result<std::process::Output> {
     }
     let out = tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output())
         .await
-        .map_err(|_| CoreError::Config("CLI did not finish within 30 seconds".into()))??;
+        .map_err(|_| CoreError::Config("The client's CLI didn't finish within 30 seconds. Try again, or add the server manually.".into()))??;
     Ok(out)
 }
 
@@ -1174,10 +1174,7 @@ mod tests {
         assert_eq!(entry(Client::FactoryDroid, s).1["type"], "stdio");
         assert_eq!(entry(Client::Kiro, s).1["disabled"], false);
         assert_eq!(entry(Client::KiloCode, s).0, "mcp");
-        assert_eq!(
-            entry(Client::KiloCode, s).1["command"][0],
-            "/bin/sawit-mcp"
-        );
+        assert_eq!(entry(Client::KiloCode, s).1["command"][0], "/bin/sawit-mcp");
         assert_eq!(entry(Client::VsCodeInsiders, s).0, "servers");
         assert_eq!(entry(Client::Cursor, s).1["type"], "stdio");
         assert_eq!(

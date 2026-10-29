@@ -1,5 +1,5 @@
 //! Checks GitHub Releases for a newer Sawit, downloads it in the
-//! background and offers "Restart for Update", which swaps the .app bundle
+//! background and offers "Restart to Update", which swaps the .app bundle
 //! after the app quits and opens the new one.
 
 use std::os::unix::process::CommandExt;

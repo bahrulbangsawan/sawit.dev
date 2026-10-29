@@ -13,6 +13,7 @@ use sawit_core::db::{self, QueryOutcome};
 use super::store::DbStore;
 use super::table::ResultDelegate;
 use crate::rt;
+use crate::states::Placeholder;
 
 const MAX_ROWS: usize = 10_000;
 
@@ -45,18 +46,24 @@ impl SqlView {
         title: SharedString,
         db: Entity<DbStore>,
         profile: String,
+        sql: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let editor = cx.new(|cx| {
-            EditorState::new(window, cx)
+            let mut state = EditorState::new(window, cx)
                 .language("sql")
                 .line_number(true)
                 .tab_size(TabSize {
                     tab_size: 2,
                     hard_tabs: false,
                 })
-                .placeholder("-- Write SQL, then press ⌘↩ to run")
+                .placeholder("-- Write SQL, then press ⌘↩ to run");
+            crate::highlight::install(&mut state, cx);
+            match sql {
+                Some(sql) => state.default_value(sql),
+                None => state,
+            }
         });
         Self {
             title,
@@ -92,7 +99,7 @@ impl SqlView {
             self.db
                 .update(cx, |s, cx| s.ensure_connecting(&profile, cx));
             self.error = Some(
-                "Connection lost; reconnecting. Run again once the connection dot turns green."
+                "Connection lost. Reconnecting now; run the query again when the dot turns green."
                     .into(),
             );
             cx.notify();
@@ -123,10 +130,14 @@ impl SqlView {
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
-        if let Some(token) = self.cancel.take() {
-            let ssl = self.db.read(cx).ssl(&self.profile);
+        if let Some(token) = self.cancel.take()
+            && let Some(profile) = self.db.read(cx).profile(&self.profile).cloned()
+        {
             // Fire and forget: the running query reports "Query canceled.".
-            drop(rt::spawn(cx, async move { db::cancel(&token, ssl).await }));
+            drop(rt::spawn(
+                cx,
+                async move { db::cancel(&token, &profile).await },
+            ));
         }
     }
 
@@ -213,32 +224,26 @@ impl Render for SqlView {
                     .border_color(cx.theme().border)
                     .text_color(cx.theme().muted_foreground)
                     .child(if self.running {
-                        "running…".to_string()
+                        "Running…".to_string()
                     } else {
                         self.summary
                             .clone()
-                            .unwrap_or_else(|| "No results yet.".into())
+                            .unwrap_or_else(|| "Ready".into())
                     }),
             )
-            .when_some(self.error.clone(), |el, e| {
-                el.child(
-                    div()
-                        .px_3()
-                        .py_2()
-                        .text_sm()
-                        .font_family(cx.theme().mono_font_family.clone())
-                        .text_color(cx.theme().danger)
-                        .whitespace_normal()
-                        .child(e),
-                )
-            })
-            .when_some(self.result.clone(), |el, table| {
-                el.child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .child(DataTable::new(&table).stripe(true).small()),
-                )
-            })
+            .child(div().flex_1().min_h_0().map(|el| {
+                match (self.error.clone(), self.result.clone()) {
+                    (Some(e), _) => el.child(Placeholder::error("The query didn't complete").detail(e)),
+                    (None, Some(table)) => el.child(DataTable::new(&table).stripe(true).small()),
+                    (None, None) if self.running => el.child(Placeholder::loading("Running query…")),
+                    (None, None) if let Some(summary) = self.summary.clone() => el.child(
+                        Placeholder::new(Lucide::Check, "Query complete").detail(summary),
+                    ),
+                    (None, None) => el.child(
+                        Placeholder::new(Lucide::Play, "No results yet")
+                            .detail("Write a query above and press ⌘↩ to run it."),
+                    ),
+                }
+            }))
     }
 }

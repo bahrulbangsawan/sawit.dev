@@ -8,6 +8,7 @@ use gpui_kit::*;
 use sawit_core::pgctl::PgCtlStatus;
 
 use super::store::{ServerStore, Status};
+use crate::states::Placeholder;
 
 pub struct ServerList {
     store: Entity<ServerStore>,
@@ -94,7 +95,7 @@ impl Render for ServerList {
                             .font_semibold()
                             .text_color(cx.theme().muted_foreground)
                             .child(Icon::new(Lucide::Server).xsmall())
-                            .child("SERVERS"),
+                            .child("INSTANCES"),
                     )
                     .child(
                         Button::new("new-instance")
@@ -117,11 +118,19 @@ impl Render for ServerList {
                     .children(rows)
                     .when(empty, |el| {
                         el.child(
-                            div()
-                                .p_2()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("No instances yet. Click + to create or add one."),
+                            Placeholder::new(Lucide::Server, "No instances yet")
+                                .compact()
+                                .detail("Create a local PostgreSQL server, or add one you already run.")
+                                .action(
+                                    Button::new("empty-new-instance")
+                                        .small()
+                                        .primary()
+                                        .icon(IconName::Plus)
+                                        .label("New Instance")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.store.update(cx, |s, cx| s.show_create(cx));
+                                        })),
+                                ),
                         )
                     }),
             )

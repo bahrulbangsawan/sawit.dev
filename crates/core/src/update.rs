@@ -82,7 +82,7 @@ pub async fn latest_release() -> Result<Release> {
     if out.code != Some(0) {
         return Err(CoreError::Download(out.stderr.trim().to_string()));
     }
-    parse_release(&out.stdout).ok_or_else(|| CoreError::Parse("GitHub release".into()))
+    parse_release(&out.stdout).ok_or_else(|| CoreError::Parse("Unable to read the latest release from GitHub.".into()))
 }
 
 /// Downloads and unpacks the release's app into `dir`, returning the new
@@ -91,7 +91,7 @@ pub async fn download(release: &Release, dir: &Path) -> Result<PathBuf> {
     let url = release
         .asset
         .as_deref()
-        .ok_or_else(|| CoreError::Download("this release has no app download yet".into()))?;
+        .ok_or_else(|| CoreError::Download("This release has no app download yet. Try again later.".into()))?;
     let _ = std::fs::remove_dir_all(dir);
     std::fs::create_dir_all(dir)?;
     let zip = dir.join("app.zip");
@@ -123,7 +123,7 @@ pub async fn download(release: &Release, dir: &Path) -> Result<PathBuf> {
     let app = dir.join("Sawit.app");
     if unzip.code != Some(0) || !app.join("Contents/MacOS/sawit").is_file() {
         return Err(CoreError::Download(format!(
-            "unexpected download contents: {}",
+            "The download has unexpected contents: {}",
             unzip.combined().trim()
         )));
     }

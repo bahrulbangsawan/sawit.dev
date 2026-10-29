@@ -6,13 +6,13 @@ mod palette;
 mod session;
 
 pub use input::{
-    KeyInput, Modes, MouseAction, MouseButton, ScrollAccumulator, key_to_bytes, mouse_report,
-    paste_bytes,
+    KeyInput, Modes, MouseAction, MouseButton, ScrollAccumulator, cd_bytes, drop_bytes,
+    is_shell_lang, key_to_bytes, mouse_report, paste_bytes, run_bytes, shell_commands, shell_quote,
 };
 pub use palette::{Palette, Rgb};
 pub use session::{
-    CellView, Command, CursorView, GridSize, Session, Snapshot, TermEvent, multiplexer_markers,
-    wrap_unsetting,
+    CellView, Command, CursorView, GridSize, SelectKind, Session, Snapshot, TermEvent,
+    default_shell, multiplexer_markers, wrap_unsetting,
 };
 
 #[cfg(test)]

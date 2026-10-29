@@ -1,0 +1,130 @@
+/* Sawit's design tokens (--sawit-*, set from the app's theme by theme.ts)
+   mapped onto Excalidraw's own variables, so the canvas UI follows the
+   app's colors, font, radii and shadow setting in light and dark. */
+
+html,
+body,
+#root {
+	margin: 0;
+	width: 100%;
+	height: 100%;
+	overflow: hidden;
+	background: var(--sawit-background, #282c33);
+	overscroll-behavior: none;
+}
+
+.excalidraw.excalidraw {
+	--ui-font: var(--sawit-font);
+	--border-radius-md: var(--sawit-radius);
+	--border-radius-lg: var(--sawit-radius-lg);
+
+	/* Surfaces */
+	--default-bg-color: var(--sawit-background);
+	--island-bg-color: var(--sawit-popover);
+	--popup-bg-color: var(--sawit-popover);
+	--popup-secondary-bg-color: var(--sawit-muted);
+	--sidebar-bg-color: var(--sawit-popover);
+	--color-surface-lowest: var(--sawit-background);
+	--color-surface-low: var(--sawit-popover);
+	--color-surface-mid: var(--sawit-muted);
+	--color-surface-high: var(--sawit-secondary-hover);
+	--color-surface-primary-container: var(--sawit-secondary-active);
+	--overlay-bg-color: rgba(0, 0, 0, 0.25);
+
+	/* Text and icons */
+	--text-primary-color: var(--sawit-foreground);
+	--color-on-surface: var(--sawit-foreground);
+	--popup-text-color: var(--sawit-popover-foreground);
+	--icon-fill-color: var(--sawit-foreground);
+	--input-label-color: var(--sawit-foreground);
+	--keybinding-color: var(--sawit-muted-foreground);
+	--color-muted-darker: var(--sawit-muted-foreground);
+	--color-on-primary-container: var(--sawit-foreground);
+	--color-logo-text: var(--sawit-foreground);
+	--link-color: var(--sawit-link);
+
+	/* Accent: Sawit's primary instead of Excalidraw's violet */
+	--color-primary: var(--sawit-primary);
+	--color-primary-darker: var(--sawit-primary-active);
+	--color-primary-darkest: var(--sawit-primary-active);
+	--color-primary-hover: var(--sawit-primary-hover);
+	--color-primary-light: var(--sawit-secondary-active);
+	--color-primary-light-darker: var(--sawit-secondary-hover);
+	--color-brand-hover: var(--sawit-primary-hover);
+	--color-brand-active: var(--sawit-primary-active);
+	--color-selection: var(--sawit-primary);
+	--color-slider-track: var(--sawit-secondary-active);
+	--focus-highlight-color: var(--sawit-ring);
+	--select-highlight-color: var(--sawit-primary);
+	--button-hover-bg: var(--sawit-secondary-hover);
+	--button-active-bg: var(--sawit-secondary-active);
+	--button-active-border: var(--sawit-primary);
+	--button-gray-1: var(--sawit-secondary-hover);
+	--button-gray-2: var(--sawit-secondary);
+	--button-gray-3: var(--sawit-muted);
+
+	/* Lines and inputs */
+	--default-border-color: var(--sawit-border);
+	--dialog-border-color: var(--sawit-border);
+	--color-border-outline: var(--sawit-input);
+	--color-border-outline-variant: var(--sawit-border);
+	--input-bg-color: var(--sawit-background);
+	--input-border-color: var(--sawit-input);
+	--input-hover-bg-color: var(--sawit-muted);
+	--scrollbar-thumb: var(--sawit-scrollbar-thumb);
+	--scrollbar-thumb-hover: var(--sawit-scrollbar-thumb-hover);
+
+	/* Danger */
+	--color-danger: var(--sawit-danger);
+	--button-destructive-color: var(--sawit-danger);
+
+	/* Islands get a hairline border like Sawit's panels and popovers. */
+	--shadow-island: 0 0 0 1px var(--sawit-border);
+}
+
+/* Sawit has shadows off: keep only the hairline outline. */
+html[data-sawit-shadow='true'] .excalidraw.excalidraw {
+	--shadow-island: 0 0 0 1px var(--sawit-border), 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+html[data-sawit-shadow='false'] .excalidraw.excalidraw {
+	--modal-shadow: 0 0 0 1px var(--sawit-border);
+}
+
+/* Excalidraw names its "Assistant" font directly in a few places (dialogs,
+   text fields). Board text and code samples keep their own fonts. */
+.excalidraw.excalidraw.excalidraw *:not(.excalidraw-wysiwyg):not(code):not(kbd):not(pre) {
+	font-family: var(--ui-font);
+}
+.excalidraw.excalidraw kbd,
+.excalidraw.excalidraw code,
+.excalidraw.excalidraw pre {
+	font-family: var(--sawit-mono-font);
+}
+
+/* Selected tool: like Sawit's selected toggle buttons, a raised surface
+   with the icon in the primary color. */
+.excalidraw.excalidraw .ToolIcon .ToolIcon_type_radio:checked + .ToolIcon__icon,
+.excalidraw.excalidraw .ToolIcon .ToolIcon_type_checkbox:checked + .ToolIcon__icon {
+	background: var(--sawit-secondary-active);
+	--color-on-primary-container: var(--sawit-primary);
+	--icon-fill-color: var(--sawit-primary);
+}
+
+.sawit-maximize {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: var(--lg-button-size, 2.25rem);
+	height: var(--lg-button-size, 2.25rem);
+	padding: 0;
+	border: none;
+	border-radius: var(--border-radius-lg);
+	background: var(--island-bg-color);
+	color: var(--icon-fill-color);
+	box-shadow: var(--shadow-island);
+	cursor: pointer;
+}
+
+.sawit-maximize:hover {
+	background: var(--button-hover-bg);
+}

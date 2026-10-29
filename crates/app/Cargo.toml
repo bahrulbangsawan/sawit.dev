@@ -7,6 +7,9 @@ publish.workspace = true
 [dependencies]
 futures.workspace = true
 gpui-kit = { version = "=0.8.1", features = ["syntect"] }
+# Same versions/features as gpui-kit's syntect backend; see src/highlight.rs.
+syntect = { version = "5.3.0", default-features = false, features = ["parsing", "default-syntaxes", "regex-fancy"] }
+two-face = { version = "0.4.5", default-features = false, features = ["syntect-fancy"] }
 image = { version = "0.25", default-features = false }
 sawit-core = { path = "../core" }
 # In-app video: AVPlayer frames painted through GPUI's surface().
@@ -15,6 +18,9 @@ objc2-av-foundation = { version = "0.3.2", default-features = false, features = 
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "objc2", "CFString", "CFCGTypes"] }
 objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMTime"] }
 objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "CVBuffer", "CVImageBuffer", "CVPixelBuffer"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDictionary", "NSString", "NSURL", "NSValue", "NSObject"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDictionary", "NSError", "NSFileManager", "NSString", "NSURL", "NSValue", "NSObject"] }
 tokio.workspace = true
 tokio-postgres.workspace = true
+wry = { version = "0.57", default-features = false, features = ["os-webview"] }
+include_dir = "0.7"
+serde_json = "1"

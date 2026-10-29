@@ -467,10 +467,377 @@ async fn running_queries_can_be_cancelled() {
     };
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let started = std::time::Instant::now();
-    db::cancel(&token, profile.ssl).await.unwrap();
+    db::cancel(&token, &profile).await.unwrap();
     let err = running.await.unwrap().unwrap_err();
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
     assert!(err.to_string().contains("canceled"), "{err}");
     // The connection survives a cancel.
     assert!(db::run_sql(&client, "SELECT 1", 1).await.is_ok());
+}
+
+/// Forwards to `upstream` but refuses the `options` startup parameter, as
+/// PgBouncer (Neon's `-pooler` endpoints, Supabase) does. Returns its port.
+async fn pooler_like_proxy(upstream: u16) -> u16 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut client, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let packet = loop {
+                    let len = client.read_i32().await.ok()? as usize;
+                    let mut body = vec![0; len - 4];
+                    client.read_exact(&mut body).await.ok()?;
+                    if body[..4] == 80877103i32.to_be_bytes() {
+                        client.write_all(b"N").await.ok()?; // no TLS
+                        continue;
+                    }
+                    break [&(len as i32).to_be_bytes()[..], &body].concat();
+                };
+                if packet.windows(8).any(|w| w == b"options\0") {
+                    let fields =
+                        b"SFATAL\0VFATAL\0C08P01\0Munsupported startup parameter: options\0\0";
+                    let mut err = vec![b'E'];
+                    err.extend_from_slice(&((fields.len() + 4) as i32).to_be_bytes());
+                    err.extend_from_slice(fields);
+                    let _ = client.write_all(&err).await;
+                    return None;
+                }
+                let mut server = tokio::net::TcpStream::connect(("127.0.0.1", upstream))
+                    .await
+                    .ok()?;
+                server.write_all(&packet).await.ok()?;
+                tokio::io::copy_bidirectional(&mut client, &mut server)
+                    .await
+                    .ok()
+            });
+        }
+    });
+    port
+}
+
+#[tokio::test]
+async fn works_through_a_pooler_without_session_settings() {
+    let Some((_cluster, profile)) = cluster().await else {
+        eprintln!("skip: no PostgreSQL binaries");
+        return;
+    };
+    let admin = db::connect(&profile, None).await.unwrap();
+    admin
+        .batch_execute(
+            "CREATE TABLE heap_t (x int);
+             INSERT INTO heap_t SELECT g FROM generate_series(1, 120) g;",
+        )
+        .await
+        .unwrap();
+    let pooled = ConnProfile {
+        port: pooler_like_proxy(profile.port).await,
+        ..profile.clone()
+    };
+    let (rw, ro, schemas) = db::connect_all(&pooled, None).await.unwrap();
+    assert!(schemas.iter().any(|s| s.name == "public"));
+    // Nothing was SET on the session: behind a real transaction pooler it
+    // would leak into other clients' transactions.
+    for client in [&rw, &ro] {
+        let row = client
+            .query_one("SHOW default_transaction_read_only", &[])
+            .await
+            .unwrap();
+        assert_eq!(row.get::<_, String>(0), "off");
+    }
+    // Keyless pages and counts still work.
+    let page = db::fetch_page(&ro, "public", "heap_t", &[], 100, 50)
+        .await
+        .unwrap();
+    assert_eq!(page.rows.len(), 20);
+    assert_eq!(page.rows[0][0].as_deref(), Some("101"));
+    assert_eq!(
+        db::row_count(&ro, "public", "heap_t").await.unwrap().rows,
+        120
+    );
+}
+
+#[tokio::test]
+async fn schema_carries_keys_estimates_and_draws_as_a_diagram() {
+    let Some((_cluster, profile)) = cluster().await else {
+        eprintln!("skip: no PostgreSQL binaries");
+        return;
+    };
+    let admin = db::connect(&profile, None).await.unwrap();
+    admin
+        .batch_execute(
+            "CREATE TABLE users (id bigint PRIMARY KEY, email varchar(255) NOT NULL);
+             CREATE TABLE line (order_id int, n int, user_id bigint REFERENCES users(id),
+                                PRIMARY KEY (order_id, n));
+             INSERT INTO users SELECT g, 'u' || g FROM generate_series(1, 500) g;
+             ANALYZE users;",
+        )
+        .await
+        .unwrap();
+    // Keyword/value connection strings connect like URLs.
+    let (kv, _) = db::parse_database_url(&format!(
+        "host=localhost port={} dbname=postgres user=postgres sslmode=disable",
+        profile.port
+    ))
+    .unwrap();
+    let (_rw, _ro, schemas) = db::connect_all(&kv, None).await.unwrap();
+    let public = schemas.iter().find(|s| s.name == "public").unwrap();
+    let rel = |n: &str| public.relations.iter().find(|r| r.name == n).unwrap();
+    assert_eq!(rel("users").primary_key, vec!["id"]);
+    assert_eq!(rel("users").estimated_rows, Some(500));
+    assert_eq!(rel("line").primary_key, vec!["order_id", "n"]);
+    assert_eq!(rel("line").estimated_rows, None); // never analyzed
+    assert_eq!(
+        rel("line").foreign_keys,
+        vec![db::ForeignKey {
+            columns: vec!["user_id".into()],
+            ref_schema: "public".into(),
+            ref_table: "users".into(),
+            ref_columns: vec!["id".into()],
+        }]
+    );
+    let dbml = db::diagram::to_dbml(&schemas, Some("public"));
+    assert!(
+        dbml.contains("Ref: public.line.user_id > public.users.id"),
+        "{dbml}"
+    );
+    let er = db::diagram::to_mermaid(&schemas, Some("public"));
+    let drawn = sawit_core::mermaid::render(&er, &Default::default()).unwrap();
+    assert_eq!(drawn.kind, "er");
+    assert!(drawn.svg.contains("public.users"));
+}
+
+#[tokio::test]
+async fn connection_strings_failover_and_failures_against_a_real_server() {
+    let Some((_cluster, profile)) = cluster().await else {
+        eprintln!("skip: no PostgreSQL binaries");
+        return;
+    };
+    let dead = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port(); // nothing listens once the listener is dropped
+    let port = profile.port;
+
+    // A dead first host falls over to the second; `options` reach the server.
+    let (multi, _) = db::parse_database_url(&format!(
+        "postgres://postgres@127.0.0.1:{dead},localhost:{port}/postgres?options=-c%20search_path%3Dfrom_url&connect_timeout=3"
+    ))
+    .unwrap();
+    let client = db::connect(&multi, None).await.unwrap();
+    let row = client.query_one("SHOW search_path", &[]).await.unwrap();
+    assert_eq!(row.get::<_, String>(0), "from_url");
+
+    // Unix socket (the server's default directory), when it has one.
+    if std::path::Path::new(&format!("/tmp/.s.PGSQL.{port}")).exists() {
+        let (sock, _) = db::parse_database_url(&format!(
+            "postgresql://postgres@%2Ftmp:{port}/postgres?sslmode=require"
+        ))
+        .unwrap();
+        assert!(sock.is_socket());
+        db::connect(&sock, None).await.expect("socket connection");
+    }
+
+    // Failures say what kind they are.
+    let kind = |p: ConnProfile| async move {
+        db::failure_kind(&db::connect(&p, None).await.expect_err("should fail"))
+    };
+    let refused = ConnProfile {
+        port: dead,
+        ..profile.clone()
+    };
+    assert_eq!(kind(refused).await, db::FailureKind::Network);
+    let unknown_host = ConnProfile {
+        host: "no-such-host.invalid".into(),
+        ..profile.clone()
+    };
+    assert_eq!(kind(unknown_host).await, db::FailureKind::Network);
+    let missing_db = ConnProfile {
+        database: "no_such_db".into(),
+        ..profile.clone()
+    };
+    assert_eq!(kind(missing_db).await, db::FailureKind::DatabaseMissing);
+    let no_tls = ConnProfile {
+        ssl: db::SslMode::Require,
+        port: pooler_like_proxy(port).await, // answers "no TLS"
+        ..profile.clone()
+    };
+    assert_eq!(kind(no_tls).await, db::FailureKind::Tls);
+
+    // A session killed on the server (restart, idle reaper, failover) is
+    // noticed, and a fresh connection works.
+    let (rw, ro, _) = db::connect_all(&profile, None).await.unwrap();
+    let pid: i32 = ro
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    rw.query_one("SELECT pg_terminate_backend($1)", &[&pid])
+        .await
+        .unwrap();
+    let _ = ro.simple_query("SELECT 1").await; // fails: terminated
+    for _ in 0..50 {
+        if ro.is_closed() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(ro.is_closed());
+    assert!(!rw.is_closed());
+    let again = db::connect_read_only(&profile, None).await.unwrap();
+    again.simple_query("SELECT 1").await.unwrap();
+}
+
+#[tokio::test]
+async fn schema_lists_indexes_constraints_and_matviews() {
+    let Some((_cluster, profile)) = cluster().await else {
+        eprintln!("skip: no PostgreSQL binaries");
+        return;
+    };
+    let client = db::connect(&profile, None).await.unwrap();
+    client
+        .batch_execute(
+            "CREATE TABLE teams (id int PRIMARY KEY);
+             CREATE TABLE players (
+               id int PRIMARY KEY,
+               team int REFERENCES teams(id),
+               email text CONSTRAINT players_email_key UNIQUE,
+               age int CONSTRAINT adult CHECK (age >= 18));
+             CREATE INDEX players_team_idx ON players USING hash (team);
+             CREATE MATERIALIZED VIEW roster AS SELECT id, team FROM players;
+             CREATE INDEX roster_team ON roster (team);",
+        )
+        .await
+        .unwrap();
+    let schemas = db::load_schema(&client).await.unwrap();
+    let public = schemas.iter().find(|s| s.name == "public").unwrap();
+    let rel = |name: &str| public.relations.iter().find(|r| r.name == name).unwrap();
+
+    let players = rel("players");
+    let kinds: Vec<_> = players
+        .constraints
+        .iter()
+        .map(|c| (c.name.as_str(), c.kind))
+        .filter(|(_, k)| *k != db::ConstraintKind::Other) // NOT NULL rows on PG 18
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            ("adult", db::ConstraintKind::Check),
+            ("players_email_key", db::ConstraintKind::Unique),
+            ("players_pkey", db::ConstraintKind::PrimaryKey),
+            ("players_team_fkey", db::ConstraintKind::ForeignKey),
+        ]
+    );
+    let check = players.constraints.iter().find(|c| c.name == "adult").unwrap();
+    assert_eq!(check.definition, "CHECK ((age >= 18))");
+    // The key and foreign key the diagram uses still load.
+    assert_eq!(players.primary_key, vec!["id"]);
+    assert_eq!(players.foreign_keys[0].ref_table, "teams");
+
+    let indexes: Vec<_> = players
+        .indexes
+        .iter()
+        .map(|i| (i.name.as_str(), i.method.as_str(), i.unique, i.primary))
+        .collect();
+    assert_eq!(
+        indexes,
+        vec![
+            ("players_email_key", "btree", true, false),
+            ("players_pkey", "btree", true, true),
+            ("players_team_idx", "hash", false, false),
+        ]
+    );
+    assert!(players.indexes[2].definition.contains("USING hash (team)"));
+
+    let roster = rel("roster");
+    assert_eq!(roster.kind, RelKind::MaterializedView);
+    assert_eq!(roster.indexes.len(), 1);
+    assert!(roster.constraints.is_empty());
+}
+
+#[tokio::test]
+async fn rows_filter_search_and_sort_on_the_server() {
+    let Some((_cluster, profile)) = cluster().await else {
+        eprintln!("skip: no PostgreSQL binaries");
+        return;
+    };
+    let client = db::connect(&profile, None).await.unwrap();
+    client
+        .batch_execute(
+            // A column named like a row alias must not break the row search.
+            "CREATE TABLE people (id int PRIMARY KEY, name text, age int, t text);
+             INSERT INTO people VALUES
+               (1, 'Ana', 30, 'a'), (2, 'bob', NULL, 'b'), (3, 'Cara', 25, 'c'),
+               (4, '100%_real', 40, 'd'), (5, 'Abe', 30, 'e');",
+        )
+        .await
+        .unwrap();
+    let pk = vec!["id".to_string()];
+    let ids = |set: &db::ResultSet| -> Vec<String> {
+        set.rows.iter().map(|r| r[0].clone().unwrap()).collect()
+    };
+    let run = |q: db::RowQuery| {
+        let (client, pk) = (&client, pk.clone());
+        async move {
+            let set = db::fetch_rows(client, "public", "people", &pk, &q, 0, 50)
+                .await
+                .unwrap();
+            let count = db::row_count_matching(client, "public", "people", &q)
+                .await
+                .unwrap()
+                .unwrap();
+            (ids(&set), count.rows)
+        }
+    };
+    let filter = |column: &str, op, value: &str| db::RowFilter {
+        column: column.into(),
+        op,
+        value: value.into(),
+    };
+
+    // Sort by age, NULLs last, ties by key.
+    let by_age = db::RowQuery {
+        sort: Some(("age".into(), db::SortDir::Asc)),
+        ..Default::default()
+    };
+    assert_eq!(run(by_age).await, (["3", "1", "5", "4", "2"].map(String::from).to_vec(), 5));
+    // Typed comparison: '30' is compared as an int.
+    let q = db::RowQuery {
+        filters: vec![filter("age", db::FilterOp::Ge, "30")],
+        sort: Some(("age".into(), db::SortDir::Desc)),
+        ..Default::default()
+    };
+    assert_eq!(run(q).await, (["4", "1", "5"].map(String::from).to_vec(), 3));
+    // LIKE wildcards in the value are literal.
+    let q = db::RowQuery {
+        filters: vec![filter("name", db::FilterOp::Contains, "%_")],
+        ..Default::default()
+    };
+    assert_eq!(run(q).await, (vec!["4".to_string()], 1));
+    // Whole-row search ignores case and finds any column.
+    let q = db::RowQuery {
+        search: "BOB".into(),
+        ..Default::default()
+    };
+    assert_eq!(run(q).await, (vec!["2".to_string()], 1));
+    let q = db::RowQuery {
+        filters: vec![
+            filter("age", db::FilterOp::IsNotNull, ""),
+            filter("name", db::FilterOp::StartsWith, "a"),
+        ],
+        ..Default::default()
+    };
+    assert_eq!(run(q).await, (["1", "5"].map(String::from).to_vec(), 2));
+    // A value the column can't take is an error, not an empty page.
+    let bad = db::RowQuery {
+        filters: vec![filter("age", db::FilterOp::Eq, "old")],
+        ..Default::default()
+    };
+    assert!(
+        db::fetch_rows(&client, "public", "people", &pk, &bad, 0, 50)
+            .await
+            .is_err()
+    );
 }

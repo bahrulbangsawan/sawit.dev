@@ -7,26 +7,47 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
+use crate::kebun::{BakarArgs, ListWhat};
 use crate::{CoreError, Result, cmd};
 
 /// Where "Install CLI" puts the command.
 pub const CLI_LINK: &str = "/usr/local/bin/sawit";
 
 pub const USAGE: &str = "\
-sawit — open folders and files in Sawit
+sawit — open folders and files in Sawit, query databases, clear ports
 
 Usage:
   sawit [options] [path[:line[:column]] ...]
+  sawit <db> [table] [\"sql\"]
+  sawit list [instances|db|ports|connections]
+  sawit bakar ports [port ...] [-y]
+  sawit bakar instances [name ...] [-y]
 
 Examples:
-  sawit .                  open this folder as a project
+  sawit .                  open this folder as a project (joins the open
+                           window next to its other projects)
   sawit src/main.rs:42     open a file at line 42
   sawit -w COMMIT_EDITMSG  wait until the file's tab is closed (git core.editor)
   ls | sawit -             open stdin as a new file
 
+Kebun (databases), no app needed:
+  sawit kyzn                               list tables
+  sawit kyzn leads                         first 100 rows
+  sawit kyzn leads \"phone is null\"         filter (becomes WHERE)
+  sawit kyzn leads \"select * from leads where phone is null\"
+  <db> is a Sawit instance, a saved connection, a database named in
+  ./.env DATABASE_URL (or a folder above), or a database on a running
+  local Postgres. A unique prefix works: kyzn finds kyzn_crm.
+
+  sawit list               instances, databases, ports and connections
+  sawit bakar ports        stop dev servers on ports (asks first;
+                           SIGTERM, then SIGKILL for the stubborn)
+  sawit bakar ports 3000   stop whatever listens on :3000
+  sawit bakar instances    stop running Sawit instances (data is kept)
+
 Options:
   -n, --new         always open in a new window
-  -r, --reuse       use the frontmost window, replacing its project
+  -r, --reuse       use the frontmost window, replacing its active project
   -w, --wait        wait until every opened file is closed
   -                 read stdin into a temporary file and open it
       --foreground  run the app in this terminal (debugging)
@@ -55,6 +76,10 @@ pub struct OpenRequest {
 pub enum Invocation {
     Help,
     Version,
+    /// `sawit list …`.
+    List(ListWhat),
+    /// `sawit bakar …`.
+    Bakar(BakarArgs),
     Open {
         request: OpenRequest,
         /// `-` was given: the CLI turns stdin into a file target.
@@ -70,6 +95,17 @@ pub fn parse_args(
     args: impl IntoIterator<Item = OsString>,
     cwd: &Path,
 ) -> std::result::Result<Invocation, String> {
+    let args: Vec<OsString> = args.into_iter().collect();
+    let words: Vec<&str> = args.iter().filter_map(|a| a.to_str()).collect();
+    match words.first().copied() {
+        Some("list" | "ls") if words.len() == args.len() && words.len() <= 2 => {
+            return ListWhat::parse(words.get(1).copied()).map(Invocation::List);
+        }
+        Some("bakar") if words.len() == args.len() => {
+            return BakarArgs::parse(&words[1..]).map(Invocation::Bakar);
+        }
+        _ => {}
+    }
     let mut request = OpenRequest::default();
     let (mut stdin, mut foreground, mut options_done) = (false, false, false);
     for arg in args {
@@ -110,7 +146,7 @@ pub fn parse_args(
         }
     }
     if request.new_window && request.reuse {
-        return Err("--new and --reuse can't be used together".into());
+        return Err("use either --new or --reuse, not both".into());
     }
     if request.wait && !stdin && request.targets.iter().all(|t| t.path.is_dir()) {
         return Err("--wait needs at least one file".into());
@@ -281,7 +317,7 @@ pub fn install_link(link: &Path, exe: &Path) -> std::io::Result<()> {
     if link_state(link, exe) == LinkState::Blocked {
         return Err(std::io::Error::new(
             std::io::ErrorKind::AlreadyExists,
-            format!("{} already exists and is not a symlink", link.display()),
+            format!("{} already exists and isn't a symlink. Move or delete it, then try again.", link.display()),
         ));
     }
     if let Some(dir) = link.parent() {
@@ -328,7 +364,7 @@ pub(crate) fn shell_quote(s: &OsStr) -> String {
     format!("'{}'", s.to_string_lossy().replace('\'', r"'\''"))
 }
 
-fn applescript_escape(s: &str) -> String {
+pub(crate) fn applescript_escape(s: &str) -> String {
     s.replace('\\', r"\\").replace('"', "\\\"")
 }
 
@@ -406,6 +442,20 @@ mod tests {
             vec![at("/nope/a.rs", Some(3), None), at("/nope/-b", None, None)]
         );
         assert!(parse(&["-psn_0_1234"]).is_ok());
+    }
+
+    #[test]
+    fn subcommands() {
+        assert_eq!(parse(&["list"]), Ok(Invocation::List(ListWhat::All)));
+        assert_eq!(parse(&["ls", "ports"]), Ok(Invocation::List(ListWhat::Ports)));
+        assert!(parse(&["list", "hutan"]).is_err());
+        let Ok(Invocation::Bakar(bakar)) = parse(&["bakar", "ports", "-y"]) else {
+            panic!()
+        };
+        assert!(bakar.yes && bakar.targets.is_empty());
+        assert!(parse(&["bakar"]).is_err());
+        // `sawit ./list` still opens a folder named list.
+        assert!(matches!(parse(&["./list"]), Ok(Invocation::Open { .. })));
     }
 
     #[test]

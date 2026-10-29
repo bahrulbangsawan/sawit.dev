@@ -1,306 +1,344 @@
-//! MCP server exposing Sawit to AI agents: list/start/stop local instances,
-//! browse schemas, run read-only queries, and write a project's DATABASE_URL.
+//! MCP server exposing Sawit to AI agents. Everything here works without the
+//! app running: local PostgreSQL instances, databases and saved connections,
+//! diagrams, ports, network checks, SSH hosts, run commands, git, prompts
+//! and file search. Tools are grouped by area, one module each, and every
+//! module contributes its own router (see [`Sawit::router`]).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use sawit_core::control::{self, Preflight, StartOutcome};
-use sawit_core::db::{
-    self, ConnProfile, Profiles, format_table, load_password, write_database_url,
+use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::model::{
+    CallToolResult, ContentBlock as Content, Implementation, ServerCapabilities, ServerConfig,
 };
-use sawit_core::instances::{AppPaths, Instance, Registry};
-use sawit_core::pgctl::PgCtlStatus;
-use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock as Content};
-use rmcp::{schemars, tool, tool_router};
+use rmcp::{ServerHandler, tool_handler};
+use sawit_core::app_control::{self, Store};
+use sawit_core::instances::{AppPaths, Instance};
 
-/// Rows returned by `query` at most.
-const MAX_ROWS: usize = 500;
+pub mod app;
+pub mod db;
+pub mod diagrams;
+pub mod files;
+pub mod git;
+pub mod instances;
+pub mod network;
+pub mod ports;
+pub mod prompts;
+pub mod scripts;
+pub mod ssh;
+
+pub use ssh::askpass;
+
+/// Text returned by one tool call at most; longer output is cut with a note.
+const MAX_OUTPUT: usize = 100_000;
+
+/// What the server tells agents when they connect.
+pub const INSTRUCTIONS: &str = "\
+Sawit is a macOS developer workbench. These tools work without the Sawit app running:
+- Instances: local PostgreSQL servers managed by Sawit (list/create/start/stop/restart/remove, logs, port checks, installed binaries).
+- Databases: detect every reachable database, list/create/drop databases, describe schemas and tables, `query` (always read-only) and `execute_sql` (read-write: can modify data), saved connections, writing DATABASE_URL to a project's .env.
+- Diagrams: render Mermaid to SVG, and draw a database schema as Mermaid, DBML or SVG.
+- Ports: list listening dev servers and stop them.
+- Network: diagnose the internet connection, ping a host.
+- SSH: saved servers and ~/.ssh/config hosts; add/update/remove, probe, run a non-interactive command.
+- Run: a project's scripts (package.json, Makefile, …) and saved run commands.
+- Git: status, log, diff, show, branches, stage/unstage, commit, switch.
+- Prompts: the prompt library (with {{variables}}).
+- Files: text search in a folder.
+These control the running Sawit app (start it with launch_app; app_state shows windows, tabs and terminals):
+- app_*: open files/folders, show panels, layout, tabs, pages (canvas, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
+- terminal_*: run commands in Sawit's terminal and read their output, type keys (ctrl-c), close tabs.
+- canvas_*: the Excalidraw board: list, add shapes/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG.
+Most app tools take `project` to pick the window that has that folder open; otherwise the frontmost window is used.
+Targets: database tools take a Sawit instance name or a saved connection name (see list_connections).";
 
 #[derive(Debug, Clone)]
 pub struct Sawit {
     paths: AppPaths,
+    tool_router: ToolRouter<Sawit>,
 }
 
-fn ok(text: impl Into<String>) -> CallToolResult {
-    CallToolResult::success(vec![Content::text(text.into())])
+pub(crate) fn ok(text: impl Into<String>) -> CallToolResult {
+    CallToolResult::success(vec![Content::text(clip(text.into(), MAX_OUTPUT))])
 }
 
-fn fail(text: impl Into<String>) -> CallToolResult {
-    CallToolResult::error(vec![Content::text(text.into())])
+pub(crate) fn fail(text: impl Into<String>) -> CallToolResult {
+    CallToolResult::error(vec![Content::text(clip(text.into(), MAX_OUTPUT))])
+}
+
+/// `text` cut to at most `max` bytes (on a character boundary), with a note
+/// saying how much was left out.
+pub(crate) fn clip(text: String, max: usize) -> String {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}\n… (output truncated: {} of {} bytes shown)",
+        &text[..end],
+        end,
+        text.len()
+    )
+}
+
+/// Unwraps a `Result<T, String>` inside a tool, returning `fail(e)` on error.
+macro_rules! tri {
+    ($e:expr) => {
+        match $e {
+            Ok(v) => v,
+            Err(e) => return $crate::fail(e),
+        }
+    };
+}
+pub(crate) use tri;
+
+/// Runs blocking work (Keychain, Pele, big file reads, the app socket) off
+/// the async workers.
+pub(crate) async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("internal error: {e}"))
 }
 
 pub fn instance_url(inst: &Instance) -> String {
     format!("postgres://postgres@localhost:{}/postgres", inst.port)
 }
 
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct InstanceArgs {
-    #[schemars(description = "Sawit instance name (see list_instances)")]
-    pub name: String,
+/// `~/x` for paths in the home folder.
+pub(crate) fn tilde(path: &Path) -> String {
+    match std::env::var_os("HOME").map(PathBuf::from) {
+        Some(home) if path.starts_with(&home) => {
+            format!("~/{}", path.strip_prefix(&home).unwrap_or(path).display())
+        }
+        _ => path.display().to_string(),
+    }
 }
 
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct TargetArgs {
-    #[schemars(
-        description = "Sawit instance name or saved connection name (see list_connections)"
-    )]
-    pub target: String,
+/// An existing folder given by an agent (absolute, `~` expanded).
+pub(crate) fn existing_dir(dir: &str) -> Result<PathBuf, String> {
+    let path = expand_home(dir.trim());
+    if !path.is_absolute() {
+        return Err(format!("“{dir}” must be an absolute path."));
+    }
+    if !path.is_dir() {
+        return Err(format!("{} is not a folder.", path.display()));
+    }
+    Ok(path)
 }
 
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct QueryArgs {
-    #[schemars(description = "Sawit instance name or saved connection name")]
-    pub target: String,
-    #[schemars(description = "SQL to run. Always executed read-only.")]
-    pub sql: String,
-    #[schemars(description = "Maximum rows to return (default and cap: 500)")]
-    pub max_rows: Option<usize>,
+pub(crate) fn expand_home(path: &str) -> PathBuf {
+    match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
+        (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
+        _ if path == "~" => std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default(),
+        _ => PathBuf::from(path),
+    }
 }
 
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct WriteEnvArgs {
-    #[schemars(description = "Sawit instance name")]
-    pub instance: String,
-    #[schemars(description = "Project folder whose .env gets DATABASE_URL")]
-    pub project_dir: String,
+/// Unix seconds as `YYYY-MM-DD HH:MM` (UTC).
+pub(crate) fn utc_time(secs: i64) -> String {
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    // Howard Hinnant's civil_from_days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}",
+        rem / 3600,
+        rem % 3600 / 60
+    )
 }
 
 impl Sawit {
     pub fn new(paths: AppPaths) -> Self {
-        Self { paths }
-    }
-
-    fn registry(&self) -> Result<Registry, String> {
-        Registry::load(&self.paths.instances_file()).map_err(|e| e.to_string())
-    }
-
-    fn instance(&self, name: &str) -> Result<Instance, String> {
-        self.registry()?
-            .get(name)
-            .cloned()
-            .ok_or_else(|| format!("Instance \"{name}\" does not exist. See list_instances."))
-    }
-
-    /// Read-only connection for a target. Instances are reached as the
-    /// non-superuser `sawit_ro` role (created on first use), so agents can't
-    /// write, COPY to files or run server programs. Saved profiles use their
-    /// own credentials inside read-only, single-statement transactions.
-    async fn connect_target(&self, target: &str) -> Result<tokio_postgres::Client, String> {
-        if let Ok(inst) = self.instance(target) {
-            let admin = ConnProfile::new("localhost", inst.port, "postgres", "postgres");
-            let client = db::connect(&admin, None).await.map_err(|e| e.to_string())?;
-            db::ensure_read_only_role(&client)
-                .await
-                .map_err(|e| e.to_string())?;
-            let ro = ConnProfile {
-                user: db::READ_ONLY_ROLE.into(),
-                ..admin
-            };
-            return db::connect_read_only(&ro, None)
-                .await
-                .map_err(|e| e.to_string());
-        }
-        let profiles =
-            Profiles::load(&self.paths.root.join("profiles.toml")).map_err(|e| e.to_string())?;
-        let profile = profiles
-            .items
-            .into_iter()
-            .find(|p| p.name == target)
-            .ok_or_else(|| format!("\"{target}\" is not a known instance or connection."))?;
-        let password = load_password(&profile).ok().flatten();
-        db::connect_read_only(&profile, password.as_deref())
-            .await
-            .map_err(|e| e.to_string())
-    }
-
-    pub async fn list_instances_tool(&self) -> CallToolResult {
-        let reg = match self.registry() {
-            Ok(r) => r,
-            Err(e) => return fail(e),
-        };
-        if reg.instances.is_empty() {
-            return ok("No Sawit instances yet.");
-        }
-        let mut lines = Vec::new();
-        for inst in &reg.instances {
-            let status = match control::status(inst).await {
-                Ok(PgCtlStatus::Running { pid }) => format!("running (PID {pid})"),
-                Ok(PgCtlStatus::Stopped) => "stopped".into(),
-                Ok(other) => format!("{other:?}"),
-                Err(e) => format!("error: {e}"),
-            };
-            lines.push(format!(
-                "- {} · port {} · {status} · {}",
-                inst.name,
-                inst.port,
-                instance_url(inst)
-            ));
-        }
-        ok(lines.join("\n"))
-    }
-
-    pub async fn start_instance_tool(&self, name: &str) -> CallToolResult {
-        let inst = match self.instance(name) {
-            Ok(i) => i,
-            Err(e) => return fail(e),
-        };
-        let managed = self.registry().map(|r| r.data_dirs()).unwrap_or_default();
-        match control::start(&inst, &self.paths, managed, Preflight::Check).await {
-            Ok(StartOutcome::Started) => ok(format!(
-                "{name} is running. DATABASE_URL={}",
-                instance_url(&inst)
-            )),
-            Ok(StartOutcome::AlreadyRunning { pid }) => {
-                ok(format!("{name} is already running (PID {pid})."))
-            }
-            Ok(StartOutcome::Blocked(report)) => fail(format!(
-                "Start held back because of a port conflict. Resolve it first, or ask the user to use \"Start Anyway\" in Sawit.\n{}",
-                report.explain()
-            )),
-            Err(e) => fail(e.to_string()),
+        Self {
+            paths,
+            tool_router: Self::router(),
         }
     }
 
-    pub async fn stop_instance_tool(&self, name: &str) -> CallToolResult {
-        match self.instance(name) {
-            Ok(inst) => match control::stop(&inst).await {
-                Ok(()) => ok(format!("{name} stopped.")),
-                Err(e) => fail(e.to_string()),
-            },
-            Err(e) => fail(e),
-        }
+    /// Every tool, from each area's router.
+    pub fn router() -> ToolRouter<Sawit> {
+        Self::instances_router()
+            + Self::db_router()
+            + Self::diagrams_router()
+            + Self::ports_router()
+            + Self::network_router()
+            + Self::ssh_router()
+            + Self::scripts_router()
+            + Self::git_router()
+            + Self::prompts_router()
+            + Self::files_router()
+            // App-control tools (need the app running).
+            + Self::app_router()
     }
 
-    pub async fn list_connections_tool(&self) -> CallToolResult {
-        let mut lines = Vec::new();
-        if let Ok(reg) = self.registry() {
-            lines.extend(
-                reg.instances
-                    .iter()
-                    .map(|i| format!("- {} (Sawit instance) · {}", i.name, instance_url(i))),
-            );
-        }
-        if let Ok(p) = Profiles::load(&self.paths.root.join("profiles.toml")) {
-            lines.extend(
-                p.items
-                    .iter()
-                    .map(|p| format!("- {} · {}", p.name, p.url())),
-            );
-        }
-        if lines.is_empty() {
-            ok("No connections yet.")
-        } else {
-            ok(lines.join("\n"))
-        }
-    }
-
-    pub async fn describe_schema_tool(&self, target: &str) -> CallToolResult {
-        let client = match self.connect_target(target).await {
-            Ok(c) => c,
-            Err(e) => return fail(e),
-        };
-        match db::load_schema(&client).await {
-            Ok(schemas) => {
-                let mut out = Vec::new();
-                for s in schemas {
-                    out.push(format!("schema {}", s.name));
-                    for r in s.relations {
-                        out.push(format!("  {:?} {}.{}", r.kind, s.name, r.name));
-                        for c in r.columns {
-                            out.push(format!(
-                                "    {} {}{}",
-                                c.name,
-                                c.data_type,
-                                if c.nullable { "" } else { " NOT NULL" }
-                            ));
-                        }
-                    }
-                }
-                ok(out.join("\n"))
-            }
-            Err(e) => fail(e.to_string()),
-        }
-    }
-
-    pub async fn query_tool(
-        &self,
-        target: &str,
-        sql: &str,
-        max_rows: Option<usize>,
-    ) -> CallToolResult {
-        let client = match self.connect_target(target).await {
-            Ok(c) => c,
-            Err(e) => return fail(e),
-        };
-        let limit = max_rows.unwrap_or(MAX_ROWS).min(MAX_ROWS);
-        match db::run_read_only(&client, sql, limit).await {
-            Ok(outcome) => {
-                let mut parts: Vec<String> = outcome.results.iter().map(format_table).collect();
-                if parts.is_empty() {
-                    parts.push(format!("OK ({} ms)", outcome.duration.as_millis()));
-                }
-                ok(parts.join("\n\n"))
-            }
-            Err(e) => fail(format!("{e}\n(query ran read-only)")),
-        }
-    }
-
-    pub async fn write_env_tool(&self, instance: &str, project_dir: &str) -> CallToolResult {
-        let inst = match self.instance(instance) {
-            Ok(i) => i,
-            Err(e) => return fail(e),
-        };
-        match write_database_url(Path::new(project_dir), &instance_url(&inst)) {
-            Ok(path) => ok(format!("DATABASE_URL written to {}", path.display())),
-            Err(e) => fail(e),
-        }
+    /// Tells a running app to re-read `store` after a tool changed its file.
+    pub(crate) async fn notify(&self, store: Store) {
+        let paths = self.paths.clone();
+        let _ = blocking(move || app_control::notify_reload(&paths, store)).await;
     }
 }
 
-#[tool_router(server_handler)]
-impl Sawit {
-    #[tool(
-        description = "List local PostgreSQL instances managed by Sawit with status, port and DATABASE_URL"
-    )]
-    async fn list_instances(&self) -> CallToolResult {
-        self.list_instances_tool().await
+#[tool_handler(router = self.tool_router)]
+impl ServerHandler for Sawit {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("sawit-mcp", env!("CARGO_PKG_VERSION")))
+            .with_instructions(INSTRUCTIONS)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_tool_is_routed() {
+        let mut names: Vec<String> = Sawit::router()
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        names.sort();
+        let mut expected = vec![
+            // instances
+            "list_instances",
+            "create_instance",
+            "start_instance",
+            "stop_instance",
+            "restart_instance",
+            "remove_instance",
+            "instance_logs",
+            "check_port",
+            "list_postgres_binaries",
+            // databases
+            "list_connections",
+            "detect_databases",
+            "list_databases",
+            "create_database",
+            "drop_database",
+            "describe_schema",
+            "describe_table",
+            "query",
+            "execute_sql",
+            "save_connection",
+            "remove_connection",
+            "write_env",
+            // diagrams
+            "render_mermaid",
+            "schema_diagram",
+            // ports
+            "list_ports",
+            "stop_processes",
+            // network
+            "diagnose_network",
+            "ping",
+            // ssh
+            "list_ssh_hosts",
+            "add_ssh_host",
+            "update_ssh_host",
+            "remove_ssh_host",
+            "probe_ssh_host",
+            "ssh_exec",
+            // run
+            "list_scripts",
+            "save_command",
+            "remove_command",
+            // git
+            "git_status",
+            "git_log",
+            "git_diff",
+            "git_show",
+            "git_branches",
+            "git_stage",
+            "git_unstage",
+            "git_commit",
+            "git_switch",
+            // prompts
+            "list_prompts",
+            "get_prompt",
+            "create_prompt",
+            "update_prompt",
+            "delete_prompt",
+            "fill_prompt",
+            // files
+            "search_files",
+            // app control
+            "launch_app",
+            "app_state",
+            "app_open",
+            "app_focus",
+            "app_show_panel",
+            "app_layout",
+            "app_maximize_terminal",
+            "app_open_page",
+            "app_activate_tab",
+            "app_close_tab",
+            "app_run_list",
+            "app_run_script",
+            "app_stop_script",
+            "app_ssh_connect",
+            "app_open_table",
+            "app_open_sql",
+            "app_open_diagram",
+            "app_open_prompt",
+            "terminal_run",
+            "terminal_read",
+            "terminal_input",
+            "terminal_close",
+            "canvas_get",
+            "canvas_add_elements",
+            "canvas_add_mermaid",
+            "canvas_update",
+            "canvas_delete",
+            "canvas_clear",
+            "canvas_load",
+            "canvas_export",
+        ];
+        expected.sort();
+        assert_eq!(names, expected);
+        for tool in Sawit::router().list_all() {
+            assert!(
+                tool.description.as_deref().is_some_and(|d| !d.is_empty()),
+                "{} has no description",
+                tool.name
+            );
+        }
     }
 
-    #[tool(
-        description = "Start a Sawit instance. Refuses (and explains) when another process already listens on its port, e.g. a Docker container"
-    )]
-    async fn start_instance(&self, Parameters(a): Parameters<InstanceArgs>) -> CallToolResult {
-        self.start_instance_tool(&a.name).await
+    #[test]
+    fn server_info_has_instructions() {
+        let sawit = Sawit::new(AppPaths {
+            root: std::env::temp_dir(),
+        });
+        let info = sawit.get_info();
+        assert!(info.capabilities.tools.is_some());
+        assert!(info.instructions.as_deref().unwrap().contains("app_*"));
     }
 
-    #[tool(description = "Stop a Sawit instance (fast shutdown)")]
-    async fn stop_instance(&self, Parameters(a): Parameters<InstanceArgs>) -> CallToolResult {
-        self.stop_instance_tool(&a.name).await
+    #[test]
+    fn clip_cuts_on_char_boundary() {
+        assert_eq!(clip("abc".into(), 10), "abc");
+        let cut = clip("ééé".into(), 3);
+        assert!(cut.starts_with("é\n"), "{cut}");
+        assert!(cut.contains("2 of 6 bytes"));
     }
 
-    #[tool(
-        description = "List instances and saved connections that describe_schema and query accept"
-    )]
-    async fn list_connections(&self) -> CallToolResult {
-        self.list_connections_tool().await
-    }
-
-    #[tool(description = "Describe schemas, tables, views and columns of a database")]
-    async fn describe_schema(&self, Parameters(a): Parameters<TargetArgs>) -> CallToolResult {
-        self.describe_schema_tool(&a.target).await
-    }
-
-    #[tool(
-        description = "Run SQL read-only (writes are rejected) and return up to 500 rows as a text table"
-    )]
-    async fn query(&self, Parameters(a): Parameters<QueryArgs>) -> CallToolResult {
-        self.query_tool(&a.target, &a.sql, a.max_rows).await
-    }
-
-    #[tool(
-        description = "Write DATABASE_URL for a Sawit instance into <project_dir>/.env, e.g. for a TanStack Start app"
-    )]
-    async fn write_env(&self, Parameters(a): Parameters<WriteEnvArgs>) -> CallToolResult {
-        self.write_env_tool(&a.instance, &a.project_dir).await
+    #[test]
+    fn utc_dates() {
+        assert_eq!(utc_time(0), "1970-01-01 00:00");
+        assert_eq!(utc_time(1_700_000_000), "2023-11-14 22:13");
+        assert_eq!(utc_time(951_782_400), "2000-02-29 00:00");
     }
 }

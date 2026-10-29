@@ -45,7 +45,7 @@ impl PromptView {
         });
         let tags = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("tags, comma-separated (e.g. sql, review)")
+                .placeholder("Tags, comma-separated: sql, review")
                 .default_value(tags_text)
         });
         let body = cx.new(|cx| {
@@ -62,6 +62,7 @@ impl PromptView {
                     "Write your prompt here. Use {{name}} for parts you fill in when copying.",
                 )
                 .default_value(body_text);
+            crate::highlight::install(&mut state, cx);
             state.set_scrollbar_renderer(Some(Rc::new(|_, _, _| div().into_any_element())));
             state
         });
@@ -166,9 +167,9 @@ impl PromptView {
     fn delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let answer = window.prompt(
             PromptLevel::Warning,
-            &format!("Delete prompt \"{}\"?", self.title(cx)),
+            &format!("Delete prompt “{}”?", self.title(cx)),
             Some("This can't be undone."),
-            &["Delete", "Cancel"],
+            &["Delete Prompt", "Cancel"],
             cx,
         );
         let (store, id) = (self.store.clone(), self.id.clone());
@@ -238,7 +239,7 @@ impl Render for PromptView {
                     .ghost()
                     .small()
                     .icon(Lucide::Trash)
-                    .tooltip("Delete prompt")
+                    .tooltip("Delete Prompt")
                     .on_click(cx.listener(|this, _, window, cx| this.delete(window, cx))),
             )
             .child(
@@ -253,7 +254,7 @@ impl Render for PromptView {
                     .label(if self.copied {
                         "Copied"
                     } else if has_vars {
-                        "Fill & copy"
+                        "Fill & Copy"
                     } else {
                         "Copy"
                     })

@@ -4,6 +4,8 @@ use sawit_core::binaries::{SearchRoots, discover};
 use sawit_core::control::{self, Preflight};
 use sawit_core::instances::{AppPaths, Instance, ListenScope, Registry};
 use sawit_mcp::Sawit;
+use sawit_mcp::db::{CreateDbArgs, DropDbArgs, ExecuteArgs, TableArgs};
+use sawit_mcp::diagrams::{SchemaDiagramArgs, SchemaFormat, Theme};
 
 fn text(result: &rmcp::model::CallToolResult) -> String {
     result
@@ -96,11 +98,11 @@ async fn query_is_read_only() {
 
     let server = Sawit::new(paths);
     let ok = server
-        .query_tool("mcp", "select 41 + 1 as answer", None)
+        .query_tool("mcp", "select 41 + 1 as answer", None, None)
         .await;
     assert!(text(&ok).contains("42"), "{}", text(&ok));
     let denied = server
-        .query_tool("mcp", "create table t(x int)", None)
+        .query_tool("mcp", "create table t(x int)", None, None)
         .await;
     assert_eq!(denied.is_error, Some(true), "{}", text(&denied));
     // Even single statements a superuser could run must not reach the shell.
@@ -109,11 +111,96 @@ async fn query_is_read_only() {
         "DO $$ BEGIN EXECUTE 'COPY (SELECT 1) TO PROGRAM ''touch {}'''; END $$",
         marker.display()
     );
-    let attack = server.query_tool("mcp", &sql, None).await;
+    let attack = server.query_tool("mcp", &sql, None, None).await;
     assert_eq!(attack.is_error, Some(true), "{}", text(&attack));
     assert!(!marker.exists(), "shell command ran via MCP");
-    let schema = server.describe_schema_tool("mcp").await;
+    let schema = server.describe_schema_tool("mcp", None, None).await;
     assert!(text(&schema).contains("public"), "{}", text(&schema));
+
+    // execute_sql writes; query then sees the rows.
+    let wrote = server
+        .execute_sql_tool(ExecuteArgs {
+            target: "mcp".into(),
+            sql: "create table t(id int primary key, x text not null default 'a'); insert into t(id) values (1), (2)".into(),
+            database: None,
+            max_rows: None,
+        })
+        .await;
+    assert_ne!(wrote.is_error, Some(true), "{}", text(&wrote));
+    assert!(text(&wrote).contains("2 rows affected"), "{}", text(&wrote));
+    let count = server
+        .query_tool("mcp", "select count(*) as n from t", None, None)
+        .await;
+    assert!(text(&count).contains("2"), "{}", text(&count));
+    let table = server
+        .describe_table_tool(TableArgs {
+            target: "mcp".into(),
+            schema: None,
+            table: "t".into(),
+            database: None,
+        })
+        .await;
+    let table = text(&table);
+    assert!(table.contains("id integer NOT NULL"), "{table}");
+    assert!(table.contains("PRIMARY KEY"), "{table}");
+    let diagram = server
+        .schema_diagram_tool(SchemaDiagramArgs {
+            target: "mcp".into(),
+            schema: None,
+            database: None,
+            format: SchemaFormat::Mermaid,
+            output_path: None,
+            theme: Theme::Light,
+        })
+        .await;
+    assert!(text(&diagram).contains("erDiagram"), "{}", text(&diagram));
+    let svg_path = home.path().join("schema.svg");
+    let svg = server
+        .schema_diagram_tool(SchemaDiagramArgs {
+            target: "mcp".into(),
+            schema: Some("public".into()),
+            database: None,
+            format: SchemaFormat::Svg,
+            output_path: Some(svg_path.display().to_string()),
+            theme: Theme::Dark,
+        })
+        .await;
+    assert_ne!(svg.is_error, Some(true), "{}", text(&svg));
+    assert!(std::fs::read_to_string(&svg_path).unwrap().contains("<svg"));
+
+    // Databases: create, address by `database`, drop only when confirmed.
+    let created = server
+        .create_database_tool(CreateDbArgs {
+            target: "mcp".into(),
+            name: "other db".into(),
+            owner: None,
+            template: None,
+        })
+        .await;
+    assert_ne!(created.is_error, Some(true), "{}", text(&created));
+    let listed = text(&server.list_databases_tool("mcp").await);
+    assert!(listed.contains("- other db"), "{listed}");
+    let current = server
+        .query_tool("mcp", "select current_database()", Some("other db"), None)
+        .await;
+    assert!(text(&current).contains("other db"), "{}", text(&current));
+    let refused = server
+        .drop_database_tool(DropDbArgs {
+            target: "mcp".into(),
+            name: "other db".into(),
+            confirm: "other".into(),
+        })
+        .await;
+    assert_eq!(refused.is_error, Some(true));
+    let dropped = server
+        .drop_database_tool(DropDbArgs {
+            target: "mcp".into(),
+            name: "other db".into(),
+            confirm: "other db".into(),
+        })
+        .await;
+    assert_ne!(dropped.is_error, Some(true), "{}", text(&dropped));
+    assert!(!text(&server.list_databases_tool("mcp").await).contains("other db"));
 
     control::stop(&inst).await.unwrap();
 }

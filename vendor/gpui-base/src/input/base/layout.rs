@@ -21,7 +21,10 @@ pub(super) struct LastLayout {
     pub(super) line_height: Pixels,
     pub(super) wrap_width: Option<Pixels>,
     pub(super) wrapping_indent: WrappingIndent,
+    /// X offset of the text: the gutter plus the code area's left margin.
     pub(super) line_number_width: Pixels,
+    /// Sawit patch: width of the gutter itself (line numbers and fold icons).
+    pub(super) gutter_width: Pixels,
     /// Width of one space in the editor font.
     ///
     /// Past the end of a line there are no glyphs to hit-test against, so this is the

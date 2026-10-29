@@ -1,6 +1,5 @@
-//! Prompt library: saved prompts with tags and favourites, search,
-//! `{{variable}}` placeholders, and importing prompts kept in a WhatsApp
-//! chat ("Export chat" → `_chat.txt`). Stored as one JSON file.
+//! Prompt library: saved prompts with tags and favourites, search and
+//! `{{variable}}` placeholders. Stored as one JSON file.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -201,20 +200,6 @@ impl Library {
         out
     }
 
-    /// Adds prompts whose text isn't in the library yet; returns how many.
-    pub fn import(&mut self, prompts: Vec<Prompt>) -> usize {
-        let mut added = 0;
-        for p in prompts {
-            let body = p.body.trim();
-            if self.items.iter().any(|q| q.body.trim() == body) {
-                continue;
-            }
-            let at = p.created_at;
-            self.add(p, at);
-            added += 1;
-        }
-        added
-    }
 }
 
 /// `{{name}}` placeholders, in order of first appearance.
@@ -254,99 +239,6 @@ pub fn fill(body: &str, values: &HashMap<String, String>) -> String {
     }
     out.push_str(rest);
     out
-}
-
-/// Messages shorter than this aren't prompts ("ok", "thanks").
-const MIN_PROMPT_CHARS: usize = 20;
-
-/// The message text after a WhatsApp export line header, if the line starts
-/// a message: iPhone `[29/10/26 04.57.59] Name: text`, Android
-/// `29/10/26 04.57 - Name: text` or `10/29/26, 5:01 PM - Name: text`.
-fn message_start(line: &str) -> Option<&str> {
-    let rest = if let Some(after) = line.strip_prefix('[') {
-        let (stamp, rest) = after.split_once("] ")?;
-        if !stamp.contains('/') {
-            return None;
-        }
-        rest
-    } else {
-        let first = line.chars().next()?;
-        if !first.is_ascii_digit() {
-            return None;
-        }
-        let (stamp, rest) = line.split_once(" - ")?;
-        if !stamp.contains('/') || stamp.len() > 24 {
-            return None;
-        }
-        rest
-    };
-    // "Name: text"; lines without a sender are system notices.
-    let (_, text) = rest.split_once(": ")?;
-    Some(text)
-}
-
-fn is_noise(body: &str) -> bool {
-    const MARKERS: [&str; 9] = [
-        "omitted",
-        "<Media omitted>",
-        "<attached:",
-        "end-to-end encrypted",
-        "This message was deleted",
-        "You deleted this message",
-        "Missed voice call",
-        "Missed video call",
-        "<This message was edited>",
-    ];
-    body.chars().count() < MIN_PROMPT_CHARS
-        || (body.lines().count() == 1 && MARKERS.iter().any(|m| body.contains(m)))
-}
-
-/// Title from the first line, at most 60 characters.
-fn title_from(body: &str) -> String {
-    let first = body
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .trim();
-    if first.chars().count() <= 60 {
-        return first.to_string();
-    }
-    let cut: String = first.chars().take(59).collect();
-    format!("{}…", cut.trim_end())
-}
-
-/// Prompts from a WhatsApp chat export (one per message, multi-line
-/// messages kept whole; media, system notices and short replies skipped),
-/// tagged `whatsapp` and stamped `now`.
-pub fn import_whatsapp(text: &str, now: u64) -> Vec<Prompt> {
-    let clean = |s: &str| {
-        s.replace(['\u{200e}', '\u{200f}', '\u{feff}'], "")
-            .replace('\u{202f}', " ")
-    };
-    let mut messages: Vec<String> = Vec::new();
-    for raw in text.lines() {
-        let line = clean(raw);
-        match message_start(&line) {
-            Some(start) => messages.push(start.to_string()),
-            None => {
-                if let Some(last) = messages.last_mut() {
-                    last.push('\n');
-                    last.push_str(&line);
-                }
-            }
-        }
-    }
-    messages
-        .into_iter()
-        .map(|m| m.trim().to_string())
-        .filter(|m| !is_noise(m))
-        .map(|body| {
-            let mut p = Prompt::new(&title_from(&body), &body, &["whatsapp"]);
-            p.created_at = now;
-            p.updated_at = now;
-            p
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -488,65 +380,6 @@ mod tests {
         assert_eq!(
             fill("Review for {{dialect}}:\n{{ sql }} ({{other}})", &values),
             "Review for PostgreSQL:\nSELECT 1 ({{other}})"
-        );
-    }
-
-    #[test]
-    fn imports_an_iphone_whatsapp_export() {
-        let chat = "\
-[29/10/26 04.57.59] Rul: \u{200e}Messages and calls are end-to-end encrypted.
-[29/10/26 05.01.02] Rul: Kamu adalah senior engineer.
-Review kode berikut dengan teliti.
-Fokus ke bug.
-[29/10/26 05.02.10] Rul: \u{200e}image omitted
-[29/10/26 05.03.00] Rul: ok
-[30/10/26 09.15.44] Rul: Buatkan commit message dari diff ini, singkat dan jelas, bahasa Inggris
-";
-        let prompts = import_whatsapp(chat, 1000);
-        let bodies: Vec<_> = prompts.iter().map(|p| p.body.as_str()).collect();
-        assert_eq!(
-            bodies,
-            vec![
-                "Kamu adalah senior engineer.\nReview kode berikut dengan teliti.\nFokus ke bug.",
-                "Buatkan commit message dari diff ini, singkat dan jelas, bahasa Inggris",
-            ]
-        );
-        assert_eq!(prompts[0].title, "Kamu adalah senior engineer.");
-        assert_eq!(prompts[0].tags, vec!["whatsapp"]);
-        assert!(prompts[1].title.chars().count() <= 60);
-    }
-
-    #[test]
-    fn imports_an_android_whatsapp_export() {
-        let chat = "\
-29/10/26 04.57 - Rul: Tolong jelaskan error ini secara detail
-dan beri solusi
-29/10/26 05.00 - Rul: <Media omitted>
-10/29/26, 5:01 PM - Rul: Write tests first, then the implementation
-";
-        let prompts = import_whatsapp(chat, 1000);
-        assert_eq!(prompts.len(), 2);
-        assert_eq!(
-            prompts[0].body,
-            "Tolong jelaskan error ini secara detail\ndan beri solusi"
-        );
-        assert_eq!(
-            prompts[1].body,
-            "Write tests first, then the implementation"
-        );
-    }
-
-    #[test]
-    fn import_skips_prompts_already_in_the_library() {
-        let mut lib = library();
-        let chat = "[29/10/26 05.01.02] Rul: Write a commit message for this diff\n[29/10/26 05.02.02] Rul: Brand new prompt text here\n";
-        let added = lib.import(import_whatsapp(chat, 1000));
-        assert_eq!(added, 1);
-        assert_eq!(lib.items.len(), 4);
-        assert_eq!(
-            lib.import(import_whatsapp(chat, 1000)),
-            0,
-            "re-import adds nothing"
         );
     }
 }

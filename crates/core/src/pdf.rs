@@ -24,10 +24,10 @@ pub struct Bitmap {
 
 fn open(path: &Path) -> Result<CFRetained<CGPDFDocument>> {
     let url = CFURL::from_file_path(path)
-        .ok_or_else(|| CoreError::Parse(format!("invalid PDF path: {}", path.display())))?;
+        .ok_or_else(|| CoreError::Parse(format!("Invalid PDF path: {}", path.display())))?;
     let doc = CGPDFDocument::with_url(Some(&url))
         .filter(|d| CGPDFDocument::number_of_pages(Some(d)) > 0)
-        .ok_or_else(|| CoreError::Parse("PDF can't be opened (damaged or locked).".into()))?;
+        .ok_or_else(|| CoreError::Parse("The file may be damaged or password-protected.".into()))?;
     Ok(doc)
 }
 
@@ -51,7 +51,7 @@ pub fn page_sizes(path: &Path) -> Result<Vec<(f64, f64)>> {
         .map(|n| {
             CGPDFDocument::page(Some(&doc), n)
                 .map(|p| displayed_size(&p))
-                .ok_or_else(|| CoreError::Parse(format!("page {n} can't be read")))
+                .ok_or_else(|| CoreError::Parse(format!("Unable to read page {n}.")))
         })
         .collect()
 }
@@ -60,10 +60,10 @@ pub fn page_sizes(path: &Path) -> Result<Vec<(f64, f64)>> {
 pub fn render_page(path: &Path, index: usize, width: u32) -> Result<Bitmap> {
     let doc = open(path)?;
     let page = CGPDFDocument::page(Some(&doc), index + 1)
-        .ok_or_else(|| CoreError::Parse(format!("page {} does not exist", index + 1)))?;
+        .ok_or_else(|| CoreError::Parse(format!("Page {} doesn't exist.", index + 1)))?;
     let (pw, ph) = displayed_size(&page);
     if pw <= 0.0 || ph <= 0.0 || width == 0 {
-        return Err(CoreError::Parse("invalid page size".into()));
+        return Err(CoreError::Parse("This page has an invalid size.".into()));
     }
     let scale = width as f64 / pw;
     let height = ((ph * scale).round() as u32).clamp(1, MAX_HEIGHT);
@@ -84,7 +84,7 @@ pub fn render_page(path: &Path, index: usize, width: u32) -> Result<Bitmap> {
             info,
         )
     }
-    .ok_or_else(|| CoreError::Parse("can't prepare the page image".into()))?;
+    .ok_or_else(|| CoreError::Parse("Unable to render this page.".into()))?;
     let all = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(w as f64, h as f64));
     CGContext::set_rgb_fill_color(Some(&ctx), 1.0, 1.0, 1.0, 1.0);
     CGContext::fill_rect(Some(&ctx), all);

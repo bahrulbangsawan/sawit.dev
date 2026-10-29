@@ -75,6 +75,11 @@ impl AppPaths {
         self.root.join("bin")
     }
 
+    /// Recently opened project folders (welcome screen).
+    pub fn recent_file(&self) -> PathBuf {
+        self.root.join("recent.toml")
+    }
+
     /// Disposable files (e.g. PNG copies of HEIC images).
     pub fn cache_dir(&self) -> PathBuf {
         self.root.join("cache")
@@ -90,7 +95,10 @@ fn migrate_legacy_root(legacy: &Path, root: &Path) {
     if root.exists() || !legacy.is_dir() || std::fs::rename(legacy, root).is_err() {
         return;
     }
-    let (from, to) = (format!("{}/", legacy.display()), format!("{}/", root.display()));
+    let (from, to) = (
+        format!("{}/", legacy.display()),
+        format!("{}/", root.display()),
+    );
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
@@ -170,13 +178,13 @@ impl Registry {
         validate_name(&inst.name)?;
         if self.get(&inst.name).is_some() {
             return Err(CoreError::Config(format!(
-                "instance \"{}\" already exists",
+                "An instance named “{}” already exists. Choose another name.",
                 inst.name
             )));
         }
         if let Some(other) = self.instances.iter().find(|i| i.data_dir == inst.data_dir) {
             return Err(CoreError::Config(format!(
-                "data dir {} is already used by \"{}\"",
+                "The data directory {} is already used by “{}”.",
                 inst.data_dir.display(),
                 other.name
             )));
@@ -224,9 +232,9 @@ pub fn validate_name(name: &str) -> Result<()> {
     if ok {
         Ok(())
     } else {
-        Err(CoreError::Config(format!(
-            "invalid instance name {name:?}: use 1-40 characters of a-z, 0-9, '-' or '_'"
-        )))
+        Err(CoreError::Config(
+            "Use 1–40 characters for the instance name: lowercase a–z, 0–9, '-' or '_'.".into(),
+        ))
     }
 }
 
@@ -247,7 +255,7 @@ pub fn validate_socket_dir(dir: &Path, port: u16) -> Result<()> {
         Ok(())
     } else {
         Err(CoreError::Config(format!(
-            "socket path {} is {len} bytes; macOS allows at most 103",
+            "The socket path {} is {len} bytes, over the macOS limit of 103. Move Sawit's data to a shorter path.",
             socket.display()
         )))
     }

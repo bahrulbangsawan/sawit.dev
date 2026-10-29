@@ -80,7 +80,7 @@ pub enum StartOutcome {
 pub(crate) fn check_shell_safe_path(path: &Path) -> Result<()> {
     let text = path
         .to_str()
-        .ok_or_else(|| CoreError::Config("path is not UTF-8".into()))?;
+        .ok_or_else(|| CoreError::Config("This path isn't valid UTF-8. Rename the folder and try again.".into()))?;
     if text.contains(['"', '$', '`', '\\']) {
         return Err(CoreError::Config(format!(
             "Path {text} contains \" $ ` or \\, which are unsafe for pg_ctl; move or rename the folder."
@@ -98,10 +98,10 @@ pub(crate) fn postgres_options(
 ) -> Result<String> {
     let dir = socket_dir
         .to_str()
-        .ok_or_else(|| CoreError::Config("socket dir is not UTF-8".into()))?;
+        .ok_or_else(|| CoreError::Config("The socket folder path isn't valid UTF-8. Move Sawit's data to another folder.".into()))?;
     if dir.contains('\'') {
         return Err(CoreError::Config(format!(
-            "socket dir must not contain a quote: {dir}"
+            "The socket folder path can't contain a quote ('): {dir}. Rename the folder."
         )));
     }
     Ok(format!(

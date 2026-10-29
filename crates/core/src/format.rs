@@ -156,7 +156,7 @@ pub fn resolve(
             }
         }
         return Err(format!(
-            "{} needs Node.js (npx) or Bun, or install it in the project: npm i -D {}",
+            "{} needs Node.js (npx) or Bun. Install one, or add it to the project: npm i -D {}",
             tool.name(),
             package
                 .split('@')

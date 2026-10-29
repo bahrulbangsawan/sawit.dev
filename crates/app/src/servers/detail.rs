@@ -115,7 +115,7 @@ impl ServerDetail {
     fn submit(&mut self, cx: &mut Context<Self>) {
         let name = self.name_input.read(cx).value().trim().to_string();
         let Ok(port) = self.port_input.read(cx).value().trim().parse::<u16>() else {
-            self.form_error = Some("Port must be a number from 1 to 65535.".into());
+            self.form_error = Some("Enter a port from 1 to 65535.".into());
             cx.notify();
             return;
         };
@@ -189,17 +189,18 @@ impl ServerDetail {
                 return;
             };
             let Ok(rx) = this.update(cx, |_, cx| {
-                crate::rt::spawn(cx, async move {
-                    sawit_core::db::write_database_url(&dir, &url)
-                })
+                crate::rt::spawn(
+                    cx,
+                    async move { sawit_core::db::write_database_url(&dir, &url) },
+                )
             }) else {
                 return;
             };
             let Ok(result) = rx.await else { return };
             let _ = this.update(cx, |this, cx| {
                 let notice = match result {
-                    Ok(path) => format!("Wrote DATABASE_URL to {}", path.display()),
-                    Err(e) => format!("Failed to write .env: {e}"),
+                    Ok(path) => format!("Wrote DATABASE_URL to {}.", path.display()),
+                    Err(e) => format!("Unable to write .env. {e}"),
                 };
                 this.store.update(cx, |s, cx| {
                     s.notice = Some(notice);
@@ -266,7 +267,7 @@ impl ServerDetail {
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
                     .child(format!(
-                        "Created in {}, listens on localhost only, user `postgres` with no password.",
+                        "Stored in {}. Listens on localhost only, with user `postgres` and no password.",
                         data_root
                     )),
             )
@@ -291,7 +292,7 @@ impl ServerDetail {
                             .ghost()
                             .small()
                             .icon(IconName::FolderOpen)
-                            .label("Add existing data directory…")
+                            .label("Add Existing Data Directory…")
                             .on_click(cx.listener(|this, _, _, cx| this.adopt(cx))),
                     ),
             )
@@ -402,7 +403,7 @@ impl ServerDetail {
                     .small()
                     .ghost()
                     .label(".env")
-                    .tooltip("Write DATABASE_URL to the Project's .env (e.g. TanStack Start)")
+                    .tooltip("Write DATABASE_URL to the Project's .env File")
                     .on_click(cx.listener(move |this, _, _, cx| this.write_env(cx))),
             )
             .child(
@@ -536,10 +537,10 @@ impl ServerDetail {
                         cx.theme().warning
                     }))
                     .child(div().font_semibold().child(if conflict {
-                        format!("Port {} is already in use — start cancelled", report.port)
+                        format!("Port {} is already in use, so the instance didn't start", report.port)
                     } else {
                         format!(
-                            "Port {} is shadowed by another process — start held",
+                            "Another process also listens on port {}. Start anyway?",
                             report.port
                         )
                     })),
@@ -603,7 +604,7 @@ impl Render for ServerDetail {
             div()
                 .p_4()
                 .text_color(cx.theme().muted_foreground)
-                .child("Select an instance in the left panel.")
+                .child("Select an instance in the sidebar.")
                 .into_any_element()
         };
         div().size_full().bg(cx.theme().background).child(content)

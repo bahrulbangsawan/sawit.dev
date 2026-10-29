@@ -2338,6 +2338,17 @@ pub struct CodeBlock {
     pub span: Option<Span>,
 }
 
+/// Code block highlights shared across re-parses, keyed by highlighter
+/// address, language and code (Sawit patch; see `highlighted_styles`).
+type SharedHighlightKey = (usize, Option<SharedString>, SharedString);
+type SharedHighlights = HashMap<
+    SharedHighlightKey,
+    (Arc<CodeBlockHighlighterFn>, Vec<(Range<usize>, HighlightStyle)>),
+>;
+static SHARED_HIGHLIGHTS: OnceLock<Mutex<SharedHighlights>> = OnceLock::new();
+/// Entries kept before the cache starts over.
+const SHARED_HIGHLIGHTS_MAX: usize = 256;
+
 struct CachedCodeBlockHighlights {
     highlighter: Arc<CodeBlockHighlighterFn>,
     styles: Vec<(Range<usize>, HighlightStyle)>,
@@ -2461,11 +2472,36 @@ impl CodeBlock {
             return cache.styles.clone();
         }
 
-        let code_len = self.code().len();
-        let styles = highlighter(self)
-            .into_iter()
-            .filter(|(range, _)| range.start <= range.end && range.end <= code_len)
-            .collect::<Vec<_>>();
+        // Sawit patch: a re-parsed document (every debounced edit of a
+        // Markdown preview) builds new code blocks with empty caches, and
+        // each visible one was highlighted again on the UI thread. Blocks
+        // whose language and code are unchanged reuse the earlier styles.
+        let code = self.code();
+        let key = (Arc::as_ptr(highlighter) as *const () as usize, self.lang.clone(), code.clone());
+        let shared = SHARED_HIGHLIGHTS.get_or_init(Default::default);
+        let reused = shared
+            .lock()
+            .ok()
+            .and_then(|map| map.get(&key).map(|(_, styles)| styles.clone()));
+        let styles = match reused {
+            Some(styles) => styles,
+            None => {
+                let code_len = code.len();
+                let styles = highlighter(self)
+                    .into_iter()
+                    .filter(|(range, _)| range.start <= range.end && range.end <= code_len)
+                    .collect::<Vec<_>>();
+                if let Ok(mut map) = shared.lock() {
+                    if map.len() >= SHARED_HIGHLIGHTS_MAX {
+                        map.clear();
+                    }
+                    // Holding the Arc keeps its address from being reused by
+                    // a different highlighter (e.g. after a theme change).
+                    map.insert(key, (highlighter.clone(), styles.clone()));
+                }
+                styles
+            }
+        };
         if let Ok(mut cache) = self.highlight_cache.lock() {
             *cache = Some(CachedCodeBlockHighlights {
                 highlighter: highlighter.clone(),
@@ -2557,7 +2593,9 @@ impl CodeBlock {
             .w_full()
             .min_w_0()
             .px_4()
-            .pt(if lang_label.is_some() {
+            // Sawit patch: actions take the same top room as the language
+            // label, so they don't cover the first line of code.
+            .pt(if lang_label.is_some() || node_cx.code_block_actions.is_some() {
                 px(28.)
             } else {
                 px(14.)

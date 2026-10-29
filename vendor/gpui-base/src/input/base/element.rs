@@ -50,6 +50,9 @@ fn diagnostic_highlight_style(
 const BOTTOM_MARGIN_ROWS: usize = 3;
 pub(super) const RIGHT_MARGIN: Pixels = px(10.);
 pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(6.);
+// Sawit patch: space between the gutter and the code. It belongs to the code
+// area (not the gutter), so the gutter background and hitbox stop before it.
+const CODE_LEFT_MARGIN: Pixels = px(10.);
 const FOLD_ICON_WIDTH: Pixels = px(14.);
 const FOLD_ICON_HITBOX_WIDTH: Pixels = px(18.);
 const MAX_HIGHLIGHT_LINE_LENGTH: usize = 10_000;
@@ -156,7 +159,7 @@ impl EditorScrollbarSnapshot {
         Self {
             layout: EditorScrollbarLayout::new(
                 input_bounds,
-                last_layout.line_number_width,
+                last_layout.gutter_width,
                 scroll_size,
                 state.editor_paddings,
             ),
@@ -1176,14 +1179,14 @@ impl<M: InputModeKind> TextElement<M> {
         (visible_range, visible_buffer_lines, visible_top)
     }
 
-    /// Return (line_number_width, line_number_len)
+    /// Return (line_number_width, gutter_width, line_number_len)
     fn layout_line_numbers(
         state: &InputBaseState<M>,
         text: &Rope,
         font_size: Pixels,
         style: &TextStyle,
         window: &mut Window,
-    ) -> (Pixels, usize) {
+    ) -> (Pixels, Pixels, usize) {
         let total_lines = text.lines_len();
         // Reserve three digits for small documents, then follow the actual
         // line count up to seven digits.
@@ -1216,7 +1219,12 @@ impl<M: InputModeKind> TextElement<M> {
             line_number_width += FOLD_ICON_HITBOX_WIDTH
         }
 
-        (line_number_width, line_number_len)
+        let gutter_width = line_number_width;
+        if state.mode.line_number() {
+            line_number_width += CODE_LEFT_MARGIN;
+        }
+
+        (line_number_width, gutter_width, line_number_len)
     }
 
     /// Layout shaped lines for whitespace indicators (space and tab).
@@ -1383,7 +1391,7 @@ impl<M: InputModeKind> TextElement<M> {
         let line_number_hitbox = window.insert_hitbox(
             Bounds::new(
                 point(origin_x, bounds.origin.y + last_layout.visible_top),
-                size(last_layout.line_number_width, bounds.size.height),
+                size(last_layout.gutter_width, bounds.size.height),
             ),
             HitboxBehavior::Normal,
         );
@@ -1426,7 +1434,7 @@ impl<M: InputModeKind> TextElement<M> {
         // Second pass: create and prepaint icons
         let line_height = last_layout.line_height;
         let line_number_width =
-            last_layout.line_number_width - LINE_NUMBER_RIGHT_MARGIN - FOLD_ICON_HITBOX_WIDTH;
+            last_layout.gutter_width - LINE_NUMBER_RIGHT_MARGIN - FOLD_ICON_HITBOX_WIDTH;
         let icon_relative_pos = point(
             (FOLD_ICON_HITBOX_WIDTH - FOLD_ICON_WIDTH).half(),
             (line_height - FOLD_ICON_WIDTH).half(),
@@ -2731,7 +2739,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
         };
 
         // Calculate the width of the line numbers
-        let (line_number_width, line_number_len) =
+        let (line_number_width, gutter_width, line_number_len) =
             Self::layout_line_numbers(&state, &text, text_size, &text_style, window);
 
         let mut bounds = bounds;
@@ -2819,6 +2827,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             wrap_width,
             wrapping_indent,
             line_number_width,
+            gutter_width,
             space_width,
             lines: Rc::new(vec![]),
             cursor_bounds: None,
@@ -3469,7 +3478,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 .unwrap_or(editor_background);
             let gutter_bounds = editor_gutter_bounds(
                 input_bounds,
-                prepaint.last_layout.line_number_width,
+                prepaint.last_layout.gutter_width,
                 prepaint.ghost_lines_height,
                 editor_paddings,
             );

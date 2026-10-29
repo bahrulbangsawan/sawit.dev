@@ -1,19 +1,28 @@
 //! One terminal: draws `core::terminal` snapshots on a canvas (like Zed's
-//! terminal element) and forwards keyboard, mouse and paste input.
+//! terminal element) and forwards keyboard, mouse and paste input. Dragging
+//! selects text and copies it on release; Shift+drag selects even while a
+//! program (herdr, vim) has the mouse. Dropped files are typed as paths.
 
 use std::cell::Cell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use futures::StreamExt;
-use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::*;
 use sawit_core::terminal::{
-    CursorView, GridSize, KeyInput, MouseAction, MouseButton as TermButton, Palette, Rgb,
-    ScrollAccumulator, Session, Snapshot, TermEvent, key_to_bytes, mouse_report, paste_bytes,
+    CellView, CursorView, GridSize, KeyInput, MouseAction, MouseButton as TermButton, Palette, Rgb,
+    ScrollAccumulator, SelectKind, Session, Snapshot, TermEvent, drop_bytes, key_to_bytes,
+    mouse_report, paste_bytes,
 };
+
+use crate::files::DraggedFile;
 
 const FONT_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 1.3;
+/// How long the "Copied to clipboard" toast stays up.
+const TOAST: std::time::Duration = std::time::Duration::from_millis(1400);
 
 /// Grid origin and cell size on screen.
 type GridLayout = (Point<Pixels>, Size<Pixels>);
@@ -31,10 +40,24 @@ pub struct TerminalView {
     focus: FocusHandle,
     pub title: SharedString,
     pub exited: bool,
+    /// Runs the user's shell (not herdr), so commands can be typed into it.
+    pub shell: bool,
+    /// Something was typed, pasted or run here; a fresh tab can be replaced.
+    pub touched: bool,
+    /// An SSH session: which server, and how to connect again.
+    pub remote: Option<super::Remote>,
+    /// Started from the Run panel: which script, under its name.
+    pub job: Option<super::JobTag>,
+    /// The project whose group the tab is in (none for SSH or no project).
+    pub group: Option<std::path::PathBuf>,
     /// Grid origin and cell size from the last paint, for mouse mapping.
     layout: Rc<Cell<Option<GridLayout>>>,
     pressed: Option<TermButton>,
+    /// The left button is down and dragging extends the selection.
+    selecting: bool,
     scroll: ScrollAccumulator,
+    /// Shows the copy toast while set; finishing hides it.
+    toast: Option<Task<()>>,
     _events: Task<()>,
 }
 
@@ -72,9 +95,7 @@ impl TerminalView {
                                     cx.emit(TerminalEvent::TitleChanged);
                                 }
                             }
-                            TermEvent::Copy(text) => {
-                                cx.write_to_clipboard(ClipboardItem::new_string(text))
-                            }
+                            TermEvent::Copy(text) => this.copy(text, cx),
                             TermEvent::Exit => {
                                 this.exited = true;
                                 cx.emit(TerminalEvent::Exited);
@@ -94,15 +115,54 @@ impl TerminalView {
             focus: cx.focus_handle(),
             title: title.into(),
             exited: false,
+            shell: false,
+            touched: false,
+            remote: None,
+            job: None,
+            group: None,
             layout: Rc::new(Cell::new(None)),
             pressed: None,
+            selecting: false,
             scroll: ScrollAccumulator::default(),
+            toast: None,
             _events: task,
         }
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         window.focus(&self.focus, cx);
+    }
+
+    /// Sends raw input to the program, jumping back to the live screen.
+    pub fn write(&self, bytes: Vec<u8>) {
+        self.session.clear_selection();
+        self.session.write(bytes);
+        self.session.scroll_to_bottom();
+    }
+
+    /// The last `lines` lines of scrollback and screen as plain text.
+    pub fn text_tail(&self, lines: usize) -> String {
+        self.session.text_tail(lines)
+    }
+
+    /// Moves an idle shell into `dir` without showing the command.
+    pub fn cd(&self, dir: &std::path::Path) {
+        self.session.clear_selection();
+        self.session.cd(dir);
+        self.session.scroll_to_bottom();
+    }
+
+    /// The shell is waiting at its prompt, not running a command.
+    pub fn at_prompt(&self) -> bool {
+        self.shell && !self.exited && self.session.at_prompt()
+    }
+
+    /// The command the shell is running, by process group.
+    pub fn foreground_job(&self) -> Option<u32> {
+        if self.exited {
+            return None;
+        }
+        self.session.foreground_job()
     }
 
     fn modes(&self) -> sawit_core::terminal::Modes {
@@ -114,10 +174,18 @@ impl TerminalView {
         let m = &ks.modifiers;
         if m.platform && ks.key == "v" {
             if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                self.session.write(paste_bytes(&text, self.modes()));
-                self.session.scroll_to_bottom();
+                self.touched = true;
+                self.write(paste_bytes(&text, self.modes()));
+                cx.notify();
             }
             cx.stop_propagation();
+            return;
+        }
+        if m.platform && ks.key == "c" {
+            if let Some(text) = self.session.selection_text() {
+                self.copy(text, cx);
+                cx.stop_propagation();
+            }
             return;
         }
         let input = KeyInput {
@@ -129,27 +197,84 @@ impl TerminalView {
             cmd: m.platform,
         };
         if let Some(bytes) = key_to_bytes(&input, self.modes()) {
-            self.session.write(bytes);
-            self.session.scroll_to_bottom();
+            self.touched = true;
+            self.write(bytes);
+            cx.notify();
             cx.stop_propagation();
             window.prevent_default();
         }
     }
 
-    /// Grid cell under `position`, clamped to the screen.
-    fn cell_at(&self, position: Point<Pixels>) -> Option<(usize, usize)> {
+    /// Grid cell under `position`, clamped to the screen, and whether the
+    /// mouse is over its right half.
+    fn cell_at(&self, position: Point<Pixels>) -> Option<(usize, usize, bool)> {
         let (origin, cell) = self.layout.get()?;
         let size = self.session.size();
-        let col = ((position.x - origin.x) / cell.width).floor().max(0.) as usize;
+        let x = ((position.x - origin.x) / cell.width).max(0.);
         let row = ((position.y - origin.y) / cell.height).floor().max(0.) as usize;
+        let col = x.floor() as usize;
+        let past_end = col >= size.cols as usize;
         Some((
             col.min(size.cols as usize - 1),
             row.min(size.rows as usize - 1),
+            past_end || x.fract() >= 0.5,
         ))
     }
 
+    fn start_selection(&mut self, position: Point<Pixels>, clicks: usize) {
+        if let Some((col, row, right)) = self.cell_at(position) {
+            self.session
+                .select_start(col, row, right, SelectKind::from_clicks(clicks));
+            self.selecting = true;
+        }
+    }
+
+    fn extend_selection(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if self.selecting
+            && let Some((col, row, right)) = self.cell_at(position)
+        {
+            self.session.select_extend(col, row, right);
+            cx.notify();
+        }
+    }
+
+    /// Ends a drag: whatever got selected goes to the clipboard.
+    fn finish_selection(&mut self, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.selecting) {
+            return;
+        }
+        if let Some(text) = self.session.selection_text() {
+            self.copy(text, cx);
+        }
+        cx.notify();
+    }
+
+    /// Puts `text` on the clipboard and briefly says so.
+    fn copy(&mut self, text: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.toast = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(TOAST).await;
+            let _ = this.update(cx, |this, cx| {
+                this.toast = None;
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    /// Types dropped files (from Finder or the file tree) as quoted paths.
+    fn drop_paths(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        if paths.is_empty() || self.exited {
+            return;
+        }
+        self.touched = true;
+        self.write(drop_bytes(paths, self.modes()));
+        self.focus(window, cx);
+        cx.notify();
+    }
+
     fn send_mouse(&self, action: MouseAction, position: Point<Pixels>, shift: bool) -> bool {
-        let Some((col, row)) = self.cell_at(position) else {
+        let Some((col, row, _)) = self.cell_at(position) else {
             return false;
         };
         match mouse_report(action, col, row, shift, self.modes()) {
@@ -212,12 +337,20 @@ struct Painter<'a> {
     cell: Size<Pixels>,
     font: &'a Font,
     focused: bool,
+    selection: Hsla,
 }
 
 /// Paints one snapshot: backgrounds, text runs (glyphs forced onto the cell
 /// grid), then the cursor.
 fn paint_snapshot(snap: &Snapshot, p: &Painter, window: &mut Window, cx: &mut App) {
     let (palette, origin, cell, font, focused) = (p.palette, p.origin, p.cell, p.font, p.focused);
+    let background = |c: &CellView| {
+        if c.selected {
+            Some(p.selection)
+        } else {
+            (c.bg != palette.background).then(|| hsla(c.bg))
+        }
+    };
 
     let font_size = px(FONT_SIZE);
     for (row, line) in snap.lines.iter().enumerate() {
@@ -225,27 +358,46 @@ fn paint_snapshot(snap: &Snapshot, p: &Painter, window: &mut Window, cx: &mut Ap
         // Backgrounds, merged across equal neighbours.
         let mut col = 0;
         while col < line.len() {
-            let bg = line[col].bg;
+            let bg = background(&line[col]);
             let start = col;
-            while col < line.len() && line[col].bg == bg {
+            while col < line.len() && background(&line[col]) == bg {
                 col += 1;
             }
-            if bg != palette.background {
+            if let Some(bg) = bg {
                 let bounds = Bounds::new(
                     point(origin.x + cell.width * start as f32, y),
                     size(cell.width * (col - start) as f32, cell.height),
                 );
-                window.paint_quad(fill(bounds, hsla(bg)));
+                window.paint_quad(fill(bounds, bg));
             }
         }
 
-        // Text: one shaped line per row, a run per style change.
+        // Text: one shaped line per row, a run per style change. Trailing
+        // blanks (most of a typical row) are not shaped at all.
+        let Some(last) = line
+            .iter()
+            .rposition(|c| (!c.spacer && c.ch != ' ') || c.underline || c.strikeout)
+        else {
+            continue;
+        };
+        let line = &line[..=last];
         let mut text = String::with_capacity(line.len());
         let mut runs: Vec<TextRun> = Vec::new();
+        // Runs are compared by this small key; building a Font (and its
+        // Arc clones) per cell was most of the paint time.
+        let mut run_key = None;
         for c in line {
             let ch = if c.spacer { ' ' } else { c.ch };
             let len = ch.len_utf8();
             text.push(ch);
+            let key = (c.fg, c.bold, c.italic, c.underline, c.strikeout);
+            if run_key == Some(key)
+                && let Some(run) = runs.last_mut()
+            {
+                run.len += len;
+                continue;
+            }
+            run_key = Some(key);
             let mut run_font = font.clone();
             if c.bold {
                 run_font.weight = FontWeight::BOLD;
@@ -254,33 +406,21 @@ fn paint_snapshot(snap: &Snapshot, p: &Painter, window: &mut Window, cx: &mut Ap
                 run_font.style = FontStyle::Italic;
             }
             let color = hsla(c.fg);
-            let underline = c.underline.then(|| UnderlineStyle {
-                thickness: px(1.),
-                color: Some(color),
-                wavy: false,
-            });
-            let strikethrough = c.strikeout.then(|| StrikethroughStyle {
-                thickness: px(1.),
-                color: Some(color),
-            });
-            match runs.last_mut() {
-                Some(last)
-                    if last.font == run_font
-                        && last.color == color
-                        && last.underline == underline
-                        && last.strikethrough == strikethrough =>
-                {
-                    last.len += len
-                }
-                _ => runs.push(TextRun {
-                    len,
-                    font: run_font,
-                    color,
-                    background_color: None,
-                    underline,
-                    strikethrough,
+            runs.push(TextRun {
+                len,
+                font: run_font,
+                color,
+                background_color: None,
+                underline: c.underline.then(|| UnderlineStyle {
+                    thickness: px(1.),
+                    color: Some(color),
+                    wavy: false,
                 }),
-            }
+                strikethrough: c.strikeout.then(|| StrikethroughStyle {
+                    thickness: px(1.),
+                    color: Some(color),
+                }),
+            });
         }
         if text.trim().is_empty() {
             continue;
@@ -342,9 +482,32 @@ impl Render for TerminalView {
         let layout = self.layout.clone();
         let focused = self.focus.is_focused(window);
         let exited = self.exited;
+        let selection = cx.theme().selection;
+        let this = cx.entity().downgrade();
+        let toast = self.toast.is_some().then(|| {
+            div()
+                .absolute()
+                .bottom_2()
+                .right_3()
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().popover)
+                .text_color(cx.theme().popover_foreground)
+                .text_xs()
+                .shadow_md()
+                .child(Icon::new(Lucide::Check).xsmall())
+                .child("Copied to clipboard")
+        });
 
         div()
             .id("terminal")
+            .relative()
             .key_context("Terminal")
             .track_focus(&self.focus)
             .size_full()
@@ -352,17 +515,26 @@ impl Render for TerminalView {
             .bg(hsla(self.palette.background))
             .on_key_down(cx.listener(Self::on_key))
             .on_scroll(cx.listener(Self::on_scroll))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.drop_paths(paths.paths(), window, cx)
+            }))
+            .on_drop(cx.listener(|this, file: &DraggedFile, window, cx| {
+                this.drop_paths(std::slice::from_ref(&file.path), window, cx)
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, window, cx| {
                     this.focus(window, cx);
-                    if this.send_mouse(
-                        MouseAction::Press(TermButton::Left),
-                        e.position,
-                        e.modifiers.shift,
-                    ) {
+                    this.session.clear_selection();
+                    // Shift takes the mouse back from programs that report it.
+                    if !e.modifiers.shift
+                        && this.send_mouse(MouseAction::Press(TermButton::Left), e.position, false)
+                    {
                         this.pressed = Some(TermButton::Left);
+                    } else {
+                        this.start_selection(e.position, e.click_count);
                     }
+                    cx.notify();
                 }),
             )
             .on_mouse_down(
@@ -402,6 +574,9 @@ impl Render for TerminalView {
                 }),
             )
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, _| {
+                if this.selecting {
+                    return;
+                }
                 let action = match e.pressed_button.and_then(to_term_button) {
                     Some(b) => MouseAction::Drag(b),
                     None => MouseAction::Move,
@@ -423,6 +598,23 @@ impl Render for TerminalView {
                         session
                     },
                     move |bounds, session, window, cx| {
+                        // Window-wide, so a drag that leaves the terminal
+                        // keeps selecting and its release is not missed.
+                        window.on_mouse_event({
+                            let this = this.clone();
+                            move |e: &MouseMoveEvent, phase, _, cx| {
+                                if phase.bubble() && e.pressed_button == Some(MouseButton::Left) {
+                                    let _ = this.update(cx, |this, cx| {
+                                        this.extend_selection(e.position, cx)
+                                    });
+                                }
+                            }
+                        });
+                        window.on_mouse_event(move |e: &MouseUpEvent, phase, _, cx| {
+                            if phase.bubble() && e.button == MouseButton::Left {
+                                let _ = this.update(cx, |this, cx| this.finish_selection(cx));
+                            }
+                        });
                         let snap = session.snapshot(&palette);
                         window.paint_quad(fill(bounds, hsla(palette.background)));
                         let painter = Painter {
@@ -431,10 +623,11 @@ impl Render for TerminalView {
                             cell,
                             font: &font,
                             focused,
+                            selection,
                         };
                         paint_snapshot(&snap, &painter, window, cx);
                         if exited {
-                            let note = "[process exited — close this tab or open a new terminal]";
+                            let note = "[process exited]";
                             let run = TextRun {
                                 len: note.len(),
                                 font: font.clone(),
@@ -463,6 +656,7 @@ impl Render for TerminalView {
                 )
                 .size_full(),
             )
+            .children(toast)
     }
 }
 

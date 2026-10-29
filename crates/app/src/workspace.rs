@@ -1,8 +1,11 @@
 //! The main window, laid out like Zed: title bar, left panel with tabs
-//! (Servers / Files / Database), tabbed center pane, bottom terminal dock and
-//! status bar.
+//! (Instances / Files / Git / Database / Run / Ports / Network / Prompts / SSH), tabbed center
+//! pane, bottom terminal dock and status bar. A new, empty window starts on the welcome screen instead.
+//! One window holds several projects (see `project`): the title bar switches
+//! between them and tabs are grouped by the project they belong to.
 
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
@@ -12,21 +15,43 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::canvas::{CanvasView, ToggleCanvasMaximize};
 use crate::changelog_page::ChangelogPage;
 use crate::cli::{CliStatus, cli_status};
-use crate::db::{DatabasePanel, DbEvent, DbStore, SqlView, TableView};
+use crate::db::{DatabasePanel, DbEvent, DbStore, DiagramView, SqlView, TableView};
 use crate::editor::{FileEditor, FileEditorEvent};
+use crate::files::search::{FolderSearch, SearchEvent};
 use crate::files::{FilesEvent, FilesPanel};
+use crate::git::{
+    CommitView, DiffView, DiffViewEvent, GitHubView, GitPanel, GitPanelEvent, GitStore, GraphEvent,
+    GraphView,
+};
 use crate::layout::{Area, Layout};
 use crate::mcp_page::McpPage;
+use crate::network::NetworkPanel;
+use crate::ports::PortsPanel;
 use crate::prompts::{PromptStore, PromptStoreEvent, PromptView, PromptsEvent, PromptsPanel};
+use crate::run::{RunEvent, RunPanel, RunStore};
 use crate::servers::{ServerDetail, ServerList, ServerStore, ShowServerTab};
-use crate::tabs::{CloseOp, TabFlags, active_after, to_close};
-use crate::terminal::TerminalPanel;
+use crate::shell_config::{ShellConfigEvent, ShellConfigPanel};
+use crate::ssh::{SshEvent, SshHostEvent, SshHostView, SshPanel, SshStore, SshStoreEvent};
+use crate::states::Placeholder;
+use crate::tab_groups::{group_header, group_stripe, project_name};
+use crate::tabs::{CloseOp, Slot, TabFlags, active_after, active_after_move, insert_index, to_close};
+use crate::terminal::{TerminalPanel, ToggleMaximize};
 use crate::update::{Updater, updater};
 use crate::viewers::{ImageView, PdfView, VideoView};
+use crate::welcome::{Welcome, WelcomeEvent};
 use sawit_core::files::{FileKind, classify};
+use sawit_core::instances::AppPaths;
+use sawit_core::recent::RecentProjects;
 use sawit_core::update::Version;
+
+mod control;
+mod project;
+
+use project::Project;
+pub use control::Answer;
 
 actions!(
     workspace,
@@ -65,14 +90,23 @@ pub fn init(cx: &mut App) {
 enum SidebarTab {
     Servers,
     Files,
+    Git,
     Database,
+    Run,
+    Ports,
+    Network,
     Prompts,
+    Ssh,
+    ShellConfig,
 }
 
 #[derive(Clone)]
 struct Tab {
     item: PaneItem,
     pinned: bool,
+    /// The project whose group the tab is in; `None` for tabs of no
+    /// project (instances, databases, prompts…).
+    group: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -94,17 +128,39 @@ pub struct Workspace {
     servers: Entity<ServerStore>,
     server_list: Entity<ServerList>,
     server_detail: Entity<ServerDetail>,
-    files: Entity<FilesPanel>,
+    /// Never empty; the first may have no folder yet.
+    projects: Vec<Project>,
+    /// The active project, whose panels the sidebar shows.
+    project: usize,
+    run_store: Entity<RunStore>,
     db: Entity<DbStore>,
     db_panel: Entity<DatabasePanel>,
     prompt_store: Entity<PromptStore>,
     prompts_panel: Entity<PromptsPanel>,
+    ports_panel: Entity<PortsPanel>,
+    network_panel: Entity<NetworkPanel>,
+    ssh_store: Entity<SshStore>,
+    ssh_panel: Entity<SshPanel>,
+    shell_config_panel: Entity<ShellConfigPanel>,
     sql_count: usize,
     terminal: Entity<TerminalPanel>,
     sidebar: SidebarTab,
     tabs: Vec<Tab>,
     active: usize,
+    /// Groups whose tabs are folded away, by project.
+    collapsed: HashSet<PathBuf>,
     layout: Layout,
+    /// The status bar's copy-path button is showing its check mark.
+    path_copied: bool,
+    _path_copied_reset: Task<()>,
+    /// Layout to go back to when the maximized terminal or canvas is restored.
+    unmaximized: Option<Layout>,
+    /// The canvas tab (owned by its tab), while open.
+    canvas: Option<WeakEntity<CanvasView>>,
+    /// The canvas fills the window: no sidebar, terminal or tab bar.
+    canvas_maximized: bool,
+    /// Shown instead of the panels until something is opened.
+    welcome: Option<Entity<Welcome>>,
     tab_scroll: ScrollHandle,
     /// Active tab last scrolled into view.
     scrolled_to: Option<usize>,
@@ -119,38 +175,51 @@ pub struct Workspace {
 impl Workspace {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let servers = cx.new(ServerStore::new);
-        let files = cx.new(FilesPanel::new);
         let terminal = cx.new(TerminalPanel::new);
         let db = cx.new(DbStore::new);
         let db_panel = cx.new(|cx| DatabasePanel::new(db.clone(), servers.clone(), window, cx));
         let prompt_store = cx.new(PromptStore::new);
         let prompts_panel = cx.new(|cx| PromptsPanel::new(prompt_store.clone(), window, cx));
+        let ports_panel = cx.new(|cx| PortsPanel::new(servers.clone(), window, cx));
+        let run_store = cx.new(RunStore::new);
+        let project = Self::new_project(&run_store, &terminal, &ports_panel, window, cx);
+        let network_panel = cx.new(|cx| NetworkPanel::new(window, cx));
+        let ssh_store = cx.new(SshStore::new);
+        let ssh_panel =
+            cx.new(|cx| SshPanel::new(ssh_store.clone(), terminal.clone(), window, cx));
+        let shell_config_panel = cx.new(ShellConfigPanel::new);
         let cli_status = cli_status(cx);
         let updater = updater(cx);
+        let welcome = cx.new(|cx| Welcome::new(servers.clone(), db.clone(), cx));
         let subscriptions =
             vec![
                 cx.observe(&servers, |_, _, cx| cx.notify()),
                 cx.observe(&cli_status, |_, _, cx| cx.notify()),
                 cx.observe(&updater, |_, _, cx| cx.notify()),
+                cx.subscribe_in(
+                    &welcome,
+                    window,
+                    |this, _, event: &WelcomeEvent, window, cx| {
+                        this.on_welcome_event(event, window, cx)
+                    },
+                ),
                 cx.subscribe(&servers, |this, _, _: &ShowServerTab, cx| {
                     this.show_server_tab();
                     cx.notify();
                 }),
-                cx.subscribe_in(&files, window, |this, _, event: &FilesEvent, window, cx| {
-                    match event {
-                        FilesEvent::OpenFile(path) => this.open_file(path.clone(), window, cx),
-                        FilesEvent::RootChanged(root) => {
-                            let root = root.clone();
-                            this.terminal.update(cx, |t, _| t.set_cwd(Some(root)));
-                            cx.notify();
-                        }
-                    }
-                }),
+                cx.subscribe_in(
+                    &terminal,
+                    window,
+                    |this, _, _: &ToggleMaximize, window, cx| {
+                        this.toggle_terminal_maximized(window, cx)
+                    },
+                ),
                 cx.observe_in(&db, window, |this, db, window, cx| {
                     let ready = match &this.pending_db {
-                        Some(DbEvent::OpenTable { profile, .. } | DbEvent::OpenSql { profile }) => {
+                        Some(event) => {
+                            let profile = event.profile();
                             let store = db.read(cx);
-                            if store.connecting.contains(profile) {
+                            if store.state(profile).is_pending() {
                                 return;
                             }
                             store.is_connected(profile)
@@ -194,6 +263,51 @@ impl Workspace {
                     }
                     cx.notify();
                 }),
+                cx.subscribe_in(&ssh_panel, window, |this, _, event: &SshEvent, window, cx| {
+                    match event {
+                        SshEvent::Connect { key, new } => {
+                            this.connect_ssh(key.clone(), *new, window, cx)
+                        }
+                        SshEvent::Edit(id) => this.open_ssh_host(id.clone(), window, cx),
+                        SshEvent::OpenFile(path) => {
+                            this.show_center(cx);
+                            this.open_file(path.clone(), window, cx)
+                        }
+                    }
+                }),
+                cx.subscribe_in(
+                    &shell_config_panel,
+                    window,
+                    |this, _, ShellConfigEvent::OpenFile(path), window, cx| {
+                        this.show_center(cx);
+                        this.open_file(path.clone(), window, cx)
+                    },
+                ),
+                // Server tabs follow renames and close when deleted.
+                cx.observe(&ssh_store, |this, store, cx| {
+                    let list = &store.read(cx).list;
+                    for tab in &mut this.tabs {
+                        if let PaneItem::Other { key, title, .. } = &mut tab.item
+                            && let Some(id) = key.strip_prefix("ssh-host\u{0}")
+                            && let Some(h) = list.get(id)
+                        {
+                            let name = h.label();
+                            if title.as_ref() != name {
+                                *title = name.into();
+                            }
+                        }
+                    }
+                    cx.notify();
+                }),
+                cx.subscribe(&ssh_store, |this, _, event: &SshStoreEvent, cx| {
+                    let SshStoreEvent::Removed(id) = event;
+                    let key = format!("ssh-host\u{0}{id}");
+                    if let Some(ix) = this.tabs.iter().position(
+                        |t| matches!(&t.item, PaneItem::Other { key: k, .. } if k.as_ref() == key),
+                    ) {
+                        this.remove_tabs(&[ix], cx);
+                    }
+                }),
                 cx.subscribe(&prompt_store, |this, _, event: &PromptStoreEvent, cx| {
                     let PromptStoreEvent::Removed(id) = event;
                     let key = format!("prompt\u{0}{id}");
@@ -208,20 +322,31 @@ impl Workspace {
             server_list: cx.new(|cx| ServerList::new(servers.clone(), cx)),
             server_detail: cx.new(|cx| ServerDetail::new(servers.clone(), window, cx)),
             servers,
-            files,
+            projects: vec![project],
+            project: 0,
+            run_store,
             db,
             db_panel,
             prompt_store,
             prompts_panel,
+            ports_panel,
+            network_panel,
+            ssh_store,
+            ssh_panel,
+            shell_config_panel,
             sql_count: 0,
             terminal,
             sidebar: SidebarTab::Servers,
-            tabs: vec![Tab {
-                item: PaneItem::Server,
-                pinned: false,
-            }],
+            tabs: Vec::new(),
             active: 0,
+            collapsed: HashSet::new(),
             layout: Layout::default(),
+            path_copied: false,
+            _path_copied_reset: Task::ready(()),
+            unmaximized: None,
+            canvas: None,
+            canvas_maximized: false,
+            welcome: Some(welcome),
             tab_scroll: ScrollHandle::new(),
             scrolled_to: None,
             pending_db: None,
@@ -232,15 +357,9 @@ impl Workspace {
         }
     }
 
-    pub fn open_project(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        self.files.update(cx, |f, cx| f.set_root(root, cx));
-        self.sidebar = SidebarTab::Files;
-        cx.notify();
-    }
-
-    /// The project folder, if one is open.
+    /// The active project's folder, if it has one.
     pub fn root(&self, cx: &App) -> Option<PathBuf> {
-        self.files.read(cx).root.clone()
+        self.current().root(cx)
     }
 
     /// Files shown in tabs (editors and viewers), for `sawit --wait`.
@@ -264,6 +383,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.leave_welcome(CENTER_ONLY, cx);
         if !self.layout.center {
             self.layout.toggle(Area::Center);
         }
@@ -304,13 +424,18 @@ impl Workspace {
                 FileKind::Pdf => cx.new(|cx| PdfView::new(path, cx)).into(),
                 _ => cx.new(|cx| VideoView::new(path, window, cx)).into(),
             };
-            self.push_tab(PaneItem::Other {
-                view,
-                key,
-                title,
-                icon,
-                file: Some(path_for_icon),
-            });
+            let group = self.group_of(&path_for_icon, cx);
+            self.push_tab(
+                PaneItem::Other {
+                    view,
+                    key,
+                    title,
+                    icon,
+                    file: Some(path_for_icon),
+                },
+                group,
+                cx,
+            );
             cx.notify();
             return;
         }
@@ -319,13 +444,13 @@ impl Workspace {
             .iter()
             .position(|t| matches!(&t.item, PaneItem::File(e) if e.read(cx).path == path))
         {
-            self.active = ix;
+            self.activate_tab(ix, cx);
         } else {
-            let root = self.files.read(cx).root.clone();
-            let editor = cx.new(|cx| FileEditor::open(path, root, window, cx));
+            let group = self.group_of(&path, cx);
+            let editor = cx.new(|cx| FileEditor::open(path, group.clone(), window, cx));
             cx.subscribe(&editor, |_, _, _: &FileEditorEvent, cx| cx.notify())
                 .detach();
-            self.push_tab(PaneItem::File(editor));
+            self.push_tab(PaneItem::File(editor), group, cx);
         }
         cx.notify();
     }
@@ -336,24 +461,99 @@ impl Workspace {
         view: AnyView,
         key: SharedString,
         title: SharedString,
+        icon: Lucide,
         cx: &mut Context<Self>,
     ) {
-        self.push_tab(PaneItem::Other {
+        self.open_item_in(view, key, title, icon, None, cx);
+    }
+
+    /// Like [`Self::open_item`], in the group of the project at `group`.
+    fn open_item_in(
+        &mut self,
+        view: AnyView,
+        key: SharedString,
+        title: SharedString,
+        icon: Lucide,
+        group: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let item = PaneItem::Other {
             view,
             key,
             title,
-            icon: Lucide::Table,
+            icon,
             file: None,
-        });
+        };
+        self.push_tab(item, group, cx);
         cx.notify();
     }
 
-    fn push_tab(&mut self, item: PaneItem) {
-        self.tabs.push(Tab {
-            item,
-            pinned: false,
-        });
-        self.active = self.tabs.len() - 1;
+    fn slots(&self) -> Vec<Slot<'_>> {
+        self.tabs
+            .iter()
+            .map(|t| Slot {
+                pinned: t.pinned,
+                group: t.group.as_deref(),
+            })
+            .collect()
+    }
+
+    /// Adds a tab to the end of its project's group and shows it.
+    fn push_tab(&mut self, item: PaneItem, group: Option<PathBuf>, cx: &mut Context<Self>) {
+        let at = insert_index(&self.slots(), false, group.as_deref());
+        self.tabs.insert(
+            at,
+            Tab {
+                item,
+                pinned: false,
+                group,
+            },
+        );
+        self.activate_tab(at, cx);
+    }
+
+    /// Shows the tab at `ix`, unfolding its group and switching to its
+    /// project.
+    fn activate_tab(&mut self, ix: usize, cx: &mut Context<Self>) {
+        self.active = ix;
+        if let Some(root) = self.tabs.get(ix).and_then(|t| t.group.clone()) {
+            self.collapsed.remove(&root);
+            if let Some(p) = self.projects.iter().position(|p| p.root(cx) == Some(root.clone())) {
+                self.activate_project(p, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Moves the tab at `ix` into `group` (or out of any), keeping groups
+    /// together.
+    fn move_to_group(&mut self, ix: usize, group: Option<PathBuf>, cx: &mut Context<Self>) {
+        if ix >= self.tabs.len() || self.tabs[ix].group == group {
+            return;
+        }
+        let mut tab = self.tabs.remove(ix);
+        tab.group = group;
+        let at = insert_index(&self.slots(), tab.pinned, tab.group.as_deref());
+        self.tabs.insert(at, tab);
+        self.active = active_after_move(self.active, ix, at);
+        cx.notify();
+    }
+
+    fn toggle_group(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        if !self.collapsed.remove(&root) {
+            self.collapsed.insert(root);
+        }
+        cx.notify();
+    }
+
+    /// Closes a group's tabs, like Close All: pinned and unsaved ones stay.
+    fn close_group(&mut self, root: &Path, cx: &mut Context<Self>) {
+        let flags = self.flags(cx);
+        let closing: Vec<usize> = (0..self.tabs.len())
+            .filter(|&ix| self.tabs[ix].group.as_deref() == Some(root))
+            .filter(|&ix| !flags[ix].pinned && !flags[ix].dirty)
+            .collect();
+        self.remove_tabs(&closing, cx);
     }
 
     /// Activates the Server tab, reopening it (after pinned tabs) if closed.
@@ -371,6 +571,7 @@ impl Workspace {
                     Tab {
                         item: PaneItem::Server,
                         pinned: false,
+                        group: None,
                     },
                 );
                 self.active = at;
@@ -386,17 +587,11 @@ impl Workspace {
         read_only: bool,
         cx: &mut Context<Self>,
     ) -> Option<std::sync::Arc<tokio_postgres::Client>> {
-        let store = self.db.read(cx);
-        if !store.is_connected(profile) {
-            self.db.update(cx, |s, cx| s.connect(profile, cx));
-            return None;
+        let client = self.db.read(cx).client(profile, read_only);
+        if client.is_none() {
+            self.db.update(cx, |s, cx| s.ensure_connecting(profile, cx));
         }
-        let clients = if read_only {
-            &store.ro_clients
-        } else {
-            &store.clients
-        };
-        clients.get(profile).cloned()
+        client
     }
 
     fn on_db_event(&mut self, event: &DbEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -432,18 +627,55 @@ impl Workspace {
                 let view = cx.new(|cx| {
                     TableView::new(title.clone(), db, profile, schema, table, window, cx)
                 });
-                self.open_item(view.into(), key, title, cx);
+                // Its "Query" button opens a SQL editor.
+                cx.subscribe_in(&view, window, |this, _, event: &DbEvent, window, cx| {
+                    this.on_db_event(event, window, cx)
+                })
+                .detach();
+                self.open_item(view.into(), key, title, Lucide::Table, cx);
             }
-            DbEvent::OpenSql { profile } => {
+            DbEvent::OpenSql { profile, sql } => {
                 if self.live_client(profile, false, cx).is_none() {
                     self.pending_db = Some(event.clone());
                     return;
                 }
                 self.sql_count += 1;
-                let title: SharedString = format!("SQL {} · {profile}", self.sql_count).into();
-                let (db, profile) = (self.db.clone(), profile.clone());
-                let view = cx.new(|cx| SqlView::new(title.clone(), db, profile, window, cx));
-                self.open_item(view.into(), title.clone(), title, cx);
+                let shown = self
+                    .db
+                    .read(cx)
+                    .profile(profile)
+                    .map_or(profile.as_str(), |p| p.display_name())
+                    .to_string();
+                let title: SharedString = format!("SQL {} · {shown}", self.sql_count).into();
+                let (db, profile, sql) = (self.db.clone(), profile.clone(), sql.clone());
+                let view = cx.new(|cx| SqlView::new(title.clone(), db, profile, sql, window, cx));
+                self.open_item(
+                    view.into(),
+                    title.clone(),
+                    title,
+                    Lucide::SquareTerminal,
+                    cx,
+                );
+            }
+            DbEvent::OpenDiagram { profile, schema } => {
+                let key: SharedString = format!("diagram\u{0}{profile}\u{0}{schema}").into();
+                if let Some(ix) = self
+                    .tabs
+                    .iter()
+                    .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
+                {
+                    self.active = ix;
+                    cx.notify();
+                    return;
+                }
+                if self.live_client(profile, true, cx).is_none() {
+                    self.pending_db = Some(event.clone());
+                    return;
+                }
+                let title: SharedString = format!("{schema} · diagram").into();
+                let (db, profile, schema) = (self.db.clone(), profile.clone(), schema.clone());
+                let view = cx.new(|cx| DiagramView::new(title.clone(), db, profile, schema, window, cx));
+                self.open_item(view.into(), key, title, Lucide::Waypoints, cx);
             }
         }
     }
@@ -526,33 +758,13 @@ impl Workspace {
         let Some(tab) = self.tabs.get(ix).cloned() else {
             return;
         };
-        let active_is_target = self.active == ix;
-        let active_item = self.active;
         self.tabs.remove(ix);
-        let pinned_count = self.tabs.iter().take_while(|t| t.pinned).count();
         // Pinned tabs sit together at the start, like in Zed; a pinned tab
-        // goes to the end of that group, an unpinned one just after it.
-        let at = pinned_count;
-        self.tabs.insert(
-            at,
-            Tab {
-                pinned: !tab.pinned,
-                ..tab
-            },
-        );
-        if active_is_target {
-            self.active = at;
-        } else {
-            // Shift the active index the same way the move shifted it.
-            let mut a = active_item;
-            if ix < a {
-                a -= 1;
-            }
-            if at <= a {
-                a += 1;
-            }
-            self.active = a;
-        }
+        // goes to the end of them, an unpinned one back into its group.
+        let pinned = !tab.pinned;
+        let at = insert_index(&self.slots(), pinned, tab.group.as_deref());
+        self.tabs.insert(at, Tab { pinned, ..tab });
+        self.active = active_after_move(self.active, ix, at);
         cx.notify();
     }
 
@@ -565,14 +777,18 @@ impl Workspace {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn tab_menu(
         this: WeakEntity<Self>,
         ix: usize,
         is_file: bool,
         read_only: bool,
         pinned: bool,
+        group: Option<PathBuf>,
+        projects: Vec<PathBuf>,
         menu: PopupMenu,
-        cx: &App,
+        window: &mut Window,
+        cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
         let muted = cx.theme().muted_foreground;
         let item = |label: &'static str, keys: &'static str| {
@@ -593,6 +809,7 @@ impl Workspace {
         };
         let this_pin = this.clone();
         let this_ro = this.clone();
+        let menu = Self::group_menu(this.clone(), ix, group, projects, menu, window, cx);
         menu.item(item("Close", "⌘W").on_click(close(CloseOp::This)))
             .item(item("Close Others", "⌥⌘T").on_click(close(CloseOp::Others)))
             .separator()
@@ -623,6 +840,48 @@ impl Workspace {
             )
     }
 
+    /// "Move to Project" and "Remove from Group", for a tab's menu.
+    fn group_menu(
+        this: WeakEntity<Self>,
+        ix: usize,
+        group: Option<PathBuf>,
+        projects: Vec<PathBuf>,
+        menu: PopupMenu,
+        window: &mut Window,
+        cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        let others: Vec<PathBuf> = projects
+            .into_iter()
+            .filter(|p| Some(p) != group.as_ref())
+            .collect();
+        if others.is_empty() && group.is_none() {
+            return menu;
+        }
+        let this_move = this.clone();
+        menu.when(!others.is_empty(), |menu| {
+            menu.submenu("Move to Project", window, cx, move |mut menu, _, _| {
+                for root in &others {
+                    let this = this_move.clone();
+                    let to = root.clone();
+                    menu = menu.item(PopupMenuItem::new(project_name(root)).on_click(
+                        move |_, _, cx| {
+                            let _ = this.update(cx, |ws, cx| {
+                                ws.move_to_group(ix, Some(to.clone()), cx)
+                            });
+                        },
+                    ));
+                }
+                menu
+            })
+        })
+        .when(group.is_some(), |menu| {
+            menu.item(PopupMenuItem::new("Remove from Group").on_click(move |_, _, cx| {
+                let _ = this.update(cx, |ws, cx| ws.move_to_group(ix, None, cx));
+            }))
+        })
+        .separator()
+    }
+
     fn render_sidebar_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let tab = |id: &'static str,
                    icon: Icon,
@@ -648,7 +907,7 @@ impl Workspace {
                 tab(
                     "side-servers",
                     Icon::new(Lucide::Server),
-                    "Servers",
+                    "PostgreSQL Instances",
                     SidebarTab::Servers,
                     current,
                 )
@@ -672,6 +931,19 @@ impl Workspace {
             )
             .child(
                 tab(
+                    "side-git",
+                    Icon::new(Lucide::GitBranch),
+                    "Git",
+                    SidebarTab::Git,
+                    current,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.sidebar = SidebarTab::Git;
+                    cx.notify();
+                })),
+            )
+            .child(
+                tab(
                     "side-db",
                     Icon::new(Lucide::Database),
                     "Database",
@@ -685,9 +957,75 @@ impl Workspace {
             )
             .child(
                 tab(
+                    "side-run",
+                    Icon::new(Lucide::Play),
+                    "Run Scripts",
+                    SidebarTab::Run,
+                    current,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.sidebar = SidebarTab::Run;
+                    cx.notify();
+                })),
+            )
+            .child(
+                tab(
+                    "side-ports",
+                    Icon::new(Lucide::Radio),
+                    "Listening Ports",
+                    SidebarTab::Ports,
+                    current,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.sidebar = SidebarTab::Ports;
+                    cx.notify();
+                })),
+            )
+            .child(
+                tab(
+                    "side-network",
+                    Icon::new(IconName::Globe),
+                    "Network Diagnosis",
+                    SidebarTab::Network,
+                    current,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.sidebar = SidebarTab::Network;
+                    cx.notify();
+                })),
+            )
+            .child(
+                tab(
+                    "side-ssh",
+                    Icon::new(Lucide::SquareTerminal),
+                    "SSH Servers",
+                    SidebarTab::Ssh,
+                    current,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.sidebar = SidebarTab::Ssh;
+                    cx.notify();
+                })),
+            )
+            .child(
+                tab(
+                    "side-shell-config",
+                    Icon::new(Lucide::FileTerminal),
+                    "Shell Config",
+                    SidebarTab::ShellConfig,
+                    current,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.sidebar = SidebarTab::ShellConfig;
+                    this.shell_config_panel.update(cx, |p, cx| p.refresh(cx));
+                    cx.notify();
+                })),
+            )
+            .child(
+                tab(
                     "side-prompts",
                     Icon::new(Lucide::MessageSquareText),
-                    "Prompt",
+                    "Prompts",
                     SidebarTab::Prompts,
                     current,
                 )
@@ -699,26 +1037,69 @@ impl Workspace {
     }
 
     fn render_sidebar(&self) -> AnyElement {
-        match self.sidebar {
-            SidebarTab::Servers => self.server_list.clone().into_any_element(),
-            SidebarTab::Files => self.files.clone().into_any_element(),
-            SidebarTab::Database => self.db_panel.clone().into_any_element(),
-            SidebarTab::Prompts => self.prompts_panel.clone().into_any_element(),
-        }
+        let view: AnyView = match self.sidebar {
+            SidebarTab::Servers => self.server_list.clone().into(),
+            SidebarTab::Files => self.current().files.clone().into(),
+            SidebarTab::Git => self.current().git_panel.clone().into(),
+            SidebarTab::Database => self.db_panel.clone().into(),
+            SidebarTab::Run => self.current().run_panel.clone().into(),
+            SidebarTab::Ports => self.ports_panel.clone().into(),
+            SidebarTab::Network => self.network_panel.clone().into(),
+            SidebarTab::Prompts => self.prompts_panel.clone().into(),
+            SidebarTab::Ssh => self.ssh_panel.clone().into(),
+            SidebarTab::ShellConfig => self.shell_config_panel.clone().into(),
+        };
+        cached(view)
     }
 
     fn render_tab_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let weak = cx.entity().downgrade();
-        let tabs: Vec<_> = self
-            .tabs
-            .iter()
-            .enumerate()
-            .map(|(ix, tab)| {
-                let active = ix == self.active;
+        let projects = self.roots(cx);
+        let mut items: Vec<AnyElement> = Vec::new();
+        for (ix, tab) in self.tabs.iter().enumerate() {
+            let group = tab.group.clone().filter(|_| !tab.pinned);
+            let color = group.as_ref().map(|g| self.group_color(g, cx));
+            // A header in front of each group's run of tabs.
+            let starts_run = ix == 0
+                || self.tabs[ix - 1].pinned
+                || self.tabs[ix - 1].group != tab.group;
+            if let (Some(root), Some(color), true) = (&group, color, starts_run) {
+                let collapsed = self.collapsed.contains(root);
+                let count = self.tabs[ix..]
+                    .iter()
+                    .take_while(|t| !t.pinned && t.group == tab.group)
+                    .count();
+                let (toggle, close) = (root.clone(), root.clone());
+                let weak = weak.clone();
+                items.push(
+                    group_header(("tab-group", ix), project_name(root), color, collapsed, count, cx)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.toggle_group(toggle.clone(), cx)
+                        }))
+                        .context_menu(move |menu, _, _| {
+                            let weak = weak.clone();
+                            let close = close.clone();
+                            menu.item(PopupMenuItem::new("Close Tabs in Group").on_click(
+                                move |_, _, cx| {
+                                    let _ = weak.update(cx, |ws, cx| ws.close_group(&close, cx));
+                                },
+                            ))
+                        })
+                        .into_any_element(),
+                );
+            }
+            let active = ix == self.active;
+            // A folded group still shows its active tab.
+            if !active && group.as_ref().is_some_and(|g| self.collapsed.contains(g)) {
+                continue;
+            }
+            let projects = projects.clone();
+            let tab_group = tab.group.clone();
+            items.push({
                 let pinned = tab.pinned;
                 let glyph = |icon: Lucide| Icon::new(icon).xsmall().into_any_element();
                 let (icon, title, dirty, read_only) = match &tab.item {
-                    PaneItem::Server => (glyph(Lucide::Server), "Server".to_string(), false, None),
+                    PaneItem::Server => (glyph(Lucide::Server), "Instance".to_string(), false, None),
                     PaneItem::File(e) => {
                         let e = e.read(cx);
                         (
@@ -743,6 +1124,7 @@ impl Workspace {
                 let weak = weak.clone();
                 h_flex()
                     .id(("pane-tab", ix))
+                    .relative()
                     .flex_none()
                     .h_full()
                     .pl_3()
@@ -792,23 +1174,25 @@ impl Workspace {
                                 this.close(CloseOp::This, ix, window, cx);
                             }))
                     })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.active = ix;
-                        cx.notify();
-                    }))
-                    .context_menu(move |menu, _, cx| {
+                    .when_some(color, |el, color| el.child(group_stripe(color)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.activate_tab(ix, cx)))
+                    .context_menu(move |menu, window, cx| {
                         Self::tab_menu(
                             weak.clone(),
                             ix,
                             read_only.is_some(),
                             read_only == Some(true),
                             pinned,
+                            tab_group.clone(),
+                            projects.clone(),
                             menu,
+                            window,
                             cx,
                         )
                     })
-            })
-            .collect();
+                    .into_any_element()
+            });
+        }
         if self.scrolled_to != Some(self.active) {
             // Bring a newly opened/activated tab into view.
             self.tab_scroll.scroll_to_item(self.active);
@@ -823,38 +1207,79 @@ impl Workspace {
             .border_color(cx.theme().border)
             .overflow_x_scroll()
             .track_scroll(&self.tab_scroll)
-            .children(tabs)
+            .children(items)
     }
 
-    fn render_active_item(&self, cx: &App) -> AnyElement {
+    fn render_active_item(&self, cx: &mut Context<Self>) -> AnyElement {
         match self.tabs.get(self.active).map(|t| &t.item) {
-            Some(PaneItem::File(editor)) => editor.clone().into_any_element(),
-            Some(PaneItem::Other { view, .. }) => view.clone().into_any_element(),
-            Some(PaneItem::Server) => self.server_detail.clone().into_any_element(),
-            None => v_flex()
-                .size_full()
-                .items_center()
-                .justify_center()
-                .gap_1()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child("No open tabs.")
-                .child("Pick a server, file or table in the left panel.")
+            Some(PaneItem::File(editor)) => cached(editor.clone().into()),
+            Some(PaneItem::Other { view, .. }) => cached(view.clone()),
+            Some(PaneItem::Server) => cached(self.server_detail.clone().into()),
+            None => Placeholder::new(Lucide::PanelTop, "No tabs open")
+                .detail("Pick an instance, file or table in the sidebar to open it here.")
+                .when(!self.layout.sidebar, |state| {
+                    state.action(
+                        Button::new("empty-show-sidebar")
+                            .small()
+                            .icon(Lucide::PanelLeft)
+                            .label("Show Sidebar")
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.toggle_area(Area::Sidebar, cx)),
+                            ),
+                    )
+                })
+                .action(
+                    Button::new("empty-open-folder")
+                        .small()
+                        .icon(Lucide::FolderOpen)
+                        .label("Open Folder…")
+                        .on_click(|_, window, cx| {
+                            crate::cli::prompt_open_folder(Some(window.window_handle()), cx)
+                        }),
+                )
                 .into_any_element(),
         }
     }
 
-    fn render_status_bar(&self, cx: &App) -> impl IntoElement + use<> {
+    /// Puts the project path on the clipboard; the button shows a check
+    /// for a moment as confirmation.
+    fn copy_project_path(&mut self, path: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(path));
+        self.path_copied = true;
+        cx.notify();
+        self._path_copied_reset = cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1500))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.path_copied = false;
+                cx.notify();
+            });
+        });
+    }
+
+    fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let store = self.servers.read(cx);
         let running = store.running_count();
         let total = store.registry.instances.len();
-        let project = self
-            .files
-            .read(cx)
-            .root
-            .as_ref()
-            .map(|r| r.display().to_string())
-            .unwrap_or_default();
+        let project = self.root(cx).map(|r| r.display().to_string());
+        let copied = self.path_copied;
+        let git = self.current().git.read(cx);
+        let branch = git.status.as_ref().map(|s| {
+            let name = s
+                .branch
+                .clone()
+                .or_else(|| s.head.clone())
+                .unwrap_or_else(|| "main".into());
+            let mut sync = String::new();
+            if s.behind > 0 {
+                sync.push_str(&format!(" ↓{}", s.behind));
+            }
+            if s.ahead > 0 {
+                sync.push_str(&format!(" ↑{}", s.ahead));
+            }
+            (name, sync, s.files.len())
+        });
         h_flex()
             .h(px(24.))
             .px_2()
@@ -875,13 +1300,174 @@ impl Workspace {
                     }))
                     .child(format!("{running}/{total} instances running")),
             )
-            .child(div().truncate().child(project))
+            .when_some(branch, |el, (name, sync, changed)| {
+                el.child(
+                    Button::new("status-git-branch")
+                        .ghost()
+                        .xsmall()
+                        .icon(Lucide::GitBranch)
+                        .label(format!(
+                            "{name}{sync}{}",
+                            if changed > 0 { format!(" · {changed} changed") } else { String::new() }
+                        ))
+                        .tooltip("Show Git")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.leave_welcome(PANEL_AND_TABS, cx);
+                            if !this.layout.sidebar {
+                                this.layout.toggle(Area::Sidebar);
+                            }
+                            this.sidebar = SidebarTab::Git;
+                            cx.notify();
+                        })),
+                )
+            })
+            .when_some(project, |el, project| {
+                el.child(
+                    h_flex()
+                        .min_w_0()
+                        .gap_1()
+                        .child(div().truncate().child(project.clone()))
+                        .child(
+                            Button::new("copy-project-path")
+                                .ghost()
+                                .xsmall()
+                                .icon(if copied { Lucide::Check } else { Lucide::Copy })
+                                .tooltip(if copied { "Copied" } else { "Copy Path" })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.copy_project_path(project.clone(), cx)
+                                })),
+                        ),
+                )
+            })
+    }
+}
+
+const CENTER_ONLY: Layout = Layout {
+    sidebar: false,
+    center: true,
+    terminal: false,
+};
+const TERMINAL_ONLY: Layout = Layout {
+    sidebar: false,
+    center: false,
+    terminal: true,
+};
+/// A sidebar panel next to the tabs.
+const PANEL_AND_TABS: Layout = Layout {
+    sidebar: true,
+    center: true,
+    terminal: false,
+};
+
+/// Puts `dir` first in the recent folders the welcome screen lists.
+fn remember_recent(dir: PathBuf) {
+    let file = AppPaths::default_macos().recent_file();
+    let mut recent = RecentProjects::load(&file).unwrap_or_default();
+    recent.touch(dir);
+    if let Err(e) = recent.save(&file) {
+        eprintln!("recent: {e}");
     }
 }
 
 impl Workspace {
+    /// Swaps the welcome screen for the panels in `layout`; once it is gone
+    /// the layout is left alone.
+    fn leave_welcome(&mut self, layout: Layout, cx: &mut Context<Self>) {
+        if self.welcome.take().is_some() {
+            self.layout = layout;
+            cx.notify();
+        }
+    }
+
+    fn on_welcome_event(
+        &mut self,
+        event: &WelcomeEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let handle = window.window_handle();
+        match event {
+            WelcomeEvent::OpenFolder => crate::cli::prompt_open_folder(Some(handle), cx),
+            WelcomeEvent::OpenRecent(dir) => {
+                // Reads every workspace, this one included: after this update.
+                let dir = dir.clone();
+                cx.defer(move |cx| crate::cli::open_folder_in(dir, Some(handle), cx));
+            }
+            WelcomeEvent::NewInstance => {
+                self.leave_welcome(PANEL_AND_TABS, cx);
+                self.sidebar = SidebarTab::Servers;
+                self.servers.update(cx, |s, cx| s.show_create(cx));
+            }
+            WelcomeEvent::OpenServer(name) => {
+                self.leave_welcome(PANEL_AND_TABS, cx);
+                self.sidebar = SidebarTab::Servers;
+                self.servers.update(cx, |s, cx| s.select(name, cx));
+            }
+            WelcomeEvent::OpenDatabase(name) => {
+                self.leave_welcome(PANEL_AND_TABS, cx);
+                self.sidebar = SidebarTab::Database;
+                self.db.update(cx, |s, cx| s.ensure_connecting(name, cx));
+            }
+            WelcomeEvent::OpenTerminal => {
+                self.leave_welcome(TERMINAL_ONLY, cx);
+                self.terminal.update(cx, |t, cx| t.focus_active(window, cx));
+            }
+            WelcomeEvent::Dismiss => self.leave_welcome(PANEL_AND_TABS, cx),
+        }
+        cx.notify();
+    }
+
+    /// Starts or shows scripts from the Run panel, showing the terminal.
+    fn on_run_event(&mut self, event: &RunEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.layout.terminal {
+            self.layout.toggle(Area::Terminal);
+        }
+        match event {
+            RunEvent::Start(launches) => {
+                let last = launches.len().saturating_sub(1);
+                self.terminal.update(cx, |t, cx| {
+                    for (i, l) in launches.iter().enumerate() {
+                        let window = (i == last).then_some(&mut *window);
+                        t.start_job(l.tag.clone(), l.dir.clone(), &l.command, window, cx);
+                    }
+                });
+            }
+            RunEvent::Show(key) => {
+                self.terminal.update(cx, |t, cx| t.show_job(key, window, cx));
+            }
+        }
+        cx.notify();
+    }
+
+    /// Types `commands` into this window's terminal, showing it if hidden.
+    pub fn run_in_terminal(&mut self, commands: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_welcome(TERMINAL_ONLY, cx);
+        if !self.layout.terminal {
+            self.layout.toggle(Area::Terminal);
+        }
+        self.terminal
+            .update(cx, |t, cx| t.run(commands, window, cx));
+        cx.notify();
+    }
+
     fn toggle_area(&mut self, area: Area, cx: &mut Context<Self>) {
+        // From the welcome screen, toggles build up from just the tabs.
+        self.leave_welcome(CENTER_ONLY, cx);
         self.layout.toggle(area);
+        cx.notify();
+    }
+
+    /// Fills the window with the terminal, or puts back the layout it
+    /// replaced (everything, if that was terminal-only too).
+    fn toggle_terminal_maximized(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.canvas_maximized = false;
+        if self.layout == TERMINAL_ONLY {
+            self.layout = self.unmaximized.take().unwrap_or_default();
+        } else {
+            self.unmaximized = Some(self.layout);
+            self.layout = TERMINAL_ONLY;
+        }
+        self.terminal.update(cx, |t, cx| t.focus_active(window, cx));
         cx.notify();
     }
 
@@ -904,7 +1490,7 @@ impl Workspace {
                 title,
                 icon: Lucide::MessageSquareText,
                 file: None,
-            });
+            }, None, cx);
         }
         if !self.layout.center {
             self.layout.toggle(Area::Center);
@@ -912,8 +1498,229 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Shows a session to the server with `key` in the terminal dock: the
+    /// open one, unless `new` or there is none.
+    fn connect_ssh(&mut self, key: String, new: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_welcome(Layout::default(), cx);
+        if !self.layout.terminal {
+            self.layout.toggle(Area::Terminal);
+        }
+        if !new && self.terminal.update(cx, |t, cx| t.focus_ssh(&key, window, cx)) {
+            cx.notify();
+            return;
+        }
+        match self.ssh_store.update(cx, |s, cx| s.remote(&key, cx)) {
+            Ok(remote) => self
+                .terminal
+                .update(cx, |t, cx| t.open_ssh(remote, Some(window), cx)),
+            // Settings are incomplete: show them.
+            Err(_) => {
+                if let Some(id) = key.strip_prefix("ssh\u{0}") {
+                    self.open_ssh_host(id.to_string(), window, cx);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Opens a saved server's settings in its own tab (one per server).
+    fn open_ssh_host(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_welcome(PANEL_AND_TABS, cx);
+        let key: SharedString = format!("ssh-host\u{0}{id}").into();
+        if !self.activate_key(&key) {
+            let store = self.ssh_store.clone();
+            let view = cx.new(|cx| SshHostView::new(id, store, window, cx));
+            cx.subscribe_in(&view, window, |this, _, SshHostEvent::Connect(key), window, cx| {
+                this.connect_ssh(key.clone(), false, window, cx)
+            })
+            .detach();
+            let title = view.read(cx).title(cx).into();
+            self.push_tab(PaneItem::Other {
+                view: view.into(),
+                key,
+                title,
+                icon: Lucide::Server,
+                file: None,
+            }, None, cx);
+        }
+        if !self.layout.center {
+            self.layout.toggle(Area::Center);
+        }
+        cx.notify();
+    }
+
+    /// `key` for the active project: tabs like the commit graph are one
+    /// per project, not one per window.
+    fn project_key(&self, key: &str, cx: &App) -> String {
+        match self.root(cx) {
+            Some(root) => format!("{key}\u{0}{}", root.display()),
+            None => key.to_string(),
+        }
+    }
+
+    /// Activates the tab with `key`, if one is open.
+    fn activate_key(&mut self, key: &str) -> bool {
+        match self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if k.as_ref() == key))
+        {
+            Some(ix) => {
+                self.active = ix;
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn show_center(&mut self, cx: &mut Context<Self>) {
+        self.leave_welcome(PANEL_AND_TABS, cx);
+        if !self.layout.center {
+            self.layout.toggle(Area::Center);
+        }
+    }
+
+    /// Open tabs of a renamed or moved file (or of files in a moved folder)
+    /// follow it.
+    fn follow_move(&mut self, from: &Path, to: &Path, cx: &mut Context<Self>) {
+        for tab in &self.tabs {
+            if let PaneItem::File(editor) = &tab.item {
+                editor.update(cx, |e, cx| {
+                    if let Ok(rest) = e.path.strip_prefix(from) {
+                        e.path = if rest.as_os_str().is_empty() {
+                            to.to_path_buf()
+                        } else {
+                            to.join(rest)
+                        };
+                        cx.notify();
+                    }
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    /// Find in Folder, one tab per folder.
+    fn open_folder_search(&mut self, dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_center(cx);
+        let key = FolderSearch::key(&dir);
+        if self.activate_key(&key) {
+            if let Some(PaneItem::Other { view, .. }) = self.tabs.get(self.active).map(|t| &t.item)
+                && let Ok(search) = view.clone().downcast::<FolderSearch>()
+            {
+                let query = search.read(cx).query.clone();
+                query.update(cx, |s, cx| s.focus(window, cx));
+            }
+        } else {
+            let name = dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| dir.display().to_string());
+            let dir_for_group = dir.clone();
+            let view = cx.new(|cx| FolderSearch::new(dir, window, cx));
+            cx.subscribe_in(&view, window, |this, _, e: &SearchEvent, window, cx| match e {
+                SearchEvent::Open { path, line } => {
+                    this.open_file_at(path.clone(), Some((*line, 1)), window, cx)
+                }
+            })
+            .detach();
+            let group = self.group_of(&dir_for_group, cx);
+            self.open_item_in(view.into(), key.into(), format!("Search: {name}").into(), Lucide::Search, group, cx);
+        }
+        cx.notify();
+    }
+
+    /// The commits touching one file or folder (one tab each).
+    fn open_git_history(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.show_center(cx);
+        let key = format!("git-history\u{0}{}", path.display());
+        if !self.activate_key(&key) {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let git = self.current().git.clone();
+            let group = self.root(cx);
+            let view = cx.new(|cx| GraphView::history(git, path, cx));
+            cx.subscribe(&view, |this, _, GraphEvent::OpenCommit(commit), cx| {
+                this.open_commit(commit.clone(), cx)
+            })
+            .detach();
+            self.open_item_in(view.into(), key.into(), format!("History: {name}").into(), Lucide::GitCommitHorizontal, group.clone(), cx);
+        }
+        cx.notify();
+    }
+
+    /// The commit graph (one tab).
+    fn open_git_graph(&mut self, cx: &mut Context<Self>) {
+        self.show_center(cx);
+        let key = self.project_key("git-graph", cx);
+        if !self.activate_key(&key) {
+            let git = self.current().git.clone();
+            let group = self.root(cx);
+            let view = cx.new(|cx| GraphView::new(git, cx));
+            cx.subscribe(&view, |this, _, GraphEvent::OpenCommit(commit), cx| {
+                this.open_commit(commit.clone(), cx)
+            })
+            .detach();
+            self.open_item_in(view.into(), key.into(), "Commit Graph".into(), Lucide::GitGraph, group.clone(), cx);
+        }
+        cx.notify();
+    }
+
+    /// One commit, one tab per commit.
+    fn open_commit(&mut self, commit: sawit_core::git::Commit, cx: &mut Context<Self>) {
+        let key = CommitView::key(&commit.hash);
+        if !self.activate_key(&key) {
+            let git = self.current().git.clone();
+            let group = self.root(cx);
+            let view = cx.new(|cx| CommitView::new(git, commit, cx));
+            let title = view.read(cx).title();
+            self.open_item_in(view.into(), key, title, Lucide::GitCommitHorizontal, group.clone(), cx);
+        }
+        cx.notify();
+    }
+
+    /// The GitHub tab (one tab).
+    fn open_github(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_center(cx);
+        let key = self.project_key("github", cx);
+        if !self.activate_key(&key) {
+            let git = self.current().git.clone();
+            let group = self.root(cx);
+            let view = cx.new(|cx| GitHubView::new(git, window, cx));
+            self.open_item_in(view.into(), key.into(), "GitHub".into(), Lucide::Github, group.clone(), cx);
+        }
+        cx.notify();
+    }
+
+    /// A changed file's diff, one tab per file and side.
+    fn open_git_diff(
+        &mut self,
+        file: sawit_core::git::FileChange,
+        staged: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_center(cx);
+        let key = self.project_key(&DiffView::key(&file, staged), cx);
+        if !self.activate_key(&key) {
+            let git = self.current().git.clone();
+            let group = self.root(cx);
+            let view = cx.new(|cx| DiffView::new(git, file, staged, cx));
+            cx.subscribe_in(&view, window, |this, _, e: &DiffViewEvent, window, cx| match e {
+                DiffViewEvent::OpenFile(path) => this.open_file(path.clone(), window, cx),
+            })
+            .detach();
+            let title = view.read(cx).title();
+            self.open_item_in(view.into(), key.into(), title, Lucide::GitCommitHorizontal, group, cx);
+        }
+        cx.notify();
+    }
+
     /// Shows the version & changelog page (one tab).
     fn open_changelog_page(&mut self, cx: &mut Context<Self>) {
+        self.leave_welcome(CENTER_ONLY, cx);
         let key: SharedString = "changelog".into();
         if let Some(ix) = self
             .tabs
@@ -929,13 +1736,90 @@ impl Workspace {
                 title: "Changelog".into(),
                 icon: Lucide::ScrollText,
                 file: None,
-            });
+            }, None, cx);
         }
         cx.notify();
     }
 
+    /// Opens the brainstorming canvas (one tab).
+    fn open_canvas(&mut self, cx: &mut Context<Self>) {
+        self.leave_welcome(CENTER_ONLY, cx);
+        if !self.layout.center {
+            self.layout.toggle(Area::Center);
+        }
+        let key: SharedString = "canvas".into();
+        if let Some(ix) = self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
+        {
+            self.active = ix;
+        } else {
+            let view = cx.new(CanvasView::new);
+            cx.subscribe(&view, |this, _, _: &ToggleCanvasMaximize, cx| {
+                this.toggle_canvas_maximized(cx)
+            })
+            .detach();
+            self.canvas = Some(view.downgrade());
+            self.push_tab(PaneItem::Other {
+                view: view.into(),
+                key,
+                title: crate::canvas::TITLE.into(),
+                icon: crate::canvas::ICON,
+                file: None,
+            }, None, cx);
+        }
+        cx.notify();
+    }
+
+    /// The canvas is the tab showing in the center pane.
+    fn canvas_active(&self) -> bool {
+        matches!(
+            self.tabs.get(self.active).map(|t| &t.item),
+            Some(PaneItem::Other { key, .. }) if key.as_ref() == "canvas"
+        )
+    }
+
+    /// Fills the window with the canvas (hiding the tab bar too), or puts
+    /// back the layout it replaced, like the terminal's maximize.
+    fn toggle_canvas_maximized(&mut self, cx: &mut Context<Self>) {
+        if self.canvas_maximized && self.layout == CENTER_ONLY {
+            self.canvas_maximized = false;
+            self.layout = self.unmaximized.take().unwrap_or_default();
+        } else {
+            if !self.canvas_maximized && self.layout != TERMINAL_ONLY {
+                self.unmaximized = Some(self.layout);
+            }
+            self.canvas_maximized = true;
+            self.layout = CENTER_ONLY;
+        }
+        cx.notify();
+    }
+
+    /// Keeps the canvas's native webview in step with what is on screen:
+    /// it draws above GPUI, so it is hidden whenever its tab isn't showing.
+    fn sync_canvas(&mut self, cx: &mut Context<Self>) {
+        let Some(canvas) = self.canvas.as_ref().and_then(|c| c.upgrade()) else {
+            self.canvas = None;
+            self.canvas_maximized = false;
+            return;
+        };
+        let visible = self.welcome.is_none() && self.layout.center && self.canvas_active();
+        // Any other layout change (⌘B, ⌘J, another tab) ends "fill window".
+        if self.canvas_maximized && !(visible && self.layout == CENTER_ONLY) {
+            self.canvas_maximized = false;
+            self.unmaximized = None;
+        }
+        let maximized = self.canvas_maximized;
+        canvas.update(cx, |c, _| {
+            c.set_visible(visible);
+            c.set_maximized(maximized);
+        });
+    }
+
     /// Shows the MCP install page (one tab).
     fn open_mcp_page(&mut self, cx: &mut Context<Self>) {
+        self.leave_welcome(CENTER_ONLY, cx);
         let key: SharedString = "mcp".into();
         if let Some(ix) = self
             .tabs
@@ -951,9 +1835,79 @@ impl Workspace {
                 title: "MCP".into(),
                 icon: Lucide::Plug,
                 file: None,
-            });
+            }, None, cx);
         }
         cx.notify();
+    }
+
+    /// One chip per open project (click to switch, × to close) and a +
+    /// that adds another; just the tagline while no project is open.
+    fn render_project_switcher(&self, cx: &mut Context<Self>) -> AnyElement {
+        let roots: Vec<Option<PathBuf>> = self.projects.iter().map(|p| p.root(cx)).collect();
+        if roots.iter().all(Option::is_none) {
+            return div()
+                .text_color(cx.theme().muted_foreground)
+                .child("Your local dev workspace")
+                .into_any_element();
+        }
+        let only = roots.len() == 1;
+        let mut colors = 0;
+        let chips = roots.into_iter().enumerate().filter_map(|(ix, root)| {
+            let root = root?;
+            let color = crate::tab_groups::group_color(colors, cx);
+            colors += 1;
+            let active = ix == self.project;
+            Some(
+                h_flex()
+                    .id(("project", ix))
+                    .flex_none()
+                    .h(px(24.))
+                    .pl_2()
+                    .pr_0p5()
+                    .gap_1p5()
+                    .rounded(cx.theme().radius)
+                    .cursor_pointer()
+                    .when(active, |el| el.bg(cx.theme().list_active))
+                    .when(!active, |el| {
+                        el.text_color(cx.theme().muted_foreground)
+                            .hover(|el| el.bg(cx.theme().list_hover))
+                    })
+                    .child(div().size(px(8.)).rounded_full().bg(color))
+                    .child(div().max_w(px(160.)).truncate().child(project_name(&root)))
+                    .child(
+                        Button::new(("close-project", ix))
+                            .ghost()
+                            .xsmall()
+                            .icon(Lucide::X)
+                            .tooltip(if only { "Close Project" } else { "Close Project and Its Tabs" })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.close_project(ix, window, cx);
+                            })),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.leave_welcome(PANEL_AND_TABS, cx);
+                        this.activate_project(ix, cx);
+                    })),
+            )
+        });
+        h_flex()
+            .id("project-switcher")
+            .min_w_0()
+            .gap_1()
+            .overflow_x_scroll()
+            .children(chips)
+            .child(
+                Button::new("add-project")
+                    .ghost()
+                    .xsmall()
+                    .icon(Lucide::Plus)
+                    .tooltip("Open Another Project in This Window")
+                    .on_click(|_, window, cx| {
+                        crate::cli::prompt_open_folder(Some(window.window_handle()), cx)
+                    }),
+            )
+            .into_any_element()
     }
 
     fn render_layout_toggles(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -974,8 +1928,8 @@ impl Workspace {
                     .primary()
                     .xsmall()
                     .icon(Lucide::Download)
-                    .label("Restart for Update")
-                    .tooltip(format!("Install Sawit {v} and relaunch"))
+                    .label("Restart to Update")
+                    .tooltip(format!("Install Sawit {v} and Relaunch"))
                     .on_click(
                         cx.listener(|this, _, _, cx| {
                             this.updater.update(cx, |u, cx| u.restart(cx))
@@ -987,7 +1941,7 @@ impl Workspace {
                     .ghost()
                     .xsmall()
                     .label(format!("v{}", Version::current()))
-                    .tooltip("Version & changelog")
+                    .tooltip("Version & Changelog")
                     .on_click(cx.listener(|this, _, _, cx| this.open_changelog_page(cx))),
             )
             .when(!self.cli_status.read(cx).installed, |el| {
@@ -997,17 +1951,26 @@ impl Workspace {
                         .xsmall()
                         .icon(Lucide::SquareTerminal)
                         .label("Install CLI")
-                        .tooltip("Install the `sawit` command to open folders from a terminal")
+                        .tooltip("Install the ‘sawit’ Command to Open Folders from a Terminal")
                         .on_click(|_, _, cx| crate::cli::install_cli(cx)),
                 )
             })
+            .child(
+                Button::new("open-canvas")
+                    .ghost()
+                    .xsmall()
+                    .icon(crate::canvas::ICON)
+                    .label("Canvas")
+                    .tooltip("Brainstorm on a Whiteboard")
+                    .on_click(cx.listener(|this, _, _, cx| this.open_canvas(cx))),
+            )
             .child(
                 Button::new("open-mcp")
                     .ghost()
                     .xsmall()
                     .icon(Lucide::Plug)
                     .label("MCP")
-                    .tooltip("Install the MCP server into Claude, Codex, etc.")
+                    .tooltip("Set Up the MCP Server for Claude, Codex and More")
                     .on_click(cx.listener(|this, _, _, cx| this.open_mcp_page(cx))),
             )
             .child(div().w(px(6.)))
@@ -1024,7 +1987,7 @@ impl Workspace {
                 toggle(
                     "toggle-center",
                     Lucide::PanelTop,
-                    "Tabs & tables (⇧⌘J)",
+                    "Tabs & Tables (⇧⌘J)",
                     l.center,
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_area(Area::Center, cx))),
@@ -1041,14 +2004,25 @@ impl Workspace {
     }
 
     fn render_center(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let show_tabs = !self.canvas_maximized;
         v_flex()
             .size_full()
-            .child(self.render_tab_bar(cx))
+            .when(show_tabs, |el| el.child(self.render_tab_bar(cx)))
             .child(div().flex_1().min_h_0().child(self.render_active_item(cx)))
     }
 
     fn render_body(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(welcome) = &self.welcome {
+            return welcome.clone().into_any_element();
+        }
         let l = self.layout;
+        let maximized = l == TERMINAL_ONLY;
+        self.terminal.update(cx, |t, cx| {
+            if t.maximized != maximized {
+                t.maximized = maximized;
+                cx.notify();
+            }
+        });
         // The terminal stays alive while hidden; only its view is dropped.
         let main = match (l.center, l.terminal) {
             (true, true) => v_resizable("workspace-v")
@@ -1057,11 +2031,11 @@ impl Workspace {
                     resizable_panel()
                         .size(px(240.))
                         .size_range(px(80.)..Pixels::MAX)
-                        .child(self.terminal.clone()),
+                        .child(cached(self.terminal.clone().into())),
                 )
                 .into_any_element(),
             (true, false) => self.render_center(cx).into_any_element(),
-            _ => self.terminal.clone().into_any_element(),
+            _ => cached(self.terminal.clone().into()),
         };
         if !l.sidebar {
             return main;
@@ -1096,6 +2070,7 @@ impl Render for Workspace {
             // Keep workspace shortcuts working when nothing inside has focus.
             self.focus.focus(window, cx);
         }
+        self.sync_canvas(cx);
         v_flex()
             .key_context("Workspace")
             .track_focus(&self.focus)
@@ -1134,24 +2109,31 @@ impl Render for Workspace {
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(
-                TitleBar::new().child(
-                    h_flex()
-                        .size_full()
-                        .pr_2()
-                        .gap_2()
-                        .text_sm()
-                        .child(img(crate::assets::LOGO_MARK).size(px(16.)))
-                        .child(div().font_semibold().child("Sawit"))
-                        .child(
-                            div()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("Postgres · Editor · Terminal"),
-                        )
-                        .child(div().flex_1())
-                        .child(self.render_layout_toggles(cx)),
-                ),
+                TitleBar::new()
+                    // Fullscreen hides the traffic lights: drop the space kept for them.
+                    .when(window.is_fullscreen(), |this| this.pl_0())
+                    .child(
+                        h_flex()
+                            .size_full()
+                            .pr_2()
+                            .gap_2()
+                            .text_sm()
+                            .child(img(crate::assets::LOGO_MARK).size(px(16.)))
+                            .child(div().font_semibold().child("Sawit"))
+                            .child(self.render_project_switcher(cx))
+                            .child(div().flex_1())
+                            .child(self.render_layout_toggles(cx)),
+                    ),
             )
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
             .child(self.render_status_bar(cx))
     }
+}
+
+/// Mounts a pane so it re-renders only when it notifies, not every time the
+/// workspace does (terminal output, a cursor blink or a poll elsewhere
+/// would otherwise rebuild the whole window).
+fn cached(view: AnyView) -> AnyElement {
+    view.cached(StyleRefinement::default().size_full())
+        .into_any_element()
 }

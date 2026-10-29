@@ -23,6 +23,7 @@ use objc2_foundation::{NSDictionary, NSNumber, NSString, NSURL};
 
 use super::image::file_name;
 use super::toolbar;
+use crate::states::Placeholder;
 
 /// Seek bar resolution (the slider can't change its range later).
 const SEEK_STEPS: f32 = 1000.;
@@ -122,7 +123,7 @@ impl VideoView {
         let player = MainThreadMarker::new().and_then(|mtm| open(&path, mtm));
         let error = player
             .is_none()
-            .then(|| "Couldn't open the video.".to_string());
+            .then(|| "The file may be damaged, or macOS can't read it.".to_string());
         let focus = cx.focus_handle();
         // Space works right away, without clicking the video first.
         focus.focus(window, cx);
@@ -202,7 +203,7 @@ impl VideoView {
         let status = unsafe { p.item.status() };
         if status == AVPlayerItemStatus::Failed {
             self.error =
-                Some("macOS can't play this format (try MP4/MOV with H.264 or HEVC).".into());
+                Some("macOS can't play this format. Convert it to MP4 or MOV (H.264 or HEVC) and open it again.".into());
             self.playing = false;
             return;
         }
@@ -259,21 +260,14 @@ impl Render for VideoView {
             .map(|s| format!("{} × {}", s.width as u32, s.height as u32));
         let bar = toolbar(self.title(), cx).children(facts);
         let picture = match (&self.error, &self.frame) {
-            (Some(e), _) => div()
-                .p_3()
-                .text_sm()
-                .text_color(cx.theme().danger)
-                .child(e.clone())
+            (Some(e), _) => Placeholder::error("Unable to play this video")
+                .detail(e.clone())
                 .into_any_element(),
             (None, Some(frame)) => surface(frame.clone())
                 .object_fit(ObjectFit::Contain)
                 .size_full()
                 .into_any_element(),
-            (None, None) => div()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child("Loading…")
-                .into_any_element(),
+            (None, None) => Placeholder::loading("Opening video…").into_any_element(),
         };
         let time = format!(
             "{} / {}",
@@ -312,7 +306,7 @@ impl Render for VideoView {
                     } else {
                         Lucide::Volume2
                     })
-                    .tooltip("Mute")
+                    .tooltip("Mute / Unmute")
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_mute(cx))),
             );
         v_flex()

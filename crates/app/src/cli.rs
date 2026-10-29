@@ -20,14 +20,16 @@ use sawit_core::cli::{
     CLI_LINK, Invocation, OpenRequest, REPLY_DONE, REPLY_ERROR, REPLY_OK, Target, USAGE, decode,
     encode, install_link, install_link_as_admin, parse_args,
 };
+use sawit_core::app_control::{self, Command as ControlCommand, reply_error, reply_ok};
 use sawit_core::cli::{LinkState, link_state};
 use sawit_core::instances::AppPaths;
+use sawit_core::kebun;
 use sawit_core::probe::find_in_path;
 
 use crate::rt;
-use crate::workspace::Workspace;
+use crate::workspace::{Answer, Workspace};
 
-actions!(sawit, [InstallCli, Quit]);
+actions!(sawit, [InstallCli, Quit, NewWindow, OpenFolder]);
 
 // ---------------------------------------------------------------------------
 // The command line (runs before GPUI starts)
@@ -39,7 +41,21 @@ actions!(sawit, [InstallCli, Quit]);
 pub fn command_line() -> OpenRequest {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let paths = AppPaths::default_macos();
+    // `sawit kyzn leads "…"`: a database, unless the name turns out to be
+    // nothing but a new file to open.
+    if let Some(query) = kebun::query_args(&args, &cwd)
+        && let Some(code) = kebun::block_on(kebun::query(query, &paths, &cwd))
+    {
+        std::process::exit(code);
+    }
     let (mut request, stdin, foreground) = match parse_args(args, &cwd) {
+        Ok(Invocation::List(what)) => {
+            std::process::exit(kebun::block_on(kebun::list(what, &paths, &cwd)));
+        }
+        Ok(Invocation::Bakar(bakar)) => {
+            std::process::exit(kebun::block_on(kebun::bakar(bakar, &paths)));
+        }
         Ok(Invocation::Help) => {
             print!("{USAGE}");
             std::process::exit(0);
@@ -66,7 +82,7 @@ pub fn command_line() -> OpenRequest {
                 column: None,
             }),
             Err(e) => {
-                eprintln!("sawit: failed to read stdin: {e}");
+                eprintln!("sawit: unable to read stdin: {e}");
                 std::process::exit(1);
             }
         }
@@ -106,15 +122,15 @@ fn send(request: &OpenRequest) -> Result<(), String> {
     let mut stream = match UnixStream::connect(&socket) {
         Ok(stream) => stream,
         Err(_) => {
-            launch_app().map_err(|e| format!("failed to start Sawit: {e}"))?;
+            launch_app().map_err(|e| format!("unable to start Sawit: {e}"))?;
             connect_when_ready(&socket, Duration::from_secs(20))
-                .ok_or("Sawit is not responding; try opening the app directly")?
+                .ok_or("Sawit isn't responding. Open the app from Applications, then try again.")?
         }
     };
     stream
         .write_all(&encode(request))
         .and_then(|()| stream.shutdown(std::net::Shutdown::Write))
-        .map_err(|e| format!("failed to send to Sawit: {e}"))?;
+        .map_err(|e| format!("unable to reach Sawit: {e}"))?;
     let mut handled = false;
     for line in BufReader::new(stream).lines() {
         let line = line.map_err(|e| e.to_string())?;
@@ -130,7 +146,7 @@ fn send(request: &OpenRequest) -> Result<(), String> {
     if handled {
         Ok(())
     } else {
-        Err("Sawit closed the connection".into())
+        Err("Sawit closed the connection. Try again.".into())
     }
 }
 
@@ -231,12 +247,31 @@ pub fn init(cx: &mut App) {
     cx.set_global(GlobalCliStatus(status));
     cx.on_action(|_: &InstallCli, cx| install_cli(cx));
     cx.on_action(|_: &Quit, cx| cx.quit());
-    cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
-    cx.set_menus([Menu::new("Sawit").items([
-        MenuItem::action("Install ‘sawit’ Command in PATH…", InstallCli),
-        MenuItem::separator(),
-        MenuItem::action("Quit Sawit", Quit),
-    ])]);
+    cx.on_action(|_: &NewWindow, cx| {
+        if let Some((handle, _)) = open_window(None, cx) {
+            let _ = handle.update(cx, |_, window, _| window.activate_window());
+        }
+    });
+    cx.on_action(|_: &OpenFolder, cx| {
+        let prefer = frontmost(cx).map(|(h, _)| h);
+        prompt_open_folder(prefer, cx);
+    });
+    cx.bind_keys([
+        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-shift-n", NewWindow, None),
+        KeyBinding::new("cmd-o", OpenFolder, None),
+    ]);
+    cx.set_menus([
+        Menu::new("Sawit").items([
+            MenuItem::action("Install ‘sawit’ Command in PATH…", InstallCli),
+            MenuItem::separator(),
+            MenuItem::action("Quit Sawit", Quit),
+        ]),
+        Menu::new("File").items([
+            MenuItem::action("New Window", NewWindow),
+            MenuItem::action("Open Folder…", OpenFolder),
+        ]),
+    ]);
     cx.on_window_closed(|cx, _| check_waiters(cx)).detach();
 }
 
@@ -255,7 +290,7 @@ pub fn open_window(
         cx.new(|cx| {
             let mut workspace = Workspace::new(window, cx);
             if let Some(project) = project {
-                workspace.open_project(project, cx);
+                workspace.open_project(project, window, cx);
             }
             workspace
         })
@@ -294,6 +329,13 @@ fn workspaces(cx: &App) -> Vec<(AnyWindowHandle, Entity<Workspace>)> {
         .collect()
 }
 
+/// The workspace shown in `window`, if it is a Sawit window.
+pub fn workspace_for(window: AnyWindowHandle, cx: &App) -> Option<Entity<Workspace>> {
+    workspaces(cx)
+        .into_iter()
+        .find_map(|(h, w)| (h == window).then_some(w))
+}
+
 fn frontmost(cx: &App) -> Option<(AnyWindowHandle, Entity<Workspace>)> {
     let spaces = workspaces(cx);
     let stack = cx.window_stack().unwrap_or_default();
@@ -302,6 +344,15 @@ fn frontmost(cx: &App) -> Option<(AnyWindowHandle, Entity<Workspace>)> {
         .find_map(|h| spaces.iter().find(|(w, _)| w == h).cloned())
         .or_else(|| spaces.last().cloned())
 }
+
+/// A request from the socket: the CLI's, or `sawit-mcp`'s.
+enum Incoming {
+    Open(OpenRequest),
+    Control(app_control::Request),
+}
+
+/// How long a canvas op may take before `sawit-mcp` hears it timed out.
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Listens on the CLI socket; requests are handled on the UI thread.
 pub fn serve(cx: &mut App) {
@@ -326,21 +377,31 @@ pub fn serve(cx: &mut App) {
         }
     };
     let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    let (tx, mut rx) = futures::channel::mpsc::unbounded::<(OpenRequest, UnixStream)>();
+    let (tx, mut rx) = futures::channel::mpsc::unbounded::<(Incoming, UnixStream)>();
     let accept = move || {
         for mut stream in listener.incoming().flatten() {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
             let mut bytes = Vec::new();
-            if (&stream).take(1 << 20).read_to_end(&mut bytes).is_err() {
+            // Canvas scenes from `sawit-mcp` can be large.
+            if (&stream).take(64 << 20).read_to_end(&mut bytes).is_err() {
                 continue;
             }
-            match decode(&bytes) {
-                Some(request) => {
-                    if tx.unbounded_send((request, stream)).is_err() {
-                        return;
-                    }
+            let incoming = match app_control::decode(&bytes) {
+                Some(Ok(request)) => Incoming::Control(request),
+                Some(Err(e)) => {
+                    reply(&mut stream, &reply_error(&e));
+                    continue;
                 }
-                None => reply(&mut stream, &format!("{REPLY_ERROR}unrecognized request")),
+                None => match decode(&bytes) {
+                    Some(request) => Incoming::Open(request),
+                    None => {
+                        reply(&mut stream, &format!("{REPLY_ERROR}unrecognized request"));
+                        continue;
+                    }
+                },
+            };
+            if tx.unbounded_send((incoming, stream)).is_err() {
+                return;
             }
         }
     };
@@ -352,8 +413,11 @@ pub fn serve(cx: &mut App) {
         return;
     }
     cx.spawn(async move |cx| {
-        while let Some((request, stream)) = rx.next().await {
-            cx.update(|cx| handle(request, Some(stream), cx));
+        while let Some((incoming, stream)) = rx.next().await {
+            cx.update(|cx| match incoming {
+                Incoming::Open(request) => handle(request, Some(stream), cx),
+                Incoming::Control(request) => handle_control(request, stream, cx),
+            });
         }
     })
     .detach();
@@ -364,8 +428,8 @@ fn reply(stream: &mut UnixStream, line: &str) {
 }
 
 /// Opens a request from the CLI (or this process's own command line, with
-/// no stream). Folders behave as in Zed: an already-open project gets
-/// focus, otherwise it fills an empty window or opens a new one. Files go
+/// no stream). An already-open project gets focus, otherwise a folder is
+/// added to the frontmost window as another project (`-n`: a new window). Files go
 /// to the window whose project holds them, else to the frontmost window.
 pub fn handle(request: OpenRequest, mut stream: Option<UnixStream>, cx: &mut App) {
     let (dirs, files): (Vec<Target>, Vec<Target>) =
@@ -405,7 +469,7 @@ pub fn handle(request: OpenRequest, mut stream: Option<UnixStream>, cx: &mut App
         if let Some(stream) = &mut stream {
             reply(
                 stream,
-                &format!("{REPLY_ERROR}couldn't open a Sawit window"),
+                &format!("{REPLY_ERROR}unable to open a Sawit window"),
             );
         }
         return;
@@ -422,30 +486,197 @@ pub fn handle(request: OpenRequest, mut stream: Option<UnixStream>, cx: &mut App
     }
 }
 
+/// Runs a `sawit-mcp` command and answers on `stream`: right away, or for
+/// canvas ops once the page replies (or [`CONTROL_TIMEOUT`] passes).
+fn handle_control(request: app_control::Request, mut stream: UnixStream, cx: &mut App) {
+    match control(request, cx) {
+        Ok(Answer::Now(value)) => reply(&mut stream, &reply_ok(&value)),
+        Err(e) => reply(&mut stream, &reply_error(&e)),
+        Ok(Answer::Later(rx)) => {
+            let timer = cx.background_executor().timer(CONTROL_TIMEOUT);
+            cx.spawn(async move |_| {
+                let line = match futures::future::select(rx, timer).await {
+                    futures::future::Either::Left((Ok(Ok(value)), _)) => reply_ok(&value),
+                    futures::future::Either::Left((Ok(Err(e)), _)) => reply_error(&e),
+                    futures::future::Either::Left((Err(_), _)) => {
+                        reply_error("The canvas closed before answering.")
+                    }
+                    futures::future::Either::Right(_) => reply_error(
+                        "The canvas didn't answer in time. Is the Sawit window visible?",
+                    ),
+                };
+                reply(&mut stream, &line);
+            })
+            .detach();
+        }
+    }
+}
+
+fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String> {
+    match request.command {
+        ControlCommand::State => {
+            let front = frontmost(cx).map(|(h, _)| h);
+            let windows: Vec<serde_json::Value> = workspaces(cx)
+                .into_iter()
+                .enumerate()
+                .map(|(ix, (handle, workspace))| {
+                    let mut state = workspace.read(cx).describe(cx);
+                    state["window"] = ix.into();
+                    state["frontmost"] = (Some(handle) == front).into();
+                    state
+                })
+                .collect();
+            return Ok(Answer::Now(serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "windows": windows,
+            })));
+        }
+        ControlCommand::Reload { store } => {
+            for (_, workspace) in workspaces(cx) {
+                workspace.update(cx, |w, cx| w.reload(store, cx));
+            }
+            return Ok(Answer::Now(serde_json::json!({ "reloaded": store })));
+        }
+        ControlCommand::Open {
+            path,
+            line,
+            column,
+            new_window,
+        } => {
+            if !path.is_absolute() {
+                return Err(format!("{} isn't an absolute path.", path.display()));
+            }
+            let request = OpenRequest {
+                targets: vec![Target { path: path.clone(), line, column }],
+                new_window,
+                ..OpenRequest::default()
+            };
+            handle(request, None, cx);
+            return Ok(Answer::Now(serde_json::json!({ "opened": path })));
+        }
+        _ => {}
+    }
+    let (handle, workspace) = match &request.project {
+        Some(project) => workspaces(cx)
+            .into_iter()
+            .filter_map(|(h, w)| {
+                let root = crate::tabs::project_of(&w.read(cx).roots(cx), project)?;
+                Some((root.components().count(), (h, w)))
+            })
+            .max_by_key(|(depth, _)| *depth)
+            .map(|(_, found)| found)
+            .ok_or_else(|| {
+                format!(
+                    "No Sawit window has {} open. Open it with app_open first.",
+                    project.display()
+                )
+            })?,
+        None => frontmost(cx)
+            .or_else(|| open_window(None, cx))
+            .ok_or("Unable to open a Sawit window.")?,
+    };
+    // Commands act on the project asked for: make it the active one.
+    if let Some(project) = &request.project {
+        workspace.update(cx, |w, cx| w.activate_project_of(project, cx));
+    }
+    let focus = request.command == ControlCommand::Focus;
+    let command = request.command;
+    let answer = handle
+        .update(cx, |_, window, cx| {
+            if focus {
+                window.activate_window();
+            }
+            workspace.update(cx, |w, cx| w.control(command, window, cx))
+        })
+        .map_err(|_| "The Sawit window closed.".to_string())??;
+    if focus {
+        cx.activate(true);
+    }
+    Ok(answer)
+}
+
+/// Asks for a folder, then opens it with [`open_folder_in`].
+pub fn prompt_open_folder(prefer: Option<AnyWindowHandle>, cx: &mut App) {
+    let rx = cx.prompt_for_paths(PathPromptOptions {
+        files: false,
+        directories: true,
+        multiple: false,
+        prompt: Some("Open Folder".into()),
+    });
+    cx.spawn(async move |cx| {
+        let Ok(Ok(Some(paths))) = rx.await else {
+            return;
+        };
+        if let Some(dir) = paths.into_iter().next() {
+            cx.update(|cx| open_folder_in(dir, prefer, cx));
+        }
+    })
+    .detach();
+}
+
+/// The window that has `dir` open as one of its projects.
+fn window_with_project(dir: &Path, cx: &App) -> Option<(AnyWindowHandle, Entity<Workspace>)> {
+    workspaces(cx)
+        .into_iter()
+        .find(|(_, w)| w.read(cx).roots(cx).iter().any(|r| r == dir))
+}
+
+/// Opens `dir` as a project of the window (showing it if already open there).
+fn add_project(
+    (handle, workspace): (AnyWindowHandle, Entity<Workspace>),
+    dir: PathBuf,
+    cx: &mut App,
+) -> Option<(AnyWindowHandle, Entity<Workspace>)> {
+    handle
+        .update(cx, |_, window, cx| {
+            workspace.update(cx, |w, cx| w.open_project(dir, window, cx))
+        })
+        .ok()?;
+    Some((handle, workspace))
+}
+
+/// Opens a folder picked in the app: shows it in the window that already
+/// has it, else adds it to `prefer` (or the frontmost window) as another
+/// project, else opens a window. Must not run while a workspace is being
+/// updated (it reads them all).
+pub fn open_folder_in(dir: PathBuf, prefer: Option<AnyWindowHandle>, cx: &mut App) {
+    let target = window_with_project(&dir, cx)
+        .or_else(|| {
+            workspaces(cx)
+                .into_iter()
+                .find(|(h, _)| Some(*h) == prefer)
+                .or_else(|| frontmost(cx))
+        })
+        .and_then(|found| add_project(found, dir.clone(), cx))
+        .or_else(|| open_window(Some(dir), cx));
+    if let Some((handle, _)) = target {
+        let _ = handle.update(cx, |_, window, _| window.activate_window());
+        cx.activate(true);
+    }
+}
+
 fn open_folder(
     dir: PathBuf,
     new_window: bool,
     reuse: bool,
     cx: &mut App,
 ) -> Option<(AnyWindowHandle, Entity<Workspace>)> {
-    if !new_window {
-        let spaces = workspaces(cx);
-        if let Some(open) = spaces
-            .iter()
-            .find(|(_, w)| w.read(cx).root(cx).as_ref() == Some(&dir))
-        {
-            return Some(open.clone());
-        }
-        let target = match reuse {
-            true => frontmost(cx),
-            false => spaces
-                .into_iter()
-                .find(|(_, w)| w.read(cx).root(cx).is_none()),
-        };
-        if let Some((handle, workspace)) = target {
-            workspace.update(cx, |w, cx| w.open_project(dir, cx));
+    // `-r` swaps the frontmost window's active project for this folder.
+    if reuse && let Some((handle, workspace)) = frontmost(cx) {
+        let replaced = handle.update(cx, |_, window, cx| {
+            workspace.update(cx, |w, cx| w.replace_project(dir.clone(), window, cx))
+        });
+        if replaced.is_ok() {
             return Some((handle, workspace));
         }
+    }
+    // Otherwise every folder joins one window as another project; `-n`
+    // asks for a window of its own.
+    if !new_window
+        && let Some(found) = window_with_project(&dir, cx).or_else(|| frontmost(cx))
+        && let Some(opened) = add_project(found, dir.clone(), cx)
+    {
+        return Some(opened);
     }
     open_window(Some(dir), cx)
 }
@@ -456,9 +687,8 @@ fn window_for_file(path: &Path, cx: &mut App) -> Option<(AnyWindowHandle, Entity
     workspaces(cx)
         .into_iter()
         .filter_map(|(h, w)| {
-            let root = w.read(cx).root(cx)?;
-            path.starts_with(&root)
-                .then(|| (root.components().count(), (h, w)))
+            let root = crate::tabs::project_of(&w.read(cx).roots(cx), path)?;
+            Some((root.components().count(), (h, w)))
         })
         .max_by_key(|(depth, _)| *depth)
         .map(|(_, found)| found)
@@ -521,11 +751,11 @@ pub fn install_cli(cx: &mut App) {
                         "{CLI_LINK} is installed. From a terminal:\n  sawit .             open this folder\n  sawit file.rs:42    open a file at line 42\n  sawit --help        all options"
                     );
                     if !in_path {
-                        detail.push_str("\n\n/usr/local/bin isn't in your shell's PATH yet; add it in ~/.zshrc.");
+                        detail.push_str("\n\n/usr/local/bin isn't in your shell's PATH. Add this line to ~/.zshrc:\n  export PATH=\"/usr/local/bin:$PATH\"");
                     }
                     (PromptLevel::Info, "‘sawit’ command installed", detail)
                 }
-                Err(e) => (PromptLevel::Critical, "Couldn't install the ‘sawit’ command", e),
+                Err(e) => (PromptLevel::Critical, "Unable to install the ‘sawit’ command", e),
             };
             if let Some((handle, _)) = frontmost(cx) {
                 let _ = handle.update(cx, |_, window, cx| {

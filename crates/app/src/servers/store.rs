@@ -16,6 +16,8 @@ use sawit_core::probe::{PortReport, check_port};
 
 use crate::rt;
 
+/// Shortest gap between two log updates.
+const LOG_FLUSH: std::time::Duration = std::time::Duration::from_millis(100);
 const MAX_LOG_LINES: usize = 5_000;
 const STATUS_INTERVAL: Duration = Duration::from_secs(3);
 
@@ -200,6 +202,9 @@ impl ServerStore {
                 {
                     return;
                 }
+                // At most ~10 redraws a second for a chatty server; lines
+                // arriving meanwhile go out in the next batch.
+                cx.background_executor().timer(LOG_FLUSH).await;
             }
         }));
         cx.notify();
@@ -296,10 +301,39 @@ impl ServerStore {
     }
 
     /// Removes an instance from the list (its data directory is kept on disk).
+    /// Reads the instance list again after another process (`sawit-mcp`)
+    /// changed it.
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        match Registry::load(&self.paths.instances_file()) {
+            Ok(registry) => self.registry = registry,
+            Err(e) => {
+                self.notice = Some(format!("Unable to read the instance list. {e}"));
+                cx.notify();
+                return;
+            }
+        }
+        let names: HashSet<String> = self.registry.instances.iter().map(|i| i.name.clone()).collect();
+        self.statuses.retain(|name, _| names.contains(name));
+        match self.selected.clone() {
+            Some(name) if names.contains(&name) => {}
+            _ => {
+                self.selected = None;
+                self._log_task = None;
+                self.log.clear();
+                if let Some(first) = self.registry.instances.first().map(|i| i.name.clone()) {
+                    self.select(&first, cx);
+                }
+            }
+        }
+        self.rediscover_binaries(cx);
+        self.refresh_statuses(cx);
+        cx.notify();
+    }
+
     pub fn forget(&mut self, name: &str, cx: &mut Context<Self>) {
         self.registry.remove(name);
         if let Err(e) = self.registry.save(&self.paths.instances_file()) {
-            self.notice = Some(format!("Failed to save the instance list: {e}"));
+            self.notice = Some(format!("Unable to save the instance list. {e}"));
         }
         self.statuses.remove(name);
         if self.selected.as_deref() == Some(name) {
@@ -341,7 +375,7 @@ impl ServerStore {
             return Task::ready(Err(e.to_string()));
         }
         if self.registry.get(&name).is_some() {
-            return Task::ready(Err(format!("Instance \"{name}\" already exists.")));
+            return Task::ready(Err(format!("An instance named “{name}” already exists. Choose another name.")));
         }
         let paths = self.paths.clone();
         let rx = rt::spawn(cx, async move {
@@ -392,7 +426,7 @@ impl ServerStore {
         cx: &mut Context<Self>,
     ) -> Task<Result<(), String>> {
         let Some(bins) = self.binaries.first().cloned() else {
-            return Task::ready(Err("No PostgreSQL binary found.".into()));
+            return Task::ready(Err("No PostgreSQL installation found. Create a new instance to download one, or install PostgreSQL with Homebrew.".into()));
         };
         let name = data_dir
             .file_name()
@@ -435,7 +469,7 @@ impl ServerStore {
         cx.spawn(async move |this, cx| {
             match rx.await {
                 Ok(Ok(PgCtlStatus::NotACluster | PgCtlStatus::MissingDir)) => {
-                    return Err("That folder isn't a PostgreSQL data directory.".to_string());
+                    return Err("That folder isn't a PostgreSQL data directory. Choose the folder that contains PG_VERSION.".to_string());
                 }
                 Ok(Err(e)) => return Err(e.to_string()),
                 _ => {}

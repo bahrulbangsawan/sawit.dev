@@ -12,7 +12,7 @@ publish = false
 [workspace.dependencies]
 futures = "0.3"
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "process", "fs", "time", "macros", "io-util", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "process", "fs", "time", "macros", "io-util", "sync", "net"] }
 tokio-postgres = "0.7.18"
 
 # GPUI's dependency tree is large; full debuginfo for it filled the disk
@@ -22,6 +22,19 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
+
+# Hot CPU paths on every file open and keystroke: at opt-level 0 they are
+# ~9x slower (highlighting a 30 KB file took ~0.4 s).
+[profile.dev.package.syntect]
+opt-level = 3
+[profile.dev.package.fancy-regex]
+opt-level = 3
+[profile.dev.package.regex-automata]
+opt-level = 3
+[profile.dev.package.regex-syntax]
+opt-level = 3
+[profile.dev.package.markdown]
+opt-level = 3
 
 [profile.release]
 lto = "fat"

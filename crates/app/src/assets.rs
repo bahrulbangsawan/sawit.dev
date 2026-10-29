@@ -44,7 +44,42 @@ gpui_kit::assets::icon_assets!(
         CopyPlus,
         Trash,
         Tag,
-        ScrollText
+        ScrollText,
+        Waypoints,
+        Radio,
+        ZoomIn,
+        ZoomOut,
+        SquareCheck,
+        Zap,
+        Unplug,
+        GitBranch,
+        GitGraph,
+        GitCommitHorizontal,
+        GitMerge,
+        GitPullRequest,
+        LogIn,
+        LogOut,
+        CircleDot,
+        MessageSquare,
+        BookMarked,
+        FileCog,
+        FileTerminal,
+        Pencil,
+        UserPlus,
+        Link,
+        GitBranchMinus,
+        Shapes,
+        CircleStop,
+        RotateCcw,
+        Package,
+        ListOrdered,
+        Layers,
+        ListTree,
+        ShieldCheck,
+        KeyRound,
+        Funnel,
+        FunnelX,
+        ArrowUpDown
     ]
 );
 
@@ -96,6 +131,9 @@ fn agent_logo(path: &str) -> Option<&'static [u8]> {
 /// The Sawit mark (title bar).
 pub const LOGO_MARK: &str = "logo/sawit-mark.svg";
 
+/// The herdr logo (terminal dock), from https://herdr.dev/assets/logo.svg.
+pub const HERDR_LOGO: &str = "logo/herdr.svg";
+
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         if let Some(svg) = agent_logo(path) {
@@ -107,6 +145,11 @@ impl AssetSource for AppAssets {
         if path == LOGO_MARK {
             return Ok(Some(Cow::Borrowed(include_bytes!(
                 "../../../assets/logo/sawit-mark.svg"
+            ))));
+        }
+        if path == HERDR_LOGO {
+            return Ok(Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/logo/herdr.svg"
             ))));
         }
         match ExtraIcons.load(path)? {

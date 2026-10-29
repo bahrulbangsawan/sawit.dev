@@ -8,7 +8,7 @@ use crate::Result;
 /// Files larger than this open as a read-only notice instead of text.
 pub const MAX_TEXT_BYTES: u64 = 5 * 1024 * 1024;
 
-const HIDDEN: [&str; 6] = [
+pub(crate) const HIDDEN: [&str; 6] = [
     ".git",
     "node_modules",
     "target",
@@ -63,7 +63,7 @@ pub fn read_text(path: &Path) -> Result<TextFile> {
         // FIFOs, sockets and devices: opening them can block or never end.
         return Ok(TextFile {
             text: String::new(),
-            read_only_reason: Some("Not a regular file (pipe, socket or device).".into()),
+            read_only_reason: Some("This isn't a regular file (it's a pipe, socket or device), so it can't be opened as text.".into()),
         });
     }
     let size = meta.len();
@@ -71,7 +71,7 @@ pub fn read_text(path: &Path) -> Result<TextFile> {
         return Ok(TextFile {
             text: String::new(),
             read_only_reason: Some(format!(
-                "File is {:.1} MB, too large for the editor (limit {} MB).",
+                "This file is {:.1} MB, over the editor's {} MB limit. Open it in another app.",
                 size as f64 / 1_048_576.0,
                 MAX_TEXT_BYTES / 1_048_576
             )),
@@ -85,7 +85,7 @@ pub fn read_text(path: &Path) -> Result<TextFile> {
         }),
         _ => Ok(TextFile {
             text: String::new(),
-            read_only_reason: Some("Binary or non-UTF-8 file; not opened as text.".into()),
+            read_only_reason: Some("Binary or non-UTF-8 file. Sawit can't show it as text.".into()),
         }),
     }
 }
@@ -129,6 +129,161 @@ pub fn write_text_atomic(path: &Path, text: &str) -> Result<()> {
     Ok(result?)
 }
 
+/// Makes an empty file or folder; fails if something is already there.
+pub fn create(path: &Path, dir: bool) -> Result<()> {
+    if dir {
+        std::fs::create_dir(path)?;
+    } else {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?;
+    }
+    Ok(())
+}
+
+/// Renames or moves `from` to `to`, refusing to replace anything there.
+pub fn move_entry(from: &Path, to: &Path) -> Result<()> {
+    if to.starts_with(from) && to != from {
+        return Err(std::io::Error::other("A folder can't be moved into itself.").into());
+    }
+    if std::fs::symlink_metadata(to).is_ok() && !same_entry(from, to) {
+        return Err(already_exists(to));
+    }
+    match std::fs::rename(from, to) {
+        // Another volume: copy, then remove the original.
+        Err(e) if e.raw_os_error() == Some(18) => {
+            copy_entry(from, to)?;
+            remove(from)
+        }
+        other => Ok(other?),
+    }
+}
+
+/// Copies a file, or a folder and everything in it (links stay links).
+/// Refuses to replace anything at `to`.
+pub fn copy_entry(from: &Path, to: &Path) -> Result<()> {
+    if to.starts_with(from) {
+        return Err(std::io::Error::other("A folder can't be copied into itself.").into());
+    }
+    if std::fs::symlink_metadata(to).is_ok() {
+        return Err(already_exists(to));
+    }
+    copy_tree(from, to)?;
+    Ok(())
+}
+
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    let meta = std::fs::symlink_metadata(from)?;
+    if meta.file_type().is_symlink() {
+        std::os::unix::fs::symlink(std::fs::read_link(from)?, to)
+    } else if meta.is_dir() {
+        std::fs::create_dir(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            copy_tree(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        std::fs::set_permissions(to, meta.permissions())
+    } else {
+        std::fs::copy(from, to).map(|_| ())
+    }
+}
+
+/// Deletes a file or a whole folder, for good.
+pub fn remove(path: &Path) -> Result<()> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.is_dir() {
+        std::fs::remove_dir_all(path)?;
+    } else {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+/// Only the case of the name differs (macOS volumes ignore case).
+fn same_entry(a: &Path, b: &Path) -> bool {
+    a.parent() == b.parent()
+        && a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+}
+
+fn already_exists(path: &Path) -> crate::CoreError {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!("“{name}” already exists here."),
+    )
+    .into()
+}
+
+/// `dir/name` if nothing is there, else the first free "name copy",
+/// "name copy 2", … (before the extension, for files).
+pub fn free_name(dir: &Path, name: &str, is_dir: bool) -> PathBuf {
+    let path = dir.join(name);
+    if std::fs::symlink_metadata(&path).is_err() {
+        return path;
+    }
+    let as_path = Path::new(name);
+    let (stem, ext) = match (is_dir, as_path.file_stem(), as_path.extension()) {
+        (false, Some(stem), Some(ext)) => (
+            stem.to_string_lossy().into_owned(),
+            format!(".{}", ext.to_string_lossy()),
+        ),
+        _ => (name.to_string(), String::new()),
+    };
+    (1..)
+        .map(|n| match n {
+            1 => dir.join(format!("{stem} copy{ext}")),
+            n => dir.join(format!("{stem} copy {n}{ext}")),
+        })
+        .find(|p| std::fs::symlink_metadata(p).is_err())
+        .expect("some name is free")
+}
+
+/// The ignore-file line for `rel` (relative to the repository): anchored
+/// to the root, with a trailing slash for folders.
+pub fn ignore_pattern(rel: &Path, is_dir: bool) -> String {
+    let mut line = String::from("/");
+    for c in rel.to_string_lossy().chars() {
+        if matches!(c, '*' | '?' | '[' | '!' | '#' | '\\') {
+            line.push('\\');
+        }
+        line.push(c);
+    }
+    if is_dir {
+        line.push('/');
+    }
+    line
+}
+
+/// Adds `line` to an ignore file (made if missing) unless it is already
+/// listed; false when it was.
+pub fn add_ignore_line(file: &Path, line: &str) -> Result<bool> {
+    use std::io::Write as _;
+
+    let existing = match std::fs::read_to_string(file) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.into()),
+    };
+    if existing.lines().any(|l| l.trim() == line) {
+        return Ok(false);
+    }
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut out = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(file)?;
+    let sep = if existing.is_empty() || existing.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
+    writeln!(out, "{sep}{line}")?;
+    Ok(true)
+}
+
 /// What the center pane shows for a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileKind {
@@ -138,6 +293,8 @@ pub enum FileKind {
     Markdown,
     Html,
     Svg,
+    /// Mermaid source (`.mmd`), previewed as the diagram.
+    Mermaid,
     /// Viewers.
     Image,
     Pdf,
@@ -156,6 +313,7 @@ pub fn classify(path: &Path) -> FileKind {
         "md" | "mdx" | "markdown" => FileKind::Markdown,
         "html" | "htm" => FileKind::Html,
         "svg" => FileKind::Svg,
+        "mmd" | "mermaid" => FileKind::Mermaid,
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "tif" | "tiff" | "heic"
         | "heif" | "avif" => FileKind::Image,
         "pdf" => FileKind::Pdf,
@@ -178,7 +336,8 @@ pub fn language_for(path: &Path) -> String {
     match lower.as_str() {
         "dockerfile" | "containerfile" => return "dockerfile".into(),
         "makefile" | "gnumakefile" => return "make".into(),
-        ".bashrc" | ".zshrc" | ".profile" | ".bash_profile" | ".zprofile" => {
+        ".bashrc" | ".zshrc" | ".profile" | ".bash_profile" | ".zprofile" | ".zshenv"
+        | "bashrc" | "bash.bashrc" | "zshrc" | "zshenv" | "zprofile" | "profile" => {
             return "bash".into();
         }
         "cargo.lock" => return "toml".into(),
@@ -238,6 +397,7 @@ pub fn language_label(token: &str) -> String {
         "javascript" => "JavaScript",
         "json" => "JSON",
         "markdown" => "Markdown",
+        "mmd" | "mermaid" => "Mermaid",
         "toml" => "TOML",
         "rust" => "Rust",
         "css" => "CSS",
@@ -302,6 +462,64 @@ mod tests {
                 ("b.ts".into(), false),
             ]
         );
+    }
+
+    #[test]
+    fn free_name_counts_copies_before_the_extension() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path();
+        assert_eq!(free_name(p, "a.rs", false), p.join("a.rs"));
+        fs::write(p.join("a.rs"), "").unwrap();
+        assert_eq!(free_name(p, "a.rs", false), p.join("a copy.rs"));
+        fs::write(p.join("a copy.rs"), "").unwrap();
+        assert_eq!(free_name(p, "a.rs", false), p.join("a copy 2.rs"));
+        fs::write(p.join(".env"), "").unwrap();
+        assert_eq!(free_name(p, ".env", false), p.join(".env copy"));
+        fs::create_dir(p.join("v1.2")).unwrap();
+        assert_eq!(free_name(p, "v1.2", true), p.join("v1.2 copy"));
+    }
+
+    #[test]
+    fn copies_and_moves_folders_without_replacing() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path();
+        fs::create_dir_all(p.join("src/inner")).unwrap();
+        fs::write(p.join("src/inner/x.txt"), "x").unwrap();
+        copy_entry(&p.join("src"), &p.join("dup")).unwrap();
+        assert_eq!(fs::read_to_string(p.join("dup/inner/x.txt")).unwrap(), "x");
+        assert!(copy_entry(&p.join("src"), &p.join("dup")).is_err());
+        assert!(copy_entry(&p.join("src"), &p.join("src/inner/again")).is_err());
+        assert!(move_entry(&p.join("dup"), &p.join("src")).is_err());
+        move_entry(&p.join("dup"), &p.join("moved")).unwrap();
+        assert!(p.join("moved/inner/x.txt").exists() && !p.join("dup").exists());
+        remove(&p.join("moved")).unwrap();
+        assert!(!p.join("moved").exists());
+    }
+
+    #[test]
+    fn create_refuses_existing() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("new.txt");
+        create(&f, false).unwrap();
+        assert!(create(&f, false).is_err());
+        create(&d.path().join("dir"), true).unwrap();
+        assert!(d.path().join("dir").is_dir());
+    }
+
+    #[test]
+    fn ignore_lines_are_anchored_and_added_once() {
+        assert_eq!(ignore_pattern(Path::new("a/b.log"), false), "/a/b.log");
+        assert_eq!(ignore_pattern(Path::new("dist"), true), "/dist/");
+        assert_eq!(ignore_pattern(Path::new("#x*.md"), false), "/\\#x\\*.md");
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join(".gitignore");
+        fs::write(&f, "target").unwrap();
+        assert!(add_ignore_line(&f, "/dist/").unwrap());
+        assert!(!add_ignore_line(&f, "/dist/").unwrap());
+        assert_eq!(fs::read_to_string(&f).unwrap(), "target\n/dist/\n");
+        let ex = d.path().join(".git/info/exclude");
+        assert!(add_ignore_line(&ex, "/a").unwrap());
+        assert_eq!(fs::read_to_string(&ex).unwrap(), "/a\n");
     }
 
     #[test]
@@ -421,6 +639,8 @@ mod tests {
             ("x.MDX", Markdown),
             ("index.html", Html),
             ("logo.svg", Svg),
+            ("flow.mmd", Mermaid),
+            ("flow.Mermaid", Mermaid),
             ("a.png", Image),
             ("a.JPG", Image),
             ("a.webp", Image),

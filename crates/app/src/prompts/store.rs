@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use gpui_kit::{Context, EventEmitter};
 use sawit_core::instances::AppPaths;
-use sawit_core::prompts::{Library, Prompt, import_whatsapp, now};
+use sawit_core::prompts::{Library, Prompt, now};
 
 use crate::rt;
 
@@ -74,7 +74,7 @@ impl PromptStore {
             let rx = cx.update(|cx| rt::spawn(cx, async move { library.save(&file) }));
             if let Ok(Err(e)) = rx.await {
                 let _ = this.update(cx, |this, cx| {
-                    this.notice = Some(format!("Couldn't save prompts: {e}"));
+                    this.notice = Some(format!("Unable to save prompts. {e}"));
                     cx.notify();
                 });
             }
@@ -121,42 +121,31 @@ impl PromptStore {
         }
     }
 
+    /// Reads the library again after another process (`sawit-mcp`) changed
+    /// it; tabs of deleted prompts close.
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        match Library::load(&self.file) {
+            Ok(library) => {
+                let gone: Vec<String> = self
+                    .library
+                    .items
+                    .iter()
+                    .filter(|p| library.get(&p.id).is_none())
+                    .map(|p| p.id.clone())
+                    .collect();
+                self.library = library;
+                self.load_error = None;
+                for id in gone {
+                    cx.emit(PromptStoreEvent::Removed(id));
+                }
+            }
+            Err(e) => self.notice = Some(format!("Unable to read prompts. {e}")),
+        }
+        cx.notify();
+    }
+
     pub fn mark_used(&mut self, id: &str, cx: &mut Context<Self>) {
         self.library.mark_used(id, now());
         self.changed(cx);
-    }
-
-    /// Imports a WhatsApp chat export file (read off the UI thread).
-    pub fn import_whatsapp_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        let rx = rt::spawn(cx, async move {
-            let bytes = std::fs::read(&path)?;
-            Ok::<_, std::io::Error>(import_whatsapp(&String::from_utf8_lossy(&bytes), now()))
-        });
-        cx.spawn(async move |this, cx| {
-            let result = rx.await;
-            let _ = this.update(cx, |this, cx| {
-                this.notice = Some(match result {
-                    Ok(Ok(prompts)) => {
-                        let found = prompts.len();
-                        let added = this.library.import(prompts);
-                        match (found, added) {
-                            (0, _) => {
-                                "No prompts in that file (short messages and media are skipped)."
-                                    .into()
-                            }
-                            (f, 0) => format!("Found {f} prompts; all were already saved."),
-                            (f, a) if a == f => format!("Imported {a} prompts from WhatsApp."),
-                            (f, a) => {
-                                format!("Imported {a} new prompts ({} already saved).", f - a)
-                            }
-                        }
-                    }
-                    Ok(Err(e)) => format!("Couldn't read the file: {e}"),
-                    Err(_) => "Import stopped.".into(),
-                });
-                this.changed(cx);
-            });
-        })
-        .detach();
     }
 }

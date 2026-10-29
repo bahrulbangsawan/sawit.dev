@@ -1,20 +1,25 @@
 //! Connections: profiles, DATABASE_URL/.env import, Keychain passwords,
 //! schema browsing, paged table reads and ad-hoc SQL.
 
+pub mod diagram;
 mod profile;
 mod query;
+mod rows;
 mod tls;
 
 pub use profile::{
-    ConnProfile, Profiles, SslMode, delete_password, dotenv_upsert, dotenv_value, load_password,
-    parse_database_url, read_dotenv_database_url, store_password,
+    ChannelBinding, ConnProfile, HostPort, Profiles, SessionAttrs, SslMode, delete_password,
+    dotenv_upsert, dotenv_value, load_password, parse_database_url, pgpass_password,
+    read_dotenv_database_url, resolve_password, store_password,
 };
 
+pub use rows::{FilterOp, RowFilter, RowQuery, SortDir, quote_literal};
+
 pub use query::{
-    ColumnInfo, QueryOutcome, READ_ONLY_ROLE, RelKind, Relation, ResultSet, RowCount, SchemaInfo,
-    cancel, connect, connect_read_only, ensure_read_only_role, fetch_page, list_databases,
-    load_schema, primary_key, row_count, row_count_within, run_read_only, run_sql,
-    screen_read_only_sql, sql_error,
+    ColumnInfo, Constraint, ConstraintKind, FailureKind, ForeignKey, IndexInfo, QueryOutcome, READ_ONLY_ROLE, RelKind, Relation, ResultSet, RowCount,
+    SchemaInfo, cancel, connect, connect_all, failure_kind, connect_read_only, ensure_read_only_role, fetch_page, fetch_rows, row_count_matching,
+    list_databases, load_schema, primary_key, row_count, row_count_estimated, row_count_within,
+    run_read_only, run_sql, screen_read_only_sql, sql_error,
 };
 
 /// Quotes an SQL identifier.

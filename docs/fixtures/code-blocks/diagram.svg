@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="160" viewBox="0 0 360 160">
+  <rect x="1" y="1" width="358" height="158" rx="12" fill="#282c34" stroke="#3e4451"/>
+  <rect x="24" y="40" width="200" height="80" rx="8" fill="#21252b" stroke="#3e4451"/>
+  <text x="40" y="86" fill="#98c379" font-family="monospace" font-size="14">echo "hi"</text>
+  <circle cx="270" cy="80" r="20" fill="#61afef"/>
+  <polygon points="264,70 264,90 282,80" fill="#282c34"/>
+  <rect x="304" y="62" width="28" height="36" rx="4" fill="none" stroke="#abb2bf" stroke-width="2"/>
+  <text x="24" y="28" fill="#abb2bf" font-family="sans-serif" font-size="12">SVG preview fixture</text>
+</svg>

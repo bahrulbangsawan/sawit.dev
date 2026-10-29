@@ -49,6 +49,21 @@ impl Runtime {
         rx
     }
 
+    /// Runs blocking or CPU-heavy `f` (file reads, rendering, Keychain) on
+    /// Tokio's blocking pool, so it never stalls the two async workers that
+    /// every query, poll and stream shares.
+    pub fn spawn_blocking<F, T>(&self, f: F) -> oneshot::Receiver<T>
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        let (tx, rx) = oneshot::channel();
+        self.handle.spawn_blocking(move || {
+            let _ = tx.send(f());
+        });
+        rx
+    }
+
     /// Runs a producer on the Tokio runtime that streams items to the receiver.
     pub fn spawn_stream<T: Send + 'static>(
         &self,

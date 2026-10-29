@@ -21,6 +21,14 @@ rustls-native-certs = "0.8"
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFURL", "CFCGTypes"] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGAffineTransform", "CGBitmapContext", "CGColorSpace", "CGContext", "CGImage", "CGPDFDocument", "CGPDFPage"] }
 tokio-postgres-rustls = { version = "=0.14.0", default-features = false, features = ["ring"] }
+# Runs Pele (Mermaid to SVG, crates/core/assets/pele) offline.
+rquickjs = "0.14"
+
+[target.'cfg(unix)'.dependencies]
+# Asks the PTY which process group is in the foreground.
+libc = "0.2"
 
 [dev-dependencies]
+# Same version GPUI rasterizes SVG with: proves rendered diagrams parse.
+resvg = "0.46"
 tempfile = "3"
