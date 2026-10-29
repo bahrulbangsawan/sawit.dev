@@ -176,6 +176,19 @@ pub(crate) fn expand_home(path: &str) -> PathBuf {
     }
 }
 
+/// The project a tool's files belong to: the `project` argument, else the
+/// folder the agent started `sawit-mcp` in (its project), unless that is
+/// `/` or the home folder. Canvas and diagram files default to its
+/// `.nyawit/`.
+pub(crate) fn project_dir(project: Option<&str>) -> Option<PathBuf> {
+    if let Some(p) = project.map(str::trim).filter(|p| !p.is_empty()) {
+        return Some(expand_home(p));
+    }
+    let cwd = std::env::current_dir().ok()?;
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    (cwd.parent().is_some() && Some(&cwd) != home.as_ref()).then_some(cwd)
+}
+
 /// Unix seconds as `YYYY-MM-DD HH:MM` (UTC).
 pub(crate) fn utc_time(secs: i64) -> String {
     let days = secs.div_euclid(86_400);

@@ -4,9 +4,15 @@
 //! we keep its frame on the element's bounds and hide it whenever the tab
 //! isn't on screen. Fully offline: every file is served from the binary.
 //!
-//! The board autosaves to `canvas.excalidraw` in the data directory (the
-//! format excalidraw.com opens), the shape library to `canvas.excalidrawlib`.
-//! Exports land in ~/Downloads.
+//! Each project has its own board, autosaved to `.nyawit/canvas.excalidraw`
+//! in the project folder (the format excalidraw.com opens); exports land in
+//! `.nyawit/exports/`. Without a project the board lives in the data
+//! directory and exports go to ~/Downloads. The shape library is personal:
+//! `canvas.excalidrawlib` in the data directory.
+//!
+//! The webview takes the keyboard while it is clicked; a click anywhere in
+//! GPUI hands it back ([`CanvasView::release_keyboard`]), and the app's own
+//! shortcuts pressed while drawing are dispatched to the window.
 //!
 //! The page follows Sawit's design system: [`theme_tokens`] reads the active
 //! GPUI theme (colors, fonts, radii, shadows, light/dark) and the page maps
@@ -18,7 +24,7 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{LazyLock, Mutex, mpsc};
 
@@ -30,6 +36,7 @@ use gpui_kit::component::{ActiveTheme as _, Theme};
 use gpui_kit::*;
 use include_dir::{Dir, include_dir};
 use sawit_core::instances::AppPaths;
+use sawit_core::nyawit;
 use serde_json::{Value, json};
 use wry::dpi::{LogicalPosition, LogicalSize};
 use wry::http::{Request, Response, header::CONTENT_TYPE};
@@ -52,6 +59,7 @@ pub struct ToggleCanvasMaximize;
 /// What the page sends besides saves.
 enum FromPage {
     Maximize,
+    Key(String),
     /// The page's script has run: `window.sawitCanvas` exists.
     Ready,
     /// The answer to an [`CanvasView::apply`] op: its id and JSON result.
@@ -61,7 +69,11 @@ enum FromPage {
 type OpResult = Result<Value, String>;
 
 pub struct CanvasView {
+    /// The project whose board this is; `None` for the app-wide one.
+    pub project: Option<PathBuf>,
     webview: Option<WebView>,
+    /// The window the webview is in, for the shortcuts it passes on.
+    window: Option<AnyWindowHandle>,
     error: Option<SharedString>,
     bounds: Option<Bounds<Pixels>>,
     /// The tab is active and the center pane is showing.
@@ -84,12 +96,30 @@ pub struct CanvasView {
 impl EventEmitter<ToggleCanvasMaximize> for CanvasView {}
 
 impl CanvasView {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(project: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
         let (to_view, mut from_page) = unbounded();
         let ipc = cx.spawn(async move |this, cx| {
             while let Some(message) = from_page.next().await {
+                if let FromPage::Key(key) = &message {
+                    // An app shortcut pressed while drawing (e.g. ⌘J): the
+                    // app takes the keyboard back and handles it.
+                    let Ok(keystroke) = Keystroke::parse_with_os(key, OperatingSystem::Mac) else {
+                        continue;
+                    };
+                    let Ok(Some(window)) = this.update(cx, |this, _| {
+                        this.release_keyboard();
+                        this.window
+                    }) else {
+                        break;
+                    };
+                    let _ = cx.update_window(window, |_, window, cx| {
+                        window.dispatch_keystroke(keystroke, cx);
+                    });
+                    continue;
+                }
                 let alive = this.update(cx, |this, cx| match message {
                     FromPage::Maximize => cx.emit(ToggleCanvasMaximize),
+                    FromPage::Key(_) => {}
                     FromPage::Ready => {
                         this.ready = true;
                         if let Some(webview) = &this.webview {
@@ -110,7 +140,9 @@ impl CanvasView {
             }
         });
         Self {
+            project,
             webview: None,
+            window: None,
             error: None,
             bounds: None,
             visible: false,
@@ -188,6 +220,14 @@ impl CanvasView {
         }
     }
 
+    /// Gives the keyboard back to GPUI. The webview keeps it after a click
+    /// otherwise, and the terminal or an editor beside it can't be typed in.
+    pub fn release_keyboard(&self) {
+        if let Some(webview) = &self.webview {
+            let _ = webview.focus_parent();
+        }
+    }
+
     pub fn set_maximized(&mut self, maximized: bool) {
         if self.maximized == maximized {
             return;
@@ -203,6 +243,7 @@ impl CanvasView {
         if self.error.is_some() {
             return;
         }
+        self.window = Some(window.window_handle());
         let Some(webview) = &self.webview else {
             match self.build(bounds, window) {
                 Ok(webview) => self.webview = Some(webview),
@@ -231,17 +272,31 @@ impl CanvasView {
         let background = rgba_tuple(&self.theme);
         let downloaded = Rc::new(RefCell::new(None::<PathBuf>));
         let download_done = downloaded.clone();
+        let scene = self.scene_file();
+        let save_to = scene.clone();
+        let project = self.project.clone();
+        // `.nyawit/` is made on the first save only: the IPC handler runs on
+        // the main thread, and saves come every few hundred ms while drawing.
+        let ensured = std::cell::Cell::new(false);
+        let export_project = self.project.clone();
         WebViewBuilder::new()
-            .with_custom_protocol(PROTOCOL.into(), |_, request| serve(request))
+            .with_custom_protocol(PROTOCOL.into(), move |_, request| serve(request, &scene))
             .with_url(format!("{ORIGIN}/index.html"))
             .with_ipc_handler(move |request| {
                 let body = request.body();
                 if let Some(scene) = body.strip_prefix("save\n") {
-                    let _ = writer.send((scene_file(), scene.to_owned()));
+                    if let Some(project) = &project
+                        && !ensured.get()
+                    {
+                        ensured.set(nyawit::ensure(project, &nyawit::dir(project)).is_ok());
+                    }
+                    let _ = writer.send((save_to.clone(), scene.to_owned()));
                 } else if let Some(library) = body.strip_prefix("library\n") {
                     let _ = writer.send((library_file(), library.to_owned()));
                 } else if body == "maximize" {
                     let _ = to_view.unbounded_send(FromPage::Maximize);
+                } else if let Some(key) = body.strip_prefix("key\n") {
+                    let _ = to_view.unbounded_send(FromPage::Key(key.to_owned()));
                 } else if body == "ready" {
                     let _ = to_view.unbounded_send(FromPage::Ready);
                 } else if let Some(rest) = body.strip_prefix("result\n")
@@ -263,9 +318,18 @@ impl CanvasView {
                 open_externally(&url);
                 NewWindowResponse::Deny
             })
-            // "Export image" / "Save to…" download to ~/Downloads (wry's
-            // default spot, de-duplicated); reveal the file when done.
+            // "Export image" / "Save to…" download to the project's
+            // `.nyawit/exports/` (else ~/Downloads, wry's default spot);
+            // reveal the file when done.
             .with_download_started_handler(move |_, path| {
+                if let Some(project) = &export_project
+                    && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                {
+                    let exports = nyawit::exports_dir(project);
+                    if nyawit::ensure(project, &exports).is_ok() {
+                        *path = nyawit::unique(&exports, name);
+                    }
+                }
                 *downloaded.borrow_mut() = Some(path.clone());
                 true
             })
@@ -279,7 +343,9 @@ impl CanvasView {
             })
             .with_initialization_script(format!(
                 "window.__sawitCanvasMaximized = {maximized}; window.__sawitTheme = {theme}; \
-                 addEventListener('DOMContentLoaded', () => window.ipc.postMessage('ready'));"
+                 window.__sawitAppKeys = {keys}; \
+                 addEventListener('DOMContentLoaded', () => window.ipc.postMessage('ready'));",
+                keys = json!(crate::workspace::canvas_passthrough_keys()),
             ))
             // The app's background, until the page paints.
             .with_background_color(background)
@@ -288,6 +354,13 @@ impl CanvasView {
             .with_visible(self.visible)
             .with_bounds(rect(bounds))
             .build_as_child(window)
+    }
+
+    fn scene_file(&self) -> PathBuf {
+        match &self.project {
+            Some(project) => nyawit::canvas_file(project),
+            None => AppPaths::default_macos().root.join("canvas.excalidraw"),
+        }
     }
 }
 
@@ -312,10 +385,22 @@ impl Render for CanvasView {
             .size_full()
             .child(
                 canvas(
-                    move |bounds, window, cx| {
-                        let _ = this.update(cx, |this, _| this.place(bounds, window));
+                    {
+                        let this = this.clone();
+                        move |bounds, window, cx| {
+                            let _ = this.update(cx, |this, _| this.place(bounds, window));
+                        }
                     },
-                    |_, _, _, _| {},
+                    // GPUI only sees clicks outside the webview, which sits on
+                    // top: each one takes the keyboard back from it.
+                    move |_, _, window, _| {
+                        let this = this.clone();
+                        window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Capture {
+                                let _ = this.update(cx, |this, _| this.release_keyboard());
+                            }
+                        });
+                    },
                 )
                 .size_full(),
             )
@@ -420,10 +505,6 @@ fn rect(bounds: Bounds<Pixels>) -> Rect {
     }
 }
 
-fn scene_file() -> PathBuf {
-    AppPaths::default_macos().root.join("canvas.excalidraw")
-}
-
 fn library_file() -> PathBuf {
     AppPaths::default_macos().root.join("canvas.excalidrawlib")
 }
@@ -488,10 +569,10 @@ fn is_empty_scene(json: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn serve(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
+fn serve(request: Request<Vec<u8>>, scene: &Path) -> Response<Cow<'static, [u8]>> {
     let path = request.uri().path();
     let saved = match path {
-        SCENE_URL => Some(scene_file()),
+        SCENE_URL => Some(scene.to_path_buf()),
         LIBRARY_URL => Some(library_file()),
         _ => None,
     };

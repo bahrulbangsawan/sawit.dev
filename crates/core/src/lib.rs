@@ -23,6 +23,7 @@ pub mod mcp_clients;
 pub mod media;
 pub mod mermaid;
 pub mod network;
+pub mod nyawit;
 pub mod owners;
 pub mod pdf;
 pub mod pgctl;

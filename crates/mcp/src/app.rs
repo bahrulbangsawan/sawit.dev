@@ -248,7 +248,9 @@ pub struct CanvasLoadArgs {
 pub struct CanvasExportArgs {
     #[schemars(description = "svg (default) or png")]
     pub format: Option<String>,
-    #[schemars(description = "Where to write the file; default Sawit's cache folder")]
+    #[schemars(
+        description = "Where to write the file; default the project's .nyawit/exports folder (Sawit's cache folder outside a project)"
+    )]
     pub output_path: Option<String>,
     pub project: Option<String>,
 }
@@ -296,9 +298,13 @@ impl Sawit {
         self.app_call(project, Command::Canvas { op }).await
     }
 
-    /// The board as saved on disk, for `canvas_get` while the app is closed.
-    fn canvas_file_summary(&self) -> Result<Value, String> {
-        let file = self.paths.root.join("canvas.excalidraw");
+    /// The board as saved on disk, for `canvas_get` while the app is
+    /// closed: the project's `.nyawit/canvas.excalidraw`, else the app-wide one.
+    fn canvas_file_summary(&self, project: Option<&str>) -> Result<Value, String> {
+        let file = match crate::project_dir(project) {
+            Some(project) => sawit_core::nyawit::canvas_file(&project),
+            None => self.paths.root.join("canvas.excalidraw"),
+        };
         let text = match std::fs::read_to_string(&file) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -351,13 +357,22 @@ fn summarize_element(e: &Value) -> Value {
     Value::Object(out)
 }
 
-/// Where an export goes when no path is given.
-fn export_path(cache: &Path, ext: &str) -> PathBuf {
+/// Where an export goes when no path is given: the project's
+/// `.nyawit/exports/`, else `<cache>/canvas`.
+fn export_path(project: Option<&Path>, cache: &Path, ext: &str) -> PathBuf {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    cache.join("canvas").join(format!("canvas-{stamp}.{ext}"))
+    let name = format!("canvas-{stamp}.{ext}");
+    match project {
+        Some(project) => {
+            let dir = sawit_core::nyawit::exports_dir(project);
+            let _ = sawit_core::nyawit::ensure(project, &dir);
+            dir.join(name)
+        }
+        None => cache.join("canvas").join(name),
+    }
 }
 
 fn base64_decode(text: &str) -> Result<Vec<u8>, String> {
@@ -635,7 +650,7 @@ impl Sawit {
     )]
     async fn canvas_get(&self, Parameters(a): Parameters<WindowArgs>) -> CallToolResult {
         if !app_control::is_running(&self.paths) {
-            return match self.canvas_file_summary() {
+            return match self.canvas_file_summary(a.project.as_deref()) {
                 Ok(v) => ok(pretty(&v)),
                 Err(e) => fail(e),
             };
@@ -739,6 +754,7 @@ impl Sawit {
             other => return fail(format!("Unknown format “{other}”: use svg or png.")),
         };
         let op = json!({ "op": if png { "export_png" } else { "export_svg" } });
+        let project = crate::project_dir(a.project.as_deref());
         let value = match self.canvas(a.project, op).await {
             Ok(v) => v,
             Err(e) => return fail(e),
@@ -756,7 +772,11 @@ impl Sawit {
                 .to_vec()
         };
         let path = a.output_path.map(PathBuf::from).unwrap_or_else(|| {
-            export_path(&self.paths.cache_dir(), if png { "png" } else { "svg" })
+            export_path(
+                project.as_deref(),
+                &self.paths.cache_dir(),
+                if png { "png" } else { "svg" },
+            )
         });
         if let Some(dir) = path.parent()
             && let Err(e) = std::fs::create_dir_all(dir)

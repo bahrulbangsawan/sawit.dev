@@ -36,7 +36,7 @@ pub struct RenderArgs {
     #[schemars(description = "Mermaid source (flowchart, sequenceDiagram, erDiagram, …)")]
     pub source: String,
     #[schemars(
-        description = "Where to write the .svg (absolute). Default: a new file in Sawit's cache folder"
+        description = "Where to write the .svg (absolute). Default: a new file in the project's .nyawit/diagrams folder (Sawit's cache folder outside a project)"
     )]
     pub output_path: Option<String>,
     #[schemars(description = "light (default) or dark")]
@@ -61,7 +61,7 @@ pub struct SchemaDiagramArgs {
     #[serde(default)]
     pub format: SchemaFormat,
     #[schemars(
-        description = "File to write (absolute). Required for nothing; svg defaults to Sawit's cache folder"
+        description = "File to write (absolute). Required for nothing; svg defaults to the project's .nyawit/diagrams folder"
     )]
     pub output_path: Option<String>,
     #[schemars(description = "light (default) or dark; svg only")]
@@ -89,7 +89,8 @@ pub(crate) fn palette(theme: Theme) -> Palette {
 }
 
 impl Sawit {
-    /// `output_path`, or a fresh file in `<cache>/diagrams`.
+    /// `output_path`, or a fresh file in the project's `.nyawit/diagrams/`
+    /// (else `<cache>/diagrams`).
     fn output_file(
         &self,
         output_path: Option<&str>,
@@ -107,11 +108,14 @@ impl Sawit {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or_default();
-        Ok(self
-            .paths
-            .cache_dir()
-            .join("diagrams")
-            .join(format!("{stem}-{stamp}.{ext}")))
+        let name = format!("{stem}-{stamp}.{ext}");
+        if let Some(project) = crate::project_dir(None) {
+            let dir = sawit_core::nyawit::diagrams_dir(&project);
+            if sawit_core::nyawit::ensure(&project, &dir).is_ok() {
+                return Ok(dir.join(name));
+            }
+        }
+        Ok(self.paths.cache_dir().join("diagrams").join(name))
     }
 
     async fn write_file(path: PathBuf, text: String) -> Result<(), String> {

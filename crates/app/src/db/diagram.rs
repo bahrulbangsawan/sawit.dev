@@ -535,9 +535,7 @@ impl DiagramView {
     /// Asks where to save `contents` (default name `<schema>.<ext>`).
     fn save(&mut self, ext: &str, contents: String, cx: &mut Context<Self>) {
         let name = format!("{}.{ext}", self.schema);
-        let dir = std::env::var_os("HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_default();
+        let dir = super::actions::save_dir(cx);
         let picked = cx.prompt_for_new_path(&dir, Some(&name));
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(path))) = picked.await else {

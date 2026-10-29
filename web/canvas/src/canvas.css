@@ -128,3 +128,33 @@ html[data-sawit-shadow='false'] .excalidraw.excalidraw {
 .sawit-maximize:hover {
 	background: var(--button-hover-bg);
 }
+
+/* Compact, like the rest of Sawit: Excalidraw sizes its UI in rem, so a
+   smaller root shrinks buttons, icons, menus and dialogs together (board
+   text is in scene units and stays as drawn); buttons get Sawit's 28 px. */
+html {
+	font-size: 13px;
+}
+.excalidraw.excalidraw {
+	--default-button-size: 28px;
+	--lg-button-size: 28px;
+	--default-icon-size: 14px;
+	--lg-icon-size: 14px;
+	--editor-container-padding: 8px;
+}
+
+/* No Help or Library: the "?" button in the footer, the Library button
+   at the top right, and the Help hint on the empty board. */
+.excalidraw.excalidraw .help-icon,
+.excalidraw.excalidraw .default-sidebar-trigger,
+.excalidraw.excalidraw .welcome-screen-decor-hint--help {
+	display: none;
+}
+
+/* Dark mode draws the board through `invert(93%) hue-rotate(180deg)`. On its
+   own layer WebKit applies that on the GPU while compositing; otherwise it
+   re-filters the full retina canvas in software on every frame, which is
+   what made panning, zooming and drawing lag. */
+.excalidraw.excalidraw canvas {
+	will-change: transform;
+}

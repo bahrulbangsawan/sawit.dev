@@ -350,7 +350,7 @@ impl DatabasePanel {
         cx: &mut Context<Self>,
         then: impl FnOnce(&mut Self, std::path::PathBuf, &mut Context<Self>) + 'static,
     ) {
-        let picked = cx.prompt_for_new_path(&actions::save_dir(), Some(&name));
+        let picked = cx.prompt_for_new_path(&actions::save_dir(cx), Some(&name));
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(path))) = picked.await {
                 let _ = this.update(cx, |this, cx| then(this, path, cx));

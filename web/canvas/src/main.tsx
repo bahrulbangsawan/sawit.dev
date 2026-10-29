@@ -6,6 +6,9 @@
 //   "save\n<.excalidraw json>"     the scene, debounced
 //   "library\n<.excalidrawlib json>" the personal shape library
 //   "maximize"                     toggle filling the window
+//   "key\n<keystroke>"             an app shortcut pressed while drawing
+//                                  (one of window.__sawitAppKeys, e.g.
+//                                  "cmd-j"), for the app to handle
 //   "result\n<id>\n<json>"         the answer to an `apply` (below)
 // Rust → JS: `window.sawitCanvas.setMaximized(bool)`, `.flush()`,
 // `.setTheme(tokens)` (Sawit's design tokens, see theme.ts), and
@@ -38,6 +41,7 @@ import { useEffect, useState } from 'react'
 import {
 	Excalidraw,
 	MainMenu,
+	hashElementsVersion,
 	serializeAsJSON,
 	serializeLibraryAsJSON,
 } from '@excalidraw/excalidraw'
@@ -51,6 +55,7 @@ declare global {
 		ipc?: { postMessage(message: string): void }
 		__sawitCanvasMaximized?: boolean
 		__sawitTheme?: SawitTheme
+		__sawitAppKeys?: string[]
 		sawitCanvas: {
 			setMaximized(on: boolean): void
 			setTheme(theme: SawitTheme): void
@@ -61,6 +66,10 @@ declare global {
 }
 
 const SAVE_DELAY_MS = 300
+
+// Excalidraw re-renders the board at most once per animation frame instead
+// of on every pointer event (needs React 18+), as excalidraw.com does.
+;(window as any).EXCALIDRAW_THROTTLE_RENDER = true
 
 function post(message: string) {
 	window.ipc?.postMessage(message)
@@ -145,10 +154,26 @@ function MaximizeButton() {
 }
 
 // Saves only when the serialized scene actually changed: Excalidraw calls
-// onChange for every pointer move and hover too.
+// onChange for every pointer move and hover too, so those are told apart by
+// a cheap key first (element versions, files and the appState a 'local'
+// save keeps) and the scene is serialized only when that key moves.
 let timer: ReturnType<typeof setTimeout> | undefined
 let lastSaved = ''
-function scheduleSave(serialize: () => string) {
+let lastKey = ''
+function sceneKey(elements: readonly any[], appState: any, files: object): string {
+	return [
+		hashElementsVersion(elements as any),
+		elements.length,
+		Object.keys(files).length,
+		appState.viewBackgroundColor,
+		appState.gridSize,
+		appState.gridStep,
+		appState.gridModeEnabled,
+	].join('|')
+}
+function scheduleSave(key: string, serialize: () => string) {
+	if (key === lastKey) return
+	lastKey = key
 	clearTimeout(timer)
 	const save = () => {
 		clearTimeout(timer)
@@ -169,12 +194,11 @@ function saveNow(api: any) {
 	clearTimeout(timer)
 	timer = undefined
 	pendingSave = null
-	const json = serializeAsJSON(
-		api.getSceneElementsIncludingDeleted(),
-		api.getAppState(),
-		api.getFiles(),
-		'local'
-	)
+	const elements = api.getSceneElementsIncludingDeleted()
+	const appState = api.getAppState()
+	const files = api.getFiles()
+	lastKey = sceneKey(elements, appState, files)
+	const json = serializeAsJSON(elements, appState, files, 'local')
 	if (json !== lastSaved) {
 		lastSaved = json
 		post('save\n' + json)
@@ -225,15 +249,17 @@ function App({ scene, library }: Saved) {
 				libraryItems: library?.libraryItems ?? library?.library ?? [],
 			}}
 			onChange={(elements, appState, files) =>
-				scheduleSave(() => serializeAsJSON(elements, appState, files, 'local'))
+				scheduleSave(sceneKey(elements, appState, files), () =>
+					serializeAsJSON(elements, appState, files, 'local')
+				)
 			}
 			onLibraryChange={(items) => post('library\n' + serializeLibraryAsJSON(items))}
 			renderTopRightUI={() => <MaximizeButton />}
 			UIOptions={{ canvasActions: { toggleTheme: false, changeViewBackgroundColor: false } }}
 		>
-			{/* The default menu minus the links to excalidraw.com, Discord,
-			    GitHub and Excalidraw+ (the canvas stays local), and minus the
-			    theme and background pickers (the canvas follows Sawit's theme). */}
+			{/* The default menu minus Help, the links to excalidraw.com,
+			    Discord, GitHub and Excalidraw+ (the canvas stays local), and
+			    the theme and background pickers (it follows Sawit's theme). */}
 			<MainMenu>
 				<MainMenu.DefaultItems.LoadScene />
 				<MainMenu.DefaultItems.SaveToActiveFile />
@@ -241,15 +267,35 @@ function App({ scene, library }: Saved) {
 				<MainMenu.DefaultItems.SaveAsImage />
 				<MainMenu.DefaultItems.CommandPalette />
 				<MainMenu.DefaultItems.SearchMenu />
-				<MainMenu.DefaultItems.Help />
 				<MainMenu.DefaultItems.ClearCanvas />
 			</MainMenu>
 		</Excalidraw>
 	)
 }
 
-// ⇧⌘↩ toggles filling the window, as it does for the terminal. The webview
-// has keyboard focus while drawing, so the app's own binding can't see it.
+// The webview has the keyboard while drawing, so the app's own bindings
+// can't see it: ⇧⌘↩ toggles filling the window here, and the app's other
+// shortcuts (⌘J, ⌘1…, ⌃⌘T…) are passed on before Excalidraw sees them.
+const appKeys = new Set(window.__sawitAppKeys ?? [])
+
+/** The keystroke as GPUI writes it, modifiers in a fixed order: "shift-cmd-j". */
+function keystroke(e: KeyboardEvent): string {
+	const code = e.code
+	const key = code.startsWith('Key')
+		? code.slice(3).toLowerCase()
+		: code.startsWith('Digit')
+			? code.slice(5)
+			: ({ BracketLeft: '[', BracketRight: ']', Tab: 'tab', Enter: 'enter' } as Record<string, string>)[code] ??
+				e.key.toLowerCase()
+	return (
+		(e.ctrlKey ? 'ctrl-' : '') +
+		(e.altKey ? 'alt-' : '') +
+		(e.shiftKey ? 'shift-' : '') +
+		(e.metaKey ? 'cmd-' : '') +
+		key
+	)
+}
+
 window.addEventListener(
 	'keydown',
 	(e) => {
@@ -257,6 +303,14 @@ window.addEventListener(
 			e.preventDefault()
 			e.stopPropagation()
 			post('maximize')
+			return
+		}
+		if (!e.metaKey && !e.ctrlKey) return
+		const k = keystroke(e)
+		if (appKeys.has(k)) {
+			e.preventDefault()
+			e.stopPropagation()
+			post('key\n' + k)
 		}
 	},
 	true

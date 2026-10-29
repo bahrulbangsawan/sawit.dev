@@ -897,7 +897,7 @@ impl TableView {
         cx: &mut Context<Self>,
     ) {
         let name = format!("{}.{}", self.table, format.extension());
-        let picked = cx.prompt_for_new_path(&super::actions::save_dir(), Some(&name));
+        let picked = cx.prompt_for_new_path(&super::actions::save_dir(cx), Some(&name));
         cx.spawn_in(window, async move |this, window| {
             let Ok(Ok(Some(path))) = picked.await else {
                 return;

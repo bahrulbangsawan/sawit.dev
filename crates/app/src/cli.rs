@@ -342,6 +342,11 @@ pub fn workspace_for(window: AnyWindowHandle, cx: &App) -> Option<Entity<Workspa
         .find_map(|(h, w)| (h == window).then_some(w))
 }
 
+/// The front window's active project folder.
+pub fn front_project(cx: &App) -> Option<PathBuf> {
+    frontmost(cx).and_then(|(_, w)| w.read(cx).root(cx))
+}
+
 fn frontmost(cx: &App) -> Option<(AnyWindowHandle, Entity<Workspace>)> {
     let spaces = workspaces(cx);
     let stack = cx.window_stack().unwrap_or_default();

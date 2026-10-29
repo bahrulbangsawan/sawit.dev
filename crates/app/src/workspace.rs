@@ -68,14 +68,40 @@ actions!(
         TogglePinTab,
         ToggleSidebar,
         ToggleTerminal,
-        ToggleCenter
+        ToggleCenter,
+        ToggleMaximizePane,
+        NextTab,
+        PreviousTab,
+        NextProject,
+        PreviousProject,
+        AddProject,
+        CloseProject,
+        CopyProjectPath,
+        NewTerminal,
+        ShowInstances,
+        ShowFiles,
+        ShowGit,
+        ShowDatabase,
+        ShowRun,
+        ShowPorts,
+        ShowNetwork,
+        ShowSsh,
+        ShowShellConfig,
+        ShowPrompts,
+        OpenCanvas,
+        OpenDevTools,
+        OpenMcp,
+        OpenChangelog,
+        InstallUpdate
     ]
 );
 
-/// Zed's default bindings for the same commands.
-pub fn init(cx: &mut App) {
+/// Every workspace shortcut: Zed's defaults where Zed has the command; the
+/// pages in the title bar are on ⌃⌘, which nothing else here (inputs, the
+/// terminal, the canvas) uses. No two share a keystroke (see the tests).
+fn bindings() -> Vec<KeyBinding> {
     let ctx = Some("Workspace");
-    cx.bind_keys([
+    vec![
         KeyBinding::new("cmd-w", CloseActiveTab, ctx),
         KeyBinding::new("alt-cmd-t", CloseOtherTabs, ctx),
         KeyBinding::new("cmd-k e", CloseTabsLeft, ctx),
@@ -83,10 +109,70 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-k u", CloseCleanTabs, ctx),
         KeyBinding::new("cmd-k w", CloseAllTabs, ctx),
         KeyBinding::new("cmd-k shift-enter", TogglePinTab, ctx),
+        KeyBinding::new("ctrl-tab", NextTab, ctx),
+        KeyBinding::new("ctrl-shift-tab", PreviousTab, ctx),
         KeyBinding::new("cmd-b", ToggleSidebar, ctx),
         KeyBinding::new("cmd-j", ToggleTerminal, ctx),
         KeyBinding::new("cmd-shift-j", ToggleCenter, ctx),
-    ]);
+        KeyBinding::new("cmd-shift-enter", ToggleMaximizePane, ctx),
+        KeyBinding::new("cmd-t", NewTerminal, ctx),
+        KeyBinding::new("cmd-1", ShowInstances, ctx),
+        KeyBinding::new("cmd-2", ShowFiles, ctx),
+        KeyBinding::new("cmd-3", ShowGit, ctx),
+        KeyBinding::new("cmd-4", ShowDatabase, ctx),
+        KeyBinding::new("cmd-5", ShowRun, ctx),
+        KeyBinding::new("cmd-6", ShowPorts, ctx),
+        KeyBinding::new("cmd-7", ShowNetwork, ctx),
+        KeyBinding::new("cmd-8", ShowSsh, ctx),
+        KeyBinding::new("cmd-9", ShowShellConfig, ctx),
+        KeyBinding::new("cmd-0", ShowPrompts, ctx),
+        KeyBinding::new("ctrl-cmd-]", NextProject, ctx),
+        KeyBinding::new("ctrl-cmd-[", PreviousProject, ctx),
+        KeyBinding::new("alt-cmd-o", AddProject, ctx),
+        KeyBinding::new("ctrl-cmd-w", CloseProject, ctx),
+        KeyBinding::new("ctrl-cmd-p", CopyProjectPath, ctx),
+        KeyBinding::new("ctrl-cmd-c", OpenCanvas, ctx),
+        KeyBinding::new("ctrl-cmd-t", OpenDevTools, ctx),
+        KeyBinding::new("ctrl-cmd-m", OpenMcp, ctx),
+        KeyBinding::new("ctrl-cmd-v", OpenChangelog, ctx),
+        KeyBinding::new("ctrl-cmd-u", InstallUpdate, ctx),
+        KeyBinding::new("ctrl-cmd-i", crate::cli::InstallCli, ctx),
+    ]
+}
+
+pub fn init(cx: &mut App) {
+    cx.bind_keys(bindings());
+}
+
+/// The workspace shortcuts the canvas passes to the app while it has the
+/// keyboard, written as the page writes keys (`ctrl-alt-shift-cmd-key`).
+/// Not the ⌘K chords or ⌘0, which Excalidraw uses (link, reset zoom), nor
+/// ⇧⌘↩, which the page handles itself.
+pub fn canvas_passthrough_keys() -> Vec<String> {
+    bindings()
+        .iter()
+        .filter_map(|b| match b.keystrokes() {
+            [k] => Some(page_key(k.modifiers(), k.key())),
+            _ => None,
+        })
+        .filter(|k| k != "cmd-0" && k != "shift-cmd-enter")
+        .chain(["cmd-o", "shift-cmd-n", "cmd-q"].map(String::from))
+        .collect()
+}
+
+fn page_key(m: &Modifiers, key: &str) -> String {
+    let mut out = String::new();
+    for (on, name) in [
+        (m.control, "ctrl-"),
+        (m.alt, "alt-"),
+        (m.shift, "shift-"),
+        (m.platform, "cmd-"),
+    ] {
+        if on {
+            out.push_str(name);
+        }
+    }
+    out + key
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -160,8 +246,8 @@ pub struct Workspace {
     _path_copied_reset: Task<()>,
     /// Layout to go back to when the maximized terminal or canvas is restored.
     unmaximized: Option<Layout>,
-    /// The canvas tab (owned by its tab), while open.
-    canvas: Option<WeakEntity<CanvasView>>,
+    /// The canvas tabs (owned by their tabs), one per project at most.
+    canvases: Vec<WeakEntity<CanvasView>>,
     /// The canvas fills the window: no sidebar, terminal or tab bar.
     canvas_maximized: bool,
     /// Shown instead of the panels until something is opened.
@@ -355,7 +441,7 @@ impl Workspace {
             path_copied: false,
             _path_copied_reset: Task::ready(()),
             unmaximized: None,
-            canvas: None,
+            canvases: Vec::new(),
             canvas_maximized: false,
             welcome: Some(welcome),
             tab_scroll: ScrollHandle::new(),
@@ -903,18 +989,78 @@ impl Workspace {
     }
 
     fn render_sidebar_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let tab = |id: &'static str,
-                   icon: Icon,
-                   tooltip: &'static str,
-                   which: SidebarTab,
-                   current: SidebarTab| {
-            Button::new(id)
-                .ghost()
-                .xsmall()
-                .icon(icon)
-                .tooltip(tooltip)
-                .selected(current == which)
-        };
+        let tabs: [(&'static str, Icon, &'static str, SidebarTab, &dyn Action); 10] = [
+            (
+                "side-servers",
+                Lucide::Server.into(),
+                "PostgreSQL Instances",
+                SidebarTab::Servers,
+                &ShowInstances,
+            ),
+            (
+                "side-files",
+                IconName::Folder.into(),
+                "Files",
+                SidebarTab::Files,
+                &ShowFiles,
+            ),
+            (
+                "side-git",
+                Lucide::GitBranch.into(),
+                "Git",
+                SidebarTab::Git,
+                &ShowGit,
+            ),
+            (
+                "side-db",
+                Lucide::Database.into(),
+                "Database",
+                SidebarTab::Database,
+                &ShowDatabase,
+            ),
+            (
+                "side-run",
+                Lucide::Play.into(),
+                "Run Scripts",
+                SidebarTab::Run,
+                &ShowRun,
+            ),
+            (
+                "side-ports",
+                Lucide::Radio.into(),
+                "Listening Ports",
+                SidebarTab::Ports,
+                &ShowPorts,
+            ),
+            (
+                "side-network",
+                IconName::Globe.into(),
+                "Network Diagnosis",
+                SidebarTab::Network,
+                &ShowNetwork,
+            ),
+            (
+                "side-ssh",
+                Lucide::SquareTerminal.into(),
+                "SSH Servers",
+                SidebarTab::Ssh,
+                &ShowSsh,
+            ),
+            (
+                "side-shell-config",
+                Lucide::FileTerminal.into(),
+                "Shell Config",
+                SidebarTab::ShellConfig,
+                &ShowShellConfig,
+            ),
+            (
+                "side-prompts",
+                Lucide::MessageSquareText.into(),
+                "Prompts",
+                SidebarTab::Prompts,
+                &ShowPrompts,
+            ),
+        ];
         let current = self.sidebar;
         h_flex()
             .h(px(30.))
@@ -923,137 +1069,78 @@ impl Workspace {
             .bg(cx.theme().sidebar)
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(
-                tab(
-                    "side-servers",
-                    Icon::new(Lucide::Server),
-                    "PostgreSQL Instances",
-                    SidebarTab::Servers,
-                    current,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.sidebar = SidebarTab::Servers;
-                    cx.notify();
-                })),
-            )
-            .child(
-                tab(
-                    "side-files",
-                    Icon::new(IconName::Folder),
-                    "Files",
-                    SidebarTab::Files,
-                    current,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.sidebar = SidebarTab::Files;
-                    cx.notify();
-                })),
-            )
-            .child(
-                tab(
-                    "side-git",
-                    Icon::new(Lucide::GitBranch),
-                    "Git",
-                    SidebarTab::Git,
-                    current,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.sidebar = SidebarTab::Git;
-                    cx.notify();
-                })),
-            )
-            .child(
-                tab(
-                    "side-db",
-                    Icon::new(Lucide::Database),
-                    "Database",
-                    SidebarTab::Database,
-                    current,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.sidebar = SidebarTab::Database;
-                    cx.notify();
-                })),
-            )
-            .child(
-                tab(
-                    "side-run",
-                    Icon::new(Lucide::Play),
-                    "Run Scripts",
-                    SidebarTab::Run,
-                    current,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.sidebar = SidebarTab::Run;
-                    cx.notify();
-                })),
-            )
-            .child(
-                tab(
-                    "side-ports",
-                    Icon::new(Lucide::Radio),
-                    "Listening Ports",
-                    SidebarTab::Ports,
-                    current,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.sidebar = SidebarTab::Ports;
-                    cx.notify();
-                })),
-            )
-            .child(
-                tab(
-                    "side-network",
-                    Icon::new(IconName::Globe),
-                    "Network Diagnosis",
-                    SidebarTab::Network,
-                    current,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.sidebar = SidebarTab::Network;
-                    cx.notify();
-                })),
-            )
-            .child(
-                tab(
-                    "side-ssh",
-                    Icon::new(Lucide::SquareTerminal),
-                    "SSH Servers",
-                    SidebarTab::Ssh,
-                    current,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.sidebar = SidebarTab::Ssh;
-                    cx.notify();
-                })),
-            )
-            .child(
-                tab(
-                    "side-shell-config",
-                    Icon::new(Lucide::FileTerminal),
-                    "Shell Config",
-                    SidebarTab::ShellConfig,
-                    current,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.sidebar = SidebarTab::ShellConfig;
-                    this.shell_config_panel.update(cx, |p, cx| p.refresh(cx));
-                    cx.notify();
-                })),
-            )
-            .child(
-                tab(
-                    "side-prompts",
-                    Icon::new(Lucide::MessageSquareText),
-                    "Prompts",
-                    SidebarTab::Prompts,
-                    current,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.sidebar = SidebarTab::Prompts;
-                    cx.notify();
-                })),
-            )
+            .children(tabs.into_iter().map(|(id, icon, tooltip, which, action)| {
+                Button::new(id)
+                    .ghost()
+                    .xsmall()
+                    .icon(icon)
+                    .tooltip_with_action(tooltip, action, Some("Workspace"))
+                    .selected(current == which)
+                    .on_click(cx.listener(move |this, _, _, cx| this.show_panel(which, cx)))
+            }))
+    }
+
+    /// Shows `tab`'s panel in the sidebar, opening the sidebar if it's hidden.
+    fn show_panel(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
+        self.leave_welcome(PANEL_AND_TABS, cx);
+        self.sidebar = tab;
+        if !self.layout.sidebar {
+            self.layout.toggle(Area::Sidebar);
+        }
+        if tab == SidebarTab::ShellConfig {
+            self.shell_config_panel.update(cx, |p, cx| p.refresh(cx));
+        }
+        cx.notify();
+    }
+
+    /// Shows the tab `step` places after (or before) the active one.
+    fn cycle_tab(&mut self, step: isize, cx: &mut Context<Self>) {
+        let len = self.tabs.len() as isize;
+        if len > 1 {
+            let ix = (self.active as isize + step).rem_euclid(len) as usize;
+            self.show_center(cx);
+            self.activate_tab(ix, cx);
+        }
+    }
+
+    /// Switches to the project `step` places after (or before) the active one.
+    fn cycle_project(&mut self, step: isize, cx: &mut Context<Self>) {
+        let len = self.projects.len() as isize;
+        if len > 1 {
+            let ix = (self.project as isize + step).rem_euclid(len) as usize;
+            self.leave_welcome(PANEL_AND_TABS, cx);
+            self.activate_project(ix, cx);
+            cx.notify();
+        }
+    }
+
+    /// A new shell in the active project's folder (else the home folder).
+    fn new_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.root(cx) {
+            Some(root) => self.open_terminal_in(root, window, cx),
+            None => {
+                self.leave_welcome(TERMINAL_ONLY, cx);
+                if !self.layout.terminal {
+                    self.layout.toggle(Area::Terminal);
+                }
+                self.terminal
+                    .update(cx, |t, cx| t.open_shell(Some(window), cx));
+                cx.notify();
+            }
+        }
+    }
+
+    /// ⇧⌘↩: the canvas fills the window while it is the tab on screen and
+    /// the terminal doesn't have the keyboard; otherwise the terminal does.
+    fn toggle_maximize_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let terminal_focused = self.terminal.read(cx).has_focus(window, cx);
+        let canvas_shown =
+            self.welcome.is_none() && self.layout.center && self.active_canvas().is_some();
+        if canvas_shown && !terminal_focused || self.canvas_maximized {
+            self.toggle_canvas_maximized(cx);
+        } else {
+            self.toggle_terminal_maximized(window, cx);
+        }
     }
 
     fn render_sidebar(&self) -> AnyElement {
@@ -1364,7 +1451,14 @@ impl Workspace {
                                 .ghost()
                                 .xsmall()
                                 .icon(if copied { Lucide::Check } else { Lucide::Copy })
-                                .tooltip(if copied { "Copied" } else { "Copy Path" })
+                                .when(copied, |b| b.tooltip("Copied"))
+                                .when(!copied, |b| {
+                                    b.tooltip_with_action(
+                                        "Copy Path",
+                                        &CopyProjectPath,
+                                        Some("Workspace"),
+                                    )
+                                })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.copy_project_path(project.clone(), cx)
                                 })),
@@ -1844,47 +1938,61 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Opens the brainstorming canvas (one tab).
-    fn open_canvas(&mut self, cx: &mut Context<Self>) {
+    /// Opens the active project's brainstorming canvas (one tab per
+    /// project, saved in its `.nyawit/`), or the app-wide one without a
+    /// project.
+    fn open_canvas(&mut self, cx: &mut Context<Self>) -> Option<Entity<CanvasView>> {
         self.leave_welcome(CENTER_ONLY, cx);
         if !self.layout.center {
             self.layout.toggle(Area::Center);
         }
-        let key: SharedString = "canvas".into();
+        let root = self.root(cx);
+        let key: SharedString = match &root {
+            Some(root) => format!("canvas\u{0}{}", root.display()).into(),
+            None => "canvas".into(),
+        };
         if let Some(ix) = self
             .tabs
             .iter()
             .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
         {
             self.active = ix;
-        } else {
-            let view = cx.new(CanvasView::new);
-            cx.subscribe(&view, |this, _, _: &ToggleCanvasMaximize, cx| {
-                this.toggle_canvas_maximized(cx)
-            })
-            .detach();
-            self.canvas = Some(view.downgrade());
-            self.push_tab(
-                PaneItem::Other {
-                    view: view.into(),
-                    key,
-                    title: crate::canvas::TITLE.into(),
-                    icon: crate::canvas::ICON,
-                    file: None,
-                },
-                None,
-                cx,
-            );
+            cx.notify();
+            return self
+                .canvases
+                .iter()
+                .filter_map(|c| c.upgrade())
+                .find(|c| c.read(cx).project == root);
         }
+        let view = cx.new(|cx| CanvasView::new(root.clone(), cx));
+        cx.subscribe(&view, |this, _, _: &ToggleCanvasMaximize, cx| {
+            this.toggle_canvas_maximized(cx)
+        })
+        .detach();
+        self.canvases.push(view.downgrade());
+        self.push_tab(
+            PaneItem::Other {
+                view: view.clone().into(),
+                key,
+                title: crate::canvas::TITLE.into(),
+                icon: crate::canvas::ICON,
+                file: None,
+            },
+            root,
+            cx,
+        );
         cx.notify();
+        Some(view)
     }
 
-    /// The canvas is the tab showing in the center pane.
-    fn canvas_active(&self) -> bool {
-        matches!(
-            self.tabs.get(self.active).map(|t| &t.item),
-            Some(PaneItem::Other { key, .. }) if key.as_ref() == "canvas"
-        )
+    /// The canvas whose tab is showing in the center pane.
+    fn active_canvas(&self) -> Option<EntityId> {
+        match self.tabs.get(self.active).map(|t| &t.item) {
+            Some(PaneItem::Other { key, view, .. }) if key.starts_with("canvas") => {
+                Some(view.entity_id())
+            }
+            _ => None,
+        }
     }
 
     /// Fills the window with the canvas (hiding the tab bar too), or puts
@@ -1903,25 +2011,26 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Keeps the canvas's native webview in step with what is on screen:
-    /// it draws above GPUI, so it is hidden whenever its tab isn't showing.
+    /// Keeps the canvases' native webviews in step with what is on screen:
+    /// they draw above GPUI, so each is hidden unless its tab is showing.
     fn sync_canvas(&mut self, cx: &mut Context<Self>) {
-        let Some(canvas) = self.canvas.as_ref().and_then(|c| c.upgrade()) else {
-            self.canvas = None;
-            self.canvas_maximized = false;
-            return;
-        };
-        let visible = self.welcome.is_none() && self.layout.center && self.canvas_active();
+        self.canvases.retain(|c| c.upgrade().is_some());
+        let shown = self
+            .active_canvas()
+            .filter(|_| self.welcome.is_none() && self.layout.center);
         // Any other layout change (⌘B, ⌘J, another tab) ends "fill window".
-        if self.canvas_maximized && !(visible && self.layout == CENTER_ONLY) {
+        if self.canvas_maximized && !(shown.is_some() && self.layout == CENTER_ONLY) {
             self.canvas_maximized = false;
             self.unmaximized = None;
         }
         let maximized = self.canvas_maximized;
-        canvas.update(cx, |c, _| {
-            c.set_visible(visible);
-            c.set_maximized(maximized);
-        });
+        for canvas in self.canvases.iter().filter_map(|c| c.upgrade()) {
+            let visible = shown == Some(canvas.entity_id());
+            canvas.update(cx, |c, _| {
+                c.set_visible(visible);
+                c.set_maximized(visible && maximized);
+            });
+        }
     }
 
     /// Shows the MCP install page (one tab).
@@ -2052,7 +2161,11 @@ impl Workspace {
                     .ghost()
                     .xsmall()
                     .icon(Lucide::Plus)
-                    .tooltip("Open Another Project in This Window")
+                    .tooltip_with_action(
+                        "Open Another Project in This Window",
+                        &AddProject,
+                        Some("Workspace"),
+                    )
                     .on_click(|_, window, cx| {
                         crate::cli::prompt_open_folder(Some(window.window_handle()), cx)
                     }),
@@ -2062,12 +2175,16 @@ impl Workspace {
 
     fn render_layout_toggles(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let l = self.layout;
-        let toggle = |id: &'static str, icon: Lucide, tooltip: &'static str, on: bool| {
+        let toggle = |id: &'static str,
+                      icon: Lucide,
+                      tooltip: &'static str,
+                      action: &dyn Action,
+                      on: bool| {
             Button::new(id)
                 .ghost()
                 .xsmall()
                 .icon(icon)
-                .tooltip(tooltip)
+                .tooltip_with_action(tooltip, action, Some("Workspace"))
                 .selected(on)
         };
         let pending = self.updater.read(cx).pending().map(|r| r.version);
@@ -2079,7 +2196,11 @@ impl Workspace {
                     .xsmall()
                     .icon(Lucide::Download)
                     .label("Restart to Update")
-                    .tooltip(format!("Install Sawit {v} and Relaunch"))
+                    .tooltip_with_action(
+                        format!("Install Sawit {v} and Relaunch"),
+                        &InstallUpdate,
+                        Some("Workspace"),
+                    )
                     .on_click(
                         cx.listener(|this, _, _, cx| {
                             this.updater.update(cx, |u, cx| u.restart(cx))
@@ -2091,7 +2212,7 @@ impl Workspace {
                     .ghost()
                     .xsmall()
                     .label(format!("v{}", Version::current()))
-                    .tooltip("Version & Changelog")
+                    .tooltip_with_action("Version & Changelog", &OpenChangelog, Some("Workspace"))
                     .on_click(cx.listener(|this, _, _, cx| this.open_changelog_page(cx))),
             )
             .when(!self.cli_status.read(cx).installed, |el| {
@@ -2101,7 +2222,11 @@ impl Workspace {
                         .xsmall()
                         .icon(Lucide::SquareTerminal)
                         .label("Install CLI")
-                        .tooltip("Install the ‘sawit’ Command to Open Folders from a Terminal")
+                        .tooltip_with_action(
+                            "Install the ‘sawit’ Command to Open Folders from a Terminal",
+                            &crate::cli::InstallCli,
+                            Some("Workspace"),
+                        )
                         .on_click(|_, _, cx| crate::cli::install_cli(cx)),
                 )
             })
@@ -2111,8 +2236,14 @@ impl Workspace {
                     .xsmall()
                     .icon(crate::canvas::ICON)
                     .label("Canvas")
-                    .tooltip("Brainstorm on a Whiteboard")
-                    .on_click(cx.listener(|this, _, _, cx| this.open_canvas(cx))),
+                    .tooltip_with_action(
+                        "Brainstorm on a Whiteboard",
+                        &OpenCanvas,
+                        Some("Workspace"),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.open_canvas(cx);
+                    })),
             )
             .child(
                 Button::new("open-tools")
@@ -2120,7 +2251,11 @@ impl Workspace {
                     .xsmall()
                     .icon(Lucide::Package)
                     .label("Tools")
-                    .tooltip("Install Dev Tools: Claude Code, Node.js, Bun, uv and More")
+                    .tooltip_with_action(
+                        "Install Dev Tools: Claude Code, Node.js, Bun, uv and More",
+                        &OpenDevTools,
+                        Some("Workspace"),
+                    )
                     .on_click(cx.listener(|this, _, window, cx| this.open_tools_page(window, cx))),
             )
             .child(
@@ -2129,7 +2264,11 @@ impl Workspace {
                     .xsmall()
                     .icon(Lucide::Plug)
                     .label("MCP")
-                    .tooltip("Set Up the MCP Server for Claude, Codex and More")
+                    .tooltip_with_action(
+                        "Set Up the MCP Server for Claude, Codex and More",
+                        &OpenMcp,
+                        Some("Workspace"),
+                    )
                     .on_click(cx.listener(|this, _, _, cx| this.open_mcp_page(cx))),
             )
             .child(div().w(px(6.)))
@@ -2137,7 +2276,8 @@ impl Workspace {
                 toggle(
                     "toggle-sidebar",
                     Lucide::PanelLeft,
-                    "Sidebar (⌘B)",
+                    "Sidebar",
+                    &ToggleSidebar,
                     l.sidebar,
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_area(Area::Sidebar, cx))),
@@ -2146,7 +2286,8 @@ impl Workspace {
                 toggle(
                     "toggle-center",
                     Lucide::PanelTop,
-                    "Tabs & Tables (⇧⌘J)",
+                    "Tabs & Tables",
+                    &ToggleCenter,
                     l.center,
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_area(Area::Center, cx))),
@@ -2155,7 +2296,8 @@ impl Workspace {
                 toggle(
                     "toggle-terminal",
                     Lucide::PanelBottom,
-                    "Terminal / herdr (⌘J)",
+                    "Terminal / herdr",
+                    &ToggleTerminal,
                     l.terminal,
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_area(Area::Terminal, cx))),
@@ -2264,6 +2406,74 @@ impl Render for Workspace {
                 let ix = this.active;
                 this.toggle_pin(ix, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &ToggleMaximizePane, w, cx| this.toggle_maximize_pane(w, cx)),
+            )
+            .on_action(cx.listener(|this, _: &NextTab, _, cx| this.cycle_tab(1, cx)))
+            .on_action(cx.listener(|this, _: &PreviousTab, _, cx| this.cycle_tab(-1, cx)))
+            .on_action(cx.listener(|this, _: &NextProject, _, cx| this.cycle_project(1, cx)))
+            .on_action(cx.listener(|this, _: &PreviousProject, _, cx| this.cycle_project(-1, cx)))
+            .on_action(cx.listener(|_, _: &AddProject, w, cx| {
+                crate::cli::prompt_open_folder(Some(w.window_handle()), cx)
+            }))
+            .on_action(cx.listener(|this, _: &CloseProject, w, cx| {
+                let ix = this.project;
+                this.close_project(ix, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CopyProjectPath, _, cx| {
+                if let Some(root) = this.root(cx) {
+                    this.copy_project_path(root.display().to_string(), cx)
+                }
+            }))
+            .on_action(cx.listener(|this, _: &NewTerminal, w, cx| this.new_terminal(w, cx)))
+            .on_action(cx.listener(|this, _: &ShowInstances, _, cx| {
+                this.show_panel(SidebarTab::Servers, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ShowFiles, _, cx| this.show_panel(SidebarTab::Files, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ShowGit, _, cx| this.show_panel(SidebarTab::Git, cx)))
+            .on_action(cx.listener(|this, _: &ShowDatabase, _, cx| {
+                this.show_panel(SidebarTab::Database, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ShowRun, _, cx| this.show_panel(SidebarTab::Run, cx)))
+            .on_action(
+                cx.listener(|this, _: &ShowPorts, _, cx| this.show_panel(SidebarTab::Ports, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ShowNetwork, _, cx| {
+                    this.show_panel(SidebarTab::Network, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ShowSsh, _, cx| this.show_panel(SidebarTab::Ssh, cx)))
+            .on_action(cx.listener(|this, _: &ShowShellConfig, _, cx| {
+                this.show_panel(SidebarTab::ShellConfig, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ShowPrompts, _, cx| {
+                    this.show_panel(SidebarTab::Prompts, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &OpenCanvas, _, cx| {
+                this.open_canvas(cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenDevTools, w, cx| this.open_tools_page(w, cx)))
+            .on_action(cx.listener(|this, _: &OpenMcp, _, cx| this.open_mcp_page(cx)))
+            .on_action(cx.listener(|this, _: &OpenChangelog, _, cx| {
+                this.show_center(cx);
+                this.open_changelog_page(cx)
+            }))
+            .on_action(cx.listener(|this, _: &InstallUpdate, _, cx| {
+                // Installs a pending update, else checks for one and shows
+                // the changelog page, where the result appears.
+                if this.updater.read(cx).pending().is_some() {
+                    this.updater.update(cx, |u, cx| u.restart(cx));
+                } else {
+                    this.updater.update(cx, |u, cx| u.check(cx));
+                    this.show_center(cx);
+                    this.open_changelog_page(cx);
+                }
+            }))
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
@@ -2295,4 +2505,44 @@ impl Render for Workspace {
 fn cached(view: AnyView) -> AnyElement {
     view.cached(StyleRefinement::default().size_full())
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::{bindings, canvas_passthrough_keys, page_key};
+
+    #[test]
+    fn no_two_shortcuts_share_a_keystroke() {
+        let mut seen = HashSet::new();
+        let global = ["cmd-q", "shift-cmd-n", "cmd-o"];
+        for binding in bindings() {
+            let keys: Vec<String> = binding
+                .keystrokes()
+                .iter()
+                .map(|k| page_key(k.modifiers(), k.key()))
+                .collect();
+            let keys = keys.join(" ");
+            assert!(!global.contains(&keys.as_str()), "{keys} is taken by the app");
+            assert!(seen.insert(keys.clone()), "{keys} is bound twice");
+        }
+        // A chord's first keystroke can't be a shortcut of its own.
+        for chord in seen.iter().filter(|k| k.contains(' ')) {
+            let first = chord.split(' ').next().unwrap();
+            assert!(!seen.contains(first), "{first} shadows {chord}");
+        }
+    }
+
+    #[test]
+    fn the_canvas_passes_on_app_shortcuts_but_not_its_own() {
+        let keys = canvas_passthrough_keys();
+        for k in ["cmd-j", "shift-cmd-j", "cmd-1", "ctrl-cmd-c", "ctrl-tab", "cmd-o"] {
+            assert!(keys.iter().any(|x| x == k), "{k} missing");
+        }
+        // Excalidraw's own: reset zoom, add link; ⇧⌘↩ is handled by the page.
+        for k in ["cmd-0", "cmd-k", "shift-cmd-enter"] {
+            assert!(!keys.iter().any(|x| x == k), "{k} passed on");
+        }
+    }
 }

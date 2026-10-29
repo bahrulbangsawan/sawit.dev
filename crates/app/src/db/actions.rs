@@ -16,8 +16,15 @@ use sawit_core::db::{self, BackupScope, ExportFormat, ExportSummary, RowQuery};
 use super::store::DbStore;
 use crate::rt;
 
-/// Where files are first offered to be saved.
-pub fn save_dir() -> PathBuf {
+/// Where files are first offered to be saved: the front window's project's
+/// `.nyawit/exports/`, else ~/Downloads.
+pub fn save_dir(cx: &App) -> PathBuf {
+    if let Some(project) = crate::cli::front_project(cx) {
+        let exports = sawit_core::nyawit::exports_dir(&project);
+        if sawit_core::nyawit::ensure(&project, &exports).is_ok() {
+            return exports;
+        }
+    }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();

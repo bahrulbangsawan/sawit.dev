@@ -98,7 +98,7 @@ impl Workspace {
             },
             "tabs": tabs,
             "terminals": self.terminal.read(cx).describe(cx),
-            "canvas_open": self.canvas.as_ref().is_some_and(|c| c.upgrade().is_some()),
+            "canvas_open": self.canvases.iter().any(|c| c.upgrade().is_some()),
         })
     }
 
@@ -316,12 +316,7 @@ impl Workspace {
                 done(json!({ "tab": self.active }))
             }
             Command::Canvas { op } => {
-                self.open_canvas(cx);
-                let canvas = self
-                    .canvas
-                    .as_ref()
-                    .and_then(|c| c.upgrade())
-                    .ok_or("The canvas didn't open.")?;
+                let canvas = self.open_canvas(cx).ok_or("The canvas didn't open.")?;
                 Ok(Answer::Later(canvas.update(cx, |c, _| c.apply(op))))
             }
         };
@@ -336,7 +331,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         match page {
-            Page::Canvas => self.open_canvas(cx),
+            Page::Canvas => {
+                self.open_canvas(cx);
+            }
             Page::Mcp => self.open_mcp_page(cx),
             Page::Tools => self.open_tools_page(window, cx),
             Page::Changelog => {
