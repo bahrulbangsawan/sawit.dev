@@ -26,6 +26,9 @@ gpui_kit::assets::icon_assets!(
         WandSparkles,
         Image,
         FileText,
+        FileSpreadsheet,
+        Upload,
+        Eraser,
         Film,
         Minus,
         Play,
@@ -99,11 +102,15 @@ macro_rules! agent_logos {
 agent_logos!(
     "amp-color",
     "antigravity-color",
+    "aws",
     "claude-color",
     "claudecode-color",
     "cline",
+    "cloudflare-color",
     "codex-color",
     "cursor",
+    "exa-color",
+    "figma-color",
     "geminicli-color",
     "githubcopilot",
     "goose",
@@ -111,6 +118,7 @@ agent_logos!(
     "kilocode",
     "kiro-color",
     "lmstudio",
+    "meta-color",
     "opencode",
     "qwen-color",
     "roocode",
@@ -119,6 +127,38 @@ agent_logos!(
     "windsurf",
     "zed",
 );
+
+macro_rules! tool_logos {
+    ($($name:literal),* $(,)?) => {
+        /// Logos for the Dev Tools page (see assets/tool_logos/SOURCES.md).
+        const TOOL_LOGOS: &[(&str, &[u8])] = &[
+            $(($name, include_bytes!(concat!("../../../assets/tool_logos/", $name, ".svg")))),*
+        ];
+    };
+}
+
+tool_logos!(
+    "bun",
+    "cap-color",
+    "deno",
+    "factory-color",
+    "flyio",
+    "homebrew-color",
+    "nodejs-color",
+    "npm-color",
+    "nvm-color",
+    "omp-color",
+    "pnpm-color",
+    "python-color",
+    "rust",
+    "starship-color",
+    "uv-color",
+);
+
+fn tool_logo(path: &str) -> Option<&'static [u8]> {
+    let name = path.strip_prefix("tool_logos/")?.strip_suffix(".svg")?;
+    TOOL_LOGOS.iter().find(|(n, _)| *n == name).map(|(_, b)| *b)
+}
 
 fn agent_logo(path: &str) -> Option<&'static [u8]> {
     let name = path.strip_prefix("agent_logos/")?.strip_suffix(".svg")?;
@@ -136,7 +176,7 @@ pub const HERDR_LOGO: &str = "logo/herdr.svg";
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        if let Some(svg) = agent_logo(path) {
+        if let Some(svg) = agent_logo(path).or_else(|| tool_logo(path)) {
             return Ok(Some(Cow::Borrowed(svg)));
         }
         if let Some(svg) = crate::file_icons::asset(path) {

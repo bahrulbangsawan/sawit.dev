@@ -290,6 +290,7 @@ impl Workspace {
         match page {
             Page::Canvas => self.open_canvas(cx),
             Page::Mcp => self.open_mcp_page(cx),
+            Page::Tools => self.open_tools_page(window, cx),
             Page::Changelog => {
                 self.show_center(cx);
                 self.open_changelog_page(cx)

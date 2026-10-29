@@ -37,8 +37,11 @@ use crate::shell_config::{ShellConfigEvent, ShellConfigPanel};
 use crate::ssh::{SshEvent, SshHostEvent, SshHostView, SshPanel, SshStore, SshStoreEvent};
 use crate::states::Placeholder;
 use crate::tab_groups::{group_header, group_stripe, project_name};
-use crate::tabs::{CloseOp, Slot, TabFlags, active_after, active_after_move, insert_index, to_close};
+use crate::tabs::{
+    CloseOp, Slot, TabFlags, active_after, active_after_move, insert_index, to_close,
+};
 use crate::terminal::{TerminalPanel, ToggleMaximize};
+use crate::tools_page::{ToolsEvent, ToolsPage};
 use crate::update::{Updater, updater};
 use crate::viewers::{ImageView, PdfView, VideoView};
 use crate::welcome::{Welcome, WelcomeEvent};
@@ -50,8 +53,8 @@ use sawit_core::update::Version;
 mod control;
 mod project;
 
-use project::Project;
 pub use control::Answer;
+use project::Project;
 
 actions!(
     workspace,
@@ -185,139 +188,144 @@ impl Workspace {
         let project = Self::new_project(&run_store, &terminal, &ports_panel, window, cx);
         let network_panel = cx.new(|cx| NetworkPanel::new(window, cx));
         let ssh_store = cx.new(SshStore::new);
-        let ssh_panel =
-            cx.new(|cx| SshPanel::new(ssh_store.clone(), terminal.clone(), window, cx));
+        let ssh_panel = cx.new(|cx| SshPanel::new(ssh_store.clone(), terminal.clone(), window, cx));
         let shell_config_panel = cx.new(ShellConfigPanel::new);
         let cli_status = cli_status(cx);
         let updater = updater(cx);
         let welcome = cx.new(|cx| Welcome::new(servers.clone(), db.clone(), cx));
-        let subscriptions =
-            vec![
-                cx.observe(&servers, |_, _, cx| cx.notify()),
-                cx.observe(&cli_status, |_, _, cx| cx.notify()),
-                cx.observe(&updater, |_, _, cx| cx.notify()),
-                cx.subscribe_in(
-                    &welcome,
-                    window,
-                    |this, _, event: &WelcomeEvent, window, cx| {
-                        this.on_welcome_event(event, window, cx)
-                    },
-                ),
-                cx.subscribe(&servers, |this, _, _: &ShowServerTab, cx| {
-                    this.show_server_tab();
-                    cx.notify();
-                }),
-                cx.subscribe_in(
-                    &terminal,
-                    window,
-                    |this, _, _: &ToggleMaximize, window, cx| {
-                        this.toggle_terminal_maximized(window, cx)
-                    },
-                ),
-                cx.observe_in(&db, window, |this, db, window, cx| {
-                    let ready = match &this.pending_db {
-                        Some(event) => {
-                            let profile = event.profile();
-                            let store = db.read(cx);
-                            if store.state(profile).is_pending() {
-                                return;
-                            }
-                            store.is_connected(profile)
+        let subscriptions = vec![
+            cx.observe(&servers, |_, _, cx| cx.notify()),
+            cx.observe(&cli_status, |_, _, cx| cx.notify()),
+            cx.observe(&updater, |_, _, cx| cx.notify()),
+            cx.subscribe_in(
+                &welcome,
+                window,
+                |this, _, event: &WelcomeEvent, window, cx| {
+                    this.on_welcome_event(event, window, cx)
+                },
+            ),
+            cx.subscribe(&servers, |this, _, _: &ShowServerTab, cx| {
+                this.show_server_tab();
+                cx.notify();
+            }),
+            cx.subscribe_in(
+                &terminal,
+                window,
+                |this, _, _: &ToggleMaximize, window, cx| {
+                    this.toggle_terminal_maximized(window, cx)
+                },
+            ),
+            cx.observe_in(&db, window, |this, db, window, cx| {
+                let ready = match &this.pending_db {
+                    Some(event) => {
+                        let profile = event.profile();
+                        let store = db.read(cx);
+                        if store.state(profile).is_pending() {
+                            return;
                         }
-                        None => return,
-                    };
-                    // Replay once connected; drop it if reconnecting failed.
-                    if let Some(event) = this.pending_db.take()
-                        && ready
+                        store.is_connected(profile)
+                    }
+                    None => return,
+                };
+                // Replay once connected; drop it if reconnecting failed.
+                if let Some(event) = this.pending_db.take()
+                    && ready
+                {
+                    this.on_db_event(&event, window, cx);
+                }
+            }),
+            cx.subscribe_in(&db_panel, window, |this, _, event: &DbEvent, window, cx| {
+                this.on_db_event(event, window, cx)
+            }),
+            cx.subscribe_in(
+                &prompts_panel,
+                window,
+                |this, _, PromptsEvent::Open(id), window, cx| {
+                    this.open_prompt(id.clone(), window, cx)
+                },
+            ),
+            // Prompt tabs follow renames and close when deleted.
+            cx.observe(&prompt_store, |this, store, cx| {
+                let library = &store.read(cx).library;
+                for tab in &mut this.tabs {
+                    if let PaneItem::Other { key, title, .. } = &mut tab.item
+                        && let Some(id) = key.strip_prefix("prompt\u{0}")
+                        && let Some(p) = library.get(id)
                     {
-                        this.on_db_event(&event, window, cx);
-                    }
-                }),
-                cx.subscribe_in(&db_panel, window, |this, _, event: &DbEvent, window, cx| {
-                    this.on_db_event(event, window, cx)
-                }),
-                cx.subscribe_in(
-                    &prompts_panel,
-                    window,
-                    |this, _, PromptsEvent::Open(id), window, cx| {
-                        this.open_prompt(id.clone(), window, cx)
-                    },
-                ),
-                // Prompt tabs follow renames and close when deleted.
-                cx.observe(&prompt_store, |this, store, cx| {
-                    let library = &store.read(cx).library;
-                    for tab in &mut this.tabs {
-                        if let PaneItem::Other { key, title, .. } = &mut tab.item
-                            && let Some(id) = key.strip_prefix("prompt\u{0}")
-                            && let Some(p) = library.get(id)
-                        {
-                            let name = if p.title.trim().is_empty() {
-                                "(untitled)"
-                            } else {
-                                p.title.as_str()
-                            };
-                            if title.as_ref() != name {
-                                *title = name.to_string().into();
-                            }
+                        let name = if p.title.trim().is_empty() {
+                            "(untitled)"
+                        } else {
+                            p.title.as_str()
+                        };
+                        if title.as_ref() != name {
+                            *title = name.to_string().into();
                         }
                     }
-                    cx.notify();
-                }),
-                cx.subscribe_in(&ssh_panel, window, |this, _, event: &SshEvent, window, cx| {
-                    match event {
-                        SshEvent::Connect { key, new } => {
-                            this.connect_ssh(key.clone(), *new, window, cx)
-                        }
-                        SshEvent::Edit(id) => this.open_ssh_host(id.clone(), window, cx),
-                        SshEvent::OpenFile(path) => {
-                            this.show_center(cx);
-                            this.open_file(path.clone(), window, cx)
-                        }
+                }
+                cx.notify();
+            }),
+            cx.subscribe_in(
+                &ssh_panel,
+                window,
+                |this, _, event: &SshEvent, window, cx| match event {
+                    SshEvent::Connect { key, new } => {
+                        this.connect_ssh(key.clone(), *new, window, cx)
                     }
-                }),
-                cx.subscribe_in(
-                    &shell_config_panel,
-                    window,
-                    |this, _, ShellConfigEvent::OpenFile(path), window, cx| {
+                    SshEvent::Edit(id) => this.open_ssh_host(id.clone(), window, cx),
+                    SshEvent::OpenFile(path) => {
                         this.show_center(cx);
                         this.open_file(path.clone(), window, cx)
-                    },
-                ),
-                // Server tabs follow renames and close when deleted.
-                cx.observe(&ssh_store, |this, store, cx| {
-                    let list = &store.read(cx).list;
-                    for tab in &mut this.tabs {
-                        if let PaneItem::Other { key, title, .. } = &mut tab.item
-                            && let Some(id) = key.strip_prefix("ssh-host\u{0}")
-                            && let Some(h) = list.get(id)
-                        {
-                            let name = h.label();
-                            if title.as_ref() != name {
-                                *title = name.into();
-                            }
+                    }
+                },
+            ),
+            cx.subscribe_in(
+                &shell_config_panel,
+                window,
+                |this, _, event: &ShellConfigEvent, window, cx| match event {
+                    ShellConfigEvent::OpenFile(path) => {
+                        this.show_center(cx);
+                        this.open_file(path.clone(), window, cx)
+                    }
+                    ShellConfigEvent::OpenTerminal(dir) => {
+                        this.open_terminal_in(dir.clone(), window, cx)
+                    }
+                },
+            ),
+            // Server tabs follow renames and close when deleted.
+            cx.observe(&ssh_store, |this, store, cx| {
+                let list = &store.read(cx).list;
+                for tab in &mut this.tabs {
+                    if let PaneItem::Other { key, title, .. } = &mut tab.item
+                        && let Some(id) = key.strip_prefix("ssh-host\u{0}")
+                        && let Some(h) = list.get(id)
+                    {
+                        let name = h.label();
+                        if title.as_ref() != name {
+                            *title = name.into();
                         }
                     }
-                    cx.notify();
-                }),
-                cx.subscribe(&ssh_store, |this, _, event: &SshStoreEvent, cx| {
-                    let SshStoreEvent::Removed(id) = event;
-                    let key = format!("ssh-host\u{0}{id}");
-                    if let Some(ix) = this.tabs.iter().position(
-                        |t| matches!(&t.item, PaneItem::Other { key: k, .. } if k.as_ref() == key),
-                    ) {
-                        this.remove_tabs(&[ix], cx);
-                    }
-                }),
-                cx.subscribe(&prompt_store, |this, _, event: &PromptStoreEvent, cx| {
-                    let PromptStoreEvent::Removed(id) = event;
-                    let key = format!("prompt\u{0}{id}");
-                    if let Some(ix) = this.tabs.iter().position(
-                        |t| matches!(&t.item, PaneItem::Other { key: k, .. } if k.as_ref() == key),
-                    ) {
-                        this.remove_tabs(&[ix], cx);
-                    }
-                }),
-            ];
+                }
+                cx.notify();
+            }),
+            cx.subscribe(&ssh_store, |this, _, event: &SshStoreEvent, cx| {
+                let SshStoreEvent::Removed(id) = event;
+                let key = format!("ssh-host\u{0}{id}");
+                if let Some(ix) = this.tabs.iter().position(
+                    |t| matches!(&t.item, PaneItem::Other { key: k, .. } if k.as_ref() == key),
+                ) {
+                    this.remove_tabs(&[ix], cx);
+                }
+            }),
+            cx.subscribe(&prompt_store, |this, _, event: &PromptStoreEvent, cx| {
+                let PromptStoreEvent::Removed(id) = event;
+                let key = format!("prompt\u{0}{id}");
+                if let Some(ix) = this.tabs.iter().position(
+                    |t| matches!(&t.item, PaneItem::Other { key: k, .. } if k.as_ref() == key),
+                ) {
+                    this.remove_tabs(&[ix], cx);
+                }
+            }),
+        ];
         Self {
             server_list: cx.new(|cx| ServerList::new(servers.clone(), cx)),
             server_detail: cx.new(|cx| ServerDetail::new(servers.clone(), window, cx)),
@@ -518,7 +526,11 @@ impl Workspace {
         self.active = ix;
         if let Some(root) = self.tabs.get(ix).and_then(|t| t.group.clone()) {
             self.collapsed.remove(&root);
-            if let Some(p) = self.projects.iter().position(|p| p.root(cx) == Some(root.clone())) {
+            if let Some(p) = self
+                .projects
+                .iter()
+                .position(|p| p.root(cx) == Some(root.clone()))
+            {
                 self.activate_project(p, cx);
             }
         }
@@ -674,7 +686,8 @@ impl Workspace {
                 }
                 let title: SharedString = format!("{schema} · diagram").into();
                 let (db, profile, schema) = (self.db.clone(), profile.clone(), schema.clone());
-                let view = cx.new(|cx| DiagramView::new(title.clone(), db, profile, schema, window, cx));
+                let view =
+                    cx.new(|cx| DiagramView::new(title.clone(), db, profile, schema, window, cx));
                 self.open_item(view.into(), key, title, Lucide::Waypoints, cx);
             }
         }
@@ -865,9 +878,8 @@ impl Workspace {
                     let to = root.clone();
                     menu = menu.item(PopupMenuItem::new(project_name(root)).on_click(
                         move |_, _, cx| {
-                            let _ = this.update(cx, |ws, cx| {
-                                ws.move_to_group(ix, Some(to.clone()), cx)
-                            });
+                            let _ = this
+                                .update(cx, |ws, cx| ws.move_to_group(ix, Some(to.clone()), cx));
                         },
                     ));
                 }
@@ -875,9 +887,11 @@ impl Workspace {
             })
         })
         .when(group.is_some(), |menu| {
-            menu.item(PopupMenuItem::new("Remove from Group").on_click(move |_, _, cx| {
-                let _ = this.update(cx, |ws, cx| ws.move_to_group(ix, None, cx));
-            }))
+            menu.item(
+                PopupMenuItem::new("Remove from Group").on_click(move |_, _, cx| {
+                    let _ = this.update(cx, |ws, cx| ws.move_to_group(ix, None, cx));
+                }),
+            )
         })
         .separator()
     }
@@ -1060,9 +1074,8 @@ impl Workspace {
             let group = tab.group.clone().filter(|_| !tab.pinned);
             let color = group.as_ref().map(|g| self.group_color(g, cx));
             // A header in front of each group's run of tabs.
-            let starts_run = ix == 0
-                || self.tabs[ix - 1].pinned
-                || self.tabs[ix - 1].group != tab.group;
+            let starts_run =
+                ix == 0 || self.tabs[ix - 1].pinned || self.tabs[ix - 1].group != tab.group;
             if let (Some(root), Some(color), true) = (&group, color, starts_run) {
                 let collapsed = self.collapsed.contains(root);
                 let count = self.tabs[ix..]
@@ -1072,20 +1085,27 @@ impl Workspace {
                 let (toggle, close) = (root.clone(), root.clone());
                 let weak = weak.clone();
                 items.push(
-                    group_header(("tab-group", ix), project_name(root), color, collapsed, count, cx)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.toggle_group(toggle.clone(), cx)
-                        }))
-                        .context_menu(move |menu, _, _| {
-                            let weak = weak.clone();
-                            let close = close.clone();
-                            menu.item(PopupMenuItem::new("Close Tabs in Group").on_click(
-                                move |_, _, cx| {
-                                    let _ = weak.update(cx, |ws, cx| ws.close_group(&close, cx));
-                                },
-                            ))
-                        })
-                        .into_any_element(),
+                    group_header(
+                        ("tab-group", ix),
+                        project_name(root),
+                        color,
+                        collapsed,
+                        count,
+                        cx,
+                    )
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.toggle_group(toggle.clone(), cx)),
+                    )
+                    .context_menu(move |menu, _, _| {
+                        let weak = weak.clone();
+                        let close = close.clone();
+                        menu.item(PopupMenuItem::new("Close Tabs in Group").on_click(
+                            move |_, _, cx| {
+                                let _ = weak.update(cx, |ws, cx| ws.close_group(&close, cx));
+                            },
+                        ))
+                    })
+                    .into_any_element(),
                 );
             }
             let active = ix == self.active;
@@ -1099,7 +1119,9 @@ impl Workspace {
                 let pinned = tab.pinned;
                 let glyph = |icon: Lucide| Icon::new(icon).xsmall().into_any_element();
                 let (icon, title, dirty, read_only) = match &tab.item {
-                    PaneItem::Server => (glyph(Lucide::Server), "Instance".to_string(), false, None),
+                    PaneItem::Server => {
+                        (glyph(Lucide::Server), "Instance".to_string(), false, None)
+                    }
                     PaneItem::File(e) => {
                         let e = e.read(cx);
                         (
@@ -1174,7 +1196,7 @@ impl Workspace {
                                 this.close(CloseOp::This, ix, window, cx);
                             }))
                     })
-                    .when_some(color, |el, color| el.child(group_stripe(color)))
+                    .when_some(color, |el, color| el.child(group_stripe(color, active)))
                     .on_click(cx.listener(move |this, _, _, cx| this.activate_tab(ix, cx)))
                     .context_menu(move |menu, window, cx| {
                         Self::tab_menu(
@@ -1308,7 +1330,11 @@ impl Workspace {
                         .icon(Lucide::GitBranch)
                         .label(format!(
                             "{name}{sync}{}",
-                            if changed > 0 { format!(" · {changed} changed") } else { String::new() }
+                            if changed > 0 {
+                                format!(" · {changed} changed")
+                            } else {
+                                String::new()
+                            }
                         ))
                         .tooltip("Show Git")
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -1433,7 +1459,8 @@ impl Workspace {
                 });
             }
             RunEvent::Show(key) => {
-                self.terminal.update(cx, |t, cx| t.show_job(key, window, cx));
+                self.terminal
+                    .update(cx, |t, cx| t.show_job(key, window, cx));
             }
         }
         cx.notify();
@@ -1484,13 +1511,17 @@ impl Workspace {
             let store = self.prompt_store.clone();
             let view = cx.new(|cx| PromptView::new(id, store, window, cx));
             let title = view.read(cx).title(cx).into();
-            self.push_tab(PaneItem::Other {
-                view: view.into(),
-                key,
-                title,
-                icon: Lucide::MessageSquareText,
-                file: None,
-            }, None, cx);
+            self.push_tab(
+                PaneItem::Other {
+                    view: view.into(),
+                    key,
+                    title,
+                    icon: Lucide::MessageSquareText,
+                    file: None,
+                },
+                None,
+                cx,
+            );
         }
         if !self.layout.center {
             self.layout.toggle(Area::Center);
@@ -1505,7 +1536,11 @@ impl Workspace {
         if !self.layout.terminal {
             self.layout.toggle(Area::Terminal);
         }
-        if !new && self.terminal.update(cx, |t, cx| t.focus_ssh(&key, window, cx)) {
+        if !new
+            && self
+                .terminal
+                .update(cx, |t, cx| t.focus_ssh(&key, window, cx))
+        {
             cx.notify();
             return;
         }
@@ -1530,18 +1565,26 @@ impl Workspace {
         if !self.activate_key(&key) {
             let store = self.ssh_store.clone();
             let view = cx.new(|cx| SshHostView::new(id, store, window, cx));
-            cx.subscribe_in(&view, window, |this, _, SshHostEvent::Connect(key), window, cx| {
-                this.connect_ssh(key.clone(), false, window, cx)
-            })
+            cx.subscribe_in(
+                &view,
+                window,
+                |this, _, SshHostEvent::Connect(key), window, cx| {
+                    this.connect_ssh(key.clone(), false, window, cx)
+                },
+            )
             .detach();
             let title = view.read(cx).title(cx).into();
-            self.push_tab(PaneItem::Other {
-                view: view.into(),
-                key,
-                title,
-                icon: Lucide::Server,
-                file: None,
-            }, None, cx);
+            self.push_tab(
+                PaneItem::Other {
+                    view: view.into(),
+                    key,
+                    title,
+                    icon: Lucide::Server,
+                    file: None,
+                },
+                None,
+                cx,
+            );
         }
         if !self.layout.center {
             self.layout.toggle(Area::Center);
@@ -1618,14 +1661,25 @@ impl Workspace {
                 .unwrap_or_else(|| dir.display().to_string());
             let dir_for_group = dir.clone();
             let view = cx.new(|cx| FolderSearch::new(dir, window, cx));
-            cx.subscribe_in(&view, window, |this, _, e: &SearchEvent, window, cx| match e {
-                SearchEvent::Open { path, line } => {
-                    this.open_file_at(path.clone(), Some((*line, 1)), window, cx)
-                }
-            })
+            cx.subscribe_in(
+                &view,
+                window,
+                |this, _, e: &SearchEvent, window, cx| match e {
+                    SearchEvent::Open { path, line } => {
+                        this.open_file_at(path.clone(), Some((*line, 1)), window, cx)
+                    }
+                },
+            )
             .detach();
             let group = self.group_of(&dir_for_group, cx);
-            self.open_item_in(view.into(), key.into(), format!("Search: {name}").into(), Lucide::Search, group, cx);
+            self.open_item_in(
+                view.into(),
+                key.into(),
+                format!("Search: {name}").into(),
+                Lucide::Search,
+                group,
+                cx,
+            );
         }
         cx.notify();
     }
@@ -1646,7 +1700,14 @@ impl Workspace {
                 this.open_commit(commit.clone(), cx)
             })
             .detach();
-            self.open_item_in(view.into(), key.into(), format!("History: {name}").into(), Lucide::GitCommitHorizontal, group.clone(), cx);
+            self.open_item_in(
+                view.into(),
+                key.into(),
+                format!("History: {name}").into(),
+                Lucide::GitCommitHorizontal,
+                group.clone(),
+                cx,
+            );
         }
         cx.notify();
     }
@@ -1663,7 +1724,14 @@ impl Workspace {
                 this.open_commit(commit.clone(), cx)
             })
             .detach();
-            self.open_item_in(view.into(), key.into(), "Commit Graph".into(), Lucide::GitGraph, group.clone(), cx);
+            self.open_item_in(
+                view.into(),
+                key.into(),
+                "Commit Graph".into(),
+                Lucide::GitGraph,
+                group.clone(),
+                cx,
+            );
         }
         cx.notify();
     }
@@ -1676,7 +1744,14 @@ impl Workspace {
             let group = self.root(cx);
             let view = cx.new(|cx| CommitView::new(git, commit, cx));
             let title = view.read(cx).title();
-            self.open_item_in(view.into(), key, title, Lucide::GitCommitHorizontal, group.clone(), cx);
+            self.open_item_in(
+                view.into(),
+                key,
+                title,
+                Lucide::GitCommitHorizontal,
+                group.clone(),
+                cx,
+            );
         }
         cx.notify();
     }
@@ -1689,7 +1764,14 @@ impl Workspace {
             let git = self.current().git.clone();
             let group = self.root(cx);
             let view = cx.new(|cx| GitHubView::new(git, window, cx));
-            self.open_item_in(view.into(), key.into(), "GitHub".into(), Lucide::Github, group.clone(), cx);
+            self.open_item_in(
+                view.into(),
+                key.into(),
+                "GitHub".into(),
+                Lucide::Github,
+                group.clone(),
+                cx,
+            );
         }
         cx.notify();
     }
@@ -1708,12 +1790,23 @@ impl Workspace {
             let git = self.current().git.clone();
             let group = self.root(cx);
             let view = cx.new(|cx| DiffView::new(git, file, staged, cx));
-            cx.subscribe_in(&view, window, |this, _, e: &DiffViewEvent, window, cx| match e {
-                DiffViewEvent::OpenFile(path) => this.open_file(path.clone(), window, cx),
-            })
+            cx.subscribe_in(
+                &view,
+                window,
+                |this, _, e: &DiffViewEvent, window, cx| match e {
+                    DiffViewEvent::OpenFile(path) => this.open_file(path.clone(), window, cx),
+                },
+            )
             .detach();
             let title = view.read(cx).title();
-            self.open_item_in(view.into(), key.into(), title, Lucide::GitCommitHorizontal, group, cx);
+            self.open_item_in(
+                view.into(),
+                key.into(),
+                title,
+                Lucide::GitCommitHorizontal,
+                group,
+                cx,
+            );
         }
         cx.notify();
     }
@@ -1730,13 +1823,17 @@ impl Workspace {
             self.active = ix;
         } else {
             let view = cx.new(ChangelogPage::new);
-            self.push_tab(PaneItem::Other {
-                view: view.into(),
-                key,
-                title: "Changelog".into(),
-                icon: Lucide::ScrollText,
-                file: None,
-            }, None, cx);
+            self.push_tab(
+                PaneItem::Other {
+                    view: view.into(),
+                    key,
+                    title: "Changelog".into(),
+                    icon: Lucide::ScrollText,
+                    file: None,
+                },
+                None,
+                cx,
+            );
         }
         cx.notify();
     }
@@ -1761,13 +1858,17 @@ impl Workspace {
             })
             .detach();
             self.canvas = Some(view.downgrade());
-            self.push_tab(PaneItem::Other {
-                view: view.into(),
-                key,
-                title: crate::canvas::TITLE.into(),
-                icon: crate::canvas::ICON,
-                file: None,
-            }, None, cx);
+            self.push_tab(
+                PaneItem::Other {
+                    view: view.into(),
+                    key,
+                    title: crate::canvas::TITLE.into(),
+                    icon: crate::canvas::ICON,
+                    file: None,
+                },
+                None,
+                cx,
+            );
         }
         cx.notify();
     }
@@ -1829,13 +1930,52 @@ impl Workspace {
             self.active = ix;
         } else {
             let view = cx.new(McpPage::new);
-            self.push_tab(PaneItem::Other {
-                view: view.into(),
-                key,
-                title: "MCP".into(),
-                icon: Lucide::Plug,
-                file: None,
-            }, None, cx);
+            self.push_tab(
+                PaneItem::Other {
+                    view: view.into(),
+                    key,
+                    title: "MCP".into(),
+                    icon: Lucide::Plug,
+                    file: None,
+                },
+                None,
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    /// Shows the Dev Tools install page (one tab).
+    fn open_tools_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_welcome(CENTER_ONLY, cx);
+        let key: SharedString = "tools".into();
+        if let Some(ix) = self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
+        {
+            self.active = ix;
+        } else {
+            let view = cx.new(ToolsPage::new);
+            cx.subscribe_in(
+                &view,
+                window,
+                |this, _, e: &ToolsEvent, window, cx| match e {
+                    ToolsEvent::RunInTerminal(command) => this.run_in_terminal(command, window, cx),
+                },
+            )
+            .detach();
+            self.push_tab(
+                PaneItem::Other {
+                    view: view.into(),
+                    key,
+                    title: "Dev Tools".into(),
+                    icon: Lucide::Package,
+                    file: None,
+                },
+                None,
+                cx,
+            );
         }
         cx.notify();
     }
@@ -1879,7 +2019,11 @@ impl Workspace {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::X)
-                            .tooltip(if only { "Close Project" } else { "Close Project and Its Tabs" })
+                            .tooltip(if only {
+                                "Close Project"
+                            } else {
+                                "Close Project and Its Tabs"
+                            })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
                                 this.close_project(ix, window, cx);
@@ -1963,6 +2107,15 @@ impl Workspace {
                     .label("Canvas")
                     .tooltip("Brainstorm on a Whiteboard")
                     .on_click(cx.listener(|this, _, _, cx| this.open_canvas(cx))),
+            )
+            .child(
+                Button::new("open-tools")
+                    .ghost()
+                    .xsmall()
+                    .icon(Lucide::Package)
+                    .label("Tools")
+                    .tooltip("Install Dev Tools: Claude Code, Node.js, Bun, uv and More")
+                    .on_click(cx.listener(|this, _, window, cx| this.open_tools_page(window, cx))),
             )
             .child(
                 Button::new("open-mcp")

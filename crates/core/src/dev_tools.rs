@@ -1,0 +1,659 @@
+//! Developer tools that install with a one-line cURL script (Claude Code,
+//! Bun, uv, …): the catalog, which of them are already installed, the order
+//! to install a selection in (prerequisites first), and running an
+//! installer while streaming its output.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::time::Duration;
+
+use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+
+use crate::{CoreError, Result};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Category {
+    PackageManager,
+    Runtime,
+    Agent,
+    Other,
+}
+
+impl Category {
+    pub const ALL: [Category; 4] = [
+        Category::PackageManager,
+        Category::Runtime,
+        Category::Agent,
+        Category::Other,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Category::PackageManager => "PACKAGE MANAGERS",
+            Category::Runtime => "LANGUAGES & RUNTIMES",
+            Category::Agent => "AI AGENTS",
+            Category::Other => "TERMINAL & APPS",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Tool {
+    /// Stable id, also the logo's key.
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub category: Category,
+    /// The command that shows it is installed.
+    pub bin: &'static str,
+    /// Where it lands when the installer doesn't put it on `PATH` (`~` is
+    /// `$HOME`).
+    pub also: &'static [&'static str],
+    /// The install command, run by the login shell.
+    pub install: &'static str,
+    /// Ids of tools that must be installed first.
+    pub needs: &'static [&'static str],
+    /// Asks for the user's password, so it runs in the terminal instead.
+    pub interactive: bool,
+    /// `bin --version` prints something useful (and returns quickly).
+    pub version: bool,
+}
+
+const fn tool(
+    id: &'static str,
+    name: &'static str,
+    description: &'static str,
+    category: Category,
+    bin: &'static str,
+    install: &'static str,
+) -> Tool {
+    Tool {
+        id,
+        name,
+        description,
+        category,
+        bin,
+        also: &[],
+        install,
+        needs: &[],
+        interactive: false,
+        version: true,
+    }
+}
+
+pub static TOOLS: &[Tool] = &[
+    Tool {
+        interactive: true,
+        also: &["/opt/homebrew/bin/brew", "/usr/local/bin/brew"],
+        ..tool(
+            "homebrew",
+            "Homebrew",
+            "The package manager for macOS. Asks for your password, so it runs in the terminal.",
+            Category::PackageManager,
+            "brew",
+            r#"/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)""#,
+        )
+    },
+    Tool {
+        also: &["~/.nvm/nvm.sh"],
+        version: false,
+        ..tool(
+            "nvm",
+            "nvm",
+            "Node Version Manager: installs and switches Node.js versions.",
+            Category::PackageManager,
+            "nvm",
+            "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash",
+        )
+    },
+    Tool {
+        also: &["~/Library/pnpm/pnpm"],
+        ..tool(
+            "pnpm",
+            "pnpm",
+            "Fast, disk-efficient package manager for JavaScript.",
+            Category::PackageManager,
+            "pnpm",
+            "curl -fsSL https://get.pnpm.io/install.sh | sh -",
+        )
+    },
+    Tool {
+        needs: &["node"],
+        ..tool(
+            "npm",
+            "npm (latest)",
+            "Ships with Node.js; this updates it to the newest release.",
+            Category::PackageManager,
+            "npm",
+            "npm install -g npm@latest",
+        )
+    },
+    Tool {
+        also: &["~/.local/bin/uv"],
+        ..tool(
+            "uv",
+            "uv",
+            "Python package and project manager from Astral, written in Rust.",
+            Category::PackageManager,
+            "uv",
+            "curl -LsSf https://astral.sh/uv/install.sh | sh",
+        )
+    },
+    Tool {
+        needs: &["nvm"],
+        ..tool(
+            "node",
+            "Node.js",
+            "The latest LTS release, installed and set as default with nvm.",
+            Category::Runtime,
+            "node",
+            "nvm install --lts && nvm alias default 'lts/*'",
+        )
+    },
+    Tool {
+        also: &["~/.bun/bin/bun"],
+        ..tool(
+            "bun",
+            "Bun",
+            "JavaScript runtime, bundler, test runner and package manager.",
+            Category::Runtime,
+            "bun",
+            "curl -fsSL https://bun.sh/install | bash",
+        )
+    },
+    Tool {
+        also: &["~/.deno/bin/deno"],
+        ..tool(
+            "deno",
+            "Deno",
+            "Secure JavaScript and TypeScript runtime.",
+            Category::Runtime,
+            "deno",
+            "curl -fsSL https://deno.land/install.sh | sh -s -- -y",
+        )
+    },
+    Tool {
+        needs: &["uv"],
+        also: &["~/.local/bin/python3"],
+        ..tool(
+            "python",
+            "Python",
+            "The latest CPython, managed by uv and linked as python3.",
+            Category::Runtime,
+            "python3",
+            "uv python install --default",
+        )
+    },
+    Tool {
+        also: &["~/.cargo/bin/rustc"],
+        ..tool(
+            "rust",
+            "Rust",
+            "rustup with the stable toolchain: rustc, cargo and friends.",
+            Category::Runtime,
+            "rustc",
+            "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y",
+        )
+    },
+    Tool {
+        also: &["~/.local/bin/claude"],
+        ..tool(
+            "claude-code",
+            "Claude Code",
+            "Anthropic's coding agent. The native installer needs no Node.js.",
+            Category::Agent,
+            "claude",
+            "curl -fsSL https://claude.ai/install.sh | bash",
+        )
+    },
+    Tool {
+        also: &["~/.local/bin/codex"],
+        ..tool(
+            "codex",
+            "Codex CLI",
+            "OpenAI's coding agent for the terminal.",
+            Category::Agent,
+            "codex",
+            "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
+        )
+    },
+    Tool {
+        also: &["~/.local/bin/omp"],
+        ..tool(
+            "omp",
+            "oh-my-pi",
+            "The omp coding agent: LSP, debugger and IDE tools in the terminal.",
+            Category::Agent,
+            "omp",
+            "curl -fsSL https://omp.sh/install | sh",
+        )
+    },
+    Tool {
+        also: &["~/.opencode/bin/opencode"],
+        ..tool(
+            "opencode",
+            "OpenCode",
+            "Open source coding agent with a terminal UI.",
+            Category::Agent,
+            "opencode",
+            "curl -fsSL https://opencode.ai/install | bash",
+        )
+    },
+    Tool {
+        also: &["~/.local/bin/amp", "~/.amp/bin/amp"],
+        ..tool(
+            "amp",
+            "Amp",
+            "Sourcegraph's agentic coding tool.",
+            Category::Agent,
+            "amp",
+            "curl -fsSL https://ampcode.com/install.sh | bash",
+        )
+    },
+    Tool {
+        also: &["~/.local/bin/cursor-agent"],
+        ..tool(
+            "cursor",
+            "Cursor CLI",
+            "Cursor's agent in the terminal (cursor-agent).",
+            Category::Agent,
+            "cursor-agent",
+            "curl https://cursor.com/install -fsS | bash",
+        )
+    },
+    Tool {
+        also: &["~/.local/bin/droid"],
+        ..tool(
+            "droid",
+            "Factory Droid",
+            "Factory's software development agent.",
+            Category::Agent,
+            "droid",
+            "curl -fsSL https://app.factory.ai/cli | sh",
+        )
+    },
+    Tool {
+        also: &["~/.local/bin/kiro-cli"],
+        ..tool(
+            "kiro",
+            "Kiro CLI",
+            "AWS's agentic coding assistant for the terminal.",
+            Category::Agent,
+            "kiro-cli",
+            "curl -fsSL https://cli.kiro.dev/install | bash",
+        )
+    },
+    Tool {
+        needs: &["node"],
+        ..tool(
+            "gemini",
+            "Gemini CLI",
+            "Google's open source agent, installed with npm.",
+            Category::Agent,
+            "gemini",
+            "npm install -g @google/gemini-cli",
+        )
+    },
+    Tool {
+        also: &["~/.local/bin/herdr"],
+        ..tool(
+            "herdr",
+            "herdr",
+            "Split panes and sessions for Sawit's terminal.",
+            Category::Other,
+            "herdr",
+            "curl -fsSL https://herdr.dev/install.sh | sh",
+        )
+    },
+    Tool {
+        also: &["/Applications/Cap.app", "~/Applications/Cap.app"],
+        version: false,
+        ..tool(
+            "cap",
+            "Cap",
+            "Open source screen recorder: the desktop app and its cap CLI.",
+            Category::Other,
+            "cap",
+            "curl -fsSL https://cap.so/install-cli.sh | sh",
+        )
+    },
+    Tool {
+        also: &["/Applications/Zed.app", "~/Applications/Zed.app"],
+        ..tool(
+            "zed",
+            "Zed",
+            "High-performance code editor, with the zed command.",
+            Category::Other,
+            "zed",
+            "curl -f https://zed.dev/install.sh | sh",
+        )
+    },
+    Tool {
+        also: &["~/.local/bin/starship"],
+        ..tool(
+            "starship",
+            "Starship",
+            "Fast, customizable prompt for any shell.",
+            Category::Other,
+            "starship",
+            r#"curl -sS https://starship.rs/install.sh | sh -s -- -y -b "$HOME/.local/bin""#,
+        )
+    },
+    Tool {
+        also: &["~/.fly/bin/flyctl"],
+        ..tool(
+            "flyio",
+            "Fly.io CLI",
+            "flyctl: deploy apps to Fly.io.",
+            Category::Other,
+            "flyctl",
+            "curl -L https://fly.io/install.sh | sh",
+        )
+    },
+];
+
+pub fn find(id: &str) -> Option<&'static Tool> {
+    TOOLS.iter().find(|t| t.id == id)
+}
+
+/// The order to install `wanted` in: every missing prerequisite before the
+/// tools that need it, each tool once. Installed tools are left out.
+pub fn plan(wanted: &[&str], installed: &dyn Fn(&str) -> bool) -> Vec<&'static Tool> {
+    fn visit(id: &str, installed: &dyn Fn(&str) -> bool, out: &mut Vec<&'static Tool>) {
+        let Some(tool) = find(id) else { return };
+        if out.iter().any(|t| t.id == id) {
+            return;
+        }
+        for need in tool.needs {
+            if !installed(need) {
+                visit(need, installed, out);
+            }
+        }
+        out.push(tool);
+    }
+    let mut out = Vec::new();
+    for id in wanted {
+        visit(id, installed, &mut out);
+    }
+    out
+}
+
+/// Put in front of every command: the folders installers use, and nvm, so a
+/// tool installed a moment ago is found even before the shell profile
+/// picks it up.
+const PRELUDE: &str = r#"export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.bun/bin:$HOME/.deno/bin:$HOME/.fly/bin:$HOME/.opencode/bin:$HOME/.amp/bin:$HOME/Library/pnpm:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
+"#;
+
+/// The user's login shell, so the profile's `PATH` and variables apply.
+fn shell() -> tokio::process::Command {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let mut cmd = tokio::process::Command::new(shell);
+    cmd.arg("-l")
+        .stdin(Stdio::null())
+        .env("NONINTERACTIVE", "1")
+        .kill_on_drop(true);
+    // A new session has no controlling terminal, so an installer that
+    // reads /dev/tty fails fast instead of waiting for an answer.
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    cmd
+}
+
+fn expand(path: &str) -> PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(rest),
+        None => PathBuf::from(path),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    pub path: PathBuf,
+    pub version: Option<String>,
+}
+
+const MARK: &str = "__SAWIT_TOOL__";
+
+/// Which tools are installed: `command -v` in one login shell, then the
+/// known install locations, then each one's `--version`.
+pub async fn detect() -> HashMap<&'static str, Found> {
+    let mut script = String::from(PRELUDE);
+    for t in TOOLS {
+        // nvm is a shell function; its path is the script that defines it.
+        let probe = if t.id == "nvm" {
+            r#"[ -s "$NVM_DIR/nvm.sh" ] && printf '%s' "$NVM_DIR/nvm.sh""#.to_string()
+        } else if t.id == "python" {
+            // macOS's /usr/bin/python3 is the old system Python (or a stub
+            // that asks to install the Xcode tools); it doesn't count.
+            "/usr/bin/which -a python3 2>/dev/null | grep -v '^/usr/bin/' | head -n 1".to_string()
+        } else {
+            format!("command -v {} 2>/dev/null", t.bin)
+        };
+        script.push_str(&format!("printf '{MARK}{}\\t%s\\n' \"$({probe})\"\n", t.id));
+    }
+    let mut cmd = shell();
+    cmd.arg("-c")
+        .arg(script)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let out = match tokio::time::timeout(Duration::from_secs(20), cmd.output()).await {
+        Ok(Ok(out)) => String::from_utf8_lossy(&out.stdout).into_owned(),
+        _ => String::new(),
+    };
+    let mut paths: HashMap<&'static str, PathBuf> = HashMap::new();
+    for line in out.lines() {
+        let Some((id, path)) = line
+            .split_once(MARK)
+            .and_then(|(_, rest)| rest.split_once('\t'))
+        else {
+            continue;
+        };
+        // `command -v` names functions and aliases without a slash.
+        if let Some(t) = find(id)
+            && path.starts_with('/')
+        {
+            paths.insert(t.id, PathBuf::from(path));
+        }
+    }
+    for t in TOOLS {
+        if paths.contains_key(t.id) {
+            continue;
+        }
+        if let Some(p) = t.also.iter().map(|p| expand(p)).find(|p| p.exists()) {
+            paths.insert(t.id, p);
+        }
+    }
+    let versions = futures::future::join_all(paths.iter().map(|(id, path)| async move {
+        let tool = find(id)?;
+        if !tool.version || path.extension().is_some_and(|e| e == "app") {
+            return None;
+        }
+        let out = crate::cmd::run(path, ["--version"], Duration::from_secs(3))
+            .await
+            .ok()?;
+        let text = if out.stdout.trim().is_empty() {
+            out.stderr
+        } else {
+            out.stdout
+        };
+        Some((*id, short_version(&text)?))
+    }))
+    .await;
+    let mut versions: HashMap<&str, String> = versions.into_iter().flatten().collect();
+    paths
+        .into_iter()
+        .map(|(id, path)| {
+            let version = versions.remove(id);
+            (id, Found { path, version })
+        })
+        .collect()
+}
+
+/// The version number in a `--version` line ("Python 3.13.2" → "3.13.2").
+fn short_version(text: &str) -> Option<String> {
+    let first = text.lines().find(|l| !l.trim().is_empty())?;
+    let word = first
+        .split(|c: char| c.is_whitespace() || c == ',' || c == '(' || c == ')')
+        .map(|w| w.trim_start_matches('v'))
+        .find(|w| w.chars().next().is_some_and(|c| c.is_ascii_digit()) && w.contains('.'))?;
+    Some(word.to_string())
+}
+
+/// Runs `tool`'s installer, sending each line it prints to `on_line`.
+/// Fails with the last lines of output when it exits non-zero.
+pub async fn install(tool: &Tool, on_line: impl Fn(String) + Send + Sync) -> Result<()> {
+    let script = format!("{PRELUDE}set -e\n{}\n", tool.install);
+    let mut cmd = shell();
+    cmd.arg("-c")
+        .arg(script)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn()?;
+    let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
+    let tail = std::sync::Mutex::new(Vec::<String>::new());
+    let read = |pipe: Option<Box<dyn AsyncRead + Unpin + Send>>| {
+        let (on_line, tail) = (&on_line, &tail);
+        async move {
+            let Some(pipe) = pipe else { return };
+            let mut lines = BufReader::new(pipe).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let line = strip_ansi(&line);
+                // Progress bars redraw with \r; keep what's left at the end.
+                let line = line
+                    .rsplit('\r')
+                    .next()
+                    .unwrap_or_default()
+                    .trim_end()
+                    .to_string();
+                if line.trim().is_empty() {
+                    continue;
+                }
+                {
+                    let mut tail = tail.lock().unwrap();
+                    tail.push(line.clone());
+                    if tail.len() > 8 {
+                        tail.remove(0);
+                    }
+                }
+                on_line(line);
+            }
+        }
+    };
+    let run = async {
+        futures::join!(
+            read(stdout.map(|p| Box::new(p) as Box<dyn AsyncRead + Unpin + Send>)),
+            read(stderr.map(|p| Box::new(p) as Box<dyn AsyncRead + Unpin + Send>)),
+        );
+        child.wait().await
+    };
+    let status = tokio::time::timeout(Duration::from_secs(15 * 60), run)
+        .await
+        .map_err(|_| CoreError::Command {
+            program: tool.name.into(),
+            code: None,
+            stderr: "timed out after 15 minutes".into(),
+        })??;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(CoreError::Command {
+            program: tool.name.into(),
+            code: status.code(),
+            stderr: tail.into_inner().unwrap().join("\n"),
+        })
+    }
+}
+
+/// Drops terminal colour and cursor escapes (`ESC [ … letter`).
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                chars.next();
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ids_are_unique_and_needs_exist() {
+        for (ix, t) in TOOLS.iter().enumerate() {
+            assert!(
+                TOOLS[..ix].iter().all(|o| o.id != t.id),
+                "duplicate {}",
+                t.id
+            );
+            for need in t.needs {
+                assert!(find(need).is_some(), "{} needs unknown {need}", t.id);
+            }
+        }
+    }
+
+    #[test]
+    fn plan_puts_missing_prerequisites_first() {
+        let none = |_: &str| false;
+        let ids: Vec<_> = plan(&["gemini", "npm", "python"], &none)
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(ids, ["nvm", "node", "gemini", "npm", "uv", "python"]);
+    }
+
+    #[test]
+    fn plan_skips_installed_prerequisites() {
+        let installed = |id: &str| id == "nvm" || id == "uv";
+        let ids: Vec<_> = plan(&["gemini", "python"], &installed)
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(ids, ["node", "gemini", "python"]);
+    }
+
+    #[test]
+    fn versions() {
+        assert_eq!(short_version("Python 3.13.2\n").as_deref(), Some("3.13.2"));
+        assert_eq!(short_version("v22.11.0").as_deref(), Some("22.11.0"));
+        assert_eq!(
+            short_version("2.0.14 (Claude Code)").as_deref(),
+            Some("2.0.14")
+        );
+        assert_eq!(
+            short_version("rustc 1.90.0 (1159e78c4 2025-09-14)").as_deref(),
+            Some("1.90.0")
+        );
+        assert_eq!(
+            short_version("uv 0.12.1 (Homebrew)").as_deref(),
+            Some("0.12.1")
+        );
+        assert_eq!(short_version("nothing here"), None);
+    }
+
+    #[test]
+    fn ansi_is_stripped() {
+        assert_eq!(strip_ansi("\u{1b}[1;32mok\u{1b}[0m done"), "ok done");
+    }
+}

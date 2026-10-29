@@ -31,12 +31,22 @@ impl Workspace {
         let git = cx.new(GitStore::new);
         let git_panel = cx.new(|cx| GitPanel::new(git.clone(), window, cx));
         let run_panel = cx.new(|cx| {
-            RunPanel::new(run_store.clone(), terminal.clone(), ports.clone(), window, cx)
+            RunPanel::new(
+                run_store.clone(),
+                terminal.clone(),
+                ports.clone(),
+                window,
+                cx,
+            )
         });
         let subscriptions = vec![
-            cx.subscribe_in(&files, window, |this, files, event: &FilesEvent, window, cx| {
-                this.on_files_event(files, event, window, cx)
-            }),
+            cx.subscribe_in(
+                &files,
+                window,
+                |this, files, event: &FilesEvent, window, cx| {
+                    this.on_files_event(files, event, window, cx)
+                },
+            ),
             cx.observe(&git, |_, _, cx| cx.notify()),
             cx.subscribe_in(
                 &git_panel,
@@ -84,18 +94,26 @@ impl Workspace {
                 cx.defer_in(window, |this, _, cx| this.sync_projects(cx));
             }
             FilesEvent::Moved { from, to } => self.follow_move(from, to, cx),
-            FilesEvent::OpenTerminal(dir) => {
-                self.leave_welcome(Layout::default(), cx);
-                if !self.layout.terminal {
-                    self.layout.toggle(Area::Terminal);
-                }
-                self.terminal
-                    .update(cx, |t, cx| t.open_shell_in(dir.clone(), window, cx));
-                cx.notify();
-            }
+            FilesEvent::OpenTerminal(dir) => self.open_terminal_in(dir.clone(), window, cx),
             FilesEvent::FindInFolder(dir) => self.open_folder_search(dir.clone(), window, cx),
             FilesEvent::ViewHistory(path) => self.open_git_history(path.clone(), cx),
         }
+    }
+
+    /// Shows the terminal with a new shell in `dir`.
+    pub(super) fn open_terminal_in(
+        &mut self,
+        dir: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.leave_welcome(Layout::default(), cx);
+        if !self.layout.terminal {
+            self.layout.toggle(Area::Terminal);
+        }
+        self.terminal
+            .update(cx, |t, cx| t.open_shell_in(dir, window, cx));
+        cx.notify();
     }
 
     pub(super) fn current(&self) -> &Project {
@@ -123,7 +141,11 @@ impl Workspace {
     pub fn open_project(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_welcome(Layout::default(), cx);
         self.sidebar = SidebarTab::Files;
-        if let Some(ix) = self.projects.iter().position(|p| p.root(cx) == Some(root.clone())) {
+        if let Some(ix) = self
+            .projects
+            .iter()
+            .position(|p| p.root(cx) == Some(root.clone()))
+        {
             self.activate_project(ix, cx);
             return;
         }
@@ -138,13 +160,18 @@ impl Workspace {
             self.projects.push(project);
             self.project = self.projects.len() - 1;
         }
-        self.current().files.update(cx, |f, cx| f.set_root(root, cx));
+        self.current()
+            .files
+            .update(cx, |f, cx| f.set_root(root, cx));
         cx.notify();
     }
 
     /// Shows `root` in the active project instead of its folder (`sawit -r`).
     pub fn replace_project(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let open = self.projects.iter().any(|p| p.root(cx) == Some(root.clone()));
+        let open = self
+            .projects
+            .iter()
+            .any(|p| p.root(cx) == Some(root.clone()));
         if open || self.root(cx).is_none() {
             return self.open_project(root, window, cx);
         }
@@ -169,7 +196,9 @@ impl Workspace {
             };
         }
         self.active = placed.unwrap_or(0);
-        self.current().files.update(cx, |f, cx| f.set_root(root, cx));
+        self.current()
+            .files
+            .update(cx, |f, cx| f.set_root(root, cx));
         cx.notify();
     }
 
@@ -185,7 +214,11 @@ impl Workspace {
         let Some(root) = self.group_of(path, cx) else {
             return;
         };
-        if let Some(ix) = self.projects.iter().position(|p| p.root(cx) == Some(root.clone())) {
+        if let Some(ix) = self
+            .projects
+            .iter()
+            .position(|p| p.root(cx) == Some(root.clone()))
+        {
             self.activate_project(ix, cx);
         }
     }

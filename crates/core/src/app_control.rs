@@ -50,6 +50,7 @@ pub enum Panel {
 pub enum Page {
     Canvas,
     Mcp,
+    Tools,
     Changelog,
     GitGraph,
     Github,
@@ -351,6 +352,20 @@ mod tests {
                 .unwrap()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn tools_page_round_trips() {
+        let request = Request {
+            project: None,
+            command: Command::OpenPage { page: Page::Tools },
+        };
+        let bytes = encode(&request);
+        assert_eq!(
+            &bytes[MAGIC.len()..],
+            br#"{"cmd":"open_page","page":"tools"}"#
+        );
+        assert_eq!(decode(&bytes), Some(Ok(request)));
     }
 
     #[test]
