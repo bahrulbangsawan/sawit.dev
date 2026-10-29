@@ -41,7 +41,7 @@
 
 Sawit is built for local development with PostgreSQL. This work usually needs Docker Desktop,
 a database client, an editor, a terminal, and a few command-line tools as separate apps. In Sawit
-they all live in a single Rust binary of about **24 MB** that uses **about 67 MB of memory** when idle.
+they all live in a single Rust binary of about **34 MB** that uses **about 67 MB of memory** when idle.
 The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (the "One Dark" palette).
 
 <p align="center">
@@ -53,13 +53,15 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🐘 **Postgres without Docker** | Use binaries from Homebrew, Postgres.app, or `PATH`, or let Sawit download PostgreSQL 16/17/18. |
 | 🛡️ **Port conflicts prevented** | Before starting, Sawit checks for processes already using the port, including Docker containers. |
 | 🔍 **Safe data browsing** | The table grid uses a separate read-only connection. Passwords are stored in the macOS Keychain. |
+| 📦 **Export, back up, import** | Tables and queries to CSV or Excel, `pg_dump` backups, CSV imports, and bulk delete or set on the rows you select. |
 | 🗺️ **Schema diagrams** | Tables and foreign keys drawn as a diagram, and exported as DBML or SVG. |
 | ✍️ **Full editor** | Highlighting for about 200 languages, formatters, Markdown/HTML/SVG/Mermaid preview, and image, PDF, and video viewers. |
 | 🖥️ **A real terminal** | Full `alacritty_terminal` emulation, fullscreen with one click, and it can run [herdr](https://herdr.dev). |
 | 📡 **Ports & network** | See and stop every dev server you started, and diagnose your internet connection step by step. |
 | 💬 **Prompt library** | Save the prompts you reuse, with tags and `{{variables}}` to fill in before copying. |
-| ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server, installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first. |
+| ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports and `sawit backup` dumps. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (94 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 
 ## Install
 
@@ -69,7 +71,7 @@ On an Apple Silicon Mac, run:
 curl -fsSL https://raw.githubusercontent.com/bahrulbangsawan/sawit.dev/main/scripts/install.sh | sh
 ```
 
-This installs the latest release into `/Applications` (or `~/Applications`). Add `SAWIT_VERSION=v0.0.3` before `sh`
+This installs the latest release into `/Applications` (or `~/Applications`). Add `SAWIT_VERSION=v0.0.6` before `sh`
 to pick a version. After that, the app updates itself.
 
 The script also offers to install [herdr](https://herdr.dev) (optional, for split panes in Sawit's terminal). It asks
@@ -89,8 +91,8 @@ A new window opens on a welcome screen, like Zed's: **Open Folder…**, **New Po
 **Open Terminal** on the left, and your recent folders, instances and database connections on the right.
 Picking anything lays the window out for that job. **Continue Without a Project** goes straight to the workspace.
 
-The window is split into a sidebar with six tabs (**Instances**, **Files**, **Database**, **Ports**, **Network**,
-**Prompts**), a tabbed center area, a terminal dock at the bottom, and a status bar. The status bar shows how many
+The window is split into a sidebar with ten tabs (**Instances**, **Files**, **Git**, **Database**, **Run**, **Ports**,
+**Network**, **SSH**, **Shell Config**, **Prompts**), a tabbed center area, a terminal dock at the bottom, and a status bar. The status bar shows how many
 instances are running and the project path, with a button that copies the path.
 
 ### Local PostgreSQL instances
@@ -119,7 +121,7 @@ explained. A conflict on the same address can't be forced.
 
 ### Database & table browser
 
-<img src="docs/media/table-grid.png" alt="Schema tree and table grid for shop.orders, 18,500 rows" width="100%">
+<img src="docs/media/table-grid.png" alt="Table grid for shop.orders, 18,500 rows, with row checkboxes, search, filter and the Export button" width="100%">
 
 - **Connections** from a `DATABASE_URL`, a `.env` file, or a running Sawit instance (**Connect Instances**).
   Passwords are stored in the **macOS Keychain**, never in a file.
@@ -133,6 +135,15 @@ explained. A conflict on the same address can't be forced.
 - **Paged read-only grid**: 50 rows per page, ordered by primary key so pages stay stable,
   over a separate read-only connection. The first page shows before the row count finishes.
   Counting stops after 3 seconds; after that an estimate is shown.
+- **Select rows** with their checkboxes, or every row the search and filters match, then **Delete Rows** or set a
+  column to one value. Sawit says how many rows change and asks first.
+- **Export** the table, or only the rows that match, to **CSV or Excel**. Rows are written as they arrive, so a big
+  table never has to fit in memory. Excel stops at its limit of 1,048,576 rows.
+- Right-click a connection, schema or table in the tree to **Back Up** with `pg_dump` (plain SQL, or the format
+  `pg_restore` reads; Sawit picks the newest installed PostgreSQL that can dump the server), **Import CSV…** into a
+  table, **Empty Table…**, **Refresh Materialized View**, or **Delete…** (**Delete with Dependents** adds `CASCADE`).
+- From the terminal: `sawit panen`, `sawit backup` and `sawit tanam`
+  (see [Databases, ports and instances from the terminal](#databases-ports-and-instances-from-the-terminal)).
 
 ### SQL editor
 
@@ -150,6 +161,7 @@ explained. A conflict on the same address can't be forced.
 - Click the diagram icon next to a schema to see its tables, keys and foreign keys as a diagram.
 - Zoom in and out, or switch to **DBML** to read the same schema as text (for dbdiagram.io and dbdocs).
 - Copy the DBML, or save it as `.dbml` or the diagram as `.svg`.
+- Zoomed out, each table shows just its name, wrapped at underscores so long names stay readable.
 - Diagrams are drawn by [Pele](https://pele.run), the renderer from Obsidian, running offline inside the app.
 
 ### Project code editor
@@ -194,6 +206,28 @@ explained. A conflict on the same address can't be forced.
   (herdr, vim) uses the mouse.
 - New terminals start in the project folder. Shells idle at their prompt follow when you open another project.
 
+### Dev tools
+
+<img src="docs/media/tools.png" alt="Dev Tools page: package managers such as Homebrew, nvm, pnpm, npm and uv, and runtimes such as Node.js, Bun and Deno, each with its install status, version and install command" width="100%">
+
+- Click **Tools** in the title bar for package managers (Homebrew, nvm, pnpm, npm, uv), languages and runtimes
+  (Node.js, Bun, Deno, Python, Rust), AI agents (Claude Code, Codex, OpenCode, Amp, …) and terminal apps.
+- Each tool shows whether it's installed, its version and where it lives, and the exact command that installs it.
+- **Install** one, tick several and **Install Selected**, or **Install All Missing**. Each runs its official install
+  script in your login shell, one at a time, with prerequisites first (nvm before Node.js, uv before Python).
+- Homebrew asks for your password, so it runs in the terminal. Open a new terminal tab afterwards so it sees the
+  new `PATH`.
+- From the terminal: `sawit list tools` and `sawit pasang bun uv`.
+
+### Canvas
+
+- Click **Canvas** in the title bar for an [Excalidraw](https://excalidraw.com) whiteboard, fully offline. It saves
+  by itself in the format excalidraw.com opens, and exports land in `~/Downloads`.
+- Excalidraw's **Mermaid to Excalidraw** tool (and the `canvas_add_mermaid` MCP tool) turns Mermaid into
+  **editable shapes**: boxes, arrows bound to them, and labels. Charts (pie, Gantt, XY,
+  quadrant, journey, Sankey, architecture) are placed as one image. Pele, the renderer the rest of the app uses,
+  does the conversion.
+
 ### Listening ports
 
 <img src="docs/media/ports.png" alt="Ports tab listing dev servers started with npm run dev and bun run dev, with their ports and project folders" width="100%">
@@ -225,6 +259,13 @@ explained. A conflict on the same address can't be forced.
 - Search by text or `#tag`. Favorites and the prompts you use most come first.
 - Write `{{variables}}` in a prompt, fill them in its tab, and **Fill & Copy**. Copy a prompt as is from the list.
 - Stored in `prompts.json` in Sawit's data folder.
+
+### Shell config
+
+- The **Shell Config** tab lists the shell startup files on this Mac (`~/.zshrc`, `/etc/profile`, …).
+  Click one to edit it.
+- Right-click a file to reveal it in Finder, open it in its default app, duplicate it (`.zshrc copy`, a quick
+  backup), copy its path, move it to the Trash or delete it. The Files tab's shortcuts work here too.
 
 ### Tabs & layout
 
@@ -265,6 +306,17 @@ explained. A conflict on the same address can't be forced.
 | Close Clean (tabs without changes) | <kbd>⌘</kbd><kbd>K</kbd> <kbd>U</kbd> |
 | Close All | <kbd>⌘</kbd><kbd>K</kbd> <kbd>W</kbd> |
 | Pin Tab | <kbd>⌘</kbd><kbd>K</kbd> <kbd>⇧</kbd><kbd>↩</kbd> |
+| Files / Shell Config: reveal in Finder | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>R</kbd> |
+| Files / Shell Config: open in default app | <kbd>⌃</kbd><kbd>⇧</kbd><kbd>↩</kbd> |
+| Files / Shell Config: duplicate | <kbd>⌘</kbd><kbd>D</kbd> |
+| Files / Shell Config: copy path | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>C</kbd> |
+| Files / Shell Config: move to Trash / delete | <kbd>⌫</kbd> / <kbd>⌥</kbd><kbd>⌘</kbd><kbd>⌫</kbd> |
+| Files: new file / new folder | <kbd>⌘</kbd><kbd>N</kbd> / <kbd>⌥</kbd><kbd>⌘</kbd><kbd>N</kbd> |
+| Files: rename | <kbd>F2</kbd> |
+| Files: cut / copy / paste | <kbd>⌘</kbd><kbd>X</kbd> / <kbd>⌘</kbd><kbd>C</kbd> / <kbd>⌘</kbd><kbd>V</kbd> |
+| Files: undo / redo | <kbd>⌘</kbd><kbd>Z</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>Z</kbd> |
+| Files: copy relative path | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>C</kbd> |
+| Files: find in folder | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>F</kbd> |
 | Quit | <kbd>⌘</kbd><kbd>Q</kbd> |
 
 ## The `sawit` command
@@ -274,8 +326,8 @@ Like `zed`, Sawit can be opened from the terminal. Install the command with the 
 Both create a symlink `/usr/local/bin/sawit` to the app and ask for an admin password if that folder is owned by
 root.
 
-Besides opening files, the command can query databases like `psql`, list instances, databases and ports, and stop
-dev servers or instances, all without the app (see
+Besides opening files, the command can query databases like `psql`, export, back up and import tables, list
+instances, databases, ports and dev tools, stop dev servers or instances, and install dev tools, all without the app (see
 [below](#databases-ports-and-instances-from-the-terminal)).
 
 ```bash
@@ -308,38 +360,71 @@ sawit kyzn leads                             # first 100 rows
 sawit kyzn leads "phone is null"             # filter: SELECT * FROM leads WHERE phone is null
 sawit kyzn leads "select * from leads where phone is null"   # any SQL, like psql (writes too)
 sawit list                                   # instances, databases, ports and saved connections
-sawit list db                                # or: instances, ports, connections
+sawit list db                                # or: instances, ports, connections, tools
 sawit bakar ports                            # "burn" dev servers: confirm, SIGTERM, then SIGKILL
 sawit bakar ports 3000 5173 -y               # whatever listens on these ports, without asking
 sawit bakar instances                        # stop running Sawit instances (data is kept)
+sawit panen kyzn leads leads.xlsx            # "harvest": export a table to Excel (or .csv)
+sawit panen kyzn "select * from leads where phone is null" nophone.csv   # export a query (read-only)
+sawit backup kyzn kyzn.dump                  # pg_dump the database (.dump/.backup for pg_restore, else SQL)
+sawit backup kyzn crm.leads leads.sql        # one schema or one table
+sawit tanam kyzn leads leads.csv             # "plant": load a CSV file into a table, all rows or none
+sawit list tools                             # dev tools and whether they're installed
+sawit pasang bun uv                          # "plant": install dev tools, prerequisites first (asks; -y skips)
 ```
 
 - `<db>` is looked up in this order: a Sawit instance or saved connection with that name, a database with that name in
   a saved connection, `DATABASE_URL` in `.env` in the current folder or one above it, then the databases of every
   Postgres running locally. A unique prefix also works (`kyzn` finds `kyzn_crm`). If a file or folder with that name
-  exists, it's opened instead. To open a folder named `list` or `bakar`, use `sawit ./list`.
+  exists, it's opened instead. To open a folder named after a subcommand (`list`, `bakar`, `panen`, `backup`,
+  `tanam`, `pasang`, …), use `sawit ./list`.
+- Every word has an English and an Indonesian name: `list`/`ls`, `panen`/`export`/`ekspor`,
+  `backup`/`dump`/`cadangkan`, `tanam`/`import`/`impor`, `pasang`/`install`, and for `list`: `db`/`blok`,
+  `ports`/`lahan`, `instances`/`kebun`, `connections`/`konsesi`, `tools`/`alat`/`perkakas`.
+- `panen` and `backup` ask before replacing an existing file; `-y` replaces it without asking. Without a terminal
+  they refuse instead of prompting. `panen` with SQL runs it read-only.
 - Table output goes to stdout, while the "connected to" line and timing go to stderr, so `sawit kyzn leads | less`
   stays clean. Up to 10,000 rows are printed per result.
 - `bakar ports` with no ports only takes dev servers (tools such as `npm run dev`, `vite` or `bun`). It skips databases,
   Docker, Sawit's instances and protected tools (Claude, MCP servers, language servers, Electron), the same rules as
   the `kill-dev` script. Without a terminal it asks for `-y` instead of prompting.
+- `pasang` runs each tool's official install script, the same as the app's **Tools** page. It lists what will run and
+  asks first (`-y` skips the question; without a terminal it needs `-y`). Homebrew asks for a password, so `pasang`
+  prints its command for you to run instead.
 
 ## MCP for AI agents
 
-<img src="docs/media/mcp.png" alt="MCP page listing AI clients found on this Mac with their install status and config paths" width="100%">
+<img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) gives AI agents access to local instances and databases:
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 94 tools work **without the app**,
+except the app-control ones, which drive the running app (`launch_app` starts it).
 
-| Tool | Purpose |
+| Area | Tools |
 |---|---|
-| `list_instances` | List instances with status, port, and `DATABASE_URL` |
-| `start_instance` / `stop_instance` | Start an instance (refused with an explanation if the port is in use) or stop it |
-| `list_connections` | List instances and saved connections usable by `describe_schema`/`query` |
-| `describe_schema` | Schemas, tables, views, and columns |
-| `query` | Run SQL, **always read-only**, up to 500 rows |
-| `write_env` | Write `DATABASE_URL` to the project's `.env` |
+| Instances | `list_instances`, `create_instance`, `start_instance` (refused with an explanation when the port is in use), `stop_instance`, `restart_instance`, `remove_instance`, `instance_logs`, `check_port`, `list_postgres_binaries` |
+| Databases | `list_connections`, `detect_databases`, `list_databases`, `create_database`, `drop_database`, `describe_schema`, `describe_table`, `query` (**always read-only**, up to 500 rows), `execute_sql` (read-write), `save_connection`, `remove_connection`, `write_env` |
+| Export, backup, import | `export_table`, `export_query` (CSV or Excel), `backup_database` (`pg_dump`), `import_csv`, `drop_relation`, `truncate_table`, `refresh_materialized_view` |
+| Diagrams | `render_mermaid` (SVG), `schema_diagram` (Mermaid, DBML or SVG) |
+| Ports | `list_ports`, `stop_processes` |
+| Network | `diagnose_network`, `ping` |
+| SSH | `list_ssh_hosts`, `add_ssh_host`, `update_ssh_host`, `remove_ssh_host`, `probe_ssh_host`, `ssh_exec` |
+| Run commands | `list_scripts`, `save_command`, `remove_command` |
+| Git | `git_status`, `git_log`, `git_diff`, `git_show`, `git_branches`, `git_stage`, `git_unstage`, `git_commit`, `git_switch` |
+| Prompts | `list_prompts`, `get_prompt`, `create_prompt`, `update_prompt`, `delete_prompt`, `fill_prompt` |
+| Files | `search_files` |
+| Dev tools | `list_dev_tools`, `install_dev_tools` |
+| MCP servers | `list_mcp_servers`, `install_mcp_server`, `uninstall_mcp_server` |
+| App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page`, `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql`, `app_open_diagram`, `app_open_prompt` |
+| Terminal (app running) | `terminal_run`, `terminal_read`, `terminal_input`, `terminal_close` |
+| Canvas (app running) | `canvas_get`, `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear`, `canvas_load`, `canvas_export` |
 
-Click **MCP** in the title bar to install it. The page finds the AI clients on this Mac: Claude Code (every
+Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`
+and `uninstall_mcp_server` take the name again as `confirm` (so does `remove_instance` when it deletes the data), and `install_dev_tools` needs
+`confirm: true` because it runs install scripts from the internet. Passwords never appear in a result.
+
+Click **MCP** in the title bar to install it, along with a catalog of other servers: AWS, Cloudflare, Neon, Postman,
+Figma, Mobbin, Exa and more. Servers that need an account sign in through the client's own sign-in, which the page
+can start for Claude Code and Codex. The page finds the AI clients on this Mac: Claude Code (every
 profile, including `CLAUDE_CONFIG_DIR` folders), Codex (and `CODEX_HOME` profiles), Claude Desktop, Cursor,
 Windsurf, Gemini CLI, Zed, opencode and VS Code. It installs into each with one click and shows where each config
 lives. Claude Code and Codex are changed through their own CLI when it's installed. Other configs are edited in
@@ -418,14 +503,21 @@ crates/core   sawit-core — no GPUI, tested with plain cargo test
   pgctl, control         status/initdb/start/stop/restart + log tail
   binaries, download     binary detection + download via postgresql_archive
   instances, recent      TOML registry, app paths, validation, recent folders
-  db                     profiles, DATABASE_URL/.env, Keychain, TLS, schema, paging, SQL, read-only, diagrams
+  db                     profiles, DATABASE_URL/.env, TLS, schema, paging, SQL, read-only, diagrams,
+                         bulk edits, CSV/Excel export, pg_dump backups, CSV import
+  keychain               passwords in the macOS Keychain
   mermaid                Mermaid → SVG with Pele in embedded QuickJS
   files, format, media, pdf   folder listing, safe reads, atomic saves, formatters, image & PDF rendering
   terminal               PTY + alacritty_terminal → snapshot, keyboard/mouse encoding
   network                connection diagnosis and ping
   prompts                prompt library and {{variables}}
-  mcp_clients, update, cli    MCP install into AI clients, self-update, the sawit command
-  kebun                  sawit <db> [table] ["sql"], sawit list, sawit bakar (no app needed)
+  git, github            status, diff, log graph, commits, branches; GitHub pull requests and checks
+  ssh, shell_config      saved SSH hosts and ~/.ssh/config; shell startup files
+  scripts, search        a project's run scripts and saved commands; text search in a folder
+  dev_tools              the Tools page catalog, detection and install scripts
+  mcp_clients, mcp_catalog, mcp_auth   MCP install into AI clients, the server catalog, client sign-in
+  app_control, update, cli    control socket for agents, self-update, the sawit command
+  kebun                  sawit <db>, list, bakar, panen, backup, tanam, pasang (no app needed)
   rt                     Tokio runtime on its own thread
 crates/app    sawit — GPUI UI only (draws & forwards input)
 crates/mcp    sawit-mcp — stdio MCP server on top of core
@@ -470,7 +562,7 @@ Figures for other apps are not listed because they have not been measured on the
 ## Known limitations
 
 - macOS only (depends on Keychain, `lsof`, AVPlayer, CoreGraphics, and Postgres.app).
-- The grid is read-only; data is edited through the SQL editor.
+- The grid changes rows in bulk (delete, or set one column); single cells are edited through the SQL editor.
 - Paging uses `OFFSET/LIMIT`. Tables without a primary key (and views) use physical order, which is stable
   as long as the data doesn't change.
 - With transaction-mode poolers, session settings (`SET`) are not guaranteed to persist. The table browser still only
