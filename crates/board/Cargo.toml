@@ -5,6 +5,8 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+# file.import takes base64 `data`; FigCraft's own version, already locked.
+base64 = "0.22"
 # FigCraft is pinned to one rev in the workspace root.
 figcraft-color.workspace = true
 figcraft-doc.workspace = true
@@ -15,6 +17,7 @@ figcraft-render.workspace = true
 figcraft-text.workspace = true
 log = "0.4"
 sawit-core = { path = "../core" }
+serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
 

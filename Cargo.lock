@@ -7491,6 +7491,7 @@ dependencies = [
 name = "sawit-board"
 version = "0.0.7"
 dependencies = [
+ "base64 0.22.1",
  "figcraft-color",
  "figcraft-doc",
  "figcraft-engine",
@@ -7500,6 +7501,7 @@ dependencies = [
  "figcraft-text",
  "log",
  "sawit-core",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
