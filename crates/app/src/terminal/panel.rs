@@ -111,7 +111,8 @@ impl TerminalPanel {
                 if view.touched {
                     view.cd(&dir);
                     self.tabs[ix].update(cx, |v, _| v.group = Some(dir.clone()));
-                } else if let Some(fresh) = self.spawn(Command::default(), &shell_name(), None, cx) {
+                } else if let Some(fresh) = self.spawn(Command::default(), &shell_name(), None, cx)
+                {
                     self.tabs[ix] = fresh;
                 }
             }
@@ -210,7 +211,12 @@ impl TerminalPanel {
     }
 
     /// Opens a new session to `remote` in its own tab.
-    pub fn open_ssh(&mut self, remote: Remote, window: Option<&mut Window>, cx: &mut Context<Self>) {
+    pub fn open_ssh(
+        &mut self,
+        remote: Remote,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
         sawit_core::ssh::ensure_ssh_dir();
         let name = remote.name.clone();
         self.open(ssh_command(&remote.launch), &name, Some(remote), window, cx);
@@ -330,7 +336,12 @@ impl TerminalPanel {
     }
 
     /// Sends raw input to a tab (the active one by default).
-    pub fn input(&mut self, tab: Option<usize>, bytes: Vec<u8>, cx: &mut Context<Self>) -> Result<usize, String> {
+    pub fn input(
+        &mut self,
+        tab: Option<usize>,
+        bytes: Vec<u8>,
+        cx: &mut Context<Self>,
+    ) -> Result<usize, String> {
         let ix = self.tab_ix(tab)?;
         let view = self.tabs[ix].read(cx);
         if view.exited {
@@ -495,7 +506,10 @@ impl TerminalPanel {
         let shell = cmd.program.is_empty();
         let group = match &remote {
             Some(_) => None,
-            None => cmd.cwd.as_deref().and_then(|d| project_of(&self.projects, d)),
+            None => cmd
+                .cwd
+                .as_deref()
+                .and_then(|d| project_of(&self.projects, d)),
         };
         match Session::spawn(cmd, size) {
             Ok((session, events)) => {
@@ -571,9 +585,7 @@ impl TerminalPanel {
 
 /// The herdr logo, sized for a button.
 fn herdr_logo() -> impl IntoElement {
-    img(crate::assets::HERDR_LOGO)
-        .size(px(14.))
-        .rounded(px(3.))
+    img(crate::assets::HERDR_LOGO).size(px(14.)).rounded(px(3.))
 }
 
 /// Opens herdr.dev, which has the install steps (Sawit does not bundle herdr).
@@ -606,14 +618,21 @@ impl Render for TerminalPanel {
                     .count();
                 let root = root.clone();
                 tabs.push(
-                    group_header(("term-group", ix), project_name(&root), color, collapsed, count, cx)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if !this.collapsed.remove(&root) {
-                                this.collapsed.insert(root.clone());
-                            }
-                            cx.notify();
-                        }))
-                        .into_any_element(),
+                    group_header(
+                        ("term-group", ix),
+                        project_name(&root),
+                        color,
+                        collapsed,
+                        count,
+                        cx,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.collapsed.remove(&root) {
+                            this.collapsed.insert(root.clone());
+                        }
+                        cx.notify();
+                    }))
+                    .into_any_element(),
                 );
             }
             let active = ix == self.active;
@@ -689,7 +708,7 @@ impl Render for TerminalPanel {
                             .icon(Lucide::X)
                             .on_click(cx.listener(move |this, _, _, cx| this.close(ix, cx))),
                     )
-                    .when_some(color, |el, color| el.child(group_stripe(color)))
+                    .when_some(color, |el, color| el.child(group_stripe(color, active)))
                     .on_click(cx.listener(move |this, _, window, cx| this.activate(ix, window, cx)))
                     .context_menu(move |menu, window, cx| {
                         let move_weak = weak.clone();
@@ -699,13 +718,14 @@ impl Render for TerminalPanel {
                                 for root in &others {
                                     let weak = move_weak.clone();
                                     let to = root.clone();
-                                    menu = menu.item(PopupMenuItem::new(project_name(root)).on_click(
-                                        move |_, _, cx| {
-                                            let _ = weak.update(cx, |t, cx| {
-                                                t.move_to_group(ix, Some(to.clone()), cx)
-                                            });
-                                        },
-                                    ));
+                                    menu =
+                                        menu.item(PopupMenuItem::new(project_name(root)).on_click(
+                                            move |_, _, cx| {
+                                                let _ = weak.update(cx, |t, cx| {
+                                                    t.move_to_group(ix, Some(to.clone()), cx)
+                                                });
+                                            },
+                                        ));
                                 }
                                 menu
                             })
@@ -715,7 +735,8 @@ impl Render for TerminalPanel {
                         menu.when(grouped, |menu| {
                             menu.item(PopupMenuItem::new("Remove from Group").on_click(
                                 move |_, _, cx| {
-                                    let _ = ungroup.update(cx, |t, cx| t.move_to_group(ix, None, cx));
+                                    let _ =
+                                        ungroup.update(cx, |t, cx| t.move_to_group(ix, None, cx));
                                 },
                             ))
                         })
@@ -728,7 +749,10 @@ impl Render for TerminalPanel {
             });
         }
         let herdr = Self::herdr_available();
-        let exited = self.tabs.get(self.active).is_some_and(|v| v.read(cx).exited);
+        let exited = self
+            .tabs
+            .get(self.active)
+            .is_some_and(|v| v.read(cx).exited);
         let remote_name = self
             .tabs
             .get(self.active)

@@ -4,7 +4,6 @@
 
 use std::path::Path;
 
-use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -22,7 +21,9 @@ pub fn project_name(root: &Path) -> String {
         .unwrap_or_else(|| root.display().to_string())
 }
 
-/// The label in front of a group's tabs; folded, it shows how many it hides.
+/// The label in front of a group's tabs: the project's colour as a dot and
+/// its name, quiet so the tabs stay the focus. Folded, it shows how many
+/// tabs it hides.
 pub fn group_header(
     id: impl Into<ElementId>,
     name: String,
@@ -31,44 +32,42 @@ pub fn group_header(
     count: usize,
     cx: &App,
 ) -> Stateful<Div> {
+    let t = cx.theme();
     h_flex()
         .id(id)
         .flex_none()
         .h_full()
-        .px_1p5()
-        .gap_1()
+        .px_2p5()
+        .gap_1p5()
+        .text_xs()
+        .font_medium()
         .cursor_pointer()
         .border_r_1()
-        .border_color(cx.theme().border)
-        .child(
-            h_flex()
-                .px_1p5()
-                .gap_1()
-                .rounded(px(4.))
-                .text_xs()
-                .font_semibold()
-                .bg(color.opacity(0.18))
-                .text_color(color)
-                .child(
-                    Icon::new(if collapsed {
-                        Lucide::ChevronRight
-                    } else {
-                        Lucide::ChevronDown
-                    })
-                    .xsmall(),
-                )
-                .child(name)
-                .when(collapsed, |el| el.child(format!("{count}"))),
-        )
+        .border_color(t.border)
+        .text_color(t.muted_foreground)
+        .hover(|s| s.text_color(t.foreground))
+        .child(div().flex_none().size(px(6.)).rounded_full().bg(color))
+        .child(name)
+        .when(collapsed, |el| {
+            el.child(
+                div()
+                    .px_1()
+                    .rounded(px(3.))
+                    .bg(t.muted)
+                    .text_color(t.muted_foreground)
+                    .child(format!("{count}")),
+            )
+        })
 }
 
-/// The thin coloured line across the top of a grouped tab.
-pub fn group_stripe(color: Hsla) -> Div {
+/// The line across the top of a grouped tab: full colour on the active tab,
+/// faint on the rest so the group still reads as one run.
+pub fn group_stripe(color: Hsla, active: bool) -> Div {
     div()
         .absolute()
         .top_0()
         .left_0()
         .right_0()
-        .h(px(2.))
-        .bg(color)
+        .h(px(if active { 2. } else { 1. }))
+        .bg(if active { color } else { color.opacity(0.45) })
 }
