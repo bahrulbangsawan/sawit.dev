@@ -3,6 +3,12 @@
 Every change to Sawit, by version. Each push to `main` is a new release: the patch version is bumped and
 its section is written automatically by `.githooks/pre-push` (`scripts/release.sh`) from the commit messages.
 
+## [0.0.4] - 2026-10-29
+
+### Features
+
+- welcome screen, schema diagrams, ports & network, git, SSH and psql-style CLI
+
 ## [0.0.3] - 2026-10-29
 
 ### Features
