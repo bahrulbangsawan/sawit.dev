@@ -3,6 +3,33 @@
 Every change to Sawit, by version. Each push to `main` is a new release: the patch version is bumped and
 its section is written automatically by `.githooks/pre-push` (`scripts/release.sh`) from the commit messages.
 
+## [0.0.6] - 2026-10-29
+
+### Features
+
+- **cli**: sawit panen, backup, tanam, list tools and pasang
+- **mcp**: tools for exports, backups, csv import, drop and truncate, dev tools and mcp servers
+- quieter project labels in front of tab groups
+- shell config menu to reveal, duplicate, trash or delete a file
+- mcp page installs aws, cloudflare, neon, figma and other servers, with sign-in
+- dev tools page to install claude code, bun, uv and more in one click
+- **db**: export to csv or excel, pg_dump backups, csv import, drop, truncate and bulk row edits
+
+### Fixes
+
+- **diagrams**: wrap zoomed-out table names at underscores
+
+### Performance
+
+- turn mermaid into canvas shapes with pele and ship only the english canvas
+
+### Other
+
+- update README, screenshots and demo for exports, backups, dev tools, mcp catalog and new cli words
+- add the /consolidate command
+- format with rustfmt and fix clippy's octal-escape lint in tests
+- remove the unused logo, probe example and old planning docs
+
 ## [0.0.5] - 2026-10-29
 
 ### Fixes
