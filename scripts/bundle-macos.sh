@@ -68,7 +68,16 @@ if [ "$dmg" = yes ]; then
     mkdir -p "$stage"
     cp -R "$app" "$stage/"
     ln -s /Applications "$stage/Applications"
-    hdiutil create -quiet -volname "Sawit" -srcfolder "$stage" -format ULMO "$out/Sawit.dmg"
+    # On GitHub's macOS runners hdiutil fails now and then with "Resource
+    # busy" (something still scanning the fresh bundle); it works on a retry.
+    tries=0
+    until hdiutil create -volname "Sawit" -srcfolder "$stage" -format ULMO "$out/Sawit.dmg"; do
+        tries=$((tries + 1))
+        [ "$tries" -lt 5 ] || { echo "hdiutil create failed $tries times" >&2; exit 1; }
+        echo "hdiutil create failed; retrying ($tries/4)" >&2
+        rm -f "$out/Sawit.dmg"
+        sleep $((tries * 5))
+    done
     rm -rf "$stage"
     echo "$out/Sawit.dmg"
 fi
