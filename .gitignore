@@ -2,3 +2,6 @@
 /.superpowers
 .DS_Store
 node_modules/
+
+# Claude Code worktrees
+/.claude/worktrees/
