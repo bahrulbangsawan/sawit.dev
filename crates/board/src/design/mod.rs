@@ -12,6 +12,12 @@ use std::collections::HashSet;
 use figcraft_doc::{Document, NodeId, NodeKind};
 use serde_json::{Map, Value, json};
 
+pub mod export;
+pub mod layout;
+#[cfg(test)]
+mod testing;
+pub mod typography;
+
 mod fields;
 mod lists;
 
@@ -30,8 +36,9 @@ pub enum Mixed {
     /// Every layer that counts holds this value.
     Same(Value),
     /// The layers that count hold different values; for an auto layout key, a frame without auto
-    /// layout is a different value from one that has it. The field shows "Mixed", and an edit sets
-    /// the property on all of them.
+    /// layout is a different value from one that has it, and a text whose characters differ in a
+    /// style, with two font sizes, holds several values by itself. The field shows "Mixed", and an
+    /// edit sets the property on all of them.
     Mixed,
 }
 
@@ -96,6 +103,9 @@ struct Layer {
     text: bool,
     /// The layer's properties, by key ([`fields::layer_props`]).
     props: Map<String, Value>,
+    /// The keys of `props` that the layer's own characters disagree on: a text with two font sizes
+    /// holds no one size. Only a text has any ([`typography::fold_runs`]).
+    mixed: Vec<&'static str>,
 }
 
 impl DesignSelection {
@@ -115,12 +125,19 @@ impl DesignSelection {
                 continue;
             };
             selection.ids.push(*id);
+            let mut props = fields::layer_props(doc, node);
+            let mixed = node
+                .kind
+                .text()
+                .map(|text| typography::fold_runs(text, &mut props))
+                .unwrap_or_default();
             selection.layers.push(Layer {
                 kind: node.kind.label(),
                 frame_like: node.kind.is_frame_like(),
                 group: matches!(node.kind, NodeKind::Group),
                 text: node.kind.text().is_some(),
-                props: fields::layer_props(doc, node),
+                props,
+                mixed,
             });
         }
         selection
@@ -138,9 +155,15 @@ impl DesignSelection {
     ///   frame holds the same value. A layer that is not a frame doesn't count: `node.set` skips it.
     /// - Every other key counts the layers that hold it. A rectangle selected with a text leaves
     ///   the font size to the text, and the answer is [`Mixed::Absent`] only when no layer has it.
+    ///   A text whose characters differ in the key, in a run of another font size, is
+    ///   [`Mixed::Mixed`] even alone, and whatever the other layers hold (`typography::fold_runs`
+    ///   says which keys a run can change).
     pub fn get(&self, key: &str) -> Mixed {
         if fields::LAYOUT_KEYS.contains(&key) {
             return self.get_of_frames(key);
+        }
+        if self.layers.iter().any(|layer| layer.mixed.contains(&key)) {
+            return Mixed::Mixed;
         }
         let mut held = self.layers.iter().filter_map(|layer| layer.props.get(key));
         let Some(first) = held.next() else {
