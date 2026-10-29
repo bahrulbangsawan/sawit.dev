@@ -3,6 +3,16 @@
 Every change to Sawit, by version. Each push to `main` is a new release: the patch version is bumped and
 its section is written automatically by `.githooks/pre-push` (`scripts/release.sh`) from the commit messages.
 
+## [0.0.7] - 2026-10-29
+
+### Features
+
+- **mcp**: run sql, start or stop an instance and diagnose the network in the running app
+
+### Other
+
+- update README, screenshots and demo for v0.0.6 screens: git, canvas, dev tools, mcp and exports
+
 ## [0.0.6] - 2026-10-29
 
 ### Features
