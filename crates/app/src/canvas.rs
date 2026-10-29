@@ -43,6 +43,8 @@ const PROTOCOL: &str = "sawitcanvas";
 const ORIGIN: &str = "sawitcanvas://localhost";
 const SCENE_URL: &str = "/scene.excalidraw";
 const LIBRARY_URL: &str = "/library.excalidrawlib";
+/// Pele, for Mermaid → shapes: the copy the app renders diagrams with.
+const PELE_URL: &str = "/pele.js";
 
 /// Asks the workspace to fill the window with the canvas (or put the layout back).
 pub struct ToggleCanvasMaximize;
@@ -497,6 +499,10 @@ fn serve(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
         let body = std::fs::read(file).unwrap_or_default();
         return respond(200, "application/json", Cow::Owned(body));
     }
+    if path == PELE_URL {
+        let body = sawit_core::mermaid::PELE_JS.as_bytes();
+        return respond(200, mime(path), Cow::Borrowed(body));
+    }
     let path = path.trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
     match bundle_file(path) {
@@ -510,7 +516,8 @@ fn serve(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
 /// time the page asks for it and kept for the life of the process, so only
 /// what gets used (most locales and diagram chunks never are) costs memory.
 fn bundle_file(path: &str) -> Option<&'static [u8]> {
-    static DECODED: LazyLock<Mutex<HashMap<String, &'static [u8]>>> = LazyLock::new(Default::default);
+    static DECODED: LazyLock<Mutex<HashMap<String, &'static [u8]>>> =
+        LazyLock::new(Default::default);
     if let Some(file) = BUNDLE.get_file(path) {
         return Some(file.contents());
     }
@@ -617,7 +624,10 @@ mod tests {
             "fonts/Virgil/Virgil-Regular.woff2",
             "fonts/Cascadia/CascadiaCode-Regular.woff2",
         ] {
-            assert!(bundle_file(path).is_some_and(|b| !b.is_empty()), "missing {path}");
+            assert!(
+                bundle_file(path).is_some_and(|b| !b.is_empty()),
+                "missing {path}"
+            );
         }
     }
 
@@ -626,7 +636,10 @@ mod tests {
         fn walk(dir: &include_dir::Dir<'static>, found: &mut usize) {
             for file in dir.files() {
                 if let Some(path) = file.path().to_str().unwrap().strip_suffix(".br") {
-                    assert!(bundle_file(path).is_some_and(|b| !b.is_empty()), "{path} doesn't decode");
+                    assert!(
+                        bundle_file(path).is_some_and(|b| !b.is_empty()),
+                        "{path} doesn't decode"
+                    );
                     *found += 1;
                 }
             }
@@ -634,7 +647,8 @@ mod tests {
         }
         let mut found = 0;
         walk(&super::BUNDLE, &mut found);
-        assert!(found > 100, "only {found} compressed files");
+        // ~78 since mermaid.js gave way to Pele and the locales were stubbed out.
+        assert!(found > 50, "only {found} compressed files");
     }
 
     #[test]

@@ -6,6 +6,21 @@ import { cpSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { compress } from './compress.mjs'
 
 const out = new URL('../../crates/app/canvas/', import.meta.url).pathname
+
+// The canvas is English only (main.tsx passes langCode="en" and shows no
+// language picker), so Excalidraw's other 54 translations would never load:
+// each becomes an empty module instead of a 10–75 KB chunk.
+const englishOnly = {
+	name: 'english-only',
+	setup(b) {
+		b.onResolve({ filter: /^\.\/locales\/[^/]+\.js$/ }, (args) => {
+			const keep = /\/(en|percentages)-[^/]+$/.test(args.path)
+			if (keep || !args.importer.includes('@excalidraw/excalidraw')) return undefined
+			return { path: args.path, namespace: 'no-locale' }
+		})
+		b.onLoad({ filter: /.*/, namespace: 'no-locale' }, () => ({ contents: 'export default {}', loader: 'js' }))
+	},
+}
 rmSync(out, { recursive: true, force: true })
 mkdirSync(out, { recursive: true })
 
@@ -15,7 +30,7 @@ await build({
 	format: 'esm',
 	target: 'safari16',
 	minify: true,
-	// Lazy features (Mermaid, export, …) load only when used.
+	// Lazy features (export, Mermaid import, …) load only when used.
 	splitting: true,
 	chunkNames: 'chunks/[name]-[hash]',
 	assetNames: 'assets/[name]-[hash]',
@@ -25,6 +40,9 @@ await build({
 	define: { 'process.env.NODE_ENV': '"production"', 'process.env.IS_PREACT': '"false"' },
 	loader: { '.woff2': 'file', '.ttf': 'file' },
 	conditions: ['production'],
+	// Mermaid → shapes with Pele (src/pele.ts) instead of mermaid.js.
+	alias: { '@excalidraw/mermaid-to-excalidraw': './src/pele.ts' },
+	plugins: [englishOnly],
 	logLevel: 'info',
 })
 

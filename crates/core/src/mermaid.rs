@@ -15,8 +15,9 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-/// Pele 1.12.0, `dist/pele.global.js` (defines the global `pele`).
-const PELE_JS: &str = include_str!("../assets/pele/pele.global.js");
+/// Pele 1.12.0, `dist/pele.global.js` (defines the global `pele`). The canvas
+/// page loads this same copy to turn Mermaid into shapes (web/canvas/src/pele.ts).
+pub const PELE_JS: &str = include_str!("../assets/pele/pele.global.js");
 
 /// A runaway diagram is interrupted after this long.
 const RENDER_TIMEOUT: Duration = Duration::from_secs(5);
