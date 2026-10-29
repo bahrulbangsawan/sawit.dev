@@ -5,7 +5,8 @@
 //! A row is left out when:
 //! - its command is hidden ([`crate::policy::is_hidden`]), because the keyboard cannot reach it;
 //! - its command has nothing to do in the canvas, although the keyboard reaches it: Dev Mode, a
-//!   live session's cursor chat, and F6's walk through FigCraft's window regions;
+//!   live session's cursor chat, F6's walk through FigCraft's window regions, and the keyboard box
+//!   selection (⌥Space, F8), whose box the canvas never draws;
 //! - it belongs to the Prototype group, which is all Present and Preview.
 //!
 //! A key is left out when Sawit keeps it ([`crate::policy::SAWIT_WINS`]: ⌘W, ⌘J, ⌃⌘M…). A row
@@ -23,15 +24,18 @@ const MAX_KEYS: usize = 2;
 
 /// Commands that have keys in the keymap and that the policy does not hide, but that the canvas
 /// has no use for: Dev Mode, the switch between design and prototype and a live session's cursor
-/// chat (all three are in the spec's Non-goals), and F6's walk through the regions of FigCraft's
-/// own window (toolbar, layers, canvas, properties), which Sawit's chrome does not have. The
-/// keyboard still reaches them; the sheet does not advertise them.
+/// chat (all three are in the spec's Non-goals), F6's walk through the regions of FigCraft's own
+/// window (toolbar, layers, canvas, properties), which Sawit's chrome does not have, and
+/// FigCraft's keyboard box selection (`select.area`, ⌥Space or F8): it raises a `selectArea`
+/// request for a box that the arrows move and Enter selects with, and the canvas never draws that
+/// box. The keyboard still reaches them; the sheet does not advertise them.
 const NOT_OFFERED: &[&str] = &[
     "view.devMode",
     "view.designPrototype",
     "collab.cursorChat",
     "view.nextRegion",
     "view.previousRegion",
+    "select.area",
 ];
 
 /// One row of the sheet: a command and its keys.
@@ -216,6 +220,7 @@ mod tests {
             "collab.cursorChat",
             "view.nextRegion",
             "view.previousRegion",
+            "select.area",
         ] {
             assert!(
                 KEYS.iter().any(|b| b.id == id),
@@ -227,6 +232,11 @@ mod tests {
         assert_eq!(
             row_of("view.contextMenu").map(|row| row.keys).as_deref(),
             Some("⇧F10")
+        );
+        // The left sidebar has ⇧⌘\, which the view answers by toggling the layers panel.
+        assert_eq!(
+            row_of("view.leftSidebar").map(|row| row.keys).as_deref(),
+            Some("⇧⌘\\")
         );
     }
 
