@@ -12,7 +12,7 @@
 //! guides, rulers and their guides, prototype connections, slot badges, the paint bucket's area,
 //! shape builder regions, the lasso, the box measured to, the Scale tool's readout, arc and corner
 //! radius handles, auto layout drop cells, swap targets, comments and the box around several
-//! selected points; names are not turned with a rotated frame, nor cut to its width.
+//! selected points; names are not turned with a rotated frame.
 //!
 //! Every colour is a fixed canvas colour, the same on any page and in either theme ([`SELECTION`],
 //! [`COMPONENT`], [`GUIDE`], white), except the names of frames and sections, whose grey reads on
@@ -50,6 +50,10 @@ const NAME_PAD: (f64, f64) = (8.0, 4.0);
 const READOUT_PAD: (f64, f64) = (4.0, 2.0);
 /// How far above a frame its name's line ends.
 const NAME_GAP: f64 = 4.0;
+/// The least width a name has, however narrow its frame (an ellipsis at least), and the most a
+/// section's has (ui-egui `frame_labels.rs`).
+const NAME_MIN: f64 = 20.0;
+const SECTION_NAME_MAX: f64 = 480.0;
 /// How far around the canvas a frame may be and still have its name drawn: names sit outside.
 const NAME_REACH: f64 = 20.0;
 /// How far below the selection's box its size label starts.
@@ -114,7 +118,7 @@ pub enum Shape {
     /// One line of text, [`LABEL_TEXT`] px on a [`LABEL_LINE`] px line: the name of the frame or
     /// section `node`, or a readout (the selection's size, a guide's distance) when `node` is
     /// `None`. With a `background` the text sits on a pill of that colour. [`Shape::label_box`]
-    /// says where it goes once its text is measured.
+    /// says where it goes once its text is measured, and [`name_room`] how wide a name may be.
     Label {
         at: (f64, f64),
         text: String,
@@ -203,12 +207,29 @@ pub fn label_quad(top_left: (f64, f64), size: (f64, f64), view: &ViewState) -> [
     })
 }
 
+/// How wide the name of the frame or section `id` may be on screen, as ui-egui cuts names
+/// (`frame_labels.rs`): a frame's name, the frame's width there, at least 20 px; a section's, that
+/// less its pill's padding, 20 to 480 px. A name stays upright on a turned frame, so the width is
+/// that of the frame's box on screen. The app cuts a longer name with an ellipsis, so the name, and
+/// where the engine takes a press on it, stay over the frame. `None` for a layer not in `doc`.
+pub fn name_room(doc: &Document, id: NodeId, view: &ViewState) -> Option<f64> {
+    let n = doc.node(id)?;
+    let (x0, _, x1, _) = extent(&node_quad(doc, id, view)?);
+    let width = Some(x1 - x0).filter(|w| w.is_finite()).unwrap_or(0.0);
+    Some(if matches!(n.kind, NodeKind::Section { .. }) {
+        (width - 2.0 * NAME_PAD.0).clamp(NAME_MIN, SECTION_NAME_MAX)
+    } else {
+        width.max(NAME_MIN)
+    })
+}
+
 /// Item 1 of [`overlay`]: the names of the frames and sections on the page, and of those in its
 /// sections, as ui-egui places them, upright: a frame's just above its top-left corner, in its
 /// component colour, the selection colour while it is selected or under the pointer, else grey; a
 /// section's on a pill inside its top-left corner, white on the selection colour while it is
 /// selected. Board objects (stickies, shapes, stamps) are frames without a name shown. A frame off
-/// the canvas has none drawn, and the focus view (Dev Mode) shows none.
+/// the canvas has none drawn, and the focus view (Dev Mode) shows none. The app cuts each name to
+/// its [`name_room`].
 fn frame_names(out: &mut Vec<Shape>, ds: &DocState) {
     if ds.focused().is_some() {
         return;
@@ -1304,6 +1325,101 @@ mod tests {
                 width: 8.0,
                 dashed: false,
             }]
+        );
+    }
+
+    #[test]
+    fn names_have_their_frames_width() {
+        let mut f = fixture();
+        let room = |board: &BoardDoc, id| {
+            let ds = board.session.ds().unwrap();
+            name_room(&ds.doc, id, &ds.view).unwrap()
+        };
+        let narrow = make(
+            &mut f.board,
+            "node.create",
+            json!({"type": "frame", "x": 0, "y": 300, "width": 5, "height": 5}),
+        );
+        let section = make(
+            &mut f.board,
+            "node.create",
+            json!({"type": "section", "x": 0, "y": 400, "width": 100, "height": 100}),
+        );
+        // A frame's name: the frame's width on screen.
+        assert_eq!(room(&f.board, f.frame), 200.0);
+        zoom(&mut f.board, 2.0);
+        assert_eq!(room(&f.board, f.frame), 400.0);
+        // However narrow the frame, room for an ellipsis.
+        assert_eq!(room(&f.board, narrow), NAME_MIN);
+        // A section's pill keeps its padding inside the section, and holds 480 px of name at most.
+        assert_eq!(room(&f.board, section), 200.0 - 16.0);
+        zoom(&mut f.board, 10.0);
+        assert_eq!(room(&f.board, section), SECTION_NAME_MAX);
+        // The name of the 200 × 150 frame turned a quarter stays upright: the width of the
+        // frame's box on screen, 150 px, not its top edge's 200.
+        zoom(&mut f.board, 1.0);
+        let doc = f.board.session.doc_mut().unwrap();
+        doc.get_mut(f.frame).unwrap().transform =
+            kurbo::Affine::rotate(std::f64::consts::FRAC_PI_2);
+        let turned = room(&f.board, f.frame);
+        assert!((turned - 150.0).abs() < 1e-9, "{turned}");
+    }
+
+    /// As built and ratified (delegate ruling on the report's Decision 3): a selection with a
+    /// component in it is drawn in the component colour throughout.
+    #[test]
+    fn a_component_colours_the_whole_selection() {
+        let mut f = fixture();
+        let component = make(
+            &mut f.board,
+            "node.create",
+            json!({"type": "component", "x": 0, "y": 300, "width": 100, "height": 100}),
+        );
+        select(&mut f.board, &[f.rect, component]);
+        let shapes = overlay(&f.board.session);
+        let mut drawn = (0, 0, 0);
+        for shape in &shapes {
+            match shape {
+                Shape::Outline { color, .. } => {
+                    assert_eq!(*color, COMPONENT);
+                    drawn.0 += 1;
+                }
+                Shape::Handle { stroke, .. } => {
+                    assert_eq!(*stroke, COMPONENT);
+                    drawn.1 += 1;
+                }
+                Shape::Label {
+                    node: None,
+                    background,
+                    ..
+                } => {
+                    assert_eq!(*background, Some(COMPONENT));
+                    drawn.2 += 1;
+                }
+                _ => {}
+            }
+        }
+        // Both outlines and the box, 4 handles, the size.
+        assert_eq!(drawn, (3, 4, 1), "{shapes:?}");
+    }
+
+    /// As built and ratified (delegate ruling on the report's Decision 4): one selected line reads
+    /// its length, on its 2 end handles.
+    #[test]
+    fn a_line_reads_its_length() {
+        let mut f = fixture();
+        let line = make(
+            &mut f.board,
+            "node.create",
+            json!({"type": "line", "x": 0, "y": 300, "width": 100}),
+        );
+        select(&mut f.board, &[line]);
+        let shapes = overlay(&f.board.session);
+        assert_eq!(readouts(&shapes).len(), 1, "{shapes:?}");
+        assert!(labels(&shapes).contains(&("100", None)), "{shapes:?}");
+        assert_eq!(
+            handles(&shapes),
+            [(100.0, 400.0), (200.0, 400.0)].map(|c| (c, false))
         );
     }
 

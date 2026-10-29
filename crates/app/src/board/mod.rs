@@ -389,10 +389,14 @@ impl BoardView {
         });
         // What goes over the frame, its labels measured. The frames' names go back to the engine
         // as they are painted: it takes a press or a hover on one as on its frame.
-        let shapes = sawit_board::overlay::overlay(&board.session);
-        let view = &board.session.ds().ok()?.view;
+        // On a panic, guard::run logs it and this frame paints no overlay and no names to press.
+        let shapes = figcraft_engine::guard::run("ui.overlay", || {
+            Ok(sawit_board::overlay::overlay(&board.session))
+        })
+        .unwrap_or_default();
+        let ds = board.session.ds().ok()?;
         let font = &cx.theme().font_family;
-        let (overlay, names) = overlay_paint::layout(shapes, font, view, window);
+        let (overlay, names) = overlay_paint::layout(shapes, font, &ds.doc, &ds.view, window);
         board.session.tool.labels = names;
         let painting = Painting {
             page: screen_rgb,
@@ -1018,6 +1022,57 @@ mod tests {
             let page = doc.first_page().unwrap();
             let pressed = figcraft_engine::tools::label_at(&doc, page, labels, centre);
             assert_eq!(pressed, Some(frame));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn long_names_are_cut_to_their_frames(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("long-names");
+        let path = tmp.0.join("design.figcraft");
+        // A frame and a section, each named far wider than it is on screen.
+        let long = "Checkout – payment method – error state, ".repeat(8);
+        let mut session = figcraft_engine::Session::new();
+        let mut make = |layer: serde_json::Value| {
+            let made = session.execute("node.create", &layer).unwrap();
+            NodeId(made["id"].as_u64().unwrap())
+        };
+        let frame = make(json!({
+            "type": "frame", "name": long, "x": 0, "y": 0, "width": 100, "height": 60,
+        }));
+        let section = make(json!({
+            "type": "section", "name": long, "x": 0, "y": 100, "width": 200, "height": 100,
+        }));
+        session
+            .execute("file.saveAs", &json!({"path": path.to_str().unwrap()}))
+            .unwrap();
+        cx.update(gpui_kit::init);
+        let (_, view) = open_in_window(cx, &path);
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let board = view.board().unwrap();
+            let doc = board.doc().unwrap();
+            let page = doc.first_page().unwrap();
+            let labels = &board.session.tool.labels;
+            let named: Vec<NodeId> = labels.iter().map(|(id, _)| *id).collect();
+            assert_eq!(named, [frame, section]);
+            for (id, quad) in labels {
+                let n = doc.node(*id).unwrap();
+                let world = doc.world_transform(*id);
+                let (left, right) = (
+                    world * PagePoint::ZERO,
+                    world * PagePoint::new(n.width, 0.0),
+                );
+                // Cut with an ellipsis: from the frame's left side to no further than its right.
+                assert!((quad[0].x - left.x).abs() < 1e-3, "{quad:?}");
+                assert!(quad[1].x <= right.x + 1e-3, "{quad:?} past {right:?}");
+                assert!(quad[1].x - quad[0].x > n.width / 2.0, "{quad:?}");
+                // A press past the frame's right side, where the whole name would have run, is
+                // not one on the name.
+                let past = PagePoint::new(right.x + 10.0, (quad[0].y + quad[3].y) / 2.0);
+                let pressed = figcraft_engine::tools::label_at(&doc, page, labels, past);
+                assert_eq!(pressed, None);
+            }
         });
     }
 
