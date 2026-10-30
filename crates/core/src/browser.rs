@@ -632,11 +632,13 @@ pub fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
-/// Decodes standard base64 (padding optional); `None` on other characters.
+/// Decodes standard base64 (padding optional, line breaks skipped); `None` on other
+/// characters.
 pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(text.len() / 4 * 3);
     let (mut acc, mut bits) = (0u32, 0u32);
-    for c in text.trim_end_matches('=').bytes() {
+    let text = text.trim_end().trim_end_matches('=');
+    for c in text.bytes().filter(|c| !c.is_ascii_whitespace()) {
         let v = match c {
             b'A'..=b'Z' => c - b'A',
             b'a'..=b'z' => c - b'a' + 26,
@@ -821,6 +823,10 @@ mod tests {
             assert_eq!(base64_decode(&base64_encode(bytes)).unwrap(), bytes);
         }
         assert!(base64_decode("a$b").is_none());
+        assert_eq!(
+            base64_decode("iVBO\nRw==\n").unwrap(),
+            [0x89, b'P', b'N', b'G']
+        );
     }
 
     #[test]

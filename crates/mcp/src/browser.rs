@@ -522,7 +522,7 @@ impl Sawit {
         };
         let v = tri!(self.browser(&a.project, op).await);
         let encoded = v["png_base64"].as_str().unwrap_or_default().to_string();
-        let bytes = tri!(base64_decode(&encoded));
+        let bytes = tri!(base64_decode(&encoded, "The browser"));
         if bytes.is_empty() {
             return fail("The browser sent an empty screenshot.");
         }
