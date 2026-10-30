@@ -298,13 +298,15 @@ fn in_role(scan: &Scan, role: ColorRole) -> Vec<Seen> {
 }
 
 /// Text colors, most-used first. "Most-used" is by text length (the samples'
-/// `chars`), like type sampling, so a link-heavy page doesn't make its link
-/// color the foreground. Without samples it falls back to element counts.
+/// `chars`) inside `main`, the scope `body-md` uses, so neither links nor
+/// footer fine print make the foreground. With nothing in `main` all samples
+/// count; without samples it falls back to element counts.
 fn text_colors(scan: &Scan) -> Vec<Seen> {
+    let any_main = scan.texts.iter().any(|t| t.in_main && t.chars > 0);
     let weighted: Vec<ColorUse> = scan
         .texts
         .iter()
-        .filter(|t| t.chars > 0)
+        .filter(|t| t.chars > 0 && (t.in_main || !any_main))
         .map(|t| ColorUse {
             value: t.color.clone(),
             role: ColorRole::Text,
@@ -1277,7 +1279,7 @@ mod tests {
     fn foreground_is_weighted_by_text_length() {
         let text = |color: &str, tag: &str, chars: u32| TextSample {
             tag: tag.into(),
-            in_main: true,
+            in_main: tag != "li",
             family: "Inter".into(),
             used_family: Some("Inter".into()),
             size: 16.0,
@@ -1300,6 +1302,8 @@ mod tests {
                 text("rgb(0, 102, 204)", "a", 60),
                 text("rgb(29, 29, 31)", "p", 900),
                 text("rgb(110, 110, 115)", "p", 40),
+                // Footer fine print outside main: longest, but not the foreground.
+                text("rgba(0, 0, 0, 0.56)", "li", 3000),
             ],
             ..Default::default()
         };
@@ -1307,6 +1311,13 @@ mod tests {
         let hex = |n: &str| semantic(&t, n).map(|c| c.to_hex());
         assert_eq!(hex("foreground").as_deref(), Some("#1d1d1f"));
         assert_eq!(hex("muted-foreground").as_deref(), Some("#6e6e73"));
+
+        // With nothing in main, every sample counts.
+        let mut outside = scan.clone();
+        outside.texts.iter_mut().for_each(|t| t.in_main = false);
+        let t = derive(&outside, "2026-10-31");
+        let fg = semantic(&t, "foreground").map(|c| c.to_hex());
+        assert_eq!(fg.as_deref(), Some("#0000008f"));
     }
 
     #[test]
