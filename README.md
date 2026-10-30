@@ -56,7 +56,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 📦 **Export, back up, import** | Tables and queries to CSV or Excel, `pg_dump` backups, CSV imports, and bulk delete or set on the rows you select. |
 | 🗺️ **Schema diagrams** | Tables and foreign keys drawn as a diagram, and exported as DBML or SVG. |
 | ✍️ **Full editor** | Highlighting for about 200 languages, formatters, Markdown/HTML/SVG/Mermaid preview, and image, PDF, and video viewers. |
-| 🖥️ **A real terminal** | Full `alacritty_terminal` emulation, fullscreen with one click, and it can run [herdr](https://herdr.dev). |
+| 🖥️ **A real terminal** | Full `alacritty_terminal` emulation, fullscreen with one click, and built-in split panes with a right-click pane menu. |
 | 📡 **Ports & network** | See and stop every dev server you started, and diagnose your internet connection step by step. |
 | 💬 **Prompt library** | Save the prompts you reuse, with tags and `{{variables}}` to fill in before copying. |
 | 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with Web Inspector, and that AI agents drive through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
@@ -74,9 +74,6 @@ curl -fsSL https://raw.githubusercontent.com/bahrulbangsawan/sawit.dev/main/scri
 
 This installs the latest release into `/Applications` (or `~/Applications`). Add `SAWIT_VERSION=v0.0.8` before `sh`
 to pick a version. After that, the app updates itself.
-
-The script also offers to install [herdr](https://herdr.dev) (optional, for split panes in Sawit's terminal). It asks
-first; add `SAWIT_HERDR=1` before `sh` to install it without asking, or `SAWIT_HERDR=0` to skip it.
 
 Sawit is not notarized yet, so if you open the `Sawit.dmg` from a browser download, macOS says it "could not verify
 Sawit is free of malware." Use the script above, or right-click **Sawit.app → Open** once, or run
@@ -199,12 +196,17 @@ explained. A conflict on the same address can't be forced.
 
 ### Terminal
 
-- Bottom dock with tabs. It can open a login shell or **herdr** (the **herdr** button appears when herdr is installed).
+- Bottom dock with tabs. Each tab opens a login shell or an SSH session.
+- Each tab can hold split panes. <kbd>⌘D</kbd> splits right, <kbd>⇧⌘D</kbd> splits down, and <kbd>⌥⌘</kbd> + an arrow
+  key moves between panes. <kbd>⇧⌘↩</kbd> zooms the focused pane of a split (and maximizes the dock when the tab has
+  one pane). Panes never shrink below 20 columns by 4 rows.
+- Right-click a pane (or Shift+right-click, even while a program uses the mouse) for the pane menu: Rename pane,
+  Split right, Split down, Zoom, Send right-clicks to pane, and Close pane.
 - The **Maximize Terminal** button fills the window with the terminal; click it again to restore the layout you had.
 - Full emulation via `alacritty_terminal`: 256/truecolor, alt-screen, SGR mouse, bracketed paste,
   and resize.
 - Drag to select text; it's copied when you release the mouse. Shift+drag selects even while a program
-  (herdr, vim) uses the mouse.
+  (vim, Claude Code) uses the mouse.
 - New terminals start in the project folder. Shells idle at their prompt follow when you open another project.
 
 ### Dev tools
@@ -570,8 +572,8 @@ crates/mcp    sawit-mcp — stdio MCP server on top of core
 | `tokio-postgres` (not `sqlx`) | Lighter, with `simple_query_raw` for streaming free-form SQL. |
 | `postgresql_archive` (not `postgresql_embedded`) | Only download+extract is needed; `postgresql_embedded` pulls in `sqlx` and manages its own lifecycle. |
 | `lsof -F` + `ps` + `docker ps` | No root needed; an IPv6 wildcard is treated as dual-stack (when in doubt, warn). |
-| PATH from the login shell at startup | Apps opened from Finder get a minimal PATH; without this, `docker`/`brew`/`herdr` are not found. |
-| Terminal: `alacritty_terminal` + canvas | Like Zed's terminal; core produces snapshots, the app only draws. `HERDR_*`/`TMUX`/`ZELLIJ*` variables from the parent process are dropped so herdr doesn't refuse to run as "nested". |
+| PATH from the login shell at startup | Apps opened from Finder get a minimal PATH; without this, `docker` and `brew` are not found. |
+| Terminal: `alacritty_terminal` + canvas | Like Zed's terminal; core produces snapshots, the app only draws. `HERDR_*`/`TMUX`/`ZELLIJ*` variables from the parent process are dropped so programs don't refuse to run as "nested". |
 | Highlighting: syntect | About 200 languages at a small size, without a tree-sitter grammar per language. |
 | Diagrams: Pele in QuickJS | Mermaid and schema diagrams render offline, without a browser engine. |
 | Network checks: system `ping` and `route` | No raw sockets, so no admin rights; a plain HTTP check detects Wi-Fi sign-in pages. |

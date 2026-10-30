@@ -189,6 +189,39 @@ fn wait_for(session: &Session, palette: &Palette, needle: &str) -> Snapshot {
     }
 }
 
+fn wait_until(ok: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !ok() {
+        assert!(Instant::now() < deadline, "timed out waiting for condition");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn cwd_follows_the_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path().canonicalize().unwrap();
+    let cmd = Command {
+        program: "/bin/sh".into(),
+        cwd: Some(dir.clone()),
+        ..Command::default()
+    };
+    let (s, _rx) = Session::spawn(
+        cmd,
+        GridSize {
+            cols: 80,
+            rows: 24,
+            cell_width: 8,
+            cell_height: 17,
+        },
+    )
+    .unwrap();
+    wait_until(|| s.cwd().as_deref() == Some(dir.as_path()));
+    s.write(b"cd /\n".to_vec());
+    wait_until(|| s.cwd().as_deref() == Some(std::path::Path::new("/")));
+}
+
 #[test]
 fn session_renders_program_output() {
     let size = GridSize {
@@ -552,4 +585,259 @@ fn selection_copies_cells_words_and_lines() {
 
     session.clear_selection();
     assert_eq!(session.selection_text(), None);
+}
+
+#[test]
+fn split_right_puts_the_new_pane_after_the_target() {
+    let mut l = Layout::Pane(1);
+    assert!(l.split(1, SplitDir::Right, 2));
+    assert!(l.split(1, SplitDir::Down, 3));
+    assert_eq!(l.panes(), vec![1, 3, 2]);
+    assert!(!l.split(9, SplitDir::Right, 4));
+}
+
+#[test]
+fn rects_divide_the_area_by_ratio() {
+    let mut l = Layout::Pane(1);
+    l.split(1, SplitDir::Right, 2);
+    l.split(2, SplitDir::Down, 3);
+    let r = l.rects(Rect {
+        x: 0.,
+        y: 0.,
+        w: 800.,
+        h: 400.,
+    });
+    assert_eq!(
+        r[0],
+        (
+            1,
+            Rect {
+                x: 0.,
+                y: 0.,
+                w: 400.,
+                h: 400.
+            }
+        )
+    );
+    assert_eq!(
+        r[1],
+        (
+            2,
+            Rect {
+                x: 400.,
+                y: 0.,
+                w: 400.,
+                h: 200.
+            }
+        )
+    );
+    assert_eq!(
+        r[2],
+        (
+            3,
+            Rect {
+                x: 400.,
+                y: 200.,
+                w: 400.,
+                h: 200.
+            }
+        )
+    );
+}
+
+#[test]
+fn rects_never_go_negative_in_a_tiny_area() {
+    let mut l = Layout::Pane(1);
+    for n in 2..8 {
+        l.split(n - 1, SplitDir::Right, n);
+    }
+    for (_, r) in l.rects(Rect {
+        x: 0.,
+        y: 0.,
+        w: 3.,
+        h: 0.,
+    }) {
+        assert!(r.w >= 0. && r.h >= 0. && !r.w.is_nan() && !r.h.is_nan());
+    }
+}
+
+#[test]
+fn removing_a_pane_gives_its_space_to_the_sibling() {
+    let mut l = Layout::Pane(1);
+    l.split(1, SplitDir::Right, 2);
+    l.split(2, SplitDir::Down, 3);
+    assert_eq!(l.remove(1), Removed::Focus(2));
+    assert_eq!(l.panes(), vec![2, 3]);
+    assert_eq!(l.remove(3), Removed::Focus(2));
+    assert_eq!(l, Layout::Pane(2));
+    assert_eq!(l.remove(2), Removed::Last);
+    assert_eq!(l.remove(7), Removed::NotFound);
+}
+
+#[test]
+fn neighbor_follows_the_direction() {
+    // 1 | 2
+    //   | 3
+    let mut l = Layout::Pane(1);
+    l.split(1, SplitDir::Right, 2);
+    l.split(2, SplitDir::Down, 3);
+    let a = Rect {
+        x: 0.,
+        y: 0.,
+        w: 800.,
+        h: 400.,
+    };
+    assert_eq!(l.neighbor(1, Direction::Right, a), Some(2));
+    assert_eq!(l.neighbor(3, Direction::Left, a), Some(1));
+    assert_eq!(l.neighbor(2, Direction::Down, a), Some(3));
+    assert_eq!(l.neighbor(3, Direction::Up, a), Some(2));
+    assert_eq!(l.neighbor(1, Direction::Left, a), None);
+}
+
+#[test]
+fn set_ratio_keeps_both_sides_at_least_min() {
+    let mut l = Layout::Pane(1);
+    l.split(1, SplitDir::Right, 2);
+    let root = SplitPath(vec![]);
+    l.set_ratio(&root, 0.05, 800., (160., 80.));
+    assert!(matches!(l, Layout::Split { ratio, .. } if (ratio - 0.2).abs() < 1e-6));
+    l.set_ratio(&root, 0.99, 800., (160., 80.));
+    assert!(matches!(l, Layout::Split { ratio, .. } if (ratio - 0.8).abs() < 1e-6));
+    l.even(&root, 800., (160., 80.));
+    assert!(matches!(l, Layout::Split { ratio, .. } if ratio == 0.5));
+    assert_eq!(
+        l.dividers(Rect {
+            x: 0.,
+            y: 0.,
+            w: 800.,
+            h: 400.
+        })[0]
+            .at,
+        400.
+    );
+    // Too short for two minimums: back to even.
+    l.set_ratio(&root, 0.9, 300., (160., 80.));
+    assert!(matches!(l, Layout::Split { ratio, .. } if ratio == 0.5));
+}
+
+fn root_ratio(l: &Layout) -> f32 {
+    match l {
+        Layout::Split { ratio, .. } => *ratio,
+        Layout::Pane(_) => panic!("not split"),
+    }
+}
+
+#[test]
+fn dragging_a_parent_divider_stops_at_the_nested_panes_minimum() {
+    // A | (B | C): the right side needs room for two panes.
+    let mut l = Layout::Pane(1);
+    l.split(1, SplitDir::Right, 2);
+    l.split(2, SplitDir::Right, 3);
+    let root = SplitPath(vec![]);
+    l.set_ratio(&root, 0.9, 800., (160., 80.));
+    assert!((root_ratio(&l) - 0.6).abs() < 1e-6, "{}", root_ratio(&l));
+    let area = Rect {
+        x: 0.,
+        y: 0.,
+        w: 800.,
+        h: 400.,
+    };
+    for (_, r) in l.rects(area) {
+        assert!(r.w >= 160. - 1e-3, "{r:?}");
+    }
+    l.set_ratio(&root, 0.0, 800., (160., 80.));
+    assert!((root_ratio(&l) - 0.2).abs() < 1e-6);
+
+    // A | (B / C): stacked panes only need one pane's width.
+    let mut l = Layout::Pane(1);
+    l.split(1, SplitDir::Right, 2);
+    l.split(2, SplitDir::Down, 3);
+    l.set_ratio(&root, 0.9, 800., (160., 80.));
+    assert!((root_ratio(&l) - 0.8).abs() < 1e-6);
+}
+
+#[test]
+fn even_respects_nested_minimums() {
+    // A | (B | C | D) in 800: the right side needs 480, so even stops at 0.4.
+    let mut l = Layout::Pane(1);
+    l.split(1, SplitDir::Right, 2);
+    l.split(2, SplitDir::Right, 3);
+    l.split(3, SplitDir::Right, 4);
+    let root = SplitPath(vec![]);
+    l.set_ratio(&root, 0.2, 800., (160., 80.));
+    l.even(&root, 800., (160., 80.));
+    assert!((root_ratio(&l) - 0.4).abs() < 1e-6, "{}", root_ratio(&l));
+}
+
+#[test]
+fn pane_ids_are_unique() {
+    let ids: std::collections::HashSet<_> = (0..1000).map(|_| new_pane_id()).collect();
+    assert_eq!(ids.len(), 1000);
+}
+
+fn tab_area() -> Rect {
+    Rect {
+        x: 0.,
+        y: 0.,
+        w: 800.,
+        h: 400.,
+    }
+}
+const TAB_MIN: (f32, f32) = (160., 80.);
+
+#[test]
+fn split_focuses_the_new_pane_and_unzooms() {
+    let mut t = TabState::new(1);
+    assert!(t.split(SplitDir::Right, 2, tab_area(), TAB_MIN));
+    assert_eq!(t.focused, 2);
+    assert!(t.toggle_zoom());
+    assert!(t.split(SplitDir::Down, 3, tab_area(), TAB_MIN));
+    assert_eq!(t.zoomed, None);
+    assert_eq!(t.panes.len(), 3);
+}
+
+#[test]
+fn split_is_refused_when_the_pane_is_too_small() {
+    let mut t = TabState::new(1);
+    let small = Rect {
+        x: 0.,
+        y: 0.,
+        w: 300.,
+        h: 400.,
+    };
+    assert!(!t.split(SplitDir::Right, 2, small, TAB_MIN));
+    assert_eq!(t.layout, Layout::Pane(1));
+    assert_eq!(t.panes.len(), 1);
+}
+
+#[test]
+fn closing_the_zoomed_pane_unzooms_and_focuses_the_sibling() {
+    let mut t = TabState::new(1);
+    t.split(SplitDir::Right, 2, tab_area(), TAB_MIN);
+    t.toggle_zoom();
+    assert_eq!(t.close(2), Removed::Focus(1));
+    assert_eq!((t.focused, t.zoomed), (1, None));
+    assert_eq!(t.close(1), Removed::Last);
+}
+
+#[test]
+fn zoom_needs_two_panes_and_shows_only_the_zoomed_one() {
+    let mut t = TabState::new(1);
+    assert!(!t.toggle_zoom());
+    t.split(SplitDir::Right, 2, tab_area(), TAB_MIN);
+    t.toggle_zoom();
+    assert_eq!(t.visible(tab_area()), vec![(2, tab_area())]);
+    t.focus(1);
+    assert_eq!(t.zoomed, None);
+}
+
+#[test]
+fn rename_trims_and_clears() {
+    let mut t = TabState::new(1);
+    t.rename(1, "  api  ");
+    assert_eq!(t.panes[&1].name.as_deref(), Some("api"));
+    t.rename(1, "   ");
+    assert_eq!(t.panes[&1].name, None);
+    t.toggle_right_clicks(1);
+    assert!(t.panes[&1].send_right_clicks);
 }
