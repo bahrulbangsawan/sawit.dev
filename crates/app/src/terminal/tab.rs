@@ -1208,7 +1208,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_menu_matches_herdr() {
+    fn pane_menu_lists_the_planned_items() {
         let labels: Vec<_> = pane_menu_items(false, true)
             .into_iter()
             .map(|(l, _)| l)

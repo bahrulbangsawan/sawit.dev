@@ -98,7 +98,6 @@ fn logo(id: &str, size: f32, cx: &App) -> AnyElement {
         "opencode" => ("agent_logos/opencode.svg", false),
         "cursor" => ("agent_logos/cursor.svg", false),
         "zed" => ("agent_logos/zed.svg", false),
-        "herdr" => (crate::assets::HERDR_LOGO, true),
         "bun" | "deno" | "rust" | "flyio" => {
             return svg()
                 .path(SharedString::from(format!("tool_logos/{id}.svg")))

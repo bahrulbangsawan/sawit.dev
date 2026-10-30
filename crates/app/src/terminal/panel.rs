@@ -1,5 +1,5 @@
-//! Tabs of terminals in the bottom dock, with quick launch for herdr and
-//! SSH sessions that reconnect with one click. Tabs are grouped by the
+//! Tabs of terminals in the bottom dock, with SSH sessions that
+//! reconnect with one click. Tabs are grouped by the
 //! window's project they started in.
 
 use std::collections::HashSet;
@@ -11,7 +11,6 @@ use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sawit_core::probe::find_in_path;
 use sawit_core::ssh::Launch;
 use sawit_core::terminal::{
     Command, GridSize, PaneId, Session, SplitDir, default_shell, run_bytes,
@@ -197,31 +196,6 @@ impl TerminalPanel {
         }
         self.focus_active(window, cx);
         cx.notify();
-    }
-
-    /// Whether herdr is on PATH. Render asks every frame, so the PATH scan
-    /// is cached briefly; installing herdr still shows up within seconds.
-    pub fn herdr_available() -> bool {
-        use std::sync::Mutex;
-        use std::time::{Duration, Instant};
-        static CHECKED: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
-        let mut checked = CHECKED.lock().unwrap_or_else(|e| e.into_inner());
-        match *checked {
-            Some((at, found)) if at.elapsed() < Duration::from_secs(10) => found,
-            _ => {
-                let found = find_in_path("herdr").is_some();
-                *checked = Some((Instant::now(), found));
-                found
-            }
-        }
-    }
-
-    pub fn open_herdr(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
-        let cmd = Command {
-            program: "herdr".into(),
-            ..Command::default()
-        };
-        self.open(cmd, "herdr", None, window, cx);
     }
 
     pub fn open_shell(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
@@ -780,50 +754,21 @@ impl TerminalPanel {
 
 impl TerminalPanel {
     /// Every tab closed, or the first one failed to start.
-    fn render_empty(&self, herdr: bool, cx: &mut Context<Self>) -> Placeholder {
+    fn render_empty(&self, cx: &mut Context<Self>) -> Placeholder {
         let shell = Button::new("empty-new-terminal")
             .small()
             .icon(IconName::Plus)
             .label("New Terminal")
             .on_click(cx.listener(|this, _, window, cx| this.open_shell(Some(window), cx)));
-        let state = match &self.error {
+        match &self.error {
             Some(e) => Placeholder::error("Unable to open a terminal")
                 .detail(e.clone())
                 .action(shell.label("Try Again")),
             None => Placeholder::new(Lucide::SquareTerminal, "No terminals open")
-                .detail(if herdr {
-                    "Start a shell in the project folder, or herdr for split panes."
-                } else {
-                    "Start a shell in the project folder."
-                })
+                .detail("Start a shell in the project folder.")
                 .action(shell.primary()),
-        };
-        state.when(self.error.is_none(), |state| {
-            state.action(if herdr {
-                Button::new("empty-open-herdr")
-                    .small()
-                    .child(herdr_logo())
-                    .child("Open herdr")
-                    .on_click(cx.listener(|this, _, window, cx| this.open_herdr(Some(window), cx)))
-            } else {
-                install_herdr_button("empty-install-herdr").small()
-            })
-        })
+        }
     }
-}
-
-/// The herdr logo, sized for a button.
-fn herdr_logo() -> impl IntoElement {
-    img(crate::assets::HERDR_LOGO).size(px(14.)).rounded(px(3.))
-}
-
-/// Opens herdr.dev, which has the install steps (Sawit does not bundle herdr).
-fn install_herdr_button(id: &'static str) -> Button {
-    Button::new(id)
-        .child(herdr_logo())
-        .child("Install herdr")
-        .tooltip("herdr adds split panes and sessions. Opens herdr.dev.")
-        .on_click(|_, _, cx| cx.open_url("https://herdr.dev"))
 }
 
 impl Render for TerminalPanel {
@@ -995,7 +940,6 @@ impl Render for TerminalPanel {
                     .into_any_element()
             });
         }
-        let herdr = Self::herdr_available();
         let (max_icon, max_tip) = if self.maximized {
             (Lucide::Minimize, "Restore Layout")
         } else {
@@ -1031,19 +975,6 @@ impl Render for TerminalPanel {
                         h_flex()
                             .px_1()
                             .gap_1()
-                            .child(if herdr {
-                                Button::new("open-herdr")
-                                    .ghost()
-                                    .xsmall()
-                                    .child(herdr_logo())
-                                    .child("herdr")
-                                    .tooltip("Open herdr in a New Tab")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_herdr(Some(window), cx)
-                                    }))
-                            } else {
-                                install_herdr_button("install-herdr").ghost().xsmall()
-                            })
                             .child(
                                 Button::new("new-terminal")
                                     .ghost()
@@ -1080,7 +1011,7 @@ impl Render for TerminalPanel {
                     .min_h_0()
                     .map(|el| match self.tabs.get(self.active).cloned() {
                         Some(tab) => el.child(tab),
-                        None => el.child(self.render_empty(herdr, cx)),
+                        None => el.child(self.render_empty(cx)),
                     }),
             )
     }

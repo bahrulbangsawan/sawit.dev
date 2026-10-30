@@ -1,4 +1,4 @@
-//! Bottom-dock terminal: tabs of real terminals (shell, herdr or SSH).
+//! Bottom-dock terminal: tabs of real terminals (shell or SSH).
 
 mod panel;
 mod tab;

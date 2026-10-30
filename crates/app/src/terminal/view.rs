@@ -1,7 +1,7 @@
 //! One terminal: draws `core::terminal` snapshots on a canvas (like Zed's
 //! terminal element) and forwards keyboard, mouse and paste input. Dragging
 //! selects text and copies it on release; Shift+drag selects even while a
-//! program (herdr, vim) has the mouse. Dropped files are typed as paths.
+//! program (vim, Claude Code) has the mouse. Dropped files are typed as paths.
 
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -110,7 +110,7 @@ pub struct TerminalView {
     focus: FocusHandle,
     pub title: SharedString,
     pub exited: bool,
-    /// Runs the user's shell (not herdr), so commands can be typed into it.
+    /// Runs the user's shell, so commands can be typed into it.
     pub shell: bool,
     /// Something was typed, pasted or run here; a fresh tab can be replaced.
     pub touched: bool,

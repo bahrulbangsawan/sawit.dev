@@ -150,8 +150,8 @@ impl Snapshot {
 }
 
 /// Variables that tell a program it runs inside another multiplexer session
-/// (herdr refuses to nest when it sees its own). Terminals opened by Sawit
-/// are new top-level sessions, so these are removed.
+/// (a program may refuse to run nested: herdr, tmux, Zellij). Terminals
+/// opened by Sawit are new top-level sessions, so these are removed.
 pub fn multiplexer_markers(names: impl Iterator<Item = String>) -> Vec<String> {
     let mut found: Vec<String> = names
         .filter(|n| {

@@ -19,7 +19,7 @@ All runnable commands are harmless: `echo`, `pwd`, `ls`, and files under
 1. **Buttons**: shell blocks show the language, ▶ and Copy in the top-right; other blocks show the language and Copy.
 2. **No overlap**: the buttons never cover the first line of code (see the long first line in `edge-cases.md`).
 3. **Run, terminal hidden**: hide the terminal (⌘J), click ▶. The terminal opens and the command runs.
-4. **Run, herdr active**: open a herdr tab and make it active, click ▶. The command goes to a shell tab, not herdr.
+4. **Run, split panes**: split the terminal and focus a pane, click ▶. The command goes to a shell pane.
 5. **Run, no shell**: close every terminal tab, click ▶. A new shell tab opens and runs it.
 6. **Run, exited shell**: type `exit` in the shell, click ▶. A new shell opens.
 7. **Copy**: click Copy, paste somewhere. You get the exact block text, `$` prompts and output included.
