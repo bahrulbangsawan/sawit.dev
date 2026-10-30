@@ -91,6 +91,19 @@ pub const UI_COMMANDS: &[&str] = &[
     "edit.copyAsPng",
 ];
 
+/// Copy, cut and paste. The engine runs them on its own copy of the layers, but each canvas tab
+/// has its own session, and the system clipboard is Sawit's to read and write, so Sawit carries
+/// them out around the engine ([`crate::clipboard`]): what one tab copies pastes in another, and a
+/// paste takes what was copied last, here or in another app. Their shortcuts come back to the view
+/// as [`crate::input::KeyOutcome::Ui`], as [`UI_COMMANDS`]' do.
+pub const CLIPBOARD: &[&str] = &[
+    "edit.copy",
+    "edit.cut",
+    "edit.paste",
+    "edit.pasteOver",
+    "edit.pasteReplace",
+];
+
 /// Keystrokes that stay Sawit's while the canvas has the keyboard, although a FigCraft command uses
 /// them too. Written as GPUI keystrokes with the modifiers in the order ctrl, alt, shift, cmd, as
 /// [`crate::input::gpui_keystroke`] writes them.
@@ -117,6 +130,12 @@ pub fn is_hidden(id: &str) -> bool {
 /// Whether Sawit carries out command `id` itself instead of running it in the engine.
 pub fn is_ui(id: &str) -> bool {
     UI_COMMANDS.contains(&id)
+}
+
+/// Whether command `id` copies or pastes, which Sawit carries out around the engine
+/// ([`CLIPBOARD`]).
+pub fn is_clipboard(id: &str) -> bool {
+    CLIPBOARD.contains(&id)
 }
 
 #[cfg(test)]
@@ -174,12 +193,29 @@ mod tests {
     }
 
     #[test]
+    fn clipboard_commands_are_their_own_list() {
+        for id in [
+            "edit.copy",
+            "edit.cut",
+            "edit.paste",
+            "edit.pasteOver",
+            "edit.pasteReplace",
+        ] {
+            assert!(is_clipboard(id), "{id}");
+            // The engine still runs them: they are neither hidden nor the spec's UI-handled ids.
+            assert!(!is_hidden(id) && !is_ui(id), "{id}");
+        }
+        assert!(!is_clipboard("edit.copyAsPng"));
+        assert!(!is_clipboard("edit.pasteProperties"));
+    }
+
+    #[test]
     fn policy_ids_are_figcraft_ids() {
         // A misspelt id would hide nothing, or leave a command to the engine.
         let known = |id: &str| {
             catalog::items().any(|m| m.id == id) || keymap::KEYS.iter().any(|b| b.id == id)
         };
-        for id in HIDDEN.iter().chain(UI_COMMANDS) {
+        for id in HIDDEN.iter().chain(UI_COMMANDS).chain(CLIPBOARD) {
             assert!(known(id), "{id} is not a FigCraft menu item or shortcut");
         }
     }

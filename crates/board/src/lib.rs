@@ -2,6 +2,7 @@
 //! can be tested with plain `cargo test`; the GPUI views live in `crates/app/src/board/`.
 
 pub mod actions;
+pub mod clipboard;
 pub mod context_bar;
 pub mod design;
 pub mod doc;

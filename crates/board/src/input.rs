@@ -17,7 +17,7 @@ use figcraft_engine::{
 };
 use serde_json::json;
 
-use crate::policy::{is_hidden, is_ui};
+use crate::policy::{is_clipboard, is_hidden, is_ui};
 use crate::{BoardDoc, BoardError};
 
 pub use figcraft_engine::keymap::Mods;
@@ -27,8 +27,9 @@ pub use figcraft_engine::keymap::Mods;
 pub enum KeyOutcome {
     /// The canvas used it: a command ran, or a tool or the text editor took it.
     Handled,
-    /// It is the shortcut of a command Sawit carries out itself ([`crate::policy::UI_COMMANDS`]).
-    /// Nothing ran: carrying it out is the caller's job.
+    /// It is the shortcut of a command Sawit carries out itself ([`crate::policy::UI_COMMANDS`]),
+    /// or of a copy or a paste, which Sawit carries out around the engine
+    /// ([`crate::policy::CLIPBOARD`]). Nothing ran: carrying it out is the caller's job.
     Ui(&'static str),
     /// The canvas has no use for it: it is no shortcut, or a hidden command's, or it types into
     /// the text being edited, which the input method does.
@@ -150,7 +151,8 @@ fn figcraft_key(key: &str, mut mods: Mods) -> (Cow<'_, str>, Mods) {
 /// A port of FigCraft's `Headless::key` (crates/mcp/src/headless.rs at the pinned rev) under
 /// Sawit's command policy:
 /// - The shortcut of a hidden command counts as no shortcut: [`KeyOutcome::Unhandled`].
-/// - The shortcut of a command Sawit carries out itself comes back as [`KeyOutcome::Ui`], unrun.
+/// - The shortcut of a command Sawit carries out itself, a copy or a paste among them, comes back
+///   as [`KeyOutcome::Ui`], unrun.
 /// - While text is edited, a typed character or space without ⌘ or ⌃ is left to the input method,
 ///   which inserts it: [`KeyOutcome::Unhandled`].
 ///
@@ -160,7 +162,9 @@ fn figcraft_key(key: &str, mut mods: Mods) -> (Cow<'_, str>, Mods) {
 ///   since GPUI reports ⇧0 as `)`.
 /// - While text is edited, only the shortcuts live while editing and the text editor's keys run.
 ///   ⌘Z and ⇧⌘Z end the edit, so it becomes one undo step, then undo or redo; ⌘A selects all the
-///   text; ⌘↩ ends the edit; any other ⌘ with a character is [`KeyOutcome::Unhandled`].
+///   text; ⌘↩ ends the edit; ⌘C, ⌘X, ⌘V and ⇧⌘V come back as [`KeyOutcome::Ui`] for the caller
+///   to copy, cut and paste the text's characters; any other ⌘ with a character is
+///   [`KeyOutcome::Unhandled`].
 /// - A number key with nothing selected is [`KeyOutcome::Unhandled`].
 ///
 /// A key that is no shortcut and no key FigCraft knows is [`KeyOutcome::Unhandled`] too. What the
@@ -234,7 +238,7 @@ fn shortcut(platform: Platform, context: Context, key: &str, mods: Mods) -> Opti
 
 /// Run command `id` for its shortcut, unless Sawit carries it out itself.
 fn run(board: &mut BoardDoc, id: &'static str) -> Result<KeyOutcome, BoardError> {
-    if is_ui(id) {
+    if is_ui(id) || is_clipboard(id) {
         return Ok(KeyOutcome::Ui(id));
     }
     // From the keyboard, typing goes on in the new sticky, as in FigCraft's own menus.
@@ -247,9 +251,14 @@ fn run(board: &mut BoardDoc, id: &'static str) -> Result<KeyOutcome, BoardError>
     Ok(KeyOutcome::Handled)
 }
 
+/// The copy and paste commands that act on the text being edited: its selected characters are
+/// copied or cut, and a paste types the clipboard's text, in FigCraft's text editor for every ⌘V
+/// it takes (Shift held or not). Paste to replace (⇧⌘R) replaces layers, and waits.
+const TEXT_CLIPBOARD: &[&str] = &["edit.copy", "edit.cut", "edit.paste", "edit.pasteOver"];
+
 /// A key while text is edited, taken as FigCraft's own keyboard takes it: the shortcuts live while
 /// editing, then typing (the input method's), then the text editor's keys. Canvas shortcuts wait
-/// until the edit ends.
+/// until the edit ends, but for copy and paste, which act on the text ([`TEXT_CLIPBOARD`]).
 fn text_key(
     board: &mut BoardDoc,
     platform: Platform,
@@ -276,8 +285,14 @@ fn text_key(
                 end_text_edit(board)?;
                 return Ok(KeyOutcome::Handled);
             }
-            // Canvas shortcuts (select all layers, duplicate, group…) wait until the edit ends.
-            _ if key.chars().count() == 1 => return Ok(KeyOutcome::Unhandled),
+            // Copy and paste act on the text, which the caller does with the system clipboard.
+            // Other canvas shortcuts (select all layers, duplicate, group…) wait until the edit
+            // ends.
+            _ if key.chars().count() == 1 => {
+                let clipboard = shortcut(platform, Context::Canvas, key, mods)
+                    .filter(|id| TEXT_CLIPBOARD.contains(id));
+                return Ok(clipboard.map_or(KeyOutcome::Unhandled, KeyOutcome::Ui));
+            }
             _ => {}
         }
     }
@@ -662,6 +677,61 @@ mod tests {
             route_key(&mut board, "s", CMD),
             Ok(KeyOutcome::Ui("file.save"))
         );
+    }
+
+    #[test]
+    fn clipboard_keys_are_left_to_the_view() {
+        let mut board = board();
+        let note = sticky(&mut board, "hi");
+        select(&mut board, note);
+        let (revision, doc) = (board.revision(), board.doc().unwrap());
+        let shift_cmd = Mods { shift: true, ..CMD };
+        for (key, mods, id) in [
+            ("c", CMD, "edit.copy"),
+            ("x", CMD, "edit.cut"),
+            ("v", CMD, "edit.paste"),
+            ("v", shift_cmd, "edit.pasteOver"),
+            ("r", shift_cmd, "edit.pasteReplace"),
+        ] {
+            assert_eq!(
+                route_key(&mut board, key, mods),
+                Ok(KeyOutcome::Ui(id)),
+                "{id}"
+            );
+        }
+        // Nothing ran: the view copies and pastes, with the system clipboard and the other tabs.
+        assert!(board.session.clipboard.nodes.is_empty());
+        assert_eq!(board.revision(), revision);
+        assert_eq!(board.doc().unwrap(), doc);
+    }
+
+    #[test]
+    fn clipboard_keys_copy_and_paste_the_text_being_edited() {
+        let mut board = board();
+        let note = sticky(&mut board, "hi");
+        assert!(figcraft_engine::board::edit_text(&mut board.session, note).unwrap());
+        let shift_cmd = Mods { shift: true, ..CMD };
+        // ⌘C, ⌘X and ⌘V copy, cut and paste the characters, as in any text field, and so does
+        // ⇧⌘V, as in FigCraft's text editor.
+        for (key, mods, id) in [
+            ("c", CMD, "edit.copy"),
+            ("x", CMD, "edit.cut"),
+            ("v", CMD, "edit.paste"),
+            ("v", shift_cmd, "edit.pasteOver"),
+        ] {
+            assert_eq!(
+                route_key(&mut board, key, mods),
+                Ok(KeyOutcome::Ui(id)),
+                "{id}"
+            );
+        }
+        // Pasting to replace the selected layers waits, like the other canvas shortcuts.
+        assert_eq!(
+            route_key(&mut board, "r", shift_cmd),
+            Ok(KeyOutcome::Unhandled)
+        );
+        assert_eq!(sticky_text(&board, note), "hi");
+        assert!(editing(&board));
     }
 
     #[test]

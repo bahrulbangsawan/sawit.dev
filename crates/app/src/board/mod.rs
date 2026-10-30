@@ -10,7 +10,8 @@
 //!
 //! The pointer drives FigCraft's tools ([`events`]). Keys go where FigCraft's keymap sends them,
 //! and the ones Sawit uses too are shared by the spec's conflict policy ([`bindings`],
-//! [`BoardView::on_key`]).
+//! [`BoardView::on_key`]). Copy and paste reach the other canvas tabs and the system clipboard
+//! ([`BoardView::run_clipboard`]).
 
 mod events;
 mod overlay_paint;
@@ -29,10 +30,11 @@ use figcraft_render::{Options, View};
 use futures::StreamExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
+use sawit_board::clipboard::{self, PasteSource};
 use sawit_board::input::KeyOutcome;
 use sawit_board::store::{self, Writer};
 use sawit_board::view::{self, PREVIEW_QUALITY, Viewport};
-use sawit_board::{BoardDoc, BoardError, DocKind, input, ops};
+use sawit_board::{BoardDoc, BoardError, DocKind, input, ops, policy};
 use serde_json::{Value, json};
 
 use crate::canvas::ToggleCanvasMaximize;
@@ -316,12 +318,120 @@ impl BoardView {
         cx.notify();
     }
 
-    /// Carries out `id`, a command Sawit does itself instead of the engine
-    /// (`sawit_board::policy::UI_COMMANDS`): import, export, save and copy as. None is done yet,
-    /// so each says it is coming.
+    /// Carries out `id`, a command Sawit does itself instead of the engine: copy and paste
+    /// ([`Self::run_clipboard`]), and import, export, save and copy as
+    /// (`sawit_board::policy::UI_COMMANDS`), none of which is done yet, so each says it is coming.
     fn run_ui_command(&mut self, id: &'static str, cx: &mut Context<Self>) {
+        if policy::is_clipboard(id) {
+            self.run_clipboard(id, None, cx);
+            return;
+        }
         log::debug!("the canvas doesn't carry out {id} yet");
         self.show_toast("Coming soon", cx);
+    }
+
+    /// Copies, cuts or pastes (`id` is one of `sawit_board::policy::CLIPBOARD`), with the system
+    /// clipboard and the other canvas tabs (`sawit_board::clipboard`). The keyboard's handler for
+    /// these ids, which the menus share with Plan 6:
+    ///
+    /// - Copy and cut run in the engine, then the copy becomes the app's, which any canvas tab
+    ///   pastes, and the system clipboard gets its marker.
+    /// - Paste pastes what was copied last: an image, SVG or text another app copied since the
+    ///   canvas's copy, else the copied layers. `at` is the page point to paste at (Paste here);
+    ///   `None` pastes where FigCraft does. Paste over the selection and paste to replace it take
+    ///   the copied layers only, as in FigCraft.
+    /// - While text is edited, they act on its characters, as in any text field: the system
+    ///   clipboard gets the selected text, and a paste types its text.
+    ///
+    /// A paste with nothing to paste does nothing and says nothing. A command the engine refuses
+    /// says why, in a toast.
+    fn run_clipboard(&mut self, id: &str, at: Option<(f64, f64)>, cx: &mut Context<Self>) {
+        let done = if self.editing_text() {
+            self.clipboard_text(id, cx)
+        } else {
+            self.clipboard_layers(id, at, cx)
+        };
+        self.handle_ui_requests(Vec::new(), cx);
+        if let Err(error) = done {
+            self.show_toast(error.to_string(), cx);
+        }
+        cx.notify();
+    }
+
+    /// Copy and paste of the canvas's layers ([`Self::run_clipboard`]).
+    fn clipboard_layers(
+        &mut self,
+        id: &str,
+        at: Option<(f64, f64)>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), BoardError> {
+        let pasted = (id == "edit.paste").then(|| system_clipboard(cx));
+        let Some(board) = self.board_mut() else {
+            return Ok(());
+        };
+        match id {
+            "edit.copy" | "edit.cut" => {
+                board.execute(id, &json!({}))?;
+                let marker = clipboard::after_copy(board);
+                cx.write_to_clipboard(ClipboardItem::new_string(marker));
+            }
+            "edit.paste" => {
+                let (text, image) = pasted.unwrap_or_default();
+                let marker = clipboard::marker();
+                clipboard::before_paste(board);
+                let source =
+                    clipboard::paste_source(text.as_deref(), image.as_deref(), marker.as_deref());
+                // Nothing newer from another app, and no layers copied: nothing to paste.
+                if source == PasteSource::Canvas && board.session.clipboard.nodes.is_empty() {
+                    return Ok(());
+                }
+                clipboard::paste(board, source, at)?;
+            }
+            // Paste over the selection and paste to replace it.
+            _ => {
+                clipboard::before_paste(board);
+                if board.session.clipboard.nodes.is_empty() {
+                    return Ok(());
+                }
+                board.execute(id, &json!({}))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Copy and paste of the characters of the text being edited ([`Self::run_clipboard`]).
+    fn clipboard_text(&mut self, id: &str, cx: &mut Context<Self>) -> Result<(), BoardError> {
+        let pasted = matches!(id, "edit.paste" | "edit.pasteOver")
+            .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
+            .flatten();
+        let Some(board) = self.board_mut() else {
+            return Ok(());
+        };
+        match id {
+            "edit.copy" | "edit.cut" => {
+                let selected = if id == "edit.cut" {
+                    clipboard::cut_text(board)?
+                } else {
+                    clipboard::copy_text(board)?
+                };
+                if let Some(text) = selected {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+            }
+            "edit.paste" | "edit.pasteOver" => {
+                // Text, SVG among it; the canvas's marker stands for layers, which no text takes.
+                let marker = clipboard::marker();
+                match clipboard::paste_source(pasted.as_deref(), None, marker.as_deref()) {
+                    PasteSource::Text(text) | PasteSource::Svg(text) => {
+                        clipboard::paste_text(board, &text)?;
+                    }
+                    PasteSource::Canvas | PasteSource::Image(_) => {}
+                }
+            }
+            // Paste to replace replaces layers: nothing while text is edited.
+            _ => {}
+        }
+        Ok(())
     }
 
     /// Whether the canvas is editing a text: typing goes into it.
@@ -685,6 +795,39 @@ fn hide_toast_later(cx: &mut Context<BoardView>) -> Task<()> {
             cx.notify();
         });
     })
+}
+
+/// What the system clipboard holds for a paste: its text, and its image when FigCraft reads the
+/// image's format (PNG, JPEG, WebP, GIF, BMP or TIFF). SVG copied as an image comes back as its
+/// text, as which a paste takes SVG in.
+fn system_clipboard(cx: &App) -> (Option<String>, Option<Vec<u8>>) {
+    let Some(item) = cx.read_from_clipboard() else {
+        return (None, None);
+    };
+    let mut text = item.text();
+    let mut image = None;
+    for entry in item.entries() {
+        let ClipboardEntry::Image(picture) = entry else {
+            continue;
+        };
+        match picture.format {
+            ImageFormat::Svg if text.is_none() => {
+                text = String::from_utf8(picture.bytes.clone()).ok();
+            }
+            ImageFormat::Png
+            | ImageFormat::Jpeg
+            | ImageFormat::Webp
+            | ImageFormat::Gif
+            | ImageFormat::Bmp
+            | ImageFormat::Tiff
+                if image.is_none() =>
+            {
+                image = Some(picture.bytes.clone());
+            }
+            _ => {}
+        }
+    }
+    (text, image)
 }
 
 /// Whether `kept` is `doc`: the same document, not only an equal one.
@@ -2097,5 +2240,172 @@ mod tests {
         assert!(held(&cx));
         cx.deactivate_window();
         assert!(!held(&cx));
+    }
+
+    /// The tests that copy layers, or paste the app's copy, share that copy
+    /// (`sawit_board::clipboard`): they take turns.
+    static CLIPBOARD_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn clipboard_turn() -> std::sync::MutexGuard<'static, ()> {
+        (CLIPBOARD_TURN.lock()).unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The text on the system clipboard.
+    fn system_text(cx: &TestAppContext) -> Option<String> {
+        cx.read_from_clipboard().and_then(|item| item.text())
+    }
+
+    /// Puts `text` on the system clipboard, as copying it in another app does.
+    fn copy_in_another_app(cx: &TestAppContext, text: &str) {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.into()));
+    }
+
+    /// What board object `id` (a sticky) or text layer `id` reads.
+    fn reads(view: &Entity<BoardView>, id: NodeId, cx: &TestAppContext) -> String {
+        view.read_with(cx, |view, _| {
+            let doc = view.board().unwrap().doc().unwrap();
+            let text = figcraft_engine::board::text_of(&doc, id).unwrap_or(id);
+            let text = doc.node(text).and_then(|n| n.kind.text()).unwrap();
+            text.characters.clone()
+        })
+    }
+
+    fn no_toast(view: &Entity<BoardView>, cx: &TestAppContext) {
+        let toast = view.read_with(cx, |view, _| view.toast.clone());
+        assert_eq!(toast, None);
+    }
+
+    #[gpui_kit::test]
+    fn copy_and_paste_act_on_the_text_being_edited(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("text-clipboard");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        let hello = json!({
+            "op": "command", "command": "board.sticky",
+            "params": {"x": 0, "y": 0, "text": "hello"},
+        });
+        let made = run_op(&view, hello, &mut cx);
+        // Typing starts with all of "hello" selected.
+        let note = type_in(&view, &made, &mut cx);
+        focus_canvas(&view, &mut cx);
+        cx.simulate_keystrokes("cmd-c");
+        assert_eq!(system_text(&cx).as_deref(), Some("hello"));
+        copy_in_another_app(&cx, "x");
+        cx.simulate_keystrokes("cmd-v");
+        assert_eq!(reads(&view, note, &cx), "x");
+        // ⌘X takes the selected text out, onto the system clipboard.
+        cx.simulate_keystrokes("cmd-a cmd-x");
+        assert_eq!(system_text(&cx).as_deref(), Some("x"));
+        assert_eq!(reads(&view, note, &cx), "");
+        // Only the text changed: no layer was copied or pasted, and the typing goes on.
+        assert_eq!(layers(&view, &cx), [note]);
+        assert!(view.read_with(&cx, |view, _| view.editing_text()));
+        no_toast(&view, &cx);
+    }
+
+    #[gpui_kit::test]
+    fn layers_copied_or_cut_in_one_canvas_paste_in_another(cx: &mut TestAppContext) {
+        let _turn = clipboard_turn();
+        let tmp = Scratch::new("copy-across");
+        cx.update(gpui_kit::init);
+        let mut canvas = |name: &str| {
+            let (window, view) = open_in_window(cx, &tmp.0.join(name));
+            next_frame(cx, &view, None);
+            (view, VisualTestContext::from_window(window.into(), cx))
+        };
+        let (one, mut one_cx) = canvas("one.figcraft");
+        let (other, mut other_cx) = canvas("other.figcraft");
+        let sticky = |text: &str| {
+            json!({
+                "op": "command", "command": "board.sticky",
+                "params": {"x": 0, "y": 0, "text": text},
+            })
+        };
+        run_op(&one, sticky("copied"), &mut one_cx);
+        focus_canvas(&one, &mut one_cx);
+        one_cx.simulate_keystrokes("cmd-c");
+        // Other apps see the copy's marker, which says the copy is the canvas's newest.
+        let marker = system_text(&one_cx);
+        assert!(
+            marker
+                .as_deref()
+                .is_some_and(|m| m.starts_with("sawit-canvas:")),
+            "{marker:?}"
+        );
+        assert_eq!(marker, sawit_board::clipboard::marker());
+
+        focus_canvas(&other, &mut other_cx);
+        other_cx.simulate_keystrokes("cmd-v");
+        let [pasted] = layers(&other, &other_cx)[..] else {
+            panic!("layers {:?}", layers(&other, &other_cx))
+        };
+        assert_eq!(reads(&other, pasted, &other_cx), "copied");
+        // ⇧⌘V pastes it again, over the selection.
+        other_cx.simulate_keystrokes("shift-cmd-v");
+        assert_eq!(layers(&other, &other_cx).len(), 2);
+
+        // A cut leaves its canvas, and pastes in the other one.
+        run_op(&one, sticky("cut"), &mut one_cx);
+        one_cx.simulate_keystrokes("cmd-x");
+        assert_eq!(layers(&one, &one_cx).len(), 1);
+        assert_ne!(system_text(&one_cx), marker);
+        other_cx.simulate_keystrokes("cmd-v");
+        let added = layers(&other, &other_cx);
+        assert_eq!(added.len(), 3);
+        assert_eq!(reads(&other, added[2], &other_cx), "cut");
+        no_toast(&one, &one_cx);
+        no_toast(&other, &other_cx);
+    }
+
+    #[gpui_kit::test]
+    fn paste_takes_what_another_app_copied_since(cx: &mut TestAppContext) {
+        let _turn = clipboard_turn();
+        let tmp = Scratch::new("paste-newer");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        run_op(&view, sticky_op(), &mut cx);
+        focus_canvas(&view, &mut cx);
+        cx.simulate_keystrokes("cmd-c");
+        // Text copied in another app since: a text layer, not the sticky again.
+        copy_in_another_app(&cx, "hello");
+        cx.simulate_keystrokes("cmd-v");
+        let [_, text] = layers(&view, &cx)[..] else {
+            panic!("layers {:?}", layers(&view, &cx))
+        };
+        assert_eq!(reads(&view, text, &cx), "hello");
+        // An image copied in another app: an image layer.
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let png = gpui_kit::Image::from_bytes(gpui_kit::ImageFormat::Png, png);
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_image(&png));
+        cx.simulate_keystrokes("cmd-v");
+        assert_eq!(layers(&view, &cx).len(), 3);
+        let images = view.read_with(&cx, |view, _| {
+            view.board().unwrap().doc().unwrap().images.len()
+        });
+        assert_eq!(images, 1);
+        no_toast(&view, &cx);
+    }
+
+    #[gpui_kit::test]
+    fn a_paste_with_nothing_to_paste_says_nothing(cx: &mut TestAppContext) {
+        let _turn = clipboard_turn();
+        // The app's copy holds no layers, as before anything is copied, and neither does the
+        // system clipboard.
+        sawit_board::clipboard::after_copy(&BoardDoc::new_board("Canvas").unwrap());
+        let tmp = Scratch::new("paste-nothing");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        focus_canvas(&view, &mut cx);
+        cx.simulate_keystrokes("cmd-v shift-cmd-v");
+        assert!(layers(&view, &cx).is_empty());
+        // A copy's marker that Sawit left on the system clipboard before a restart is no text.
+        copy_in_another_app(&cx, "sawit-canvas:999999");
+        cx.simulate_keystrokes("cmd-v");
+        assert!(layers(&view, &cx).is_empty());
+        // Paste to replace, with a layer selected to replace.
+        run_op(&view, sticky_op(), &mut cx);
+        cx.simulate_keystrokes("shift-cmd-r");
+        assert_eq!(layers(&view, &cx).len(), 1);
+        no_toast(&view, &cx);
     }
 }
