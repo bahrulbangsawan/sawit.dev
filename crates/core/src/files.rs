@@ -92,8 +92,17 @@ pub fn read_text(path: &Path) -> Result<TextFile> {
 
 /// Writes via a private temp file in the same directory + rename, keeping
 /// the original file's permissions. A symlink stays a symlink: its target is
-/// what gets replaced.
+/// what gets replaced ([`write_atomic`]).
 pub fn write_text_atomic(path: &Path, text: &str) -> Result<()> {
+    write_atomic(path, text.as_bytes())
+}
+
+/// Writes `bytes` to `path` so that a crash or power cut leaves the old file
+/// or the new one, never part of either: to a private temp file in the same
+/// directory ([`staging_file`]), synced to disk, then renamed over the file.
+/// The file keeps its permissions (a new one gets 0644). A symlink stays a
+/// symlink: its target is what gets replaced.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
 
@@ -101,12 +110,7 @@ pub fn write_text_atomic(path: &Path, text: &str) -> Result<()> {
         Ok(m) if m.file_type().is_symlink() => std::fs::canonicalize(path)?,
         _ => path.to_path_buf(),
     };
-    let dir = path.parent().unwrap_or(Path::new("."));
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let tmp = dir.join(format!(".{name}.sawit-tmp"));
+    let tmp = staging_file(&path);
     let result = (|| {
         // Owner-only until the final permissions are applied.
         let mut file = std::fs::OpenOptions::new()
@@ -115,7 +119,7 @@ pub fn write_text_atomic(path: &Path, text: &str) -> Result<()> {
             .truncate(true)
             .mode(0o600)
             .open(&tmp)?;
-        file.write_all(text.as_bytes())?;
+        file.write_all(bytes)?;
         file.sync_all()?;
         let mode = std::fs::metadata(&path)
             .map(|m| m.permissions())
@@ -127,6 +131,17 @@ pub fn write_text_atomic(path: &Path, text: &str) -> Result<()> {
         let _ = std::fs::remove_file(&tmp);
     }
     Ok(result?)
+}
+
+/// Where [`write_atomic`] puts the bytes for the file at `path` (not a
+/// symlink) before they replace it: `.<name>.sawit-tmp` beside it.
+pub fn staging_file(path: &Path) -> PathBuf {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    dir.join(format!(".{name}.sawit-tmp"))
 }
 
 /// Makes an empty file or folder; fails if something is already there.
@@ -574,6 +589,25 @@ mod tests {
         );
         let leftovers: Vec<_> = fs::read_dir(d.path()).unwrap().collect();
         assert_eq!(leftovers.len(), 1);
+    }
+
+    #[test]
+    fn write_atomic_writes_bytes_through_a_staging_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("board.figcraft");
+        assert_eq!(staging_file(&f), d.path().join(".board.figcraft.sawit-tmp"));
+        // Bytes that aren't text, to a new file, which gets the usual permissions.
+        write_atomic(&f, &[0, 0xFF, 0xFE]).unwrap();
+        assert_eq!(fs::read(&f).unwrap(), [0, 0xFF, 0xFE]);
+        assert_eq!(
+            fs::metadata(&f).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        // A folder where the staging file goes: the write fails, and the file is as it was.
+        fs::create_dir(staging_file(&f)).unwrap();
+        assert!(write_atomic(&f, b"new").is_err());
+        assert_eq!(fs::read(&f).unwrap(), [0, 0xFF, 0xFE]);
     }
 
     #[test]

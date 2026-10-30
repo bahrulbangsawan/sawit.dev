@@ -1,14 +1,16 @@
 //! Where the canvas file lives, how it is opened, and the writer thread that saves it.
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
+use std::time::SystemTime;
 
 use figcraft_doc::Document;
-use sawit_core::nyawit;
+use sawit_core::{files, nyawit};
 
 use crate::doc::{BoardDoc, BoardError};
 use crate::excalidraw;
@@ -158,16 +160,47 @@ pub fn is_empty(doc: &Document) -> bool {
         .all(|page| doc.node(*page).is_none_or(|p| p.children.is_empty()))
 }
 
+/// A file's length and modification time, as the canvas read or wrote it: when the file there has
+/// another stamp, something else wrote to it since. FigCraft stamps a document's file the same way
+/// (`library::stat`, #1330), but keeps its stamp to itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stamp {
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+impl Stamp {
+    /// The stamp of the file at `path` as it is now, through a symlink. `None` when there is no
+    /// file there: nothing, a folder, or a path that can't be looked up.
+    pub fn of(path: &Path) -> Option<Self> {
+        let meta = std::fs::metadata(path).ok().filter(|meta| meta.is_file())?;
+        Some(Self {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+        })
+    }
+}
+
 /// Saves the canvas on its own thread, so editing never waits for the disk.
 ///
 /// Saves are queued, and when several for one path are waiting only the newest is written. Each
-/// goes to `<path>.tmp` first and is then renamed over the file, so a crash half way can't leave a
-/// truncated canvas. Dropping the writer writes what is queued, then ends the thread.
+/// goes to a private file beside the canvas first, is synced to disk and is then renamed over the
+/// file ([`files::write_atomic`]), so a crash or power cut half way can't leave a truncated canvas.
+/// The file keeps its permissions, and a symlink stays one: its target gets the save. A canvas
+/// tab's writer also keeps its saves from replacing what something else wrote to its file since
+/// ([`Writer::guard`]). Dropping the writer writes what is queued, then ends the thread.
 pub struct Writer {
     tx: Sender<Msg>,
     error: Arc<Mutex<Option<String>>>,
+    /// The files guarded against saving over another app's or window's changes, with the stamp
+    /// of each as the canvas last read or wrote it ([`Writer::guard`]).
+    stamps: Arc<Stamps>,
     thread: Option<JoinHandle<()>>,
 }
+
+/// The guarded files' stamps, which the writer thread checks and updates: `None` while there was
+/// no file to stamp.
+type Stamps = Mutex<HashMap<PathBuf, Option<Stamp>>>;
 
 /// What goes to the writer thread.
 enum Msg {
@@ -190,11 +223,12 @@ impl Writer {
     pub fn spawn() -> Self {
         let (tx, rx) = mpsc::channel();
         let error = Arc::new(Mutex::new(None));
+        let stamps = Arc::new(Stamps::default());
         let started = std::thread::Builder::new()
             .name("canvas-save".into())
             .spawn({
-                let error = error.clone();
-                move || run(&rx, &error)
+                let (error, stamps) = (error.clone(), stamps.clone());
+                move || run(&rx, &error, &stamps)
             });
         let thread = match started {
             Ok(thread) => Some(thread),
@@ -204,7 +238,12 @@ impl Writer {
                 None
             }
         };
-        Self { tx, error, thread }
+        Self {
+            tx,
+            error,
+            stamps,
+            thread,
+        }
     }
 
     /// Queues `bytes` to be written to `path`, and returns at once.
@@ -213,7 +252,8 @@ impl Writer {
     /// there that has layers, or that doesn't load, is first copied to `<path>.bak`, so clearing
     /// the canvas can be undone after a restart; if that copy can't be made, the save is not done
     /// and the error is reported. A `.nyawit` folder that is missing is made with its `.gitignore`, any other
-    /// missing folder without.
+    /// missing folder without. A save over a guarded file that something else wrote to since is
+    /// refused ([`Writer::guard`]).
     pub fn save(&self, path: PathBuf, bytes: Vec<u8>, empty: bool) {
         let save = Msg::Save(Save { path, bytes, empty });
         if let Err(mpsc::SendError(Msg::Save(lost))) = self.tx.send(save) {
@@ -222,6 +262,21 @@ impl Writer {
                 lost.path.display()
             ));
         }
+    }
+
+    /// Keeps saves to `path` from replacing what another app or window wrote to the file since the
+    /// canvas read or saved it, as FigCraft keeps its own saves from it (#1330). `read` is the
+    /// file's stamp from before the canvas read it ([`Stamp::of`]), `None` when there was no file.
+    ///
+    /// A save to `path` is then refused, right before it would be written, when the writer holds a
+    /// stamp of the file and the file there now has another: the stamp it was given, then that of
+    /// each save of the file it wrote, so the canvas's own saves never refuse each other. No stamp
+    /// held (there was no file, and none has been written yet), or no file there now, writes as
+    /// before. A refusal is the save's error ([`Writer::last_error`]) and leaves the file as it is,
+    /// and so does every later save of it, until the canvas opens the file again. A path that isn't
+    /// guarded is saved as before, whatever wrote to it since.
+    pub fn guard(&self, path: PathBuf, read: Option<Stamp>) {
+        lock(&self.stamps).insert(path, read);
     }
 
     /// Waits until everything queued so far is on disk or has failed ([`Writer::last_error`]).
@@ -276,7 +331,7 @@ impl Batch {
 
 /// The writer thread: take everything queued, write the newest save of each path, then answer
 /// whoever waits.
-fn run(rx: &Receiver<Msg>, error: &Mutex<Option<String>>) {
+fn run(rx: &Receiver<Msg>, error: &Mutex<Option<String>>, stamps: &Stamps) {
     while let Ok(first) = rx.recv() {
         let mut batch = Batch::default();
         batch.add(first);
@@ -287,7 +342,7 @@ fn run(rx: &Receiver<Msg>, error: &Mutex<Option<String>>) {
         if !batch.saves.is_empty() {
             let mut failure = None;
             for save in &batch.saves {
-                if let Err(e) = write(save) {
+                if let Err(e) = write(save, stamps) {
                     failure = Some(e);
                 }
             }
@@ -303,20 +358,46 @@ fn run(rx: &Receiver<Msg>, error: &Mutex<Option<String>>) {
 }
 
 /// Writes one save. On failure the error is a sentence for the user.
-fn write(save: &Save) -> Result<(), String> {
+///
+/// A save of a guarded file ([`Writer::guard`]) is refused right before its write when the file
+/// changed since the stamp held of it. Once written, the file's new stamp is the one held.
+fn write(save: &Save, stamps: &Stamps) -> Result<(), String> {
     let path = &save.path;
     let failed = |why: String| format!("The canvas couldn't be saved to {}: {why}", path.display());
     make_folder(path).map_err(|e| failed(e.to_string()))?;
     if save.empty {
         keep_backup_before_emptying(path).map_err(failed)?;
     }
-    let tmp = sibling(path, ".tmp");
-    std::fs::write(&tmp, &save.bytes)
-        .and_then(|()| std::fs::rename(&tmp, path))
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&tmp);
-            failed(e.to_string())
-        })
+    let guarded = lock(stamps).get(path).copied();
+    if let Some(Some(held)) = guarded {
+        refuse_overwriting_changes(path, held)?;
+    }
+    files::write_atomic(path, &save.bytes).map_err(|e| failed(e.to_string()))?;
+    if guarded.is_some() {
+        // The canvas's own write: the next save is checked against it, not against the file as
+        // it was read.
+        lock(stamps).insert(path.clone(), Stamp::of(path));
+    }
+    Ok(())
+}
+
+/// Refuses a save over the file at `path` when something else wrote to it since the canvas read
+/// or saved it: the file there now has another stamp than `held`. No file there has nothing to
+/// replace. It is FigCraft's own rule and sentence (`refuse_overwriting_changes`, #1330), with
+/// Sawit's way out in place of FigCraft's Revert to saved and Save as.
+fn refuse_overwriting_changes(path: &Path, held: Stamp) -> Result<(), String> {
+    match Stamp::of(path) {
+        Some(now) if now != held => Err(format!(
+            "{} wasn't saved: the file changed on disk since it was opened or saved here (another \
+             app or window wrote to it), and saving would replace those changes. Close its tab \
+             and open it again to load them, or save it under another name to keep this version \
+             as well.",
+            path.file_stem()
+                .and_then(OsStr::to_str)
+                .unwrap_or("Untitled")
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Makes the folder `path` goes in. A `.nyawit/` that is new gets its `.gitignore` too
@@ -381,9 +462,10 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
     name.into()
 }
 
-/// The writer's last error. A poisoned lock still holds a usable value.
-fn lock(error: &Mutex<Option<String>>) -> MutexGuard<'_, Option<String>> {
-    error.lock().unwrap_or_else(PoisonError::into_inner)
+/// What the writer shares with its thread (its last error, the stamps of the files it guards),
+/// locked. A poisoned lock still holds a usable value.
+fn lock<T>(shared: &Mutex<T>) -> MutexGuard<'_, T> {
+    shared.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]
@@ -479,7 +561,7 @@ mod tests {
             Err(BoardError::Format(_))
         ));
         assert_eq!(std::fs::read(&path).unwrap(), b"not a figcraft file");
-        // No `.bak` or `.tmp` beside it either.
+        // No `.bak` or temporary file beside it either.
         assert_eq!(names(dir.path()), ["canvas.figcraft"]);
     }
 
@@ -1168,7 +1250,7 @@ mod tests {
         writer.flush();
         // A folder where the temporary file should be: writing it fails, and the canvas is
         // untouched. Written straight to the file, the save would have gone through.
-        std::fs::create_dir(sibling(&path, ".tmp")).unwrap();
+        std::fs::create_dir(files::staging_file(&path)).unwrap();
         writer.save(path.clone(), bytes_with(&["new"]), false);
         writer.flush();
         assert!(writer.last_error().is_some());
@@ -1178,12 +1260,170 @@ mod tests {
     }
 
     #[test]
+    fn a_canvas_file_that_is_a_symlink_stays_one_and_its_target_gets_the_save() {
+        // A link the user made to a board kept elsewhere: the save goes to that board, and the
+        // link still points at it.
+        let dir = tempdir().unwrap();
+        let elsewhere = dir.path().join("boards");
+        std::fs::create_dir(&elsewhere).unwrap();
+        let target = elsewhere.join("plan.figcraft");
+        std::fs::write(&target, bytes_with(&["old"])).unwrap();
+        let link = dir.path().join("plan.figcraft");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let writer = Writer::spawn();
+        writer.save(link.clone(), bytes_with(&["new"]), false);
+        writer.flush();
+        assert_eq!(writer.last_error(), None);
+        let link_kind = std::fs::symlink_metadata(&link).unwrap().file_type();
+        assert!(link_kind.is_symlink(), "the link was replaced by a copy");
+        assert_eq!(std::fs::read_link(&link).unwrap(), target);
+        let saved = open(&target).unwrap();
+        assert!(has_text(&saved, "new"));
+        assert!(!has_text(&saved, "old"));
+        // Nothing is left beside either of them.
+        assert_eq!(names(dir.path()), ["boards", "plan.figcraft"]);
+        assert_eq!(names(&elsewhere), ["plan.figcraft"]);
+    }
+
+    #[test]
+    fn a_saved_file_keeps_its_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+        // A file only its owner may read stays so: a save doesn't make it readable by everyone.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("private.figcraft");
+        std::fs::write(&path, bytes_with(&["old"])).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let writer = Writer::spawn();
+        writer.save(path.clone(), bytes_with(&["new"]), false);
+        writer.flush();
+        assert_eq!(writer.last_error(), None);
+        assert!(has_text(&open(&path).unwrap(), "new"));
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "saved as {mode:o}");
+    }
+
+    #[test]
+    fn a_stamp_tells_a_file_written_since() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("canvas.figcraft");
+        assert_eq!(Stamp::of(&path), None, "no file");
+        let folder = dir.path().join("folder.figcraft");
+        std::fs::create_dir(&folder).unwrap();
+        assert_eq!(Stamp::of(&folder), None, "a folder");
+        std::fs::write(&path, b"one").unwrap();
+        let first = Stamp::of(&path).unwrap();
+        assert_eq!(Stamp::of(&path), Some(first), "unchanged");
+        std::fs::write(&path, b"three").unwrap();
+        assert_ne!(Stamp::of(&path), Some(first), "written since");
+        // Through a symlink, it is its target's.
+        let link = dir.path().join("link.figcraft");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        assert_eq!(Stamp::of(&link), Stamp::of(&path));
+    }
+
+    #[test]
+    fn a_guarded_file_changed_on_disk_is_not_saved_over() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("design.figcraft");
+        std::fs::write(&path, bytes_with(&["read"])).unwrap();
+        let writer = Writer::spawn();
+        // Stamped before the canvas reads it, as a canvas tab opens its file.
+        writer.guard(path.clone(), Stamp::of(&path));
+        // Another app (FigCraft, figcraft-cli, git) or another window writes the file.
+        let theirs = bytes_with(&["theirs", "and more"]);
+        std::fs::write(&path, &theirs).unwrap();
+
+        writer.save(path.clone(), bytes_with(&["mine"]), false);
+        writer.flush();
+        assert_eq!(
+            writer.last_error().as_deref(),
+            Some(
+                "design wasn't saved: the file changed on disk since it was opened or saved here \
+                 (another app or window wrote to it), and saving would replace those changes. \
+                 Close its tab and open it again to load them, or save it under another name to \
+                 keep this version as well."
+            )
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), theirs);
+        // The canvas's next save is refused too: it still hasn't read what is there.
+        writer.save(path.clone(), bytes_with(&["mine", "again"]), false);
+        writer.flush();
+        assert!(writer.last_error().is_some());
+        assert_eq!(std::fs::read(&path).unwrap(), theirs);
+        assert_eq!(names(dir.path()), ["design.figcraft"]);
+    }
+
+    #[test]
+    fn a_writers_own_saves_of_a_guarded_file_all_go_through() {
+        let dir = tempdir().unwrap();
+        // A file that was there when the canvas read it, and one that wasn't, which its first
+        // save makes.
+        let read = dir.path().join("read.figcraft");
+        std::fs::write(&read, bytes_with(&["read"])).unwrap();
+        let new = dir.path().join("new.figcraft");
+        let writer = Writer::spawn();
+        for path in [&read, &new] {
+            writer.guard(path.clone(), Stamp::of(path));
+        }
+        for n in 0..3 {
+            let text = format!("save {n}");
+            for path in [&read, &new] {
+                writer.save(path.clone(), bytes_with(&[&text]), false);
+            }
+            writer.flush();
+            assert_eq!(writer.last_error(), None, "{text}");
+            for path in [&read, &new] {
+                assert!(has_text(&open(path).unwrap(), &text), "{text}");
+            }
+        }
+        // Saves queued faster than the thread writes go through too, and so does emptying.
+        for n in 0..10 {
+            writer.save(read.clone(), bytes_with(&[&format!("burst {n}")]), false);
+        }
+        writer.flush();
+        writer.save(read.clone(), blank(), true);
+        writer.flush();
+        assert_eq!(writer.last_error(), None);
+        assert!(is_empty(&open(&read).unwrap().doc().unwrap()));
+        assert!(has_text(&open(&sibling(&read, ".bak")).unwrap(), "burst 9"));
+    }
+
+    #[test]
+    fn an_unguarded_file_is_saved_whatever_wrote_to_it_since() {
+        // As sawit-mcp saves a canvas file that no canvas tab has open: every save writes.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("canvas.figcraft");
+        std::fs::write(&path, bytes_with(&["theirs"])).unwrap();
+        let writer = Writer::spawn();
+        writer.save(path.clone(), bytes_with(&["one"]), false);
+        writer.flush();
+        std::fs::write(&path, bytes_with(&["theirs", "again"])).unwrap();
+        writer.save(path.clone(), bytes_with(&["two"]), false);
+        writer.flush();
+        assert_eq!(writer.last_error(), None);
+        assert!(has_text(&open(&path).unwrap(), "two"));
+
+        // A guarded file that is gone has nothing to replace: the save makes it again.
+        let gone = dir.path().join("gone.figcraft");
+        std::fs::write(&gone, bytes_with(&["read"])).unwrap();
+        writer.guard(gone.clone(), Stamp::of(&gone));
+        std::fs::remove_file(&gone).unwrap();
+        writer.save(gone.clone(), bytes_with(&["saved"]), false);
+        writer.flush();
+        assert_eq!(writer.last_error(), None);
+        assert!(has_text(&open(&gone).unwrap(), "saved"));
+    }
+
+    #[test]
     fn a_writer_whose_thread_is_gone_reports_saves_and_does_not_hang_on_flush() {
         let (tx, rx) = mpsc::channel();
         drop(rx);
         let writer = Writer {
             tx,
             error: Arc::default(),
+            stamps: Arc::default(),
             thread: None,
         };
         writer.save("/nowhere/canvas.figcraft".into(), blank(), false);
