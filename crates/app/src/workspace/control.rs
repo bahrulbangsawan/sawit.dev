@@ -195,12 +195,17 @@ impl Workspace {
                 };
                 done(json!({ "terminal": tab }))
             }
-            Command::TerminalRead { tab, lines } => {
+            Command::TerminalRead { tab, pane, lines } => {
                 let lines = lines.unwrap_or(READ_LINES).clamp(1, MAX_READ_LINES);
-                let text = self.terminal.read(cx).text(tab, lines, cx)?;
+                let text = self.terminal.read(cx).text(tab, pane, lines, cx)?;
                 done(json!({ "text": text }))
             }
-            Command::TerminalInput { tab, text, key } => {
+            Command::TerminalInput {
+                tab,
+                pane,
+                text,
+                key,
+            } => {
                 let mut bytes = text.map(String::into_bytes).unwrap_or_default();
                 if let Some(key) = key {
                     bytes.extend(key_bytes(&key).ok_or_else(|| {
@@ -210,11 +215,14 @@ impl Workspace {
                 if bytes.is_empty() {
                     return Err("Give text, a key, or both.".into());
                 }
-                let ix = self.terminal.update(cx, |t, cx| t.input(tab, bytes, cx))?;
+                let ix = self
+                    .terminal
+                    .update(cx, |t, cx| t.input(tab, pane, bytes, cx))?;
                 done(json!({ "terminal": ix }))
             }
-            Command::TerminalClose { tab } => {
-                self.terminal.update(cx, |t, cx| t.close_tab(tab, cx))?;
+            Command::TerminalClose { tab, pane } => {
+                self.terminal
+                    .update(cx, |t, cx| t.close_tab(tab, pane, window, cx))?;
                 done(json!({ "closed": tab }))
             }
             Command::RunList => {

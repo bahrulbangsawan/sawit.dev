@@ -231,7 +231,7 @@ impl TerminalTab {
     }
 
     /// A pane's name, else its program's title.
-    fn pane_title(&self, pane: PaneId, view: &TerminalView) -> SharedString {
+    pub(super) fn pane_title(&self, pane: PaneId, view: &TerminalView) -> SharedString {
         match self
             .state
             .panes

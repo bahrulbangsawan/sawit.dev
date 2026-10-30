@@ -109,6 +109,10 @@ pub struct TerminalRunArgs {
 pub struct TerminalReadArgs {
     #[schemars(description = "Terminal tab index (from app_state); default the active one")]
     pub tab: Option<usize>,
+    #[schemars(
+        description = "Pane within the tab (from app_state); default: the focused pane, or for close, the whole tab"
+    )]
+    pub pane: Option<usize>,
     #[schemars(description = "Lines of scrollback + screen to return (default 200, max 5000)")]
     pub lines: Option<usize>,
     pub project: Option<String>,
@@ -118,6 +122,10 @@ pub struct TerminalReadArgs {
 pub struct TerminalInputArgs {
     #[schemars(description = "Terminal tab index; default the active one")]
     pub tab: Option<usize>,
+    #[schemars(
+        description = "Pane within the tab (from app_state); default: the focused pane, or for close, the whole tab"
+    )]
+    pub pane: Option<usize>,
     #[schemars(description = "Text to type as is (no Enter added)")]
     pub text: Option<String>,
     #[schemars(
@@ -131,6 +139,10 @@ pub struct TerminalInputArgs {
 pub struct TerminalCloseArgs {
     #[schemars(description = "Terminal tab index (from app_state)")]
     pub tab: usize,
+    #[schemars(
+        description = "Pane within the tab (from app_state); default: the focused pane, or for close, the whole tab"
+    )]
+    pub pane: Option<usize>,
     pub project: Option<String>,
 }
 
@@ -604,7 +616,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "What the Sawit app shows: each window's project, sidebar panel, layout, open tabs (index, title, kind, path, unsaved) and terminal tabs (index, title, running job, script, ssh)"
+        description = "What the Sawit app shows: each window's project, sidebar panel, layout, open tabs (index, title, kind, path, unsaved) and terminal tabs (index, title, running job, script, ssh) and each tab's split panes"
     )]
     async fn app_state(&self) -> CallToolResult {
         self.app_tool(None, Command::State).await
@@ -693,6 +705,7 @@ impl Sawit {
         tokio::time::sleep(wait).await;
         let read = Command::TerminalRead {
             tab,
+            pane: None,
             lines: Some(a.lines.unwrap_or(100)),
         };
         match self.app_call(a.project, read).await {
@@ -709,6 +722,7 @@ impl Sawit {
     async fn terminal_read(&self, Parameters(a): Parameters<TerminalReadArgs>) -> CallToolResult {
         let command = Command::TerminalRead {
             tab: a.tab,
+            pane: a.pane,
             lines: a.lines,
         };
         match self.app_call(a.project, command).await {
@@ -723,16 +737,23 @@ impl Sawit {
     async fn terminal_input(&self, Parameters(a): Parameters<TerminalInputArgs>) -> CallToolResult {
         let command = Command::TerminalInput {
             tab: a.tab,
+            pane: a.pane,
             text: a.text,
             key: a.key,
         };
         self.app_tool(a.project, command).await
     }
 
-    #[tool(description = "Close a terminal tab")]
+    #[tool(description = "Close a terminal tab, or just one pane of it")]
     async fn terminal_close(&self, Parameters(a): Parameters<TerminalCloseArgs>) -> CallToolResult {
-        self.app_tool(a.project, Command::TerminalClose { tab: a.tab })
-            .await
+        self.app_tool(
+            a.project,
+            Command::TerminalClose {
+                tab: a.tab,
+                pane: a.pane,
+            },
+        )
+        .await
     }
 
     #[tool(

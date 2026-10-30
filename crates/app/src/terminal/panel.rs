@@ -109,18 +109,38 @@ impl TerminalPanel {
             });
         }
         if let Some(dir) = self.cwd.clone().filter(|_| first) {
-            for ix in 0..self.tabs.len() {
-                let view = focused(&self.tabs[ix], cx);
-                // `ssh` itself is "at the prompt"; the folder is local anyway.
-                if view.remote.is_some() || view.job.is_some() || !view.at_prompt() {
-                    continue;
-                }
-                if view.touched {
-                    view.cd(&dir);
-                    self.tabs[ix].update(cx, |t, _| t.group = Some(dir.clone()));
-                } else if let Some(fresh) = self.spawn(Command::default(), &shell_name(), None, cx)
-                {
-                    self.tabs[ix] = fresh;
+            let idle: Vec<(usize, PaneId, bool)> = self
+                .all_panes(cx)
+                .filter(|(_, _, v)| {
+                    // `ssh` itself is "at the prompt"; the folder is local anyway.
+                    let v = v.read(cx);
+                    v.remote.is_none() && v.job.is_none() && v.at_prompt()
+                })
+                .map(|(ix, pane, v)| (ix, pane, v.read(cx).touched))
+                .collect();
+            for (ix, pane, touched) in idle {
+                let tab = self.tabs[ix].clone();
+                if touched {
+                    if let Some(view) = tab.read(cx).view(pane) {
+                        view.read(cx).cd(&dir);
+                    }
+                    tab.update(cx, |t, _| t.group = Some(dir.clone()));
+                } else if let Some(fresh) = self.spawn_view(
+                    Command {
+                        cwd: Some(dir.clone()),
+                        ..Command::default()
+                    },
+                    &shell_name(),
+                    None,
+                    cx,
+                ) {
+                    // Replacing a view focuses its pane; give the focus back.
+                    tab.update(cx, |t, cx| {
+                        let focused = t.state.focused;
+                        t.replace_view(pane, fresh, cx);
+                        t.state.focus(focused);
+                        t.group = Some(dir.clone());
+                    });
                 }
             }
         }
@@ -229,29 +249,51 @@ impl TerminalPanel {
         self.open(ssh_command(&remote.launch), &name, Some(remote), window, cx);
     }
 
-    /// Live sessions to the server with `key`.
-    pub fn ssh_sessions(&self, key: &str, cx: &App) -> usize {
-        self.tabs
-            .iter()
-            .filter(|t| {
-                let v = focused(t, cx);
-                !v.exited && v.remote.as_ref().is_some_and(|r| r.key == key)
-            })
-            .count()
+    /// Every pane of every tab: the tab's index, the pane and its terminal,
+    /// tabs in strip order and panes in layout order.
+    fn all_panes<'a>(
+        &'a self,
+        cx: &'a App,
+    ) -> impl Iterator<Item = (usize, PaneId, &'a Entity<TerminalView>)> + 'a {
+        self.tabs.iter().enumerate().flat_map(move |(ix, tab)| {
+            tab.read(cx)
+                .views()
+                .map(move |(pane, view)| (ix, pane, view))
+        })
     }
 
-    /// Shows the newest live session to `key`; false when there is none.
+    /// Makes the tab at `ix` the active one with `pane` focused.
+    fn show_pane(&mut self, ix: usize, pane: PaneId, window: &mut Window, cx: &mut Context<Self>) {
+        self.active = ix;
+        self.tabs[ix].update(cx, |t, _| t.state.focus(pane));
+        self.focus_active(window, cx);
+        cx.notify();
+    }
+
+    /// Live panes in sessions to the server with `key`.
+    fn ssh_panes(&self, key: &str, cx: &App) -> Vec<(usize, PaneId)> {
+        self.all_panes(cx)
+            .filter(|(_, _, v)| {
+                let v = v.read(cx);
+                !v.exited && v.remote.as_ref().is_some_and(|r| r.key == key)
+            })
+            .map(|(ix, pane, _)| (ix, pane))
+            .collect()
+    }
+
+    /// Live sessions to the server with `key`, in any pane.
+    pub fn ssh_sessions(&self, key: &str, cx: &App) -> usize {
+        self.ssh_panes(key, cx).len()
+    }
+
+    /// Shows the newest live session to `key`, in whichever pane it is;
+    /// false when there is none.
     pub fn focus_ssh(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let found = self.tabs.iter().rposition(|t| {
-            let v = focused(t, cx);
-            !v.exited && v.remote.as_ref().is_some_and(|r| r.key == key)
-        });
-        if let Some(ix) = found {
-            self.active = ix;
-            self.focus_active(window, cx);
-            cx.notify();
-        }
-        found.is_some()
+        let Some((ix, pane)) = self.ssh_panes(key, cx).last().copied() else {
+            return false;
+        };
+        self.show_pane(ix, pane, window, cx);
+        true
     }
 
     /// Connects the ended SSH session in `pane` of the tab at `ix` again,
@@ -282,38 +324,45 @@ impl TerminalPanel {
         cx.notify();
     }
 
-    /// Types `commands` into a shell and presses Enter: the active tab if it
-    /// is a live shell, else the newest live shell, else a new one.
+    /// Types `commands` into a shell and presses Enter: the active tab's
+    /// focused pane if it is a live shell, else the newest live shell pane
+    /// in any tab, else a new one.
     pub fn run(&mut self, commands: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let live_shell = |tab: &Entity<TerminalTab>| {
-            let v = focused(tab, cx);
+        let live_shell = |v: &Entity<TerminalView>| {
+            let v = v.read(cx);
             v.shell && !v.exited
         };
-        let target = self
-            .tabs
-            .get(self.active)
-            .filter(|v| live_shell(v))
-            .map(|_| self.active)
-            .or_else(|| self.tabs.iter().rposition(live_shell));
-        match target {
-            Some(ix) => self.active = ix,
+        let in_active = self.tabs.get(self.active).and_then(|t| {
+            let t = t.read(cx);
+            live_shell(t.focused_view()).then_some((self.active, t.state.focused))
+        });
+        let target = in_active.or_else(|| {
+            self.all_panes(cx)
+                .filter(|(_, _, v)| live_shell(v))
+                .map(|(ix, pane, _)| (ix, pane))
+                .last()
+        });
+        let (ix, pane) = match target {
+            Some(found) => found,
             None => {
                 self.open_shell(None, cx);
                 if self.error.is_some() {
                     return;
                 }
+                (self.active, self.tabs[self.active].read(cx).state.focused)
             }
+        };
+        if let Some(view) = self.tabs[ix].read(cx).view(pane).cloned() {
+            view.update(cx, |view, _| {
+                view.touched = true;
+                view.write(run_bytes(commands));
+            });
         }
-        let view = self.tabs[self.active].read(cx).focused_view().clone();
-        view.update(cx, |view, _| {
-            view.touched = true;
-            view.write(run_bytes(commands));
-        });
-        self.focus_active(window, cx);
-        cx.notify();
+        self.show_pane(ix, pane, window, cx);
     }
 
-    /// Every tab, for `sawit-mcp`: title, state, and what it runs.
+    /// Every tab, for `sawit-mcp`: the tab's own fields describe its focused
+    /// pane, and `panes` lists each pane in layout order.
     pub fn describe(&self, cx: &App) -> Vec<serde_json::Value> {
         self.tabs
             .iter()
@@ -321,6 +370,23 @@ impl TerminalPanel {
             .map(|(ix, tab)| {
                 let t = tab.read(cx);
                 let v = t.focused_view().read(cx);
+                let panes: Vec<_> = t
+                    .views()
+                    .enumerate()
+                    .map(|(n, (pane, view))| {
+                        let v = view.read(cx);
+                        serde_json::json!({
+                            "index": n,
+                            "title": t.pane_title(pane, v).to_string(),
+                            "focused": pane == t.state.focused,
+                            "exited": v.exited,
+                            "at_prompt": v.at_prompt(),
+                            "running_job": v.foreground_job().is_some(),
+                            "script": v.job.as_ref().map(|j| j.name.clone()),
+                            "ssh": v.remote.as_ref().map(|r| r.name.clone()),
+                        })
+                    })
+                    .collect();
                 serde_json::json!({
                     "index": ix,
                     "title": t.title(cx).to_string(),
@@ -332,6 +398,7 @@ impl TerminalPanel {
                     "script": v.job.as_ref().map(|j| j.name.clone()),
                     "ssh": v.remote.as_ref().map(|r| r.name.clone()),
                     "project": t.group,
+                    "panes": panes,
                 })
             })
             .collect()
@@ -351,21 +418,53 @@ impl TerminalPanel {
         }
     }
 
-    /// The tab's last `lines` lines of output (the active tab by default).
-    pub fn text(&self, tab: Option<usize>, lines: usize, cx: &App) -> Result<String, String> {
-        let ix = self.tab_ix(tab)?;
-        Ok(focused(&self.tabs[ix], cx).text_tail(lines))
+    /// The pane at position `pane` of the tab at `ix` (the tab's focused
+    /// pane by default).
+    fn pane_of(
+        &self,
+        ix: usize,
+        pane: Option<usize>,
+        cx: &App,
+    ) -> Result<(PaneId, Entity<TerminalView>), String> {
+        let tab = self.tabs[ix].read(cx);
+        let Some(n) = pane else {
+            return Ok((tab.state.focused, tab.focused_view().clone()));
+        };
+        let panes: Vec<_> = tab.views().collect();
+        match panes.get(n) {
+            Some((id, view)) => Ok((*id, (*view).clone())),
+            None => Err(format!(
+                "Terminal {ix} has no pane {n}; panes are 0 to {}.",
+                panes.len() - 1
+            )),
+        }
     }
 
-    /// Sends raw input to a tab (the active one by default).
+    /// The pane's last `lines` lines of output (the active tab's focused
+    /// pane by default).
+    pub fn text(
+        &self,
+        tab: Option<usize>,
+        pane: Option<usize>,
+        lines: usize,
+        cx: &App,
+    ) -> Result<String, String> {
+        let ix = self.tab_ix(tab)?;
+        let (_, view) = self.pane_of(ix, pane, cx)?;
+        Ok(view.read(cx).text_tail(lines))
+    }
+
+    /// Sends raw input to a pane (the active tab's focused one by default).
     pub fn input(
         &mut self,
         tab: Option<usize>,
+        pane: Option<usize>,
         bytes: Vec<u8>,
         cx: &mut Context<Self>,
     ) -> Result<usize, String> {
         let ix = self.tab_ix(tab)?;
-        let view = focused(&self.tabs[ix], cx);
+        let (_, view) = self.pane_of(ix, pane, cx)?;
+        let view = view.read(cx);
         if view.exited {
             return Err(format!("Terminal {ix} has exited."));
         }
@@ -374,9 +473,22 @@ impl TerminalPanel {
         Ok(ix)
     }
 
-    pub fn close_tab(&mut self, ix: usize, cx: &mut Context<Self>) -> Result<(), String> {
+    /// Closes the tab at `ix`, or only its pane at position `pane`.
+    pub fn close_tab(
+        &mut self,
+        ix: usize,
+        pane: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
         self.tab_ix(Some(ix))?;
-        self.close(ix, cx);
+        match pane {
+            None => self.close(ix, cx),
+            Some(_) => {
+                let (id, _) = self.pane_of(ix, pane, cx)?;
+                self.tabs[ix].update(cx, |t, cx| t.close_pane(id, window, cx));
+            }
+        }
         Ok(())
     }
 
@@ -410,25 +522,28 @@ impl TerminalPanel {
         self.active
     }
 
-    /// Live tabs running the script with `key`, oldest first.
-    fn job_tabs(&self, key: &str, cx: &App) -> Vec<usize> {
-        (0..self.tabs.len())
-            .filter(|&ix| {
-                let v = focused(&self.tabs[ix], cx);
+    /// Live panes running the script with `key`, oldest first, as the
+    /// tab's index and the pane.
+    fn job_panes(&self, key: &str, cx: &App) -> Vec<(usize, PaneId)> {
+        self.all_panes(cx)
+            .filter(|(_, _, v)| {
+                let v = v.read(cx);
                 !v.exited && v.job.as_ref().is_some_and(|j| j.key == key)
             })
+            .map(|(ix, pane, _)| (ix, pane))
             .collect()
     }
 
     /// The newest live terminal of the script with `key`, if one is open.
     pub fn job_status(&self, key: &str, cx: &App) -> Option<JobStatus> {
-        let ix = *self.job_tabs(key, cx).last()?;
+        let (ix, pane) = *self.job_panes(key, cx).last()?;
+        let view = self.tabs[ix].read(cx).view(pane)?;
         Some(JobStatus {
-            running: focused(&self.tabs[ix], cx).foreground_job(),
+            running: view.read(cx).foreground_job(),
         })
     }
 
-    /// Types `command` into the script's terminal: its idle tab when there
+    /// Types `command` into the script's terminal: its idle pane when there
     /// is one (a running one is only shown), else a new shell in `dir`.
     pub fn start_job(
         &mut self,
@@ -438,9 +553,8 @@ impl TerminalPanel {
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
-        let existing = self.job_tabs(&tag.key, cx).last().copied();
-        let ix = match existing {
-            Some(ix) => ix,
+        let (ix, pane) = match self.job_panes(&tag.key, cx).last().copied() {
+            Some(found) => found,
             None => {
                 let cmd = Command {
                     cwd: Some(dir),
@@ -450,18 +564,21 @@ impl TerminalPanel {
                     cx.notify();
                     return;
                 };
-                self.insert(tab, cx)
+                let pane = tab.read(cx).state.focused;
+                (self.insert(tab, cx), pane)
             }
         };
         self.active = ix;
-        let view = self.tabs[ix].read(cx).focused_view().clone();
-        view.update(cx, |view, _| {
-            view.job = Some(tag);
-            if view.foreground_job().is_none() {
-                view.touched = true;
-                view.write(run_bytes(command));
-            }
-        });
+        self.tabs[ix].update(cx, |t, _| t.state.focus(pane));
+        if let Some(view) = self.tabs[ix].read(cx).view(pane).cloned() {
+            view.update(cx, |view, _| {
+                view.job = Some(tag);
+                if view.foreground_job().is_none() {
+                    view.touched = true;
+                    view.write(run_bytes(command));
+                }
+            });
+        }
         if let Some(window) = window {
             self.focus_active(window, cx);
         }
@@ -470,23 +587,23 @@ impl TerminalPanel {
 
     /// Interrupts (Ctrl-C) whatever the script's terminals are running.
     pub fn stop_job(&mut self, key: &str, cx: &mut Context<Self>) {
-        for ix in self.job_tabs(key, cx) {
-            let view = focused(&self.tabs[ix], cx);
-            if view.foreground_job().is_some() {
+        for (ix, pane) in self.job_panes(key, cx) {
+            if let Some(view) = self.tabs[ix].read(cx).view(pane).map(|v| v.read(cx))
+                && view.foreground_job().is_some()
+            {
                 view.write(vec![0x03]);
             }
         }
         cx.notify();
     }
 
-    /// Shows the newest terminal of the script; false when there is none.
+    /// Shows the newest terminal of the script, in whichever pane it is;
+    /// false when there is none.
     pub fn show_job(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(ix) = self.job_tabs(key, cx).last().copied() else {
+        let Some((ix, pane)) = self.job_panes(key, cx).last().copied() else {
             return false;
         };
-        self.active = ix;
-        self.focus_active(window, cx);
-        cx.notify();
+        self.show_pane(ix, pane, window, cx);
         true
     }
 
@@ -995,5 +1112,82 @@ fn ssh_command(launch: &Launch) -> Command {
         args: launch.args.clone(),
         cwd: None,
         env: launch.env.iter().cloned().collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::{AppContext as _, TestAppContext};
+
+    use super::super::testing::{focus_terminal, init, open_panel};
+    use super::JobTag;
+
+    #[gpui_kit::test]
+    fn a_script_in_a_split_is_still_found(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        let tag = JobTag {
+            key: "k".into(),
+            name: "k".into(),
+        };
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| {
+                p.start_job(tag, std::env::temp_dir(), "true", Some(window), cx)
+            })
+        })
+        .expect("the test window is open");
+        cx.run_until_parked();
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let (job_tab, job_pane, new_pane) = cx.update(|cx| {
+            let p = panel.read(cx);
+            let tab = p.tab(p.active_index()).read(cx);
+            let panes = tab.state.layout.panes();
+            assert_eq!(panes.len(), 2);
+            assert_eq!(tab.state.focused, panes[1]);
+            (p.active_index(), panes[0], panes[1])
+        });
+        assert_ne!(job_pane, new_pane);
+        cx.update(|cx| assert!(panel.read(cx).job_status("k", cx).is_some()));
+        let found = cx
+            .update_window(w, |_, window, cx| {
+                panel.update(cx, |p, cx| p.show_job("k", window, cx))
+            })
+            .expect("the test window is open");
+        assert!(found);
+        cx.update(|cx| {
+            let p = panel.read(cx);
+            assert_eq!(p.active_index(), job_tab);
+            assert_eq!(p.tab(job_tab).read(cx).state.focused, job_pane);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn describe_lists_panes(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let tabs = panel.read(cx).describe(cx);
+            let panes = tabs[0]["panes"].as_array().expect("a panes list");
+            assert_eq!(panes.len(), 2);
+            let focused = panes.iter().filter(|p| p["focused"] == true).count();
+            assert_eq!(focused, 1);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_bad_pane_index_is_an_error(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (_w, panel) = open_panel(cx);
+        cx.update(|cx| {
+            assert_eq!(
+                panel.read(cx).text(Some(0), Some(5), 10, cx),
+                Err("Terminal 0 has no pane 5; panes are 0 to 0.".to_string())
+            );
+        });
     }
 }
