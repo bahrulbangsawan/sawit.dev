@@ -597,7 +597,7 @@ mod tests {
     use sawit_board::design::{DesignSelection, Edit, Mixed};
     use serde_json::{Value, json};
 
-    use super::super::{BoardView, top_bar};
+    use super::super::{BoardView, layers_panel, top_bar};
     use super::{ICONS, NOTHING_SELECTED, WIDTH, appearance, header_text, position, typography};
 
     /// A folder of the test's own, removed when the test ends.
@@ -932,7 +932,8 @@ mod tests {
         cx.simulate_mouse_move(start + point(px(12.), px(4.)), left, shift);
         assert_eq!(prop(&view, ids[0], "x", &cx), json!(30.0));
         // Released over the canvas, far from the label: the scrub ends there, as one undo step.
-        cx.simulate_mouse_up(point(px(100.), px(300.)), left, none);
+        let canvas = point(px(layers_panel::WIDTH + 100.), px(300.));
+        cx.simulate_mouse_up(canvas, left, none);
         assert!(view.read_with(&cx, |view, _| view.scrub.is_none()));
         assert_eq!(prop(&view, ids[0], "x", &cx), json!(30.0));
         assert_eq!(undo_steps(&view, &cx), steps + 1);
@@ -996,7 +997,9 @@ mod tests {
         };
         assert!(shown(&cx));
         assert!(drawn(&mut cx, "board-design-panel"));
-        assert_eq!(canvas_width(&cx), 900. - WIDTH);
+        // The canvas is the window less both panels, which a design file opens with.
+        let beside_panels = 900. - WIDTH - layers_panel::WIDTH;
+        assert_eq!(canvas_width(&cx), beside_panels);
         let toggle_ui = |cx: &mut VisualTestContext| {
             view.update(cx, |view, cx| view.choose("view.toggleUi", json!({}), cx));
             cx.run_until_parked();
@@ -1007,7 +1010,7 @@ mod tests {
         assert_eq!(canvas_width(&cx), 900.);
         toggle_ui(&mut cx);
         assert!(drawn(&mut cx, "board-design-panel"));
-        assert_eq!(canvas_width(&cx), 900. - WIDTH);
+        assert_eq!(canvas_width(&cx), beside_panels);
     }
 
     /// `view.design` shows and hides the panel: from an agent's command, and from the top bar's

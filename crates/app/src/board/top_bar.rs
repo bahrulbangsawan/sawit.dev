@@ -1,7 +1,7 @@
 //! The canvas's top bar, a strip of [`HEIGHT`] over the canvas (spec D11, "Toolbar and context
-//! bar"): the main menu's ≡ button ([`super::menus`]), the document's name, the zoom menu and
-//! the Design panel's toggle on the left, Hide UI and Maximize on the right. Plan 4 adds the
-//! layers panel's toggle after the zoom menu (ruling P3-C11).
+//! bar"): the main menu's ≡ button ([`super::menus`]), the document's name, the zoom menu, and
+//! the layers panel's and the Design panel's toggles on the left (rulings P3-C11, P4-C13), Hide
+//! UI and Maximize on the right.
 //!
 //! Like the rest of the chrome, the bar goes while the UI is hidden (`⌘\`, `view.toggleUi`), so
 //! its Hide UI button only ever hides: `⌘\` shows the UI again (ruling P3-C12).
@@ -40,6 +40,9 @@ pub(super) const HIDE_UI_ICON: Lucide = Lucide::EyeOff;
 
 /// The picture of the Maximize button.
 pub(super) const MAXIMIZE_ICON: Lucide = Lucide::Maximize;
+
+/// The picture of the layers panel's toggle.
+pub(super) const LAYERS_ICON: Lucide = Lucide::PanelLeft;
 
 /// The picture of the Design panel's toggle.
 pub(super) const DESIGN_ICON: Lucide = Lucide::PanelRight;
@@ -83,6 +86,7 @@ pub(super) fn render_top_bar(
                         .child(document_name(view.path())),
                 )
                 .child(zoom_menu(zoom, this.clone()))
+                .child(layers_toggle(view.show_layers, this.clone()))
                 .child(design_toggle(view.show_design, this.clone())),
         )
         .child(
@@ -177,6 +181,21 @@ fn zoom_menu(zoom: f64, view: WeakEntity<BoardView>) -> impl IntoElement + use<>
                 }
             }
             menu
+        })
+}
+
+/// The layers panel's toggle, marked while the panel is `shown`. It runs `view.layers`, as ⌥1
+/// does, and the canvas carries out the engine's `panel.layers` request.
+fn layers_toggle(shown: bool, view: WeakEntity<BoardView>) -> Button {
+    Button::new("board-layers")
+        .ghost()
+        .small()
+        .icon(LAYERS_ICON)
+        .selected(shown)
+        .tooltip(with_keys("Layers panel", shortcut_label("view.layers")))
+        .debug_selector(|| "board-layers".into())
+        .on_click(move |_, _, cx| {
+            let _ = view.update(cx, |view, cx| view.choose("view.layers", json!({}), cx));
         })
 }
 

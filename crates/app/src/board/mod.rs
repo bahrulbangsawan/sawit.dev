@@ -16,15 +16,17 @@
 //!
 //! Around the canvas goes its chrome (spec D11): the top bar over it ([`top_bar`]), the toolbar
 //! floating at its bottom centre ([`toolbar`]), the context bar floating over a board's
-//! selection ([`context_bar`]) and the Design panel on its right ([`design_panel`]). Their buttons
-//! run their commands through [`BoardView::choose`]. The menus (spec D8: the top bar's main menu,
-//! the context menu, the Actions palette and the shortcuts sheet) run theirs through
-//! [`BoardView::run_menu`] ([`menus`]). While the UI is hidden (`⌘\`, `view.toggleUi`) only the
-//! canvas shows, and the context menu, the palette and the sheet when they are open.
+//! selection ([`context_bar`]), the layers panel on its left ([`layers_panel`]) and the Design
+//! panel on its right ([`design_panel`]). Their buttons run their commands through
+//! [`BoardView::choose`]. The menus (spec D8: the top bar's main menu, the context menu, the
+//! Actions palette and the shortcuts sheet) run theirs through [`BoardView::run_menu`]
+//! ([`menus`]). While the UI is hidden (`⌘\`, `view.toggleUi`) only the canvas shows, and the
+//! context menu, the palette and the sheet when they are open.
 
 mod context_bar;
 mod design_panel;
 mod events;
+mod layers_panel;
 mod menus;
 mod overlay_paint;
 mod paint;
@@ -33,13 +35,14 @@ mod toolbar;
 mod top_bar;
 mod worker;
 
+use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use figcraft_doc::Document;
 use figcraft_doc::color::Color;
+use figcraft_doc::{Document, NodeId};
 use figcraft_engine::textedit::ImeEditOwner;
 use figcraft_engine::{UiRequest, ViewState};
 use figcraft_render::{Options, View};
@@ -193,6 +196,25 @@ pub struct BoardView {
     /// The kind of file the chrome was last drawn for: when another kind is on show, an open
     /// flyout or picker closes ([`Self::settle_chrome`]).
     shown_kind: Option<DocKind>,
+    /// The layers panel shows beside the canvas: at first beside a design file, not beside a
+    /// board (spec D11). `view.layers` (⌥1, the top bar's toggle) and `view.leftSidebar` (⇧⌘\)
+    /// turn it over (ruling P4-C10). Hiding the UI leaves it as it is, and the panel comes back
+    /// with the UI (ruling P4-C8).
+    show_layers: bool,
+    /// The layers whose own layers the layer tree lists ([`layers_panel`]): those opened by hand,
+    /// and those opened to show a selection. A filter shows the layers holding what it finds open
+    /// without adding them here, so clearing it gives the tree back as it was (ruling P4-C5).
+    expanded: HashSet<NodeId>,
+    /// The layers panel's name filter, as typed in its field.
+    layer_filter: String,
+    /// The layer whose new name is being typed in its row of the layers panel.
+    renaming: Option<NodeId>,
+    /// The layers being dragged in the layers panel, and where they would land.
+    drag: Option<layers_panel::LayerDrag>,
+    /// The row a ⇧-click in the layers panel selects from: the last one clicked alone or with ⌘.
+    layer_anchor: Option<NodeId>,
+    /// What the layers panel keeps between frames ([`layers_panel`]).
+    layers: layers_panel::LayersPanel,
     /// The Design panel shows beside the canvas: at first beside a design file, not beside a
     /// board (spec D11). `view.design` (⌥8, the top bar's toggle) turns it over. Hiding the UI
     /// leaves it as it is, and the panel comes back with the UI (ruling P5-C18).
@@ -300,7 +322,8 @@ impl BoardView {
         // Its saves never replace what another app or window wrote to the file since.
         let writer = Writer::spawn();
         writer.guard(path.clone(), read);
-        let show_design = board
+        // A design file opens with both panels, a board with neither (spec D11).
+        let design_file = board
             .as_ref()
             .is_ok_and(|board| board.kind() == DocKind::Design);
         Self {
@@ -331,7 +354,14 @@ impl BoardView {
             open_flyout: None,
             picker: None,
             shown_kind: None,
-            show_design,
+            show_layers: design_file,
+            expanded: HashSet::new(),
+            layer_filter: String::new(),
+            renaming: None,
+            drag: None,
+            layer_anchor: None,
+            layers: layers_panel::LayersPanel::default(),
+            show_design: design_file,
             design: design_panel::DesignPanel::default(),
             scrub: None,
             menus: menus::Menus::default(),
@@ -456,11 +486,15 @@ impl BoardView {
     ///
     /// `sawit_board::input::handle_requests` does the ones that need no view (`board.editText`
     /// starts typing in a sticky). `panel.design` (from `view.design`: ⌥8, the top bar's toggle,
-    /// an agent's command) shows or hides the Design panel. `palette.actions` (`app.actions`: ⌘K,
-    /// ⌘/) and `panel.shortcuts` (`help.shortcuts`: ⌃⇧?) open or close the Actions palette and
-    /// the shortcuts sheet, and `contextMenu` (`view.contextMenu`: ⇧F10) opens the context menu
-    /// under the selection ([`menus`]). The layers panel's requests get their arms here with
-    /// Plan 4. A message the engine left for the user shows as a toast.
+    /// an agent's command) shows or hides the Design panel, and `panel.layers` (`view.layers`: ⌥1,
+    /// the top bar's toggle) and `panel.leftSidebar` (`view.leftSidebar`: ⇧⌘\) the layers panel
+    /// (ruling P4-C10). The layers panel ([`layers_panel`]) starts typing a layer's name for
+    /// `layers.rename` (`object.rename` without a name: ⌘R, F2) and `canvas.renameLabel` (a
+    /// double-click on a frame's name on the canvas), and closes its rows for
+    /// `layers.collapseAll` (⌥L). `palette.actions` (`app.actions`: ⌘K, ⌘/) and
+    /// `panel.shortcuts` (`help.shortcuts`: ⌃⇧?) open or close the Actions palette and the
+    /// shortcuts sheet, and `contextMenu` (`view.contextMenu`: ⇧F10) opens the context menu under
+    /// the selection ([`menus`]). A message the engine left for the user shows as a toast.
     fn handle_ui_requests(&mut self, mut requests: Vec<UiRequest>, cx: &mut Context<Self>) {
         let Some(board) = self.board_mut() else {
             return;
@@ -471,6 +505,15 @@ impl BoardView {
         for request in rest {
             match request.kind.as_str() {
                 "panel.design" => self.show_design = !self.show_design,
+                "panel.layers" | "panel.leftSidebar" => self.show_layers = !self.show_layers,
+                "layers.rename" => self.start_rename(&layers_panel::ids_in(&request.data), cx),
+                "canvas.renameLabel" => {
+                    let id = request.data.get("id");
+                    if let Some(id) = id.and_then(figcraft_engine::params::id_of) {
+                        self.start_rename(&[id], cx);
+                    }
+                }
+                "layers.collapseAll" => self.collapse_layers(),
                 "palette.actions" => self.toggle_palette(cx),
                 "panel.shortcuts" => self.toggle_sheet(cx),
                 "contextMenu" => self.open_context_menu_from_keys(cx),
@@ -968,8 +1011,11 @@ impl Render for BoardView {
             "Board"
         };
         let top = chrome.then(|| top_bar::render_top_bar(self, window, cx));
+        // The panels go with the rest of the chrome while the UI is hidden, and come back with it
+        // (rulings P4-C8, P5-C18).
+        let layers = (chrome && self.show_layers)
+            .then(|| layers_panel::render_layers_panel(self, window, cx));
         let canvas = self.render_canvas(chrome, window, cx);
-        // Goes with the rest of the chrome while the UI is hidden, and comes back with it.
         let design = (chrome && self.show_design)
             .then(|| design_panel::render_design_panel(self, window, cx));
         // Over all of it, whether the UI is hidden or not (ruling P6-C6).
@@ -988,6 +1034,8 @@ impl Render for BoardView {
             .on_key_down(cx.listener(Self::on_key))
             .on_key_up(cx.listener(Self::on_key_up))
             .children(top)
+            // The canvas is a container of its own between the panels, holding the toolbar and the
+            // context bar, so their places and the pointer's stay the canvas's (ruling P4-C14).
             .child(
                 div()
                     .flex()
@@ -995,6 +1043,7 @@ impl Render for BoardView {
                     .flex_1()
                     .min_h_0()
                     .w_full()
+                    .children(layers)
                     .child(canvas)
                     .children(design),
             )
@@ -1004,10 +1053,11 @@ impl Render for BoardView {
 }
 
 impl BoardView {
-    /// The canvas, under the top bar and beside the Design panel: the document as rendered and
-    /// its overlay, and over them, while the `chrome` shows, the context bar and the toolbar, then
-    /// the toast. The pointer on the canvas drives the tools ([`events`]); the chrome floating over
-    /// it takes its own clicks, so none of them reaches the tools.
+    /// The canvas, under the top bar and between the layers panel and the Design panel: the
+    /// document as rendered and its overlay, and over them, while the `chrome` shows, the context
+    /// bar and the toolbar, then the toast. The pointer on the canvas drives the tools
+    /// ([`events`]); the chrome floating over it takes its own clicks, so none of them reaches the
+    /// tools.
     fn render_canvas(
         &mut self,
         chrome: bool,
@@ -1284,7 +1334,10 @@ mod tests {
     use sawit_board::{BoardDoc, DocKind, store};
     use serde_json::{Value, json};
 
-    use super::{BoardView, SAVE_DELAY, TOAST_TIME, issues_line, menus, toolbar, top_bar};
+    use super::{
+        BoardView, SAVE_DELAY, TOAST_TIME, design_panel, issues_line, layers_panel, menus, toolbar,
+        top_bar,
+    };
 
     /// A folder of the test's own, removed when the test ends. The view's other test modules
     /// (`menus`) share this one and the helpers below.
@@ -1365,6 +1418,21 @@ mod tests {
         cx.executor().allow_parking();
         let path = path.to_path_buf();
         let window = cx.open_window(size(px(400.), px(300.)), |_, cx| BoardView::open(path, cx));
+        let view = window.root(cx).unwrap();
+        (window, view)
+    }
+
+    /// The design file at `path` in a window of its own, drawn as the app draws it: as tall as
+    /// [`open_in_window`]'s, and as much wider as a design file's two panels are (spec D11), so
+    /// that its canvas is 400 wide too.
+    fn open_design_in_window(
+        cx: &mut TestAppContext,
+        path: &Path,
+    ) -> (WindowHandle<BoardView>, Entity<BoardView>) {
+        cx.executor().allow_parking();
+        let path = path.to_path_buf();
+        let width = 400. + layers_panel::WIDTH + design_panel::WIDTH;
+        let window = cx.open_window(size(px(width), px(300.)), |_, cx| BoardView::open(path, cx));
         let view = window.root(cx).unwrap();
         (window, view)
     }
@@ -1947,7 +2015,7 @@ mod tests {
             .execute("file.saveAs", &json!({"path": path.to_str().unwrap()}))
             .unwrap();
         cx.update(gpui_kit::init);
-        let (window, view) = open_in_window(cx, &path);
+        let (window, view) = open_design_in_window(cx, &path);
         let first = next_frame(cx, &view, None);
         let (uid, first_page) = view.read_with(cx, |view, _| {
             let ds = view.board().unwrap().session.ds().unwrap();
@@ -2012,7 +2080,7 @@ mod tests {
             gpui_kit::init(cx);
             Theme::change(ThemeMode::Dark, None, cx);
         });
-        let (_, view) = open_in_window(cx, &path);
+        let (_, view) = open_design_in_window(cx, &path);
         next_frame(cx, &view, None);
         let page = view.read_with(cx, |view, _| {
             let doc = view.board().unwrap().doc().unwrap();
@@ -2203,7 +2271,7 @@ mod tests {
             .execute("file.saveAs", &json!({"path": path.to_str().unwrap()}))
             .unwrap();
         cx.update(gpui_kit::init);
-        let (_, view) = open_in_window(cx, &path);
+        let (_, view) = open_design_in_window(cx, &path);
         // Selected, it has its outline, handles and size painted over it too.
         view.update(cx, |view, cx| {
             let board = view.board_mut().unwrap();
@@ -2251,7 +2319,7 @@ mod tests {
             .execute("file.saveAs", &json!({"path": path.to_str().unwrap()}))
             .unwrap();
         cx.update(gpui_kit::init);
-        let (_, view) = open_in_window(cx, &path);
+        let (_, view) = open_design_in_window(cx, &path);
         view.update(cx, |_, cx| cx.notify());
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
@@ -2433,7 +2501,7 @@ mod tests {
             .execute("file.saveAs", &json!({"path": path.to_str().unwrap()}))
             .unwrap();
         cx.update(gpui_kit::init);
-        let (_, view) = open_in_window(cx, &path);
+        let (_, view) = open_design_in_window(cx, &path);
         let filled = next_frame(cx, &view, None);
         let (middle, outside) = ((50.0, 25.0), (-50.0, -50.0));
         let page = frame_pixel(&view, cx, outside);

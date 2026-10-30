@@ -126,7 +126,12 @@ gpui_kit::assets::icon_assets!(
         FoldVertical,
         ArrowDownToLine,
         UnfoldVertical,
-        UnfoldHorizontal
+        UnfoldHorizontal,
+        // The native canvas's layers panel (src/board/layers_panel.rs).
+        LockOpen,
+        Group,
+        Component,
+        Diamond
     ]
 );
 
