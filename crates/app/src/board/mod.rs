@@ -1235,6 +1235,61 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn an_edit_in_the_window_is_saved_once_the_painted_canvas_has_been_still(
+        cx: &mut TestAppContext,
+    ) {
+        // An edit made in the window (a drag, a key, typing) arrives with no op: the canvas only
+        // redraws, and its paint is what starts the save.
+        let tmp = Scratch::new("painted-save");
+        let path = tmp.0.join("canvas.figcraft");
+        cx.update(gpui_kit::init);
+        let (_, view) = open_in_window(cx, &path);
+        next_frame(cx, &view, None);
+        view.update(cx, |view, cx| {
+            let sticky = json!({"x": 0, "y": 0, "text": "drawn"});
+            view.board_mut()
+                .unwrap()
+                .execute("board.sticky", &sticky)
+                .unwrap();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.executor().advance_clock(SAVE_DELAY / 2);
+        cx.run_until_parked();
+        assert!(!path.exists(), "saved before the canvas was still");
+        cx.executor().advance_clock(SAVE_DELAY);
+        cx.run_until_parked();
+        assert_eq!(saved_layers(&path), 1);
+    }
+
+    #[gpui_kit::test]
+    fn closing_the_tab_saves_what_is_not_on_disk(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("drop-saves");
+        let path = tmp.0.join("canvas.figcraft");
+        let view = open(cx, &path);
+        // An edit that no paint, op or wait has saved.
+        add_sticky(&view, cx);
+        assert!(!path.exists());
+        // The tab closes: the workspace lets go of the view, and the app drops it.
+        drop(view);
+        cx.update(|_| {});
+        assert_eq!(saved_layers(&path), 1);
+    }
+
+    #[gpui_kit::test]
+    fn quitting_saves_what_is_not_on_disk(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("quit-saves");
+        let path = tmp.0.join("canvas.figcraft");
+        let view = open(cx, &path);
+        add_sticky(&view, cx);
+        assert!(!path.exists());
+        // ⌘Q: the app quits without dropping its views, and asks each to finish first.
+        cx.quit();
+        assert_eq!(saved_layers(&path), 1);
+        assert!(view.read_with(cx, |view, _| view.board().is_some()));
+    }
+
+    #[gpui_kit::test]
     fn an_op_redraws_the_canvas(cx: &mut TestAppContext) {
         let tmp = Scratch::new("op-redraw");
         let view = open(cx, &tmp.0.join("canvas.figcraft"));
