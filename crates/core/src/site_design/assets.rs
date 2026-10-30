@@ -15,9 +15,9 @@ pub const SAFARI_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) App
 pub const MAX_TOTAL: u64 = 300 * 1024 * 1024;
 
 const BLOB_MSG: &str = "Can't save blob: media (made by the page's scripts).";
-const KNOWN_EXTS: [&str; 16] = [
+const KNOWN_EXTS: [&str; 18] = [
     "png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "ico", "mp4", "webm", "mov", "json",
-    "lottie", "woff2", "woff", "ttf",
+    "lottie", "woff2", "woff", "ttf", "otf", "eot",
 ];
 
 pub fn sub_dir(kind: AssetKind) -> &'static str {
@@ -56,7 +56,7 @@ fn slug(s: &str) -> String {
 }
 
 fn is_ext(e: &str) -> bool {
-    KNOWN_EXTS.contains(&e) || e == "otf"
+    KNOWN_EXTS.contains(&e)
 }
 
 pub fn file_name(asset: &AssetRef, taken: &mut HashSet<String>) -> String {
@@ -100,6 +100,7 @@ pub fn file_name(asset: &AssetRef, taken: &mut HashSet<String>) -> String {
     let ext = seg_ext
         .filter(|e| is_ext(e))
         .or(data_ext.map(String::from))
+        .or(asset.svg.as_ref().map(|_| "svg".to_string()))
         .unwrap_or_else(|| {
             match asset.kind {
                 AssetKind::Svg => "svg",
@@ -489,6 +490,15 @@ mod tests {
         assert_eq!(file_name(&cart, &mut t), "cart.svg");
         let logo = asset(AssetKind::Svg, None, Some("<svg/>"), "logo");
         assert_eq!(file_name(&logo, &mut t), "logo.svg");
+        let eot = asset(
+            AssetKind::Font,
+            Some("https://x.com/f/icons.eot"),
+            None,
+            "Icons",
+        );
+        assert_eq!(file_name(&eot, &mut t), "icons.eot");
+        let small = asset(AssetKind::Icon, None, Some("<svg/>"), "logo");
+        assert_eq!(file_name(&small, &mut t), "logo-2.svg");
         let data = asset(
             AssetKind::Image,
             Some("data:image/png;base64,AAAA"),

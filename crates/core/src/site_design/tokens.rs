@@ -370,15 +370,20 @@ fn derive_colors(scan: &Scan) -> Colors {
             .collect()
     };
     // "Second most-used": the most-used neutral that isn't the background / foreground itself.
-    let other_than = |v: Vec<Rgba>, first: Option<Rgba>| {
-        v.into_iter()
-            .find(|c| first.is_none_or(|f| color::delta_e(*c, f) >= CLUSTER))
+    let other_than = |v: Vec<Rgba>, taken: &[Option<Rgba>]| {
+        v.into_iter().find(|c| {
+            taken
+                .iter()
+                .flatten()
+                .all(|f| color::delta_e(*c, *f) >= CLUSTER)
+        })
     };
     let foreground = texts.first().map(|s| s.color);
     let backgrounds = in_role(scan, ColorRole::Background);
     let first_bg = background.or_else(|| backgrounds.first().map(|s| s.color));
-    let muted = other_than(neutral_of(backgrounds), first_bg);
-    let muted_fg = other_than(neutral_of(texts), foreground);
+    let muted = other_than(neutral_of(backgrounds), &[first_bg]);
+    // Text in the page's or the muted background color (white on buttons) can't be muted text.
+    let muted_fg = other_than(neutral_of(texts), &[foreground, first_bg, muted]);
     let border = in_role(scan, ColorRole::Border).first().map(|s| s.color);
     let primary_c = primary.map(|p| p.color);
     let primary_fg = primary_c.map(|p| {
@@ -1243,6 +1248,24 @@ mod tests {
         assert_eq!(hex("muted").as_deref(), Some("#ffffff"));
         assert_eq!(hex("foreground").as_deref(), Some("#1e293b"));
         assert_eq!(hex("muted-foreground").as_deref(), Some("#6b7280"));
+    }
+
+    #[test]
+    fn muted_text_is_not_the_background() {
+        let scan = Scan {
+            body_background: Some("rgb(255, 255, 255)".into()),
+            colors: vec![
+                use_("rgb(29, 29, 31)", ColorRole::Text, 9),
+                use_("rgb(255, 255, 255)", ColorRole::Text, 3),
+                use_("rgb(245, 245, 247)", ColorRole::Text, 2),
+                use_("rgb(110, 110, 115)", ColorRole::Text, 1),
+                use_("rgb(245, 245, 247)", ColorRole::Background, 5),
+            ],
+            ..Default::default()
+        };
+        let t = derive(&scan, "2026-10-31");
+        let hex = |n: &str| semantic(&t, n).map(|c| c.to_hex());
+        assert_eq!(hex("muted-foreground").as_deref(), Some("#6e6e73"));
     }
 
     #[test]

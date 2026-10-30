@@ -597,7 +597,8 @@
 
     // Assets.
     const isLogo = (el, url) => {
-      const head = el.closest("header, [role=banner]");
+      // A site's top nav is its header when there's no <header> (apple.com's #globalnav).
+      const head = el.closest("header, [role=banner], nav") && !el.closest("footer, [role=contentinfo]");
       const home = el.closest("a[href]");
       if (head && home) {
         try {
@@ -984,6 +985,19 @@
     return out;
   };
   const STATE_RE = /:(hover|focus-visible|focus|active)(?![\w-])/g;
+  // A longhand as the rule wrote it: `background: #0077ed` comes back as nine
+  // longhands, so the shortest shorthand that serializes stands in for them.
+  const declared = (st, prop) => {
+    if (!prop.startsWith("--")) {
+      const parts = prop.split("-");
+      for (let n = 1; n < parts.length; n++) {
+        const name = parts.slice(0, n).join("-");
+        const value = st.getPropertyValue(name).trim();
+        if (value) return [name, value];
+      }
+    }
+    return [prop, st.getPropertyValue(prop).trim()];
+  };
   const statesOf = (el) => {
     const found = new Map(STATES.map((s) => [s, new Map()]));
     const visit = (list) => {
@@ -1013,7 +1027,10 @@
                 const st = rule.style;
                 for (const state of states) {
                   const into = found.get(state);
-                  for (let i = 0; i < st.length; i++) into.set(st[i], st.getPropertyValue(st[i]).trim());
+                  for (let i = 0; i < st.length; i++) {
+                    const [name, value] = declared(st, st[i]);
+                    into.set(name, value);
+                  }
                 }
               }
             }
