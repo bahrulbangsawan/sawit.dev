@@ -117,7 +117,16 @@ gpui_kit::assets::icon_assets!(
         EyeDashed,
         TextWrap,
         MoveHorizontal,
-        MoveVertical
+        MoveVertical,
+        TextAlignStart,
+        TextAlignCenter,
+        TextAlignEnd,
+        TextAlignJustify,
+        ArrowUpToLine,
+        FoldVertical,
+        ArrowDownToLine,
+        UnfoldVertical,
+        UnfoldHorizontal
     ]
 );
 

@@ -1,36 +1,51 @@
 //! The Design panel (spec "Design panel", D11): a column [`WIDTH`] wide on the canvas's right that
 //! shows what the selected layers hold and changes it, in the spec's sections and order
 //! (`sawit_board::design::Section`): the header, then Position ([`position`]), Auto layout
-//! ([`layout`]) and Appearance ([`appearance`]). Fill, Stroke, Effects, Typography and Export come
-//! with Plan 5 Task 5; until then their sections show nothing.
+//! ([`layout`]), Appearance ([`appearance`]), Fill and Stroke ([`paints`]), Effects ([`effects`]),
+//! Typography ([`typography`]) and Export ([`export`]).
 //!
 //! - **Reading.** The panel reads the selection through `sawit_board::design`
 //!   ([`DesignSelection`]): once for each document and selection, behind the engine's guard, so a
 //!   frame drawn for anything else reads nothing, and a panic in the read costs the panel its
-//!   fields, not the app (D15).
+//!   fields, not the app (D15). The models drawn from it (the paints, the effects, the fonts) are
+//!   built behind the guard too ([`guarded`]).
 //! - **Editing.** Every change is the model's [`Edit`], run through [`BoardView::apply_edit`]: one
-//!   undo step for all the selected layers, and the engine's refusal as a toast. A number field
+//!   undo step for all the selected layers, and the engine's refusal as a toast. An edit of a list
+//!   (the fills, the effects, the export settings) is made from the layers as they are when it is
+//!   made ([`BoardView::edit_layers`]), since it sends the whole list back. A number field
 //!   ([`number_field::NumberField`]) takes a typed number, and scrubs when its label is dragged:
 //!   a scrub is one undo step however many values it went through, and Escape puts the value
-//!   back ([`BoardView::scrub_begin`]).
+//!   back ([`BoardView::scrub_begin`]). The colours a colour picker goes through while it is open
+//!   are a scrub of their own ([`paints`]).
 //! - **Showing.** The panel shows at first beside a design file and not beside a board (spec
 //!   D11). `view.design` (⌥8, and the top bar's toggle) shows or hides it, through the engine's
 //!   `panel.design` request. While the UI is hidden (`⌘\`) it is not drawn, and it comes back with
 //!   the UI (ruling P5-C18). With nothing selected it says so, and offers no field.
+//! - **The keyboard.** A field has it while it is typed in. Every other control leaves the canvas's
+//!   shortcuts working (delegate ruling on P5.T4): a click on a button or a menu gives the keyboard
+//!   to the canvas, a colour picker gives it back to where it was when it closes, and the dashed
+//!   switch and the font family list, which take it for themselves, give it to the canvas once
+//!   they are done.
 
 mod appearance;
+mod effects;
+mod export;
 mod layout;
 mod number_field;
+mod paints;
 mod position;
+mod typography;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use figcraft_doc::{Document, NodeId};
 use figcraft_engine::guard;
 use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::base::actions::Cancel;
 use gpui_kit::component::button::*;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::*;
 use gpui_kit::*;
 use sawit_board::BoardError;
@@ -48,12 +63,24 @@ pub(super) const WIDTH: f32 = 264.;
 pub(super) struct DesignPanel {
     /// The selection as last read, with the document and the layers it was read from.
     read: Option<Read>,
-    /// The number fields' inputs, by the key they edit, each made the first time it is drawn.
-    fields: HashMap<&'static str, Field>,
+    /// The fields' inputs, by the field's name (a number field's is the key it edits), each made
+    /// the first time it is drawn.
+    fields: HashMap<SharedString, Field>,
     /// The Appearance section shows the radius of each corner on its own.
     corners_open: bool,
     /// The Auto layout section shows the padding of each side on its own.
     padding_open: bool,
+    /// The colour pickers of the paint and shadow rows, by name, each made the first time it is
+    /// drawn.
+    pickers: HashMap<SharedString, paints::Picker>,
+    /// The colour picker whose colours make the scrub that is on.
+    colour: Option<SharedString>,
+    /// The effects whose editor is open, by their place in the list, and the layers they are the
+    /// effects of: the editors close when other layers are selected.
+    effects_open: HashSet<usize>,
+    effects_of: Vec<NodeId>,
+    /// The Typography section's font family list, made the first time it is drawn.
+    families: Option<typography::Families>,
 }
 
 /// The selection as the panel last read it.
@@ -125,6 +152,8 @@ impl BoardView {
     /// (`Session::commit_interaction`; none when nothing changed). Without, the layers go back to
     /// how they were when it began, and no undo step is made (`Session::cancel_interaction`).
     pub fn scrub_end(&mut self, commit: bool, cx: &mut Context<Self>) {
+        // A colour picker's scrub ends with any other.
+        self.design.colour = None;
         if self.scrub.take().is_none() {
             return;
         }
@@ -173,6 +202,43 @@ impl BoardView {
         self.scrub
             .as_ref()
             .is_some_and(|scrub| scrub.drag.is_some())
+    }
+
+    /// Makes an edit of the selected layers with `make`, from the layers as the document holds
+    /// them now, and runs it ([`BoardView::apply_edit`]). An edit of a list (the paints, the
+    /// effects, the export settings) sends the whole list back, so it is made from what the list
+    /// holds when it is made, not from what the panel showed. `make` gives `None` for an edit that
+    /// can't be made, and then nothing runs.
+    pub(super) fn edit_layers(
+        &mut self,
+        make: impl FnOnce(&DesignSelection) -> Option<Edit>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(sel) = self.design_selection() else {
+            return;
+        };
+        if let Ok(Some(edit)) = guard::run("ui.design", || Ok(make(&sel))) {
+            self.apply_edit(edit, cx);
+        }
+    }
+}
+
+/// What `model` gives, built behind the engine's guard as every model the panel is drawn from:
+/// a panic costs the panel that part, which shows as `fallback`, and is logged, not the app
+/// (D15, ruling on P2.T3).
+pub(super) fn guarded<T>(name: &str, fallback: T, model: impl FnOnce() -> T) -> T {
+    guard::run(name, || Ok(model())).unwrap_or(fallback)
+}
+
+/// A click handler that makes an edit of the selected layers, as they are when the click comes,
+/// with `make`, and runs it ([`BoardView::edit_layers`]).
+pub(super) fn on_click_edit(
+    view: &WeakEntity<BoardView>,
+    make: impl Fn(&DesignSelection) -> Option<Edit> + 'static,
+) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+    let view = view.clone();
+    move |_, _, cx| {
+        let _ = view.update(cx, |view, cx| view.edit_layers(&make, cx));
     }
 }
 
@@ -228,7 +294,10 @@ pub(super) fn render_design_panel(
         .border_color(theme.border)
         .bg(theme.background)
         .text_color(theme.foreground)
-        .text_sm();
+        .text_sm()
+        // Escape in an open colour picker: heard before the picker closes on it, so that what
+        // the picker changed goes back instead of staying (ruling P5-C15).
+        .capture_action(cx.listener(|view, _: &Cancel, _, cx| view.cancel_colour_scrub(cx)));
     let muted = theme.muted_foreground;
     let Some(sel) = view.design_selection().filter(|sel| !sel.ids.is_empty()) else {
         return panel.child(
@@ -243,16 +312,16 @@ pub(super) fn render_design_panel(
     let mut panel = panel.child(header(&sel, cx));
     for section in sel.sections() {
         let shown = match section {
+            // Drawn above.
+            Section::Header => None,
             Section::Position => Some(position::render(view, &sel, window, cx)),
             Section::AutoLayout => Some(layout::render(view, &sel, window, cx)),
             Section::Appearance => Some(appearance::render(view, &sel, window, cx)),
-            // The header is drawn above; the other sections are Plan 5 Task 5's.
-            Section::Header
-            | Section::Fill
-            | Section::Stroke
-            | Section::Effects
-            | Section::Typography
-            | Section::Export => None,
+            Section::Fill => Some(paints::render_fill(view, &sel, window, cx)),
+            Section::Stroke => Some(paints::render_stroke(view, &sel, window, cx)),
+            Section::Effects => Some(effects::render(view, &sel, window, cx)),
+            Section::Typography => Some(typography::render(view, &sel, window, cx)),
+            Section::Export => Some(export::render(&sel, cx)),
         };
         panel = panel.children(shown);
     }
@@ -333,6 +402,146 @@ fn icon_button(id: impl Into<ElementId>, icon: Lucide, tooltip: impl Into<Shared
     Button::new(id).ghost().xsmall().icon(icon).tooltip(tooltip)
 }
 
+/// The button of row `id` (`fills-0`, `effects-1`) that makes `make`'s edit, showing `icon` and
+/// `tooltip`, drawn as `design-<id>-<what>`.
+fn row_button(
+    id: &str,
+    what: &str,
+    icon: Lucide,
+    tooltip: &'static str,
+    view: &WeakEntity<BoardView>,
+    make: impl Fn(&DesignSelection) -> Option<Edit> + 'static,
+) -> Button {
+    let selector = format!("design-{id}-{what}");
+    icon_button(SharedString::from(selector.clone()), icon, tooltip)
+        .debug_selector(move || selector)
+        .on_click(on_click_edit(view, make))
+}
+
+/// The eye of row `id`, a paint or an effect: open while the row shows. A click makes `make`'s
+/// edit, which hides or shows it.
+fn eye_button(
+    id: &str,
+    visible: bool,
+    view: &WeakEntity<BoardView>,
+    make: impl Fn(&DesignSelection) -> Option<Edit> + 'static,
+) -> Button {
+    let (icon, tooltip) = if visible {
+        (appearance::SHOWN_ICON, "Hide")
+    } else {
+        (appearance::HIDDEN_ICON, "Show")
+    };
+    row_button(id, "visible", icon, tooltip, view, make)
+}
+
+/// The row that stands for a list the layers hold differently (`list` is `fills`, `strokes`,
+/// `effects` or `exports`): it says "Mixed", and its "Replace all" button makes `replace`'s edit,
+/// which gives every layer the same list.
+fn mixed_row(
+    list: &str,
+    view: &WeakEntity<BoardView>,
+    replace: impl Fn(&DesignSelection) -> Option<Edit> + 'static,
+    cx: &App,
+) -> AnyElement {
+    let selector = format!("design-{list}-replace-all");
+    let button = Button::new(SharedString::from(selector.clone()))
+        .ghost()
+        .xsmall()
+        .label("Replace all")
+        .debug_selector(move || selector)
+        .on_click(on_click_edit(view, replace));
+    row()
+        .items_center()
+        .child(
+            div()
+                .flex_1()
+                .text_color(cx.theme().muted_foreground)
+                .child("Mixed"),
+        )
+        .child(button)
+        .into_any_element()
+}
+
+/// What a menu of choices ([`choice_menu`]) offers and does: its items, each a value and its name,
+/// which it asks for when it opens; the value the layers hold, if they hold one; and what a pick
+/// does with its value.
+struct Choices<T> {
+    items: Box<Offer<T>>,
+    current: Option<T>,
+    pick: Rc<Pick<T>>,
+}
+
+/// What a menu of choices offers: each value and its name.
+type Offer<T> = dyn Fn() -> Vec<(T, SharedString)>;
+/// What a pick from a menu of choices does with the value picked.
+type Pick<T> = dyn Fn(&T, &mut App);
+
+impl<T> Choices<T> {
+    fn new(
+        items: impl Fn() -> Vec<(T, SharedString)> + 'static,
+        current: Option<T>,
+        pick: impl Fn(&T, &mut App) + 'static,
+    ) -> Self {
+        Self {
+            items: Box::new(items),
+            current,
+            pick: Rc::new(pick),
+        }
+    }
+}
+
+/// A menu of choices for a property of the layers, drawn as `design-<id>`, taking an equal share
+/// of its row with the others: its button shows `label` (the layers' choice, or "Mixed" when they
+/// differ) and `tooltip`, and its items are the ones `choices` offers, each drawn as
+/// `design-<id>-<name>`, the one the layers hold checked. Like the blend mode and sizing menus, it
+/// leaves the keyboard where it was when it opened (delegate ruling on P5.T4). An `off` menu
+/// doesn't open.
+fn choice_menu<T: Clone + PartialEq + 'static>(
+    id: &str,
+    label: impl Into<SharedString>,
+    tooltip: &'static str,
+    choices: Choices<T>,
+    off: bool,
+) -> Div {
+    let selector = format!("design-{id}");
+    let prefix = selector.clone();
+    let button = Button::new(SharedString::from(selector.clone()))
+        .ghost()
+        .small()
+        .w_full()
+        .label(label)
+        .dropdown_caret(true)
+        .tooltip(tooltip)
+        .debug_selector(move || selector);
+    let menu = if off {
+        button.disabled(true).into_any_element()
+    } else {
+        let Choices {
+            items: offered,
+            current,
+            pick,
+        } = choices;
+        let menu = button.dropdown_menu(move |mut menu: PopupMenu, _, _| {
+            for (value, name) in offered() {
+                let checked = current.as_ref() == Some(&value);
+                let selector = format!("{prefix}-{name}");
+                let pick = pick.clone();
+                let item = PopupMenuItem::element(move |_, _| {
+                    div()
+                        .debug_selector(|| selector.clone())
+                        .child(name.clone())
+                })
+                .checked(checked)
+                .on_click(move |_, _, cx| pick(&value, cx));
+                menu = menu.item(item);
+            }
+            menu
+        });
+        menu.into_any_element()
+    };
+    div().flex_1().min_w_0().child(menu)
+}
+
 /// The edit that sets several properties at once, `props`, on every selected layer, as
 /// [`DesignSelection::set`] sets one that is not a text's.
 fn set_props(sel: &DesignSelection, props: Value) -> Edit {
@@ -364,6 +573,12 @@ const ICONS: &[Lucide] = &[
     layout::GAP_DOWN_ICON,
     layout::PADDING_ICON,
     layout::SIDES_ICON,
+    paints::ADD_ICON,
+    paints::REMOVE_ICON,
+    paints::REPLACE_ICON,
+    paints::IMAGE_ICON,
+    paints::PATTERN_ICON,
+    effects::EDIT_ICON,
 ];
 
 #[cfg(test)]
@@ -380,13 +595,13 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::super::{BoardView, top_bar};
-    use super::{ICONS, NOTHING_SELECTED, WIDTH, appearance, header_text, position};
+    use super::{ICONS, NOTHING_SELECTED, WIDTH, appearance, header_text, position, typography};
 
     /// A folder of the test's own, removed when the test ends.
-    struct Scratch(PathBuf);
+    pub(super) struct Scratch(pub(super) PathBuf);
 
     impl Scratch {
-        fn new(test: &str) -> Self {
+        pub(super) fn new(test: &str) -> Self {
             let dir = std::env::temp_dir()
                 .join(format!("sawit-design-panel-{}-{test}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
@@ -402,27 +617,27 @@ mod tests {
     }
 
     /// A design file being made, before it is written.
-    struct Design(figcraft_engine::Session);
+    pub(super) struct Design(figcraft_engine::Session);
 
     impl Design {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             Self(figcraft_engine::Session::new())
         }
 
         /// Makes a layer with `node.create`'s params `layer`, and returns its id.
-        fn make(&mut self, layer: Value) -> NodeId {
+        pub(super) fn make(&mut self, layer: Value) -> NodeId {
             let made = self.0.execute("node.create", &layer).unwrap();
             NodeId(made["id"].as_u64().unwrap())
         }
 
         /// Sets `props` on layers `ids`.
-        fn set(&mut self, ids: &[NodeId], props: Value) {
+        pub(super) fn set(&mut self, ids: &[NodeId], props: Value) {
             let params = json!({"ids": ids, "props": props});
             self.0.execute("node.set", &params).unwrap();
         }
 
         /// Writes the file at `path`.
-        fn save(mut self, path: &Path) {
+        pub(super) fn save(mut self, path: &Path) {
             let params = json!({"path": path.to_str().unwrap()});
             self.0.execute("file.saveAs", &params).unwrap();
         }
@@ -430,7 +645,7 @@ mod tests {
 
     /// Writes a design file at `path` with a layer made from each of `layers` (`node.create`'s
     /// params) on its page, and returns their ids.
-    fn design_file(path: &Path, layers: &[Value]) -> Vec<NodeId> {
+    pub(super) fn design_file(path: &Path, layers: &[Value]) -> Vec<NodeId> {
         let mut design = Design::new();
         let ids = layers.iter().map(|layer| design.make(layer.clone()));
         let ids = ids.collect();
@@ -439,7 +654,7 @@ mod tests {
     }
 
     /// A 100 × 100 rectangle at (`x`, 0).
-    fn rectangle(x: f64) -> Value {
+    pub(super) fn rectangle(x: f64) -> Value {
         json!({"type": "rectangle", "x": x, "y": 0, "width": 100, "height": 100})
     }
 
@@ -455,7 +670,7 @@ mod tests {
     /// `ids` selected and drawn. The window is tall enough for every section to show at once, and
     /// has the keyboard, as the one the user types in does: its fields hear when they take the
     /// keyboard and lose it.
-    fn open_in_window(
+    pub(super) fn open_in_window(
         cx: &mut TestAppContext,
         path: &Path,
         ids: &[NodeId],
@@ -472,7 +687,7 @@ mod tests {
     }
 
     /// Selects `ids`, as a click or an agent does, and draws the window again.
-    fn select(view: &Entity<BoardView>, ids: &[NodeId], cx: &mut VisualTestContext) {
+    pub(super) fn select(view: &Entity<BoardView>, ids: &[NodeId], cx: &mut VisualTestContext) {
         view.update(cx, |view, cx| {
             let board = view.board_mut().unwrap();
             board.session.set_selection(ids.to_vec());
@@ -482,7 +697,7 @@ mod tests {
     }
 
     /// Clicks the middle of what the window drew with debug selector `selector`.
-    fn click(cx: &mut VisualTestContext, selector: &'static str) {
+    pub(super) fn click(cx: &mut VisualTestContext, selector: &'static str) {
         let drawn = cx.debug_bounds(selector);
         let bounds = drawn.unwrap_or_else(|| panic!("{selector} isn't drawn"));
         cx.simulate_click(bounds.center(), Modifiers::default());
@@ -490,19 +705,19 @@ mod tests {
     }
 
     /// Whether the window drew something with debug selector `selector`.
-    fn drawn(cx: &mut VisualTestContext, selector: &'static str) -> bool {
+    pub(super) fn drawn(cx: &mut VisualTestContext, selector: &'static str) -> bool {
         cx.debug_bounds(selector).is_some()
     }
 
     /// What field `key` reads.
-    fn field_text(view: &Entity<BoardView>, key: &str, cx: &TestAppContext) -> String {
+    pub(super) fn field_text(view: &Entity<BoardView>, key: &str, cx: &TestAppContext) -> String {
         view.read_with(cx, |view, cx| {
             view.design.fields[key].input.read(cx).value().to_string()
         })
     }
 
     /// Gives the canvas the keyboard, as a press on it does.
-    fn focus_canvas(view: &Entity<BoardView>, cx: &mut VisualTestContext) {
+    pub(super) fn focus_canvas(view: &Entity<BoardView>, cx: &mut VisualTestContext) {
         cx.update(|window, cx| {
             let focus = view.read(cx).focus.clone();
             window.focus(&focus, cx);
@@ -511,7 +726,7 @@ mod tests {
     }
 
     /// The selected layers' `key`, as the Design panel reads it.
-    fn panel_value(
+    pub(super) fn panel_value(
         view: &Entity<BoardView>,
         ids: &[NodeId],
         key: &str,
@@ -525,7 +740,7 @@ mod tests {
 
     /// The canvas of the design file at `path`, opened as the workspace opens it, with `ids`
     /// selected.
-    fn open(cx: &mut TestAppContext, path: &Path, ids: &[NodeId]) -> Entity<BoardView> {
+    pub(super) fn open(cx: &mut TestAppContext, path: &Path, ids: &[NodeId]) -> Entity<BoardView> {
         cx.executor().allow_parking();
         cx.update(gpui_kit::init);
         let view = cx.new(|cx| BoardView::open(path.to_path_buf(), cx));
@@ -537,7 +752,12 @@ mod tests {
     }
 
     /// Layer `id`'s `key`, as the engine's inspector gives it.
-    fn prop(view: &Entity<BoardView>, id: NodeId, key: &str, cx: &TestAppContext) -> Value {
+    pub(super) fn prop(
+        view: &Entity<BoardView>,
+        id: NodeId,
+        key: &str,
+        cx: &TestAppContext,
+    ) -> Value {
         view.read_with(cx, |view, _| {
             let doc = view.board().unwrap().doc().unwrap();
             figcraft_engine::inspect::node_json(&doc, id, 0)[key].clone()
@@ -545,7 +765,7 @@ mod tests {
     }
 
     /// How many undo steps the canvas's file has.
-    fn undo_steps(view: &Entity<BoardView>, cx: &TestAppContext) -> usize {
+    pub(super) fn undo_steps(view: &Entity<BoardView>, cx: &TestAppContext) -> usize {
         view.read_with(cx, |view, _| view.board().unwrap().session.undo_depth().0)
     }
 
@@ -970,6 +1190,7 @@ mod tests {
     #[test]
     fn every_icon_of_the_design_panel_is_embedded() {
         let icons = ICONS.iter().copied().chain(position::align_icons());
+        let icons = icons.chain(typography::icons());
         for icon in icons.chain([top_bar::DESIGN_ICON]) {
             let path = icon.path();
             let svg = crate::assets::AppAssets.load(&path).unwrap();
