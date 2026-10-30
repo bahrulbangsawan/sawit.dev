@@ -31,7 +31,7 @@ use crate::git::{
 use crate::layout::{Area, Layout};
 use crate::mcp_page::McpPage;
 use crate::network::NetworkPanel;
-use crate::ports::PortsPanel;
+use crate::ports::{PortsEvent, PortsPanel};
 use crate::prompts::{PromptStore, PromptStoreEvent, PromptView, PromptsEvent, PromptsPanel};
 use crate::run::{RunEvent, RunPanel, RunStore};
 use crate::servers::{ServerDetail, ServerList, ServerStore, ShowServerTab};
@@ -320,6 +320,15 @@ impl Workspace {
                 window,
                 |this, _, event: &WelcomeEvent, window, cx| {
                     this.on_welcome_event(event, window, cx)
+                },
+            ),
+            cx.subscribe_in(
+                &ports_panel,
+                window,
+                |this, _, event: &PortsEvent, window, cx| match event {
+                    PortsEvent::OpenInBrowser(url) => {
+                        this.open_browser(Some(url.clone()), window, cx)
+                    }
                 },
             ),
             cx.subscribe(&servers, |this, _, _: &ShowServerTab, cx| {

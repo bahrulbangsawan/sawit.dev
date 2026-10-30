@@ -13,7 +13,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock as Content};
 use rmcp::{schemars, tool, tool_router};
 use sawit_core::app_control::Command;
-use sawit_core::browser::{BrowserOp, Target, pick_dev_server};
+use sawit_core::browser::{BrowserOp, Target, pick_dev_server, resize_mode};
 use serde_json::{Value, json};
 
 use crate::app::{base64_decode, pretty};
@@ -200,6 +200,19 @@ pub struct EvaluateArgs {
     pub script: String,
     #[schemars(description = "How long to await a promise, in ms (default 10000)")]
     pub timeout_ms: Option<u64>,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ResizeArgs {
+    #[schemars(
+        description = "iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop, Desktop, or responsive to fill the tab"
+    )]
+    pub device: Option<String>,
+    #[schemars(description = "Viewport width in CSS px (with height)")]
+    pub width: Option<u32>,
+    #[schemars(description = "Viewport height in CSS px (with width)")]
+    pub height: Option<u32>,
     pub project: Option<String>,
 }
 
@@ -553,6 +566,27 @@ impl Sawit {
     }
 
     #[tool(
+        description = "Set the browser tab's viewport: a device (iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop, Desktop), a width and height in CSS px, or responsive to fill the tab again"
+    )]
+    async fn browser_resize(&self, Parameters(a): Parameters<ResizeArgs>) -> CallToolResult {
+        if let Err(e) = resize_mode(a.device.as_deref(), a.width, a.height) {
+            return fail(e);
+        }
+        let v = tri!(
+            self.browser(
+                &a.project,
+                BrowserOp::Resize {
+                    device: a.device,
+                    width: a.width,
+                    height: a.height,
+                },
+            )
+            .await
+        );
+        ok(pretty(&v))
+    }
+
+    #[tool(
         description = "Run JavaScript in the browser tab's page and return its JSON value (DOM nodes are described); a returned promise is awaited"
     )]
     async fn browser_evaluate(&self, Parameters(a): Parameters<EvaluateArgs>) -> CallToolResult {
@@ -580,6 +614,19 @@ impl Sawit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resize_args_need_a_device_or_size() {
+        let a = ResizeArgs {
+            device: None,
+            width: None,
+            height: None,
+            project: None,
+        };
+        let e = resize_mode(a.device.as_deref(), a.width, a.height).unwrap_err();
+        assert!(!e.is_empty());
+        assert_eq!(Err(e), sawit_core::browser::resize_mode(None, None, None));
+    }
 
     #[test]
     fn navigation_ops() {
