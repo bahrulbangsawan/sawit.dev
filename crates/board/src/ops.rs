@@ -2271,13 +2271,6 @@ mod tests {
         }
     }
 
-    /// A new, empty design file.
-    fn design() -> BoardDoc {
-        BoardDoc {
-            session: Session::with_document(figcraft_doc::Document::new("Design")),
-        }
-    }
-
     /// Sends pointer op `kind` at page point (`x`, `y`), checks that it answered, and returns the
     /// answer.
     fn pointer_at(board: &mut BoardDoc, kind: &str, x: f64, y: f64) -> Value {
