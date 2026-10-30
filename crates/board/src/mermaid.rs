@@ -15,8 +15,8 @@
 //! A board holds less than an Excalidraw scene, so some of what pele.ts kept is left out: line
 //! widths and dashes, opacity, the size and colour of the text inside a shape, and groups. A
 //! connector has one arrowhead, at its end, so the marks it has no cap for stay drawn where Pele
-//! drew them, and an edge whose ends join nothing and whose route bends (a message to oneself)
-//! stays drawn along its route.
+//! drew them. An edge whose route bends and whose ends join nothing, or one node at both ends (a
+//! message to oneself, a loop back to a node), stays drawn along its route.
 
 use std::collections::{HashMap, HashSet};
 
@@ -155,10 +155,19 @@ struct Converter<'a, 'input> {
     labels: HashMap<&'a str, Node<'a, 'input>>,
     /// The elements already drawn, or drawn as part of something else.
     done: HashSet<XmlId>,
-    /// What an edge can join: the outline of each node and cluster as Pele drew it, by the id of
-    /// its skeleton.
-    targets: Vec<(String, Rect)>,
+    /// What an edge can join: each node and cluster.
+    targets: Vec<Target>,
     out: Vec<Skeleton>,
+}
+
+/// A node or a cluster that an edge can join.
+struct Target {
+    /// The id of its skeleton.
+    id: String,
+    /// Its outline as Pele drew it.
+    frame: Rect,
+    /// Whether it is a note, which no sequence message ends at.
+    note: bool,
 }
 
 impl<'a, 'input> Converter<'a, 'input> {
@@ -293,7 +302,11 @@ impl<'a, 'input> Converter<'a, 'input> {
                 container.id = Some(id.clone());
                 // Pele ended its edges on the outline as it drew it, so that is what they join,
                 // whatever room the label took.
-                self.targets.push((id, frame));
+                self.targets.push(Target {
+                    id,
+                    frame,
+                    note: has_class(group, &["pele-note"]),
+                });
             }
             members.push(container);
         }
@@ -314,8 +327,9 @@ impl<'a, 'input> Converter<'a, 'input> {
     /// drawn the other way round, so the arrowhead stays where it points; one with none is a line.
     /// The marks a connector has no cap for (a second arrowhead, the circles, diamonds and crosses
     /// of class diagrams and flowcharts, the bars and crow's feet of entity relationships) stay
-    /// drawn as Pele drew them. So does an edge whose ends join nothing and whose route bends:
-    /// a connector would run straight across where it loops.
+    /// drawn as Pele drew them. So does an edge whose route bends and whose ends join nothing, or
+    /// one node at both ends (a loop back to it): a connector would run straight across where it
+    /// loops, and can't join one layer at both ends.
     fn edge(&mut self, edge: Node<'a, 'input>) {
         if self.is_done(edge) {
             return;
@@ -365,8 +379,14 @@ impl<'a, 'input> Converter<'a, 'input> {
         }
         let stroke = self.stroke_colour(route);
         let label = self.edge_label(edge);
-        let mut from = self.target(points[0]);
-        let mut to = self.target(points[points.len() - 1]);
+        let message = has_class(edge, &["pele-message"]);
+        let mut from = self.target(points[0], message);
+        let mut to = self.target(points[points.len() - 1], message);
+        // A loop from a node back to it ends where it starts, and a connector can't join one
+        // layer at both ends: it joins neither, so that it is drawn as Pele drew it.
+        if from.is_some() && from == to {
+            (from, to) = (None, None);
+        }
         if from.is_none() && to.is_none() && !is_straight(&points) {
             self.out
                 .push(line_through(&points, stroke, TRANSPARENT.into()));
@@ -436,12 +456,17 @@ impl<'a, 'input> Converter<'a, 'input> {
 
     /// The id of the node outline (or cluster) that `end` touches, the smallest if it touches
     /// several.
-    fn target(&self, end: Point) -> Option<String> {
+    ///
+    /// The end of a sequence `message` joins no note. A message runs from lifeline to lifeline,
+    /// or to the box of a participant it makes, never to a note; but Pele puts a note just under
+    /// the message before it, near enough to join.
+    fn target(&self, end: Point, message: bool) -> Option<String> {
         self.targets
             .iter()
-            .filter(|(_, frame)| distance_to_outline(end, *frame) <= BIND_DISTANCE)
-            .min_by(|(_, a), (_, b)| a.area().total_cmp(&b.area()))
-            .map(|(id, _)| id.clone())
+            .filter(|target| !(message && target.note))
+            .filter(|target| distance_to_outline(end, target.frame) <= BIND_DISTANCE)
+            .min_by(|a, b| a.frame.area().total_cmp(&b.frame.area()))
+            .map(|target| target.id.clone())
     }
 
     // --- Everything else ------------------------------------------------------------------------
@@ -1910,6 +1935,155 @@ mod tests {
                 .any(|item| item.text.as_deref() == Some("Think")),
             "{items:#?}"
         );
+    }
+
+    #[test]
+    fn a_loop_back_to_its_own_node_keeps_its_loop() {
+        // Both ends of a loop are on its node, and a connector can't join one layer at both ends.
+        // It joins neither and is drawn as Pele drew it, as a message to oneself is: out of the
+        // node and back, its marks and its label where Pele put them.
+        let diagrams = [
+            (
+                "stateDiagram-v2\n  Still --> Still : tick\n  Still --> Moving\n",
+                "Still",
+                Some("tick"),
+                Some(("Still", "Moving")),
+            ),
+            (
+                "flowchart LR\n  A[Retry] --> A\n  A --> B[Done]\n",
+                "Retry",
+                None,
+                Some(("Retry", "Done")),
+            ),
+            (
+                "classDiagram\n  Node --> Node : next\n",
+                "Node",
+                Some("next"),
+                None,
+            ),
+            (
+                "erDiagram\n  PERSON ||--o{ PERSON : parent\n",
+                "PERSON",
+                Some("parent"),
+                None,
+            ),
+        ];
+        for (source, name, said, other) in diagrams {
+            let items = skeletons(source);
+            // No connector names one node at both ends.
+            let id = |end: &Option<End>| end.as_ref().and_then(|end| end.id.clone());
+            for item in &items {
+                if let (Some(start), Some(end)) = (id(&item.start), id(&item.end)) {
+                    assert_ne!(start, end, "{source}: {items:#?}");
+                }
+            }
+            // The loop: one line through more than 4 points, joined to nothing, from the node's
+            // outline out of it and back.
+            let node = items.iter().find(|item| label(item) == Some(name));
+            let node = node.expect("the node");
+            let frame = Rect::from_origin_size(
+                (node.x, node.y),
+                (node.width.unwrap(), node.height.unwrap()),
+            );
+            let lines = of_kind(&items, "line");
+            let loops: Vec<&&Skeleton> =
+                lines.iter().filter(|line| point_count(line) > 4).collect();
+            assert_eq!(loops.len(), 1, "{source}: {items:#?}");
+            let ring = loops[0];
+            assert!(
+                ring.start.is_none() && ring.end.is_none(),
+                "{source}: {ring:#?}"
+            );
+            let route: Vec<Point> = ring
+                .points
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|p| Point::new(ring.x + p[0], ring.y + p[1]))
+                .collect();
+            let (first, last) = (route[0], route[route.len() - 1]);
+            assert!(
+                distance_to_outline(first, frame) <= BIND_DISTANCE
+                    && distance_to_outline(last, frame) <= BIND_DISTANCE,
+                "{source}: {route:?} starts and ends on {frame:?}"
+            );
+            let out = frame.inflate(10.0, 10.0);
+            assert!(
+                route.iter().any(|p| !out.contains(*p)),
+                "{source}: {route:?} loops out of {frame:?}"
+            );
+            if let Some(said) = said {
+                let text = items.iter().find(|item| item.text.as_deref() == Some(said));
+                assert_eq!(
+                    text.map(|text| text.kind.as_str()),
+                    Some("text"),
+                    "{source}"
+                );
+            }
+            // The diagram's other edge still joins its two nodes.
+            let arrows = of_kind(&items, "arrow");
+            let joined: Vec<(&str, &str)> = arrows
+                .iter()
+                .map(|arrow| (joins(&items, &arrow.start), joins(&items, &arrow.end)))
+                .collect();
+            assert_eq!(joined, other.into_iter().collect::<Vec<_>>(), "{source}");
+            // The op draws it all, with nothing to say about it.
+            let mut board = board();
+            let reply = ops::run(&mut board, &json!({"op": "mermaid", "source": source}));
+            assert_eq!(reply["ok"], json!(true), "{source}: {reply}");
+            assert!(reply.get("notes").is_none(), "{source}: {reply}");
+        }
+    }
+
+    #[test]
+    fn a_message_joins_no_note_under_it() {
+        // Pele puts a note 10 px under the message before it, near enough to join. A message runs
+        // from lifeline to lifeline, so it stays free and level, whether the note is over one
+        // lifeline or over both.
+        for source in [
+            "sequenceDiagram\n  Alice->>Bob: Hello\n  Note over Bob: Thinks\n",
+            "sequenceDiagram\n  Alice->>Bob: Hello\n  Note right of Bob: A note\n  Bob-->>Alice: Hi\n  Note over Alice,Bob: Shared\n  Alice->>Bob: Again\n",
+        ] {
+            let items = skeletons(source);
+            let messages = of_kind(&items, "arrow");
+            assert!(!messages.is_empty(), "{source}: {items:#?}");
+            for message in messages {
+                assert!(
+                    message.start.is_none() && message.end.is_none(),
+                    "{source}: {message:#?}"
+                );
+                let run = message.points.as_ref().unwrap()[1];
+                assert_eq!(run[1], 0.0, "{source}: {message:#?}");
+            }
+            // The notes are still there, each holding its text.
+            let notes = ["Thinks", "A note", "Shared"];
+            let held = items
+                .iter()
+                .filter(|item| label(item).is_some_and(|said| notes.contains(&said)));
+            assert_eq!(held.count(), source.matches("Note ").count(), "{items:#?}");
+            let mut board = board();
+            let reply = ops::run(&mut board, &json!({"op": "mermaid", "source": source}));
+            assert_eq!(reply["ok"], json!(true), "{source}: {reply}");
+            assert!(reply.get("notes").is_none(), "{source}: {reply}");
+        }
+
+        // What a message does end at, the box of a participant it makes, it still joins.
+        let items = skeletons(
+            "sequenceDiagram\n  Alice->>Bob: Hi\n  create participant Carl\n  Alice->>Carl: Hi Carl\n",
+        );
+        let ends: Vec<Option<&str>> = of_kind(&items, "arrow")
+            .iter()
+            .map(|arrow| arrow.end.as_ref().map(|_| joins(&items, &arrow.end)))
+            .collect();
+        assert_eq!(ends, [None, Some("Carl")], "{items:#?}");
+        // And a note's own line, which is no message, still joins its note.
+        let items = skeletons("classDiagram\n  class Dog\n  note for Dog \"can bark\"\n");
+        let joined: Vec<(&str, &str)> = of_kind(&items, "line")
+            .iter()
+            .filter(|line| line.start.is_some() || line.end.is_some())
+            .map(|line| (joins(&items, &line.start), joins(&items, &line.end)))
+            .collect();
+        assert_eq!(joined, [("can bark", "Dog")], "{items:#?}");
     }
 
     #[test]
