@@ -488,6 +488,13 @@ ctl '{"cmd":"canvas","op":{"op":"command","command":"node.create","params":{"typ
 The Trail card is the card at the lower left of the Components section (zoom in with ⌘+ to hit it).
 Where a check already passed over the socket, it says so.
 
+Several checks press R to see whether the canvas has the keyboard: the Rectangle tool comes on
+only if it does. R can show that only from another tool, so each such step starts from the Move
+tool, V, which the toolbar marks. If R leaves the Move tool on, that step failed: note it, click
+the canvas on the selected layer (with the Move tool a click selects, it doesn't draw), and go on.
+After each R that worked, press V before anything else, so that the next click on the canvas
+selects instead of drawing.
+
 1. **Scrub X** (Step 3, the P5.T4 ruling, and Review Focus 3).
    - Select the probe rectangle. Drag the "X" label in the Position row sideways. Over the label
      the pointer is a left-right arrow. X moves 1 per px, and 10 per px with ⇧ held, and the
@@ -502,20 +509,29 @@ Where a check already passed over the socket, it says so.
    - Select two layers whose X differ and drag the X label. The first pixel sets both to one X,
      counted from the first layer's, where Figma moves each layer from its own X. This is Task 4's
      deferred minor, recorded here for you: say whether it is acceptable.
-2. **Type W** (Step 3, the P5.T4 ruling, and Review Focus 2).
+2. **Type W** (Step 3, the P5.T4 ruling, Review Focus 2, and the final review's I1).
+   Start: the probe rectangle selected, the Move tool on (click the canvas on the probe, press V).
    - Click in W: its text shows selected. Type 40 and press Enter: the rectangle is 40 wide, and the
      field reads 40. Click the rectangle on the canvas and press R: the Rectangle tool comes on, so
-     the canvas has the keyboard again.
+     the canvas has the keyboard again. Press V: the Move tool is back.
    - Type 60 in W and click in another field, with no Enter: 60 is applied when W lets go of the
      keyboard.
+   - (I1) Type 80 in W and, with no Enter, click the rectangle on the canvas (press and let go
+     without moving): the rectangle is 80 wide, and W reads 80. Then type 90 in W and, with no
+     Enter, press on the rectangle and drag it: it moves, and stays 90 wide. ⌘Z undoes the move,
+     a second ⌘Z puts W back to 80, and a third back to 60.
    - Type `abc`, `-5`, `1e400` and nothing at all, each followed by Enter. Each time the field shows
      the old value again, the rectangle doesn't change, and no toast shows.
    - Turn on the proportions lock (the link button beside H): typing 100 in W changes H in step.
    - Type 50, with no %, in the opacity field. It reads 50 %, and the rectangle fades.
-   - Click in X and press R: an "r" appears in the field, and the tool doesn't change.
-   - After Enter, the field keeps the keyboard with the caret at its end, so typing 5 next reads
-     405. This is Task 4's deferred minor too: say whether Enter should select the text again, as a
-     click into the field does.
+   - With the Move tool on, click in X and press R: an "r" appears in the field, and the toolbar
+     still marks the Move tool. Press Enter: X shows its value again.
+   - On its own, from the Move tool: turn the proportions lock off again, click in W, type 40 and
+     press Enter, so W is 40. Then type 5, with no click in between: the field reads 405, because
+     after Enter it keeps the keyboard with the caret at its end. Press Enter (the rectangle is 405
+     wide), click the rectangle on the canvas, and press ⌘Z: W is 40 again. This is Task 4's
+     deferred minor too: say whether Enter should select the text again, as a click into the field
+     does, or give the keyboard back to the canvas.
 3. **Mixed selections** (Review Focus 1, and P5-C2).
    - Select two layers whose X differ (click one, ⇧-click the other). X reads "Mixed". Type 100 in
      it and press Enter: both layers go to X 100, and one ⌘Z puts both back.
@@ -525,11 +541,16 @@ Where a check already passed over the socket, it says so.
      get one new grey fill, and one ⌘Z restores both.
 4. **Menus leave the canvas its keys** (the P5.T4 ruling on blend, and the P5.T5 one on the other
    menus).
-   - With the rectangle selected, open the blend menu in Appearance: FigCraft's modes in groups, the
-     current one, "Normal", checked. Pick Multiply, then press R without clicking the canvas: the
-     Rectangle tool comes on. Do the same after pressing Escape in an open blend menu, after picking
-     a stroke position (Inside, Center or Outside), and after picking an export format.
-   - Select the Trail card, and do the same with its W and H menus (Fixed and Hug).
+   Start: the probe rectangle selected, the Move tool on (click the canvas on the probe, press V).
+   Each step below begins from the Move tool and ends with V.
+   - Open the blend menu in Appearance: FigCraft's modes in groups, the current one, "Normal",
+     checked. Pick Multiply, then press R without clicking the canvas: the Rectangle tool comes on.
+     Press V.
+   - Open the blend menu again and press Escape, then press R: the Rectangle tool comes on. Press V.
+   - Pick a stroke position (Inside, Center or Outside), then press R: the same. Press V.
+   - Pick an export format, then press R: the same. Press V.
+   - Click the canvas on the Trail card (with the Move tool), and do the same with its W and H menus
+     (Fixed and Hug): pick one, press R, then V, for each menu.
 5. **The colour picker** (Step 3, and the P5.T5 ruling).
    - (a) Draw a rectangle (R, then drag): its fill is `D9D9D9`. Click the fill's swatch in the
      Design panel. The picker opens under the swatch, about 234 px wide, whole and inside the
@@ -543,6 +564,24 @@ Where a check already passed over the socket, it says so.
      colour. A click on empty canvas while a picker is open closes it, with no toast.
    - Type `ff0000` in the hex field next to the swatch and press Enter: the fill is red. Type `zzz`:
      the field shows the colour again.
+   - (Review Focus 4) Press V, and click the probe on the canvas. Its Fill rows are "Linear
+     gradient" on top, then the solid `3B82F6`. Type `22C55E` in the solid's hex field and press
+     Enter: the gradient row still reads "Linear gradient", and the canvas still shows the
+     orange-to-purple gradient over the rectangle. Hide the gradient with its eye: the rectangle
+     under it is green. Show it again: the gradient is as it was. Each is one ⌘Z step.
+   - (C1, a text being edited) With the Move tool, double-click "P5T6 text" on the canvas, press
+     ⌘→ to put the caret at the end of the line, and type " one". Click the Fill swatch in the
+     Design panel: the caret goes, and the text keeps " one". Drag a slider, then press Escape:
+     the colour goes back, and the text still ends in " one". Click the text on the canvas and
+     press ⌘Z: " one" goes, as one step.
+   - (C1, the same with a label) Double-click the text again, press ⌘→, and type " two". Drag the
+     X label, and press Escape before letting go: X goes back, the text still ends in " two", and
+     ⌘Z (after a click on the text) takes back " two" alone.
+   - (C1, a pen path) Press P, and click two points on empty canvas: a path is being drawn. Click
+     its stroke swatch and pick a colour: the path takes it, and keeps its two points. Press
+     Escape: the picker closes, and the path and its colour stay. Without clicking the canvas (a
+     click would add a point), press Enter: the path is done, and one ⌘Z takes it away, colour and
+     all. Press V.
 6. **A drop shadow** (Step 3, and the P5.T5 ruling).
    - With the rectangle selected, click "+" in Effects. A "Drop shadow" row appears, and the canvas
      shows the shadow. Click the sliders button at the left of the row: x, y, blur, spread and the
@@ -553,13 +592,19 @@ Where a check already passed over the socket, it says so.
      doesn't change. Open the editor of one of them, then remove the other: the editor should stay
      with the effect it was opened for (Task 5's deferred minor: editors are kept by place in the
      list, so it may jump to the effect that moves into the place).
-7. **A font change** (Step 3, and the P5.T5 ruling).
-   - Select "P5T6 text". Open the family menu: a search field over a list at most 320 px tall, long
-     names cut with an ellipsis, the list filled once the font scan is done. Type part of a name,
-     and pick a family with Enter or a click: the text changes to it. The style menu then lists
-     that family's styles: pick Bold, and the text turns bold.
-   - Then press R without clicking the canvas: the Rectangle tool comes on. Open the family list
-     again, press Escape, press R: the same.
+7. **A font change** (Step 3, the P5.T5 ruling, and Review Focus 5).
+   Start: the Move tool on (click the canvas on "P5T6 text", press V), "P5T6 text" selected.
+   - Open the family menu: a search field over a list at most 320 px tall, long names cut with an
+     ellipsis, the list filled once the font scan is done. Type part of a name, and pick a family
+     with Enter or a click: the text changes to it. The style menu then lists that family's styles:
+     pick Bold, and the text turns bold.
+   - Then press R without clicking the canvas: the Rectangle tool comes on. Press V.
+   - Open the family list again, press Escape, press R: the Rectangle tool comes on again. Press V.
+   - (Review Focus 5) With "P5T6 text" selected, make its first word bigger than the rest:
+     `ctl '{"cmd":"canvas","op":{"op":"command","command":"text.style","params":{"start":0,"end":10,"fontSize":40}}}'`.
+     The size field reads "Mixed". Type 30 in it and press Enter: the whole text is 30 on the
+     canvas, both words, and the field reads 30. Click the text on the canvas and press ⌘Z: the two
+     sizes come back, and the field reads "Mixed" again.
    - Try size 30, line height `auto`, `120` and `150%`, and letter spacing `-1` and `2%`. Each
      applies; `abc` and a negative line height are refused, and the field shows the old value.
      The marked align and resize buttons follow the text.
