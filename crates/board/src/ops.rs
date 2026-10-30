@@ -3,17 +3,18 @@
 //!
 //! Every answer is `{ok: true, ...}` or `{ok: false, error}`, and an op never panics: a failure of
 //! the engine, or an op that is malformed, is an `error` the agent can read. The ops are `get`,
-//! `add`, `update`, `delete`, `clear`, `replace`, `command`, `commands`, `pointer` and `mermaid`; the others of the
-//! contract get their own answer, "<op> is not supported yet".
+//! `add`, `update`, `delete`, `clear`, `replace`, `command`, `commands`, `pointer`, `mermaid` and
+//! `key`; the others of the contract get their own answer, "<op> is not supported yet".
 //!
 //! Each op that draws, changes or removes layers (all but `command`, which is the engine's) is one
 //! undo step, and when the engine refuses a part of it, none of it is done. A layer is named by the
 //! id an agent gave it when it drew it, or by its node id ([`skeleton::resolve`]): an agent's id
 //! wins.
 //!
-//! The `pointer` op takes the path of the pointer on the canvas (`crate::input`), so what an agent
-//! does with it is what a mouse does there. What it asks of the view is left in
-//! `session.ui_requests`, as after the same input in the window, for the view to carry out.
+//! The `pointer` and `key` ops take the paths of the pointer and the keyboard on the canvas
+//! (`crate::input`), so what an agent does with them is what a mouse or a keyboard does there.
+//! What they ask of the view is left in `session.ui_requests`, as after the same input in the
+//! window, for the view to carry out.
 //!
 //! A canvas holds one document, and the view saves the one on show over the canvas's file, so no
 //! `command` op may leave another document open or on show. The ones that do that by name are
@@ -32,7 +33,7 @@ use serde_json::{Map, Value, json};
 use thiserror::Error;
 
 use crate::doc::{BoardDoc, BoardError};
-use crate::input::{self, Mods};
+use crate::input::{self, KeyOutcome, Mods};
 use crate::skeleton::{self, Applied, Label, Skeleton};
 use crate::{policy, summary};
 use sawit_core::mermaid::{Palette, render};
@@ -110,6 +111,12 @@ const MERMAID_GAP: f64 = 100.0;
 ///   one undo step, and answers `{ok, added, ids}`, with `notes` on what couldn't be drawn. The
 ///   diagram's top left corner goes to `x`, `y`; what they leave out is 100 px right of what the
 ///   page holds and level with its top, or 0 on an empty page. Every error starts "mermaid: ".
+/// - `key` (`{key, shift?, alt?, cmd?, ctrl?}`) presses `key` on the canvas, with the modifier
+///   keys given held, as the keyboard does ([`input::route_key`]), and answers `{ok, handled}`:
+///   whether the canvas took the key. `key` is FigCraft's name for it: a letter or a digit,
+///   `Escape`, `Enter`, `Backspace`, `Delete`, `ArrowLeft`... The shortcut of a command Sawit
+///   carries out itself (save, export, import, copy as) is taken, though the op carries out
+///   nothing for it.
 pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
     match op.get("op").and_then(Value::as_str) {
         Some("get") => get(board),
@@ -122,6 +129,7 @@ pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
         Some("commands") => commands(),
         Some("pointer") => pointer(board, op),
         Some("mermaid") => mermaid(board, op),
+        Some("key") => key(board, op),
         Some(other) => failure(format!("{other} is not supported yet")),
         None => failure(r#"an op needs a name, like {"op": "get"}"#),
     }
@@ -667,6 +675,30 @@ fn pointer(board: &mut BoardDoc, op: &Value) -> Value {
         .map(ToString::to_string)
         .collect();
     json!({"ok": true, "selection": selection, "tool": board.session.tool.tool.id()})
+}
+
+fn key(board: &mut BoardDoc, op: &Value) -> Value {
+    let Some(key) = op
+        .get("key")
+        .and_then(Value::as_str)
+        .filter(|key| !key.is_empty())
+    else {
+        return failure(r#"a key op needs a key, like {"op": "key", "key": "Escape"}"#);
+    };
+    let held = |modifier: &str| op.get(modifier).and_then(Value::as_bool).unwrap_or(false);
+    let mods = Mods {
+        shift: held("shift"),
+        alt: held("alt"),
+        cmd: held("cmd"),
+        ctrl: held("ctrl"),
+    };
+    let outcome = match input::route_key(board, key, mods) {
+        Ok(outcome) => outcome,
+        Err(error) => return failure(error),
+    };
+    let requests = std::mem::take(&mut board.session.ui_requests);
+    leave_for_the_view(board, &requests);
+    json!({"ok": true, "handled": outcome != KeyOutcome::Unhandled})
 }
 
 /// Carries out what an op's input asked of the view that needs none
@@ -2447,5 +2479,88 @@ mod tests {
         // None of them reached the tools: no sticky was placed, and the tool is still on.
         assert!(elements(&mut board).is_empty());
         assert_eq!(board.session.tool.tool.id(), "sticky");
+    }
+
+    /// Sends key op `key` with the modifier keys in `held` (`{"cmd": true}`), checks that it
+    /// answered, and returns whether the canvas took the key.
+    fn press(board: &mut BoardDoc, key: &str, held: Value) -> bool {
+        let mut op = json!({"op": "key", "key": key});
+        for (modifier, on) in held.as_object().expect("modifier keys") {
+            op[modifier] = on.clone();
+        }
+        let reply = run(board, &op);
+        assert_eq!(reply["ok"], json!(true), "{op}: {reply}");
+        reply["handled"].as_bool().expect("handled")
+    }
+
+    #[test]
+    fn key_op_routes_like_the_keyboard() {
+        let mut board = board();
+        let reply = run(&mut board, &json!({"op": "key", "key": "r"}));
+        assert_eq!(reply, json!({"ok": true, "handled": true}));
+        assert_eq!(board.session.tool.tool.id(), "rectangle");
+        // With the modifier keys held: ⌘Z takes back the sticky.
+        send(&mut board, "board.sticky", json!({"x": 0, "y": 0}));
+        assert!(press(&mut board, "z", json!({"cmd": true})));
+        assert!(elements(&mut board).is_empty());
+        // A key that is no shortcut, and a hidden command's (⌘N is file.new), aren't the canvas's.
+        assert!(!press(&mut board, "g", json!({})));
+        assert!(!press(&mut board, "n", json!({"cmd": true})));
+        assert_eq!(board.session.docs.len(), 1);
+        // The shortcut of a command Sawit carries out itself is the canvas's, though the op runs
+        // nothing for it (⌘S, the save).
+        assert!(press(&mut board, "s", json!({"cmd": true})));
+    }
+
+    #[test]
+    fn key_op_leaves_the_views_requests_for_it() {
+        let mut board = board();
+        // ⌘K asks the view for the Actions palette: the request waits for it.
+        assert!(press(&mut board, "k", json!({"cmd": true})));
+        let kinds: Vec<&str> = (board.session.ui_requests.iter())
+            .map(|request| request.kind.as_str())
+            .collect();
+        assert_eq!(kinds, ["palette.actions"]);
+        board.session.ui_requests.clear();
+
+        // ⇧⌘↩ while typing in a sticky makes the next one, and typing goes on there, as from the
+        // keyboard: the op does what the engine asked of the view that needs no view.
+        let made = send(&mut board, "board.sticky", json!({"x": 0, "y": 0}));
+        let first = figcraft_engine::params::id_of(&made["result"]["id"]).unwrap();
+        assert!(figcraft_engine::board::edit_text(&mut board.session, first).unwrap());
+        assert!(press(
+            &mut board,
+            "Enter",
+            json!({"shift": true, "cmd": true})
+        ));
+        assert!(board.session.ui_requests.is_empty());
+        let ds = board.session.ds().unwrap();
+        let layers = &ds.doc.node(ds.page).unwrap().children;
+        let [one, next] = layers[..] else {
+            panic!("layers {layers:?}")
+        };
+        assert_eq!(one, first);
+        let text = figcraft_engine::board::text_of(&ds.doc, next).unwrap();
+        assert_eq!(ds.text_edit.as_ref().map(|edit| edit.id), Some(text));
+    }
+
+    #[test]
+    fn malformed_key_ops_and_refusals_are_reported() {
+        let mut board = board();
+        for op in [
+            json!({"op": "key"}),
+            json!({"op": "key", "key": 5}),
+            json!({"op": "key", "key": ""}),
+        ] {
+            let reply = run(&mut board, &op);
+            assert_eq!(reply["ok"], json!(false), "{op}: {reply}");
+            let error = reply["error"].as_str().expect("an error string");
+            assert!(error.contains("a key op needs a key"), "{op}: {error}");
+        }
+        // A shortcut the engine refuses: ⌘G groups the selection, and nothing is selected.
+        let reply = run(&mut board, &json!({"op": "key", "key": "g", "cmd": true}));
+        assert_eq!(reply["ok"], json!(false), "{reply}");
+        let error = reply["error"].as_str().expect("an error string");
+        assert!(error.contains("nothing is selected"), "{error}");
     }
 }

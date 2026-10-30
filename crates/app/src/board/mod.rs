@@ -7,6 +7,10 @@
 //! handles, names and previews `sawit_board::overlay` lists, as the view is now
 //! ([`overlay_paint`]). Edits are saved once the canvas has been still for a moment, and when the
 //! tab closes or the app quits.
+//!
+//! The pointer drives FigCraft's tools ([`events`]). Keys go where FigCraft's keymap sends them,
+//! and the ones Sawit uses too are shared by the spec's conflict policy ([`bindings`],
+//! [`BoardView::on_key`]).
 
 mod events;
 mod overlay_paint;
@@ -25,6 +29,7 @@ use figcraft_render::{Options, View};
 use futures::StreamExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
+use sawit_board::input::KeyOutcome;
 use sawit_board::store::{self, Writer};
 use sawit_board::view::{self, PREVIEW_QUALITY, Viewport};
 use sawit_board::{BoardDoc, BoardError, DocKind, input, ops};
@@ -44,16 +49,52 @@ const TOAST_TIME: Duration = Duration::from_secs(3);
 /// How far a mouse wheel's scroll of one line pans the canvas.
 const SCROLL_LINE: Pixels = px(20.);
 
-/// Starts what every canvas shares, once at startup. The system fonts are read on a background
-/// thread, and then every window repaints: text laid out with FigCraft's bundled fonts meanwhile
-/// is laid out again ([`figcraft_text::layout_generation`] has changed).
+/// Starts what every canvas shares, once at startup: its key bindings ([`bindings`]), bound after
+/// the workspace's, and the system fonts, read on a background thread. Then every window
+/// repaints: text laid out with FigCraft's bundled fonts meanwhile is laid out again
+/// ([`figcraft_text::layout_generation`] has changed).
 pub fn init(cx: &mut App) {
+    cx.bind_keys(bindings());
     let scan = cx.background_spawn(async { figcraft_text::scan_system_fonts() });
     cx.spawn(async move |cx| {
         scan.await;
         cx.update(|cx| cx.refresh_windows());
     })
     .detach();
+}
+
+/// The keys the canvas takes from the app while it has the keyboard (spec, "Keyboard conflict
+/// policy"). Key bindings run before a view sees the key, so each is bound to `NoAction` in the
+/// canvas's key context, and goes on to [`BoardView::on_key`]:
+///
+/// - `Board`, the canvas: ⌘0 and ⌘K (FigCraft's zoom to 100% and Actions), and the keys of
+///   gpui-kit's root that FigCraft uses.
+/// - `BoardText`, while the canvas edits text: ⌘B, ⌥⌘T and ⇧⌘↩ (bold, centre and the next
+///   sticky), which are Sawit's otherwise.
+///
+/// Bound after the workspace's keys, or its ⌘K chords would still keep ⌘K waiting.
+pub fn bindings() -> Vec<KeyBinding> {
+    let board = Some("Board");
+    let text = Some("BoardText");
+    vec![
+        KeyBinding::new("cmd-0", NoAction, board),
+        KeyBinding::new("cmd-k", NoAction, board),
+        // The workspace's ⌘K chords, which would hold ⌘K until their second key or a timeout.
+        KeyBinding::new("cmd-k e", NoAction, board),
+        KeyBinding::new("cmd-k t", NoAction, board),
+        KeyBinding::new("cmd-k u", NoAction, board),
+        KeyBinding::new("cmd-k w", NoAction, board),
+        KeyBinding::new("cmd-k shift-enter", NoAction, board),
+        // Root's Tab (root::Tab, the next focus): FigCraft's select.next.
+        KeyBinding::new("tab", NoAction, board),
+        // Root's ⇧Tab (root::TabPrev, the previous focus): FigCraft's select.previous.
+        KeyBinding::new("shift-tab", NoAction, board),
+        // Root's ⌘C (input::Copy): FigCraft's edit.copy.
+        KeyBinding::new("cmd-c", NoAction, board),
+        KeyBinding::new("cmd-b", NoAction, text),
+        KeyBinding::new("alt-cmd-t", NoAction, text),
+        KeyBinding::new("shift-cmd-enter", NoAction, text),
+    ]
 }
 
 /// A canvas tab: the board in one `.figcraft` file, drawn as its view and its document change,
@@ -79,6 +120,15 @@ pub struct BoardView {
     /// The left button went down on the canvas and hasn't come up: its moves and its release go
     /// to the tools wherever the pointer is ([`events`]).
     dragging: bool,
+    /// Space is held down on the canvas, and no text is edited: a press of the left button pans
+    /// instead of reaching the tools ([`events`]).
+    space_held: bool,
+    /// The canvas is being panned by hand, with Space and the left button or with the middle
+    /// button ([`events`]).
+    pan: Option<events::Pan>,
+    /// Watches for the canvas losing the keyboard, whereupon Space's release goes elsewhere. Set
+    /// up with the first render, which has the window.
+    keyboard_watch: Option<Subscription>,
     /// The window it was last painted in, whose sprite atlas holds its images.
     window: Option<AnyWindowHandle>,
     /// A zoom gesture is on until then: frames render at [`PREVIEW_QUALITY`] to keep up.
@@ -149,6 +199,9 @@ impl BoardView {
             fitted: false,
             bounds: Bounds::default(),
             dragging: false,
+            space_held: false,
+            pan: None,
+            keyboard_watch: None,
             window: None,
             zooming_until: None,
             zoom_settle: None,
@@ -220,6 +273,61 @@ impl BoardView {
         if let Some(message) = message {
             self.show_toast(message, cx);
         }
+    }
+
+    /// A key pressed while the canvas has the keyboard, which no key binding took ([`bindings`]
+    /// lets the canvas's own through). It goes where FigCraft's keymap sends it, under Sawit's
+    /// command policy ([`input::route_key`]), and then the canvas carries out what the engine
+    /// asked of it, as after every input:
+    ///
+    /// - A key the canvas uses stops here. The shortcut of a command Sawit carries out itself
+    ///   says it is coming, for now, and a command the engine refuses says why, in a toast.
+    /// - Any other key goes on: while text is edited, typing reaches the input method.
+    ///
+    /// Space held down without modifiers, while no text is edited, arms a pan instead
+    /// ([`events`]).
+    pub(super) fn on_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.hold_space(event, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        let keystroke = &event.keystroke;
+        let Some(key) = input::key_name(&keystroke.key) else {
+            return;
+        };
+        let Some(board) = self.board_mut() else {
+            return;
+        };
+        let routed = input::route_key(board, &key, events::mods(keystroke.modifiers));
+        self.handle_ui_requests(Vec::new(), cx);
+        match routed {
+            Ok(KeyOutcome::Unhandled) => {}
+            Ok(KeyOutcome::Handled) => cx.stop_propagation(),
+            Ok(KeyOutcome::Ui(id)) => {
+                cx.stop_propagation();
+                self.run_ui_command(id, cx);
+            }
+            // After the requests' toast, so that the error's is the one that shows.
+            Err(error) => {
+                cx.stop_propagation();
+                self.show_toast(error.to_string(), cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Carries out `id`, a command Sawit does itself instead of the engine
+    /// (`sawit_board::policy::UI_COMMANDS`): import, export, save and copy as. None is done yet,
+    /// so each says it is coming.
+    fn run_ui_command(&mut self, id: &'static str, cx: &mut Context<Self>) {
+        log::debug!("the canvas doesn't carry out {id} yet");
+        self.show_toast("Coming soon", cx);
+    }
+
+    /// Whether the canvas is editing a text: typing goes into it.
+    fn editing_text(&self) -> bool {
+        self.board()
+            .is_some_and(|board| board.session.ds().is_ok_and(|ds| ds.text_edit.is_some()))
     }
 
     /// The answer to an op when the file couldn't be opened: why, as `{ok: false, error}`.
@@ -494,17 +602,22 @@ impl Focusable for BoardView {
 }
 
 impl Render for BoardView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Err(error) = &self.board {
             return Placeholder::error("The canvas couldn't be opened.")
                 .detail(error.clone())
                 .into_any_element();
         }
+        self.watch_keyboard(window, cx);
         let this = cx.entity().downgrade();
         let drags = this.clone();
-        let cursor = self.board().map_or(CursorStyle::Arrow, |board| {
-            events::cursor_style(&board.session.tool.overlay.cursor)
-        });
+        let cursor = self.cursor();
+        // The keys the canvas takes while it edits text are bound in a context of their own.
+        let key_context = if self.editing_text() {
+            "Board BoardText"
+        } else {
+            "Board"
+        };
         let theme = cx.theme();
         let toast = self.toast.clone().map(|text| {
             div()
@@ -531,15 +644,19 @@ impl Render for BoardView {
         });
         div()
             .id("board")
+            .key_context(key_context)
             .relative()
             .size_full()
             .overflow_hidden()
             .track_focus(&self.focus)
             .cursor(cursor)
+            .on_key_down(cx.listener(Self::on_key))
+            .on_key_up(cx.listener(Self::on_key_up))
             .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| this.on_scroll(event, cx)))
             .on_pinch(cx.listener(|this, event: &PinchEvent, _, cx| this.on_pinch(event, cx)))
             // The right button is left for the context menu.
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_left_down))
+            .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_middle_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             // A key pressed with the pointer resting on the canvas isn't the pointer leaving it.
             .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
@@ -626,12 +743,16 @@ mod tests {
     use figcraft_doc::color::Color;
     use figcraft_doc::geom::Point as PagePoint;
     use figcraft_engine::ViewState;
+    use figcraft_engine::keymap::{self, KEYS, Platform};
     use gpui_kit::component::{Theme, ThemeMode};
     use gpui_kit::{
-        AppContext as _, Entity, Modifiers, MouseButton, MouseDownEvent, MouseExitEvent,
-        MouseUpEvent, PinchEvent, RenderImage, ScrollDelta, ScrollEvent, TestAppContext,
+        App, AppContext as _, Entity, KeyBinding, KeyContext, KeyDownEvent, KeyUpEvent, Keystroke,
+        Modifiers, MouseButton, MouseDownEvent, MouseExitEvent, MouseUpEvent, OperatingSystem,
+        PinchEvent, PlatformInput, RenderImage, ScrollDelta, ScrollEvent, TestAppContext,
         VisualTestContext, WindowHandle, point, px, size,
     };
+    use sawit_board::input::gpui_keystroke;
+    use sawit_board::policy::{self, SAWIT_WINS, SAWIT_WINS_UNLESS_EDITING};
     use sawit_board::{BoardDoc, DocKind, store};
     use serde_json::{Value, json};
 
@@ -1379,5 +1500,287 @@ mod tests {
             assert_eq!(ds.text_edit.as_ref().map(|edit| edit.id), Some(text));
             assert!(board.session.ui_requests.is_empty());
         });
+    }
+
+    /// The app's key bindings, bound in the app's order: gpui-kit's, then the workspace's, which
+    /// binds the canvas's after its own, then the three `cli::init` binds for the whole app.
+    fn bind_app_keys(cx: &mut App) {
+        gpui_kit::init(cx);
+        crate::workspace::init(cx);
+        cx.bind_keys([
+            KeyBinding::new("cmd-q", crate::cli::Quit, None),
+            KeyBinding::new("cmd-shift-n", crate::cli::NewWindow, None),
+            KeyBinding::new("cmd-o", crate::cli::OpenFolder, None),
+        ]);
+    }
+
+    /// The key contexts from the window's root to the focused view.
+    fn contexts(names: &[&str]) -> Vec<KeyContext> {
+        names
+            .iter()
+            .map(|name| KeyContext::parse(name).unwrap())
+            .collect()
+    }
+
+    /// The key contexts of the canvas in the workspace: gpui-kit's root, the workspace, then the
+    /// canvas, which is `Board BoardText` while it edits text.
+    fn canvas_contexts(editing: bool) -> Vec<KeyContext> {
+        let canvas = if editing { "Board BoardText" } else { "Board" };
+        contexts(&["Root", "Workspace", canvas])
+    }
+
+    /// What pressing `keystroke` (written as `gpui_keystroke` writes it) does with the focus in
+    /// `contexts`: the actions its bindings run, by name, and whether it waits for the next key of
+    /// a chord. A key no action takes goes on to the focused view's `on_key_down`.
+    fn resolve(cx: &App, keystroke: &str, contexts: &[KeyContext]) -> (Vec<&'static str>, bool) {
+        let typed = Keystroke::parse_with_os(keystroke, OperatingSystem::Mac).unwrap();
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let (bindings, pending) = keymap.bindings_for_input(&[typed], contexts);
+        let actions = bindings.iter().map(|b| b.action().name()).collect();
+        (actions, pending)
+    }
+
+    #[gpui_kit::test]
+    fn board_keys_reach_the_canvas(cx: &mut TestAppContext) {
+        cx.update(bind_app_keys);
+        let kept = cx.update(|cx| {
+            let mut kept = Vec::new();
+            for binding in KEYS.iter().filter(|b| !policy::is_hidden(b.id)) {
+                for spec in binding.keys(Platform::Mac) {
+                    let keystroke = gpui_keystroke(spec).unwrap();
+                    let sawits = |keys: &[&str]| keys.contains(&keystroke.as_str());
+                    // On the canvas, each key FigCraft uses there, but the keys Sawit keeps.
+                    // While text is edited, each of its keys but those Sawit always keeps: the
+                    // text shortcuts, and the canvas's keys the text editor takes (⌘C, ⌘A, ⌘Z…).
+                    let live_on_canvas = binding.context != keymap::Context::Text
+                        && !sawits(SAWIT_WINS)
+                        && !sawits(SAWIT_WINS_UNLESS_EDITING);
+                    let live_while_editing = !sawits(SAWIT_WINS);
+                    for (live, editing) in [(live_on_canvas, false), (live_while_editing, true)] {
+                        let (actions, pending) = resolve(cx, &keystroke, &canvas_contexts(editing));
+                        if live && (!actions.is_empty() || pending) {
+                            kept.push(format!(
+                                "{keystroke} ({}, editing {editing}): {actions:?}{}",
+                                binding.id,
+                                if pending { ", waits for a chord" } else { "" },
+                            ));
+                        }
+                    }
+                }
+            }
+            kept
+        });
+        assert!(
+            kept.is_empty(),
+            "kept from the canvas:\n{}",
+            kept.join("\n")
+        );
+    }
+
+    #[gpui_kit::test]
+    fn sawit_keeps_its_shortcuts(cx: &mut TestAppContext) {
+        cx.update(bind_app_keys);
+        let workspace = contexts(&["Root", "Workspace"]);
+        cx.update(|cx| {
+            for keystroke in SAWIT_WINS {
+                let (in_workspace, _) = resolve(cx, keystroke, &workspace);
+                assert!(!in_workspace.is_empty(), "{keystroke} is no Sawit shortcut");
+                // On the canvas, and while it edits text.
+                for editing in [false, true] {
+                    let (on_canvas, pending) = resolve(cx, keystroke, &canvas_contexts(editing));
+                    assert_eq!(on_canvas, in_workspace, "{keystroke}, editing {editing}");
+                    assert!(!pending, "{keystroke} waits for a chord, editing {editing}");
+                }
+            }
+        });
+    }
+
+    #[gpui_kit::test]
+    fn text_editing_takes_text_keys(cx: &mut TestAppContext) {
+        cx.update(bind_app_keys);
+        cx.update(|cx| {
+            for (keystroke, sawits) in [
+                ("cmd-b", "workspace::ToggleSidebar"),
+                ("alt-cmd-t", "workspace::CloseOtherTabs"),
+                ("shift-cmd-enter", "workspace::ToggleMaximizePane"),
+            ] {
+                // While text is edited they are bold, centre and the next sticky: the canvas's.
+                let (editing, pending) = resolve(cx, keystroke, &canvas_contexts(true));
+                assert!(editing.is_empty() && !pending, "{keystroke}: {editing:?}");
+                // Otherwise they stay Sawit's.
+                let (on_canvas, _) = resolve(cx, keystroke, &canvas_contexts(false));
+                assert_eq!(on_canvas.first(), Some(&sawits), "{keystroke}");
+            }
+        });
+    }
+
+    /// Gives the canvas the keyboard, as a press on it does.
+    fn focus_canvas(view: &Entity<BoardView>, cx: &mut VisualTestContext) {
+        cx.update(|window, cx| {
+            let focus = view.read(cx).focus.clone();
+            window.focus(&focus, cx);
+        });
+    }
+
+    /// Starts typing in the sticky that a command op made, `made` being its answer, and returns
+    /// the sticky.
+    fn type_in(view: &Entity<BoardView>, made: &Value, cx: &mut TestAppContext) -> NodeId {
+        let note = figcraft_engine::params::id_of(&made["result"]["id"]).unwrap();
+        view.update(cx, |view, _| {
+            let board = view.board_mut().unwrap();
+            assert!(figcraft_engine::board::edit_text(&mut board.session, note).unwrap());
+        });
+        note
+    }
+
+    #[gpui_kit::test]
+    fn a_keys_requests_reach_the_view(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("key-requests");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        let made = run_op(&view, sticky_op(), &mut cx);
+        let first = type_in(&view, &made, &mut cx);
+        focus_canvas(&view, &mut cx);
+        // ⇧⌘↩ while typing makes the next sticky, and the engine asks the view to go on typing
+        // there.
+        cx.simulate_keystrokes("shift-cmd-enter");
+        let [one, next] = layers(&view, &cx)[..] else {
+            panic!("layers {:?}", layers(&view, &cx))
+        };
+        assert_eq!(one, first);
+        view.read_with(&cx, |view, _| {
+            let board = view.board().unwrap();
+            let ds = board.session.ds().unwrap();
+            let text = figcraft_engine::board::text_of(&ds.doc, next).unwrap();
+            assert_eq!(ds.text_edit.as_ref().map(|edit| edit.id), Some(text));
+            assert!(board.session.ui_requests.is_empty());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn keys_reach_the_tools_and_sawits_own_commands_say_coming_soon(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("key-tools");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        focus_canvas(&view, &mut cx);
+        cx.simulate_keystrokes("r");
+        let tool = |cx: &VisualTestContext| {
+            view.read_with(cx, |view, _| view.board().unwrap().session.tool.tool.id())
+        };
+        assert_eq!(tool(&cx), "rectangle");
+        // ⌘S is the save, which Sawit carries out itself, once Plan 6 has it.
+        cx.simulate_keystrokes("cmd-s");
+        let toast = view.read_with(&cx, |view, _| view.toast.clone());
+        assert_eq!(toast.as_deref(), Some("Coming soon"));
+    }
+
+    /// Releases the keys of `keystrokes`, last first, as `simulate_keystrokes` presses them.
+    fn release_keys(cx: &mut VisualTestContext, keystrokes: &str) {
+        for source in keystrokes.split(' ').rev() {
+            let keystroke = Keystroke::parse_with_os(source, OperatingSystem::Mac).unwrap();
+            cx.simulate_event(KeyUpEvent { keystroke });
+        }
+    }
+
+    /// A drag of `button` from (100, 100) to (160, 140) in the window, which the canvas fills.
+    fn drag(cx: &mut VisualTestContext, button: MouseButton) {
+        let none = Modifiers::default();
+        cx.simulate_mouse_down(point(px(100.), px(100.)), button, none);
+        cx.simulate_mouse_move(point(px(130.), px(120.)), button, none);
+        cx.simulate_mouse_move(point(px(160.), px(140.)), button, none);
+        cx.simulate_mouse_up(point(px(160.), px(140.)), button, none);
+    }
+
+    /// Whether `a` and `b` are the same page point, but for rounding.
+    fn same_point(a: (f64, f64), b: (f64, f64)) -> bool {
+        (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6
+    }
+
+    #[gpui_kit::test]
+    fn a_middle_button_drag_pans_with_any_tool(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("middle-pan");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        let tool = json!({"op": "command", "command": "tool.rectangle"});
+        run_op(&view, tool, &mut cx);
+        let pressed = view_state(&view, &cx).screen_to_page(100., 100.);
+        drag(&mut cx, MouseButton::Middle);
+        // The page point under the press is under the release.
+        let released = view_state(&view, &cx).screen_to_page(160., 140.);
+        assert!(same_point(released, pressed), "{released:?} != {pressed:?}");
+        // The tools got nothing: no shape, no undo step, the tool still on.
+        assert!(layers(&view, &cx).is_empty());
+        view.read_with(&cx, |view, _| {
+            assert!(view.pan.is_none());
+            let board = view.board().unwrap();
+            assert_eq!(board.session.tool.tool.id(), "rectangle");
+            assert_eq!(board.session.undo_depth(), (0, 0));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn space_and_a_drag_pan_instead_of_drawing(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("space-pan");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        let tool = json!({"op": "command", "command": "tool.rectangle"});
+        run_op(&view, tool, &mut cx);
+        focus_canvas(&view, &mut cx);
+
+        // Held, Space turns a drag into a pan.
+        cx.simulate_keystrokes("space");
+        let pressed = view_state(&view, &cx).screen_to_page(100., 100.);
+        drag(&mut cx, MouseButton::Left);
+        let released = view_state(&view, &cx).screen_to_page(160., 140.);
+        assert!(same_point(released, pressed), "{released:?} != {pressed:?}");
+        assert!(layers(&view, &cx).is_empty());
+
+        // Released, the same drag draws.
+        release_keys(&mut cx, "space");
+        drag(&mut cx, MouseButton::Left);
+        assert_eq!(layers(&view, &cx).len(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn space_is_typed_while_text_is_edited(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("space-typed");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        let made = run_op(&view, sticky_op(), &mut cx);
+        type_in(&view, &made, &mut cx);
+        focus_canvas(&view, &mut cx);
+        let space = KeyDownEvent {
+            keystroke: Keystroke::parse("space").unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        };
+        let result =
+            cx.update(|window, cx| window.dispatch_event(PlatformInput::KeyDown(space), cx));
+        // It goes on past the canvas, to the input method, and arms no pan.
+        assert!(result.propagate);
+        view.read_with(&cx, |view, _| {
+            assert!(!view.space_held);
+            let ds = view.board().unwrap().session.ds().unwrap();
+            assert!(ds.text_edit.is_some());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn losing_the_keyboard_lets_go_of_space(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("space-lost");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        // The window has the keyboard, as the one the user types in.
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        let held = |cx: &VisualTestContext| view.read_with(cx, |view, _| view.space_held);
+        // The canvas loses the keyboard in the window: Space's release goes elsewhere.
+        focus_canvas(&view, &mut cx);
+        cx.simulate_keystrokes("space");
+        assert!(held(&cx));
+        cx.update(|window, cx| window.blur(cx));
+        cx.run_until_parked();
+        assert!(!held(&cx));
+        // The window loses it to another.
+        focus_canvas(&view, &mut cx);
+        cx.simulate_keystrokes("space");
+        assert!(held(&cx));
+        cx.deactivate_window();
+        assert!(!held(&cx));
     }
 }
