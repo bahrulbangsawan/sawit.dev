@@ -1,6 +1,7 @@
 //! What the canvas draws over the rendered page (spec D4): the selection's outlines, box, handles
-//! and size, the hover outline, the names of frames and sections, the marquee, snap guides with
-//! their distances, where a drag drops, the previews of the pen, pencil, marker, highlighter,
+//! and size, the hover outline, the text being edited (its box, its selected characters, an input
+//! method's composition and the caret), the names of frames and sections, the marquee, snap guides
+//! with their distances, where a drag drops, the previews of the pen, pencil, marker, highlighter,
 //! connector and eraser, and vector edit mode's points and handles. [`overlay`] lists them back
 //! to front as [`Shape`]s, in logical px from the canvas's top-left, from the engine's state; the
 //! app paints the list as it is (`crates/app/src/board/overlay_paint.rs`) and only measures the
@@ -12,16 +13,22 @@
 //! guides, rulers and their guides, prototype connections, slot badges, the paint bucket's area,
 //! shape builder regions, the lasso, the box measured to, the Scale tool's readout, arc and corner
 //! radius handles, auto layout drop cells, swap targets, comments and the box around several
-//! selected points; names are not turned with a rotated frame.
+//! selected points; names are not turned with a rotated frame, and the caret doesn't blink.
 //!
 //! Every colour is a fixed canvas colour, the same on any page and in either theme ([`SELECTION`],
 //! [`COMPONENT`], [`GUIDE`], white), except the names of frames and sections, whose grey reads on
-//! the page they are on, and a stroke being drawn, which shows in the colour it will have.
+//! the page they are on, and a stroke being drawn, which shows in the colour it will have. The
+//! caret and the composition's underline, which FigCraft draws in its theme's text colour, are
+//! [`SELECTION`], as the text's box is.
+
+use std::sync::Arc;
 
 use figcraft_doc::{Document, NodeId, NodeKind};
 use figcraft_engine::tools::{self, Overlay, PENCIL_STROKE};
 use figcraft_engine::vectoredit::{self, EditOverlay, VHit, VTool};
-use figcraft_engine::{DocState, Session, ToolId, ViewState, board, components};
+use figcraft_engine::{
+    DocState, Preedit, Session, ToolId, ViewState, board, components, guard, textedit,
+};
 use figcraft_geom::Point;
 use figcraft_geom::kurbo::{self, CubicBez, PathEl};
 
@@ -163,6 +170,68 @@ impl Shape {
     }
 }
 
+/// What an input method composes in the text being edited: shown in the text, not yet in the
+/// document. While it lasts, the canvas renders [`Composition::doc`] in place of the document, and
+/// the overlay lays out the caret and the composition's underline in it, so both show the text as
+/// it will read once committed.
+pub struct Composition {
+    /// The document as it shows: the composition in the edited text at its caret, laid out
+    /// ([`textedit::preedit_doc`]).
+    pub doc: Arc<Document>,
+    /// The composition's characters in the edited text as it shows: from and to.
+    pub range: (usize, usize),
+    /// The input method's cursor: a character of the edited text as it shows.
+    pub cursor: usize,
+    /// What it shows: the document, the edited text, the composition and the caret it was made of.
+    of: (Arc<Document>, NodeId, Preedit, usize),
+}
+
+impl Composition {
+    /// The composition under way in the text `s` edits. `None` when nothing is composed.
+    pub fn of(s: &Session) -> Option<Self> {
+        let ds = s.ds().ok()?;
+        let edit = ds.text_edit.as_ref()?;
+        let preedit = edit.preedit.clone()?;
+        let (doc, range, cursor) = textedit::preedit_doc(s)?;
+        Some(Self {
+            doc: Arc::new(doc),
+            range,
+            cursor,
+            of: (ds.doc.clone(), edit.id, preedit, edit.caret),
+        })
+    }
+
+    /// Keeps `kept` the composition under way in `s`: as it is while it still shows that one,
+    /// made again once the document, the edited text, the composition or the caret has changed,
+    /// and `None` once nothing is composed. Kept, its document stays the same one, so the render
+    /// asked for it isn't asked for again. Made through [`guard::run`]: should that fail, `None`,
+    /// and the canvas shows the document without the composition.
+    pub fn refresh(kept: &mut Option<Self>, s: &Session) {
+        if kept
+            .as_ref()
+            .is_some_and(|composition| composition.shows(s))
+        {
+            return;
+        }
+        *kept = guard::run("ui.preeditDoc", || Ok(Self::of(s)))
+            .ok()
+            .flatten();
+    }
+
+    /// Whether this is the composition under way in `s`.
+    fn shows(&self, s: &Session) -> bool {
+        let Ok(ds) = s.ds() else { return false };
+        let Some(edit) = &ds.text_edit else {
+            return false;
+        };
+        let (doc, id, preedit, caret) = &self.of;
+        Arc::ptr_eq(doc, &ds.doc)
+            && *id == edit.id
+            && edit.preedit.as_ref() == Some(preedit)
+            && *caret == edit.caret
+    }
+}
+
 /// What to draw over the canvas of `s`'s open document, back to front:
 ///
 /// 1. the names of frames and sections (labels with a `node`);
@@ -171,13 +240,24 @@ impl Shape {
 /// 4. the selection's box, outlined around several layers, and its 4 corner handles (a
 ///    connector's 2 round end handles instead);
 /// 5. the selection's size, `"{w} × {h}"` under its box;
-/// 6. the marquee;
-/// 7. snap guides and measurements, with their distances;
-/// 8. the frame a drag drops into, and the line where it goes in an auto layout;
-/// 9. the pen's path, the stroke the pencil, marker or highlighter is drawing, the connector
-///    being drawn and the eraser;
-/// 10. in vector edit mode, the edited layers' segments, points and handles.
+/// 6. while text is edited, in place of 3 to 5: the edited text's box, its selected characters,
+///    the input method's composition, underlined, and the caret;
+/// 7. the marquee;
+/// 8. snap guides and measurements, with their distances;
+/// 9. the frame a drag drops into, and the line where it goes in an auto layout;
+/// 10. the pen's path, the stroke the pencil, marker or highlighter is drawing, the connector
+///     being drawn and the eraser;
+/// 11. in vector edit mode, the edited layers' segments, points and handles.
+///
+/// Item 6 lays out the text as it shows, with the composition under way in it
+/// ([`Composition::of`]); [`overlay_with`] takes one already made.
 pub fn overlay(s: &Session) -> Vec<Shape> {
+    overlay_with(s, Composition::of(s).as_ref())
+}
+
+/// [`overlay`], with `composition` the composition under way in the text `s` edits, as the
+/// canvas keeps it ([`Composition::refresh`]) and renders it.
+pub fn overlay_with(s: &Session, composition: Option<&Composition>) -> Vec<Shape> {
     let Ok(ds) = s.ds() else {
         return Vec::new();
     };
@@ -185,6 +265,7 @@ pub fn overlay(s: &Session) -> Vec<Shape> {
     frame_names(&mut out, ds);
     hover(&mut out, s, ds);
     selection(&mut out, s, ds);
+    text_edit(&mut out, s, ds, composition);
     let (ov, view) = (&s.tool.overlay, &ds.view);
     marquee(&mut out, ov, view);
     guides(&mut out, ov, view);
@@ -425,7 +506,137 @@ fn selection(out: &mut Vec<Shape>, s: &Session, ds: &DocState) {
     }
 }
 
-/// Item 6: the marquee, tinted 10 % with the selection colour, and outlined.
+/// Item 6: while text is edited, the edited text as it shows, with the input method's
+/// composition in it: its box, outlined; its selected characters, tinted 30 % with the selection
+/// colour; the composition, underlined just below its baseline; and the caret, before the
+/// character it is at (the input method's cursor while composing). The caret holds steady, so an
+/// idle canvas draws nothing. Each is laid out in FigCraft's text layout and placed through the
+/// text's world transform and the view (ui-egui `text_edit_overlay`).
+fn text_edit(out: &mut Vec<Shape>, s: &Session, ds: &DocState, composition: Option<&Composition>) {
+    // The selected characters, from and to, as the text editor has them.
+    let (Some(edit), Some((_, from, to))) = (&ds.text_edit, textedit::selected_range(s)) else {
+        return;
+    };
+    let doc = composition.map_or(&*ds.doc, |composition| &*composition.doc);
+    let Some(text) = TextShown::of(doc, edit.id, &ds.view) else {
+        return;
+    };
+    if let Some(quad) = node_quad(doc, edit.id, &ds.view) {
+        out.push(Shape::Outline {
+            points: quad.to_vec(),
+            closed: true,
+            color: SELECTION,
+            width: 1.0,
+            dashed: false,
+        });
+    }
+    match composition {
+        Some(composition) => underline(out, &text, composition.range),
+        None if from < to => {
+            for r in text.layout.selection_rects(from, to) {
+                out.push(Shape::Fill {
+                    points: vec![
+                        text.at(r.x0, r.y0),
+                        text.at(r.x1, r.y0),
+                        text.at(r.x1, r.y1),
+                        text.at(r.x0, r.y1),
+                    ],
+                    color: alpha(SELECTION, 0.3),
+                });
+            }
+        }
+        None => {}
+    }
+    let at = composition.map_or(edit.caret, |composition| composition.cursor);
+    let (top, bottom) = text.caret(at);
+    out.push(Shape::Caret {
+        top,
+        bottom,
+        color: SELECTION,
+    });
+}
+
+/// The composition's characters `from..to` underlined: on each line they are on, from where they
+/// start to the right of the last of them there, just below the baseline.
+fn underline(out: &mut Vec<Shape>, text: &TextShown, (from, to): (usize, usize)) {
+    let layout = &text.layout;
+    for r in layout.selection_rects(from, to) {
+        let Some(line) = layout.lines.iter().find(|l| (l.top - r.y0).abs() < 1e-6) else {
+            continue;
+        };
+        let glyphs = layout.glyphs.get(line.glyph_start..line.glyph_end);
+        let right = (glyphs.unwrap_or_default().iter())
+            .filter(|g| g.char_end > g.char_start && g.char_start >= from && g.char_end <= to)
+            .map(|g| g.x + g.advance)
+            .fold(r.x0, f64::max);
+        let y = line.baseline + (line.top + line.height - line.baseline) * 0.35;
+        out.push(Shape::Outline {
+            points: vec![text.at(r.x0, y), text.at(right, y)],
+            closed: false,
+            color: SELECTION,
+            width: 1.0,
+            dashed: false,
+        });
+    }
+}
+
+/// The caret before character `index` of the text `s` edits, as it shows with `composition` in
+/// it (the composition under way, if any): its top and bottom on the canvas, in logical px from
+/// its top-left. `None` when no text is edited. An input method shows its candidates there.
+pub fn caret_at(
+    s: &Session,
+    composition: Option<&Composition>,
+    index: usize,
+) -> Option<((f64, f64), (f64, f64))> {
+    let ds = s.ds().ok()?;
+    let edit = ds.text_edit.as_ref()?;
+    let doc = composition.map_or(&*ds.doc, |composition| &*composition.doc);
+    Some(TextShown::of(doc, edit.id, &ds.view)?.caret(index))
+}
+
+/// A text layer laid out where it shows on the canvas (ui-egui's `TextOnScreen`).
+struct TextShown<'a> {
+    layout: Arc<figcraft_text::TextLayout>,
+    /// How far down its box the layout starts: its vertical alignment.
+    dy: f64,
+    world: kurbo::Affine,
+    view: &'a ViewState,
+}
+
+impl<'a> TextShown<'a> {
+    /// Text layer `id` of `doc`, on a canvas showing it as `view` does. `None` for another layer.
+    fn of(doc: &Document, id: NodeId, view: &'a ViewState) -> Option<Self> {
+        let n = doc.node(id)?;
+        let (layout, dy) = figcraft_text::layout_node(n)?;
+        Some(Self {
+            layout,
+            dy,
+            world: doc.world_transform(id),
+            view,
+        })
+    }
+
+    /// Layout point (`x`, `y`) on screen; on its path, for text on a path.
+    fn at(&self, x: f64, y: f64) -> (f64, f64) {
+        let p = self.layout.warp_point(x, y);
+        screen(self.view, self.world * Point::new(p.x, p.y + self.dy))
+    }
+
+    /// The caret before character `index`: its top and bottom on screen. In a text with no line
+    /// laid out, a line 14 units tall at its top-left corner.
+    fn caret(&self, index: usize) -> ((f64, f64), (f64, f64)) {
+        let (x, line) = self.layout.caret(index);
+        match self.layout.lines.get(line).or(self.layout.lines.last()) {
+            Some(line) => (self.at(x, line.top), self.at(x, line.top + line.height)),
+            None => {
+                let top = self.at(0.0, 0.0);
+                (top, (top.0, top.1 + 14.0 * self.view.zoom))
+            }
+        }
+    }
+}
+
+/// Item 7: the marquee, tinted 10 % with the selection colour, and outlined.
 fn marquee(out: &mut Vec<Shape>, ov: &Overlay, view: &ViewState) {
     let Some([x0, y0, x1, y1]) = ov.marquee else {
         return;
@@ -444,7 +655,7 @@ fn marquee(out: &mut Vec<Shape>, ov: &Overlay, view: &ViewState) {
     });
 }
 
-/// Item 7: the snap guides and measurements of the gesture under way: lines, dashed extension lines
+/// Item 8: the snap guides and measurements of the gesture under way: lines, dashed extension lines
 /// and a small cross on a point snapped onto, then each distance on a pill centred on its line.
 fn guides(out: &mut Vec<Shape>, ov: &Overlay, view: &ViewState) {
     let mut distances = Vec::new();
@@ -482,7 +693,7 @@ fn guides(out: &mut Vec<Shape>, ov: &Overlay, view: &ViewState) {
     out.extend(distances);
 }
 
-/// Item 8: where a drag drops: the frame or section it goes into, outlined (a component's slot in
+/// Item 9: where a drag drops: the frame or section it goes into, outlined (a component's slot in
 /// the component colour), and the line where it goes in an auto layout, 2 px wide.
 fn drops(out: &mut Vec<Shape>, ov: &Overlay, doc: &Document, view: &ViewState) {
     if let Some(id) = ov.drop_target
@@ -512,7 +723,7 @@ fn drops(out: &mut Vec<Shape>, ov: &Overlay, doc: &Document, view: &ViewState) {
     }
 }
 
-/// Item 9: what a tool is making: the stroke the pencil, marker or highlighter is drawing, in its
+/// Item 10: what a tool is making: the stroke the pencil, marker or highlighter is drawing, in its
 /// colour and weight (at least 1 px); the pen's points, their handles and the segment a click would
 /// add; the connector being drawn, or the end of one being dragged; and the eraser's reach.
 fn previews(out: &mut Vec<Shape>, s: &Session, ds: &DocState) {
@@ -592,7 +803,7 @@ fn stroke(s: &Session, doc: &Document) -> Option<(Rgba, f64)> {
     Some((alpha([r, g, b, a], opacity), weight))
 }
 
-/// Item 10: vector edit mode, each edited layer's segments (thicker when selected or under the
+/// Item 11: vector edit mode, each edited layer's segments (thicker when selected or under the
 /// pointer) and, but for the Variable width tool, its Bézier handles, its points (filled when
 /// selected, larger under the pointer), a ring around the point the pen goes on from, and the pen's
 /// next segment dashed; the active layer last.
@@ -895,7 +1106,7 @@ fn whole(v: f64) -> i64 {
 #[cfg(test)]
 mod tests {
     use figcraft_doc::{Document, NodeId};
-    use figcraft_engine::{PointerEvent, PointerKind, Session, ToolId};
+    use figcraft_engine::{PointerEvent, PointerKind, Session, ToolId, textedit};
     use serde_json::{Value, json};
 
     use super::*;
@@ -1458,5 +1669,244 @@ mod tests {
             node: Some(section),
         };
         assert!(shapes.contains(&pill), "{shapes:?}");
+    }
+
+    /// The carets drawn: each one's top and bottom.
+    fn carets(shapes: &[Shape]) -> Vec<((f64, f64), (f64, f64))> {
+        let caret = |s: &Shape| match s {
+            Shape::Caret { top, bottom, .. } => Some((*top, *bottom)),
+            _ => None,
+        };
+        shapes.iter().filter_map(caret).collect()
+    }
+
+    fn fills(shapes: &[Shape]) -> Vec<&Shape> {
+        let fill = |s: &&Shape| matches!(s, Shape::Fill { .. });
+        shapes.iter().filter(fill).collect()
+    }
+
+    /// The lines drawn that don't close: their points.
+    fn open_lines(shapes: &[Shape]) -> Vec<&[(f64, f64)]> {
+        let mut lines = Vec::new();
+        for shape in shapes {
+            if let Shape::Outline {
+                points,
+                closed: false,
+                ..
+            } = shape
+            {
+                lines.push(points.as_slice());
+            }
+        }
+        lines
+    }
+
+    /// Whether `a` and `b` are the same point on screen, but for rounding.
+    fn near(a: (f64, f64), b: (f64, f64)) -> bool {
+        (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6
+    }
+
+    /// A text layer reading "hi" with its top-left corner at page point (100, 50) of the
+    /// fixture's design file, (200, 150) on screen at 100 %, being edited: the caret before
+    /// character `caret`, or all of it selected.
+    fn editing_hi(f: &mut Fixture, caret: Option<usize>) -> NodeId {
+        // Without fonts nothing is shaped: the system's are scanned first, so the layer is made
+        // the size its letters are.
+        figcraft_text::scan_system_fonts();
+        let text = make(
+            &mut f.board,
+            "node.create",
+            json!({"type": "text", "x": 100, "y": 50, "text": "hi"}),
+        );
+        textedit::begin(&mut f.board.session, text, caret, false).unwrap();
+        text
+    }
+
+    /// What text layer `id` reads in the document.
+    fn reads(board: &BoardDoc, id: NodeId) -> String {
+        let doc = board.doc().unwrap();
+        let text = doc.node(id).and_then(|n| n.kind.text()).unwrap();
+        text.characters.clone()
+    }
+
+    #[test]
+    fn caret_overlay_while_editing() {
+        let mut board = BoardDoc::new_board("Canvas").unwrap();
+        zoom(&mut board, 1.0);
+        let note = make(
+            &mut board,
+            "board.sticky",
+            json!({"x": 0, "y": 0, "text": "hi"}),
+        );
+        assert!(carets(&overlay(&board.session)).is_empty());
+        // Typing in it (all of "hi" selected): one caret, in the selection colour.
+        assert!(figcraft_engine::board::edit_text(&mut board.session, note).unwrap());
+        let shapes = overlay(&board.session);
+        assert_eq!(carets(&shapes).len(), 1, "{shapes:?}");
+        let caret_color = |s: &Shape| match s {
+            Shape::Caret { color, .. } => Some(*color),
+            _ => None,
+        };
+        let colors: Vec<Rgba> = shapes.iter().filter_map(caret_color).collect();
+        assert_eq!(colors, [SELECTION]);
+        // The selection makes way: no handles, no size.
+        assert!(handles(&shapes).is_empty(), "{shapes:?}");
+        assert!(readouts(&shapes).is_empty(), "{shapes:?}");
+        // Once the typing ends, the caret goes.
+        textedit::end(&mut board.session).unwrap();
+        assert!(carets(&overlay(&board.session)).is_empty());
+    }
+
+    #[test]
+    fn caret_stands_before_its_character_on_screen() {
+        let mut f = fixture();
+        let text = editing_hi(&mut f, Some(0));
+        let shapes = overlay(&f.board.session);
+        let [(top, bottom)] = carets(&shapes)[..] else {
+            panic!("{shapes:?}")
+        };
+        // Before the first character: at the text's left side, from its top down one line.
+        assert!(near(top, (200.0, 150.0)), "{top:?}");
+        assert!((bottom.0 - 200.0).abs() < 1e-6, "{bottom:?}");
+        let line = bottom.1 - top.1;
+        let (width, height) = {
+            let doc = f.board.doc().unwrap();
+            let n = doc.node(text).unwrap();
+            (n.width, n.height)
+        };
+        assert!(line > 0.0 && line <= height + 1e-6, "{line} in {height}");
+        // The text's box is outlined, and nothing else is.
+        let outline = Shape::Outline {
+            points: vec![
+                (200.0, 150.0),
+                (200.0 + width, 150.0),
+                (200.0 + width, 150.0 + height),
+                (200.0, 150.0 + height),
+            ],
+            closed: true,
+            color: SELECTION,
+            width: 1.0,
+            dashed: false,
+        };
+        assert_eq!(outlines(&shapes), [&outline]);
+        // After the last character: further right, within the text's box.
+        textedit::key(&mut f.board.session, "End", false, false, false).unwrap();
+        let [(end, _)] = carets(&overlay(&f.board.session))[..] else {
+            panic!()
+        };
+        assert!(
+            end.0 > top.0 + 1.0 && end.0 <= 200.0 + width + 1e-6,
+            "{end:?}"
+        );
+        assert!((end.1 - top.1).abs() < 1e-6, "{end:?}");
+        // At twice the zoom: twice as far from the canvas's top-left, and twice as tall.
+        textedit::key(&mut f.board.session, "Home", false, false, false).unwrap();
+        zoom(&mut f.board, 2.0);
+        let [(top, bottom)] = carets(&overlay(&f.board.session))[..] else {
+            panic!()
+        };
+        assert!(near(top, (400.0, 300.0)), "{top:?}");
+        assert!((bottom.1 - top.1 - 2.0 * line).abs() < 1e-6, "{bottom:?}");
+    }
+
+    #[test]
+    fn selected_text_is_tinted() {
+        let mut f = fixture();
+        // All of "hi" selected: the caret after it, the selection back to its start.
+        editing_hi(&mut f, None);
+        let shapes = overlay(&f.board.session);
+        let [(top, bottom)] = carets(&shapes)[..] else {
+            panic!("{shapes:?}")
+        };
+        let [Shape::Fill { points, color }] = fills(&shapes)[..] else {
+            panic!("{shapes:?}")
+        };
+        // The selection colour at 30 %, from the line's start to the caret, a line high.
+        assert_eq!(*color, [0x0D, 0x99, 0xFF, 77]);
+        let tinted = [
+            (200.0, top.1),
+            (top.0, top.1),
+            (top.0, bottom.1),
+            (200.0, bottom.1),
+        ];
+        assert_eq!(points.len(), 4, "{points:?}");
+        for (point, corner) in points.iter().zip(tinted) {
+            assert!(near(*point, corner), "{points:?} != {tinted:?}");
+        }
+        // Collapsed to a caret, nothing is tinted.
+        textedit::key(&mut f.board.session, "ArrowRight", false, false, false).unwrap();
+        let shapes = overlay(&f.board.session);
+        assert!(fills(&shapes).is_empty(), "{shapes:?}");
+        assert_eq!(carets(&shapes).len(), 1);
+    }
+
+    #[test]
+    fn composition_is_underlined_where_it_shows() {
+        let mut f = fixture();
+        let text = editing_hi(&mut f, Some(2));
+        let shapes = overlay(&f.board.session);
+        let [(before, _)] = carets(&shapes)[..] else {
+            panic!("{shapes:?}")
+        };
+        let narrow = outlines(&shapes)[0].clone();
+        textedit::preedit(&mut f.board.session, "ni", None).unwrap();
+        let shapes = overlay(&f.board.session);
+        // The caret is the input method's, at the composition's end, which shows after "hi"; the
+        // composition is underlined from where the caret was to there.
+        let [(top, bottom)] = carets(&shapes)[..] else {
+            panic!("{shapes:?}")
+        };
+        assert!(top.0 > before.0 + 1.0, "{top:?} {before:?}");
+        let [&[start, end]] = open_lines(&shapes)[..] else {
+            panic!("{shapes:?}")
+        };
+        assert!((start.0 - before.0).abs() < 1e-6, "{start:?} {before:?}");
+        assert!((end.0 - top.0).abs() < 1e-6, "{end:?} {top:?}");
+        // Level, below the baseline, inside the line.
+        assert!((start.1 - end.1).abs() < 1e-9, "{start:?} {end:?}");
+        assert!(start.1 > top.1 && start.1 < bottom.1, "{start:?}");
+        // Nothing is selected, and the box, drawn before the underline, grew with the
+        // composition.
+        assert!(fills(&shapes).is_empty(), "{shapes:?}");
+        let [wide, _underline] = outlines(&shapes)[..] else {
+            panic!("{shapes:?}")
+        };
+        let right = |s: &Shape| match s {
+            Shape::Outline { points, .. } => points[1].0,
+            _ => unreachable!(),
+        };
+        assert!(right(wide) > right(&narrow) + 1.0, "{wide:?} {narrow:?}");
+        // The document doesn't have the composition.
+        assert_eq!(reads(&f.board, text), "hi");
+    }
+
+    #[test]
+    fn a_composition_is_made_again_only_when_it_changes() {
+        let mut f = fixture();
+        let text = editing_hi(&mut f, Some(2));
+        let mut kept = None;
+        Composition::refresh(&mut kept, &f.board.session);
+        assert!(kept.is_none());
+        textedit::preedit(&mut f.board.session, "ni", None).unwrap();
+        Composition::refresh(&mut kept, &f.board.session);
+        let first = kept.as_ref().expect("a composition");
+        assert_eq!((first.range, first.cursor), ((2, 4), 4));
+        let first = first.doc.clone();
+        // Unchanged, it is the same document: the render asked for it stays the one asked for.
+        Composition::refresh(&mut kept, &f.board.session);
+        assert!(Arc::ptr_eq(&first, &kept.as_ref().unwrap().doc));
+        // A longer composition, the input method's cursor in it: made again.
+        textedit::preedit(&mut f.board.session, "nih", Some(1)).unwrap();
+        Composition::refresh(&mut kept, &f.board.session);
+        let grown = kept.as_ref().expect("a composition");
+        assert!(!Arc::ptr_eq(&first, &grown.doc));
+        assert_eq!((grown.range, grown.cursor), ((2, 5), 3));
+        let shown = grown.doc.node(text).and_then(|n| n.kind.text()).unwrap();
+        assert_eq!(shown.characters, "hinih");
+        // Committed, there is none, and the document has the text.
+        textedit::insert_ime_commit(&mut f.board.session, "你").unwrap();
+        Composition::refresh(&mut kept, &f.board.session);
+        assert!(kept.is_none());
+        assert_eq!(reads(&f.board, text), "hi你");
     }
 }

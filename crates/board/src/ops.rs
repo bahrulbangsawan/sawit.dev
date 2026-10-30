@@ -3,16 +3,19 @@
 //!
 //! Every answer is `{ok: true, ...}` or `{ok: false, error}`, and an op never panics: a failure of
 //! the engine, or an op that is malformed, is an `error` the agent can read. The ops are `get`,
-//! `add`, `update`, `delete`, `clear`, `replace`, `command`, `commands`, `pointer`, `mermaid` and
-//! `key`; the others of the contract get their own answer, "<op> is not supported yet".
+//! `add`, `update`, `delete`, `clear`, `replace`, `command`, `commands`, `pointer`, `mermaid`,
+//! `key` and `type`; the others of the contract get their own answer, "<op> is not supported
+//! yet".
 //!
-//! Each op that draws, changes or removes layers (all but `command`, which is the engine's) is one
-//! undo step, and when the engine refuses a part of it, none of it is done. A layer is named by the
-//! id an agent gave it when it drew it, or by its node id ([`skeleton::resolve`]): an agent's id
-//! wins.
+//! Each op that draws, changes or removes layers (all but `command`, which is the engine's, and
+//! the input ops below) is one undo step, and when the engine refuses a part of it, none of it is
+//! done. A layer is named by the id an agent gave it when it drew it, or by its node id
+//! ([`skeleton::resolve`]): an agent's id wins.
 //!
-//! The `pointer` and `key` ops take the paths of the pointer and the keyboard on the canvas
-//! (`crate::input`), so what an agent does with them is what a mouse or a keyboard does there.
+//! The `pointer`, `key` and `type` ops are input: they take the paths of the pointer and the
+//! keyboard on the canvas (`crate::input`, and FigCraft's text editor for what is typed), so what
+//! an agent does with them is what a mouse or a keyboard does there, undo steps included: what is
+//! typed is part of its text edit's one step.
 //! What they ask of the view is left in `session.ui_requests`, as after the same input in the
 //! window, for the view to carry out.
 //!
@@ -31,7 +34,9 @@ use std::path::Path;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use figcraft_doc::{BoardItem, Document, NodeId};
-use figcraft_engine::{EngineError, PointerKind, Result as EngineResult, Session, UiRequest};
+use figcraft_engine::{
+    EngineError, PointerKind, Result as EngineResult, Session, UiRequest, guard, textedit,
+};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
@@ -123,6 +128,10 @@ const MERMAID_GAP: f64 = 100.0;
 ///   `Escape`, `Enter`, `Backspace`, `Delete`, `ArrowLeft`... The shortcut of a command Sawit
 ///   carries out itself (save, export, import, copy as) is taken, though the op carries out
 ///   nothing for it.
+/// - `type` (`{text}`) types `text` into the text being edited, in place of its selection, as the
+///   keyboard types it, and answers `{ok}`; the edit goes on. With no text edited it answers the
+///   error "not editing text". A sticky or a text layer is edited once the pointer or a key
+///   starts it, as with a mouse and a keyboard: the sticky tool's click, a double-click, Enter.
 pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
     match op.get("op").and_then(Value::as_str) {
         Some("get") => get(board),
@@ -136,6 +145,7 @@ pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
         Some("pointer") => pointer(board, op),
         Some("mermaid") => mermaid(board, op),
         Some("key") => key(board, op),
+        Some("type") => type_text(board, op),
         Some(other) => failure(format!("{other} is not supported yet")),
         None => failure(r#"an op needs a name, like {"op": "get"}"#),
     }
@@ -788,6 +798,20 @@ fn key(board: &mut BoardDoc, op: &Value) -> Value {
     json!({"ok": true, "handled": outcome != KeyOutcome::Unhandled})
 }
 
+fn type_text(board: &mut BoardDoc, op: &Value) -> Value {
+    let Some(text) = op.get("text").and_then(Value::as_str) else {
+        return failure(r#"a type op needs the text to type, like {"op": "type", "text": "hi"}"#);
+    };
+    if !board.session.ds().is_ok_and(|ds| ds.text_edit.is_some()) {
+        return failure("not editing text");
+    }
+    let session = &mut board.session;
+    match guard::run("ui.type", || textedit::insert(session, text)) {
+        Ok(()) => json!({"ok": true}),
+        Err(error) => failure(error),
+    }
+}
+
 /// Carries out what an op's input asked of the view that needs none
 /// ([`input::handle_requests`]), and leaves the rest in `session.ui_requests`, ahead of any made
 /// since, as the same input from the window leaves them for the view.
@@ -854,6 +878,7 @@ mod tests {
 
     use figcraft_color::{Color, Paint};
     use figcraft_doc::{BoardItem, Document, NodeId};
+    use figcraft_engine::textedit;
     use serde_json::json;
 
     use super::*;
@@ -2646,6 +2671,7 @@ mod tests {
             json!({"op": "replace", "scene": {"elements": []}}),
             json!({"op": "command", "command": "board.sticky", "params": {"x": 0, "y": 0}}),
             json!({"op": "pointer", "kind": "down", "x": 0, "y": 0}),
+            json!({"op": "type", "text": "hi"}),
         ] {
             let reply = run(&mut board, &op);
             assert_eq!(reply["ok"], json!(false), "{op}: {reply}");
@@ -2871,5 +2897,130 @@ mod tests {
         assert_eq!(reply["ok"], json!(false), "{reply}");
         let error = reply["error"].as_str().expect("an error string");
         assert!(error.contains("nothing is selected"), "{error}");
+    }
+
+    /// Puts a new, empty sticky on the board and starts typing in it, and returns the sticky. The
+    /// edit is of the sticky's text, a layer of its own (ruling P2-C6).
+    fn typing_in_a_new_sticky(board: &mut BoardDoc) -> NodeId {
+        let made = send(board, "board.sticky", json!({"x": 0, "y": 0}));
+        let note = figcraft_engine::params::id_of(&made["result"]["id"]).unwrap();
+        let text = figcraft_engine::board::text_of(&board.doc().unwrap(), note).unwrap();
+        textedit::begin(&mut board.session, text, None, false).unwrap();
+        note
+    }
+
+    /// What sticky `id` reads in the document.
+    fn sticky_text(board: &BoardDoc, id: NodeId) -> String {
+        let doc = board.doc().unwrap();
+        let text = figcraft_engine::board::text_of(&doc, id).unwrap();
+        let text = doc.node(text).and_then(|n| n.kind.text()).unwrap();
+        text.characters.clone()
+    }
+
+    fn editing(board: &BoardDoc) -> bool {
+        board.session.ds().unwrap().text_edit.is_some()
+    }
+
+    /// What an input method composes in the text being edited: shown there, not in the document.
+    fn composing(board: &BoardDoc) -> Option<String> {
+        let ds = board.session.ds().unwrap();
+        let preedit = ds.text_edit.as_ref()?.preedit.as_ref()?;
+        Some(preedit.text.clone())
+    }
+
+    #[test]
+    fn typing_into_a_new_sticky() {
+        let mut board = board();
+        let note = typing_in_a_new_sticky(&mut board);
+        textedit::insert(&mut board.session, "hi").unwrap();
+        textedit::end(&mut board.session).unwrap();
+        assert!(!editing(&board));
+        assert_eq!(sticky_text(&board, note), "hi");
+    }
+
+    #[test]
+    fn ime_commit_replaces_preedit() {
+        let mut board = board();
+        let note = typing_in_a_new_sticky(&mut board);
+        textedit::preedit(&mut board.session, "ni", None).unwrap();
+        // Composed, it shows; the document gets it only once it is committed.
+        assert_eq!(composing(&board).as_deref(), Some("ni"));
+        assert_eq!(sticky_text(&board, note), "");
+        textedit::insert_ime_commit(&mut board.session, "你").unwrap();
+        assert_eq!(sticky_text(&board, note), "你");
+        assert_eq!(composing(&board), None);
+        assert!(editing(&board));
+    }
+
+    /// Review Focus 3, at the engine: Escape while composing ends the edit, and the composition
+    /// goes with it.
+    #[test]
+    fn cancelled_composition_leaves_no_text() {
+        let mut board = board();
+        let note = typing_in_a_new_sticky(&mut board);
+        textedit::preedit(&mut board.session, "ni", None).unwrap();
+        let escape = input::route_key(&mut board, "Escape", Mods::default());
+        assert_eq!(escape, Ok(KeyOutcome::Handled));
+        assert!(!editing(&board));
+        assert_eq!(sticky_text(&board, note), "");
+        // The sticky stays, emptied, as an emptied sticky does.
+        assert_eq!(elements(&mut board).len(), 1);
+    }
+
+    /// Ruling P2-C18.
+    #[test]
+    fn type_op_types_text() {
+        let mut board = board();
+        // With no text edited there is nothing to type into.
+        let reply = run(&mut board, &json!({"op": "type", "text": "hi"}));
+        assert_eq!(reply, json!({"ok": false, "error": "not editing text"}));
+        assert!(elements(&mut board).is_empty());
+
+        // While a new sticky is edited, the text goes into it, and the edit goes on.
+        let note = typing_in_a_new_sticky(&mut board);
+        let reply = run(&mut board, &json!({"op": "type", "text": "hi"}));
+        assert_eq!(reply, json!({"ok": true}));
+        assert_eq!(sticky_text(&board, note), "hi");
+        assert!(editing(&board));
+        // On at the caret, as the keyboard types.
+        let reply = run(&mut board, &json!({"op": "type", "text": " there"}));
+        assert_eq!(reply, json!({"ok": true}));
+        assert_eq!(sticky_text(&board, note), "hi there");
+    }
+
+    #[test]
+    fn type_op_follows_the_pointer_and_key_ops() {
+        // An agent's sticky, as a mouse and a keyboard make one: the sticky tool's click starts
+        // typing in the new sticky, the text goes in, and Escape ends the typing.
+        let mut board = board();
+        send(&mut board, "tool.sticky", json!({}));
+        pointer_at(&mut board, "down", 0.0, 0.0);
+        pointer_at(&mut board, "up", 0.0, 0.0);
+        let reply = run(
+            &mut board,
+            &json!({"op": "type", "text": "Hello from Sawit"}),
+        );
+        assert_eq!(reply, json!({"ok": true}));
+        assert!(press(&mut board, "Escape", json!({})));
+        let elements = elements(&mut board);
+        assert_eq!(elements.len(), 1, "{elements:?}");
+        assert_eq!(elements[0]["text"], json!("Hello from Sawit"));
+        let reply = run(&mut board, &json!({"op": "type", "text": "more"}));
+        assert_eq!(reply, json!({"ok": false, "error": "not editing text"}));
+    }
+
+    #[test]
+    fn malformed_type_ops_are_reported() {
+        let mut board = board();
+        let note = typing_in_a_new_sticky(&mut board);
+        for op in [json!({"op": "type"}), json!({"op": "type", "text": 5})] {
+            let reply = run(&mut board, &op);
+            assert_eq!(reply["ok"], json!(false), "{op}: {reply}");
+            let error = reply["error"].as_str().expect("an error string");
+            assert!(error.contains("a type op needs the text"), "{op}: {error}");
+        }
+        // Nothing was typed, and the edit goes on.
+        assert_eq!(sticky_text(&board, note), "");
+        assert!(editing(&board));
     }
 }

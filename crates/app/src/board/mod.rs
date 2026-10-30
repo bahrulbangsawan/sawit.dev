@@ -11,11 +11,13 @@
 //! The pointer drives FigCraft's tools ([`events`]). Keys go where FigCraft's keymap sends them,
 //! and the ones Sawit uses too are shared by the spec's conflict policy ([`bindings`],
 //! [`BoardView::on_key`]). Copy and paste reach the other canvas tabs and the system clipboard
-//! ([`BoardView::run_clipboard`]).
+//! ([`BoardView::run_clipboard`]). While a text is edited, what the keys type and what an input
+//! method composes go into it ([`text_input`]).
 
 mod events;
 mod overlay_paint;
 mod paint;
+mod text_input;
 mod worker;
 
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -25,6 +27,7 @@ use std::time::{Duration, Instant};
 
 use figcraft_doc::Document;
 use figcraft_doc::color::Color;
+use figcraft_engine::textedit::ImeEditOwner;
 use figcraft_engine::{UiRequest, ViewState};
 use figcraft_render::{Options, View};
 use futures::StreamExt as _;
@@ -32,6 +35,7 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
 use sawit_board::clipboard::{self, PasteSource};
 use sawit_board::input::KeyOutcome;
+use sawit_board::overlay::{self, Composition};
 use sawit_board::store::{self, Writer};
 use sawit_board::view::{self, PREVIEW_QUALITY, Viewport};
 use sawit_board::{BoardDoc, BoardError, DocKind, input, ops, policy};
@@ -110,6 +114,13 @@ pub struct BoardView {
     /// The newest render request, and its document. The document is kept so that no other one
     /// can take its address, which the request's key holds.
     requested: Option<(u64, Arc<Document>)>,
+    /// What an input method composes in the text being edited, kept while it lasts: the canvas
+    /// renders its document in place of the document, and lays out the caret in it
+    /// ([`Composition::refresh`]). Kept, its render is asked for once.
+    composition: Option<Composition>,
+    /// The text edit the input method composed in when it last marked text: its unmark commits
+    /// the composition only while that edit still has it (ruling P2-C9, [`text_input`]).
+    ime_owner: Option<ImeEditOwner>,
     /// The newest frame, painted until a newer one arrives.
     frame: Option<Frame>,
     /// The images of the frames replaced since the last paint, which takes them out of the
@@ -196,6 +207,8 @@ impl BoardView {
             focus: cx.focus_handle(),
             worker,
             requested: None,
+            composition: None,
+            ime_owner: None,
             frame: None,
             stale: Vec::new(),
             fitted: false,
@@ -569,8 +582,9 @@ impl BoardView {
     /// Each frame, before the paint: tells the engine the theme and the canvas's size, fits the
     /// view to the content the first time, asks for a render when the view or the document isn't
     /// the one asked for last, lays out the overlay and hands the engine its frames' names as they
-    /// will be painted, and starts the autosave after an edit. What to paint, if there is a
-    /// document.
+    /// will be painted, and starts the autosave after an edit. While an input method composes,
+    /// the document rendered, and the text the overlay lays out, have the composition in them. What
+    /// to paint, if there is a document.
     fn prepaint(
         &mut self,
         bounds: Bounds<Pixels>,
@@ -587,6 +601,7 @@ impl BoardView {
         board.session.set_ui_dark(dark);
         board.session.apply_view_prefs();
         let kind = board.kind();
+        Composition::refresh(&mut self.composition, &board.session);
         let ds = board.session.ds_mut().ok()?;
         let (width, height) = (f64::from(bounds.size.width), f64::from(bounds.size.height));
         ds.view.vw = width;
@@ -611,13 +626,13 @@ impl BoardView {
             1.0
         };
         if let Some(wanted) = view::render_view(&ds.view, viewport, quality) {
-            let job = render_job(ds, kind, wanted);
+            let job = render_job(ds, self.composition.as_ref(), kind, wanted);
             let key = job_key(&job, ds.view.zoom, dark);
             let asked = (self.requested.as_ref())
-                .is_some_and(|(asked, of)| *asked == key && Arc::ptr_eq(of, &doc));
+                .is_some_and(|(asked, of)| *asked == key && Arc::ptr_eq(of, &job.doc));
             if !asked {
+                self.requested = Some((key, job.doc.clone()));
                 self.worker.request(Job { key, ..job });
-                self.requested = Some((key, doc));
             }
         }
         // Only an image of the document and page on show: until the page's own frame comes, one
@@ -631,8 +646,9 @@ impl BoardView {
         // What goes over the frame, its labels measured. The frames' names go back to the engine
         // as they are painted: it takes a press or a hover on one as on its frame.
         // On a panic, guard::run logs it and this frame paints no overlay and no names to press.
+        let composition = self.composition.as_ref();
         let shapes = figcraft_engine::guard::run("ui.overlay", || {
-            Ok(sawit_board::overlay::overlay(&board.session))
+            Ok(overlay::overlay_with(&board.session, composition))
         })
         .unwrap_or_default();
         let ds = board.session.ds().ok()?;
@@ -714,7 +730,7 @@ impl Render for BoardView {
         }
         self.watch_keyboard(window, cx);
         let this = cx.entity().downgrade();
-        let drags = this.clone();
+        let painted = this.clone();
         let cursor = self.cursor();
         // The keys the canvas takes while it edits text are bound in a context of their own.
         let key_context = if self.editing_text() {
@@ -773,7 +789,8 @@ impl Render for BoardView {
                             .flatten()
                     },
                     move |bounds, painting, window, cx| {
-                        events::track_drags(&drags, window);
+                        events::track_drags(&painted, window);
+                        text_input::handle_input(&painted, bounds, window, cx);
                         if let Some(painting) = painting {
                             paint::paint(bounds, painting, window, cx);
                         }
@@ -843,10 +860,17 @@ fn same(kept: &Option<Arc<Document>>, doc: &Arc<Document>) -> bool {
 ///   show.
 /// - Pixel preview, zoomed in past its resolution, shows the page at 1 or 2 pixels per unit.
 ///
-/// It is drawn on the page's colour, and a board on its dot grid. The key is left for
+/// It is drawn on the page's colour, and a board on its dot grid. While an input method composes,
+/// what is drawn is `composition`'s document, the composition in the edited text, as FigCraft's
+/// canvas draws it: the text shows as it will read once committed. The key is left for
 /// [`job_key`] to name.
-fn render_job(ds: &figcraft_engine::DocState, kind: DocKind, wanted: View) -> Job {
-    let doc = ds.doc.clone();
+fn render_job(
+    ds: &figcraft_engine::DocState,
+    composition: Option<&Composition>,
+    kind: DocKind,
+    wanted: View,
+) -> Job {
+    let doc = composition.map_or_else(|| ds.doc.clone(), |composition| composition.doc.clone());
     let page_rgb = view::page_rgb(&doc, ds.page);
     let [r, g, b] = page_rgb;
     let shown = &ds.view;
@@ -928,6 +952,7 @@ fn issues_line(path: &Path, issues: &[String]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::ops::Range;
     use std::path::{Path, PathBuf};
     use std::rc::Rc;
     use std::sync::Arc;
@@ -940,12 +965,14 @@ mod tests {
     use figcraft_engine::keymap::{self, KEYS, Platform};
     use gpui_kit::component::{Theme, ThemeMode};
     use gpui_kit::{
-        App, AppContext as _, Entity, KeyBinding, KeyContext, KeyDownEvent, KeyUpEvent, Keystroke,
-        Modifiers, MouseButton, MouseDownEvent, MouseExitEvent, MouseUpEvent, OperatingSystem,
-        PinchEvent, PlatformInput, RenderImage, ScrollDelta, ScrollEvent, TestAppContext,
-        VisualTestContext, WindowHandle, point, px, size,
+        App, AppContext as _, Bounds, Context, Entity, EntityInputHandler as _, KeyBinding,
+        KeyContext, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent,
+        MouseExitEvent, MouseUpEvent, OperatingSystem, PinchEvent, PlatformInput, RenderImage,
+        ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, Window, WindowHandle, point,
+        px, size,
     };
     use sawit_board::input::gpui_keystroke;
+    use sawit_board::overlay::{self, Composition, Shape};
     use sawit_board::policy::{self, SAWIT_WINS, SAWIT_WINS_UNLESS_EDITING};
     use sawit_board::{BoardDoc, DocKind, store};
     use serde_json::{Value, json};
@@ -1609,7 +1636,7 @@ mod tests {
                 width: 100,
                 height: 100,
             };
-            super::render_job(session.ds().unwrap(), DocKind::Design, wanted)
+            super::render_job(session.ds().unwrap(), None, DocKind::Design, wanted)
         };
         let key = |session: &figcraft_engine::Session| super::job_key(&job(session), 1.0, false);
         let run = |session: &mut figcraft_engine::Session, id: &str, params: Value| {
@@ -1670,6 +1697,35 @@ mod tests {
         assert_eq!(job(&session).pixels, Some(2.0));
         session.ds_mut().unwrap().view.zoom = 2.0;
         assert_eq!(job(&session).pixels, None);
+    }
+
+    #[test]
+    fn a_composition_is_rendered_in_place_of_the_document() {
+        let mut board = BoardDoc::new_board("Canvas").unwrap();
+        let made = board
+            .execute("board.sticky", &json!({"x": 0, "y": 0}))
+            .unwrap();
+        let note = figcraft_engine::params::id_of(&made["id"]).unwrap();
+        assert!(figcraft_engine::board::edit_text(&mut board.session, note).unwrap());
+        figcraft_engine::textedit::preedit(&mut board.session, "ni", None).unwrap();
+        let composition = Composition::of(&board.session).expect("a composition");
+        let wanted = || figcraft_render::View {
+            origin: (0.0, 0.0),
+            scale: 2.0,
+            width: 100,
+            height: 100,
+        };
+        let ds = board.session.ds().unwrap();
+        let composed = super::render_job(ds, Some(&composition), DocKind::Board, wanted());
+        let plain = super::render_job(ds, None, DocKind::Board, wanted());
+        // The sticky renders with the composition in it, which the document doesn't have.
+        assert!(Arc::ptr_eq(&composed.doc, &composition.doc));
+        assert!(Arc::ptr_eq(&plain.doc, &ds.doc));
+        assert_eq!((composed.uid, composed.page), (plain.uid, plain.page));
+        assert_ne!(
+            super::job_key(&composed, 1.0, false),
+            super::job_key(&plain, 1.0, false)
+        );
     }
 
     /// The colour (BGRA) of the frame shown at page point `at`.
@@ -2085,9 +2141,11 @@ mod tests {
     /// the sticky.
     fn type_in(view: &Entity<BoardView>, made: &Value, cx: &mut TestAppContext) -> NodeId {
         let note = figcraft_engine::params::id_of(&made["result"]["id"]).unwrap();
-        view.update(cx, |view, _| {
+        view.update(cx, |view, cx| {
             let board = view.board_mut().unwrap();
             assert!(figcraft_engine::board::edit_text(&mut board.session, note).unwrap());
+            // Redrawn, as after the input that starts typing.
+            cx.notify();
         });
         note
     }
@@ -2270,6 +2328,43 @@ mod tests {
         })
     }
 
+    /// Calls the canvas through `input`, as the platform's text input calls it.
+    fn with_input<R>(
+        view: &Entity<BoardView>,
+        cx: &mut VisualTestContext,
+        input: impl FnOnce(&mut BoardView, &mut Window, &mut Context<BoardView>) -> R,
+    ) -> R {
+        cx.update(|window, cx| view.update(cx, |view, cx| input(view, window, cx)))
+    }
+
+    /// An input method composes `text`, its cursor at the end.
+    fn mark(view: &Entity<BoardView>, text: &str, cx: &mut VisualTestContext) {
+        with_input(view, cx, |view, window, cx| {
+            view.replace_and_mark_text_in_range(None, text, None, window, cx)
+        });
+    }
+
+    /// The input method takes `text` as typed, in place of its composition or the selection.
+    fn commit(view: &Entity<BoardView>, text: &str, cx: &mut VisualTestContext) {
+        with_input(view, cx, |view, window, cx| {
+            view.replace_text_in_range(None, text, window, cx)
+        });
+    }
+
+    fn unmark(view: &Entity<BoardView>, cx: &mut VisualTestContext) {
+        with_input(view, cx, |view, window, cx| view.unmark_text(window, cx));
+    }
+
+    /// What sticky `id` reads in the document.
+    fn sticky_reads(view: &Entity<BoardView>, id: NodeId, cx: &VisualTestContext) -> String {
+        view.read_with(cx, |view, _| {
+            let doc = view.board().unwrap().doc().unwrap();
+            let text = figcraft_engine::board::text_of(&doc, id).unwrap();
+            let text = doc.node(text).and_then(|n| n.kind.text()).unwrap();
+            text.characters.clone()
+        })
+    }
+
     fn no_toast(view: &Entity<BoardView>, cx: &TestAppContext) {
         let toast = view.read_with(cx, |view, _| view.toast.clone());
         assert_eq!(toast, None);
@@ -2407,5 +2502,223 @@ mod tests {
         cx.simulate_keystrokes("shift-cmd-r");
         assert_eq!(layers(&view, &cx).len(), 1);
         no_toast(&view, &cx);
+    }
+
+    /// What an input method composes in the text being edited: shown there, not in the document.
+    fn composing(view: &Entity<BoardView>, cx: &VisualTestContext) -> Option<String> {
+        view.read_with(cx, |view, _| {
+            let ds = view.board().unwrap().session.ds().unwrap();
+            let preedit = ds.text_edit.as_ref()?.preedit.as_ref()?;
+            Some(preedit.text.clone())
+        })
+    }
+
+    fn editing(view: &Entity<BoardView>, cx: &VisualTestContext) -> bool {
+        view.read_with(cx, |view, _| view.editing_text())
+    }
+
+    #[gpui_kit::test]
+    fn input_handler_inserts_text(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("input-handler");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        let made = run_op(&view, sticky_op(), &mut cx);
+        let note = type_in(&view, &made, &mut cx);
+        commit(&view, "ok", &mut cx);
+        assert_eq!(sticky_reads(&view, note, &cx), "ok");
+        assert!(editing(&view, &cx));
+    }
+
+    #[gpui_kit::test]
+    fn typed_keys_reach_the_text_being_edited(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("typed-keys");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        let made = run_op(&view, sticky_op(), &mut cx);
+        let note = type_in(&view, &made, &mut cx);
+        focus_canvas(&view, &mut cx);
+        // The canvas leaves a typed character alone, and it comes back as text through the text
+        // input the canvas's paint hands the window while it edits.
+        cx.simulate_input("ok");
+        assert_eq!(sticky_reads(&view, note, &cx), "ok");
+        // Space too, which arms a pan only while no text is edited (ruling P2-C1).
+        cx.simulate_keystrokes("space");
+        assert_eq!(sticky_reads(&view, note, &cx), "ok ");
+        // Named keys are the text editor's own.
+        cx.simulate_keystrokes("backspace backspace");
+        assert_eq!(sticky_reads(&view, note, &cx), "o");
+        cx.simulate_keystrokes("escape");
+        assert!(!editing(&view, &cx));
+        assert_eq!(sticky_reads(&view, note, &cx), "o");
+    }
+
+    /// Review Focus 3 through the platform's text input (ruling P2-C9): a composition the input
+    /// method cancels, or one a press away from the text leaves behind, leaves no text.
+    #[gpui_kit::test]
+    fn a_cancelled_composition_leaves_no_text(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("ime-cancel");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        // A 200 × 200 sticky about page point (0, 0), the middle of the window, typed in.
+        let sticky = json!({
+            "op": "command", "command": "board.sticky", "params": {"x": -100, "y": -100},
+        });
+        let made = run_op(&view, sticky, &mut cx);
+        let note = type_in(&view, &made, &mut cx);
+        // Marked, the composition shows in the sticky but isn't in the document.
+        mark(&view, "ni", &mut cx);
+        assert_eq!(composing(&view, &cx).as_deref(), Some("ni"));
+        assert_eq!(sticky_reads(&view, note, &cx), "");
+        // The input method cancels it (Escape while it composes): marked empty, it is gone.
+        mark(&view, "", &mut cx);
+        assert_eq!(composing(&view, &cx), None);
+        assert_eq!(sticky_reads(&view, note, &cx), "");
+        assert!(editing(&view, &cx));
+
+        // Marked again, then a press on the canvas away from the sticky ends the edit, and the
+        // unmark the input method sends after that commits nothing.
+        mark(&view, "ni", &mut cx);
+        let (away, left, none) = (
+            point(px(20.), px(20.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_down(away, left, none);
+        cx.simulate_mouse_up(away, left, none);
+        assert!(!editing(&view, &cx));
+        unmark(&view, &mut cx);
+        assert_eq!(sticky_reads(&view, note, &cx), "");
+        assert_eq!(layers(&view, &cx), [note]);
+
+        // Each time typing in the sticky starts, it is another edit of the same text. The input
+        // method marks text in one; once a second has started, the composition there isn't the
+        // one it made, and its unmark doesn't commit it.
+        type_in(&view, &made, &mut cx);
+        mark(&view, "ni", &mut cx);
+        type_in(&view, &made, &mut cx);
+        view.update(&mut cx, |view, _| {
+            let session = &mut view.board_mut().unwrap().session;
+            figcraft_engine::textedit::preedit(session, "ni", None).unwrap();
+        });
+        unmark(&view, &mut cx);
+        assert_eq!(sticky_reads(&view, note, &cx), "");
+    }
+
+    #[gpui_kit::test]
+    fn the_input_method_commits_its_composition(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("ime-commit");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        let made = run_op(&view, sticky_op(), &mut cx);
+        let note = type_in(&view, &made, &mut cx);
+        // Composing, the canvas renders the sticky with the composition in it.
+        mark(&view, "ni", &mut cx);
+        view.read_with(&cx, |view, _| {
+            let composition = view.composition.as_ref().expect("the composition shown");
+            let (_, asked) = view.requested.as_ref().expect("a render");
+            assert!(Arc::ptr_eq(asked, &composition.doc));
+        });
+        // Committed in its final form, that takes the composition's place, in the document.
+        commit(&view, "你", &mut cx);
+        assert_eq!(sticky_reads(&view, note, &cx), "你");
+        assert_eq!(composing(&view, &cx), None);
+        view.read_with(&cx, |view, _| {
+            assert!(view.composition.is_none());
+            let doc = view.board().unwrap().doc().unwrap();
+            let (_, asked) = view.requested.as_ref().unwrap();
+            assert!(Arc::ptr_eq(asked, &doc));
+        });
+        // Unmarked, the input method keeps its composition as it is: it goes in as composed.
+        mark(&view, "hao", &mut cx);
+        unmark(&view, &mut cx);
+        assert_eq!(sticky_reads(&view, note, &cx), "你hao");
+        assert_eq!(composing(&view, &cx), None);
+        // Once committed there is nothing left to commit.
+        unmark(&view, &mut cx);
+        assert_eq!(sticky_reads(&view, note, &cx), "你hao");
+        assert!(editing(&view, &cx));
+    }
+
+    #[gpui_kit::test]
+    fn the_input_method_reads_the_text_in_utf16(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("ime-utf16");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        let made = run_op(&view, sticky_op(), &mut cx);
+        type_in(&view, &made, &mut cx);
+        // An emoji is two UTF-16 units: "a😀b" is four, and the caret is after the b.
+        commit(&view, "a😀b", &mut cx);
+        let selected = |cx: &mut VisualTestContext| {
+            with_input(&view, cx, |view, window, cx| {
+                view.selected_text_range(false, window, cx)
+            })
+            .expect("a selection")
+        };
+        let read = |range: Range<usize>, cx: &mut VisualTestContext| {
+            let mut adjusted = None;
+            let text = with_input(&view, cx, |view, window, cx| {
+                view.text_for_range(range, &mut adjusted, window, cx)
+            });
+            (text.expect("the text"), adjusted.expect("the range read"))
+        };
+        let marked = |cx: &mut VisualTestContext| {
+            with_input(&view, cx, |view, window, cx| {
+                view.marked_text_range(window, cx)
+            })
+        };
+        let caret = selected(&mut cx);
+        assert_eq!((caret.range, caret.reversed), (4..4, false));
+        assert_eq!(read(0..4, &mut cx), ("a😀b".to_string(), 0..4));
+        // Half the emoji reads as all of it.
+        assert_eq!(read(2..3, &mut cx), ("😀".to_string(), 1..3));
+        assert_eq!(marked(&mut cx), None);
+
+        // Composing, the composition is in the text it reads, marked, with its cursor in it.
+        mark(&view, "ni", &mut cx);
+        assert_eq!(marked(&mut cx), Some(4..6));
+        assert_eq!(selected(&mut cx).range, 6..6);
+        assert_eq!(read(0..6, &mut cx).0, "a😀bni");
+
+        // Its candidates show by the caret, where the canvas draws it, in the window.
+        let canvas = Bounds::new(point(px(10.), px(20.)), size(px(400.), px(300.)));
+        let bounds = with_input(&view, &mut cx, |view, window, cx| {
+            view.bounds_for_range(6..6, canvas, window, cx)
+        })
+        .expect("where the caret is");
+        let (top, bottom) = view.read_with(&cx, |view, _| {
+            let shapes = overlay::overlay(&view.board().unwrap().session);
+            let caret = |shape: &Shape| match shape {
+                Shape::Caret { top, bottom, .. } => Some((*top, *bottom)),
+                _ => None,
+            };
+            shapes.iter().find_map(caret).expect("a caret")
+        });
+        let at = |(x, y): (f64, f64)| point(px(10. + x as f32), px(20. + y as f32));
+        assert_eq!(bounds.origin, at(top));
+        assert_eq!(bounds.bottom_left(), at(bottom));
+    }
+
+    #[gpui_kit::test]
+    fn an_accent_held_down_replaces_the_letter_before_the_caret(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("ime-replace");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        let made = run_op(&view, sticky_op(), &mut cx);
+        let note = type_in(&view, &made, &mut cx);
+        commit(&view, "cafe", &mut cx);
+        let replace = |range: Range<usize>, text: &str, cx: &mut VisualTestContext| {
+            with_input(&view, cx, |view, window, cx| {
+                view.replace_text_in_range(Some(range), text, window, cx)
+            });
+        };
+        let caret = |cx: &mut VisualTestContext| {
+            with_input(&view, cx, |view, window, cx| {
+                view.selected_text_range(false, window, cx)
+            })
+            .expect("a selection")
+            .range
+        };
+        // The accents menu (e held down, then é chosen) puts its letter in place of the e.
+        replace(3..4, "é", &mut cx);
+        assert_eq!(sticky_reads(&view, note, &cx), "café");
+        assert_eq!(caret(&mut cx), 4..4);
+        // A range apart from the caret is replaced where it is, the caret after it.
+        replace(0..1, "C", &mut cx);
+        assert_eq!(sticky_reads(&view, note, &cx), "Café");
+        assert_eq!(caret(&mut cx), 1..1);
     }
 }
