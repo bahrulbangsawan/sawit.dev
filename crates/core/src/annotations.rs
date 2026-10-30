@@ -518,4 +518,13 @@ mod tests {
         );
         assert_eq!(relative_source("file:///opt/x.js", None), "/opt/x.js");
     }
+
+    #[test]
+    fn picked_payload_deserializes() {
+        let json = r##"{"selector":"#a","label":"button#a","tag":"button","id":"a","classes":[],"text":"Go","rect":{"x":1,"y":2,"width":3,"height":4},"styles":[["display","flex"]],"source":{"file":"src/A.tsx","line":7,"framework":"React","component":"A"},"html":"<button id=\"a\">Go</button>","off_screen":false}"##;
+        let d: ElementDetails = serde_json::from_str(json).unwrap();
+        assert_eq!(d.styles[0], ("display".to_string(), "flex".to_string()));
+        assert_eq!(d.source.unwrap().line, Some(7));
+        assert!(!d.off_screen);
+    }
 }

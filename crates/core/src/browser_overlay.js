@@ -108,6 +108,94 @@
     rect: rectOf(el),
   });
 
+  // ---- Pick details ----
+
+  const STYLE_PROPS = [
+    ["position", "static"],
+    ["overflow", "visible"],
+    ["z-index", "auto"],
+    ["opacity", "1"],
+    ["background-color", "transparent", "rgba(0, 0, 0, 0)"],
+    ["color", "rgb(0, 0, 0)"],
+    ["font-size", "16px"],
+    ["font-weight", "400"],
+    ["border-radius", "0px"],
+    ["gap", "normal"],
+    ["padding", "0px"],
+    ["margin", "0px"],
+  ];
+  const stylesOf = (el) => {
+    const s = getComputedStyle(el);
+    const out = [["display", s.getPropertyValue("display")]];
+    for (const [prop, ...defaults] of STYLE_PROPS) {
+      const v = s.getPropertyValue(prop);
+      if (v && !defaults.includes(v)) out.push([prop, v]);
+    }
+    return out;
+  };
+  const nameOf = (t) => (t && (typeof t === "function" || typeof t === "object") ? t.displayName || t.name || t.__name || "" : "");
+  const reactHint = (el) => {
+    const key = Object.keys(el).find((k) => k.startsWith("__reactFiber$"));
+    if (!key) return null;
+    let file = "";
+    let line = null;
+    let component = "";
+    let f = el[key];
+    for (let i = 0; f && i < 50; i++, f = f.return) {
+      if (!file && f._debugSource && f._debugSource.fileName) {
+        file = f._debugSource.fileName;
+        line = f._debugSource.lineNumber || null;
+      }
+      if (!component && typeof f.type === "function") component = nameOf(f.type);
+      if (file && component) break;
+    }
+    if (!file && !component) return null;
+    return { framework: "React", file, line, component: component || null };
+  };
+  const hintOf = (el) => {
+    const react = reactHint(el);
+    if (react) return react;
+    const v3 = el.__vueParentComponent && el.__vueParentComponent.type;
+    if (v3) return { framework: "Vue", file: v3.__file || "", line: null, component: v3.name || v3.__name || null };
+    const v2 = el.__vue__ && el.__vue__.$options;
+    if (v2) return { framework: "Vue", file: v2.__file || "", line: null, component: v2.name || null };
+    const loc = el.__svelte_meta && el.__svelte_meta.loc;
+    if (loc && loc.file) return { framework: "Svelte", file: loc.file, line: (loc.line || 0) + 1, component: null };
+    const ds = el.getAttribute && el.getAttribute("data-source");
+    if (ds) {
+      const m = /^(.*?)(?::(\d+))?(?::\d+)?$/.exec(ds);
+      return { framework: "source", file: m[1], line: m[2] ? Number(m[2]) : null, component: null };
+    }
+    const ip = el.getAttribute && el.getAttribute("data-inspector-relative-path");
+    if (ip) {
+      const ln = Number(el.getAttribute("data-inspector-line"));
+      return { framework: "source", file: ip, line: ln || null, component: null };
+    }
+    return null;
+  };
+  const sourceOf = (el) => {
+    try {
+      for (let n = el; n && n.nodeType === Node.ELEMENT_NODE; n = n.parentElement) {
+        const h = hintOf(n);
+        if (h) return h;
+      }
+    } catch (_) {}
+    return null;
+  };
+  const details = (el) => {
+    const r = el.getBoundingClientRect();
+    const rect = { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
+    return {
+      ...info(el),
+      text: oneLine(el.innerText || el.textContent),
+      rect,
+      styles: stylesOf(el),
+      source: sourceOf(el),
+      html: (el.outerHTML || "").slice(0, 20000),
+      off_screen: r.left < 0 || r.top < 0 || r.right > innerWidth || r.bottom > innerHeight,
+    };
+  };
+
   // ---- Drawing ----
 
   const drawHighlight = () => {
@@ -242,7 +330,7 @@
     swallow(e);
     const h = hit(e.clientX, e.clientY);
     const el = current && h && current.contains(h) ? current : h || current;
-    if (el) send("picked", { mode, element: info(el) });
+    if (el) send("picked", { mode, element: details(el) });
   };
   const keydown = (e) => {
     if (e.key === "Escape") {
