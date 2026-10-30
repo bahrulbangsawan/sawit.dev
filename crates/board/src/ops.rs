@@ -3,7 +3,7 @@
 //!
 //! Every answer is `{ok: true, ...}` or `{ok: false, error}`, and an op never panics: a failure of
 //! the engine, or an op that is malformed, is an `error` the agent can read. The ops are `get`,
-//! `add`, `update`, `delete`, `clear`, `replace`, `command`, `commands` and `pointer`; the others of the
+//! `add`, `update`, `delete`, `clear`, `replace`, `command`, `commands`, `pointer` and `mermaid`; the others of the
 //! contract get their own answer, "<op> is not supported yet".
 //!
 //! Each op that draws, changes or removes layers (all but `command`, which is the engine's) is one
@@ -35,6 +35,7 @@ use crate::doc::{BoardDoc, BoardError};
 use crate::input::{self, Mods};
 use crate::skeleton::{self, Applied, Label, Skeleton};
 use crate::{policy, summary};
+use sawit_core::mermaid::{Palette, render};
 
 /// The commands the `command` op refuses: they switch, open, close or write documents behind the
 /// canvas's store. Sawit does these itself.
@@ -62,6 +63,9 @@ const OPENS_DOCUMENTS: &[&str] = &["file.recover", "version.duplicate", "branch.
 
 /// The command that runs other commands as its steps.
 const BATCH: &str = "command.batch";
+
+/// How far right of what the page holds the `mermaid` op puts a diagram that names no place.
+const MERMAID_GAP: f64 = 100.0;
 
 /// Runs `op` (an object whose `op` is the op's name) on `board` and answers it: `{ok: true, ...}`,
 /// or `{ok: false, error}`.
@@ -102,6 +106,10 @@ const BATCH: &str = "command.batch";
 ///   the button down (`move`), its release (`up`), a double-click (`double`) or a move without a
 ///   button (`hover`) at page point (`x`, `y`), with the modifier keys given held, and answers
 ///   `{ok, selection, tool}`: the ids selected then, and the tool on.
+/// - `mermaid` (`{source, x?, y?}`) draws Mermaid `source` as board shapes that can be edited, in
+///   one undo step, and answers `{ok, added, ids}`, with `notes` on what couldn't be drawn. The
+///   diagram's top left corner goes to `x`, `y`; what they leave out is 100 px right of what the
+///   page holds and level with its top, or 0 on an empty page. Every error starts "mermaid: ".
 pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
     match op.get("op").and_then(Value::as_str) {
         Some("get") => get(board),
@@ -113,6 +121,7 @@ pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
         Some("command") => command(board, op),
         Some("commands") => commands(),
         Some("pointer") => pointer(board, op),
+        Some("mermaid") => mermaid(board, op),
         Some(other) => failure(format!("{other} is not supported yet")),
         None => failure(r#"an op needs a name, like {"op": "get"}"#),
     }
@@ -667,6 +676,57 @@ fn leave_for_the_view(board: &mut BoardDoc, requests: &[UiRequest]) {
     let mut rest = input::handle_requests(board, requests);
     rest.append(&mut board.session.ui_requests);
     board.session.ui_requests = rest;
+}
+
+fn mermaid(board: &mut BoardDoc, op: &Value) -> Value {
+    let source = op.get("source").and_then(Value::as_str);
+    let Some(source) = source.filter(|source| !source.trim().is_empty()) else {
+        return failure("mermaid: `source` must be a non-empty string");
+    };
+    match draw_mermaid(board, source, op) {
+        Ok(applied) => {
+            let mut reply = json!({"ok": true, "added": applied.ids.len(), "ids": applied.ids});
+            if !applied.notes.is_empty() {
+                reply["notes"] = json!(applied.notes);
+            }
+            reply
+        }
+        Err(error) => failure(format!("mermaid: {error}")),
+    }
+}
+
+/// Renders `source`, makes board shapes of it and draws them where `op` says.
+///
+/// Rendering blocks, and the app answers ops on its UI thread, because the canvas answers
+/// synchronously: well under a millisecond for a typical diagram, about 60 ms the first time,
+/// while Pele loads, and at most 5 s a try, when `sawit_core::mermaid` stops a runaway diagram.
+fn draw_mermaid(board: &mut BoardDoc, source: &str, op: &Value) -> Result<Applied, String> {
+    let palette = Palette::default();
+    let diagram = match render(source, &palette) {
+        Ok(diagram) => diagram,
+        // Double quotes trip up some diagram types, so a source that has them is tried once more
+        // with single ones, as Excalidraw's own Mermaid import does. A diagram that fails both is
+        // reported in the words of the first try.
+        Err(first) if source.contains('"') => {
+            render(&source.replace('"', "'"), &palette).map_err(|_| first)?
+        }
+        Err(first) => return Err(first),
+    };
+    let items = crate::mermaid::to_skeletons(&diagram)?;
+    let (left, top, _, _) = skeleton::bounds(&items).ok_or("the diagram is empty")?;
+    let (x, y) = diagram_corner(board, op).map_err(|error| error.to_string())?;
+    skeleton::apply(board, &items, (x - left, y - top)).map_err(|error| error.to_string())
+}
+
+/// Where the `mermaid` op puts a diagram's top left corner: at the op's `x` and `y`. What it leaves
+/// out is [`MERMAID_GAP`] right of what the page on show holds and level with its top, or 0 on an
+/// empty page.
+fn diagram_corner(board: &BoardDoc, op: &Value) -> Result<(f64, f64), BoardError> {
+    let page = board.session.page()?;
+    let held = board.doc()?.page_content_bounds(page);
+    let (x, y) = held.map_or((0.0, 0.0), |held| (held.x1 + MERMAID_GAP, held.y0));
+    let given = |key| op.get(key).and_then(Value::as_f64);
+    Ok((given("x").unwrap_or(x), given("y").unwrap_or(y)))
 }
 
 #[cfg(test)]
@@ -2255,13 +2315,10 @@ mod tests {
     #[test]
     fn unknown_op_is_reported() {
         let mut board = board();
-        let reply = run(
-            &mut board,
-            &json!({"op": "mermaid", "source": "graph TD; A-->B"}),
-        );
+        let reply = run(&mut board, &json!({"op": "teleport", "to": [0, 0]}));
         assert_eq!(
             reply,
-            json!({"ok": false, "error": "mermaid is not supported yet"})
+            json!({"ok": false, "error": "teleport is not supported yet"})
         );
         // An op with no name, or that isn't an op at all.
         for op in [json!({}), json!("get"), json!({"op": 3}), json!(null)] {
