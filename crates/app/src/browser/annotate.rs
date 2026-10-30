@@ -2,8 +2,6 @@
 //! an intent and a screenshot, grouped by page. `BrowserView` owns the flow
 //! around it (pick, capture, markers, copy); the panel owns the rows.
 
-use std::time::Duration;
-
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
@@ -14,8 +12,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::annotations::{Annotation, Intent, Rect, page_key};
 
-/// How long a footer note stays.
-const NOTE_FOR: Duration = Duration::from_secs(3);
+use super::panel::note_timer;
 
 /// What the panel asks of the browser.
 pub enum AnnotateEvent {
@@ -105,13 +102,7 @@ impl AnnotatePanel {
     /// Shows `text` in the footer for a few seconds.
     pub fn set_note(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.note = Some(text.into());
-        self._note_timer = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(NOTE_FOR).await;
-            let _ = this.update(cx, |this, cx| {
-                this.note = None;
-                cx.notify();
-            });
-        }));
+        self._note_timer = Some(note_timer(cx, |this: &mut Self| this.note = None));
         cx.notify();
     }
 

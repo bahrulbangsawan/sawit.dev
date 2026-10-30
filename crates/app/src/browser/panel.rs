@@ -1,12 +1,29 @@
 //! The side panel beside the page: a title, a close button and a body that
 //! scrolls. Annotate and Design put their content in [`frame`].
 
+use std::time::Duration;
+
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::*;
 
 use super::{BrowserView, Panel};
+
+/// How long a footer note stays.
+const NOTE_FOR: Duration = Duration::from_secs(3);
+
+/// A timer that runs `clear` on the panel after [`NOTE_FOR`]: keep it in the panel so a newer
+/// note replaces it.
+pub fn note_timer<T: 'static>(cx: &mut Context<T>, clear: fn(&mut T)) -> Task<()> {
+    cx.spawn(async move |this, cx| {
+        cx.background_executor().timer(NOTE_FOR).await;
+        let _ = this.update(cx, |this, cx| {
+            clear(this);
+            cx.notify();
+        });
+    })
+}
 
 /// The panel's width, on the right of the page.
 pub const PANEL_WIDTH: f32 = 340.;
@@ -61,14 +78,7 @@ impl BrowserView {
     pub(super) fn side_panel(&self, panel: Panel, cx: &mut Context<Self>) -> AnyElement {
         let (title, body) = match panel {
             Panel::Annotate => ("Annotate", self.annotate.clone().into_any_element()),
-            Panel::Design => (
-                "Design",
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Inspect, colors, fonts, assets and the design system appear here.")
-                    .into_any_element(),
-            ),
+            Panel::Design => ("Design", self.design_panel.clone().into_any_element()),
         };
         let close = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.toggle_panel(panel, window, cx);

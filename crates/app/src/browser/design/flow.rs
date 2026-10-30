@@ -27,7 +27,6 @@ use crate::rt;
 
 pub const NOTHING: &str = "Nothing to extract on this page.";
 /// What a dropped (superseded) inspect answers; the panel ignores it.
-#[allow(dead_code)] // read by the Design panel (next tasks)
 pub const STALE_INSPECT: &str = "A newer inspect replaced this one.";
 const NO_EXPORT: &str = "No export has run in this browser tab.";
 const PARTS: [&str; 6] = [
@@ -57,7 +56,7 @@ pub struct Ready {
     pub tokens: Tokens,
 }
 
-#[allow(dead_code)] // read by the Design panel (next tasks)
+#[derive(Clone)]
 pub enum ScanState {
     Idle,
     Scanning,
@@ -91,7 +90,6 @@ pub(crate) struct DesignFlow {
     generation: u64,
     job: Option<ScanJob>,
     /// The latest inspect; older answers are dropped.
-    #[allow(dead_code)] // used by the Design panel's inspect (next tasks)
     inspect_seq: u64,
     export: Option<ExportJob>,
 }
@@ -124,16 +122,25 @@ impl DesignFlow {
 }
 
 impl BrowserView {
-    /// The design scan's state, for the Design panel.
-    #[allow(dead_code)] // read by the Design panel
-    pub(crate) fn design_state(&self) -> &ScanState {
-        &self.design.state
-    }
-
     /// The last export, for the Design panel.
     #[allow(dead_code)] // read by the Design panel
     pub(crate) fn export_job(&self) -> Option<&ExportJob> {
         self.design.export.as_ref()
+    }
+
+    /// Hands the scan state to the Design panel.
+    pub(in crate::browser) fn sync_design(&mut self, cx: &mut Context<Self>) {
+        let state = self.design.state.clone();
+        self.design_panel
+            .update(cx, |panel, cx| panel.set_scan(state, cx));
+    }
+
+    /// With the Design panel open, scans the page (a cached scan answers at once).
+    pub(in crate::browser) fn scan_if_design_open(&mut self, cx: &mut Context<Self>) {
+        if self.panel == Some(crate::browser::Panel::Design) {
+            self.scan_design(cx).detach();
+        }
+        self.sync_design(cx);
     }
 
     /// A load started: the next scan starts over.
@@ -155,6 +162,8 @@ impl BrowserView {
     ) -> Task<Result<Rc<Ready>, String>> {
         let url = self.current_url();
         if !extractable(&url) {
+            self.design.state = ScanState::Failed(NOTHING.into());
+            self.sync_design(cx);
             return Task::ready(Err(NOTHING.into()));
         }
         let key = page_key(&url).to_string();
@@ -183,6 +192,7 @@ impl BrowserView {
         let fetch_deadline = std::time::Instant::now() + FETCH_BUDGET;
         let scan = self.page_op(json!({ "op": "scan" }));
         self.design.state = ScanState::Scanning;
+        self.sync_design(cx);
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = run_scan(&this, scan, url, fetch_deadline, cx).await;
@@ -192,6 +202,7 @@ impl BrowserView {
                         Ok(ready) => ScanState::Ready(ready.clone()),
                         Err(e) => ScanState::Failed(e.clone().into()),
                     };
+                    this.sync_design(cx);
                     cx.notify();
                 }
             });
@@ -217,7 +228,6 @@ impl BrowserView {
 
     /// Like [`Self::style_info`], latest only: an answer overtaken by a newer inspect errs
     /// with [`STALE_INSPECT`].
-    #[allow(dead_code)] // the Design panel's hover and pick (next tasks)
     pub(crate) fn inspect(
         &mut self,
         target: Value,
@@ -237,6 +247,40 @@ impl BrowserView {
             }
             info
         })
+    }
+
+    /// Downloads `assets` into the export folder's `assets/` (other files there stay), then
+    /// tells the Design panel.
+    pub(crate) fn save_assets(&mut self, assets: Vec<AssetRef>, cx: &mut Context<Self>) {
+        let url = self.current_url();
+        let folder = match extractable(&url)
+            .then_some(())
+            .ok_or_else(|| NOTHING.to_string())
+            .and_then(|()| self.export_folder(&export_host(&url)))
+        {
+            Ok(folder) => folder.join("assets"),
+            Err(e) => return self.design_note(e, cx),
+        };
+        self.design_note("Saving…".into(), cx);
+        let dir = folder.clone();
+        let job = rt::spawn(cx, async move {
+            let outcomes = download_all(assets, &dir, &url, false, MAX_TOTAL, |_, _| {}).await;
+            outcomes.iter().filter(|o| o.error.is_none()).count()
+        });
+        cx.spawn(async move |this, cx| {
+            let note = match job.await {
+                Ok(0) => "Nothing was saved.".to_string(),
+                Ok(n) => format!("Saved {n} to {}", folder.display()),
+                Err(_) => "The save was cancelled.".to_string(),
+            };
+            let _ = this.update(cx, |this, cx| this.design_note(note, cx));
+        })
+        .detach();
+    }
+
+    /// Shows `text` in the Design panel's footer.
+    pub(in crate::browser) fn design_note(&mut self, text: String, cx: &mut Context<Self>) {
+        self.design_panel.update(cx, |p, cx| p.set_note(text, cx));
     }
 
     /// Starts the export in the background and returns its folder; while one runs, returns
@@ -736,7 +780,6 @@ fn extractable(url: &str) -> bool {
     l.starts_with("http://") || l.starts_with("https://") || l.starts_with("file://")
 }
 
-#[allow(dead_code)] // see `inspect`
 fn is_latest(seq: u64, current: u64) -> bool {
     seq == current
 }

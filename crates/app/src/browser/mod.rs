@@ -38,6 +38,7 @@ use sawit_core::probe;
 use serde_json::{Value, json};
 
 use annotate::{AnnotateEvent, AnnotatePanel, group_order, padded_rect};
+use design::{DesignEvent, DesignPanel};
 use engine::{Engine, EngineEvent, EngineSpec, Frame};
 
 use crate::rt;
@@ -152,6 +153,7 @@ pub struct BrowserView {
     focus: FocusHandle,
     panel: Option<Panel>,
     annotate: Entity<AnnotatePanel>,
+    design_panel: Entity<DesignPanel>,
     /// Shots take turns: the overlay has one hidden flag.
     shots: ShotGate,
     pick: PickMode,
@@ -179,11 +181,17 @@ impl BrowserView {
         let address =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search or enter address"));
         let annotate = cx.new(|cx| AnnotatePanel::new(window, cx));
+        let design_panel = cx.new(|_| DesignPanel::new());
         let subscriptions = vec![
             cx.subscribe_in(
                 &annotate,
                 window,
                 |this, _, event: &AnnotateEvent, _, cx| this.on_annotate(event, cx),
+            ),
+            cx.subscribe_in(
+                &design_panel,
+                window,
+                |this, _, event: &DesignEvent, _, cx| this.on_design(event, cx),
             ),
             cx.subscribe_in(
                 &address,
@@ -249,6 +257,7 @@ impl BrowserView {
             focus: cx.focus_handle(),
             panel: None,
             annotate,
+            design_panel,
             shots: ShotGate::default(),
             pick: PickMode::Off,
             pick_waiting: false,
@@ -294,6 +303,7 @@ impl BrowserView {
         } else {
             self.panel = Some(panel);
             self.set_pick(panel.pick_mode(), cx);
+            self.scan_if_design_open(cx);
         }
         cx.notify();
     }
@@ -356,6 +366,66 @@ impl BrowserView {
     pub fn set_annotate_note(&mut self, text: &str, cx: &mut Context<Self>) {
         let text = text.to_string();
         self.annotate.update(cx, |a, cx| a.set_note(text, cx));
+    }
+
+    fn on_design(&mut self, event: &DesignEvent, cx: &mut Context<Self>) {
+        match event {
+            DesignEvent::Flash(selector) => {
+                drop(self.page_op(json!({ "op": "flash", "selector": selector })));
+            }
+            DesignEvent::CopyHtml(selector) => {
+                let info = self.inspect(json!({ "selector": selector }), true, cx);
+                cx.spawn(async move |this, cx| {
+                    let note = match info.await {
+                        Ok(info) => match info.html {
+                            Some(html) => {
+                                cx.update(|cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(html));
+                                });
+                                "Copied".to_string()
+                            }
+                            None => "The page gave no markup.".to_string(),
+                        },
+                        Err(e) if e == design::flow::STALE_INSPECT => return,
+                        Err(e) => e,
+                    };
+                    let _ = this.update(cx, |this, cx| this.design_note(note, cx));
+                })
+                .detach();
+            }
+            DesignEvent::SaveAssets(assets) => self.save_assets(assets.clone(), cx),
+        }
+    }
+
+    /// The page reported the pointer on an element in inspect mode (or a click picked one):
+    /// reads its styles for the Design panel.
+    fn inspect_element(&mut self, selector: String, pin: bool, cx: &mut Context<Self>) {
+        if self.panel != Some(Panel::Design) {
+            return;
+        }
+        let (pinned, shown) = {
+            let p = self.design_panel.read(cx);
+            (p.is_pinned(), p.shown_selector() == Some(selector.as_str()))
+        };
+        // A pinned element stays on show until a click picks another or Unpin.
+        if (pinned && !pin) || (shown && !pin) {
+            return;
+        }
+        let info = self.inspect(json!({ "selector": selector }), false, cx);
+        cx.spawn(async move |this, cx| {
+            // Stale and failed answers leave the view as it was.
+            let Ok(info) = info.await else { return };
+            let _ = this.update(cx, |this, cx| {
+                this.design_panel.update(cx, |panel, cx| {
+                    if pin {
+                        panel.pin(info, cx);
+                    } else {
+                        panel.set_hovered(info, cx);
+                    }
+                });
+            });
+        })
+        .detach();
     }
 
     fn on_annotate(&mut self, event: &AnnotateEvent, cx: &mut Context<Self>) {
@@ -647,17 +717,21 @@ impl BrowserView {
             FromPage::Event(PageEvent::Network(entry)) => self.logs.push_network(entry),
             FromPage::Event(PageEvent::Picked(pick)) => {
                 self.last_pick = pick["element"]["selector"].as_str().map(str::to_string);
-                // Inspecting is the design panel's.
                 if pick["mode"] == "annotate" {
                     match serde_json::from_value(pick["element"].clone()) {
                         Ok(element) => self.on_picked(element, window, cx),
                         Err(e) => eprintln!("sawit: a picked element couldn't be read: {e}"),
                     }
+                } else if let Some(selector) = &self.last_pick {
+                    self.inspect_element(selector.clone(), true, cx);
                 }
                 cx.notify();
             }
-            // Hovers wait for the design panel.
-            FromPage::Event(PageEvent::Hovered(_)) => {}
+            FromPage::Event(PageEvent::Hovered(hover)) => {
+                if let Some(selector) = hover["selector"].as_str() {
+                    self.inspect_element(selector.to_string(), false, cx);
+                }
+            }
             // The page has the keyboard: it forwards ⌘⇧. and Esc.
             FromPage::Event(PageEvent::Key(key)) => match key.as_str() {
                 "toggle-annotate" => self.annotate_key(window, cx),
@@ -667,6 +741,7 @@ impl BrowserView {
             FromPage::Event(PageEvent::Url(url)) => {
                 self.url = url;
                 self.design_url_changed();
+                self.scan_if_design_open(cx);
                 self.show_address(window, cx);
                 // Route changes without a load still move to another page.
                 let url = self.current_url();
@@ -682,8 +757,10 @@ impl BrowserView {
                 self.loading = started;
                 if started {
                     self.design_load_started();
+                    self.sync_design(cx);
                 }
                 if !started {
+                    self.scan_if_design_open(cx);
                     for op in self.ops_after_load(cx) {
                         if op["op"] == "pick" {
                             self.send_pick(op, cx);
