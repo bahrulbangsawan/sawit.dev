@@ -5,8 +5,9 @@
 //!
 //! [`to_skeletons`] reads a scene as the element [`Skeleton`]s the canvas draws, [`import`] draws
 //! them on a board, [`to_board`] makes a board of them, and [`read_file`] reads a scene from a
-//! file. An Excalidraw element has the shape of a
-//! skeleton (today's agent schema is Excalidraw's), so the mapping is direct:
+//! file ([`read_file_or_blank`] for opening a canvas: a file with nothing in it is a blank one).
+//! An Excalidraw element has the shape of a skeleton (today's agent schema is Excalidraw's), so
+//! the mapping is direct:
 //! - A rectangle, an ellipse or a diamond is the shape of that name, and a rectangle with
 //!   `roundness` has rounded corners. A text bound to it (`containerId`) is its `label`, and so is
 //!   one bound to an arrow. A text whose container isn't in the scene, or can't hold one, is a
@@ -17,13 +18,20 @@
 //!   to an element the canvas draws (`startBinding`, `endBinding`) joins it, and any other end is
 //!   free, at the first or the last point. A line through more than two points, and a freedraw,
 //!   are ink ([`skeleton::apply`]).
+//! - An arrow points where its head is (`startArrowhead`, `endArrowhead`). With a head at its end,
+//!   or at both ends, it is an arrow. With a head at its start only it is drawn the other way
+//!   round, from its end to its start, so the head stays where it was. With no head it is a line,
+//!   which is what the links of Mermaid diagrams (`A --- B`) are on the old canvas; if it bends and
+//!   joins something, or has a label, it keeps only its first and last point, since ink joins
+//!   nothing and has no text. A connector has one head, so the kind of head and a second one at
+//!   the start aren't carried.
 //! - A frame is a section, and the elements that name it in `frameId` are inside it.
 //! - An image shows the picture in `files`, in the entry its `fileId` names.
 //!
 //! Elements marked as deleted are skipped. Embeds (`embeddable`, `iframe`, `magicframe`), and any
 //! type the canvas doesn't know, are skipped with a note, never an error. What an element says of
 //! how it is drawn and a skeleton has no place for isn't carried over: rotation, opacity, stroke
-//! width and style, fill style, arrowheads, fonts, text alignment, groups and links.
+//! width and style, fill style, the kind of arrowhead, fonts, text alignment, groups and links.
 //!
 //! What goes to the engine is made safe first, because one element it refuses would fail the
 //! whole import: a colour it can't read is left out, and a side it can't take is brought into its
@@ -36,7 +44,7 @@ use std::sync::Arc;
 
 use figcraft_color::Color;
 use figcraft_engine::Session;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::doc::{BoardDoc, BoardError, DocKind};
 use crate::skeleton::{self, End, Label, Skeleton};
@@ -49,6 +57,9 @@ type Fields = Map<String, Value>;
 /// whole import, so every box is held to it.
 const MIN_SIDE: f64 = 1.0;
 const MAX_SIDE: f64 = 100_000.0;
+
+/// What some editors write at the start of a text file.
+const BYTE_ORDER_MARK: char = '\u{feff}';
 
 /// What is said of a scene that isn't one.
 const NO_ELEMENTS: &str =
@@ -161,11 +172,41 @@ pub fn to_board(name: &str, scene: &Value) -> Result<(BoardDoc, Vec<String>), Bo
 }
 
 /// The scene in the `.excalidraw` file at `path`. A file that can't be read, or isn't JSON, is an
-/// error that names it.
+/// error that names it. A file with nothing in it isn't JSON, so it is one too: a load that
+/// somebody asked for (the `replace` op) has no use for it. Opening a canvas takes it as a blank
+/// one ([`read_file_or_blank`]).
 pub fn read_file(path: &Path) -> Result<Value, BoardError> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| BoardError::Io(format!("couldn't read {}: {e}", path.display())))?;
-    serde_json::from_str(text.trim_start_matches('\u{feff}'))
+    parse(path, &read_text(path)?)
+}
+
+/// The scene in the `.excalidraw` file at `path`, as [`read_file`] reads it, except that a file
+/// with nothing in it is a scene with no elements: a blank canvas. Nothing in it is empty, or only
+/// white space, or only a byte order mark (which some editors write). Today's canvas opens such a
+/// file blank, and there is nothing in it to protect.
+///
+/// It is for opening a canvas, as the migration of the old project canvas does
+/// ([`store::open_with_issues`](crate::store::open_with_issues)). Everything else is as
+/// [`read_file`]'s: a file with anything in it that isn't a scene is an error that names it.
+pub fn read_file_or_blank(path: &Path) -> Result<Value, BoardError> {
+    let text = read_text(path)?;
+    if text
+        .chars()
+        .all(|c| c.is_whitespace() || c == BYTE_ORDER_MARK)
+    {
+        return Ok(json!({"type": "excalidraw", "elements": []}));
+    }
+    parse(path, &text)
+}
+
+/// The text of the file at `path`.
+fn read_text(path: &Path) -> Result<String, BoardError> {
+    std::fs::read_to_string(path)
+        .map_err(|e| BoardError::Io(format!("couldn't read {}: {e}", path.display())))
+}
+
+/// The JSON in `text`, the text of the file at `path`, without the byte order mark in front.
+fn parse(path: &Path, text: &str) -> Result<Value, BoardError> {
+    serde_json::from_str(text.trim_start_matches(BYTE_ORDER_MARK))
         .map_err(|e| BoardError::Format(format!("{} isn't valid JSON: {e}", path.display())))
 }
 
@@ -442,20 +483,39 @@ impl<'a> Item<'a> {
             Kind::Arrow | Kind::Line | Kind::Freedraw => {
                 item.width = number(fields, "width");
                 item.height = number(fields, "height");
-                let points = points_of(fields);
+                item.points = points_of(fields);
                 if self.kind != Kind::Freedraw {
-                    let origin = (item.x, item.y);
-                    let first = points.as_ref().and_then(|points| points.first());
-                    let last = points.as_ref().and_then(|points| points.last());
-                    item.start = Some(end_of(fields, "startBinding", first, origin, joinable));
-                    item.end = Some(end_of(fields, "endBinding", last, origin, joinable));
-                    item.label = self.label(labels);
+                    self.run_between(&mut item, labels, joinable);
                 }
-                item.points = points;
                 item.stroke_color = colour(fields, "strokeColor");
             }
         }
         Some(item)
+    }
+
+    /// Sets what an arrow or a line runs between on `item`, its skeleton, which has its place and
+    /// its points: the two ends and the label. An arrow is then drawn as its heads say ([`Heads`]).
+    fn run_between(&self, item: &mut Skeleton, labels: &Labels, joinable: &HashSet<&str>) {
+        let origin = (item.x, item.y);
+        let points = item.points.as_deref().unwrap_or_default();
+        let start = end_of(
+            self.fields,
+            "startBinding",
+            points.first(),
+            origin,
+            joinable,
+        );
+        let end = end_of(self.fields, "endBinding", points.last(), origin, joinable);
+        item.start = Some(start);
+        item.end = Some(end);
+        item.label = self.label(labels);
+        if self.kind == Kind::Arrow {
+            match Heads::of(self.fields) {
+                Heads::End => {}
+                Heads::Start => turn_around(item),
+                Heads::Neither => without_heads(item),
+            }
+        }
     }
 
     /// The text bound to this element.
@@ -700,9 +760,82 @@ fn end_of(
     }
 }
 
+/// Where an arrow has a head, which is which way it points. A skeleton's `arrow` has one, at its
+/// end, and its `line` has none; so the kind of head, and a second head at the start, are not
+/// carried.
+enum Heads {
+    /// A head at the end, or at both ends: an arrow as it is.
+    End,
+    /// A head at the start only: an arrow that points back, from its end to its start.
+    Start,
+    /// No head at either end: a line.
+    Neither,
+}
+
+impl Heads {
+    /// The heads that an arrow element has, as Excalidraw draws them: `null` in `startArrowhead`
+    /// or `endArrowhead` is no head, and any other value is a head of some kind. A field that
+    /// isn't there is what Excalidraw makes of it (`restoreElements`, which the canvas runs on
+    /// every scene it loads, and its renderer): no head at the start, one at the end.
+    fn of(fields: &Fields) -> Self {
+        let head =
+            |key: &str, missing: bool| fields.get(key).map_or(missing, |kind| !kind.is_null());
+        match (head("startArrowhead", false), head("endArrowhead", true)) {
+            (_, true) => Self::End,
+            (true, false) => Self::Start,
+            (false, false) => Self::Neither,
+        }
+    }
+}
+
+/// Makes `item`, the skeleton of an arrow whose only head is at its start, the arrow that runs
+/// the other way: the same route from its end to its start, with the same things joined (the ends
+/// change places), and the head at the end it points to.
+///
+/// The points of a skeleton are relative to its `x`, `y`, which is where it starts. The turned
+/// arrow starts where the old one ended, so `x`, `y` move to the old last point, and the points
+/// are the old ones in reverse, relative to it.
+///
+/// An arrow with fewer than two points has no route to turn around, and stays as it is.
+fn turn_around(item: &mut Skeleton) {
+    let Some(points) = item.points.as_mut().filter(|points| points.len() >= 2) else {
+        return;
+    };
+    let [dx, dy] = points[points.len() - 1];
+    points.reverse();
+    for point in points.iter_mut() {
+        *point = [point[0] - dx, point[1] - dy];
+    }
+    item.x += dx;
+    item.y += dy;
+    std::mem::swap(&mut item.start, &mut item.end);
+}
+
+/// Makes `item`, the skeleton of an arrow with no head, a `line`, as Excalidraw draws it.
+///
+/// A line through more than two points is ink, which joins nothing and has no text. An arrow that
+/// joins something or has a label would lose that, so it keeps only its first and last point and
+/// stays a connector between them. That is the case of the links that Mermaid diagrams made on the
+/// old canvas, written with the points sampled along the route Pele drew. One that joins nothing
+/// and has no label keeps its bends, and is ink, as a line is.
+fn without_heads(item: &mut Skeleton) {
+    item.kind = Kind::Line.skeleton().to_string();
+    let joins = [&item.start, &item.end]
+        .into_iter()
+        .flatten()
+        .any(|end| end.id.is_some());
+    if !joins && item.label.is_none() {
+        return;
+    }
+    if let Some(points) = item.points.as_mut().filter(|points| points.len() > 2) {
+        let (first, last) = (points[0], points[points.len() - 1]);
+        *points = vec![first, last];
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use figcraft_doc::{BoardItem, NodeKind, StrokeCap};
+    use figcraft_doc::{BoardItem, End as DocEnd, NodeId, NodeKind, StrokeCap};
     use serde_json::json;
 
     use super::*;
@@ -1014,6 +1147,312 @@ mod tests {
             Some(vec![[0.0, 0.0], [300.0, 40.0]])
         );
         assert_eq!(with_id(&imported, "one").x, 100.0);
+    }
+
+    // Arrowheads: where an arrow's heads are is which way it points, and an arrow with none is a
+    // line. The scenes here are written inline, so that the fixture's counts stay what they are.
+
+    /// An arrow from `at` along `points`, as Excalidraw writes it: `heads` are its
+    /// `startArrowhead` and `endArrowhead` (`null` is none), and `joins` are the elements it is
+    /// bound to at its start and at its end.
+    fn arrow(
+        id: &str,
+        at: (f64, f64),
+        points: Value,
+        heads: (Value, Value),
+        joins: (Option<&str>, Option<&str>),
+    ) -> Value {
+        let bound = |to: Option<&str>| match to {
+            Some(id) => json!({"elementId": id, "focus": 0, "gap": 1}),
+            None => json!(null),
+        };
+        json!({"id": id, "type": "arrow", "x": at.0, "y": at.1, "points": points,
+               "startArrowhead": heads.0, "endArrowhead": heads.1,
+               "startBinding": bound(joins.0), "endBinding": bound(joins.1)})
+    }
+
+    /// The rectangles `a` and `b`, side by side, and `link` after them.
+    fn between(link: Value) -> Value {
+        json!([rectangle("a", 0.0, 0.0), rectangle("b", 300.0, 0.0), link])
+    }
+
+    /// The elements of a scene drawn on a new board, with nothing left out.
+    fn drawn(elements: Value) -> BoardDoc {
+        let mut board = board();
+        let notes = import(&mut board, &scene(elements)).unwrap();
+        assert_eq!(notes, Vec::<String>::new());
+        board
+    }
+
+    /// The node on `board` that the element `id` of the scene is.
+    fn node_of(board: &BoardDoc, id: &str) -> Option<NodeId> {
+        skeleton::resolve(&board.doc().unwrap(), id)
+    }
+
+    /// The connector that the element `id` of the scene is on `board`: its two ends, and the caps
+    /// of its line (its arrowheads).
+    fn connector(board: &BoardDoc, id: &str) -> (DocEnd, DocEnd, StrokeCap, StrokeCap) {
+        let doc = board.doc().unwrap();
+        let node = doc.node(skeleton::resolve(&doc, id).unwrap()).unwrap();
+        let Some(BoardItem::Connector(connector)) = node.board.clone() else {
+            panic!("`{id}` is {:?}, not a connector", node.board);
+        };
+        (
+            connector.from,
+            connector.to,
+            node.stroke.cap_start,
+            node.stroke.cap_end,
+        )
+    }
+
+    /// An end of a skeleton that joins the element `id`.
+    fn joined(id: &str) -> End {
+        End {
+            id: Some(id.into()),
+            x: None,
+            y: None,
+        }
+    }
+
+    /// A free end of a skeleton, at the point `(x, y)` of the page.
+    fn loose(x: f64, y: f64) -> End {
+        End {
+            id: None,
+            x: Some(x),
+            y: Some(y),
+        }
+    }
+
+    #[test]
+    fn an_arrow_with_no_head_is_a_line() {
+        // A link with no arrowhead (Mermaid's `A --- B`, say) is written as an arrow whose heads
+        // are both `null`. It is drawn as a plain line, so it comes in as one that joins what it
+        // joined, and not as an arrow with a head at its end.
+        let heads = (json!(null), json!(null));
+        let link = arrow(
+            "link",
+            (100.0, 25.0),
+            json!([[0, 0], [200, 0]]),
+            heads,
+            (Some("a"), Some("b")),
+        );
+        let imported = read(between(link.clone()));
+        assert_eq!(imported.notes, Vec::<String>::new());
+        let item = with_id(&imported, "link");
+        assert_eq!(item.kind, "line");
+        assert_eq!(item.start, Some(joined("a")));
+        assert_eq!(item.end, Some(joined("b")));
+        assert_eq!(item.points, Some(vec![[0.0, 0.0], [200.0, 0.0]]));
+
+        let board = drawn(between(link));
+        let (from, to, cap_start, cap_end) = connector(&board, "link");
+        assert_eq!(from.node(), node_of(&board, "a"));
+        assert_eq!(to.node(), node_of(&board, "b"));
+        assert_eq!((cap_start, cap_end), (StrokeCap::None, StrokeCap::None));
+    }
+
+    #[test]
+    fn an_arrow_with_a_head_at_its_start_only_is_turned_around() {
+        // The head is where an arrow points, and a connector has one head, at its end. So the
+        // arrow is drawn from its end to its start: the same line, with the head where it was.
+        let heads = (json!("arrow"), json!(null));
+        let link = arrow(
+            "link",
+            (100.0, 25.0),
+            json!([[0, 0], [200, 0]]),
+            heads,
+            (Some("a"), Some("b")),
+        );
+        let imported = read(between(link.clone()));
+        let item = with_id(&imported, "link");
+        assert_eq!(item.kind, "arrow");
+        // It starts where it ended, and what it joined at its start is what it points at now.
+        assert_eq!(item.start, Some(joined("b")));
+        assert_eq!(item.end, Some(joined("a")));
+        assert_eq!((item.x, item.y), (300.0, 25.0));
+        assert_eq!(item.points, Some(vec![[0.0, 0.0], [-200.0, 0.0]]));
+
+        let board = drawn(between(link));
+        let (from, to, cap_start, cap_end) = connector(&board, "link");
+        assert_eq!(from.node(), node_of(&board, "b"));
+        assert_eq!(to.node(), node_of(&board, "a"));
+        assert_eq!(
+            (cap_start, cap_end),
+            (StrokeCap::None, StrokeCap::TriangleArrow)
+        );
+    }
+
+    #[test]
+    fn a_turned_around_arrow_keeps_its_route_its_free_ends_and_its_label() {
+        // Free at both ends, through a bend, coloured and labelled: all of it runs the other way
+        // round. The first point is still the arrow's own place (`x`, `y`), so the points are
+        // given relative to the place where the arrow now starts.
+        let mut bent = arrow(
+            "bent",
+            (10.0, 20.0),
+            json!([[0, 0], [60, -30], [200, 40]]),
+            (json!("triangle"), json!(null)),
+            (None, None),
+        );
+        bent["strokeColor"] = json!("#ff0000");
+        let imported = read(json!([bent.clone(), label("bent-label", "bent", "back")]));
+        assert_eq!(imported.notes, Vec::<String>::new());
+        let item = with_id(&imported, "bent");
+        assert_eq!(item.kind, "arrow");
+        assert_eq!((item.x, item.y), (210.0, 60.0));
+        assert_eq!(
+            item.points,
+            Some(vec![[0.0, 0.0], [-140.0, -70.0], [-200.0, -40.0]])
+        );
+        assert_eq!(item.start, Some(loose(210.0, 60.0)));
+        assert_eq!(item.end, Some(loose(10.0, 20.0)));
+        assert_eq!(item.stroke_color.as_deref(), Some("#ff0000"));
+        assert_eq!(item.label.as_ref().map(|l| l.text.as_str()), Some("back"));
+
+        // On the board it runs from where it ended to where it started, with its head there.
+        let board = drawn(json!([bent, label("bent-label", "bent", "back")]));
+        let (from, to, cap_start, cap_end) = connector(&board, "bent");
+        assert_eq!(from, DocEnd::Point { x: 210.0, y: 60.0 });
+        assert_eq!(to, DocEnd::Point { x: 10.0, y: 20.0 });
+        assert_eq!(
+            (cap_start, cap_end),
+            (StrokeCap::None, StrokeCap::TriangleArrow)
+        );
+    }
+
+    #[test]
+    fn an_arrow_with_a_head_at_its_end_or_at_both_ends_is_as_it_was() {
+        // Whatever the kind of head is. A connector has one head, at its end, so a second one at
+        // the start isn't carried, and the arrow keeps pointing the way it was drawn.
+        for (id, start, end) in [
+            ("arrow", json!(null), json!("arrow")),
+            ("triangle", json!(null), json!("triangle_outline")),
+            ("crow", json!(null), json!("crowfoot_many")),
+            ("both", json!("arrow"), json!("arrow")),
+            ("kinds", json!("dot"), json!("bar")),
+        ] {
+            let link = arrow(
+                id,
+                (100.0, 25.0),
+                json!([[0, 0], [200, 0]]),
+                (start, end),
+                (Some("a"), Some("b")),
+            );
+            let imported = read(between(link.clone()));
+            let item = with_id(&imported, id);
+            assert_eq!(item.kind, "arrow", "{id}");
+            assert_eq!(item.start, Some(joined("a")), "{id}");
+            assert_eq!(item.end, Some(joined("b")), "{id}");
+            assert_eq!((item.x, item.y), (100.0, 25.0), "{id}");
+            assert_eq!(item.points, Some(vec![[0.0, 0.0], [200.0, 0.0]]), "{id}");
+
+            let board = drawn(between(link));
+            let (from, to, cap_start, cap_end) = connector(&board, id);
+            assert_eq!(from.node(), node_of(&board, "a"), "{id}");
+            assert_eq!(to.node(), node_of(&board, "b"), "{id}");
+            assert_eq!(
+                (cap_start, cap_end),
+                (StrokeCap::None, StrokeCap::TriangleArrow),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_head_the_scene_does_not_mention_is_read_as_excalidraw_reads_it() {
+        // Excalidraw draws an arrow with no `endArrowhead` with a head at its end (what
+        // `restoreElements` does, which the canvas runs on every scene it loads), and one with no
+        // `startArrowhead` without. A line has no heads, whatever it says of them.
+        let plain = |id: &str| json!({"id": id, "type": "arrow", "x": 0, "y": 0, "points": [[0, 0], [50, 0]]});
+        let mut start_only = plain("start-only");
+        start_only["startArrowhead"] = json!("arrow");
+        let mut no_end = plain("no-end");
+        no_end["endArrowhead"] = json!(null);
+        let line = json!({"id": "line", "type": "line", "x": 0, "y": 0, "points": [[0, 0], [50, 0]],
+                          "startArrowhead": "arrow", "endArrowhead": null});
+        let imported = read(json!([plain("plain"), start_only, no_end, line]));
+        let kind = |id: &str| with_id(&imported, id).kind.as_str();
+        assert_eq!(kind("plain"), "arrow");
+        // Both heads (the start's is written, the end's is the default): not turned around.
+        assert_eq!(kind("start-only"), "arrow");
+        assert_eq!(
+            with_id(&imported, "start-only").points,
+            with_id(&imported, "plain").points
+        );
+        assert_eq!(kind("no-end"), "line");
+        // A line stays a line as it is, whatever heads it names, and is never turned around.
+        let line = with_id(&imported, "line");
+        assert_eq!(line.kind, "line");
+        assert_eq!((line.x, line.y), (0.0, 0.0));
+        assert_eq!(line.points, Some(vec![[0.0, 0.0], [50.0, 0.0]]));
+    }
+
+    #[test]
+    fn a_headless_arrow_that_bends_and_joins_something_is_a_connector() {
+        // The Mermaid links on an old canvas are written with the 10 to 19 points that were
+        // sampled along their route. A line through more than two points is ink, which joins
+        // nothing, so a headless arrow keeps its first and its last point: it runs between what
+        // it joined, like an arrow does.
+        let route = json!([[0, 0], [60, -30], [140, -30], [200, 0]]);
+        let heads = (json!(null), json!(null));
+        for (id, joins) in [("both", (Some("a"), Some("b"))), ("end", (None, Some("b")))] {
+            let link = arrow(id, (100.0, 25.0), route.clone(), heads.clone(), joins);
+            let imported = read(between(link.clone()));
+            let item = with_id(&imported, id);
+            assert_eq!(item.kind, "line", "{id}");
+            assert_eq!(item.points, Some(vec![[0.0, 0.0], [200.0, 0.0]]), "{id}");
+
+            let mut board = drawn(between(link));
+            let (from, to, cap_start, cap_end) = connector(&board, id);
+            match joins.0 {
+                Some(start) => assert_eq!(from.node(), node_of(&board, start), "{id}"),
+                None => assert_eq!(from, DocEnd::Point { x: 100.0, y: 25.0 }, "{id}"),
+            }
+            assert_eq!(to.node(), node_of(&board, "b"), "{id}");
+            assert_eq!((cap_start, cap_end), (StrokeCap::None, StrokeCap::None));
+            // Not ink: the board has the two rectangles and the one connector.
+            let listed = elements(&mut board);
+            assert_eq!(listed.len(), 3, "{id}: {listed:?}");
+            assert_eq!(of_type(&listed, "connector").len(), 1, "{id}");
+        }
+    }
+
+    #[test]
+    fn a_headless_arrow_that_joins_nothing_keeps_its_bends_unless_it_has_a_label() {
+        // Free at both ends, it is as an Excalidraw line is: a line through more than two points
+        // is ink, and one through two is a connector with no heads.
+        let heads = (json!(null), json!(null));
+        let free =
+            |id: &str, points: Value| arrow(id, (10.0, 10.0), points, heads.clone(), (None, None));
+        let bent = free("bent", json!([[0, 0], [30, 5], [60, 0]]));
+        let straight = free("straight", json!([[0, 0], [60, 0]]));
+        let imported = read(json!([bent.clone(), straight.clone()]));
+        assert_eq!(with_id(&imported, "bent").kind, "line");
+        assert_eq!(
+            with_id(&imported, "bent").points.as_ref().map(Vec::len),
+            Some(3)
+        );
+        let mut board = drawn(json!([bent.clone(), straight]));
+        let listed = elements(&mut board);
+        assert_eq!(of_type(&listed, "ink").len(), 1, "{listed:?}");
+        assert_eq!(of_type(&listed, "connector").len(), 1);
+        let (_, _, cap_start, cap_end) = connector(&board, "straight");
+        assert_eq!((cap_start, cap_end), (StrokeCap::None, StrokeCap::None));
+
+        // Ink has no text, and a label is not to be lost: one that has a label is a connector
+        // through its first and last point.
+        let labelled = json!([bent, label("bent-label", "bent", "maybe")]);
+        let imported = read(labelled.clone());
+        let item = with_id(&imported, "bent");
+        assert_eq!(item.kind, "line");
+        assert_eq!(item.points, Some(vec![[0.0, 0.0], [60.0, 0.0]]));
+        assert_eq!(item.label.as_ref().map(|l| l.text.as_str()), Some("maybe"));
+        let mut board = drawn(labelled);
+        let listed = elements(&mut board);
+        assert_eq!(of_type(&listed, "ink").len(), 0, "{listed:?}");
+        let connectors = of_type(&listed, "connector");
+        assert_eq!(connectors.len(), 1);
+        assert_eq!(connectors[0]["text"], json!("maybe"));
     }
 
     #[test]
@@ -1605,6 +2044,71 @@ mod tests {
         )
         .unwrap();
         assert_eq!(read_file(&path).unwrap(), basic());
+    }
+
+    #[test]
+    fn a_file_with_nothing_in_it_is_a_blank_scene_only_when_asked_to_be() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("canvas.excalidraw");
+        // Today's canvas opens a file like these blank: empty, white space, a byte order mark
+        // (which some editors write), or any mix of them.
+        for blank in [
+            "",
+            " ",
+            " \n",
+            "\t\r\n",
+            "\u{feff}",
+            "\u{feff}\n  ",
+            " \u{feff} ",
+            "\u{a0}",
+        ] {
+            std::fs::write(&path, blank).unwrap();
+            // `read_file` is for a file somebody asked to load, and takes none of them.
+            let error = read_file(&path).unwrap_err();
+            assert!(
+                matches!(error, BoardError::Format(_)),
+                "{blank:?}: {error:?}"
+            );
+            assert!(
+                error.to_string().contains("isn't valid JSON"),
+                "{blank:?}: {error}"
+            );
+
+            let scene = read_file_or_blank(&path).unwrap();
+            let imported = to_skeletons(&scene).unwrap();
+            assert_eq!(imported, Imported::default(), "{blank:?}");
+            // And it opens as the blank board it is, with nothing to say.
+            let (mut board, notes) = to_board("Canvas", &scene).unwrap();
+            assert_eq!(notes, Vec::<String>::new());
+            assert!(elements(&mut board).is_empty());
+        }
+
+        // Anything with something in it is read as `read_file` reads it: what isn't there, what
+        // isn't text, and what isn't JSON are errors that name the file. So is a scene with no
+        // `elements`, once it is imported.
+        let missing = dir.path().join("missing.excalidraw");
+        assert_eq!(
+            read_file_or_blank(&missing).unwrap_err(),
+            read_file(&missing).unwrap_err()
+        );
+        for text in [&b"{ not json"[..], b"\0", b"[", &[0xFF, 0xFE, 0x00]] {
+            std::fs::write(&path, text).unwrap();
+            let error = read_file_or_blank(&path).unwrap_err();
+            assert_eq!(error, read_file(&path).unwrap_err(), "{text:?}");
+            assert!(error.to_string().contains("canvas.excalidraw"), "{error}");
+        }
+        for text in ["{}", "null", r#"{"type": "excalidraw"}"#] {
+            std::fs::write(&path, text).unwrap();
+            let scene = read_file_or_blank(&path).unwrap();
+            assert_eq!(scene, read_file(&path).unwrap(), "{text}");
+            assert!(to_skeletons(&scene).is_err(), "{text}");
+        }
+        std::fs::write(
+            &path,
+            include_str!("../tests/fixtures/excalidraw/basic.excalidraw"),
+        )
+        .unwrap();
+        assert_eq!(read_file_or_blank(&path).unwrap(), basic());
     }
 
     #[test]

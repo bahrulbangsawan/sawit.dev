@@ -2474,6 +2474,11 @@ mod tests {
         };
         let not_json = write("not-json.excalidraw", "{ not json");
         let no_elements = write("no-elements.excalidraw", r#"{"type": "excalidraw"}"#);
+        // A file with nothing in it opens blank as the project canvas (the migration), but nobody
+        // loads nothing on purpose: `replace` refuses it, as `canvas_load` always has.
+        let empty = write("empty.excalidraw", "");
+        let spaces = write("spaces.excalidraw", " \n");
+        let bom = write("bom.excalidraw", "\u{feff}");
         let missing = dir.path().join("missing.excalidraw");
         let mut board = board();
         add(
@@ -2495,6 +2500,9 @@ mod tests {
                 "isn't valid JSON",
             ),
             (json!({"op": "replace", "path": no_elements}), "`elements`"),
+            (json!({"op": "replace", "path": empty}), "isn't valid JSON"),
+            (json!({"op": "replace", "path": spaces}), "isn't valid JSON"),
+            (json!({"op": "replace", "path": bom}), "isn't valid JSON"),
         ] {
             let error = refusal(&mut board, op.clone());
             assert!(error.starts_with("replace: "), "{op}: {error}");

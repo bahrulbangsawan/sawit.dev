@@ -53,8 +53,10 @@ pub fn open(path: &Path) -> Result<BoardDoc, BoardError> {
 ///   beside it is that old canvas, imported ([`excalidraw::import`]). It is the first open only:
 ///   once the canvas has been saved the file is there, and is what opens. Neither file is
 ///   written, and no `.bak` is made: the old canvas stays as it is, and the notes are what the
-///   import left out. An old canvas that can't be imported is an error that names it, and then
-///   nothing is made either; no new board takes its place, because the first save would hide it.
+///   import left out. An old canvas with nothing in it (empty, or only white space) is a blank
+///   board, as it was on the old canvas, and has nothing to say. Any other old canvas that can't be
+///   imported is an error that names it, and then nothing is made either; no new board takes its
+///   place, because the first save would hide it.
 /// - A corrupt or truncated file is `Err(BoardError::Format)`, and stays as it is.
 /// - With notes, the original is first copied to `<path>.lossy.bak`, so the first save can't
 ///   silently drop what the loader left out. When that copy can't be made the file is not opened
@@ -106,8 +108,11 @@ fn old_canvas(path: &Path) -> Option<PathBuf> {
 
 /// A board that holds the old canvas `old`, and the notes on what the import left out. It opens as
 /// a file does, with no undo step ([`excalidraw::to_board`]).
+///
+/// A file with nothing in it (empty, or only white space) is a blank board with nothing to say,
+/// as it was on the old canvas ([`excalidraw::read_file_or_blank`]).
 fn import_old_canvas(old: &Path) -> Result<(BoardDoc, Vec<String>), BoardError> {
-    let scene = excalidraw::read_file(old)?;
+    let scene = excalidraw::read_file_or_blank(old)?;
     excalidraw::to_board(NAME, &scene)
         .map_err(|e| BoardError::Format(format!("{} can't be imported: {e}", old.display())))
 }
@@ -657,13 +662,34 @@ mod tests {
     fn an_old_canvas_with_nothing_on_it_opens_blank() {
         let deleted = br#"{"type": "excalidraw", "elements": [
             {"id": "a", "type": "rectangle", "isDeleted": true}]}"#;
-        for scene in [&deleted[..], br#"{"elements": []}"#] {
-            let (dir, _, path) = project_with_old_canvas(scene);
-            let (board, issues) = open_with_issues(&path).unwrap();
-            assert_eq!(board.kind(), DocKind::Board);
-            assert_eq!(top_level(&board), 0);
-            assert!(issues.is_empty());
-            assert!(is_empty(&board.doc().unwrap()));
+        // A scene with nothing drawn, and a file with nothing in it at all: empty, only white
+        // space, or only a byte order mark. Today's canvas opens each of them blank, and there is
+        // nothing in them to protect.
+        let lone_bom = "\u{feff}".as_bytes();
+        let spaced_bom = "\u{feff} \r\n\t".as_bytes();
+        for scene in [
+            &deleted[..],
+            br#"{"elements": []}"#,
+            b"",
+            b" \n",
+            lone_bom,
+            spaced_bom,
+        ] {
+            let (dir, old, path) = project_with_old_canvas(scene);
+            for (board, issues) in [
+                open_with_issues(&path).unwrap(),
+                (open(&path).unwrap(), Vec::new()),
+            ] {
+                assert_eq!(board.kind(), DocKind::Board, "{scene:?}");
+                assert_eq!(top_level(&board), 0, "{scene:?}");
+                assert!(issues.is_empty(), "{scene:?}: {issues:?}");
+                assert!(is_empty(&board.doc().unwrap()));
+                // Opened as a file is: nothing to undo.
+                assert_eq!(board.session.undo_depth(), (0, 0));
+            }
+            // Neither file is written, and nothing is kept beside them.
+            assert!(!path.exists(), "{scene:?}");
+            assert_eq!(std::fs::read(&old).unwrap(), scene);
             assert_eq!(names(&dir.path().join(".nyawit")), ["canvas.excalidraw"]);
         }
     }
