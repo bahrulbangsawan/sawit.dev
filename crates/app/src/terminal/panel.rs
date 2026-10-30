@@ -15,13 +15,14 @@ use sawit_core::probe::find_in_path;
 use sawit_core::ssh::Launch;
 use sawit_core::terminal::{Command, GridSize, Session, default_shell, run_bytes};
 
-use super::view::{TerminalEvent, TerminalView};
+use super::tab::{TabEvent, TerminalTab};
+use super::view::TerminalView;
 use crate::states::{Banner, Placeholder};
 use crate::tab_groups::{group_color, group_header, group_stripe, project_name};
 use crate::tabs::{Slot, insert_index, project_of};
 
 pub struct TerminalPanel {
-    tabs: Vec<Entity<TerminalView>>,
+    tabs: Vec<Entity<TerminalTab>>,
     active: usize,
     /// The active project's folder: where new terminals start.
     cwd: Option<PathBuf>,
@@ -94,23 +95,23 @@ impl TerminalPanel {
         self.projects = projects;
         self.cwd = active;
         self.collapsed.retain(|r| self.projects.contains(r));
-        for view in &self.tabs {
-            view.update(cx, |v, _| {
-                if v.group.as_ref().is_some_and(|g| !self.projects.contains(g)) {
-                    v.group = None;
+        for tab in &self.tabs {
+            tab.update(cx, |t, _| {
+                if t.group.as_ref().is_some_and(|g| !self.projects.contains(g)) {
+                    t.group = None;
                 }
             });
         }
         if let Some(dir) = self.cwd.clone().filter(|_| first) {
             for ix in 0..self.tabs.len() {
-                let view = self.tabs[ix].read(cx);
+                let view = focused(&self.tabs[ix], cx);
                 // `ssh` itself is "at the prompt"; the folder is local anyway.
                 if view.remote.is_some() || view.job.is_some() || !view.at_prompt() {
                     continue;
                 }
                 if view.touched {
                     view.cd(&dir);
-                    self.tabs[ix].update(cx, |v, _| v.group = Some(dir.clone()));
+                    self.tabs[ix].update(cx, |t, _| t.group = Some(dir.clone()));
                 } else if let Some(fresh) = self.spawn(Command::default(), &shell_name(), None, cx)
                 {
                     self.tabs[ix] = fresh;
@@ -124,7 +125,7 @@ impl TerminalPanel {
     /// Where a tab of `group` goes: at the end of that group's tabs.
     fn insert_at(&self, group: Option<&Path>, cx: &App) -> usize {
         let groups: Vec<Option<PathBuf>> =
-            self.tabs.iter().map(|v| v.read(cx).group.clone()).collect();
+            self.tabs.iter().map(|t| t.read(cx).group.clone()).collect();
         let slots: Vec<Slot> = groups
             .iter()
             .map(|g| Slot {
@@ -136,28 +137,28 @@ impl TerminalPanel {
     }
 
     /// Adds a tab at its group's end; returns its index.
-    fn insert(&mut self, view: Entity<TerminalView>, cx: &App) -> usize {
-        let group = view.read(cx).group.clone();
+    fn insert(&mut self, tab: Entity<TerminalTab>, cx: &App) -> usize {
+        let group = tab.read(cx).group.clone();
         let at = self.insert_at(group.as_deref(), cx);
-        self.tabs.insert(at, view);
+        self.tabs.insert(at, tab);
         at
     }
 
     /// Puts every tab back in group order, keeping the active one.
     fn regroup(&mut self, cx: &App) {
         let active = self.tabs.get(self.active).cloned();
-        for view in std::mem::take(&mut self.tabs) {
-            self.insert(view, cx);
+        for tab in std::mem::take(&mut self.tabs) {
+            self.insert(tab, cx);
         }
         self.active = active
-            .and_then(|a| self.tabs.iter().position(|v| *v == a))
+            .and_then(|a| self.tabs.iter().position(|t| *t == a))
             .unwrap_or(0);
     }
 
     /// Moves the tab at `ix` into `group` (or out of any).
     fn move_to_group(&mut self, ix: usize, group: Option<PathBuf>, cx: &mut Context<Self>) {
-        if let Some(view) = self.tabs.get(ix) {
-            view.update(cx, |v, _| v.group = group);
+        if let Some(tab) = self.tabs.get(ix) {
+            tab.update(cx, |t, _| t.group = group);
             self.regroup(cx);
             cx.notify();
         }
@@ -165,7 +166,7 @@ impl TerminalPanel {
 
     fn activate(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.active = ix;
-        if let Some(g) = self.tabs.get(ix).and_then(|v| v.read(cx).group.clone()) {
+        if let Some(g) = self.tabs.get(ix).and_then(|t| t.read(cx).group.clone()) {
             self.collapsed.remove(&g);
         }
         self.focus_active(window, cx);
@@ -226,8 +227,8 @@ impl TerminalPanel {
     pub fn ssh_sessions(&self, key: &str, cx: &App) -> usize {
         self.tabs
             .iter()
-            .filter(|v| {
-                let v = v.read(cx);
+            .filter(|t| {
+                let v = focused(t, cx);
                 !v.exited && v.remote.as_ref().is_some_and(|r| r.key == key)
             })
             .count()
@@ -235,8 +236,8 @@ impl TerminalPanel {
 
     /// Shows the newest live session to `key`; false when there is none.
     pub fn focus_ssh(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let found = self.tabs.iter().rposition(|v| {
-            let v = v.read(cx);
+        let found = self.tabs.iter().rposition(|t| {
+            let v = focused(t, cx);
             !v.exited && v.remote.as_ref().is_some_and(|r| r.key == key)
         });
         if let Some(ix) = found {
@@ -249,12 +250,16 @@ impl TerminalPanel {
 
     /// Connects an ended SSH tab again, in place.
     fn reconnect(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(remote) = self.tabs.get(ix).and_then(|v| v.read(cx).remote.clone()) else {
+        let Some(remote) = self
+            .tabs
+            .get(ix)
+            .and_then(|t| focused(t, cx).remote.clone())
+        else {
             return;
         };
         let name = remote.name.clone();
-        if let Some(view) = self.spawn(ssh_command(&remote.launch), &name, Some(remote), cx) {
-            self.tabs[ix] = view;
+        if let Some(tab) = self.spawn(ssh_command(&remote.launch), &name, Some(remote), cx) {
+            self.tabs[ix] = tab;
             self.active = ix;
             self.focus_active(window, cx);
         }
@@ -264,8 +269,8 @@ impl TerminalPanel {
     /// Types `commands` into a shell and presses Enter: the active tab if it
     /// is a live shell, else the newest live shell, else a new one.
     pub fn run(&mut self, commands: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let live_shell = |view: &Entity<TerminalView>| {
-            let v = view.read(cx);
+        let live_shell = |tab: &Entity<TerminalTab>| {
+            let v = focused(tab, cx);
             v.shell && !v.exited
         };
         let target = self
@@ -283,7 +288,7 @@ impl TerminalPanel {
                 }
             }
         }
-        let view = &self.tabs[self.active];
+        let view = self.tabs[self.active].read(cx).focused_view().clone();
         view.update(cx, |view, _| {
             view.touched = true;
             view.write(run_bytes(commands));
@@ -297,11 +302,12 @@ impl TerminalPanel {
         self.tabs
             .iter()
             .enumerate()
-            .map(|(ix, view)| {
-                let v = view.read(cx);
+            .map(|(ix, tab)| {
+                let t = tab.read(cx);
+                let v = t.focused_view().read(cx);
                 serde_json::json!({
                     "index": ix,
-                    "title": v.title.to_string(),
+                    "title": t.title(cx).to_string(),
                     "active": ix == self.active,
                     "exited": v.exited,
                     "shell": v.shell,
@@ -309,7 +315,7 @@ impl TerminalPanel {
                     "running_job": v.foreground_job().is_some(),
                     "script": v.job.as_ref().map(|j| j.name.clone()),
                     "ssh": v.remote.as_ref().map(|r| r.name.clone()),
-                    "project": v.group,
+                    "project": t.group,
                 })
             })
             .collect()
@@ -332,7 +338,7 @@ impl TerminalPanel {
     /// The tab's last `lines` lines of output (the active tab by default).
     pub fn text(&self, tab: Option<usize>, lines: usize, cx: &App) -> Result<String, String> {
         let ix = self.tab_ix(tab)?;
-        Ok(self.tabs[ix].read(cx).text_tail(lines))
+        Ok(focused(&self.tabs[ix], cx).text_tail(lines))
     }
 
     /// Sends raw input to a tab (the active one by default).
@@ -343,7 +349,7 @@ impl TerminalPanel {
         cx: &mut Context<Self>,
     ) -> Result<usize, String> {
         let ix = self.tab_ix(tab)?;
-        let view = self.tabs[ix].read(cx);
+        let view = focused(&self.tabs[ix], cx);
         if view.exited {
             return Err(format!("Terminal {ix} has exited."));
         }
@@ -375,7 +381,8 @@ impl TerminalPanel {
             return Err(e.clone());
         }
         let ix = self.active;
-        self.tabs[ix].update(cx, |view, _| {
+        let view = self.tabs[ix].read(cx).focused_view().clone();
+        view.update(cx, |view, _| {
             view.touched = true;
             view.write(run_bytes(commands));
         });
@@ -391,7 +398,7 @@ impl TerminalPanel {
     fn job_tabs(&self, key: &str, cx: &App) -> Vec<usize> {
         (0..self.tabs.len())
             .filter(|&ix| {
-                let v = self.tabs[ix].read(cx);
+                let v = focused(&self.tabs[ix], cx);
                 !v.exited && v.job.as_ref().is_some_and(|j| j.key == key)
             })
             .collect()
@@ -401,7 +408,7 @@ impl TerminalPanel {
     pub fn job_status(&self, key: &str, cx: &App) -> Option<JobStatus> {
         let ix = *self.job_tabs(key, cx).last()?;
         Some(JobStatus {
-            running: self.tabs[ix].read(cx).foreground_job(),
+            running: focused(&self.tabs[ix], cx).foreground_job(),
         })
     }
 
@@ -423,15 +430,16 @@ impl TerminalPanel {
                     cwd: Some(dir),
                     ..Command::default()
                 };
-                let Some(view) = self.spawn(cmd, &tag.name, None, cx) else {
+                let Some(tab) = self.spawn(cmd, &tag.name, None, cx) else {
                     cx.notify();
                     return;
                 };
-                self.insert(view, cx)
+                self.insert(tab, cx)
             }
         };
         self.active = ix;
-        self.tabs[ix].update(cx, |view, _| {
+        let view = self.tabs[ix].read(cx).focused_view().clone();
+        view.update(cx, |view, _| {
             view.job = Some(tag);
             if view.foreground_job().is_none() {
                 view.touched = true;
@@ -447,7 +455,7 @@ impl TerminalPanel {
     /// Interrupts (Ctrl-C) whatever the script's terminals are running.
     pub fn stop_job(&mut self, key: &str, cx: &mut Context<Self>) {
         for ix in self.job_tabs(key, cx) {
-            let view = self.tabs[ix].read(cx);
+            let view = focused(&self.tabs[ix], cx);
             if view.foreground_job().is_some() {
                 view.write(vec![0x03]);
             }
@@ -474,24 +482,24 @@ impl TerminalPanel {
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
-        if let Some(view) = self.spawn(cmd, title, remote, cx) {
-            self.active = self.insert(view.clone(), cx);
+        if let Some(tab) = self.spawn(cmd, title, remote, cx) {
+            self.active = self.insert(tab.clone(), cx);
             if let Some(window) = window {
-                let handle = view.focus_handle(cx);
-                window.focus(&handle, cx);
+                tab.update(cx, |t, cx| t.focus(window, cx));
             }
         }
         cx.notify();
     }
 
-    /// Starts `cmd` in the panel's directory (else `$HOME`), without adding a tab.
+    /// Starts `cmd` in the panel's directory (else `$HOME`) in a new tab,
+    /// without adding it to the strip.
     fn spawn(
         &mut self,
         mut cmd: Command,
         title: &str,
         remote: Option<Remote>,
         cx: &mut Context<Self>,
-    ) -> Option<Entity<TerminalView>> {
+    ) -> Option<Entity<TerminalTab>> {
         cmd.cwd = cmd
             .cwd
             .take()
@@ -518,13 +526,12 @@ impl TerminalPanel {
                     let mut view = TerminalView::new(session, events, title, cx);
                     view.shell = shell;
                     view.remote = remote;
-                    view.group = group;
                     view
                 });
-                cx.subscribe(&view, |_, _, _: &TerminalEvent, cx| cx.notify())
-                    .detach();
+                let tab = cx.new(|cx| TerminalTab::new(view, group, cx));
+                cx.subscribe(&tab, Self::on_tab_event).detach();
                 self.error = None;
-                Some(view)
+                Some(tab)
             }
             Err(e) => {
                 self.error = Some(format!("{e}"));
@@ -541,17 +548,42 @@ impl TerminalPanel {
         }
     }
 
+    /// Drops a tab whose last pane closed and redraws the strip on changes.
+    fn on_tab_event(&mut self, tab: Entity<TerminalTab>, event: &TabEvent, cx: &mut Context<Self>) {
+        match event {
+            TabEvent::Closed => {
+                if let Some(ix) = self.tabs.iter().position(|t| *t == tab) {
+                    self.close(ix, cx);
+                }
+            }
+            TabEvent::Changed => cx.notify(),
+            // Nothing asks to split a tab yet.
+            TabEvent::Split(_) => {}
+        }
+    }
+
+    /// How many tabs are open (for tests).
+    #[cfg(test)]
+    pub fn tab_count(&self) -> usize {
+        self.tabs.len()
+    }
+
+    /// The tab at `ix` (for tests). Panics when there is none.
+    #[cfg(test)]
+    pub fn tab(&self, ix: usize) -> &Entity<TerminalTab> {
+        &self.tabs[ix]
+    }
+
     /// A terminal tab has the keyboard.
     pub fn has_focus(&self, window: &Window, cx: &App) -> bool {
         self.tabs
             .iter()
-            .any(|view| view.focus_handle(cx).contains_focused(window, cx))
+            .any(|tab| tab.read(cx).has_focus(window, cx))
     }
 
     pub fn focus_active(&self, window: &mut Window, cx: &mut App) {
-        if let Some(view) = self.tabs.get(self.active) {
-            let handle = view.focus_handle(cx);
-            window.focus(&handle, cx);
+        if let Some(tab) = self.tabs.get(self.active) {
+            tab.update(cx, |t, cx| t.focus(window, cx));
         }
     }
 }
@@ -608,9 +640,10 @@ impl Render for TerminalPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let weak = cx.entity().downgrade();
         let mut tabs: Vec<AnyElement> = Vec::new();
-        for (ix, view) in self.tabs.iter().enumerate() {
-            let v = view.read(cx);
-            let group = v.group.clone();
+        for (ix, tab) in self.tabs.iter().enumerate() {
+            let t = tab.read(cx);
+            let v = t.focused_view().read(cx);
+            let group = t.group.clone();
             let color = group.as_ref().map(|g| {
                 let at = self.projects.iter().position(|p| p == g).unwrap_or(0);
                 group_color(at, cx)
@@ -660,8 +693,11 @@ impl Render for TerminalPanel {
                 // says little across servers), numbered when it is open twice.
                 let (icon, label) = match &v.remote {
                     Some(r) => {
-                        let same = |w: &Entity<TerminalView>| {
-                            w.read(cx).remote.as_ref().is_some_and(|o| o.key == r.key)
+                        let same = |w: &Entity<TerminalTab>| {
+                            focused(w, cx)
+                                .remote
+                                .as_ref()
+                                .is_some_and(|o| o.key == r.key)
                         };
                         let nth = self.tabs[..ix].iter().filter(|w| same(w)).count();
                         let name = if nth > 0 || self.tabs[ix + 1..].iter().any(same) {
@@ -683,8 +719,8 @@ impl Render for TerminalPanel {
                         };
                         (Lucide::Play, format!("{name}{state}"))
                     }
-                    None if v.exited => (Lucide::Terminal, format!("{} (exited)", v.title)),
-                    None => (Lucide::Terminal, v.title.to_string()),
+                    None if v.exited => (Lucide::Terminal, format!("{} (exited)", t.title(cx))),
+                    None => (Lucide::Terminal, t.title(cx).to_string()),
                 };
                 h_flex()
                     .id(("term-tab", ix))
@@ -759,11 +795,11 @@ impl Render for TerminalPanel {
         let exited = self
             .tabs
             .get(self.active)
-            .is_some_and(|v| v.read(cx).exited);
+            .is_some_and(|t| focused(t, cx).exited);
         let remote_name = self
             .tabs
             .get(self.active)
-            .and_then(|v| v.read(cx).remote.as_ref().map(|r| r.name.clone()));
+            .and_then(|t| focused(t, cx).remote.as_ref().map(|r| r.name.clone()));
         let (max_icon, max_tip) = if self.maximized {
             (Lucide::Minimize, "Restore Layout")
         } else {
@@ -887,11 +923,16 @@ impl Render for TerminalPanel {
                     .flex_1()
                     .min_h_0()
                     .map(|el| match self.tabs.get(self.active).cloned() {
-                        Some(view) => el.child(view),
+                        Some(tab) => el.child(tab),
                         None => el.child(self.render_empty(herdr, cx)),
                     }),
             )
     }
+}
+
+/// The terminal of `tab`'s focused pane.
+fn focused<'a>(tab: &Entity<TerminalTab>, cx: &'a App) -> &'a TerminalView {
+    tab.read(cx).focused_view().read(cx)
 }
 
 /// Tab title for the default shell ("zsh", "bash", "powershell").

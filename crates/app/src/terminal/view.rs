@@ -62,8 +62,6 @@ pub struct TerminalView {
     pub remote: Option<super::Remote>,
     /// Started from the Run panel: which script, under its name.
     pub job: Option<super::JobTag>,
-    /// The project whose group the tab is in (none for SSH or no project).
-    pub group: Option<std::path::PathBuf>,
     /// Grid origin and cell size from the last paint, for mouse mapping.
     layout: Rc<Cell<Option<GridLayout>>>,
     pressed: Option<TermButton>,
@@ -133,7 +131,6 @@ impl TerminalView {
             touched: false,
             remote: None,
             job: None,
-            group: None,
             layout: Rc::new(Cell::new(None)),
             pressed: None,
             selecting: false,

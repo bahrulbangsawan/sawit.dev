@@ -1,6 +1,9 @@
 //! Bottom-dock terminal: tabs of real terminals (shell, herdr or SSH).
 
 mod panel;
+mod tab;
+#[cfg(test)]
+mod testing;
 mod view;
 
 pub use panel::{JobTag, Remote, TerminalPanel, ToggleMaximize};
