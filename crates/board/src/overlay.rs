@@ -1,19 +1,21 @@
 //! What the canvas draws over the rendered page (spec D4): the selection's outlines, box, handles
-//! and size, the hover outline, the text being edited (its box, its selected characters, an input
-//! method's composition and the caret), the names of frames and sections, the marquee, snap guides
-//! with their distances, where a drag drops, the previews of the pen, pencil, marker, highlighter,
-//! connector and eraser, and vector edit mode's points and handles. [`overlay`] lists them back
-//! to front as [`Shape`]s, in logical px from the canvas's top-left, from the engine's state; the
-//! app paints the list as it is (`crates/app/src/board/overlay_paint.rs`) and only measures the
-//! labels' text.
+//! and size, a selected ellipse's arc handles and a selected shape's corner radius handles with
+//! their readouts, the hover outline, the text being edited (its box, its selected characters, an
+//! input method's composition and the caret), the names of frames and sections, the marquee, snap
+//! guides with their distances, where a drag drops, the previews of the pen, pencil, marker,
+//! highlighter, connector and eraser, and vector edit mode's points and handles. [`overlay`] lists
+//! them back to front as [`Shape`]s, in logical px from the canvas's top-left, from the engine's
+//! state; the app paints the list as it is (`crates/app/src/board/overlay_paint.rs`) and only
+//! measures the labels' text.
 //!
 //! A port of FigCraft's `ui-egui/src/canvas/overlays.rs`, with the frame names of
 //! `frame_labels.rs` and the snap guides `measure_overlay.rs` draws from the tool's overlay,
 //! limited to what the native canvas shows. Not drawn: layout grids, the pixel grid, constraint
 //! guides, rulers and their guides, prototype connections, slot badges, the paint bucket's area,
-//! shape builder regions, the lasso, the box measured to, the Scale tool's readout, arc and corner
-//! radius handles, auto layout drop cells, swap targets, comments and the box around several
-//! selected points; names are not turned with a rotated frame, and the caret doesn't blink.
+//! shape builder regions, the lasso, the box measured to, the Scale tool's readout, auto layout
+//! drop cells, swap targets, comments and the box around several selected points; names are not
+//! turned with a rotated frame, and the caret doesn't blink. Every handle the Move tool answers a
+//! press on is drawn.
 //!
 //! Every colour is a fixed canvas colour, the same on any page and in either theme ([`SELECTION`],
 //! [`COMPONENT`], [`GUIDE`], white), except the names of frames and sections, whose grey reads on
@@ -25,6 +27,8 @@
 use std::sync::Arc;
 
 use figcraft_doc::{Document, NodeId, NodeKind};
+use figcraft_engine::arc_handles::ArcHandle;
+use figcraft_engine::shape_handles::ShapeHandle;
 use figcraft_engine::tools::{self, Overlay, PENCIL_STROKE};
 use figcraft_engine::vectoredit::{self, EditOverlay, VHit, VTool};
 use figcraft_engine::{
@@ -77,6 +81,17 @@ const CORNER: f64 = 8.0;
 const END: f64 = 10.0;
 const POINT: f64 = 7.0;
 const POINT_HOVERED: f64 = 9.0;
+/// The size across of an ellipse's arc handles, larger under the pointer or while dragged, and of
+/// the dot on its Start handle (ui-egui `arc_overlay`: radius 4, 5 and 1.5).
+const ARC: f64 = 8.0;
+const ARC_HOVERED: f64 = 10.0;
+const ARC_DOT: f64 = 3.0;
+/// The size across of a corner radius handle and a star's ratio handle, larger under the pointer
+/// or while dragged (ui-egui `shape_overlay`: radius 3.5 and 4.5).
+const RADIUS: f64 = 7.0;
+const RADIUS_HOVERED: f64 = 9.0;
+/// How far right of and below a dragged handle its readout starts.
+const READOUT_OFFSET: f64 = 12.0;
 
 /// The marker's and the highlighter's strokes: weight (page units) and opacity, as `board.ink`
 /// makes them (FigCraft's `boards/board.rs` keeps these private).
@@ -128,11 +143,13 @@ pub enum Shape {
         stroke: Rgba,
     },
     /// One line of text, [`LABEL_TEXT`] px on a [`LABEL_LINE`] px line: the name of the frame or
-    /// section `node`, or a readout (the selection's size, a guide's distance) when `node` is
-    /// `None`. With a `background` the text sits on a pill of that colour. [`Shape::label_box`]
-    /// says where it goes once its text is measured, and [`name_room`] how wide a name may be.
+    /// section `node`, or a readout (the selection's size, a guide's distance, a dragged handle's
+    /// value) when `node` is `None`. With a `background` the text sits on a pill of that colour.
+    /// `at` is the point of its box that `anchor` says. [`Shape::label_box`] says where it goes
+    /// once its text is measured, and [`name_room`] how wide a name may be.
     Label {
         at: (f64, f64),
+        anchor: Anchor,
         text: String,
         color: Rgba,
         background: Option<Rgba>,
@@ -147,14 +164,26 @@ pub enum Shape {
     },
 }
 
+/// Which point of a label's box its `at` is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Anchor {
+    /// The box's top-left corner: a frame's or section's name, and the readout beside a dragged
+    /// handle.
+    TopLeft,
+    /// The box's middle: the selection's size and a guide's distance, centred on what they
+    /// measure, however wide their text.
+    Middle,
+}
+
 impl Shape {
     /// Where a label goes once its text is measured `text_width` px wide: the top-left corner and
     /// the size of its box. The box is the text's line, padded into a pill when the label has a
-    /// background. A name starts at `at`, its box's top-left; a readout is centred on `at`. The
-    /// text is centred in the box. `None` for every other shape.
+    /// background (more around a name than around a readout). Its top-left or its middle is at
+    /// `at`, as its [`Anchor`] says. The text is centred in the box. `None` for every other shape.
     pub fn label_box(&self, text_width: f64) -> Option<((f64, f64), (f64, f64))> {
         let Shape::Label {
             at,
+            anchor,
             background,
             node,
             ..
@@ -168,9 +197,9 @@ impl Shape {
             (Some(_), None) => READOUT_PAD,
         };
         let size = (text_width.max(0.0) + 2.0 * pad_x, LABEL_LINE + 2.0 * pad_y);
-        let top_left = match node {
-            Some(_) => *at,
-            None => (at.0 - size.0 / 2.0, at.1 - size.1 / 2.0),
+        let top_left = match anchor {
+            Anchor::TopLeft => *at,
+            Anchor::Middle => (at.0 - size.0 / 2.0, at.1 - size.1 / 2.0),
         };
         Some((top_left, size))
     }
@@ -267,7 +296,8 @@ impl Composition {
 /// 3. the outline of each selected layer;
 /// 4. the selection's box, outlined around several layers, and its 4 corner handles (a
 ///    connector's 2 round end handles instead);
-/// 5. the selection's size, `"{w} × {h}"` under its box;
+/// 5. the selection's size, `"{w} × {h}"` under its box, then a selected ellipse's arc handles and
+///    a selected shape's corner radius handles, with the value of the one dragged;
 /// 6. while text is edited, in place of 3 to 5: the edited text's box, its selected characters,
 ///    the input method's composition, underlined, and the caret;
 /// 7. the marquee;
@@ -365,6 +395,7 @@ fn frame_names(out: &mut Vec<Shape>, ds: &DocState) {
         let label = if matches!(n.kind, NodeKind::Section { .. }) {
             Shape::Label {
                 at: (x0, y0),
+                anchor: Anchor::TopLeft,
                 text: n.name.clone(),
                 color: if selected { WHITE } else { names.section },
                 background: Some(if selected { SELECTION } else { names.pill }),
@@ -384,6 +415,7 @@ fn frame_names(out: &mut Vec<Shape>, ds: &DocState) {
             };
             Shape::Label {
                 at: (x0, y0 - NAME_GAP - LABEL_LINE),
+                anchor: Anchor::TopLeft,
                 text: n.name.clone(),
                 color,
                 background: None,
@@ -443,9 +475,10 @@ fn hover(out: &mut Vec<Shape>, s: &Session, ds: &DocState) {
 /// the component colour for all of them when one is in a component; the selection's box, outlined
 /// around several layers only (one layer's own outline is its box); 4 square handles on its
 /// corners, or 2 on a line's ends, or none for a locked layer, while measuring or when the box is
-/// too small on screen to show them; a selected connector's 2 round end handles instead; and the
-/// size label, `"{w} × {h}"` in whole pixels (a line's length) centred under the box, unless the
-/// preference to show dimensions is off.
+/// too small on screen to show them; a selected connector's 2 round end handles instead; the size
+/// label, `"{w} × {h}"` in whole pixels (a line's length) centred under the box, unless the
+/// preference to show dimensions is off; and, but while measuring, the arc handles and corner
+/// radius handles the Move tool answers ([`arc_overlay`], [`shape_overlay`]).
 fn selection(out: &mut Vec<Shape>, s: &Session, ds: &DocState) {
     let (doc, view, sel) = (&ds.doc, &ds.view, &ds.selection);
     if sel.is_empty() || ds.text_edit.is_some() || ds.vector_edit.is_some() {
@@ -526,11 +559,99 @@ fn selection(out: &mut Vec<Shape>, s: &Session, ds: &DocState) {
         let half = LABEL_LINE / 2.0 + READOUT_PAD.1;
         out.push(Shape::Label {
             at: (middle, bottom + SIZE_GAP + half),
+            anchor: Anchor::Middle,
             text,
             color: WHITE,
             background: Some(color),
             node: None,
         });
+    }
+    if !measuring {
+        arc_overlay(out, s, view, color);
+        shape_overlay(out, s, view, color);
+    }
+}
+
+/// The selected ellipse's arc handles, as the Move tool shows and answers them
+/// (`Session::arc_handles`, which leaves them out with another tool, while another gesture runs,
+/// and on an ellipse locked or small on screen): round, larger under the pointer or while
+/// dragged, Start with a dot inside; and while one is dragged, its readout beside it (ui-egui
+/// `arc_overlay`).
+fn arc_overlay(out: &mut Vec<Shape>, s: &Session, view: &ViewState, color: Rgba) {
+    let ov = &s.tool.overlay;
+    if let Some(handles) = s.arc_handles() {
+        for handle in [ArcHandle::Ratio, ArcHandle::Start, ArcHandle::Sweep] {
+            let Some([x, y]) = handles.at(handle) else {
+                continue;
+            };
+            let center = at(view, x, y);
+            out.push(Shape::Handle {
+                center,
+                size: if ov.arc_hover == Some(handle) {
+                    ARC_HOVERED
+                } else {
+                    ARC
+                },
+                round: true,
+                fill: WHITE,
+                stroke: color,
+            });
+            if handle == ArcHandle::Start {
+                out.push(Shape::Handle {
+                    center,
+                    size: ARC_DOT,
+                    round: true,
+                    fill: color,
+                    stroke: color,
+                });
+            }
+        }
+    }
+    if let Some(hint) = &ov.arc {
+        out.push(readout_beside(view, hint.at, hint.label.clone(), color));
+    }
+}
+
+/// The selected rectangle's, frame's (a sticky's, a board shape's), polygon's or star's corner
+/// radius handles and a star's ratio handle, as the Move tool shows and answers them
+/// (`Session::shape_handles`, which leaves them out as for the arc handles, and on a layer under
+/// 48 px on screen): round, larger under the pointer or while dragged; and while one is dragged,
+/// its value beside it (ui-egui `shape_overlay`).
+fn shape_overlay(out: &mut Vec<Shape>, s: &Session, view: &ViewState, color: Rgba) {
+    let ov = &s.tool.overlay;
+    for (handle, [x, y]) in s.shape_handles() {
+        out.push(Shape::Handle {
+            center: at(view, x, y),
+            size: if ov.shape_hover == Some(handle) {
+                RADIUS_HOVERED
+            } else {
+                RADIUS
+            },
+            round: true,
+            fill: WHITE,
+            stroke: color,
+        });
+    }
+    if let Some(hint) = &ov.shape {
+        let text = match hint.handle {
+            ShapeHandle::Radius { .. } => format!("Radius {}", hint.value),
+            ShapeHandle::Ratio => format!("Ratio {}%", hint.value),
+        };
+        out.push(readout_beside(view, hint.at, text, color));
+    }
+}
+
+/// A dragged handle's readout: `text` in white on a pill of `color`, its top-left corner
+/// [`READOUT_OFFSET`] px right of and below the handle at page point `handle`.
+fn readout_beside(view: &ViewState, [x, y]: [f64; 2], text: String, color: Rgba) -> Shape {
+    let (hx, hy) = at(view, x, y);
+    Shape::Label {
+        at: (hx + READOUT_OFFSET, hy + READOUT_OFFSET),
+        anchor: Anchor::TopLeft,
+        text,
+        color: WHITE,
+        background: Some(color),
+        node: None,
     }
 }
 
@@ -712,6 +833,7 @@ fn guides(out: &mut Vec<Shape>, ov: &Overlay, view: &ViewState) {
         if let Some(text) = &g.label {
             distances.push(Shape::Label {
                 at: ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0),
+                anchor: Anchor::Middle,
                 text: text.clone(),
                 color: WHITE,
                 background: Some(GUIDE),
@@ -1234,6 +1356,256 @@ mod tests {
         shapes.iter().filter(readout).collect()
     }
 
+    /// Where the square handles are: the selection box's corners.
+    fn box_handles(shapes: &[Shape]) -> Vec<(f64, f64)> {
+        let square = |s: &Shape| match s {
+            Shape::Handle {
+                center,
+                round: false,
+                ..
+            } => Some(*center),
+            _ => None,
+        };
+        shapes.iter().filter_map(square).collect()
+    }
+
+    /// The round handles drawn white and outlined: where each is, and its size across.
+    fn round_handles(shapes: &[Shape]) -> Vec<((f64, f64), f64)> {
+        let round = |s: &Shape| match s {
+            Shape::Handle {
+                center,
+                size,
+                round: true,
+                fill: WHITE,
+                ..
+            } => Some((*center, *size)),
+            _ => None,
+        };
+        shapes.iter().filter_map(round).collect()
+    }
+
+    /// Whether `handles` are `expected` (where, and how big), but for rounding.
+    fn same_handles(handles: &[((f64, f64), f64)], expected: &[((f64, f64), f64)]) -> bool {
+        handles.len() == expected.len()
+            && (handles.iter().zip(expected))
+                .all(|((a, size), (b, wanted))| near(*a, *b) && size == wanted)
+    }
+
+    /// A board at 100 %, the page point (-100, -100) at the canvas's top-left, with a 200 × 200
+    /// sticky from there selected: from (0, 0) to (200, 200) on screen.
+    fn selected_sticky() -> (BoardDoc, NodeId) {
+        let mut board = BoardDoc::new_board("Canvas").unwrap();
+        zoom(&mut board, 1.0);
+        let note = make(&mut board, "board.sticky", json!({"x": -100, "y": -100}));
+        select(&mut board, &[note]);
+        (board, note)
+    }
+
+    /// How far in from a corner along its diagonal a corner radius handle is at least, on each
+    /// axis: 10 px along the diagonal.
+    fn radius_inset() -> f64 {
+        10.0 / 2f64.sqrt()
+    }
+
+    /// As FigCraft draws them (ui-egui overlays.rs `shape_overlay`): the Move tool answers a press
+    /// on these handles, before the box's, by rounding the corners.
+    #[test]
+    fn a_selected_sticky_shows_its_corner_radius_handles() {
+        let (board, _) = selected_sticky();
+        let shapes = overlay(&board.session);
+        // The box's 4 corner handles, then a round one 10 px in from each corner along its
+        // diagonal: a sticky's corners are rounded 2 px, less than that.
+        let corners = [(0.0, 0.0), (200.0, 0.0), (200.0, 200.0), (0.0, 200.0)];
+        assert_eq!(box_handles(&shapes), corners);
+        let i = radius_inset();
+        let radius = [
+            (i, i),
+            (200.0 - i, i),
+            (200.0 - i, 200.0 - i),
+            (i, 200.0 - i),
+        ];
+        let expected = radius.map(|center| (center, 7.0));
+        let drawn = round_handles(&shapes);
+        assert!(same_handles(&drawn, &expected), "{drawn:?}");
+    }
+
+    /// As FigCraft draws it (ui-egui overlays.rs `arc_overlay`): the Move tool answers a press on
+    /// it, before the box's handles, by opening the ellipse into an arc.
+    #[test]
+    fn a_selected_ellipse_shows_its_sweep_handle() {
+        let mut f = fixture();
+        // From (0, 300) on the page, 200 × 100: its right edge's middle is at (300, 450) on
+        // screen.
+        let ellipse = make(
+            &mut f.board,
+            "node.create",
+            json!({"type": "ellipse", "x": 0, "y": 300, "width": 200, "height": 100}),
+        );
+        select(&mut f.board, &[ellipse]);
+        let shapes = overlay(&f.board.session);
+        // A whole ellipse: only its sweep handle, 10 px in from its right edge, and no corner
+        // radius handles.
+        let drawn = round_handles(&shapes);
+        assert!(same_handles(&drawn, &[((290.0, 450.0), 8.0)]), "{drawn:?}");
+        assert_eq!(box_handles(&shapes).len(), 4);
+    }
+
+    /// The readouts of dragged handles: their text, and where their box starts.
+    fn beside(shapes: &[Shape]) -> Vec<(&str, (f64, f64))> {
+        let mut readouts = Vec::new();
+        for shape in shapes {
+            if let Shape::Label {
+                at,
+                anchor: Anchor::TopLeft,
+                text,
+                color: WHITE,
+                background: Some(_),
+                node: None,
+            } = shape
+            {
+                readouts.push((text.as_str(), *at));
+            }
+        }
+        readouts
+    }
+
+    #[test]
+    fn a_dragged_corner_radius_handle_reads_out_the_radius_beside_it() {
+        let (mut board, note) = selected_sticky();
+        let i = radius_inset();
+        // Under the pointer, the top-left corner's handle is drawn larger.
+        pointer(&mut board, PointerKind::Hover, -100.0 + i, -100.0 + i);
+        let drawn = round_handles(&overlay(&board.session));
+        assert!(near(drawn[0].0, (i, i)) && drawn[0].1 == 9.0, "{drawn:?}");
+        // A press there takes the handle, not the sticky, and a drag along the corner's diagonal
+        // to 20 px in rounds every corner 20 px.
+        pointer(&mut board, PointerKind::Down, -100.0 + i, -100.0 + i);
+        pointer(&mut board, PointerKind::Move, -80.0, -80.0);
+        let shapes = overlay(&board.session);
+        let [(text, at)] = beside(&shapes)[..] else {
+            panic!("{shapes:?}")
+        };
+        // Its value, 12 px right of and below the handle, which now stands 20 px in on each axis.
+        assert_eq!(text, "Radius 20");
+        assert!(near(at, (32.0, 32.0)), "{at:?}");
+        let drawn = round_handles(&shapes);
+        assert!(
+            near(drawn[0].0, (20.0, 20.0)) && drawn[0].1 == 9.0,
+            "{drawn:?}"
+        );
+        // The size still reads under the box; the release ends the readout, as one undo step.
+        assert!(labels(&shapes).contains(&("200 × 200", None)), "{shapes:?}");
+        pointer(&mut board, PointerKind::Up, -80.0, -80.0);
+        assert!(beside(&overlay(&board.session)).is_empty());
+        let doc = board.doc().unwrap();
+        let radii = doc.node(note).unwrap().corners.radii;
+        assert!(radii.iter().all(|r| (r - 20.0).abs() < 1e-6), "{radii:?}");
+    }
+
+    #[test]
+    fn an_arc_shows_its_start_and_ratio_handles_and_reads_out_the_drag() {
+        let mut f = fixture();
+        let ellipse = make(
+            &mut f.board,
+            "node.create",
+            json!({"type": "ellipse", "x": 0, "y": 300, "width": 200, "height": 100}),
+        );
+        // A half: from the right edge round the bottom to the left edge.
+        f.board
+            .execute(
+                "node.set",
+                &json!({"id": ellipse, "props": {"arcSweep": 180}}),
+            )
+            .unwrap();
+        select(&mut f.board, &[ellipse]);
+        let shapes = overlay(&f.board.session);
+        // Ratio in the middle (no ring), Start 10 px in from the right edge with a dot inside, and
+        // Sweep 10 px in from the left edge.
+        let drawn = round_handles(&shapes);
+        let expected = [
+            ((200.0, 450.0), 8.0),
+            ((290.0, 450.0), 8.0),
+            ((110.0, 450.0), 8.0),
+        ];
+        assert!(same_handles(&drawn, &expected), "{drawn:?}");
+        let dots: Vec<&Shape> = shapes
+            .iter()
+            .filter(|s| matches!(s, Shape::Handle { size: 3.0, .. }))
+            .collect();
+        let [
+            &Shape::Handle {
+                center,
+                round: true,
+                fill: SELECTION,
+                stroke: SELECTION,
+                ..
+            },
+        ] = dots[..]
+        else {
+            panic!("{shapes:?}")
+        };
+        assert!(near(center, (290.0, 450.0)), "{center:?}");
+        // Dragging Sweep reads out its share of a full turn beside it.
+        pointer(&mut f.board, PointerKind::Down, 10.0, 350.0);
+        pointer(&mut f.board, PointerKind::Move, 100.0, 300.0);
+        let hint = f
+            .board
+            .session
+            .tool
+            .overlay
+            .arc
+            .clone()
+            .expect("an arc drag");
+        assert!(hint.label.starts_with("Sweep "), "{hint:?}");
+        let shapes = overlay(&f.board.session);
+        let [(text, at)] = beside(&shapes)[..] else {
+            panic!("{shapes:?}")
+        };
+        let handle = (hint.at[0] + 100.0, hint.at[1] + 100.0);
+        assert_eq!(text, hint.label);
+        assert!(near(at, (handle.0 + 12.0, handle.1 + 12.0)), "{at:?}");
+        // The handle dragged is drawn larger.
+        let dragged = round_handles(&shapes);
+        assert!(
+            dragged
+                .iter()
+                .any(|(c, size)| near(*c, handle) && *size == 10.0),
+            "{dragged:?}"
+        );
+    }
+
+    #[test]
+    fn handles_the_move_tool_doesnt_answer_arent_drawn() {
+        let (mut board, note) = selected_sticky();
+        assert_eq!(round_handles(&overlay(&board.session)).len(), 4);
+        // Another tool.
+        board.session.set_tool(ToolId::Rectangle);
+        assert!(round_handles(&overlay(&board.session)).is_empty());
+        board.session.set_tool(ToolId::Move);
+        // While measuring (Alt), as the box's handles.
+        board.session.tool.overlay.measure_box = Some([0.0, 0.0, 10.0, 10.0]);
+        assert!(round_handles(&overlay(&board.session)).is_empty());
+        board.session.tool.overlay.measure_box = None;
+        // Two layers selected.
+        let other = make(&mut board, "board.sticky", json!({"x": 300, "y": -100}));
+        select(&mut board, &[note, other]);
+        assert!(round_handles(&overlay(&board.session)).is_empty());
+        // A layer under 48 px on screen.
+        select(&mut board, &[note]);
+        zoom(&mut board, 0.2);
+        assert!(round_handles(&overlay(&board.session)).is_empty());
+        zoom(&mut board, 1.0);
+        // A locked layer.
+        board
+            .session
+            .doc_mut()
+            .unwrap()
+            .get_mut(note)
+            .unwrap()
+            .locked = true;
+        assert!(round_handles(&overlay(&board.session)).is_empty());
+    }
+
     #[test]
     fn nothing_selected_draws_only_frame_labels() {
         let f = fixture();
@@ -1269,12 +1641,14 @@ mod tests {
                 dashed: false,
             }]
         );
-        assert_eq!(handles(&shapes), corners.map(|c| (c, false)));
+        // Its 4 corner handles; the round ones inside them round its corners.
+        assert_eq!(box_handles(&shapes), corners);
+        assert_eq!(round_handles(&shapes).len(), 4);
         // Twice the zoom, twice as far from the canvas's top-left and from one another.
         zoom(&mut f.board, 2.0);
         let shapes = overlay(&f.board.session);
-        let doubled = corners.map(|(x, y)| ((2.0 * x, 2.0 * y), false));
-        assert_eq!(handles(&shapes), doubled);
+        let doubled = corners.map(|(x, y)| (2.0 * x, 2.0 * y));
+        assert_eq!(box_handles(&shapes), doubled);
     }
 
     #[test]
@@ -1468,6 +1842,7 @@ mod tests {
     fn label_box_places_names_and_readouts() {
         let name = |background| Shape::Label {
             at: (100.0, 50.0),
+            anchor: Anchor::TopLeft,
             text: "Frame".into(),
             color: SELECTION,
             background,
@@ -1482,9 +1857,10 @@ mod tests {
             name(Some(SELECTION)).label_box(40.0),
             Some(((100.0, 50.0), (56.0, LABEL_LINE + 8.0)))
         );
-        // A readout's pill is centred on `at`.
-        let readout = Shape::Label {
+        // A distance's pill is centred on `at`.
+        let readout = |anchor| Shape::Label {
             at: (100.0, 50.0),
+            anchor,
             text: "24".into(),
             color: WHITE,
             background: Some(GUIDE),
@@ -1492,8 +1868,13 @@ mod tests {
         };
         let height = LABEL_LINE + 4.0;
         assert_eq!(
-            readout.label_box(40.0),
+            readout(Anchor::Middle).label_box(40.0),
             Some(((76.0, 50.0 - height / 2.0), (48.0, height)))
+        );
+        // A dragged handle's starts at `at`, beside the handle.
+        assert_eq!(
+            readout(Anchor::TopLeft).label_box(40.0),
+            Some(((100.0, 50.0), (48.0, height)))
         );
         let caret = Shape::Caret {
             top: (0.0, 0.0),
@@ -1536,6 +1917,7 @@ mod tests {
             // The distance over the middle of its line, after every line.
             Shape::Label {
                 at: (150.0, 300.0),
+                anchor: Anchor::Middle,
                 text: "24".into(),
                 color: WHITE,
                 background: Some(GUIDE),
@@ -1692,6 +2074,7 @@ mod tests {
         let shapes = overlay(&f.board.session);
         let pill = Shape::Label {
             at: (100.0, 500.0),
+            anchor: Anchor::TopLeft,
             text: "Ideas".into(),
             color: ON_DARK.section,
             background: Some(ON_DARK.pill),
