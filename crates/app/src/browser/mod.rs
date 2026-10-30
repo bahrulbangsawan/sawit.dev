@@ -394,6 +394,14 @@ impl BrowserView {
                 .detach();
             }
             DesignEvent::SaveAssets(assets) => self.save_assets(assets.clone(), cx),
+            DesignEvent::SaveAll { include_videos } => self.save_all_assets(*include_videos, cx),
+            DesignEvent::Export { include_videos } => self.export_from_panel(*include_videos, cx),
+            DesignEvent::Reveal(file) => {
+                let _ = std::process::Command::new("open")
+                    .arg("-R")
+                    .arg(file)
+                    .spawn();
+            }
         }
     }
 

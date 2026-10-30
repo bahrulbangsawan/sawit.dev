@@ -22,6 +22,7 @@ use sawit_core::site_design::tailwind::classes;
 use sawit_core::site_design::tokens::{Tokens, derive};
 use serde_json::{Value, json};
 
+use super::{ExportDone, ExportShown};
 use crate::browser::{BrowserView, OpResult};
 use crate::rt;
 
@@ -130,7 +131,6 @@ impl DesignFlow {
 
 impl BrowserView {
     /// The last export, for the Design panel.
-    #[allow(dead_code)] // read by the Design panel
     pub(crate) fn export_job(&self) -> Option<&ExportJob> {
         self.design.export.as_ref()
     }
@@ -326,6 +326,12 @@ impl BrowserView {
         self.design_panel
             .update(cx, |p, cx| p.hold_note("Saving…", cx));
         let dir = folder.clone();
+        let shown = self
+            .project
+            .as_deref()
+            .and_then(|p| folder.strip_prefix(p).ok())
+            .unwrap_or(&folder)
+            .to_path_buf();
         let job = rt::spawn(cx, async move {
             let outcomes = download_all(assets, &dir, &url, false, MAX_TOTAL, |_, _| {}).await;
             let saved = outcomes.iter().filter(|o| o.error.is_none()).count();
@@ -335,12 +341,63 @@ impl BrowserView {
         cx.spawn(async move |this, cx| {
             let note = match job.await {
                 Ok((0, error)) => error.unwrap_or_else(|| "Nothing was saved.".to_string()),
-                Ok((n, _)) => format!("Saved {n} to {}", folder.display()),
+                Ok((n, _)) => format!(
+                    "Saved {n} file{} to {}",
+                    if n == 1 { "" } else { "s" },
+                    shown.display()
+                ),
                 Err(_) => "The save was cancelled.".to_string(),
             };
             let _ = this.update(cx, |this, cx| this.design_note(note, cx));
         })
         .detach();
+    }
+
+    /// Hands the export's progress to the Design panel.
+    fn sync_export(&mut self, cx: &mut Context<Self>) {
+        let shown = self.export_job().map(|job| ExportShown {
+            folder: job.folder.clone(),
+            done: job.done,
+            total: job.total,
+            outcome: job.result.as_ref().map(|r| {
+                r.as_ref()
+                    .map(|report| ExportDone {
+                        files: report.files.len(),
+                        failed: report.failed.len(),
+                        screenshot_error: report.screenshot_error.clone(),
+                    })
+                    .map_err(Clone::clone)
+            }),
+        });
+        self.design_panel
+            .update(cx, |p, cx| p.set_export(shown, cx));
+    }
+
+    /// Writes the export folder from the panel, or says why not.
+    pub(in crate::browser) fn export_from_panel(
+        &mut self,
+        include_videos: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(e) = self.start_export(include_videos, cx) {
+            self.design_note(e, cx);
+        }
+    }
+
+    /// Downloads every asset of the scanned page into the export folder's `assets/`.
+    pub(in crate::browser) fn save_all_assets(
+        &mut self,
+        include_videos: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let ScanState::Ready(ready) = &self.design.state else {
+            return self.design_note(NOTHING.into(), cx);
+        };
+        let assets = super::assets::save_all_set(&ready.scan, include_videos);
+        if assets.is_empty() {
+            return self.design_note("No assets to save.".into(), cx);
+        }
+        self.save_assets(assets, cx);
     }
 
     /// Shows `text` in the Design panel's footer.
@@ -372,6 +429,7 @@ impl BrowserView {
             total: 0,
             result: None,
         });
+        self.sync_export(cx);
         let (progress, mut progress_rx) = unbounded::<(usize, usize)>();
         cx.spawn(async move |this, cx| {
             while let Some((done, total)) = progress_rx.next().await {
@@ -382,6 +440,7 @@ impl BrowserView {
                         (job.done, job.total) = (done, total);
                         cx.notify();
                     }
+                    this.sync_export(cx);
                 });
                 if alive.is_err() {
                     break;
@@ -402,6 +461,7 @@ impl BrowserView {
                     }));
                     cx.notify();
                 }
+                this.sync_export(cx);
             });
         })
         .detach();

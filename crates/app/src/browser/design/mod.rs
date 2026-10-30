@@ -1,37 +1,49 @@
 //! Design extraction in the browser tab: the scan, inspect and export flow ([`flow`]), over
 //! `sawit_core::site_design`, and the Design panel's views.
 
+mod assets;
 mod colors;
 pub(crate) mod flow;
 mod fonts;
 mod inspect;
+mod system;
 
 use gpui_kit::component::button::*;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::*;
 use gpui_kit::*;
 use sawit_core::site_design::inspect::StyleInfo;
-use sawit_core::site_design::scan::AssetRef;
+use sawit_core::site_design::scan::{AssetKind, AssetRef};
 
 use self::flow::{NOTHING, ScanState};
 use super::panel::note_timer;
 
-/// The panel's segments. Assets and System join in the next step.
+/// The panel's segments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Segment {
     Inspect,
     Colors,
     Fonts,
+    Assets,
+    System,
 }
 
 impl Segment {
-    const ALL: [Segment; 3] = [Segment::Inspect, Segment::Colors, Segment::Fonts];
+    const ALL: [Segment; 5] = [
+        Segment::Inspect,
+        Segment::Colors,
+        Segment::Fonts,
+        Segment::Assets,
+        Segment::System,
+    ];
 
     fn title(self) -> &'static str {
         match self {
             Segment::Inspect => "Inspect",
             Segment::Colors => "Colors",
             Segment::Fonts => "Fonts",
+            Segment::Assets => "Assets",
+            Segment::System => "System",
         }
     }
 }
@@ -44,6 +56,30 @@ pub enum DesignEvent {
     CopyHtml(String),
     /// Download these files.
     SaveAssets(Vec<AssetRef>),
+    /// Download every asset (videos only when asked).
+    SaveAll { include_videos: bool },
+    /// Write the export folder.
+    Export { include_videos: bool },
+    /// Show this file in Finder.
+    Reveal(std::path::PathBuf),
+}
+
+/// What an export that ended wrote.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExportDone {
+    pub files: usize,
+    pub failed: usize,
+    pub screenshot_error: Option<String>,
+}
+
+/// The export as the panel shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExportShown {
+    pub folder: std::path::PathBuf,
+    pub done: usize,
+    pub total: usize,
+    /// None while it runs.
+    pub outcome: Option<Result<ExportDone, String>>,
 }
 
 pub struct DesignPanel {
@@ -51,6 +87,9 @@ pub struct DesignPanel {
     scan: ScanState,
     hovered: Option<StyleInfo>,
     pinned: Option<StyleInfo>,
+    asset_kind: AssetKind,
+    include_videos: bool,
+    export: Option<ExportShown>,
     note: Option<SharedString>,
     _note_timer: Option<Task<()>>,
 }
@@ -64,6 +103,9 @@ impl DesignPanel {
             scan: ScanState::Idle,
             hovered: None,
             pinned: None,
+            asset_kind: AssetKind::Image,
+            include_videos: false,
+            export: None,
             note: None,
             _note_timer: None,
         }
@@ -86,6 +128,14 @@ impl DesignPanel {
         }
         self.scan = scan;
         cx.notify();
+    }
+
+    /// The export's progress, when it changed.
+    pub fn set_export(&mut self, export: Option<ExportShown>, cx: &mut Context<Self>) {
+        if self.export != export {
+            self.export = export;
+            cx.notify();
+        }
     }
 
     pub fn is_pinned(&self) -> bool {
@@ -159,6 +209,15 @@ impl DesignPanel {
                 let ready = ready.clone();
                 match self.segment {
                     Segment::Colors => colors::render(&ready.scan, cx).into_any_element(),
+                    Segment::Assets => {
+                        assets::render(&ready.scan, self.asset_kind, self.include_videos, cx)
+                            .into_any_element()
+                    }
+                    Segment::System => {
+                        let export = self.export.clone();
+                        system::render(&ready.tokens, export.as_ref(), self.include_videos, cx)
+                            .into_any_element()
+                    }
                     _ => fonts::render(&ready.scan, &ready.tokens, cx).into_any_element(),
                 }
             }
@@ -198,6 +257,6 @@ mod tests {
     #[test]
     fn segments_keep_their_order() {
         let titles: Vec<&str> = Segment::ALL.iter().map(|s| s.title()).collect();
-        assert_eq!(titles, ["Inspect", "Colors", "Fonts"]);
+        assert_eq!(titles, ["Inspect", "Colors", "Fonts", "Assets", "System"]);
     }
 }
