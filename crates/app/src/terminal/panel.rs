@@ -271,7 +271,8 @@ impl TerminalPanel {
     }
 
     /// Connects the ended SSH session in `pane` of the tab at `ix` again,
-    /// in place, and focuses it. The tab's other panes are left alone.
+    /// in place, and focuses it. The tab's other panes are left alone, and
+    /// so is a session that has not ended (a second click on Reconnect).
     pub(super) fn reconnect(
         &mut self,
         ix: usize,
@@ -285,7 +286,9 @@ impl TerminalPanel {
         let Some(remote) = tab
             .read(cx)
             .view(pane)
-            .and_then(|v| v.read(cx).remote.clone())
+            .map(|v| v.read(cx))
+            .filter(|v| v.exited)
+            .and_then(|v| v.remote.clone())
         else {
             return;
         };
@@ -447,7 +450,8 @@ impl TerminalPanel {
         Ok(ix)
     }
 
-    /// Closes the tab at `ix`, or only its pane at position `pane`.
+    /// Closes the tab at `ix`, or only its pane at position `pane`. Closing
+    /// a pane moves the keyboard only if it was in that tab.
     pub fn close_tab(
         &mut self,
         ix: usize,
@@ -460,7 +464,10 @@ impl TerminalPanel {
             None => self.close(ix, cx),
             Some(_) => {
                 let (id, _) = self.pane_of(ix, pane, cx)?;
-                self.tabs[ix].update(cx, |t, cx| t.close_pane(id, window, cx));
+                self.tabs[ix].update(cx, |t, cx| {
+                    let refocus = t.has_focus(window, cx);
+                    t.remove_pane(id, refocus, window, cx)
+                });
             }
         }
         Ok(())
@@ -684,13 +691,17 @@ impl TerminalPanel {
         }
     }
 
-    /// Drops a tab whose last pane closed, redraws the strip on changes,
-    /// and does what a pane's banner asks.
+    /// Drops a tab whose last pane closed (handing the keyboard to the next
+    /// tab if it was there), redraws the strip on changes, and does what a
+    /// pane's banner asks.
     fn on_tab_event(&mut self, tab: Entity<TerminalTab>, event: &TabEvent, cx: &mut Context<Self>) {
         match event {
-            TabEvent::Closed => {
+            TabEvent::Closed { refocus } => {
                 if let Some(ix) = self.tabs.iter().position(|t| *t == tab) {
                     self.close(ix, cx);
+                    if *refocus {
+                        self.in_window(cx, |this, window, cx| this.focus_active(window, cx));
+                    }
                 }
             }
             TabEvent::Changed => cx.notify(),
@@ -853,9 +864,7 @@ impl Render for TerminalPanel {
                         (Lucide::Server, format!("{name}{state}"))
                     }
                     None if v.job.is_some() => {
-                        let name = named
-                            .or(v.job.as_ref().map(|j| j.name.as_str()))
-                            .unwrap_or_default();
+                        let name = t.pane_label(t.state.focused, v);
                         let state = if v.exited {
                             " (exited)"
                         } else if v.foreground_job().is_none() {

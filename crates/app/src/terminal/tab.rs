@@ -59,8 +59,10 @@ pub fn pane_menu_items(zoomed: bool, send_right_clicks: bool) -> Vec<(&'static s
 pub enum TabEvent {
     /// A pane's title or state changed, so the tab strip needs a redraw.
     Changed,
-    /// The tab's last pane closed.
-    Closed,
+    /// The tab's last pane closed. `refocus` is set when the keyboard was
+    /// in the tab (or the user closed the pane there), so the panel's next
+    /// tab should take it.
+    Closed { refocus: bool },
     /// The user asked to connect the ended SSH session in this pane again.
     Reconnect(PaneId),
     /// The user asked for a new shell tab.
@@ -96,6 +98,9 @@ pub struct TerminalTab {
     renaming: Option<Rename>,
     /// The window the tab last drew in, where its pane menu opens.
     window: Option<AnyWindowHandle>,
+    /// How many times the tab has drawn (for tests).
+    #[cfg(test)]
+    renders: usize,
 }
 
 /// An open pane menu.
@@ -129,6 +134,8 @@ impl TerminalTab {
             menu: None,
             renaming: None,
             window: None,
+            #[cfg(test)]
+            renders: 0,
         }
     }
 
@@ -243,6 +250,26 @@ impl TerminalTab {
         }
     }
 
+    /// What a pane's header calls it: the name the user gave it, else, as
+    /// in the tab strip, the server of an SSH session or the script it
+    /// runs, else its program's title.
+    pub(super) fn pane_label(&self, pane: PaneId, view: &TerminalView) -> SharedString {
+        let named = self
+            .state
+            .panes
+            .get(&pane)
+            .and_then(|meta| meta.name.clone());
+        let fixed = view
+            .remote
+            .as_ref()
+            .map(|r| r.name.clone())
+            .or_else(|| view.job.as_ref().map(|j| j.name.clone()));
+        match named.or(fixed) {
+            Some(name) => name.into(),
+            None => view.title.clone(),
+        }
+    }
+
     /// The name the user gave the focused pane, if any.
     pub fn pane_name(&self) -> Option<&str> {
         self.state
@@ -345,9 +372,10 @@ impl TerminalTab {
         self.remove_pane(pane, true, window, cx);
     }
 
-    /// Closes `pane` like `close_pane`. The tab's next focused pane gets
-    /// the keyboard only when `refocus` is set.
-    fn remove_pane(
+    /// Closes `pane` like `close_pane`. Only when `refocus` is set does the
+    /// keyboard go to the tab's next focused pane (or, for the last pane,
+    /// to the panel's next tab).
+    pub(super) fn remove_pane(
         &mut self,
         pane: PaneId,
         refocus: bool,
@@ -359,7 +387,7 @@ impl TerminalTab {
             Removed::Last => {
                 self.menu = None;
                 self.renaming = None;
-                cx.emit(TabEvent::Closed);
+                cx.emit(TabEvent::Closed { refocus });
             }
             Removed::Focus(_) => {
                 self.views.remove(&pane);
@@ -479,7 +507,7 @@ impl TerminalTab {
         let Some(view) = self.views.get(&pane) else {
             return;
         };
-        let title = self.pane_title(pane, view.read(cx));
+        let title = self.pane_label(pane, view.read(cx));
         let input = cx.new(|cx| InputState::new(window, cx).default_value(title));
         input.update(cx, |s, cx| {
             s.focus(window, cx);
@@ -557,29 +585,37 @@ impl TerminalTab {
         cx.notify();
     }
 
-    /// A pane's header: what runs there and where, and its buttons.
+    /// A pane's header: what runs there and where (not for SSH, whose
+    /// folder would be the local `ssh`'s), whether it is zoomed, and its
+    /// buttons. A long name or folder is cut short before the buttons are.
     fn render_header(
         &self,
         pane: PaneId,
         view: &Entity<TerminalView>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let folder = view.update(cx, |v, cx| v.folder(cx)).map(|dir| tilde(&dir));
+        let remote = view.read(cx).remote.is_some();
+        let folder = if remote {
+            None
+        } else {
+            view.update(cx, |v, cx| v.folder(cx)).map(|dir| tilde(&dir))
+        };
         let v = view.read(cx);
-        let icon = if v.remote.is_some() {
+        let icon = if remote {
             Lucide::Server
         } else if v.job.is_some() {
             Lucide::Play
         } else {
             Lucide::Terminal
         };
-        let title = self.pane_title(pane, v);
+        let title = self.pane_label(pane, v);
         let zoomed = self.state.zoomed == Some(pane);
         let (zoom_icon, zoom_tip) = if zoomed {
             (Lucide::Minimize, "Unzoom")
         } else {
             (Lucide::Maximize, "Zoom")
         };
+        let muted = cx.theme().muted_foreground;
         h_flex()
             .h(HEADER_H)
             .flex_none()
@@ -590,11 +626,22 @@ impl TerminalTab {
             .bg(cx.theme().tab_bar)
             .border_b(HEADER_BORDER)
             .border_color(cx.theme().border)
-            .child(Icon::new(icon).xsmall())
+            .child(div().flex_none().child(Icon::new(icon).xsmall()))
             .child(
                 self.rename_field(cx.entity().downgrade(), pane)
-                    .unwrap_or_else(|| div().flex_none().child(title).into_any_element()),
+                    .unwrap_or_else(|| {
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(title)
+                            .into_any_element()
+                    }),
             )
+            .when(zoomed, |el| {
+                el.child(div().flex_none().text_color(muted).child("Zoomed"))
+            })
             .child(
                 div()
                     .flex_1()
@@ -602,38 +649,43 @@ impl TerminalTab {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis()
-                    .text_color(cx.theme().muted_foreground)
+                    .text_color(muted)
                     .when_some(folder, |el, folder| el.child(folder)),
             )
             .child(
-                Button::new(("pane-split", pane))
-                    .ghost()
-                    .xsmall()
-                    .icon(Lucide::Columns2)
-                    .tooltip("Split right")
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.focus_pane(pane, window, cx);
-                        window.dispatch_action(Box::new(SplitRight), cx);
-                    })),
-            )
-            .child(
-                Button::new(("pane-zoom", pane))
-                    .ghost()
-                    .xsmall()
-                    .icon(zoom_icon)
-                    .tooltip(zoom_tip)
-                    .on_click(
-                        cx.listener(move |this, _, window, cx| this.toggle_zoom(pane, window, cx)),
-                    ),
-            )
-            .child(
-                Button::new(("pane-close", pane))
-                    .ghost()
-                    .xsmall()
-                    .icon(Lucide::X)
-                    .tooltip("Close pane")
-                    .on_click(
-                        cx.listener(move |this, _, window, cx| this.close_pane(pane, window, cx)),
+                h_flex()
+                    .flex_none()
+                    .gap_1()
+                    .child(
+                        Button::new(("pane-split", pane))
+                            .ghost()
+                            .xsmall()
+                            .icon(Lucide::Columns2)
+                            .tooltip("Split right")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.focus_pane(pane, window, cx);
+                                window.dispatch_action(Box::new(SplitRight), cx);
+                            })),
+                    )
+                    .child(
+                        Button::new(("pane-zoom", pane))
+                            .ghost()
+                            .xsmall()
+                            .icon(zoom_icon)
+                            .tooltip(zoom_tip)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.toggle_zoom(pane, window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new(("pane-close", pane))
+                            .ghost()
+                            .xsmall()
+                            .icon(Lucide::X)
+                            .tooltip("Close pane")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.close_pane(pane, window, cx)
+                            })),
                     ),
             )
     }
@@ -758,6 +810,10 @@ fn tilde(path: &Path) -> String {
 
 impl Render for TerminalTab {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        {
+            self.renders += 1;
+        }
         self.window = Some(window.window_handle());
         let bounds = self.bounds.clone();
         let this = cx.entity().downgrade();
@@ -912,6 +968,7 @@ mod tests {
     use super::super::TerminalPanel;
 
     use super::super::testing::{focus_terminal, init, open_panel};
+    use super::super::view::FOLDER_TTL;
     use super::pane_menu_items;
 
     /// A fresh, empty folder under the temp dir, by its real path (what a
@@ -1120,18 +1177,143 @@ mod tests {
         let dir = scratch_dir("header-cd");
         cx.update(|cx| view.read(cx).cd(&dir));
         // No more input: only the passing of time may bring the header up
-        // to date.
-        let deadline = Instant::now() + Duration::from_millis(1500);
+        // to date. Time is the test clock's, moved one folder check at a
+        // time, with a moment between for the shell to run the `cd`.
+        let mut checks = 0;
         while cx.update(|cx| view.read(cx).cached_folder()).as_ref() != Some(&dir) {
-            assert!(
-                Instant::now() < deadline,
-                "the header still shows the old folder"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-            cx.executor().advance_clock(Duration::from_millis(50));
+            assert!(checks < 60, "the header still shows the old folder");
+            checks += 1;
+            std::thread::sleep(Duration::from_millis(20));
+            cx.executor().advance_clock(FOLDER_TTL);
             cx.run_until_parked();
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui_kit::test]
+    fn an_idle_split_tab_does_not_redraw(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let tab = cx.update(|cx| panel.read(cx).tab(0).clone());
+        let renders = |cx: &mut TestAppContext| cx.update(|cx| tab.read(cx).renders);
+        // Let the shells finish starting: half a second with no redraw.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut last = renders(cx);
+        let mut quiet_since = Instant::now();
+        while quiet_since.elapsed() < Duration::from_millis(500) {
+            assert!(Instant::now() < deadline, "the shells never went quiet");
+            std::thread::sleep(Duration::from_millis(20));
+            cx.run_until_parked();
+            let now = renders(cx);
+            if now != last {
+                last = now;
+                quiet_since = Instant::now();
+            }
+        }
+        // A last frame or two of output, as a shell's prompt would draw.
+        for _ in 0..2 {
+            cx.update(|cx| tab.update(cx, |_, cx| cx.notify()));
+            cx.run_until_parked();
+        }
+
+        let before = renders(cx);
+        for _ in 0..10 {
+            cx.executor().advance_clock(FOLDER_TTL);
+            cx.run_until_parked();
+        }
+        let redraws = renders(cx) - before;
+        assert!(
+            redraws <= 1,
+            "an idle split tab redrew {redraws} times in 10 folder checks"
+        );
+    }
+
+    /// The index of `tab` in `panel`'s strip.
+    fn index_of(
+        cx: &mut TestAppContext,
+        panel: &Entity<TerminalPanel>,
+        tab: &Entity<super::TerminalTab>,
+    ) -> usize {
+        cx.update(|cx| {
+            let p = panel.read(cx);
+            (0..p.tab_count())
+                .find(|&ix| p.tab(ix) == tab)
+                .expect("the tab is in the panel")
+        })
+    }
+
+    #[gpui_kit::test]
+    fn closing_a_background_pane_by_index_leaves_the_keyboard_alone(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let background = cx.update(|cx| panel.read(cx).tab(0).clone());
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.open_shell(Some(window), cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        let active = cx.update(|cx| {
+            let p = panel.read(cx);
+            p.tab(p.active_index()).clone()
+        });
+        assert!(active != background, "the new tab is not the active one");
+        let typing = cx.update(|cx| active.read(cx).focused_view().focus_handle(cx));
+        let has_keyboard = |cx: &mut TestAppContext| {
+            cx.update_window(w, |_, window, _| typing.is_focused(window))
+                .unwrap()
+        };
+        assert!(has_keyboard(cx), "the new tab did not take the keyboard");
+
+        let ix = index_of(cx, &panel, &background);
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.close_tab(ix, Some(1), window, cx))
+        })
+        .unwrap()
+        .unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| assert_eq!(background.read(cx).views().count(), 1));
+        assert!(
+            has_keyboard(cx),
+            "closing a background pane took the keyboard"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn closing_a_tabs_only_pane_gives_the_keyboard_to_the_next_tab(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.open_shell(Some(window), cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        let closing = cx.update(|cx| {
+            let p = panel.read(cx);
+            assert_eq!(p.tab_count(), 2);
+            p.tab(p.active_index()).clone()
+        });
+        focus_terminal(cx, w, &panel);
+        let pane = cx.update(|cx| closing.read(cx).state.focused);
+        cx.update_window(w, |_, window, cx| {
+            closing.update(cx, |t, cx| t.run_menu_item(pane, "Close pane", window, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        let next = cx.update(|cx| {
+            let p = panel.read(cx);
+            assert_eq!(p.tab_count(), 1);
+            p.tab(p.active_index()).clone()
+        });
+        let kept = cx
+            .update_window(w, |_, window, cx| next.read(cx).has_focus(window, cx))
+            .unwrap();
+        assert!(kept, "the keyboard did not go to the next tab");
     }
 
     #[gpui_kit::test]
@@ -1463,11 +1645,10 @@ mod tests {
         cx.update(|cx| assert_eq!(tab.read(cx).views().count(), 2));
     }
 
-    #[gpui_kit::test]
-    fn reconnecting_replaces_only_the_ended_pane(cx: &mut TestAppContext) {
-        cx.update(init);
-        let (w, panel) = open_panel(cx);
-        let remote = super::super::Remote {
+    /// A stand-in SSH server "test": a session that ends once it reads a
+    /// line.
+    fn test_remote() -> super::super::Remote {
+        super::super::Remote {
             key: "test".into(),
             name: "test".into(),
             launch: sawit_core::ssh::Launch {
@@ -1475,9 +1656,15 @@ mod tests {
                 args: vec!["-c".into(), "read line".into()],
                 env: Vec::new(),
             },
-        };
+        }
+    }
+
+    #[gpui_kit::test]
+    fn reconnecting_replaces_only_the_ended_pane(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
         cx.update_window(w, |_, window, cx| {
-            panel.update(cx, |p, cx| p.open_ssh(remote, Some(window), cx))
+            panel.update(cx, |p, cx| p.open_ssh(test_remote(), Some(window), cx))
         })
         .unwrap();
         cx.run_until_parked();
@@ -1511,6 +1698,85 @@ mod tests {
             assert!(*new != ended, "the pane still holds the ended session");
             let v = new.read(cx);
             assert!(!v.exited && v.remote.is_some());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn ssh_and_script_pane_headers_use_the_tab_strips_names(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.open_ssh(test_remote(), Some(window), cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        let tab = cx.update(|cx| {
+            let p = panel.read(cx);
+            p.tab(p.active_index()).clone()
+        });
+        let (ssh, ssh_view) = cx.update(|cx| {
+            let t = tab.read(cx);
+            (t.state.focused, t.focused_view().clone())
+        });
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let (script, script_view) = cx.update(|cx| {
+            let t = tab.read(cx);
+            assert_eq!(t.views().count(), 2);
+            (t.state.focused, t.focused_view().clone())
+        });
+        // The programs set their own titles, which the headers pass over.
+        cx.update(|cx| {
+            ssh_view.update(cx, |v, _| v.title = "zsh".into());
+            script_view.update(cx, |v, _| {
+                v.title = "node".into();
+                v.job = Some(super::super::JobTag {
+                    key: "dev".into(),
+                    name: "dev".into(),
+                });
+            });
+        });
+        cx.update(|cx| {
+            let t = tab.read(cx);
+            assert_eq!(t.pane_label(ssh, ssh_view.read(cx)), "test");
+            assert_eq!(t.pane_label(script, script_view.read(cx)), "dev");
+        });
+        cx.update(|cx| tab.update(cx, |t, _| t.state.rename(ssh, "prod")));
+        cx.update(|cx| {
+            let t = tab.read(cx);
+            assert_eq!(t.pane_label(ssh, ssh_view.read(cx)), "prod");
+        });
+    }
+
+    #[gpui_kit::test]
+    fn reconnecting_a_live_session_keeps_it(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.open_ssh(test_remote(), Some(window), cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        let (ix, tab) = cx.update(|cx| {
+            let p = panel.read(cx);
+            (p.active_index(), p.tab(p.active_index()).clone())
+        });
+        let (pane, live) = cx.update(|cx| {
+            let t = tab.read(cx);
+            (t.state.focused, t.focused_view().clone())
+        });
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.reconnect(ix, pane, window, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let t = tab.read(cx);
+            assert!(
+                *t.focused_view() == live,
+                "reconnecting replaced a live session"
+            );
+            assert!(!live.read(cx).exited);
         });
     }
 

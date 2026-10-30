@@ -28,7 +28,7 @@ const TOAST: Duration = Duration::from_millis(1400);
 /// Space left and right of the grid.
 pub(super) const PAD_X: Pixels = px(8.);
 /// How long a pane header shows a folder before asking the OS again.
-const FOLDER_TTL: Duration = Duration::from_millis(500);
+pub(super) const FOLDER_TTL: Duration = Duration::from_millis(500);
 
 /// Grid origin and cell size on screen.
 type GridLayout = (Point<Pixels>, Size<Pixels>);
@@ -131,7 +131,8 @@ pub struct TerminalView {
     toast: Option<Task<()>>,
     /// The last `cwd()` answer for the pane header, and when it was asked.
     folder: Option<(Instant, Option<PathBuf>)>,
-    /// Redraws once the cached folder is due to be asked again.
+    /// Asks for the folder again a moment after the header last read it,
+    /// redrawing if it changed.
     folder_refresh: Option<Task<()>>,
     _events: Task<()>,
 }
@@ -235,27 +236,33 @@ impl TerminalView {
     }
 
     /// The program's folder for display. Asks the OS at most every 500 ms,
-    /// since headers redraw with every frame of output. A cached answer
-    /// schedules one redraw for when it expires, so after a `cd` the header
-    /// settles on the new folder even if no more output comes.
+    /// since headers redraw with every frame of output. Each read also
+    /// schedules one more look 500 ms later, so after a `cd` the header
+    /// settles on the new folder even if no more output comes. That look
+    /// redraws only when the folder changed, so an idle pane stays idle.
     pub fn folder(&mut self, cx: &mut Context<Self>) -> Option<PathBuf> {
-        if let Some((at, dir)) = &self.folder
-            && at.elapsed() < FOLDER_TTL
-        {
-            if self.folder_refresh.is_none() {
-                let wait = FOLDER_TTL.saturating_sub(at.elapsed());
-                self.folder_refresh = Some(cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(wait).await;
-                    let _ = this.update(cx, |this, cx| {
-                        this.folder_refresh = None;
-                        cx.notify();
-                    });
-                }));
+        let dir = match &self.folder {
+            Some((at, dir)) if at.elapsed() < FOLDER_TTL => dir.clone(),
+            _ => {
+                let dir = self.cwd();
+                self.folder = Some((Instant::now(), dir.clone()));
+                dir
             }
-            return dir.clone();
+        };
+        if self.folder_refresh.is_none() {
+            self.folder_refresh = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(FOLDER_TTL).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.folder_refresh = None;
+                    let dir = this.cwd();
+                    let changed = this.folder.as_ref().is_none_or(|(_, old)| *old != dir);
+                    this.folder = Some((Instant::now(), dir));
+                    if changed {
+                        cx.notify();
+                    }
+                });
+            }));
         }
-        let dir = self.cwd();
-        self.folder = Some((Instant::now(), dir.clone()));
         dir
     }
 
