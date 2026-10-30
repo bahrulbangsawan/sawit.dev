@@ -1,0 +1,29 @@
+{
+  "url": "https://mono.example/",
+  "title": "Mono",
+  "viewport": [1280, 800],
+  "truncated": false,
+  "colors": [
+    { "value": "rgb(17, 17, 17)", "role": "text", "count": 120 },
+    { "value": "rgb(255, 255, 255)", "role": "background", "count": 80 },
+    { "value": "rgb(102, 102, 102)", "role": "text", "count": 30 },
+    { "value": "rgb(229, 229, 229)", "role": "border", "count": 20 },
+    { "value": "rgb(0, 0, 0)", "role": "background", "count": 4, "on_button": 4 },
+    { "value": "rgb(68, 68, 68)", "role": "text", "count": 10, "on_link": 10 }
+  ],
+  "texts": [
+    { "tag": "p", "in_main": false, "family": "Inter, sans-serif", "used_family": "Inter", "size": 16, "weight": 400, "line_height": 24, "letter_spacing": null, "color": "rgb(17, 17, 17)", "chars": 2000 }
+  ],
+  "spacing": [],
+  "radii": [],
+  "shadows": [],
+  "body_background": "rgb(255, 255, 255)",
+  "focus_ring": null,
+  "font_faces": [],
+  "variables": [],
+  "breakpoints": [],
+  "assets": [],
+  "components": [],
+  "blocked_sheets": [],
+  "manifest": null
+}
