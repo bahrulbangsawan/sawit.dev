@@ -169,6 +169,10 @@ fn figcraft_key(key: &str, mut mods: Mods) -> (Cow<'_, str>, Mods) {
 /// - In vector edit mode ⌘X takes the selected points out of their paths, healing each path
 ///   through them, or with no point selected the selected segments, and the layers stay. Nothing
 ///   is copied: it is [`KeyOutcome::Handled`], and the system clipboard stays as it was.
+/// - Delete (⌫) while the Pen draws finishes its path, which stays, where `edit.delete` would
+///   take the path being drawn, which is selected, off the canvas.
+/// - ⌘ with an arrow resizes the selection by the nudge (`transform.nudgeSize`): right and down
+///   grow it, left and up shrink it, its top-left kept.
 ///
 /// A key that is no shortcut and no key FigCraft knows is [`KeyOutcome::Unhandled`] too. What the
 /// commands ask of the view stays in `session.ui_requests` for the caller. Errors are the engine's
@@ -193,6 +197,11 @@ pub fn route_key(board: &mut BoardDoc, key: &str, mods: Mods) -> Result<KeyOutco
             "select.none" => guard::run("ui.escape", || board.session.escape())?,
             "select.children" => enter(board)?,
             "edit.cut" if vector_editing(&board.session) => cut_points(board)?,
+            "edit.delete" if board.session.tool.pen.is_some() => {
+                let session = &mut board.session;
+                // As in FigCraft, a pen that can't finish leaves nothing to report.
+                let _ = guard::run("ui.penFinish", || session.pen_finish());
+            }
             id => return run(board, id),
         }
         return Ok(KeyOutcome::Handled);
@@ -208,13 +217,22 @@ pub fn route_key(board: &mut BoardDoc, key: &str, mods: Mods) -> Result<KeyOutco
                 "ArrowUp" => (0, -1),
                 _ => (0, 1),
             };
-            // With nothing selected the arrows pan the view.
-            let cmd = if board.session.selection().is_empty() {
-                "view.pan"
+            // With nothing selected the arrows pan the view; with ⌘ they resize the selection,
+            // right and down growing it.
+            let (cmd, params) = if board.session.selection().is_empty() {
+                ("view.pan", json!({"dx": dx, "dy": dy, "big": mods.shift}))
+            } else if mods.cmd {
+                (
+                    "transform.nudgeSize",
+                    json!({"dw": dx, "dh": dy, "big": mods.shift}),
+                )
             } else {
-                "transform.nudge"
+                (
+                    "transform.nudge",
+                    json!({"dx": dx, "dy": dy, "big": mods.shift}),
+                )
             };
-            board.execute(cmd, &json!({"dx": dx, "dy": dy, "big": mods.shift}))?;
+            board.execute(cmd, &params)?;
         }
         // Number keys set the selection's opacity. With nothing selected they do nothing, as in
         // FigCraft's own keyboard (the command would refuse).
@@ -1305,5 +1323,130 @@ mod tests {
         ] {
             assert_eq!(resize_dir(angle), dir, "{angle}");
         }
+    }
+
+    /// A click of the tool chosen at page point (`x`, `y`): a press and its release.
+    fn click(board: &mut BoardDoc, x: f64, y: f64) {
+        send(
+            board,
+            &[at(PointerKind::Down, x, y), at(PointerKind::Up, x, y)],
+        );
+    }
+
+    /// A new 100 × 80 rectangle at page point (0, 0), and only it selected.
+    fn rectangle(board: &mut BoardDoc) -> NodeId {
+        let made = board
+            .execute(
+                "shape.rectangle",
+                &json!({"x": 0, "y": 0, "width": 100, "height": 80}),
+            )
+            .unwrap();
+        let rect = figcraft_engine::params::id_of(&made["id"]).unwrap();
+        select(board, rect);
+        rect
+    }
+
+    /// As FigCraft's own keyboard finishes the pen's path on Delete (ui-egui shortcuts.rs
+    /// `run_binding`), where the edit.delete the key is bound to would take the path being drawn,
+    /// which is selected, off the canvas mid-way.
+    #[test]
+    fn delete_while_the_pen_draws_finishes_the_path() {
+        for key in ["Backspace", "Delete"] {
+            let mut board = design();
+            board.execute("tool.pen", &json!({})).unwrap();
+            click(&mut board, 0.0, 0.0);
+            click(&mut board, 100.0, 0.0);
+            // The path being drawn is a layer already, and selected.
+            let [path] = layers(&board)[..] else {
+                panic!("layers {:?}", layers(&board))
+            };
+            assert_eq!(board.session.selection(), [path], "{key}");
+            assert!(board.session.tool.pen.is_some());
+            assert_eq!(route_key(&mut board, key, NONE), Ok(KeyOutcome::Handled));
+            // Finished, not deleted: the path stays with its 2 points, the Pen stays chosen,
+            // and its next click starts another path.
+            assert_eq!(layers(&board), [path], "{key}");
+            assert_eq!(network(&board, path).vertices.len(), 2, "{key}");
+            assert!(board.session.tool.pen.is_none(), "{key}");
+            assert_eq!(tool(&board), "pen");
+            // The path is one undo step.
+            assert_eq!(board.session.undo_depth(), (1, 0), "{key}");
+        }
+    }
+
+    #[test]
+    fn delete_after_the_pens_first_point_deletes_nothing() {
+        let mut board = design();
+        let rect = rectangle(&mut board);
+        board.execute("tool.pen", &json!({})).unwrap();
+        // One point: nothing drawn yet, and the pen is under way.
+        click(&mut board, 300.0, 300.0);
+        assert!(board.session.tool.pen.is_some());
+        assert_eq!(
+            route_key(&mut board, "Backspace", NONE),
+            Ok(KeyOutcome::Handled)
+        );
+        assert_eq!(layers(&board), [rect]);
+        assert!(board.session.tool.pen.is_none());
+        assert_eq!(tool(&board), "pen");
+    }
+
+    /// As FigCraft's own keyboard resizes with ⌘ and an arrow (ui-egui shortcuts.rs `key_event`;
+    /// keymap.rs GESTURES "⌘ arrows"): right and down grow, left and up shrink, by the nudge, its
+    /// top-left kept.
+    #[test]
+    fn cmd_and_an_arrow_resize_the_selection() {
+        let mut board = design();
+        let rect = rectangle(&mut board);
+        let (small, big) = (
+            board.session.prefs.nudge_small,
+            board.session.prefs.nudge_big,
+        );
+        let size = |board: &BoardDoc| {
+            let doc = board.doc().unwrap();
+            let n = doc.node(rect).unwrap();
+            (n.width, n.height)
+        };
+        let top_left = |board: &BoardDoc| {
+            let bounds = board.doc().unwrap().world_bounds(rect).unwrap();
+            (bounds.x0, bounds.y0)
+        };
+        assert_eq!(
+            route_key(&mut board, "ArrowRight", CMD),
+            Ok(KeyOutcome::Handled)
+        );
+        assert_eq!(size(&board), (100.0 + small, 80.0));
+        assert_eq!(
+            route_key(&mut board, "ArrowUp", CMD),
+            Ok(KeyOutcome::Handled)
+        );
+        assert_eq!(size(&board), (100.0 + small, 80.0 - small));
+        // With Shift, by the big nudge.
+        let shift_cmd = Mods { shift: true, ..CMD };
+        assert_eq!(
+            route_key(&mut board, "ArrowDown", shift_cmd),
+            Ok(KeyOutcome::Handled)
+        );
+        assert_eq!(size(&board), (100.0 + small, 80.0 - small + big));
+        assert_eq!(top_left(&board), (0.0, 0.0));
+        // Without ⌘ an arrow moves it, as before.
+        assert_eq!(
+            route_key(&mut board, "ArrowRight", NONE),
+            Ok(KeyOutcome::Handled)
+        );
+        assert_eq!(top_left(&board), (small, 0.0));
+        assert_eq!(size(&board), (100.0 + small, 80.0 - small + big));
+        // With nothing selected, ⌘ and an arrow pan the view, as an arrow does.
+        board.execute("select.none", &json!({})).unwrap();
+        let (view, doc) = (
+            board.session.ds().unwrap().view.clone(),
+            board.doc().unwrap(),
+        );
+        assert_eq!(
+            route_key(&mut board, "ArrowLeft", CMD),
+            Ok(KeyOutcome::Handled)
+        );
+        assert_ne!(board.session.ds().unwrap().view, view);
+        assert_eq!(board.doc().unwrap(), doc);
     }
 }
