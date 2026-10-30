@@ -244,7 +244,7 @@ explained. A conflict on the same address can't be forced.
 - **Boards and design files**: the project's canvas is a board, for sticky notes, shapes with text, connectors,
   marker drawing, stamps and sections. A `.figcraft` file opened from the **Files** tab gets its own canvas tab,
   as a board or as a design file (frames, vectors, auto layout and components), and saves back to the same file.
-- **Tools and the toolbar**: the toolbar floats at the bottom of the canvas, and each button's tooltip shows its key.
+- **Tools and the toolbar**: the toolbar floats at the bottom of the canvas, and each tool's tooltip shows its key when it has one.
   - A board has Move and Hand, Marker, Highlighter and Eraser, Sticky notes in eight colours, Shapes, Connectors
     (straight, elbow or curved), Text, Section, Stamps, and a picker for templates and tables. A bar over the
     selection offers its colour, shape, text size and connector style and ends.
@@ -260,9 +260,10 @@ explained. A conflict on the same address can't be forced.
   by name, and <kbd>⌃</kbd><kbd>⇧</kbd><kbd>?</kbd> lists every shortcut. While the canvas has the keyboard,
   <kbd>⌘</kbd><kbd>K</kbd> belongs to the palette, so the tab chords that start with it don't work there.
 - **Where files live**: the project's canvas is `.nyawit/canvas.figcraft` in its folder. With no project it is
-  `canvas.figcraft` in Sawit's data folder. Exports go to `.nyawit/exports/` (`exports/` in the data folder with no
-  project), and Sawit shows them in Finder. **Save as…** (<kbd>⇧</kbd><kbd>⌘</kbd><kbd>S</kbd>) writes a `.figcraft`
-  copy anywhere. `.nyawit/` has its own `.gitignore`, so nothing in it is committed until you delete that file.
+  `canvas.figcraft` in Sawit's data folder. Exports go to `.nyawit/exports/`, or to `exports/` in the data folder
+  with no project or for a canvas file outside a project's `.nyawit/` (a `.figcraft` opened from the Files tab, say),
+  and Sawit shows them in Finder. **Save as…** (<kbd>⇧</kbd><kbd>⌘</kbd><kbd>S</kbd>) writes a `.figcraft` copy
+  anywhere. `.nyawit/` has its own `.gitignore`, so nothing in it is committed until you delete that file.
 - **From the old canvas**: a project that has only its old `.nyawit/canvas.excalidraw` opens it imported the first
   time. The `.excalidraw` file is never changed, and the canvas says what the import left out (the hand-drawn look
   doesn't carry over). An `.excalidraw` file in the Files tab opens the same way and saves as `<name>.figcraft`
