@@ -374,7 +374,8 @@ impl BrowserView {
                 drop(self.page_op(json!({ "op": "flash", "selector": selector })));
             }
             DesignEvent::CopyHtml(selector) => {
-                let info = self.inspect(json!({ "selector": selector }), true, cx);
+                // Not the latest-only path: a hover meanwhile neither drops nor is dropped.
+                let info = self.style_info(json!({ "selector": selector }), true, cx);
                 cx.spawn(async move |this, cx| {
                     let note = match info.await {
                         Ok(info) => match info.html {
@@ -386,7 +387,6 @@ impl BrowserView {
                             }
                             None => "The page gave no markup.".to_string(),
                         },
-                        Err(e) if e == design::flow::STALE_INSPECT => return,
                         Err(e) => e,
                     };
                     let _ = this.update(cx, |this, cx| this.design_note(note, cx));
@@ -395,37 +395,6 @@ impl BrowserView {
             }
             DesignEvent::SaveAssets(assets) => self.save_assets(assets.clone(), cx),
         }
-    }
-
-    /// The page reported the pointer on an element in inspect mode (or a click picked one):
-    /// reads its styles for the Design panel.
-    fn inspect_element(&mut self, selector: String, pin: bool, cx: &mut Context<Self>) {
-        if self.panel != Some(Panel::Design) {
-            return;
-        }
-        let (pinned, shown) = {
-            let p = self.design_panel.read(cx);
-            (p.is_pinned(), p.shown_selector() == Some(selector.as_str()))
-        };
-        // A pinned element stays on show until a click picks another or Unpin.
-        if (pinned && !pin) || (shown && !pin) {
-            return;
-        }
-        let info = self.inspect(json!({ "selector": selector }), false, cx);
-        cx.spawn(async move |this, cx| {
-            // Stale and failed answers leave the view as it was.
-            let Ok(info) = info.await else { return };
-            let _ = this.update(cx, |this, cx| {
-                this.design_panel.update(cx, |panel, cx| {
-                    if pin {
-                        panel.pin(info, cx);
-                    } else {
-                        panel.set_hovered(info, cx);
-                    }
-                });
-            });
-        })
-        .detach();
     }
 
     fn on_annotate(&mut self, event: &AnnotateEvent, cx: &mut Context<Self>) {

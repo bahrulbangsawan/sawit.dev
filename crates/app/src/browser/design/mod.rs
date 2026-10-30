@@ -92,14 +92,6 @@ impl DesignPanel {
         self.pinned.is_some()
     }
 
-    /// The selector on show (pinned, else hovered).
-    pub fn shown_selector(&self) -> Option<&str> {
-        self.pinned
-            .as_ref()
-            .or(self.hovered.as_ref())
-            .map(|i| i.selector.as_str())
-    }
-
     pub fn set_hovered(&mut self, info: StyleInfo, cx: &mut Context<Self>) {
         self.hovered = Some(info);
         cx.notify();
@@ -121,6 +113,13 @@ impl DesignPanel {
     pub fn set_note(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.note = Some(text.into());
         self._note_timer = Some(note_timer(cx, |this: &mut Self| this.note = None));
+        cx.notify();
+    }
+
+    /// Shows `text` until the next note replaces it (work in progress).
+    pub fn hold_note(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.note = Some(text.into());
+        self._note_timer = None;
         cx.notify();
     }
 

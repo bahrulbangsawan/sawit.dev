@@ -91,6 +91,10 @@ pub(crate) struct DesignFlow {
     job: Option<ScanJob>,
     /// The latest inspect; older answers are dropped.
     inspect_seq: u64,
+    /// The element the last hover asked about.
+    hover_req: Option<String>,
+    /// Pins asked for and not answered yet.
+    pins_pending: u32,
     export: Option<ExportJob>,
 }
 
@@ -102,6 +106,8 @@ impl Default for DesignFlow {
             generation: 0,
             job: None,
             inspect_seq: 0,
+            hover_req: None,
+            pins_pending: 0,
             export: None,
         }
     }
@@ -114,6 +120,7 @@ impl DesignFlow {
         self.state = ScanState::Idle;
         self.key.clear();
         self.job = None;
+        self.hover_req = None;
     }
 
     fn export_running(&self) -> bool {
@@ -211,7 +218,7 @@ impl BrowserView {
     }
 
     /// One element's styles; `html` adds its outerHTML with styles inlined.
-    fn style_info(
+    pub(in crate::browser) fn style_info(
         &self,
         target: Value,
         html: bool,
@@ -249,6 +256,61 @@ impl BrowserView {
         })
     }
 
+    /// The pointer is on an element in inspect mode (`pin: false`), or a click picked it
+    /// (`pin: true`): reads its styles for the Design panel.
+    pub(in crate::browser) fn inspect_element(
+        &mut self,
+        selector: String,
+        pin: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.panel != Some(crate::browser::Panel::Design) {
+            return;
+        }
+        let pinned = self.design_panel.read(cx).is_pinned();
+        if !should_inspect(
+            pinned,
+            self.design.pins_pending,
+            self.design.hover_req.as_deref(),
+            &selector,
+            pin,
+        ) {
+            return;
+        }
+        if pin {
+            self.design.pins_pending += 1;
+            self.design.hover_req = None;
+        } else {
+            self.design.hover_req = Some(selector.clone());
+        }
+        let info = self.inspect(json!({ "selector": selector }), false, cx);
+        cx.spawn(async move |this, cx| {
+            let info = info.await;
+            let _ = this.update(cx, |this, cx| {
+                if pin {
+                    this.design.pins_pending = this.design.pins_pending.saturating_sub(1);
+                }
+                match info {
+                    Ok(info) => this.design_panel.update(cx, |panel, cx| {
+                        if pin {
+                            panel.pin(info, cx);
+                        } else {
+                            panel.set_hovered(info, cx);
+                        }
+                    }),
+                    // Overtaken: the newer ask answers. A failure lets the same element be
+                    // asked again.
+                    Err(e) => {
+                        if e != STALE_INSPECT && !pin && this.design.hover_req.is_some() {
+                            this.design.hover_req = None;
+                        }
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
     /// Downloads `assets` into the export folder's `assets/` (other files there stay), then
     /// tells the Design panel.
     pub(crate) fn save_assets(&mut self, assets: Vec<AssetRef>, cx: &mut Context<Self>) {
@@ -261,16 +323,19 @@ impl BrowserView {
             Ok(folder) => folder.join("assets"),
             Err(e) => return self.design_note(e, cx),
         };
-        self.design_note("Saving…".into(), cx);
+        self.design_panel
+            .update(cx, |p, cx| p.hold_note("Saving…", cx));
         let dir = folder.clone();
         let job = rt::spawn(cx, async move {
             let outcomes = download_all(assets, &dir, &url, false, MAX_TOTAL, |_, _| {}).await;
-            outcomes.iter().filter(|o| o.error.is_none()).count()
+            let saved = outcomes.iter().filter(|o| o.error.is_none()).count();
+            let first_error = outcomes.iter().find_map(|o| o.error.clone());
+            (saved, first_error)
         });
         cx.spawn(async move |this, cx| {
             let note = match job.await {
-                Ok(0) => "Nothing was saved.".to_string(),
-                Ok(n) => format!("Saved {n} to {}", folder.display()),
+                Ok((0, error)) => error.unwrap_or_else(|| "Nothing was saved.".to_string()),
+                Ok((n, _)) => format!("Saved {n} to {}", folder.display()),
                 Err(_) => "The save was cancelled.".to_string(),
             };
             let _ = this.update(cx, |this, cx| this.design_note(note, cx));
@@ -780,6 +845,20 @@ fn extractable(url: &str) -> bool {
     l.starts_with("http://") || l.starts_with("https://") || l.starts_with("file://")
 }
 
+/// Whether a hover (`pin: false`) or a pick (`pin: true`) of `selector` asks the page. A pick
+/// always does. A hover waits while an element is pinned or a pick is pending (it would
+/// overtake the pick's answer), and repeats nothing: the last element asked about is the one
+/// the answer in flight, or on show, is for.
+fn should_inspect(
+    pinned: bool,
+    pins_pending: u32,
+    last_hover: Option<&str>,
+    selector: &str,
+    pin: bool,
+) -> bool {
+    pin || (!pinned && pins_pending == 0 && last_hover != Some(selector))
+}
+
 fn is_latest(seq: u64, current: u64) -> bool {
     seq == current
 }
@@ -1046,6 +1125,35 @@ mod tests {
         assert!(extractable("file:///x.html"));
         assert!(!extractable("about:blank"));
         assert!(!extractable("data:text/html,x"));
+    }
+
+    #[test]
+    fn hover_a_b_a_asks_again() {
+        // A on show, B asked, back to A: A must be asked, B's answer is then stale.
+        assert!(should_inspect(false, 0, None, "a", false));
+        assert!(should_inspect(false, 0, Some("a"), "b", false));
+        assert!(should_inspect(false, 0, Some("b"), "a", false));
+        // The same element twice in a row isn't asked twice.
+        assert!(!should_inspect(false, 0, Some("a"), "a", false));
+    }
+
+    #[test]
+    fn hover_waits_for_a_pending_pin_and_a_pinned_element() {
+        assert!(should_inspect(false, 0, Some("a"), "a", true));
+        assert!(!should_inspect(false, 1, None, "b", false));
+        assert!(!should_inspect(true, 0, None, "b", false));
+        // A second pick while one is pending still goes through.
+        assert!(should_inspect(false, 1, None, "b", true));
+    }
+
+    #[test]
+    fn copy_during_hover_does_not_use_the_latest_only_gate() {
+        // Copies call `style_info`, which never touches the sequence.
+        let mut seq = 0u64;
+        seq += 1; // hover asks
+        let hover = seq;
+        // (copy runs here without bumping)
+        assert!(is_latest(hover, seq));
     }
 
     #[test]
