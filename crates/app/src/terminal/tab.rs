@@ -1,7 +1,8 @@
 //! One terminal tab: its panes, each a `TerminalView`, arranged by a
 //! `TabState` split layout. A tab with one pane shows it full size; with
 //! more, each pane gets a header and a border, and the dividers between
-//! them can be dragged.
+//! them can be dragged. Right-clicking a pane opens its menu (rename,
+//! split, zoom, right-click routing, close).
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -9,16 +10,20 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::base::POPUP_PRIORITY;
 use gpui_kit::component::button::*;
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
+use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::terminal::{
-    Direction, MIN_COLS, MIN_ROWS, PaneId, Rect, SplitDir, SplitPath, TabState, new_pane_id,
+    Direction, MIN_COLS, MIN_ROWS, PaneId, Rect, Removed, SplitDir, SplitPath, TabState,
+    new_pane_id,
 };
 
 use super::view::{PAD_X, TerminalEvent, TerminalView, cell_size};
-use super::{FocusDown, FocusLeft, FocusRight, FocusUp, SplitRight};
+use super::{FocusDown, FocusLeft, FocusRight, FocusUp, SplitDown, SplitRight};
 
 /// Height of a pane's header, its bottom border included (boxes are
 /// border-box, so the border takes from this height).
@@ -32,13 +37,26 @@ const PANE_BORDER: Pixels = px(1.);
 const ROUNDING: f32 = 1.;
 /// Width of the grab strip centred on each divider.
 const DIVIDER_HIT: f32 = 5.;
+/// Width of the field that renames a pane.
+const RENAME_W: Pixels = px(160.);
+
+/// The pane menu, in order: each label, with `Some(checked)` for a toggle.
+pub fn pane_menu_items(zoomed: bool, send_right_clicks: bool) -> Vec<(&'static str, Option<bool>)> {
+    vec![
+        ("Rename pane", None),
+        ("Split right", None),
+        ("Split down", None),
+        (if zoomed { "Unzoom" } else { "Zoom" }, None),
+        ("Send right-clicks to pane", Some(send_right_clicks)),
+        ("Close pane", None),
+    ]
+}
 
 /// What a tab tells the panel.
 pub enum TabEvent {
     /// A pane's title or state changed, so the tab strip needs a redraw.
     Changed,
     /// The tab's last pane closed.
-    #[expect(dead_code, reason = "emitted once single panes can be closed")]
     Closed,
 }
 
@@ -65,6 +83,27 @@ pub struct TerminalTab {
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The divider under the mouse while it is dragged.
     drag: Option<Drag>,
+    /// The pane menu while it is open.
+    menu: Option<Menu>,
+    /// The pane being renamed, if any.
+    renaming: Option<Rename>,
+    /// The window the tab last drew in, where its pane menu opens.
+    window: Option<AnyWindowHandle>,
+}
+
+/// An open pane menu.
+struct Menu {
+    view: Entity<PopupMenu>,
+    /// Where it opens, in window coordinates.
+    at: Point<Pixels>,
+    _dismiss: Subscription,
+}
+
+/// A pane being renamed.
+struct Rename {
+    pane: PaneId,
+    input: Entity<InputState>,
+    _events: Subscription,
 }
 
 impl EventEmitter<TabEvent> for TerminalTab {}
@@ -73,21 +112,29 @@ impl TerminalTab {
     /// A tab holding `view` as its only pane.
     pub fn new(view: Entity<TerminalView>, group: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
         let pane = new_pane_id();
-        Self::watch(&view, cx);
+        Self::watch(pane, &view, cx);
         Self {
             state: TabState::new(pane),
             views: HashMap::from([(pane, view)]),
             group,
             bounds: Rc::new(Cell::new(None)),
             drag: None,
+            menu: None,
+            renaming: None,
+            window: None,
         }
     }
 
-    /// Redraws the tab strip when the pane's title or state changes.
-    fn watch(view: &Entity<TerminalView>, cx: &mut Context<Self>) {
-        cx.subscribe(view, |_, _, _: &TerminalEvent, cx| {
-            cx.emit(TabEvent::Changed)
-        })
+    /// Opens the pane menu when asked, and redraws the tab strip when the
+    /// pane's title or state changes.
+    fn watch(pane: PaneId, view: &Entity<TerminalView>, cx: &mut Context<Self>) {
+        cx.subscribe(
+            view,
+            move |this, _, event: &TerminalEvent, cx| match event {
+                TerminalEvent::MenuRequested(at) => this.request_menu(pane, *at, cx),
+                TerminalEvent::TitleChanged | TerminalEvent::Exited => cx.emit(TabEvent::Changed),
+            },
+        )
         .detach();
     }
 
@@ -117,6 +164,14 @@ impl TerminalTab {
             Some(name) => name.into(),
             None => view.title.clone(),
         }
+    }
+
+    /// The name the user gave the focused pane, if any.
+    pub fn pane_name(&self) -> Option<&str> {
+        self.state
+            .panes
+            .get(&self.state.focused)
+            .and_then(|meta| meta.name.as_deref())
     }
 
     /// The focused pane's name, else its program's title.
@@ -166,7 +221,7 @@ impl TerminalTab {
         {
             return false;
         }
-        Self::watch(&view, cx);
+        Self::watch(pane, &view, cx);
         self.views.insert(pane, view);
         self.focus(window, cx);
         cx.emit(TabEvent::Changed);
@@ -205,6 +260,192 @@ impl TerminalTab {
         self.focus_pane(pane, window, cx);
         self.state.toggle_zoom();
         cx.notify();
+    }
+
+    /// Closes `pane`, ending its process. The last pane closes the tab: its
+    /// terminal goes with the tab, which the panel drops on `Closed`.
+    pub fn close_pane(&mut self, pane: PaneId, window: &mut Window, cx: &mut Context<Self>) {
+        match self.state.close(pane) {
+            Removed::NotFound => {}
+            Removed::Last => {
+                self.menu = None;
+                self.renaming = None;
+                cx.emit(TabEvent::Closed);
+            }
+            Removed::Focus(_) => {
+                self.views.remove(&pane);
+                if self.renaming.as_ref().is_some_and(|r| r.pane == pane) {
+                    self.renaming = None;
+                }
+                self.focus(window, cx);
+                cx.emit(TabEvent::Changed);
+                cx.notify();
+            }
+        }
+    }
+
+    /// Opens the pane menu for `pane` once the window can be reached (an
+    /// event from a pane comes without it).
+    fn request_menu(&mut self, pane: PaneId, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(handle) = self.window else {
+            return;
+        };
+        let tab = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, cx| {
+                tab.update(cx, |t, cx| t.open_menu(pane, at, window, cx))
+            });
+        });
+    }
+
+    /// Shows the pane menu for `pane` at `at` (window coordinates) and
+    /// gives it the keyboard; dismissing it hands the keyboard back.
+    fn open_menu(
+        &mut self,
+        pane: PaneId,
+        at: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(view) = self.views.get(&pane) else {
+            return;
+        };
+        let back = view.focus_handle(cx);
+        let zoomed = self.state.zoomed == Some(pane);
+        let send = self
+            .state
+            .panes
+            .get(&pane)
+            .is_some_and(|meta| meta.send_right_clicks);
+        let tab = cx.entity().downgrade();
+        let menu = PopupMenu::build(window, cx, move |mut menu, _, _| {
+            menu = menu.action_context(back);
+            for (label, checked) in pane_menu_items(zoomed, send) {
+                let tab = tab.clone();
+                let item = match checked {
+                    Some(checked) => PopupMenuItem::new(label).checked(checked),
+                    None => PopupMenuItem::new(label),
+                };
+                menu = menu.item(item.on_click(move |_, window, cx| {
+                    let _ = tab.update(cx, |t, cx| t.run_menu_item(pane, label, window, cx));
+                }));
+            }
+            menu
+        });
+        menu.focus_handle(cx).focus(window, cx);
+        let dismiss = cx.subscribe(&menu, |this, menu, _: &DismissEvent, cx| {
+            if this.menu.as_ref().is_some_and(|m| m.view == menu) {
+                this.menu = None;
+                cx.notify();
+            }
+        });
+        self.menu = Some(Menu {
+            view: menu,
+            at,
+            _dismiss: dismiss,
+        });
+        cx.notify();
+    }
+
+    /// Does what the pane menu item `label` says, to `pane`.
+    fn run_menu_item(
+        &mut self,
+        pane: PaneId,
+        label: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match label {
+            "Rename pane" => self.start_rename(pane, window, cx),
+            "Split right" => {
+                self.focus_pane(pane, window, cx);
+                window.dispatch_action(Box::new(SplitRight), cx);
+            }
+            "Split down" => {
+                self.focus_pane(pane, window, cx);
+                window.dispatch_action(Box::new(SplitDown), cx);
+            }
+            "Zoom" | "Unzoom" => self.toggle_zoom(pane, window, cx),
+            "Send right-clicks to pane" => {
+                self.state.toggle_right_clicks(pane);
+                let send = self
+                    .state
+                    .panes
+                    .get(&pane)
+                    .is_some_and(|meta| meta.send_right_clicks);
+                if let Some(view) = self.views.get(&pane) {
+                    view.update(cx, |v, _| v.send_right_clicks = send);
+                }
+            }
+            "Close pane" => self.close_pane(pane, window, cx),
+            _ => {}
+        }
+    }
+
+    /// Puts a field for `pane`'s name in its header (in the tab strip when
+    /// the tab has one pane), filled with its title and selected. Enter
+    /// names the pane; Escape or leaving the field keeps the old name.
+    pub(super) fn start_rename(
+        &mut self,
+        pane: PaneId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(view) = self.views.get(&pane) else {
+            return;
+        };
+        let title = self.pane_title(pane, view.read(cx));
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(title));
+        input.update(cx, |s, cx| {
+            s.focus(window, cx);
+            s.select_all(window, cx);
+        });
+        let events = cx.subscribe_in(&input, window, move |this, input, e, window, cx| match e {
+            InputEvent::PressEnter { .. } => {
+                let name = input.read(cx).value();
+                this.state.rename(pane, &name);
+                this.end_rename(window, cx);
+            }
+            InputEvent::Blur => {
+                this.renaming = None;
+                cx.emit(TabEvent::Changed);
+                cx.notify();
+            }
+            InputEvent::Change | InputEvent::Focus => {}
+        });
+        self.renaming = Some(Rename {
+            pane,
+            input,
+            _events: events,
+        });
+        cx.emit(TabEvent::Changed);
+        cx.notify();
+    }
+
+    /// Closes the rename field and gives the keyboard back to the pane.
+    fn end_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.renaming = None;
+        self.focus(window, cx);
+        cx.emit(TabEvent::Changed);
+        cx.notify();
+    }
+
+    /// The field renaming `pane`, while it is open.
+    pub fn rename_field(&self, tab: WeakEntity<Self>, pane: PaneId) -> Option<AnyElement> {
+        let rename = self.renaming.as_ref().filter(|r| r.pane == pane)?;
+        Some(
+            div()
+                .w(RENAME_W)
+                .flex_none()
+                .on_action(move |_: &Escape, window, cx| {
+                    let _ = tab.update(cx, |t, cx| t.end_rename(window, cx));
+                })
+                // A click in the field must not reach the pane or tab under
+                // it, which would take the keyboard and close the field.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(Input::new(&rename.input).xsmall())
+                .into_any_element(),
+        )
     }
 
     /// Moves the dragged divider to `position` (window coordinates).
@@ -265,7 +506,10 @@ impl TerminalTab {
             .border_b(HEADER_BORDER)
             .border_color(cx.theme().border)
             .child(Icon::new(icon).xsmall())
-            .child(div().flex_none().child(title))
+            .child(
+                self.rename_field(cx.entity().downgrade(), pane)
+                    .unwrap_or_else(|| div().flex_none().child(title).into_any_element()),
+            )
             .child(
                 div()
                     .flex_1()
@@ -298,13 +542,14 @@ impl TerminalTab {
                     ),
             )
             .child(
-                // Closing a single pane comes with the pane menu.
                 Button::new(("pane-close", pane))
                     .ghost()
                     .xsmall()
                     .icon(Lucide::X)
                     .tooltip("Close pane")
-                    .disabled(true),
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.close_pane(pane, window, cx)),
+                    ),
             )
     }
 
@@ -365,11 +610,22 @@ fn tilde(path: &Path) -> String {
 
 impl Render for TerminalTab {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.window = Some(window.window_handle());
         let bounds = self.bounds.clone();
         let this = cx.entity().downgrade();
+        let menu = self.menu.as_ref().map(|menu| {
+            deferred(
+                anchored()
+                    .position(menu.at)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(menu.view.clone()),
+            )
+            .with_priority(POPUP_PRIORITY)
+        });
         let root = div()
             .relative()
             .size_full()
+            .children(menu)
             .on_action(cx.listener(|this, _: &FocusLeft, window, cx| {
                 this.move_focus(Direction::Left, window, cx)
             }))
@@ -479,14 +735,15 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use gpui_kit::{
-        AnyWindowHandle, App, AppContext as _, Bounds, Entity, Pixels, Point, TestAppContext,
-        point, px,
+        AnyWindowHandle, App, AppContext as _, Bounds, Entity, Modifiers, MouseButton, Pixels,
+        Point, TestAppContext, VisualTestContext, point, px,
     };
     use sawit_core::terminal::{Layout, MIN_COLS, MIN_ROWS, SplitDir};
 
     use super::super::TerminalPanel;
 
     use super::super::testing::{focus_terminal, init, open_panel};
+    use super::pane_menu_items;
 
     /// A fresh, empty folder under the temp dir, by its real path (what a
     /// process's cwd reports).
@@ -768,5 +1025,125 @@ mod tests {
             new.read(cx).cwd().as_ref() == Some(&project)
         });
         let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn pane_menu_matches_herdr() {
+        let labels: Vec<_> = pane_menu_items(false, true)
+            .into_iter()
+            .map(|(l, _)| l)
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                "Rename pane",
+                "Split right",
+                "Split down",
+                "Zoom",
+                "Send right-clicks to pane",
+                "Close pane"
+            ]
+        );
+        assert_eq!(pane_menu_items(true, false)[3].0, "Unzoom");
+        assert_eq!(pane_menu_items(false, true)[4].1, Some(true));
+    }
+
+    #[gpui_kit::test]
+    fn closing_panes_closes_the_tab_last(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let tab = cx.update(|cx| panel.read(cx).tab(0).clone());
+        let panes = cx.update(|cx| tab.read(cx).state.layout.panes());
+        assert_eq!(panes.len(), 2);
+
+        let close = |cx: &mut TestAppContext, pane| {
+            cx.update_window(w, |_, window, cx| {
+                tab.update(cx, |t, cx| t.close_pane(pane, window, cx))
+            })
+            .unwrap();
+            cx.run_until_parked();
+        };
+        let focused = cx.update(|cx| tab.read(cx).state.focused);
+        close(cx, focused);
+        cx.update(|cx| {
+            let t = tab.read(cx);
+            assert_eq!(t.views().count(), 1);
+            assert_eq!(t.views.len(), 1, "the closed pane's terminal was kept");
+            assert_eq!(t.state.focused, panes[0]);
+        });
+
+        close(cx, panes[0]);
+        cx.update(|cx| assert_eq!(panel.read(cx).tab_count(), 0));
+    }
+
+    #[gpui_kit::test]
+    fn renaming_a_pane_names_it_over_the_program_title(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        let tab = cx.update(|cx| panel.read(cx).tab(0).clone());
+        let pane = cx.update(|cx| tab.read(cx).state.focused);
+        cx.update_window(w, |_, window, cx| {
+            tab.update(cx, |t, cx| t.start_rename(pane, window, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.simulate_input(w, "build");
+        cx.simulate_keystrokes(w, "enter");
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let t = tab.read(cx);
+            assert!(t.renaming.is_none());
+            assert_eq!(t.title(cx), "build");
+        });
+        let back = cx
+            .update_window(w, |_, window, cx| tab.read(cx).has_focus(window, cx))
+            .unwrap();
+        assert!(back, "the keyboard did not go back to the pane");
+    }
+
+    #[gpui_kit::test]
+    fn right_clicks_open_the_pane_menu_unless_sent_on(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        let tab = cx.update(|cx| panel.read(cx).tab(0).clone());
+        let pane = cx.update(|cx| tab.read(cx).state.focused);
+        let at = cx.update(|cx| tab.read(cx).bounds.get().unwrap().center());
+        let mut vcx = VisualTestContext::from_window(w, cx);
+        let right_click = |vcx: &mut VisualTestContext, modifiers: Modifiers| {
+            vcx.simulate_mouse_down(at, MouseButton::Right, modifiers);
+            vcx.simulate_mouse_up(at, MouseButton::Right, modifiers);
+            vcx.run_until_parked();
+        };
+        let menu_open =
+            |vcx: &mut VisualTestContext| vcx.update(|_, cx| tab.read(cx).menu.is_some());
+
+        right_click(&mut vcx, Modifiers::default());
+        assert!(menu_open(&mut vcx), "a right-click did not open the menu");
+
+        vcx.update(|window, cx| {
+            tab.update(cx, |t, cx| {
+                t.run_menu_item(pane, "Send right-clicks to pane", window, cx);
+                t.menu = None;
+            })
+        });
+        let sent = vcx.update(|_, cx| tab.read(cx).focused_view().read(cx).send_right_clicks);
+        assert!(sent, "the pane does not send right-clicks on");
+        // The shell does not take the mouse, so the click goes nowhere.
+        right_click(&mut vcx, Modifiers::default());
+        assert!(
+            !menu_open(&mut vcx),
+            "the menu opened for a sent right-click"
+        );
+
+        right_click(&mut vcx, Modifiers::shift());
+        assert!(
+            menu_open(&mut vcx),
+            "Shift+right-click did not open the menu"
+        );
     }
 }

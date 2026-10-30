@@ -70,6 +70,35 @@ pub(super) fn cell_size(window: &Window, cx: &App) -> Size<Pixels> {
 pub enum TerminalEvent {
     TitleChanged,
     Exited,
+    /// A right-click asked for the pane menu, at this window position.
+    MenuRequested(Point<Pixels>),
+}
+
+/// Where a right-click goes.
+pub enum RightClick {
+    /// Opens the pane menu.
+    Menu,
+    /// Goes to the program as a mouse report.
+    Program,
+    /// Goes nowhere: the pane sends right-clicks on, but its program does
+    /// not take the mouse.
+    Nothing,
+}
+
+/// Where a right-click goes. Shift always opens the menu; otherwise it goes
+/// to the program when the pane is set to send right-clicks on.
+pub fn right_click_target(
+    send_right_clicks: bool,
+    shift: bool,
+    program_has_mouse: bool,
+) -> RightClick {
+    if shift || !send_right_clicks {
+        RightClick::Menu
+    } else if program_has_mouse {
+        RightClick::Program
+    } else {
+        RightClick::Nothing
+    }
 }
 
 impl EventEmitter<TerminalEvent> for TerminalView {}
@@ -88,6 +117,9 @@ pub struct TerminalView {
     pub remote: Option<super::Remote>,
     /// Started from the Run panel: which script, under its name.
     pub job: Option<super::JobTag>,
+    /// Right-clicks go to the program instead of opening the pane menu
+    /// (the tab keeps this in step with the pane's settings).
+    pub send_right_clicks: bool,
     /// Grid origin and cell size from the last paint, for mouse mapping.
     layout: Rc<Cell<Option<GridLayout>>>,
     pressed: Option<TermButton>,
@@ -161,6 +193,7 @@ impl TerminalView {
             touched: false,
             remote: None,
             job: None,
+            send_right_clicks: false,
             layout: Rc::new(Cell::new(None)),
             pressed: None,
             selecting: false,
@@ -617,13 +650,24 @@ impl Render for TerminalView {
             )
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(|this, e: &MouseDownEvent, _, _| {
-                    if this.send_mouse(
-                        MouseAction::Press(TermButton::Right),
-                        e.position,
+                cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                    let target = right_click_target(
+                        this.send_right_clicks,
                         e.modifiers.shift,
-                    ) {
-                        this.pressed = Some(TermButton::Right);
+                        this.modes().mouse_report,
+                    );
+                    match target {
+                        RightClick::Menu => cx.emit(TerminalEvent::MenuRequested(e.position)),
+                        RightClick::Program => {
+                            if this.send_mouse(
+                                MouseAction::Press(TermButton::Right),
+                                e.position,
+                                false,
+                            ) {
+                                this.pressed = Some(TermButton::Right);
+                            }
+                        }
+                        RightClick::Nothing => {}
                     }
                 }),
             )
@@ -991,5 +1035,14 @@ mod tests {
         assert!(focused, "focus left the terminal");
         let received = cx.update(|cx| host.read(cx).received.clone());
         assert_eq!(received, keys.split(' ').collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn right_clicks_open_the_menu_unless_sent_to_the_pane() {
+        use super::{RightClick::*, right_click_target};
+        assert!(matches!(right_click_target(false, false, true), Menu));
+        assert!(matches!(right_click_target(true, false, true), Program));
+        assert!(matches!(right_click_target(true, false, false), Nothing));
+        assert!(matches!(right_click_target(true, true, true), Menu));
     }
 }

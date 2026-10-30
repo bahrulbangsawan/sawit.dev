@@ -716,9 +716,15 @@ impl Render for TerminalPanel {
                 .collect();
             let weak = weak.clone();
             let grouped = group.is_some();
+            // A one-pane tab is renamed in its label.
+            let rename = (!t.state.is_split())
+                .then(|| t.rename_field(tab.downgrade(), t.state.focused))
+                .flatten();
+            let named = t.pane_name();
             tabs.push({
                 // SSH tabs keep the server's name (the remote shell's title
                 // says little across servers), numbered when it is open twice.
+                // A name the user gave the pane goes over either.
                 let (icon, label) = match &v.remote {
                     Some(r) => {
                         let same = |w: &Entity<TerminalTab>| {
@@ -728,7 +734,9 @@ impl Render for TerminalPanel {
                                 .is_some_and(|o| o.key == r.key)
                         };
                         let nth = self.tabs[..ix].iter().filter(|w| same(w)).count();
-                        let name = if nth > 0 || self.tabs[ix + 1..].iter().any(same) {
+                        let name = if let Some(named) = named {
+                            named.to_string()
+                        } else if nth > 0 || self.tabs[ix + 1..].iter().any(same) {
                             format!("{} {}", r.name, nth + 1)
                         } else {
                             r.name.clone()
@@ -737,7 +745,9 @@ impl Render for TerminalPanel {
                         (Lucide::Server, format!("{name}{state}"))
                     }
                     None if v.job.is_some() => {
-                        let name = v.job.as_ref().map(|j| j.name.as_str()).unwrap_or_default();
+                        let name = named
+                            .or(v.job.as_ref().map(|j| j.name.as_str()))
+                            .unwrap_or_default();
                         let state = if v.exited {
                             " (exited)"
                         } else if v.foreground_job().is_none() {
@@ -771,7 +781,10 @@ impl Render for TerminalPanel {
                             || (v.job.is_some() && v.foreground_job().is_some()),
                         |i| i.text_color(cx.theme().success),
                     ))
-                    .child(label)
+                    .map(|el| match rename {
+                        Some(field) => el.child(field),
+                        None => el.child(label),
+                    })
                     .child(
                         Button::new(("close-term", ix))
                             .ghost()
