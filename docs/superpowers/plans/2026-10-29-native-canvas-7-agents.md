@@ -462,14 +462,26 @@ excalidraw drew them"):
   look right today. The importer joined every bound end, so the engine routed each message onto
   its note, and a connector from a node to itself became a stub (`skeleton::apply` frees one end
   of such a connector, with a note). `mermaid.rs` handles both cases on the native path already.
-- Fix (`crates/board/src/excalidraw.rs`): an end whose binding `focus` is outside -1..1 stays free
-  where it is drawn; a line bound to one element at both ends joins neither, and such an arrow with
-  no label is ink along its route with its triangle head drawn in it (Excalidraw's size: half the
+- Fix (`crates/board/src/excalidraw.rs`): an end stays free where it is drawn when it runs beside
+  the element it is bound to, that is when its binding's `focus` is outside -1..1 and the line,
+  carried on past that end, misses the element's box (turned by its angle, as Excalidraw measures
+  a focus); a line bound to one element at both ends joins neither, and such an arrow with no
+  label is ink along its route with its triangle head drawn in it (Excalidraw's size: half the
   last step, at most 15, 25° to each side). Every other binding in the two files seen here has
   |focus| ≤ 0.76, and the real board migrates exactly as before (same counts after the fix).
-- Tests (RED before the fix, GREEN after): `an_end_bound_to_an_element_it_runs_beside_stays_where_
-  it_is_drawn`, `an_arrow_bound_to_one_element_at_both_ends_joins_neither`,
-  `a_loop_back_to_one_element_is_drawn_along_its_route_with_its_head`.
+- Review fix round 1 added the box test. Excalidraw 0.18.1's `determineFocusDistance` (minified
+  `pg` in `crates/app/canvas/chunks/chunk-W2HEY36P.js`) divides a diamond's axis crossing by the
+  axis at its index after filtering and sorting, so an arrow straight down into the top of a
+  289 × 123 diamond is written with focus 1.138 at 70 off its centre and 1.626 at 100, though it
+  meets the diamond. With the focus alone it came in free; now it joins. A focus up to ±1 (or none)
+  still joins wherever the line is drawn, since today's canvas moved only two-point arrows along
+  when a script moved a shape. Re-checked: the six-diagram file migrates element for element as
+  at launch 5, and a copy of the real board gives the same counts with no notes.
+- Tests (RED before the fix, GREEN after):
+  `an_end_bound_to_an_element_it_runs_beside_stays_where_it_is_drawn`,
+  `an_arrow_bound_to_one_element_at_both_ends_joins_neither`,
+  `a_loop_back_to_one_element_is_drawn_along_its_route_with_its_head`, and from the fix round
+  `an_arrow_into_a_diamond_joins_it_whatever_its_focus_says`.
 - Live, launch 5 (the same file, a fresh project): both loops are loops with their heads, and
   "Hello" and "Hi" run level from lifeline to lifeline as today's canvas draws them: 22 connectors
   and 2 ink, where launch 4 had 24 connectors. `canvas_load` of the file answers no `notes`.
