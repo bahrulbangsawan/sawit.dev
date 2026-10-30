@@ -166,6 +166,9 @@ fn figcraft_key(key: &str, mut mods: Mods) -> (Cow<'_, str>, Mods) {
 ///   to copy, cut and paste the text's characters; any other ⌘ with a character is
 ///   [`KeyOutcome::Unhandled`].
 /// - A number key with nothing selected is [`KeyOutcome::Unhandled`].
+/// - In vector edit mode ⌘X takes the selected points out of their paths, healing each path
+///   through them, or with no point selected the selected segments, and the layers stay. Nothing
+///   is copied: it is [`KeyOutcome::Handled`], and the system clipboard stays as it was.
 ///
 /// A key that is no shortcut and no key FigCraft knows is [`KeyOutcome::Unhandled`] too. What the
 /// commands ask of the view stays in `session.ui_requests` for the caller. Errors are the engine's
@@ -189,6 +192,7 @@ pub fn route_key(board: &mut BoardDoc, key: &str, mods: Mods) -> Result<KeyOutco
         match id {
             "select.none" => guard::run("ui.escape", || board.session.escape())?,
             "select.children" => enter(board)?,
+            "edit.cut" if vector_editing(&board.session) => cut_points(board)?,
             id => return run(board, id),
         }
         return Ok(KeyOutcome::Handled);
@@ -368,6 +372,31 @@ fn single_text(session: &Session) -> Option<NodeId> {
 /// The selected layers Enter edits as vectors.
 fn vector_targets(session: &Session) -> Option<Vec<NodeId>> {
     vectoredit::enter_targets(session.doc().ok()?, &session.selection())
+}
+
+/// Whether layers are edited as vectors (vector edit mode).
+fn vector_editing(session: &Session) -> bool {
+    session.ds().is_ok_and(|ds| ds.vector_edit.is_some())
+}
+
+/// ⌘X in vector edit mode, as FigCraft's own keyboard cuts there (ui-egui shortcuts.rs `cut`):
+/// the selected points go, in every layer edited, each taken out with a heal that joins the path
+/// through it; else the selected segments go; with nothing selected, nothing does. The layers
+/// stay, and nothing is copied.
+fn cut_points(board: &mut BoardDoc) -> Result<(), BoardError> {
+    let parts = board
+        .session
+        .ds()?
+        .vector_edit
+        .as_ref()
+        .map(|edit| edit.parts())
+        .unwrap_or_default();
+    if parts.iter().any(|part| !part.vertices.is_empty()) {
+        board.execute("vector.deleteHeal", &json!({}))?;
+    } else if parts.iter().any(|part| !part.segments.is_empty()) {
+        board.execute("vector.edit.delete", &json!({}))?;
+    }
+    Ok(())
 }
 
 /// A pointer event of `kind` at `local`, a point of the canvas in logical px from its top-left,
@@ -847,6 +876,117 @@ mod tests {
         let edit = board.session.ds().unwrap().vector_edit.clone().unwrap();
         assert_eq!(edit.vertices.len(), 4);
         assert_eq!(board.session.selection(), [rect]);
+    }
+
+    /// A new open path through three points in a row at height `y`: A (100, y), B (200, y) and
+    /// C (300, y).
+    fn three_points(board: &mut BoardDoc, y: i32) -> NodeId {
+        let made = board
+            .execute(
+                "vector.create",
+                &json!({"points": [[100, y], [200, y], [300, y]], "closed": false}),
+            )
+            .unwrap();
+        figcraft_engine::params::id_of(&made["id"]).unwrap()
+    }
+
+    /// The path A-B-C ([`three_points`]) edited as a vector, with B selected, as in FigCraft's
+    /// tests of the cut in vector edit mode (ui-egui vector_keys_tests.rs).
+    fn abc(board: &mut BoardDoc) -> NodeId {
+        let path = three_points(board, 100);
+        board
+            .execute("vector.edit.begin", &json!({"id": path}))
+            .unwrap();
+        board
+            .execute("vector.edit.select", &json!({"vertices": [1]}))
+            .unwrap();
+        path
+    }
+
+    /// The points and segments of path `id`.
+    fn network(board: &BoardDoc, id: NodeId) -> figcraft_doc::VectorNetwork {
+        vectoredit::network(&board.doc().unwrap(), id)
+            .unwrap()
+            .clone()
+    }
+
+    #[test]
+    fn cmd_x_in_vector_edit_mode_takes_the_selected_points_not_the_layer() {
+        let mut board = board();
+        let path = abc(&mut board);
+        assert_eq!(route_key(&mut board, "x", CMD), Ok(KeyOutcome::Handled));
+        // B is gone and a heal joins A and C: the layer stays, still edited.
+        assert!(board.doc().unwrap().node(path).is_some());
+        let net = network(&board, path);
+        assert_eq!(net.vertices.len(), 2, "{net:?}");
+        assert_eq!(net.segments.len(), 1, "{net:?}");
+        assert!(board.session.ds().unwrap().vector_edit.is_some());
+        // Nothing was copied, so the view has nothing to put on the system clipboard.
+        assert!(board.session.clipboard.nodes.is_empty());
+    }
+
+    #[test]
+    fn cmd_x_in_vector_edit_mode_with_nothing_selected_keeps_the_layer() {
+        let mut board = board();
+        let path = abc(&mut board);
+        board
+            .execute("vector.edit.select", &json!({"vertices": []}))
+            .unwrap();
+        let doc = board.doc().unwrap();
+        assert_eq!(route_key(&mut board, "x", CMD), Ok(KeyOutcome::Handled));
+        assert_eq!(network(&board, path).vertices.len(), 3);
+        assert_eq!(board.doc().unwrap(), doc);
+        assert!(board.session.clipboard.nodes.is_empty());
+    }
+
+    #[test]
+    fn cmd_x_in_vector_edit_mode_takes_points_selected_in_another_edited_layer() {
+        let mut board = board();
+        let (a, b) = (three_points(&mut board, 100), three_points(&mut board, 200));
+        vectoredit::begin_many(&mut board.session, &[a, b]).unwrap();
+        // Points selected in the second layer, then the first made active: only the layer that
+        // isn't active has a selection.
+        board
+            .execute("vector.edit.select", &json!({"id": b, "vertices": [1]}))
+            .unwrap();
+        board
+            .execute("vector.edit.select", &json!({"id": a, "add": true}))
+            .unwrap();
+        assert_eq!(route_key(&mut board, "x", CMD), Ok(KeyOutcome::Handled));
+        let doc = board.doc().unwrap();
+        assert!(doc.node(a).is_some() && doc.node(b).is_some());
+        assert_eq!(network(&board, a).vertices.len(), 3);
+        assert_eq!(network(&board, b).vertices.len(), 2);
+    }
+
+    #[test]
+    fn cmd_x_in_vector_edit_mode_takes_the_selected_segments() {
+        let mut board = board();
+        let path = abc(&mut board);
+        // A-B selected, and no point: the segment goes, and A with it, which nothing joins now.
+        board
+            .execute("vector.edit.select", &json!({"segments": [0]}))
+            .unwrap();
+        assert_eq!(route_key(&mut board, "x", CMD), Ok(KeyOutcome::Handled));
+        assert!(board.doc().unwrap().node(path).is_some());
+        let net = network(&board, path);
+        assert_eq!(net.segments.len(), 1, "{net:?}");
+        assert_eq!(net.vertices.len(), 2, "{net:?}");
+        assert!(board.session.clipboard.nodes.is_empty());
+    }
+
+    #[test]
+    fn cmd_x_outside_vector_edit_mode_cuts_the_layer_in_the_view() {
+        let mut board = board();
+        let path = three_points(&mut board, 100);
+        select(&mut board, path);
+        let doc = board.doc().unwrap();
+        // The selected path itself is cut, by the view, with the system clipboard.
+        assert_eq!(
+            route_key(&mut board, "x", CMD),
+            Ok(KeyOutcome::Ui("edit.cut"))
+        );
+        assert_eq!(board.doc().unwrap(), doc);
     }
 
     #[test]
