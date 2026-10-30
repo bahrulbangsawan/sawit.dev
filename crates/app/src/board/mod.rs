@@ -22,8 +22,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use figcraft_doc::Document;
 use figcraft_doc::color::Color;
-use figcraft_doc::{Document, NodeId};
 use figcraft_engine::{UiRequest, ViewState};
 use figcraft_render::{Options, View};
 use futures::StreamExt as _;
