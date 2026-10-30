@@ -232,24 +232,26 @@ git commit -m "feat(canvas): floating toolbar, top bar and context bar on the na
 Run: `cargo test --workspace`
 Expected: all pass.
 
-#### Task 4 notes: live check (2026-10-30, at `c5d882b` and `b978572`, lane 4)
+#### Task 4 notes: live check (2026-10-30, at `c5d882b` and lane commit `b978572`, lane 4)
 
 Steps 1–3 passed over the control socket. So did the checks that the reviews of Tasks 2 and 3 left
 to this one: the context bar's menu widths, its clamping, the marked tool button and the toast over
 the toolbar. The check found one defect: a selection below the view sent the context bar under the
-toolbar. It is fixed in `b978572` (see "The context bar under the toolbar" below).
-`cargo test --workspace` passes at `b978572`: 1136 passed, 9 ignored and 0 failed. Step 4 needs the
-user: its checks are under "Hand checks (pending — needs the user)" below, with the ones the reviews
-of Tasks 2 and 3 asked for. Machine: Apple M3 (8 cores, 16 GB), macOS 26.6.1, window scale factor 2,
-debug build. Other lanes were building, so `vm.loadavg` was 5.1–8.3.
+toolbar. It is fixed in lane commit `b978572`, on main as `4bffa2f` "fix(canvas): keep the context
+bar over the toolbar" (see "The context bar under the toolbar" below). The last two runs below and
+the test run were made on the lane commit, before it was rebased onto main, so these notes name it.
+`cargo test --workspace` passes at lane commit `b978572`: 1136 passed, 9 ignored and 0 failed.
+Step 4 needs the user: its checks are under "Hand checks (pending — needs the user)" below, with the
+ones the reviews of Tasks 2 and 3 asked for. Machine: Apple M3 (8 cores, 16 GB), macOS 26.6.1,
+window scale factor 2, debug build. Other lanes were building, so `vm.loadavg` was 5.1–8.3.
 
 **How it ran.** As rulings C15–C17 amend Steps 1–3. The app was launched from lane 4 with Plan 1
 Task 7's launch recipe for an empty board (no `.nyawit/`, C15), and stopped with `/bin/kill $PID`
 each time (C17 as amended). It ran three times:
 - Steps 1–2 and the board checks, at `c5d882b`;
-- the fix, on the same board, at `b978572`;
+- the fix, on the same board, at lane commit `b978572` (on main as `4bffa2f`);
 - Step 3, with `ridgeline-app.figcraft` copied over `.nyawit/canvas.figcraft` before the launch, at
-  `b978572`. The fix touches nothing a design file shows.
+  lane commit `b978572`. The fix touches nothing a design file shows.
 
 Another app's window covered Sawit's at times, and a covered window doesn't repaint, so each batch
 of screenshots started with `{"cmd":"focus"}`. After Step 1, `{"cmd":"layout","terminal":false}`
@@ -358,7 +360,8 @@ gave the canvas 1040 × 675 pt. Pointer ops take page points.
   - The verdicts don't rest on that board: the view was set back to 100 % around (0, 0) before
     Step 2's screenshot. The template's layers had taken the ids before it, which is why Step 2's
     sticky is `"40"`.
-- **The context bar under the toolbar (a defect, fixed in `b978572`).**
+- **The context bar under the toolbar (a defect, fixed in lane commit `b978572`, on main as
+  `4bffa2f`).**
   - With the sticky selected, the view was moved until the sticky was below the canvas
     (`view.set {cx: 0, cy: -600}`). The bar went to the canvas's bottom edge, under the toolbar,
     which covered all of it but a 7.5 pt strip below the toolbar's own bottom edge.
@@ -375,12 +378,12 @@ gave the canvas 1040 × 675 pt. Pointer ops take page points.
   inside a narrow canvas and scroll its buttons"):
   - The window can't be resized over the socket. Its smallest size is 720 × 480 pt, and Sawit's
     sidebar is 240 pt wide.
-  - At `c5d882b` and `b978572` the toolbars didn't wrap or scroll. Centred at their full width,
-    508 pt on a board and 476 pt on a design file, they were cut evenly at both ends of a narrower
-    canvas. The 480 pt canvas of the narrowest window with Sawit's sidebar shown cut 14 pt off each
-    end of the board toolbar. With Plans 4 and 5's panels (240 + 264 pt) beside a design file, the
-    narrowest window without the sidebar leaves 216 pt, which would cut 130 pt off each end: whole
-    tools out of the pointer's reach.
+  - At `c5d882b` and lane commit `b978572` (on main as `4bffa2f`) the toolbars didn't wrap or
+    scroll. Centred at their full width, 508 pt on a board and 476 pt on a design file, they were
+    cut evenly at both ends of a narrower canvas. The 480 pt canvas of the narrowest window with
+    Sawit's sidebar shown cut 14 pt off each end of the board toolbar. With Plans 4 and 5's panels
+    (240 + 264 pt) beside a design file, the narrowest window without the sidebar leaves 216 pt,
+    which would cut 130 pt off each end: whole tools out of the pointer's reach.
   - The fix ports FigCraft's rule (ui-egui `toolbar.rs`, `pill_rect` and `pill_scroll`). The
     toolbar keeps its full width while the canvas has room for it and 8 pt at each side: 524 pt
     for a board, 492 pt for a design file. It is never wider than the canvas less 16 pt. Narrower,
@@ -394,6 +397,13 @@ gave the canvas 1040 × 675 pt. Pointer ops take page points.
     In the 216 pt canvas the design toolbar is 200 pt wide and shows about two fifths of its
     buttons at a time.
   - Test: `the_toolbar_scrolls_inside_a_narrow_canvas`. Hand check 6 is how it looks and feels.
+  - After this check, Plan 3's final review found the same gap in the context bar. It kept its full
+    width, 474 pt for a shape and 651 pt for a connector, so a narrower canvas cut it at the right,
+    where a connector's End cap menu is: at the 480 pt canvas, 179 pt of it. It now follows the
+    toolbar's rule: it is never wider than the canvas less 16 pt, and its controls keep their size
+    and scroll sideways inside it. Computed from its widths in the code, a connector's bar in the
+    480 pt canvas is 464 pt wide and scrolls by up to 187 pt. Test:
+    `the_context_bar_scrolls_inside_a_narrow_canvas`. Hand check 6 covers it too.
 
 #### Hand checks (pending — needs the user)
 
@@ -412,7 +422,11 @@ already passed over the socket, it says so.
    - The chevron beside Shapes lists the 7 shapes, the current one checked. Pick Ellipse: the
      Shapes tool now places ellipses. The Connector chevron lists Straight, Elbow and Curved, and
      the Stamp chevron the 6 stamps.
-   - Open a flyout, then press ⌘\ twice. Once the chrome is back, no flyout is open.
+   - Press Escape first if a sticky's text has a caret: ⌘\ does nothing while text is typed in.
+     Open a flyout and press ⌘\: nothing happens, because the open flyout has the keyboard (the
+     canvas takes only the keys pressed while it has the keyboard itself, ruling P5-C3). Press
+     Escape: the flyout closes, and the canvas has the keyboard again. Then press ⌘\ twice: the
+     chrome goes, then comes back with no flyout open.
    - Say whether the marked look of a tool button is clear enough.
 2. **Placing a template** (Step 4, and Review Focus 5).
    - Click the last button, Templates & table. The picker opens above the toolbar: Retrospective,
@@ -441,7 +455,8 @@ already passed over the socket, it says so.
      The size menu offers S, M, L and XL.
    - Select a connector. Its style and cap menus change it.
    - Each menu opens by its button, and the bar's buttons look right when hovered and when marked.
-6. **A narrow canvas** (Task 3's review; the toolbar scrolls, as FigCraft's does).
+6. **A narrow canvas** (Task 3's review and Plan 3's final review; the toolbar scrolls, as FigCraft's
+   does, and so does the context bar).
    - With Sawit's sidebar shown, drag the window's edge in until it stops (720 pt wide). The canvas
      is then about 480 pt wide.
    - Expect the board toolbar 8 pt in from both sides of the canvas, its buttons at their usual
@@ -451,10 +466,16 @@ already passed over the socket, it says so.
      slide inside it until the Templates & table button shows whole, and the canvas under it
      doesn't move. Click that button: the picker opens above it. Swipe back: the Move button
      shows again.
+   - Select a connector (draw one with the Connector tool if the board has none). Its context bar
+     is 8 pt in from both sides of the canvas, its colours whole at its left end, and its End cap
+     menu out of sight past its right end. Swipe sideways over the bar, or turn a mouse wheel over
+     it: its controls slide until the End cap menu shows whole, and the canvas under it doesn't
+     move. Open that menu and pick Circle: the connector's end becomes a filled circle.
    - Widen the window. From a canvas of about 524 pt, the toolbar has its full width again, every
-     button in sight.
-   - Say whether the scrolling toolbar works well enough, or whether it should wrap or shrink
-     instead.
+     button in sight. From about 667 pt, so does the connector's context bar, every control in
+     sight.
+   - Say whether the scrolling toolbar and context bar work well enough, or whether they should
+     wrap or shrink instead.
 7. **Hide UI and Maximize** (Task 3).
    - Hover the eye-off button at the top bar's right: "Hide UI  ⌘\". Click it: all the chrome goes.
      ⌘\ brings it back. The button only hides (P3-C12).
