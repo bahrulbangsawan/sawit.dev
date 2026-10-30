@@ -124,35 +124,6 @@ pub fn file_name(asset: &AssetRef, taken: &mut HashSet<String>) -> String {
     }
 }
 
-fn b64_val(c: u8) -> Option<u8> {
-    match c {
-        b'A'..=b'Z' => Some(c - b'A'),
-        b'a'..=b'z' => Some(c - b'a' + 26),
-        b'0'..=b'9' => Some(c - b'0' + 52),
-        b'+' | b'-' => Some(62),
-        b'/' | b'_' => Some(63),
-        _ => None,
-    }
-}
-
-fn base64_decode(s: &[u8]) -> Option<Vec<u8>> {
-    let mut out = Vec::with_capacity(s.len() * 3 / 4);
-    let (mut acc, mut bits) = (0u32, 0);
-    for &c in s {
-        if c == b'=' || c.is_ascii_whitespace() {
-            continue;
-        }
-        acc = (acc << 6) | b64_val(c)? as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
-            acc &= (1 << bits) - 1;
-        }
-    }
-    Some(out)
-}
-
 fn percent_decode(b: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -179,7 +150,16 @@ pub fn decode_data_url(url: &str) -> Option<(String, Vec<u8>)> {
     let mime = if mime.is_empty() { "text/plain" } else { mime };
     let is_b64 = parts.any(|p| p.eq_ignore_ascii_case("base64"));
     let raw = percent_decode(data.as_bytes());
-    let bytes = if is_b64 { base64_decode(&raw)? } else { raw };
+    let bytes = if is_b64 {
+        let text: String = raw
+            .iter()
+            .filter(|b| !b.is_ascii_whitespace())
+            .map(|&b| b as char)
+            .collect();
+        crate::browser::base64_decode(&text)?
+    } else {
+        raw
+    };
     Some((mime.to_ascii_lowercase(), bytes))
 }
 
@@ -194,11 +174,26 @@ fn curl_args_with(
         .into_iter()
         .map(OsString::from)
         .collect();
-    a.extend(["--max-filesize", max_size, "-A", SAFARI_UA, "-e", referer].map(OsString::from));
+    a.extend(
+        [
+            "--proto",
+            "=http,https",
+            "--proto-redir",
+            "=http,https",
+            "--max-filesize",
+            max_size,
+            "-A",
+            SAFARI_UA,
+            "-e",
+            referer,
+        ]
+        .map(OsString::from),
+    );
     if let Some(out) = out {
         a.push("-o".into());
         a.push(out.as_os_str().to_os_string());
     }
+    a.push("--".into());
     a.push(url.into());
     a
 }
@@ -284,6 +279,48 @@ fn write_local(
     }
 }
 
+const MAX_FILE: u64 = 52_428_800;
+
+/// Copies a `file://` asset of a `file://` page, without curl.
+fn copy_file_url(
+    a: &AssetRef,
+    url: &str,
+    dir: &Path,
+    taken: &mut HashSet<String>,
+    total: &AtomicU64,
+    budget: u64,
+) -> AssetOutcome {
+    if total.load(Ordering::SeqCst) >= budget {
+        return outcome(a, None, 0, Some(budget_msg(budget)));
+    }
+    let rest = url.strip_prefix("file://").unwrap_or("");
+    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+    let rest = rest.split(['?', '#']).next().unwrap_or("");
+    let src = std::path::PathBuf::from(
+        String::from_utf8_lossy(&percent_decode(rest.as_bytes())).into_owned(),
+    );
+    let len = match std::fs::metadata(&src) {
+        Ok(m) if m.is_file() => m.len(),
+        Ok(_) => return outcome(a, None, 0, Some("Not a file.".into())),
+        Err(e) => return outcome(a, None, 0, Some(e.to_string())),
+    };
+    if len > MAX_FILE {
+        return outcome(a, None, 0, Some("The file is larger than 50 MB.".into()));
+    }
+    let sub = sub_dir(a.kind);
+    let name = file_name(a, taken);
+    let target = dir.join(sub);
+    let res =
+        std::fs::create_dir_all(&target).and_then(|_| std::fs::copy(&src, target.join(&name)));
+    match res {
+        Ok(n) => {
+            total.fetch_add(n, Ordering::SeqCst);
+            outcome(a, Some(format!("{sub}/{name}")), n, None)
+        }
+        Err(e) => outcome(a, None, 0, Some(e.to_string())),
+    }
+}
+
 async fn fetch_one(
     a: &AssetRef,
     url: &str,
@@ -355,6 +392,28 @@ pub async fn download_all(
             } else {
                 Some(write_local(a, assets_dir, &mut taken, &total))
             }
+        } else if let Some(u) = url.filter(|u| u.starts_with("file://")) {
+            if referer.starts_with("file://") {
+                Some(copy_file_url(a, u, assets_dir, &mut taken, &total, budget))
+            } else {
+                Some(outcome(
+                    a,
+                    None,
+                    0,
+                    Some("Local files can only be saved from a local page.".into()),
+                ))
+            }
+        } else if let Some(u) = url.filter(|u| {
+            let l = u.to_ascii_lowercase();
+            !(l.starts_with("http://") || l.starts_with("https://"))
+        }) {
+            let scheme = u.split(':').next().unwrap_or("");
+            Some(outcome(
+                a,
+                None,
+                0,
+                Some(format!("Can't download {scheme}: URLs.")),
+            ))
         } else if let Some(u) = url {
             let rel = format!("{}/{}", sub_dir(a.kind), file_name(a, &mut taken));
             remote.push((i, u.to_string(), rel));
@@ -463,6 +522,69 @@ mod tests {
         assert_eq!(s[at("-e") + 1], "https://x.com/");
         assert_eq!(s[at("--max-filesize") + 1], "52428800");
         assert_eq!(s.last().unwrap(), "https://x.com/a.png");
+        assert_eq!(s[s.len() - 2], "--");
+        assert_eq!(s[at("--proto") + 1], "=http,https");
+        assert_eq!(s[at("--proto-redir") + 1], "=http,https");
+    }
+
+    #[tokio::test]
+    async fn file_urls_only_from_file_pages() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("a.png"), [1u8; 10]).unwrap();
+        let url = format!("file://{}/a.png", src.path().display());
+        let mk = || vec![asset(AssetKind::Image, Some(&url), None, "a")];
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = download_all(
+            mk(),
+            dir.path(),
+            "https://x.com/",
+            false,
+            1 << 20,
+            |_, _| {},
+        )
+        .await;
+        assert!(out[0].error.is_some() && out[0].file.is_none());
+        assert!(!dir.path().join("images").exists());
+        let hosts = vec![asset(
+            AssetKind::Image,
+            Some("file:///etc/hosts"),
+            None,
+            "h",
+        )];
+        let out = download_all(
+            hosts,
+            dir.path(),
+            "https://x.com/",
+            false,
+            1 << 20,
+            |_, _| {},
+        )
+        .await;
+        assert!(out[0].error.is_some());
+        assert!(!dir.path().join("images/h.png").exists());
+
+        let out = download_all(
+            mk(),
+            dir.path(),
+            "file:///tmp/index.html",
+            false,
+            1 << 20,
+            |_, _| {},
+        )
+        .await;
+        assert_eq!(out[0].file.as_deref(), Some("images/a.png"));
+        assert_eq!(out[0].bytes, 10);
+        assert!(dir.path().join("images/a.png").exists());
+
+        let js = vec![asset(
+            AssetKind::Image,
+            Some("javascript:alert(1)"),
+            None,
+            "j",
+        )];
+        let out = download_all(js, dir.path(), "https://x.com/", false, 1 << 20, |_, _| {}).await;
+        assert!(out[0].error.is_some());
     }
 
     fn enc(b: &[u8]) -> String {
