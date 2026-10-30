@@ -270,8 +270,18 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-shift-n", NewWindow, None),
         KeyBinding::new("cmd-o", OpenFolder, None),
     ]);
+    set_menus(cx);
+    cx.on_window_closed(|cx, _| check_waiters(cx)).detach();
+}
+
+/// Sets the app's menus. Their shortcuts are the keymap's as it is now, so the keymap sets them
+/// again whenever it changes.
+pub fn set_menus(cx: &mut App) {
     cx.set_menus([
         Menu::new("Sawit").items([
+            MenuItem::action("Keymap Editor", crate::keymap::OpenKeymapEditor),
+            MenuItem::action("Open Keymap File", crate::keymap::OpenKeymapFile),
+            MenuItem::separator(),
             MenuItem::action("Install ‘sawit’ Command in PATH…", InstallCli),
             MenuItem::separator(),
             MenuItem::action("Quit Sawit", Quit),
@@ -281,7 +291,6 @@ pub fn init(cx: &mut App) {
             MenuItem::action("Open Folder…", OpenFolder),
         ]),
     ]);
-    cx.on_window_closed(|cx, _| check_waiters(cx)).detach();
 }
 
 /// Opens a Sawit window, optionally with a project folder.

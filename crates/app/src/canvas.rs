@@ -239,13 +239,15 @@ impl CanvasView {
         }
     }
 
-    fn place(&mut self, bounds: Bounds<Pixels>, window: &Window) {
+    /// Places the page at `bounds`, building it the first time with `app_keys`, the shortcuts it
+    /// passes on to the app ([`crate::workspace::canvas_passthrough_keys`]).
+    fn place(&mut self, bounds: Bounds<Pixels>, app_keys: &[String], window: &Window) {
         if self.error.is_some() {
             return;
         }
         self.window = Some(window.window_handle());
         let Some(webview) = &self.webview else {
-            match self.build(bounds, window) {
+            match self.build(bounds, app_keys, window) {
                 Ok(webview) => self.webview = Some(webview),
                 Err(e) => {
                     self.error = Some(e.to_string().into());
@@ -264,7 +266,12 @@ impl CanvasView {
         }
     }
 
-    fn build(&self, bounds: Bounds<Pixels>, window: &Window) -> wry::Result<WebView> {
+    fn build(
+        &self,
+        bounds: Bounds<Pixels>,
+        app_keys: &[String],
+        window: &Window,
+    ) -> wry::Result<WebView> {
         let writer = self.to_writer.clone();
         let to_view = self.to_view.clone();
         let maximized = self.maximized;
@@ -345,7 +352,7 @@ impl CanvasView {
                 "window.__sawitCanvasMaximized = {maximized}; window.__sawitTheme = {theme}; \
                  window.__sawitAppKeys = {keys}; \
                  addEventListener('DOMContentLoaded', () => window.ipc.postMessage('ready'));",
-                keys = json!(crate::workspace::canvas_passthrough_keys()),
+                keys = json!(app_keys),
             ))
             // The app's background, until the page paints.
             .with_background_color(background)
@@ -388,7 +395,10 @@ impl Render for CanvasView {
                     {
                         let this = this.clone();
                         move |bounds, window, cx| {
-                            let _ = this.update(cx, |this, _| this.place(bounds, window));
+                            let _ = this.update(cx, |this, cx| {
+                                let keys = crate::workspace::canvas_passthrough_keys(cx);
+                                this.place(bounds, &keys, window)
+                            });
                         }
                     },
                     // GPUI only sees clicks outside the webview, which sits on

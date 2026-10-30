@@ -381,6 +381,10 @@ impl Workspace {
                 self.show_center(cx);
                 self.show_server_tab();
             }
+            Page::Keymap => {
+                self.show_center(cx);
+                self.open_keymap_editor(window, cx)
+            }
         }
         Ok(())
     }

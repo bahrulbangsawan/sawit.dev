@@ -7479,6 +7479,8 @@ dependencies = [
  "sawit-board",
  "sawit-core",
  "sawit-mcp",
+ "schemars",
+ "serde",
  "serde_json",
  "syntect",
  "tokio",

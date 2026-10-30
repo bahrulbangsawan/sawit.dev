@@ -319,8 +319,19 @@ explained. A conflict on the same address can't be forced.
 
 ## Keyboard shortcuts
 
+These are the defaults. Every shortcut can be changed in the **Keymap Editor**
+(<kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd>, the keyboard button in the title bar, or
+Sawit ▸ Keymap Editor). It lists each binding of every feature, including the workspace, panels,
+editors, terminal, Git, inputs, and the native canvas's commands, with its action, arguments,
+keys, context and source. From it you can change, add, remove or restore a binding, find bindings
+by their keys, and see which ones clash. Your changes go to
+`~/Library/Application Support/sawit/keymap.json` in Zed's keymap format (*Edit in JSON*,
+<kbd>⌘</kbd><kbd>E</kbd>). You can also edit that file by hand: Sawit applies it as soon as it is
+saved.
+
 | Action | Shortcut |
 |---|---|
+| Keymap Editor | <kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd> |
 | Open folder | <kbd>⌘</kbd><kbd>O</kbd> |
 | New window | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>N</kbd> |
 | Run SQL (selection or all) | <kbd>⌘</kbd><kbd>↩</kbd> |

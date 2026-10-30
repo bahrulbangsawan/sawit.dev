@@ -75,6 +75,11 @@ impl AppPaths {
         self.root.join("bin")
     }
 
+    /// The user's key bindings, over the app's defaults (Zed's keymap format).
+    pub fn keymap_file(&self) -> PathBuf {
+        self.root.join("keymap.json")
+    }
+
     /// Recently opened project folders (welcome screen).
     pub fn recent_file(&self) -> PathBuf {
         self.root.join("recent.toml")

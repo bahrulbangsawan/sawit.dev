@@ -680,6 +680,8 @@ mod tests {
     ) -> (Entity<BoardView>, VisualTestContext) {
         cx.executor().allow_parking();
         cx.update(gpui_kit::init);
+        // The canvas's shortcuts are key bindings.
+        cx.update(crate::board::init_keys);
         let path = path.to_path_buf();
         let window = cx.open_window(size(px(900.), px(1000.)), |_, cx| BoardView::open(path, cx));
         let view = window.root(cx).unwrap();
@@ -746,6 +748,8 @@ mod tests {
     pub(super) fn open(cx: &mut TestAppContext, path: &Path, ids: &[NodeId]) -> Entity<BoardView> {
         cx.executor().allow_parking();
         cx.update(gpui_kit::init);
+        // The canvas's shortcuts are key bindings.
+        cx.update(crate::board::init_keys);
         let view = cx.new(|cx| BoardView::open(path.to_path_buf(), cx));
         view.update(cx, |view, _| {
             let board = view.board_mut().unwrap();

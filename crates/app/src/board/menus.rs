@@ -1183,7 +1183,8 @@ mod tests {
         let tmp = Scratch::new("sheet");
         let (view, mut cx) = chrome_canvas(cx, &tmp);
         focus_canvas(&view, &mut cx);
-        cx.simulate_keystrokes("ctrl-shift-?");
+        // ⌃⇧/, as the keyboard reports it: the shifted symbol, without Shift.
+        cx.simulate_keystrokes("ctrl-?");
         assert_eq!(open_menus(&view, &cx), (false, true, None));
         // In the middle of the tab, 24 px from its edges at most: its rows scroll inside it.
         let sheet = cx.debug_bounds("board-sheet").expect("the sheet");
