@@ -4,7 +4,8 @@
 
 **Goal:** The native canvas becomes the only canvas:
 - the flag is gone
-- Excalidraw, the WKWebView (`wry`), the embedded web bundle and `web/canvas/` are deleted
+- Excalidraw, its WKWebView, the embedded web bundle and `web/canvas/` are deleted; `wry` stays for
+  the browser tab (ruling P8-C1)
 - MCP descriptions, README and the consolidate command describe the native canvas
 - FigCraft is credited in `NOTICE`
 - the performance budget is measured and recorded
@@ -36,7 +37,7 @@
 
 1. A user upgrading with only `.nyawit/canvas.excalidraw` must see their board on first open, and the file must stay. Test: `migration_imports_once_and_keeps_original` (Plan 7). It is re-run in Task 4's live check against a real old board.
 2. Old control clients sending `{"cmd":"canvas","op":{"op":"get"}}` must get an immediate answer, not a timeout. Test: `canvas_ops_answer_now` (Task 1).
-3. No dangling reference to the webview may remain: no `wry`, `include_dir`, `brotli` or `CanvasView`. Test: `rg` check in Task 1 Step 4 and a clean `cargo build`.
+3. No dangling reference to the canvas's webview may remain: no `include_dir`, `brotli` or `CanvasView`, and `wry` only in the browser (ruling P8-C1). Test: `rg` check in Task 1 Step 4 and a clean `cargo build`.
 4. ⇧⌘↩ must still maximize the canvas tab, and the tab bar must come back after. Test: `maximize_still_works_without_webview` (Task 1).
 5. The release binary must build with LTO, and its size change must be reported. Test: Task 4 Step 2.
 
@@ -57,7 +58,7 @@
 - Modify: `crates/app/src/cli.rs`:
   - drop the canvas-only 30 s `CONTROL_TIMEOUT` branch and the `Answer::Later` handling, if unused
   - keep the 64 MB read limit; reword its comment to "canvas scenes and images can be large"
-- Modify: `crates/app/Cargo.toml` (remove `wry`, `include_dir`, `brotli-decompressor`, and their comments)
+- Modify: `crates/app/Cargo.toml` (remove `include_dir`, `brotli-decompressor` and the canvas-bundle comment; `wry`, `objc2-web-kit`, `objc2-app-kit` and `block2` stay for the browser tab, ruling P8-C1)
 - Modify: `crates/core/src/nyawit.rs` (`canvas_file` → `legacy_canvas_file`; update the callers in `crates/board/src/store.rs` and `crates/mcp/src/app.rs`)
 
 **Interfaces:**
@@ -75,8 +76,8 @@ Expected: FAIL (the flag is still required).
 - [ ] **Step 3: Delete and rewire** as listed. Prefer `git rm -r crates/app/canvas web/canvas crates/app/src/canvas.rs`.
 
 - [ ] **Step 4: Check for leftovers**
-Run: `rg -n "wry|include_dir|brotli|CanvasView|canvas_passthrough|Excalidraw|excalidraw" crates/ --glob '!crates/board/src/excalidraw.rs' --glob '!crates/board/tests/**'`
-Expected: matches only in import, migration and MCP fallback code (`legacy_canvas_file`, `excalidraw::`), and in the `canvas_load` description.
+Run: `rg -n "wry|include_dir|brotli|CanvasView|canvas_passthrough|web/canvas|pele\.ts|Excalidraw|excalidraw" crates/ --glob '!crates/board/src/excalidraw.rs' --glob '!crates/board/tests/**' --glob '!crates/app/src/browser.rs' --glob '!crates/app/src/browser/**'` (rulings P8-C1, P8-C6)
+Expected: matches only in import, migration and MCP fallback code (`legacy_canvas_file`, `excalidraw::`), in the MCP tool and argument descriptions (Task 2's test is their gate), in the `ensure()` test fixture of `crates/core/src/nyawit.rs`, and in `crates/app/Cargo.toml`'s `wry` line and `objc2-web-kit` comment.
 
 - [ ] **Step 5: Run the gates**
 Run: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
