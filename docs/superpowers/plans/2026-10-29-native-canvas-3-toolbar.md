@@ -335,12 +335,29 @@ gave the canvas 1040 × 675 pt. Pointer ops take page points.
 - **After a restart**, the board opened as it was left, zoomed to fit (73 %).
 - **The logs** hold only `canvas render` lines, 60, 4 and 6 in the three runs. There are no warnings
   or errors.
-- **Someone used the window by hand.** In the first run, between Steps 1 and 2, while the window was
-  in front, the board got FigCraft's Flow chart template, and the zoom became 34 %. By Step 2 the
-  board was empty again. `canvas.figcraft.bak` (written 18:18:21) holds that board. No op of this
-  check did it, synthetic input can't reach the window, and only the Templates & table picker places
-  a template. That is why Step 2's sticky is `"40"`, and why the view was set back to 100 % around
-  (0, 0) before Step 2's screenshot.
+- **The board changed with no op of this check behind it, most likely by hand.** In the first run,
+  between Step 1's screenshot (18:17:20) and Step 2's first one (18:18:34), the board got FigCraft's
+  Flow chart template and was emptied again, and the zoom went from 100 % to 34 %. `.nyawit/`
+  appeared at 18:17:42, with the first save after an edit, and `canvas.figcraft.bak` (written
+  18:18:21) holds the flow chart board.
+  - No op of this check did it. The template alone doesn't say who did: the Templates & table
+    picker places one, and so does `board.template` from any client of the control socket, as this
+    check's own b01 did.
+  - Nothing else is known to have used this instance's socket. It was the per-`SAWIT_HOME`
+    fallback `/tmp/sawit-rulisme-945615192beed5f.sock`, which sawit-mcp and the `sawit` CLI never
+    use without that `SAWIT_HOME` (`AppPaths::default_macos` and `cli_socket`,
+    crates/core/src/instances.rs:20-28, :62-72). No other live check ran then: the run's others
+    ended at 06:12 (Plan 1) and 17:26 (Plan 2), and FINAL.P2's began at 19:00.
+  - 34 % is no step of the zoom menu or keys: Zoom in and Zoom out go to the next of 2, 3, 6, 13,
+    25, 50, 100, 200 % and up, and the presets are 50, 100 and 200 % (engine `cmd/view.rs`,
+    `STEPS`). Nor is it a fit of the 1220 × 360 flow chart on the 1040 pt wide canvas, which is
+    about 75 % with the engine's 64 pt margin (`ViewState::fit`). It is what a pinch or a ⌘-scroll
+    leaves.
+  - The window lost key focus in between: its title bar is active in s1 and inactive in s2a.
+  - So most likely a person at the machine used the window. The user hasn't confirmed it yet.
+  - The verdicts don't rest on that board: the view was set back to 100 % around (0, 0) before
+    Step 2's screenshot. The template's layers had taken the ids before it, which is why Step 2's
+    sticky is `"40"`.
 - **The context bar under the toolbar (a defect, fixed in `b978572`).**
   - With the sticky selected, the view was moved until the sticky was below the canvas
     (`view.set {cx: 0, cy: -600}`). The bar went to the canvas's bottom edge, under the toolbar,
@@ -353,16 +370,30 @@ gave the canvas 1040 × 675 pt. Pointer ops take page points.
     Test: `the_context_bar_stays_over_the_toolbar`.
   - After a rebuild, the same view put the whole bar 8 pt over the toolbar. A selection in view keeps
     its bar 12 pt over it.
-- **A narrow canvas** (Task 3's review; the controller decides before Plans 4 and 5 land):
-  - The window can't be resized over the socket. Its smallest size is 720 × 480 pt.
-  - The toolbars don't wrap or scroll. They are centred and keep their width, 508 pt on a board and
-    476 pt on a design file, so a narrower canvas cuts both ends evenly.
-  - With Sawit's sidebar shown, the narrowest window leaves a 480 pt canvas: the board toolbar loses
-    14 pt at each end.
-  - With Plans 4 and 5's panels (240 + 264 pt) beside a design file, a 1280 pt window leaves 536 pt
-    with Sawit's sidebar shown (the toolbar fits) and 776 pt without it. The narrowest window
-    without the sidebar leaves 216 pt, and 130 pt of the toolbar is cut at each end.
-  - Hand check 6 is how it looks.
+- **A narrow canvas** (Task 3's review; decided during the run by the delegate's ruling on this
+  task: the toolbar follows FigCraft's, fixed after this check in "fix(canvas): keep the toolbar
+  inside a narrow canvas and scroll its buttons"):
+  - The window can't be resized over the socket. Its smallest size is 720 × 480 pt, and Sawit's
+    sidebar is 240 pt wide.
+  - At `c5d882b` and `b978572` the toolbars didn't wrap or scroll. Centred at their full width,
+    508 pt on a board and 476 pt on a design file, they were cut evenly at both ends of a narrower
+    canvas. The 480 pt canvas of the narrowest window with Sawit's sidebar shown cut 14 pt off each
+    end of the board toolbar. With Plans 4 and 5's panels (240 + 264 pt) beside a design file, the
+    narrowest window without the sidebar leaves 216 pt, which would cut 130 pt off each end: whole
+    tools out of the pointer's reach.
+  - The fix ports FigCraft's rule (ui-egui `toolbar.rs`, `pill_rect` and `pill_scroll`). The
+    toolbar keeps its full width while the canvas has room for it and 8 pt at each side: 524 pt
+    for a board, 492 pt for a design file. It is never wider than the canvas less 16 pt. Narrower,
+    its buttons, chevrons and lines keep their size and scroll sideways inside it, under a
+    two-finger swipe or the wheel. It still takes the pointer: no click or scroll over it reaches
+    the canvas.
+  - What that makes of the cases above, computed from the measured widths (they can't be measured
+    over the socket): in the 480 pt canvas the board toolbar is 464 pt wide and scrolls by up to
+    44 pt, and the Templates & table button and the line before it start out of sight. A 1280 pt
+    window has room for the whole design toolbar beside both panels: 536 pt with the sidebar shown.
+    In the 216 pt canvas the design toolbar is 200 pt wide and shows about two fifths of its
+    buttons at a time.
+  - Test: `the_toolbar_scrolls_inside_a_narrow_canvas`. Hand check 6 is how it looks and feels.
 
 #### Hand checks (pending — needs the user)
 
@@ -410,12 +441,20 @@ already passed over the socket, it says so.
      The size menu offers S, M, L and XL.
    - Select a connector. Its style and cap menus change it.
    - Each menu opens by its button, and the bar's buttons look right when hovered and when marked.
-6. **A narrow canvas** (Task 3's review; the controller decides).
+6. **A narrow canvas** (Task 3's review; the toolbar scrolls, as FigCraft's does).
    - With Sawit's sidebar shown, drag the window's edge in until it stops (720 pt wide). The canvas
      is then about 480 pt wide.
-   - Expect both ends of the board toolbar cut off by about 14 pt: the Move button's left edge and
-     the Templates & table button's right edge. Say whether that is acceptable, or whether the
-     toolbar should wrap, scroll or shrink.
+   - Expect the board toolbar 8 pt in from both sides of the canvas, its buttons at their usual
+     size, the Move button whole at its left end. The Templates & table button is out of sight past
+     its right end.
+   - Swipe sideways over the toolbar with two fingers, or turn a mouse wheel over it. The buttons
+     slide inside it until the Templates & table button shows whole, and the canvas under it
+     doesn't move. Click that button: the picker opens above it. Swipe back: the Move button
+     shows again.
+   - Widen the window. From a canvas of about 524 pt, the toolbar has its full width again, every
+     button in sight.
+   - Say whether the scrolling toolbar works well enough, or whether it should wrap or shrink
+     instead.
 7. **Hide UI and Maximize** (Task 3).
    - Hover the eye-off button at the top bar's right: "Hide UI  ⌘\". Click it: all the chrome goes.
      ⌘\ brings it back. The button only hides (P3-C12).
