@@ -11,9 +11,16 @@ use figcraft_doc::Document;
 use sawit_core::nyawit;
 
 use crate::doc::{BoardDoc, BoardError};
+use crate::excalidraw;
 
 /// What a new canvas is called.
 const NAME: &str = "Canvas";
+
+/// The file the project canvas was in before the native canvas
+/// (`<project>/.nyawit/canvas.excalidraw`, [`nyawit::canvas_file`]), which a canvas file that isn't
+/// there yet is imported from. It is found beside the canvas file by its name, because the path of
+/// the canvas file is all the store is given.
+const OLD_CANVAS: &str = "canvas.excalidraw";
 
 /// The canvas file: `<project>/.nyawit/canvas.figcraft`, else `canvas.figcraft` in `app_root`
 /// (Sawit's own folder).
@@ -24,7 +31,8 @@ pub fn board_file(project: Option<&Path>, app_root: &Path) -> PathBuf {
     }
 }
 
-/// Opens the canvas at `path`, as [`open_with_issues`] does, and only logs its notes.
+/// Opens the canvas at `path`, as [`open_with_issues`] does (so it imports the old canvas too), and
+/// only logs its notes.
 pub fn open(path: &Path) -> Result<BoardDoc, BoardError> {
     let (board, issues) = open_with_issues(path)?;
     for issue in issues {
@@ -41,6 +49,12 @@ pub fn open(path: &Path) -> Result<BoardDoc, BoardError> {
 ///
 /// - A missing file is a new, empty board. Nothing is written, not even the folder: the first
 ///   save does that.
+/// - A missing canvas file (`canvas.figcraft`, [`nyawit::BOARD_FILE`]) with a `canvas.excalidraw`
+///   beside it is that old canvas, imported ([`excalidraw::import`]). It is the first open only:
+///   once the canvas has been saved the file is there, and is what opens. Neither file is
+///   written, and no `.bak` is made: the old canvas stays as it is, and the notes are what the
+///   import left out. An old canvas that can't be imported is an error that names it, and then
+///   nothing is made either; no new board takes its place, because the first save would hide it.
 /// - A corrupt or truncated file is `Err(BoardError::Format)`, and stays as it is.
 /// - With notes, the original is first copied to `<path>.lossy.bak`, so the first save can't
 ///   silently drop what the loader left out. When that copy can't be made the file is not opened
@@ -49,9 +63,7 @@ pub fn open(path: &Path) -> Result<BoardDoc, BoardError> {
 pub fn open_with_issues(path: &Path) -> Result<(BoardDoc, Vec<String>), BoardError> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            return Ok((BoardDoc::new_board(NAME)?, Vec::new()));
-        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return open_missing(path),
         Err(e) => {
             return Err(BoardError::Io(format!(
                 "couldn't read {}: {e}",
@@ -71,6 +83,33 @@ pub fn open_with_issues(path: &Path) -> Result<(BoardDoc, Vec<String>), BoardErr
         })?;
     }
     Ok((board, issues))
+}
+
+/// What the canvas file `path`, which isn't there, opens as: the old canvas beside it imported,
+/// else a new board.
+fn open_missing(path: &Path) -> Result<(BoardDoc, Vec<String>), BoardError> {
+    match old_canvas(path) {
+        Some(old) => import_old_canvas(&old),
+        None => Ok((BoardDoc::new_board(NAME)?, Vec::new())),
+    }
+}
+
+/// The old canvas that the canvas file `path` replaces: `canvas.excalidraw` in the same folder.
+/// Only the canvas file takes over from it, not any other `.figcraft` file that is missing.
+fn old_canvas(path: &Path) -> Option<PathBuf> {
+    if path.file_name() != Some(OsStr::new(nyawit::BOARD_FILE)) {
+        return None;
+    }
+    let old = path.with_file_name(OLD_CANVAS);
+    old.is_file().then_some(old)
+}
+
+/// A board that holds the old canvas `old`, and the notes on what the import left out. It opens as
+/// a file does, with no undo step ([`excalidraw::to_board`]).
+fn import_old_canvas(old: &Path) -> Result<(BoardDoc, Vec<String>), BoardError> {
+    let scene = excalidraw::read_file(old)?;
+    excalidraw::to_board(NAME, &scene)
+        .map_err(|e| BoardError::Format(format!("{} can't be imported: {e}", old.display())))
 }
 
 /// Whether `doc` has no layers on any page: nothing drawn, so nothing to lose.
@@ -471,6 +510,194 @@ mod tests {
             "{err}"
         );
         assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+
+    /// The old canvas as Excalidraw saved it: nine layers on the page, a frame's child among the
+    /// ones inside, an embed that can't be imported, and a deleted rectangle.
+    const FIXTURE: &str = include_str!("../tests/fixtures/excalidraw/basic.excalidraw");
+
+    /// How many layers are on the first page, not counting what is inside them.
+    fn top_level(board: &BoardDoc) -> usize {
+        let doc = board.doc().unwrap();
+        let page = doc.first_page().unwrap();
+        doc.node(page).unwrap().children.len()
+    }
+
+    #[test]
+    fn migration_imports_once_and_keeps_original() {
+        let dir = tempdir().unwrap();
+        let nyawit = dir.path().join(".nyawit");
+        std::fs::create_dir(&nyawit).unwrap();
+        let old = nyawit.join("canvas.excalidraw");
+        let path = nyawit.join("canvas.figcraft");
+        std::fs::write(&old, FIXTURE).unwrap();
+
+        // The first open imports the old canvas. Nothing is written: not the new file, and the
+        // old one is as it was.
+        let mut board = open(&path).unwrap();
+        assert_eq!(board.kind(), DocKind::Board);
+        assert_eq!(top_level(&board), 9);
+        assert_eq!(std::fs::read(&old).unwrap(), FIXTURE.as_bytes());
+        assert!(!path.exists());
+        assert_eq!(names(&nyawit), ["canvas.excalidraw"]);
+
+        // The first save writes the native canvas, and from then on that is what opens.
+        board
+            .execute("board.sticky", &json!({"x": 2000, "y": 0, "text": "after"}))
+            .unwrap();
+        let writer = Writer::spawn();
+        writer.save(path.clone(), board.to_bytes().unwrap(), false);
+        writer.flush();
+        assert_eq!(writer.last_error(), None);
+        assert_eq!(std::fs::read(&old).unwrap(), FIXTURE.as_bytes());
+
+        // Not imported again: the nine layers and the sticky, not the old canvas a second time.
+        let again = open(&path).unwrap();
+        assert!(has_text(&again, "after"));
+        assert_eq!(top_level(&again), 10);
+        assert_eq!(names(&nyawit), ["canvas.excalidraw", "canvas.figcraft"]);
+    }
+
+    /// A project folder whose `.nyawit/` holds the old canvas `scene`: the folder, the old canvas
+    /// and the canvas file that isn't there.
+    fn project_with_old_canvas(scene: &[u8]) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempdir().unwrap();
+        let nyawit = dir.path().join(".nyawit");
+        std::fs::create_dir(&nyawit).unwrap();
+        let old = nyawit.join("canvas.excalidraw");
+        std::fs::write(&old, scene).unwrap();
+        (dir, old, nyawit.join("canvas.figcraft"))
+    }
+
+    #[test]
+    fn migration_says_what_it_left_out_and_makes_no_backup() {
+        let (dir, old, path) = project_with_old_canvas(FIXTURE.as_bytes());
+        let nyawit = dir.path().join(".nyawit");
+
+        let (board, issues) = open_with_issues(&path).unwrap();
+        assert_eq!(top_level(&board), 9);
+        // The notes of the import are what is shown, as for any file that opens with something said.
+        assert_eq!(issues, ["skipped 1 embed"]);
+        // Neither file is written, and nothing is kept beside them: there is no `.bak`, because
+        // the old canvas isn't touched and no canvas file was there to save over.
+        assert_eq!(names(&nyawit), ["canvas.excalidraw"]);
+        assert_eq!(std::fs::read(&old).unwrap(), FIXTURE.as_bytes());
+
+        // A canvas the import left nothing out of opens without a word.
+        let clean = br#"{"type": "excalidraw", "elements": [
+            {"id": "a", "type": "rectangle", "x": 0, "y": 0, "width": 10, "height": 10}]}"#;
+        let (dir, _, path) = project_with_old_canvas(clean);
+        let (board, issues) = open_with_issues(&path).unwrap();
+        assert_eq!(top_level(&board), 1);
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(names(&dir.path().join(".nyawit")), ["canvas.excalidraw"]);
+    }
+
+    #[test]
+    fn a_migrated_canvas_opens_as_a_file_does_with_no_undo_step() {
+        let (_dir, _, path) = project_with_old_canvas(FIXTURE.as_bytes());
+        let board = open(&path).unwrap();
+        assert_eq!(board.kind(), DocKind::Board);
+        // Undoing is for what the user did after it opened: it can't take the canvas away.
+        assert_eq!(board.session.undo_depth(), (0, 0));
+        assert!(board.session.selection().is_empty());
+        // The document is a board's, and what a save writes of it opens as the same canvas.
+        let doc = board.doc().unwrap();
+        assert_eq!(doc.pages.len(), 1);
+        let again = BoardDoc::from_bytes(&board.to_bytes().unwrap()).unwrap();
+        assert_eq!(again.kind(), DocKind::Board);
+        assert_eq!(top_level(&again), 9);
+        assert_eq!(again.doc().unwrap().nodes().count(), doc.nodes().count());
+    }
+
+    #[test]
+    fn only_the_canvas_file_takes_over_from_the_old_canvas() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("canvas.excalidraw"), FIXTURE).unwrap();
+
+        // Any other file that is missing is a new board, even beside a `canvas.excalidraw`.
+        let other = open(&dir.path().join("other.figcraft")).unwrap();
+        assert_eq!(top_level(&other), 0);
+        let named_alike = open(&dir.path().join("my-canvas.figcraft")).unwrap();
+        assert_eq!(top_level(&named_alike), 0);
+        // The canvas of a window with no project is `canvas.figcraft` in Sawit's own folder, with
+        // the old one beside it.
+        let app = open(&board_file(None, dir.path())).unwrap();
+        assert_eq!(top_level(&app), 9);
+        assert_eq!(names(dir.path()), ["canvas.excalidraw"]);
+
+        // No old canvas, or one that is a folder, is nothing to import.
+        let empty = tempdir().unwrap();
+        assert_eq!(
+            top_level(&open(&empty.path().join("canvas.figcraft")).unwrap()),
+            0
+        );
+        std::fs::create_dir(empty.path().join("canvas.excalidraw")).unwrap();
+        let (board, issues) = open_with_issues(&empty.path().join("canvas.figcraft")).unwrap();
+        assert_eq!(top_level(&board), 0);
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn the_old_canvas_is_never_imported_over_a_canvas_file_that_is_there() {
+        let (_dir, old, path) = project_with_old_canvas(FIXTURE.as_bytes());
+        std::fs::write(&path, bytes_with(&["native"])).unwrap();
+        let board = open(&path).unwrap();
+        assert!(has_text(&board, "native"));
+        assert_eq!(top_level(&board), 1);
+
+        // Not when the canvas file is corrupt either: it stays as it is, and so does the old one.
+        std::fs::write(&path, b"not a figcraft file").unwrap();
+        assert!(matches!(open(&path), Err(BoardError::Format(_))));
+        assert_eq!(std::fs::read(&path).unwrap(), b"not a figcraft file");
+        assert_eq!(std::fs::read(&old).unwrap(), FIXTURE.as_bytes());
+    }
+
+    #[test]
+    fn an_old_canvas_with_nothing_on_it_opens_blank() {
+        let deleted = br#"{"type": "excalidraw", "elements": [
+            {"id": "a", "type": "rectangle", "isDeleted": true}]}"#;
+        for scene in [&deleted[..], br#"{"elements": []}"#] {
+            let (dir, _, path) = project_with_old_canvas(scene);
+            let (board, issues) = open_with_issues(&path).unwrap();
+            assert_eq!(board.kind(), DocKind::Board);
+            assert_eq!(top_level(&board), 0);
+            assert!(issues.is_empty());
+            assert!(is_empty(&board.doc().unwrap()));
+            assert_eq!(names(&dir.path().join(".nyawit")), ["canvas.excalidraw"]);
+        }
+    }
+
+    #[test]
+    fn an_old_canvas_that_cannot_be_imported_is_an_error_and_nothing_is_made() {
+        // A new board would take its place at the first save, and hide it.
+        let invalid_utf8 = [0xFF, 0xFE, 0x00];
+        for (scene, kind, says) in [
+            (&b"{ not json"[..], "format", "isn't valid JSON"),
+            (&br#"{"type": "excalidraw"}"#[..], "format", "`elements`"),
+            (&br#"[1, 2]"#[..], "format", "`elements`"),
+            (&invalid_utf8[..], "io", "couldn't read"),
+        ] {
+            let (dir, old, path) = project_with_old_canvas(scene);
+            for error in [
+                open(&path).err().unwrap(),
+                open_with_issues(&path).err().unwrap(),
+            ] {
+                let right_kind = match kind {
+                    "format" => matches!(error, BoardError::Format(_)),
+                    _ => matches!(error, BoardError::Io(_)),
+                };
+                assert!(right_kind, "{error:?}");
+                let message = error.to_string();
+                assert!(
+                    message.contains("canvas.excalidraw") && message.contains(says),
+                    "{message}"
+                );
+            }
+            assert!(!path.exists());
+            assert_eq!(std::fs::read(&old).unwrap(), scene);
+            assert_eq!(names(&dir.path().join(".nyawit")), ["canvas.excalidraw"]);
+        }
     }
 
     #[test]

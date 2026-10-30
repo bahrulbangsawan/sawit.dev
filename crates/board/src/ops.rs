@@ -28,6 +28,8 @@ use std::ffi::OsStr;
 use std::fmt::Display;
 use std::path::Path;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use figcraft_doc::{BoardItem, Document, NodeId};
 use figcraft_engine::{EngineError, PointerKind, Result as EngineResult, Session, UiRequest};
 use serde::Deserialize;
@@ -37,7 +39,7 @@ use thiserror::Error;
 use crate::doc::{BoardDoc, BoardError};
 use crate::input::{self, KeyOutcome, Mods};
 use crate::skeleton::{self, Applied, Label, Skeleton};
-use crate::{policy, summary};
+use crate::{excalidraw, policy, summary};
 use sawit_core::mermaid::{Palette, render};
 
 /// The commands the `command` op refuses: they switch, open, close or write documents behind the
@@ -93,11 +95,13 @@ const MERMAID_GAP: f64 = 100.0;
 ///   section), with a note.
 /// - `delete` (`{ids}`) answers `{ok, deleted, missing}`. A connector's label goes with it.
 /// - `clear` deletes every top-level layer of the page on show, and answers `{ok}`.
-/// - `replace` (`{path}`) loads the `.figcraft` file at `path` in place of the canvas's pages and
-///   answers `{ok, elements}` as `get` does. It runs in the canvas's own session, so the canvas
-///   stays what it is (a board, with its file), and undo brings the old pages back. A file that
-///   can't be read is an error and changes nothing. Excalidraw (a `scene`, or an `.excalidraw`
-///   file) is for the importer to take, and is refused until it does.
+/// - `replace` (`{scene}` or `{path}`) loads a canvas in place of the canvas's pages and answers
+///   `{ok, elements, notes?}`: `elements` as `get` gives them, and `notes` on what the importer
+///   left out. The new canvas is an Excalidraw scene (`scene`, or an `.excalidraw` file at `path`,
+///   which [`excalidraw::import`] draws), or the `.figcraft` file at `path`. A `scene` wins over a
+///   `path`. It runs in the canvas's own session, so the canvas stays what it is (a board, with
+///   its file), and undo brings the old pages back. A scene that has no `elements`, and a file
+///   that can't be read, are errors that change nothing.
 /// - `command` (`{command, params?}`) runs engine command `command` and answers `{ok, result}`,
 ///   or the engine's own `error`. It refuses the commands Sawit handles itself, as the steps of a
 ///   `command.batch` too ("<id> is handled by Sawit"). A command that would leave the canvas with
@@ -446,40 +450,82 @@ fn clear(board: &mut BoardDoc) -> Value {
 }
 
 fn replace(board: &mut BoardDoc, op: &Value) -> Value {
-    if op.get("scene").is_some_and(|scene| !scene.is_null()) {
-        return failure("replace: an Excalidraw scene can't be loaded yet");
+    let incoming = match incoming(op) {
+        Ok(incoming) => incoming,
+        Err(error) => return failure(error),
+    };
+    if let Err(error) = replace_pages(board, &incoming.import) {
+        return failure(format!("replace: {error}"));
+    }
+    let mut reply = get(board);
+    if !incoming.notes.is_empty() {
+        reply["notes"] = json!(incoming.notes);
+    }
+    reply
+}
+
+/// What a `replace` brings in.
+struct Incoming {
+    /// The params of the `file.import` that loads it.
+    import: Value,
+    /// What the Excalidraw importer left out of a scene.
+    notes: Vec<String>,
+}
+
+/// What the `replace` op `op` brings in: the scene it carries, else the file its `path` names
+/// (read here when it is an Excalidraw one). Anything that can't be taken is the reply's error,
+/// before the canvas is touched.
+fn incoming(op: &Value) -> Result<Incoming, String> {
+    if let Some(scene) = op.get("scene").filter(|scene| !scene.is_null()) {
+        return from_scene(scene).map_err(|error| format!("replace: {error}"));
     }
     let Some(path) = op.get("path").and_then(Value::as_str) else {
-        return failure(
-            r#"replace needs the file to load, like {"op": "replace", "path": "/path/to/board.figcraft"}"#,
+        return Err(
+            r#"replace needs the scene or the file to load, like {"op": "replace", "path": "/path/to/board.figcraft"}"#
+                .into(),
         );
     };
     let extension = Path::new(path).extension().and_then(OsStr::to_str);
     match extension.map(str::to_ascii_lowercase).as_deref() {
-        Some("figcraft") => {}
-        Some("excalidraw") => return failure("replace: an .excalidraw file can't be loaded yet"),
-        _ => {
-            return failure(format!(
-                "replace: {path} is not a .figcraft or .excalidraw file"
-            ));
+        Some("figcraft") => Ok(Incoming {
+            import: json!({"path": path}),
+            notes: Vec::new(),
+        }),
+        Some("excalidraw") => {
+            let scene = excalidraw::read_file(Path::new(path))
+                .map_err(|error| format!("replace: {error}"))?;
+            from_scene(&scene).map_err(|error| format!("replace: {path}: {error}"))
         }
-    }
-    match replace_pages(board, path) {
-        Ok(()) => get(board),
-        Err(error) => failure(format!("replace: {error}")),
+        _ => Err(format!(
+            "replace: {path} is not a .figcraft or .excalidraw file"
+        )),
     }
 }
 
-/// Replaces the pages of the canvas with those of the `.figcraft` file at `path`, in the canvas's
-/// own session as one undo step: the file's pages are added to the document, then the old ones are
-/// deleted. A file that can't be read fails the step, and the canvas is as it was.
+/// An Excalidraw `scene` as something the engine imports: it is drawn on a board of its own, and
+/// that board is the `.figcraft` that comes in. So a scene replaces the canvas the way a file
+/// does, as pages, and what it is drawn on is as the importer makes it (a light page, which the
+/// scene's own colours are made for).
+fn from_scene(scene: &Value) -> Result<Incoming, BoardError> {
+    let (drawn, notes) = excalidraw::to_board("Canvas", scene)?;
+    let file = drawn.to_bytes()?;
+    Ok(Incoming {
+        import: json!({"data": STANDARD.encode(file), "name": "scene.figcraft"}),
+        notes,
+    })
+}
+
+/// Replaces the pages of the canvas with those that the `file.import` of `import` brings in (a
+/// `.figcraft` file or its bytes), in the canvas's own session as one undo step: they are added to
+/// the document, then the old ones are deleted. An import that fails, a file that can't be read
+/// say, fails the step, and the canvas is as it was.
 ///
 /// The canvas keeps its document, so it stays a board (a design file's frames come in as layers of
 /// one), keeps its file and what is saved of it, and undo brings the old pages back.
-fn replace_pages(board: &mut BoardDoc, path: &str) -> Result<(), BoardError> {
+fn replace_pages(board: &mut BoardDoc, import: &Value) -> Result<(), BoardError> {
     board.session.grouped("Replace canvas", |session| {
         let old = session.doc()?.pages.clone();
-        session.execute("file.import", &json!({"path": path}))?;
+        session.execute("file.import", import)?;
         for page in old {
             session.execute("page.delete", &json!({"id": page}))?;
         }
@@ -2296,27 +2342,186 @@ mod tests {
         assert_eq!(elements(&mut board).len(), 1);
     }
 
+    /// The scene of the Excalidraw fixture: nine layers on the page, and an embed it leaves out.
+    fn scene() -> Value {
+        serde_json::from_str(include_str!(
+            "../tests/fixtures/excalidraw/basic.excalidraw"
+        ))
+        .unwrap()
+    }
+
     #[test]
-    fn replace_leaves_excalidraw_to_the_importer_for_now() {
+    fn replace_loads_an_excalidraw_scene_as_one_undo_step() {
+        let mut board = board();
+        add(
+            &mut board,
+            json!([{"type": "sticky", "x": 0, "y": 0, "text": "mine"}]),
+        );
+        // Two pages of its own: both are replaced.
+        board
+            .execute("page.add", &json!({"name": "Notes"}))
+            .unwrap();
+        board.execute("page.select", &json!({"index": 0})).unwrap();
+        let (uid, steps) = (board.session.ds().unwrap().uid, board.session.undo_depth());
+
+        let reply = ask(&mut board, json!({"op": "replace", "scene": scene()}));
+
+        // The canvas shows the scene, and says what is on it as `get` does, and what was left out.
+        let now = elements(&mut board);
+        assert_eq!(now.len(), 9, "{now:?}");
+        assert_eq!(reply["elements"], json!(now));
+        assert_eq!(reply["notes"], json!(["skipped 1 embed"]));
+        assert_eq!(board.doc().unwrap().pages.len(), 1);
+        assert!(board.session.selection().is_empty());
+        // In the canvas's own session: one document, the one it had, and still a board.
+        assert_eq!(board.session.docs.len(), 1);
+        assert_eq!(board.session.ds().unwrap().uid, uid);
+        assert_eq!(board.kind(), DocKind::Board);
+        // One step: undo brings the old board back, pages and all, and redo the scene.
+        assert_eq!(board.session.undo_depth(), (steps.0 + 1, 0));
+        assert_eq!(board.session.undo_labels(1), ["Replace canvas"]);
+        ask(&mut board, json!({"op": "command", "command": "edit.undo"}));
+        assert_eq!(board.doc().unwrap().pages.len(), 2);
+        let back = elements(&mut board);
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0]["text"], json!("mine"));
+        ask(&mut board, json!({"op": "command", "command": "edit.redo"}));
+        assert_eq!(elements(&mut board).len(), 9);
+    }
+
+    #[test]
+    fn a_replaced_scene_keeps_what_it_joins_and_the_ids_it_had() {
+        let mut board = board();
+        let reply = ask(&mut board, json!({"op": "replace", "scene": scene()}));
+        let now = reply["elements"].as_array().unwrap();
+        let of = |kind: &str| now.iter().find(|e| e["type"] == json!(kind)).unwrap();
+        // The arrow still joins the rectangle and the ellipse, which are in the new canvas.
+        let arrow = now.iter().find(|e| e.get("from").is_some()).unwrap();
+        assert_eq!(arrow["from"], of("rectangle")["id"]);
+        assert_eq!(arrow["to"], of("ellipse")["id"]);
+        // The picture and the section came through the engine's import.
+        assert_eq!(of("image")["width"], json!(120.0));
+        assert_eq!(of("section")["name"], json!("Group A"));
+        let doc = board.doc().unwrap();
+        let section = doc
+            .node(of("section")["id"].as_str().unwrap().parse().unwrap())
+            .unwrap();
+        assert_eq!(section.children.len(), 1);
+        // The ids the elements had in Excalidraw name them still.
+        let rectangle = of("rectangle")["id"].as_str().unwrap().to_string();
+        let reply = ask(
+            &mut board,
+            json!({"op": "update", "elements": [{"id": "box", "text": "Renamed"}]}),
+        );
+        assert_eq!(reply["updated"], json!(1), "{reply}");
+        assert_eq!(listed(&mut board, &rectangle)["text"], json!("Renamed"));
+    }
+
+    #[test]
+    fn replace_loads_an_excalidraw_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = include_str!("../tests/fixtures/excalidraw/basic.excalidraw");
+        for name in ["board.excalidraw", "BOARD.Excalidraw"] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, text).unwrap();
+            let mut board = board();
+            add(
+                &mut board,
+                json!([{"type": "sticky", "x": 0, "y": 0, "text": "mine"}]),
+            );
+
+            let reply = ask(&mut board, json!({"op": "replace", "path": path}));
+
+            assert_eq!(reply["elements"].as_array().unwrap().len(), 9, "{name}");
+            assert_eq!(reply["notes"], json!(["skipped 1 embed"]));
+            assert_eq!(elements(&mut board).len(), 9);
+            assert_eq!(board.session.undo_labels(1), ["Replace canvas"]);
+            // The file is read, never written.
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        }
+    }
+
+    #[test]
+    fn a_scene_wins_over_a_path_and_an_empty_one_clears_the_canvas() {
+        let mut board = board();
+        add(
+            &mut board,
+            json!([{"type": "sticky", "x": 0, "y": 0, "text": "mine"}]),
+        );
+        let reply = ask(
+            &mut board,
+            json!({"op": "replace", "scene": {"elements": []}, "path": "/nowhere/a.figcraft"}),
+        );
+        assert_eq!(reply, json!({"ok": true, "elements": []}));
+        assert!(elements(&mut board).is_empty());
+        ask(&mut board, json!({"op": "command", "command": "edit.undo"}));
+        assert_eq!(elements(&mut board).len(), 1);
+        // `null` is no scene: the path is what counts.
+        let error = refusal(
+            &mut board,
+            json!({"op": "replace", "scene": null, "path": "/nowhere/a.figcraft"}),
+        );
+        assert!(error.contains("a.figcraft"), "{error}");
+    }
+
+    #[test]
+    fn replace_of_a_bad_scene_or_excalidraw_file_is_an_error_and_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |name: &str, text: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, text).unwrap();
+            path.to_string_lossy().into_owned()
+        };
+        let not_json = write("not-json.excalidraw", "{ not json");
+        let no_elements = write("no-elements.excalidraw", r#"{"type": "excalidraw"}"#);
+        let missing = dir.path().join("missing.excalidraw");
+        let mut board = board();
+        add(
+            &mut board,
+            json!([{"type": "sticky", "x": 0, "y": 0, "text": "mine"}]),
+        );
+        let (before, steps) = (board.doc().unwrap(), board.session.undo_depth());
+
+        for (op, says) in [
+            (json!({"op": "replace", "scene": {}}), "`elements`"),
+            (json!({"op": "replace", "scene": [1, 2]}), "`elements`"),
+            (json!({"op": "replace", "scene": "scene"}), "`elements`"),
+            (
+                json!({"op": "replace", "path": missing}),
+                "missing.excalidraw",
+            ),
+            (
+                json!({"op": "replace", "path": not_json}),
+                "isn't valid JSON",
+            ),
+            (json!({"op": "replace", "path": no_elements}), "`elements`"),
+        ] {
+            let error = refusal(&mut board, op.clone());
+            assert!(error.starts_with("replace: "), "{op}: {error}");
+            assert!(error.contains(says), "{op}: {error}");
+        }
+        // The file that is no scene is named, not only said to be one.
+        let error = refusal(&mut board, json!({"op": "replace", "path": no_elements}));
+        assert!(error.contains("no-elements.excalidraw"), "{error}");
+
+        assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
+        assert_eq!(board.session.undo_depth(), steps);
+        assert_eq!(elements(&mut board).len(), 1);
+    }
+
+    #[test]
+    fn replace_needs_a_scene_or_a_file_of_a_kind_it_knows() {
         let mut board = board();
         add(
             &mut board,
             json!([{"type": "sticky", "x": 0, "y": 0, "text": "mine"}]),
         );
         let before = board.doc().unwrap();
-        for op in [
-            json!({"op": "replace", "scene": {"type": "excalidraw", "elements": []}}),
-            json!({"op": "replace", "scene": {"elements": []}, "path": "/tmp/a.figcraft"}),
-            json!({"op": "replace", "path": "/tmp/board.excalidraw"}),
-            json!({"op": "replace", "path": "/tmp/BOARD.Excalidraw"}),
-        ] {
-            let error = refusal(&mut board, op.clone());
-            assert!(error.starts_with("replace:"), "{op}: {error}");
-        }
-        // Nor does a path that is neither kind of file, or no path, run anything.
+        // No scene and no path, or a path that isn't text, runs nothing.
         for op in [
             json!({"op": "replace"}),
             json!({"op": "replace", "path": 5}),
+            json!({"op": "replace", "scene": null}),
         ] {
             let error = refusal(&mut board, op.clone());
             assert!(error.starts_with("replace needs"), "{op}: {error}");
@@ -2430,6 +2635,7 @@ mod tests {
             json!({"op": "delete", "ids": []}),
             json!({"op": "clear"}),
             json!({"op": "replace", "path": "/tmp/canvas.figcraft"}),
+            json!({"op": "replace", "scene": {"elements": []}}),
             json!({"op": "command", "command": "board.sticky", "params": {"x": 0, "y": 0}}),
             json!({"op": "pointer", "kind": "down", "x": 0, "y": 0}),
         ] {

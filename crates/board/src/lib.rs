@@ -5,6 +5,7 @@ pub mod actions;
 pub mod context_bar;
 pub mod design;
 pub mod doc;
+pub mod excalidraw;
 pub mod input;
 pub mod layers;
 pub mod menu;
