@@ -208,7 +208,7 @@ pub struct OpenPromptArgs {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasElementsArgs {
     #[schemars(
-        description = "Excalidraw element skeletons, e.g. {\"type\":\"rectangle\",\"id\":\"a\",\"x\":0,\"y\":0,\"width\":160,\"height\":60,\"label\":{\"text\":\"API\"}}, {\"type\":\"arrow\",\"x\":160,\"y\":30,\"start\":{\"id\":\"a\"},\"end\":{\"id\":\"b\"}}, {\"type\":\"text\",\"x\":0,\"y\":-40,\"text\":\"Title\"}. Types: rectangle, ellipse, diamond, text, arrow, line, frame"
+        description = "Element skeletons, e.g. {\"type\":\"rectangle\",\"id\":\"a\",\"x\":0,\"y\":0,\"width\":160,\"height\":60,\"label\":{\"text\":\"API\"}}, {\"type\":\"arrow\",\"x\":160,\"y\":30,\"start\":{\"id\":\"a\"},\"end\":{\"id\":\"b\"}}, {\"type\":\"text\",\"x\":0,\"y\":-40,\"text\":\"Title\"}. Types: rectangle, ellipse, diamond, sticky, text, arrow, line, frame"
     )]
     pub elements: Vec<Value>,
     pub project: Option<String>,
@@ -242,7 +242,9 @@ pub struct CanvasDeleteArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasLoadArgs {
-    #[schemars(description = "An .excalidraw file to load (replaces the board)")]
+    #[schemars(
+        description = "A .figcraft file to load, or an .excalidraw file to import (replaces the board)"
+    )]
     pub path: Option<String>,
     #[schemars(description = "Or the .excalidraw scene JSON itself")]
     pub scene: Option<Value>,
@@ -591,7 +593,7 @@ pub(crate) fn base64_decode(text: &str) -> Result<Vec<u8>, String> {
 #[tool_router(router = app_router, vis = "pub(crate)")]
 impl Sawit {
     #[tool(
-        description = "Start the Sawit app if it isn't running (or bring it forward), optionally opening a folder or file. The app_*, terminal_* and canvas_* tools need it running"
+        description = "Start the Sawit app if it isn't running (or bring it forward), optionally opening a folder or file. The app_* and terminal_* tools need it running; the canvas_* tools also work on the saved canvas file without it"
     )]
     async fn launch_app(&self, Parameters(a): Parameters<LaunchArgs>) -> CallToolResult {
         let paths = self.paths.clone();
@@ -654,7 +656,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Open a page as a tab: canvas (Excalidraw board), browser (web browser agents can drive), mcp (install page), tools (dev tools installer), changelog, git_graph, github, instance (selected PostgreSQL instance)"
+        description = "Open a page as a tab: canvas (whiteboard and design canvas), browser (web browser agents can drive), mcp (install page), tools (dev tools installer), changelog, git_graph, github, instance (selected PostgreSQL instance)"
     )]
     async fn app_open_page(&self, Parameters(a): Parameters<PageArgs>) -> CallToolResult {
         match variant::<Page>(&a.page, PAGES) {
@@ -833,14 +835,14 @@ impl Sawit {
     }
 
     #[tool(
-        description = "List the elements on Sawit's Excalidraw canvas: id, type, position, size, text, colors and arrow bindings. Works from the saved file when the app isn't running"
+        description = "List the elements on Sawit's canvas: id, type, position, size, text, color and what a connector joins. Works from the saved file when the app isn't running"
     )]
     async fn canvas_get(&self, Parameters(a): Parameters<WindowArgs>) -> CallToolResult {
         self.canvas_get_tool(a).await
     }
 
     #[tool(
-        description = "Draw on Sawit's canvas: add Excalidraw shapes, labels, text and arrows (arrows bind to shapes by id). Opens the canvas tab"
+        description = "Draw on Sawit's canvas: add shapes, stickies, labels, text and arrows (arrows bind to shapes by id). Opens the canvas tab"
     )]
     async fn canvas_add_elements(
         &self,
@@ -856,7 +858,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Convert a Mermaid diagram into editable Excalidraw shapes on Sawit's canvas: boxes, arrows bound to them, labels. Charts (pie, gantt, xychart, quadrant, journey, sankey, architecture) are placed as one image. (For an SVG image of a Mermaid diagram use render_mermaid)"
+        description = "Convert a Mermaid diagram into editable shapes on Sawit's canvas: boxes, arrows bound to them, labels. Charts (pie, gantt, xychart, quadrant, journey, sankey, architecture) are placed as one image. (For an SVG image of a Mermaid diagram use render_mermaid)"
     )]
     async fn canvas_add_mermaid(
         &self,
@@ -899,7 +901,9 @@ impl Sawit {
         }
     }
 
-    #[tool(description = "Replace the canvas with an .excalidraw file or scene JSON")]
+    #[tool(
+        description = "Replace the canvas with a .figcraft file, or import an .excalidraw file or scene JSON in its place"
+    )]
     async fn canvas_load(&self, Parameters(a): Parameters<CanvasLoadArgs>) -> CallToolResult {
         let op = match (a.scene, a.path) {
             (Some(scene), _) => json!({ "op": "replace", "scene": scene }),

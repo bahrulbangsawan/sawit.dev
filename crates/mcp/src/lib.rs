@@ -84,7 +84,7 @@ Sawit is a macOS developer workbench. These tools work without the Sawit app run
 These control the running Sawit app (start it with launch_app; app_state shows windows, tabs and terminals):
 - app_*: open files/folders, show panels, layout, tabs, pages (canvas, MCP, tools, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
 - terminal_*: run commands in Sawit's terminal and read their output, type keys (ctrl-c), close tabs.
-- canvas_*: the Excalidraw board: list, add shapes/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG.
+- canvas_*: the canvas (FigCraft engine): list, add shapes/stickies/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG. They also work on the saved file when the app is closed.
 - canvas_command: run any command of the canvas engine by id with its parameters (board.sticky, node.set, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes.
 - browser_*: a browser tab (WebKit) to check the app being built: navigate (default the project's dev server), snapshot the page as an outline with element refs, click/hover/type/press keys/select/scroll by ref or CSS selector, wait for text, screenshot, read console errors and network requests, evaluate JS. Take a new browser_snapshot after the page changes; refs reset.
 Most app tools take `project` to pick the window that has that folder open; otherwise the frontmost window is used.
@@ -433,6 +433,99 @@ mod tests {
         // The engine's commands are reachable, and an agent is told where to find their ids.
         assert!(instructions.contains("canvas_command"), "{instructions}");
         assert!(instructions.contains("canvas_commands"), "{instructions}");
+    }
+
+    /// The canvas the tools draw on is the native one, and what an agent is sent says so. Nothing
+    /// in it names the web canvas that this one replaced: not a tool's description, not the
+    /// description of one of its arguments (those are in the input schema), and not the
+    /// instructions. `canvas_load` alone speaks of that canvas's format, to import it, and only as
+    /// the extension of the files it takes.
+    #[test]
+    fn canvas_tools_describe_the_native_canvas() {
+        const OLD_NAME: &str = "excalidraw";
+        // Each tool as `tools/list` sends it: its name, description and input schema.
+        let sent: Vec<(String, String)> = Sawit::router()
+            .list_all()
+            .iter()
+            .map(|tool| (tool.name.to_string(), serde_json::to_string(tool).unwrap()))
+            .collect();
+        let tool = |name: &str| {
+            let found = sent.iter().find(|(candidate, _)| candidate == name);
+            found.map_or_else(|| panic!("no tool {name}"), |(_, text)| text.as_str())
+        };
+
+        let mut stale = Vec::new();
+        for (name, text) in &sent {
+            // `canvas_load` takes `.excalidraw` files: that extension is a file's, not a name.
+            let named = match name.as_str() {
+                "canvas_load" => text.replace(".excalidraw", ""),
+                _ => text.clone(),
+            };
+            if named.to_lowercase().contains(OLD_NAME) {
+                stale.push(format!("{name}: {text}"));
+            }
+        }
+        assert!(
+            stale.is_empty(),
+            "these still name the web canvas: {stale:#?}"
+        );
+        assert!(
+            !INSTRUCTIONS.to_lowercase().contains(OLD_NAME),
+            "the instructions still name the web canvas: {INSTRUCTIONS}"
+        );
+
+        // What the tools say instead.
+        let page = tool("app_open_page");
+        assert!(
+            page.contains("canvas (whiteboard and design canvas)"),
+            "{page}"
+        );
+        let elements = tool("canvas_add_elements");
+        assert!(elements.contains("Element skeletons, e.g."), "{elements}");
+        assert!(
+            elements
+                .contains("Types: rectangle, ellipse, diamond, sticky, text, arrow, line, frame"),
+            "{elements}"
+        );
+        let load = tool("canvas_load");
+        assert!(
+            load.contains(
+                "A .figcraft file to load, or an .excalidraw file to import (replaces the board)"
+            ),
+            "{load}"
+        );
+        // The canvas tools work with the app closed, so launching it is not a step they need.
+        let launch = tool("launch_app");
+        assert!(
+            launch.contains("canvas_* tools also work on the saved canvas file without it"),
+            "{launch}"
+        );
+
+        // The canvas_* line is the native canvas's, and it works on the file with the app closed.
+        let instruction = |start: &str| {
+            let found = INSTRUCTIONS.lines().find(|line| line.starts_with(start));
+            found.unwrap_or_else(|| panic!("no instruction line {start}"))
+        };
+        let canvas = instruction("- canvas_*:");
+        assert!(canvas.contains("the canvas (FigCraft engine)"), "{canvas}");
+        assert!(
+            canvas.contains("saved file") && canvas.contains("when the app is closed"),
+            "{canvas}"
+        );
+
+        // The list of commands is too long to return whole with their parameters (a tool's answer
+        // is cut at 100 KB), and every place that names the list says the parameters come with a
+        // filter.
+        for (what, text) in [
+            ("canvas_command", tool("canvas_command")),
+            ("canvas_commands", tool("canvas_commands")),
+            ("the canvas_command line", instruction("- canvas_command:")),
+        ] {
+            assert!(
+                text.contains("filter"),
+                "{what} doesn't mention the filter: {text}"
+            );
+        }
     }
 
     #[test]
