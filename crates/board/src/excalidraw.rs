@@ -19,10 +19,13 @@
 //!   free, at the first or the last point. A line through more than two points, and a freedraw,
 //!   are ink ([`skeleton::apply`]).
 //! - Two bindings are kept as Excalidraw draws them, where they are, since a connector joined there
-//!   would be drawn otherwise: an end bound to an element it runs beside (a `focus` outside -1 to
-//!   1), as the old canvas's sequence messages are to the note under them, is free; and so are both
-//!   ends of a line bound to one element at both ends, a loop back to it. Such a loop, if it is an
-//!   arrow with no label, is ink along its route with its head drawn in it.
+//!   would be drawn otherwise: an end bound to an element it runs beside, as the old canvas's
+//!   sequence messages are to the note under them, is free; and so are both ends of a line bound
+//!   to one element at both ends, a loop back to it. Such a loop, if it is an arrow with no label,
+//!   is ink along its route with its head drawn in it. A line runs beside an element when
+//!   Excalidraw says so (a `focus` outside -1 to 1) and the drawing agrees (carried on past that
+//!   end, the line misses the element's box). Excalidraw's word alone isn't enough: it puts some
+//!   lines straight into a wide diamond past 1.
 //! - An arrow points where its head is (`startArrowhead`, `endArrowhead`). With a head at its end,
 //!   or at both ends, it is an arrow. With a head at its start only it is drawn the other way
 //!   round, from its end to its start, so the head stays where it was. With no head it is a line,
@@ -103,7 +106,8 @@ pub fn to_skeletons(scene: &Value) -> Result<Imported, String> {
 
     let labels = Labels::find(&items);
     // An element names the section it is in, and a line names what it joins, so both are known
-    // before the elements are read: the sections, and then what the lines can join.
+    // before the elements are read: the sections, and then what the lines can join, and where
+    // each of those is drawn.
     let frames: HashSet<&str> = items
         .iter()
         .filter(|item| item.kind == Kind::Frame)
@@ -115,13 +119,13 @@ pub fn to_skeletons(scene: &Value) -> Result<Imported, String> {
         .enumerate()
         .filter(|(_, item)| !item.kind.is_linear())
     {
-        drawn[at] = item.skeleton(at, &labels, &frames, &HashSet::new());
+        drawn[at] = item.skeleton(at, &labels, &frames, &HashMap::new());
     }
-    let joinable: HashSet<&str> = items
+    let joinable: HashMap<&str, &Fields> = items
         .iter()
         .zip(&drawn)
         .filter(|(_, drawn)| drawn.is_some())
-        .filter_map(|(item, _)| item.id)
+        .filter_map(|(item, _)| Some((item.id?, item.fields)))
         .collect();
     for (at, item) in items
         .iter()
@@ -428,14 +432,15 @@ impl<'a> Item<'a> {
     /// draw: a text that is another element's label, or has no characters.
     ///
     /// Of what is named in the element, `frames` are the sections that are drawn, and `joinable`
-    /// the elements that a line can join. A name that isn't one of those is left out, so that it
-    /// can't be taken for something else on the board: a numeric id is a node id too.
+    /// the elements that a line can join, by id, each with its fields. A name that isn't one of
+    /// those is left out, so that it can't be taken for something else on the board: a numeric id
+    /// is a node id too.
     fn skeleton(
         &self,
         at: usize,
         labels: &Labels,
         frames: &HashSet<&str>,
-        joinable: &HashSet<&str>,
+        joinable: &HashMap<&str, &Fields>,
     ) -> Option<Skeleton> {
         let fields = self.fields;
         let mut item = Skeleton {
@@ -510,17 +515,17 @@ impl<'a> Item<'a> {
     /// to where the route ends, a stub. What Excalidraw draws there is the route, a loop back to
     /// the element (a state's transition to itself, say), so such a line joins neither and keeps
     /// its route. An arrow of that kind is drawn along it ([`drawn_along_its_route`]).
-    fn run_between(&self, item: &mut Skeleton, labels: &Labels, joinable: &HashSet<&str>) {
+    fn run_between(&self, item: &mut Skeleton, labels: &Labels, joinable: &HashMap<&str, &Fields>) {
         let origin = (item.x, item.y);
         let points = item.points.as_deref().unwrap_or_default();
-        let mut start = end_of(
+        let mut start = end_of(self.fields, "startBinding", points.iter(), origin, joinable);
+        let mut end = end_of(
             self.fields,
-            "startBinding",
-            points.first(),
+            "endBinding",
+            points.iter().rev(),
             origin,
             joinable,
         );
-        let mut end = end_of(self.fields, "endBinding", points.last(), origin, joinable);
         let looped = start.id.is_some() && start.id == end.id;
         if looped {
             start = free_at(points.first(), origin);
@@ -763,35 +768,95 @@ fn points_of(fields: &Fields) -> Option<Vec<[f64; 2]>> {
 }
 
 /// One end of an arrow or a line: the element named in its `binding` when `joinable` has it and
-/// the line points into it, else the end is free, at `point` (relative to `origin`, the line's own
-/// place).
+/// the line doesn't run beside it, else the end is free, where it is drawn. `route` is the line's
+/// points from that end inwards, relative to `origin`, the line's own place.
 ///
-/// Excalidraw's `focus` says where the line, carried on past its end, meets the element it is
-/// bound to: from -1 to 1 across it. A binding whose focus is outside that runs beside the
-/// element, as a sequence message of the old canvas runs beside the note under it, and Excalidraw
-/// draws that end where it is; joined, the end would be moved onto the element.
-fn end_of(
+/// A line runs beside the element it is bound to when Excalidraw says so and the drawing agrees.
+/// Excalidraw's `focus` says where the line, carried on past its end, meets the element: from -1
+/// to 1 across it, so a line with a focus outside that runs beside it, as a sequence message of
+/// the old canvas runs beside the note under it. Excalidraw draws that end where it is; joined,
+/// the end would be moved onto the element. The drawing must agree ([`misses`]), because the focus
+/// can be wrong: Excalidraw 0.18 measures a line into a diamond against the wrong half of it, so
+/// one straight into a wide diamond can read 1.6. And Excalidraw must say so, because a line that
+/// misses what it is bound to while its focus says it meets it (or that has no focus) is still
+/// joined to it: a route that the old canvas left behind when a script moved its shape (it moved
+/// only two-point arrows along), and still listed as joined.
+fn end_of<'p>(
     fields: &Fields,
     binding: &str,
-    point: Option<&[f64; 2]>,
+    mut route: impl Iterator<Item = &'p [f64; 2]>,
     origin: (f64, f64),
-    joinable: &HashSet<&str>,
+    joinable: &HashMap<&str, &Fields>,
 ) -> End {
+    let point = route.next();
     let binding = fields.get(binding);
     let bound = binding
         .and_then(|binding| binding.get("elementId"))
-        .and_then(Value::as_str);
-    let beside = binding
+        .and_then(Value::as_str)
+        .and_then(|id| Some((id, *joinable.get(id)?)));
+    let Some((id, element)) = bound else {
+        return free_at(point, origin);
+    };
+    let said_beside = binding
         .and_then(|binding| binding.get("focus"))
         .and_then(finite)
         .is_some_and(|focus| focus.abs() > 1.0);
-    match bound.filter(|id| joinable.contains(id)) {
-        Some(id) if !beside => End {
-            id: Some(id.to_string()),
-            ..End::default()
-        },
-        _ => free_at(point, origin),
+    // The point the line comes from on its way to its end, the step that it is carried on along.
+    let from = point.and_then(|end| route.find(|other| *other != end));
+    let on_page = |p: &[f64; 2]| [origin.0 + p[0], origin.1 + p[1]];
+    let beside = said_beside
+        && point
+            .zip(from)
+            .is_some_and(|(end, from)| misses(element, on_page(from), on_page(end)));
+    if beside {
+        return free_at(point, origin);
     }
+    End {
+        id: Some(id.to_string()),
+        ..End::default()
+    }
+}
+
+/// Whether a line that runs from `from` to `to` (points of the page), carried on past `to`,
+/// misses the box of `element`, as Excalidraw draws it: turned by its `angle` about its centre. A
+/// line along an edge meets it. `false` for an element with no size, of which nothing can be said.
+///
+/// It is the box even for an ellipse or a diamond, as Excalidraw measures the focus of every shape
+/// but a diamond: a line that meets the box near one of its corners passes close to the shape, and
+/// an end bound there is joined.
+fn misses(element: &Fields, from: [f64; 2], to: [f64; 2]) -> bool {
+    let (Some(width), Some(height)) = (number(element, "width"), number(element, "height")) else {
+        return false;
+    };
+    let centre = [
+        number(element, "x").unwrap_or(0.0) + width / 2.0,
+        number(element, "y").unwrap_or(0.0) + height / 2.0,
+    ];
+    // In the element's own frame, where its box stands upright about the origin, as Excalidraw
+    // measures a focus: the points turned back by its angle.
+    let (sin, cos) = (-number(element, "angle").unwrap_or(0.0)).sin_cos();
+    let upright = |point: [f64; 2]| {
+        let (x, y) = (point[0] - centre[0], point[1] - centre[1]);
+        [x * cos - y * sin, x * sin + y * cos]
+    };
+    let (end, back) = (upright(to), upright(from));
+    let way = [end[0] - back[0], end[1] - back[1]];
+    let half = [width.abs() / 2.0, height.abs() / 2.0];
+    // The stretch of the line past its end, end + t × way for t from 0 on, that is inside the box
+    // along each axis in turn; it meets the box when the two overlap.
+    let (mut near, mut far) = (0.0_f64, f64::INFINITY);
+    for ((end, way), half) in end.into_iter().zip(way).zip(half) {
+        if way == 0.0 {
+            if end.abs() > half {
+                return true;
+            }
+        } else {
+            let (one, other) = ((-half - end) / way, (half - end) / way);
+            near = near.max(one.min(other));
+            far = far.min(one.max(other));
+        }
+    }
+    near > far
 }
 
 /// A free end of a line, at `point`, which is relative to `origin`, the line's own place.
@@ -1555,7 +1620,8 @@ mod tests {
     fn an_end_bound_to_an_element_it_runs_beside_stays_where_it_is_drawn() {
         // Excalidraw's `focus` says where an arrow, carried on past its end, meets the element it
         // is bound to: from -1 to 1 across it. A message bound to the note under it runs beside
-        // the note (focus 1.6), and Excalidraw drew it level, from lifeline to lifeline.
+        // the note: Excalidraw says so (focus 1.6), and the drawing agrees (carried on, the
+        // message misses the note). Excalidraw drew it level, from lifeline to lifeline.
         let note = json!({"id": "note", "type": "rectangle", "x": 75, "y": 10, "width": 61,
                           "height": 33});
         let heads = (json!(null), json!("triangle"));
@@ -1580,7 +1646,9 @@ mod tests {
         let imported = read(elements.clone());
         assert_eq!(with_id(&imported, "beside").end, Some(loose(105.0, 0.0)));
         assert_eq!(with_id(&imported, "under").end, Some(loose(105.0, 0.0)));
-        // Up to its edges, the arrow points into the element, and joins it.
+        // A focus up to ±1, the edges included, says the arrow meets the element, and it joins it
+        // even where it is drawn beside it: a route the old canvas left behind when a script moved
+        // its shape is still joined to it.
         assert_eq!(with_id(&imported, "edge").end, Some(joined("note")));
         assert_eq!(with_id(&imported, "into").end, Some(joined("note")));
 
@@ -1592,6 +1660,62 @@ mod tests {
         assert_eq!(cap_end, StrokeCap::TriangleArrow);
         let (_, to, _, _) = connector(&board, "into");
         assert_eq!(to.node(), node_of(&board, "note"));
+    }
+
+    #[test]
+    fn an_arrow_into_a_diamond_joins_it_whatever_its_focus_says() {
+        // Excalidraw 0.18 measures where a line meets a diamond against the wrong half of it, so
+        // an arrow straight down into the top of a wide diamond, off its centre, is written with a
+        // focus past 1, as if it ran beside it: 1.138 at 70 off the centre of a 289 × 123 one
+        // (the size of the diamonds on a real board), 1.626 at 100. Each meets the diamond, and
+        // joins it. One that runs over the diamond's top, which Excalidraw also puts past 1,
+        // misses it, and is free.
+        let choice = json!({"id": "choice", "type": "diamond", "x": 0, "y": 0, "width": 289,
+                            "height": 123});
+        // A diamond turned by 45° about its centre (200, 300), and an arrow drawn into it as it is
+        // turned: straight into its top, 120 off its centre (focus -1.955). The diamond upright,
+        // or turned the other way, the same arrow would miss it.
+        let turned = json!({"id": "turned", "type": "diamond", "x": 55.5, "y": 238.5,
+                            "width": 289, "height": 123, "angle": std::f64::consts::FRAC_PI_4});
+        // Each arrow: its id, the diamond its end is bound to, where it starts and ends on the
+        // page, and the focus that Excalidraw 0.18 gives that end.
+        let arrows = [
+            ("off-70", "choice", [214.5, -100.0], [214.5, 25.0], 1.138),
+            ("off-100", "choice", [244.5, -100.0], [244.5, 37.0], 1.626),
+            ("over", "choice", [0.0, -8.0], [144.5, -8.0], 1.130),
+            ("angled", "turned", [390.0, 280.0], [295.0, 375.0], -1.955),
+        ];
+        let heads = (json!(null), json!("arrow"));
+        let mut diamonds = vec![choice, turned];
+        for (id, diamond, start, end, focus) in arrows {
+            let points = json!([[0, 0], [end[0] - start[0], end[1] - start[1]]]);
+            let to_diamond = (None, Some(diamond));
+            let into = arrow(id, (start[0], start[1]), points, heads.clone(), to_diamond);
+            diamonds.push(focused(into, (0.0, focus)));
+        }
+        let diamonds = Value::Array(diamonds);
+        let imported = read(diamonds.clone());
+        assert_eq!(with_id(&imported, "off-70").end, Some(joined("choice")));
+        assert_eq!(with_id(&imported, "off-100").end, Some(joined("choice")));
+        assert_eq!(with_id(&imported, "angled").end, Some(joined("turned")));
+        assert_eq!(with_id(&imported, "over").end, Some(loose(144.5, -8.0)));
+
+        // On the board they end at the diamonds, and `get` says so: the diamond is their `to`.
+        let mut board = drawn(diamonds);
+        let choice = node_of(&board, "choice").unwrap();
+        for id in ["off-70", "off-100"] {
+            let (_, to, _, cap_end) = connector(&board, id);
+            assert_eq!(to.node(), Some(choice), "{id}");
+            assert_eq!(cap_end, StrokeCap::TriangleArrow, "{id}");
+        }
+        let (_, to, _, _) = connector(&board, "angled");
+        assert_eq!(to.node(), node_of(&board, "turned"));
+        let listed = elements(&mut board);
+        let to_choice = of_type(&listed, "connector")
+            .into_iter()
+            .filter(|connector| connector["to"] == json!(choice.to_string()))
+            .count();
+        assert_eq!(to_choice, 2, "{listed:?}");
     }
 
     #[test]
