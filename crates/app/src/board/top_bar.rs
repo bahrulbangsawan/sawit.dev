@@ -1,7 +1,7 @@
 //! The canvas's top bar, a strip of [`HEIGHT`] over the canvas (spec D11, "Toolbar and context
-//! bar"): the document's name, the zoom menu and the Design panel's toggle on the left, Hide UI
-//! and Maximize on the right. Plan 6 puts the main menu first, and Plan 4 adds the layers panel's
-//! toggle after the zoom menu (ruling P3-C11).
+//! bar"): the main menu's ≡ button ([`super::menus`]), the document's name, the zoom menu and
+//! the Design panel's toggle on the left, Hide UI and Maximize on the right. Plan 4 adds the
+//! layers panel's toggle after the zoom menu (ruling P3-C11).
 //!
 //! Like the rest of the chrome, the bar goes while the UI is hidden (`⌘\`, `view.toggleUi`), so
 //! its Hide UI button only ever hides: `⌘\` shows the UI again (ruling P3-C12).
@@ -19,11 +19,14 @@ use sawit_board::menu::shortcut_label;
 use sawit_core::nyawit;
 use serde_json::json;
 
-use super::BoardView;
+use super::{BoardView, menus};
 use crate::canvas::{TITLE, ToggleCanvasMaximize};
 
 /// The bar's height.
 pub(super) const HEIGHT: f32 = 36.;
+
+/// The picture of the main menu's button: ≡.
+pub(super) const MAIN_MENU_ICON: Lucide = Lucide::Menu;
 
 /// The zoom menu's commands, in the spec's order, in groups between separators.
 const ZOOMS: [&[&str]; 3] = [
@@ -69,6 +72,7 @@ pub(super) fn render_top_bar(
                 .flex_1()
                 .min_w_0()
                 .gap_1()
+                .child(main_menu(this.clone()))
                 .child(
                     div()
                         .min_w_0()
@@ -139,6 +143,19 @@ pub(super) fn with_keys(label: &str, keys: Option<String>) -> String {
         Some(keys) => format!("{label}  {keys}"),
         None => label.to_owned(),
     }
+}
+
+/// The ≡ button, and its menu: the main menu (spec D8), as it is when it drops.
+fn main_menu(view: WeakEntity<BoardView>) -> impl IntoElement + use<> {
+    Button::new("board-main-menu")
+        .ghost()
+        .small()
+        .icon(MAIN_MENU_ICON)
+        .tooltip("Main menu")
+        .debug_selector(|| "board-main-menu".into())
+        .dropdown_menu(move |menu: PopupMenu, window, cx| {
+            menus::fill_main_menu(menu, &view, window, cx)
+        })
 }
 
 /// The zoom button, showing `zoom`, and its menu of the zoom commands, each with its keys.

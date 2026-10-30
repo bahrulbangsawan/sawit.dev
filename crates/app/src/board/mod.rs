@@ -17,12 +17,15 @@
 //! Around the canvas goes its chrome (spec D11): the top bar over it ([`top_bar`]), the toolbar
 //! floating at its bottom centre ([`toolbar`]), the context bar floating over a board's
 //! selection ([`context_bar`]) and the Design panel on its right ([`design_panel`]). Their buttons
-//! run their commands through [`BoardView::choose`]. While the UI is hidden (`⌘\`,
-//! `view.toggleUi`) only the canvas shows.
+//! run their commands through [`BoardView::choose`]. The menus (spec D8: the top bar's main menu,
+//! the context menu, the Actions palette and the shortcuts sheet) run theirs through
+//! [`BoardView::run_menu`] ([`menus`]). While the UI is hidden (`⌘\`, `view.toggleUi`) only the
+//! canvas shows, and the context menu, the palette and the sheet when they are open.
 
 mod context_bar;
 mod design_panel;
 mod events;
+mod menus;
 mod overlay_paint;
 mod paint;
 mod text_input;
@@ -198,6 +201,9 @@ pub struct BoardView {
     design: design_panel::DesignPanel,
     /// The scrub of a Design panel field that is on ([`BoardView::scrub_begin`]).
     scrub: Option<design_panel::Scrub>,
+    /// The context menu, the Actions palette and the keyboard-shortcuts sheet: which is open, and
+    /// what each keeps between frames ([`menus`]).
+    menus: menus::Menus,
     _frames: Task<()>,
     _quit: Subscription,
     _release: Subscription,
@@ -328,6 +334,7 @@ impl BoardView {
             show_design,
             design: design_panel::DesignPanel::default(),
             scrub: None,
+            menus: menus::Menus::default(),
             _frames: frames,
             // ⌘Q quits without dropping the views: what isn't on disk yet is written first.
             _quit: cx.on_app_quit(|this, _| {
@@ -360,7 +367,13 @@ impl BoardView {
     /// window, redraws, and saves whatever the op changed: an op arrives with no input in the
     /// window, perhaps while it is covered and its display link has stopped, so the save can't
     /// wait for the next paint.
+    ///
+    /// While the Actions palette, the shortcuts sheet or the context menu is open, a `key` op of
+    /// Escape closes it, as the key does in the window, and the canvas never gets it ([`menus`]).
     pub fn run_op(&mut self, op: &Value, cx: &mut Context<Self>) -> Value {
+        if let Some(reply) = self.close_menus_for_op(op, cx) {
+            return reply;
+        }
         let reply = match self.board_mut() {
             Some(board) => ops::run(board, op),
             None => self.not_opened(),
@@ -436,9 +449,11 @@ impl BoardView {
     ///
     /// `sawit_board::input::handle_requests` does the ones that need no view (`board.editText`
     /// starts typing in a sticky). `panel.design` (from `view.design`: ⌥8, the top bar's toggle,
-    /// an agent's command) shows or hides the Design panel. The other panels' and the menus'
-    /// requests get their arms here with Plans 4 and 6. A message the engine left for the user
-    /// shows as a toast.
+    /// an agent's command) shows or hides the Design panel. `palette.actions` (`app.actions`: ⌘K,
+    /// ⌘/) and `panel.shortcuts` (`help.shortcuts`: ⌃⇧?) open or close the Actions palette and
+    /// the shortcuts sheet, and `contextMenu` (`view.contextMenu`: ⇧F10) opens the context menu
+    /// under the selection ([`menus`]). The layers panel's requests get their arms here with
+    /// Plan 4. A message the engine left for the user shows as a toast.
     fn handle_ui_requests(&mut self, mut requests: Vec<UiRequest>, cx: &mut Context<Self>) {
         let Some(board) = self.board_mut() else {
             return;
@@ -449,6 +464,9 @@ impl BoardView {
         for request in rest {
             match request.kind.as_str() {
                 "panel.design" => self.show_design = !self.show_design,
+                "palette.actions" => self.toggle_palette(cx),
+                "panel.shortcuts" => self.toggle_sheet(cx),
+                "contextMenu" => self.open_context_menu_from_keys(cx),
                 kind => log::debug!("the canvas has no handler yet for request {kind}"),
             }
         }
@@ -470,7 +488,8 @@ impl BoardView {
     /// ([`events`]).
     ///
     /// The canvas takes only the keys pressed while it has the keyboard itself: a key typed in a
-    /// field of the Design panel, inside the canvas's view, goes on to the field. While a label's
+    /// field of the Design panel or in the Actions palette, inside the canvas's view, goes on to
+    /// the field, and the menus and the shortcuts sheet take their own keys. While a label's
     /// drag scrubs a field, Escape puts the value back and no key runs a command, which would end
     /// up in the scrub's undo step (ruling P5-C3).
     pub(super) fn on_key(
@@ -946,9 +965,12 @@ impl Render for BoardView {
         // Goes with the rest of the chrome while the UI is hidden, and comes back with it.
         let design = (chrome && self.show_design)
             .then(|| design_panel::render_design_panel(self, window, cx));
+        // Over all of it, whether the UI is hidden or not (ruling P6-C6).
+        let menus = self.render_menus(window, cx);
         div()
             .id("board")
             .key_context(key_context)
+            .relative()
             .flex()
             .flex_col()
             .size_full()
@@ -967,6 +989,7 @@ impl Render for BoardView {
                     .child(canvas)
                     .children(design),
             )
+            .children(menus)
             .into_any_element()
     }
 }
@@ -1000,9 +1023,9 @@ impl BoardView {
             .cursor(cursor)
             .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| this.on_scroll(event, cx)))
             .on_pinch(cx.listener(|this, event: &PinchEvent, _, cx| this.on_pinch(event, cx)))
-            // The right button is left for the context menu.
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_left_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_middle_down))
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             // A key pressed with the pointer resting on the canvas isn't the pointer leaving it.
             .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
@@ -1243,13 +1266,14 @@ mod tests {
     use sawit_board::{BoardDoc, DocKind, store};
     use serde_json::{Value, json};
 
-    use super::{BoardView, SAVE_DELAY, TOAST_TIME, issues_line, toolbar, top_bar};
+    use super::{BoardView, SAVE_DELAY, TOAST_TIME, issues_line, menus, toolbar, top_bar};
 
-    /// A folder of the test's own, removed when the test ends.
-    struct Scratch(PathBuf);
+    /// A folder of the test's own, removed when the test ends. The view's other test modules
+    /// (`menus`) share this one and the helpers below.
+    pub(super) struct Scratch(pub(super) PathBuf);
 
     impl Scratch {
-        fn new(test: &str) -> Self {
+        pub(super) fn new(test: &str) -> Self {
             let dir = std::env::temp_dir()
                 .join(format!("sawit-board-view-{}-{test}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
@@ -1300,7 +1324,7 @@ mod tests {
     }
 
     /// Sends `op` to the canvas as the control socket does, and returns its answer.
-    fn run_op(view: &Entity<BoardView>, op: Value, cx: &mut TestAppContext) -> Value {
+    pub(super) fn run_op(view: &Entity<BoardView>, op: Value, cx: &mut TestAppContext) -> Value {
         view.update(cx, |view, cx| view.run_op(&op, cx))
     }
 
@@ -1309,7 +1333,7 @@ mod tests {
         json!({"op": "command", "command": "board.sticky", "params": {"x": 0, "y": 0}})
     }
 
-    fn view_state(view: &Entity<BoardView>, cx: &TestAppContext) -> ViewState {
+    pub(super) fn view_state(view: &Entity<BoardView>, cx: &TestAppContext) -> ViewState {
         view.read_with(cx, |view, _| {
             view.board().unwrap().session.ds().unwrap().view.clone()
         })
@@ -2480,7 +2504,10 @@ mod tests {
     }
 
     /// The top-level layers of the canvas's page.
-    fn layers(view: &Entity<BoardView>, cx: &TestAppContext) -> Vec<figcraft_doc::NodeId> {
+    pub(super) fn layers(
+        view: &Entity<BoardView>,
+        cx: &TestAppContext,
+    ) -> Vec<figcraft_doc::NodeId> {
         view.read_with(cx, |view, _| {
             let doc = view.board().unwrap().doc().unwrap();
             doc.node(doc.first_page().unwrap())
@@ -2828,7 +2855,7 @@ mod tests {
     }
 
     /// Gives the canvas the keyboard, as a press on it does.
-    fn focus_canvas(view: &Entity<BoardView>, cx: &mut VisualTestContext) {
+    pub(super) fn focus_canvas(view: &Entity<BoardView>, cx: &mut VisualTestContext) {
         cx.update(|window, cx| {
             let focus = view.read(cx).focus.clone();
             window.focus(&focus, cx);
@@ -3002,7 +3029,7 @@ mod tests {
     /// (`sawit_board::clipboard`): they take turns.
     static CLIPBOARD_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    fn clipboard_turn() -> std::sync::MutexGuard<'static, ()> {
+    pub(super) fn clipboard_turn() -> std::sync::MutexGuard<'static, ()> {
         (CLIPBOARD_TURN.lock()).unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
@@ -3422,7 +3449,7 @@ mod tests {
 
     /// A new, empty canvas in an 800 × 600 window, wide enough for the whole toolbar, painted
     /// once: under the top bar, at 100%, with page point (0, 0) in the middle of the canvas.
-    fn chrome_canvas(
+    pub(super) fn chrome_canvas(
         cx: &mut TestAppContext,
         tmp: &Scratch,
     ) -> (Entity<BoardView>, VisualTestContext) {
@@ -3436,7 +3463,7 @@ mod tests {
     }
 
     /// Clicks the middle of what the window drew with debug selector `selector`.
-    fn click(cx: &mut VisualTestContext, selector: &'static str) {
+    pub(super) fn click(cx: &mut VisualTestContext, selector: &'static str) {
         let drawn = cx.debug_bounds(selector);
         let bounds = drawn.unwrap_or_else(|| panic!("{selector} isn't drawn"));
         cx.simulate_click(bounds.center(), Modifiers::default());
@@ -4038,6 +4065,8 @@ mod tests {
             toolbar::CHECK_ICON,
             top_bar::HIDE_UI_ICON,
             top_bar::MAXIMIZE_ICON,
+            top_bar::MAIN_MENU_ICON,
+            menus::SEARCH_ICON,
         ];
         for icon in tools.chain(chrome) {
             let path = icon.path();

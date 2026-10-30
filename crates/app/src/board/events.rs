@@ -7,21 +7,26 @@
 //! pointer is, off the canvas or out of the window too, and its release ends the gesture there:
 //! listeners on the whole window, registered with each paint ([`track_drags`]), see those events
 //! where the canvas can't. Without a button the pointer hovers, and leaving the canvas tells the
-//! engine that nothing there is hovered any more. The right button is left for the context menu.
+//! engine that nothing there is hovered any more. The right button selects what is under the
+//! pointer, as FigCraft's canvas does, and opens the context menu there ([`super::menus`]).
 //!
 //! The canvas pans by hand as FigCraft's own canvas does, outside the engine: a drag of the middle
 //! button, whatever the tool, or of the left button while Space is held down (not while text is
 //! edited, where Space types). The content follows the pointer until the button comes up, on the
 //! canvas or off it, and the tools see none of it: no gesture, no undo step.
 
-use figcraft_engine::tools::Cursor;
-use figcraft_engine::{PointerEvent, PointerKind, UiRequest};
+use figcraft_doc::NodeId;
+use figcraft_doc::geom::Point as PagePoint;
+use figcraft_doc::geometry::select_target;
+use figcraft_engine::tools::{self, Cursor};
+use figcraft_engine::{PointerEvent, PointerKind, Session, UiRequest, guard};
 use gpui_kit::{
     Context, CursorStyle, DispatchPhase, KeyDownEvent, KeyUpEvent, Modifiers, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, WeakEntity, Window,
 };
 use sawit_board::input::{self, Mods, ResizeDir};
 use sawit_board::{BoardDoc, BoardError, view};
+use serde_json::json;
 
 use super::BoardView;
 
@@ -80,6 +85,56 @@ impl BoardView {
         if !self.dragging {
             self.start_pan(MouseButton::Middle, event.position, cx);
         }
+    }
+
+    /// The right button went down on the canvas: what is under the pointer is selected, as
+    /// FigCraft's canvas selects it for its context menu (ui-egui `canvas/input.rs`,
+    /// `open_context_menu`), and the context menu opens there ([`super::menus`]):
+    /// - A frame's name label is its frame, as for a press.
+    /// - A layer already selected keeps the whole selection. Another becomes the selection: the
+    ///   layer a click there selects, or with ⌘ held the nested layer under the pointer.
+    /// - Empty canvas clears the selection, so the menu is the empty canvas's: Paste here, Select
+    ///   all, Zoom to fit and Show/Hide UI (ruling P6-C10).
+    ///
+    /// Not while a drag or a pan is on.
+    pub(super) fn on_right_down(
+        &mut self,
+        event: &MouseDownEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.dragging || self.pan.is_some() {
+            return;
+        }
+        cx.stop_propagation();
+        let local = event.position - self.bounds.origin;
+        let Some(board) = self.board_mut() else {
+            return;
+        };
+        let Ok(ds) = board.session.ds() else {
+            return;
+        };
+        let page = ds
+            .view
+            .screen_to_page(f64::from(local.x), f64::from(local.y));
+        let session = &board.session;
+        let deep = event.modifiers.platform;
+        let target = guard::run("ui.contextMenu", || Ok(context_target(session, page, deep)));
+        let selected = session.selection();
+        let chosen = match target {
+            Ok(Some(target)) if selected.contains(&target) => Ok(()),
+            Ok(Some(target)) => board
+                .execute("select.set", &json!({"ids": [target]}))
+                .map(drop),
+            Ok(None) => board.execute("select.none", &json!({})).map(drop),
+            Err(error) => Err(error.into()),
+        };
+        self.handle_ui_requests(Vec::new(), cx);
+        // After the requests' toast, so that the error's is the one that shows.
+        if let Err(error) = chosen {
+            self.show_toast(error.to_string(), cx);
+        }
+        self.open_context_menu(event.position, page, cx);
     }
 
     /// The pointer moved over the canvas. With no drag or pan on it hovers; their moves come from
@@ -314,6 +369,18 @@ fn cursor_style(cursor: &Cursor) -> CursorStyle {
         Cursor::Pointer => CursorStyle::PointingHand,
         Cursor::NotAllowed => CursorStyle::OperationNotAllowed,
     }
+}
+
+/// What a right-click at page point `page` selects in `s`, as FigCraft's canvas has it: the frame
+/// whose name label is there, else the layer a click within 2 px of it selects among the
+/// selection, or with `deep` the nested layer under it. `None` on empty canvas.
+fn context_target(s: &Session, page: (f64, f64), deep: bool) -> Option<NodeId> {
+    let ds = s.ds().ok()?;
+    let p = PagePoint::new(page.0, page.1);
+    tools::label_at(&ds.doc, ds.page, &s.tool.labels, p).or_else(|| {
+        let leaf = s.hit(&ds.doc, ds.page, p, 2.0 / ds.view.zoom.max(1e-6))?;
+        Some(select_target(&ds.doc, leaf, &ds.selection, deep))
+    })
 }
 
 /// GPUI's modifier keys as FigCraft names them: ⌘ is `cmd`.
