@@ -501,6 +501,8 @@ fn take_turn() -> MutexGuard<'static, ()> {
 ///   with its `.gitignore`.
 fn headless(file: &Path, op: &Value) -> Result<Value, String> {
     let _turn = take_turn();
+    // No app is scanning the system's fonts here, and Sawit embeds none: text would have no glyphs.
+    sawit_board::scan_system_fonts_on_demand();
     let mut board = store::open(file).map_err(|e| format!("{}: {e}", file.display()))?;
     run_and_save(&mut board, file, op)
 }
@@ -930,6 +932,15 @@ impl Sawit {
             "png" => true,
             other => return fail(format!("Unknown format “{other}”: use svg or png.")),
         };
+        // Nothing else holds the board when the app is closed: an export must never replace it.
+        if let Some(out) = a.output_path.as_deref()
+            && ops::is_canvas_file(&crate::expand_home(out.trim()))
+        {
+            return fail(format!(
+                "canvas_export would overwrite a canvas file: {}",
+                out.trim()
+            ));
+        }
         let op = json!({ "op": if png { "export_png" } else { "export_svg" } });
         let project = crate::project_dir(a.project.as_deref());
         let value = match self.canvas(a.project, op).await {
@@ -1553,5 +1564,95 @@ mod tests {
             let home = Path::new(&home).join("b.figcraft");
             assert_eq!(absolute_path("~/b.figcraft"), home.to_string_lossy());
         }
+    }
+
+    #[tokio::test]
+    async fn an_export_never_overwrites_the_canvas_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = dir.path().join("project");
+        let file = board_file(&project);
+        write_board(&file, 1);
+        let was = std::fs::read(&file).unwrap();
+
+        // The canvas_command path: the guard is the op's own, so it holds with no app running.
+        let refused = server
+            .canvas_command_tool(CanvasCommandArgs {
+                command: "file.exportSvg".into(),
+                params: Some(json!({"path": file})),
+                project: project_arg(&project),
+            })
+            .await;
+        assert_eq!(refused.is_error, Some(true), "{}", said(&refused));
+        assert_eq!(
+            said(&refused),
+            "file.exportSvg would overwrite a canvas file"
+        );
+        assert_eq!(std::fs::read(&file).unwrap(), was);
+
+        // The canvas_export path, for every canvas name and both formats.
+        for name in [
+            "canvas.figcraft",
+            "canvas.excalidraw",
+            "canvas.figcraft.bak",
+        ] {
+            for format in ["svg", "png"] {
+                let target = file.with_file_name(name);
+                let refused = server
+                    .canvas_export(Parameters(CanvasExportArgs {
+                        format: Some(format.into()),
+                        output_path: Some(target.display().to_string()),
+                        project: project_arg(&project),
+                    }))
+                    .await;
+                assert_eq!(refused.is_error, Some(true), "{name}: {}", said(&refused));
+                assert!(said(&refused).contains("would overwrite a canvas file"));
+            }
+        }
+        assert_eq!(std::fs::read(&file).unwrap(), was);
+        assert!(!file.with_file_name("canvas.excalidraw").exists());
+
+        // The canvas is still there, with its sticky.
+        let got = server
+            .canvas_get_tool(WindowArgs {
+                project: project_arg(&project),
+            })
+            .await;
+        assert_eq!(answer(&got)["elements"].as_array().unwrap().len(), 1);
+
+        // An export to an image path still writes.
+        for (format, name) in [("svg", "page.svg"), ("png", "page.png")] {
+            let out = dir.path().join(name);
+            let done = server
+                .canvas_export(Parameters(CanvasExportArgs {
+                    format: Some(format.into()),
+                    output_path: Some(out.display().to_string()),
+                    project: project_arg(&project),
+                }))
+                .await;
+            assert_ne!(done.is_error, Some(true), "{}", said(&done));
+            assert!(!std::fs::read(&out).unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_headless_export_of_text_has_glyphs() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = dir.path().join("project");
+        write_board(&board_file(&project), 1);
+
+        let done = server
+            .canvas_export(Parameters(CanvasExportArgs {
+                format: Some("svg".into()),
+                output_path: Some(dir.path().join("page.svg").display().to_string()),
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_ne!(done.is_error, Some(true), "{}", said(&done));
+        let svg = std::fs::read_to_string(dir.path().join("page.svg")).unwrap();
+        // The sticky's text is drawn as outlines: more than the sticky's own rectangle.
+        let paths = svg.matches("<path").count();
+        assert!(paths >= 2, "{paths} paths in {svg}");
     }
 }

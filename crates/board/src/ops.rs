@@ -27,6 +27,11 @@
 //! branches as they were ([`FileHistory`]): they are part of the file, and the engine keeps them
 //! outside undo.
 //!
+//! Nor may a `command` op write over a canvas file. An engine command that writes where its `path`
+//! says (`file.export`, `variable.export`...: [`WRITES_TO_PATH`]) is refused, as the steps of a
+//! `command.batch` too, when `path` names a `.figcraft` or `.excalidraw` file or a copy Sawit keeps
+//! of one ([`is_canvas_file`]): with the app closed nothing else holds the board.
+//!
 //! It also holds the document's side of the commands Sawit carries out itself instead of the
 //! engine, which the canvas's menus and keys run ([`export_page`], [`frames_pdf`], [`copy_as`],
 //! [`import_file`]).
@@ -79,6 +84,51 @@ const HANDLED_BY_SAWIT: &[&str] = &[
 /// ([`Documents`] undoes it), so none of these can succeed through it.
 const OPENS_DOCUMENTS: &[&str] = &["file.recover", "version.duplicate", "branch.open"];
 
+/// The engine's commands that write a file where their `path` parameter says. The `command` op
+/// refuses them when that is a canvas file ([`is_canvas_file`]): one mistaken export would replace
+/// the board, and with the app closed nothing holds another copy of it.
+///
+/// These are all of them at the pinned FigCraft revision, found by reading what writes in the
+/// engine: every write goes through `file_access::write`. `file.save` and `file.saveAs` are the
+/// others, and Sawit's own ([`HANDLED_BY_SAWIT`]). `file.exportLayers` and `data.fill` write into a
+/// folder (`dir`) instead, but name every file after a layer and add its format's extension (`png`,
+/// `jpg`, `webp`, `svg`, `pdf` or `xml`), so none of the files they write is a canvas file, and
+/// they need no check.
+const WRITES_TO_PATH: &[&str] = &[
+    "file.export",
+    "file.exportSvg",
+    "file.exportFramesPdf",
+    "variable.export",
+    "component.playground",
+    "codeConnect.export",
+];
+
+/// The ends of the names of the files a canvas is kept in: the one it is saved to, and the old
+/// one that it was migrated from.
+const CANVAS_EXTENSIONS: [&str; 2] = [".figcraft", ".excalidraw"];
+
+/// What goes after that to name a copy Sawit keeps of a canvas file, or a file it writes one
+/// through: the backups of the store (`.bak` and `.lossy.bak`), and the files a save is staged in
+/// (`.tmp`, and `.<name>.sawit-tmp`, [`sawit_core::files::staging_file`]).
+const CANVAS_COMPANIONS: [&str; 5] = ["", ".bak", ".lossy.bak", ".tmp", ".sawit-tmp"];
+
+/// Whether `path` names a canvas file: a `.figcraft` or an `.excalidraw` file, or one of the
+/// copies and staging files that Sawit keeps beside one.
+///
+/// Only the name at the end of `path` counts, in any case (the files of a Mac are not told apart
+/// by it), and the whole of its end: `canvas.figcraft.svg` is an SVG file, not a canvas. So an
+/// export to an image path is never refused.
+pub fn is_canvas_file(path: &Path) -> bool {
+    let Some(name) = path.file_name() else {
+        return false;
+    };
+    let name = name.to_string_lossy().to_lowercase();
+    CANVAS_EXTENSIONS.iter().any(|extension| {
+        (CANVAS_COMPANIONS.iter())
+            .any(|companion| name.ends_with(&format!("{extension}{companion}")))
+    })
+}
+
 /// The command that runs other commands as its steps.
 const BATCH: &str = "command.batch";
 
@@ -121,9 +171,10 @@ const MERMAID_GAP: f64 = 100.0;
 ///   nothing on it has nothing to export, and that is the error, as is any other the engine gives.
 /// - `command` (`{command, params?}`) runs engine command `command` and answers `{ok, result}`,
 ///   or the engine's own `error`. It refuses the commands Sawit handles itself, as the steps of a
-///   `command.batch` too ("<id> is handled by Sawit"). A command that would leave the canvas with
-///   another document open or on show is undone and answers "<id> would open or switch documents;
-///   the canvas keeps its one document".
+///   `command.batch` too ("<id> is handled by Sawit"), and the commands that write a file where
+///   their `path` says when that is a canvas file ("<id> would overwrite a canvas file"). A command
+///   that would leave the canvas with another document open or on show is undone and answers
+///   "<id> would open or switch documents; the canvas keeps its one document".
 /// - `commands` answers `{ok, commands: [{id, label, params}]}`: the engine's commands that
 ///   `command` runs and that the canvas doesn't hide, with the parameters each documents.
 /// - `pointer` (`{kind, x, y, shift?, alt?, cmd?}`) sends the tools a press (`down`), a move with
@@ -593,8 +644,8 @@ fn command(board: &mut BoardDoc, op: &Value) -> Value {
         None | Some(Value::Null) => json!({}),
         Some(params) => params.clone(),
     };
-    if let Some(refused) = refused(id, &params) {
-        return failure(format!("{refused} is handled by Sawit"));
+    if let Some(refusal) = refused(id, &params) {
+        return failure(refusal);
     }
     let history = FileHistory::of(&board.session);
     let ran = if id == BATCH {
@@ -658,20 +709,36 @@ enum Failed {
     Switched(String),
 }
 
-/// The command in [`HANDLED_BY_SAWIT`] that running `id` with `params` would reach, if any: `id`
-/// itself, or a step of a `command.batch`, however deeply batches are nested.
-fn refused(id: &str, params: &Value) -> Option<&'static str> {
+/// Why the `command` op won't run `id` with `params`, if it won't. `id` itself, or a step of a
+/// `command.batch`, however deeply batches are nested, is one that Sawit handles
+/// ([`HANDLED_BY_SAWIT`]), or that would write over a canvas file ([`WRITES_TO_PATH`]).
+fn refused(id: &str, params: &Value) -> Option<Refusal> {
     if let Some(handled) = handled(id) {
-        return Some(handled);
+        return Some(Refusal::Handled(handled));
     }
-    if id != BATCH {
+    if id == BATCH {
+        let steps = params.get("commands")?.as_array()?;
+        return steps.iter().find_map(|step| {
+            let id = step.get("command")?.as_str()?;
+            refused(id, step.get("params").unwrap_or(&Value::Null))
+        });
+    }
+    if !WRITES_TO_PATH.contains(&id) {
         return None;
     }
-    let steps = params.get("commands")?.as_array()?;
-    steps.iter().find_map(|step| {
-        let id = step.get("command")?.as_str()?;
-        refused(id, step.get("params").unwrap_or(&Value::Null))
-    })
+    let path = params.get("path")?.as_str()?;
+    is_canvas_file(Path::new(path)).then(|| Refusal::Overwrites(id.to_string()))
+}
+
+/// Why a command op is refused before anything runs ([`refused`]).
+#[derive(Debug, Error, PartialEq)]
+enum Refusal {
+    /// The command is one Sawit carries out itself.
+    #[error("{0} is handled by Sawit")]
+    Handled(&'static str),
+    /// The command, by its id, would write over a canvas file.
+    #[error("{0} would overwrite a canvas file")]
+    Overwrites(String),
 }
 
 /// The documents a session holds, as a command op found them: their uids in order, and the uid of
@@ -1435,6 +1502,233 @@ mod tests {
         assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
         // The canvas's document was never given a path, so file.revert has nothing to read.
         assert_eq!(board.session.ds().unwrap().path, None);
+    }
+
+    /// The answer to a command that would have written over a canvas file (ruling P7-X3).
+    fn would_overwrite(id: &str) -> Value {
+        json!({"ok": false, "error": format!("{id} would overwrite a canvas file")})
+    }
+
+    /// The engine's commands that write a file where their `path` says, as read in FigCraft's
+    /// engine at the pinned revision: everything it writes goes through `file_access::write`.
+    const WRITERS: [&str; 6] = [
+        "file.export",
+        "file.exportSvg",
+        "file.exportFramesPdf",
+        "variable.export",
+        "component.playground",
+        "codeConnect.export",
+    ];
+
+    /// A project's `.nyawit` folder in `dir`, holding a file of each name a canvas, or a copy of
+    /// one, goes by, with its own path as its bytes. Their paths.
+    fn canvas_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let folder = dir.join(".nyawit");
+        std::fs::create_dir_all(&folder).unwrap();
+        let staging = sawit_core::files::staging_file(&folder.join("canvas.figcraft"));
+        let mut files: Vec<_> = [
+            "canvas.figcraft",
+            "canvas.excalidraw",
+            "canvas.figcraft.bak",
+            "canvas.figcraft.lossy.bak",
+            "canvas.figcraft.tmp",
+            "canvas.excalidraw.bak",
+            "canvas.excalidraw.lossy.bak",
+            // A file of the user's own, and in capitals, which is the same file on a Mac.
+            "Design.figcraft",
+            "OLD.EXCALIDRAW",
+        ]
+        .map(|name| folder.join(name))
+        .into();
+        files.push(staging);
+        for file in &files {
+            std::fs::write(file, file.to_string_lossy().as_bytes()).unwrap();
+        }
+        files
+    }
+
+    #[test]
+    fn canvas_files_are_told_by_the_end_of_their_name() {
+        use std::path::Path;
+        for name in [
+            "canvas.figcraft",
+            "/project/.nyawit/canvas.figcraft",
+            "relative/Board.FigCraft",
+            "OLD.EXCALIDRAW",
+            "canvas.figcraft.bak",
+            "canvas.figcraft.lossy.bak",
+            "canvas.figcraft.tmp",
+            ".canvas.figcraft.sawit-tmp",
+            "canvas.excalidraw.bak",
+            "canvas.excalidraw.lossy.bak",
+            "canvas.excalidraw.tmp",
+        ] {
+            assert!(is_canvas_file(Path::new(name)), "{name}");
+        }
+        // An export to an image or a text path is not one, whatever its name holds.
+        for name in [
+            "page.png",
+            "page.svg",
+            "canvas.figcraft.svg",
+            "canvas.excalidraw.png",
+            "figcraft",
+            "notes.figcraftx",
+            "canvas.bak",
+            "canvas.tmp",
+            "/project/.figcraft/page.png",
+            "",
+            "/",
+            "..",
+        ] {
+            assert!(!is_canvas_file(Path::new(name)), "{name}");
+        }
+        // The file a save of the canvas is staged in, wherever it is.
+        let staging = sawit_core::files::staging_file(Path::new("/p/.nyawit/canvas.figcraft"));
+        assert!(is_canvas_file(&staging), "{}", staging.display());
+    }
+
+    #[test]
+    fn the_guarded_writers_are_the_audited_engine_commands() {
+        assert_eq!(WRITES_TO_PATH, WRITERS);
+        // A rename in the engine would leave a stale id here, and the command unguarded.
+        for id in WRITES_TO_PATH {
+            assert!(figcraft_engine::cmd::find_command(id).is_some(), "{id}");
+            assert!(!HANDLED_BY_SAWIT.contains(id), "{id} is refused already");
+        }
+    }
+
+    /// The names of what is in `dir`, in order.
+    fn names_in(dir: &std::path::Path) -> Vec<String> {
+        let entries = std::fs::read_dir(dir).unwrap();
+        let mut names: Vec<String> = entries
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn an_export_aimed_at_a_canvas_file_is_refused_and_the_file_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = canvas_files(dir.path());
+        let folder = dir.path().join(".nyawit");
+        let read = |files: &[std::path::PathBuf]| -> Vec<Vec<u8>> {
+            files.iter().map(|f| std::fs::read(f).unwrap()).collect()
+        };
+        let (bytes, names) = (read(&files), names_in(&folder));
+        let mut board = board();
+        square_at(&mut board, 0.0);
+
+        for id in WRITERS {
+            for file in &files {
+                let reply = send(&mut board, id, json!({"path": file}));
+                assert_eq!(reply, would_overwrite(id), "{id} to {}", file.display());
+            }
+        }
+
+        // Every file is as it was, byte for byte, and nothing was left beside them.
+        assert_eq!(read(&files), bytes);
+        assert_eq!(names_in(&folder), names);
+    }
+
+    #[test]
+    fn exports_to_other_paths_still_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let canvas = canvas_files(dir.path());
+        let mut board = board();
+        square_at(&mut board, 0.0);
+
+        // What the name ends in decides, not what it holds: `.figcraft.svg` is an SVG file.
+        let writes = [
+            ("file.export", "page.png"),
+            ("file.exportSvg", "page.svg"),
+            ("file.exportSvg", "canvas.figcraft.svg"),
+            ("file.export", "design.figcraft.png"),
+            ("variable.export", "variables.json"),
+            ("codeConnect.export", "links.json"),
+        ];
+        for (id, name) in writes {
+            let path = dir.path().join(name);
+            let reply = send(&mut board, id, json!({"path": path}));
+            assert_eq!(reply["ok"], json!(true), "{id} to {name}: {reply}");
+            assert!(path.is_file(), "{id} wrote no {name}");
+        }
+        let page = std::fs::read(dir.path().join("page.png")).unwrap();
+        assert!(page.starts_with(b"\x89PNG"), "{:02x?}", &page[..8]);
+        let svg = std::fs::read_to_string(dir.path().join("canvas.figcraft.svg")).unwrap();
+        assert!(svg.starts_with("<svg"), "{svg}");
+        // And the canvas files beside them are as they were.
+        for file in &canvas {
+            let path = file.to_string_lossy();
+            assert_eq!(std::fs::read(file).unwrap(), path.as_bytes());
+        }
+    }
+
+    #[test]
+    fn a_batch_step_that_would_overwrite_a_canvas_file_is_refused_before_anything_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let canvas = canvas_files(dir.path()).remove(0);
+        let was = std::fs::read(&canvas).unwrap();
+        let mut board = board();
+        let before = board.doc().unwrap();
+
+        for id in WRITERS {
+            let reply = send(
+                &mut board,
+                "command.batch",
+                json!({"commands": [
+                    {"command": "board.sticky", "params": {"x": 0, "y": 0}},
+                    {"command": "command.batch", "params": {"commands": [
+                        {"command": id, "params": {"path": canvas}},
+                    ]}},
+                ]}),
+            );
+            assert_eq!(reply, would_overwrite(id));
+        }
+
+        // Not even the sticky before the refused step was made, and the file is as it was.
+        assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
+        assert_eq!(board.session.undo_depth(), (0, 0));
+        assert_eq!(std::fs::read(&canvas).unwrap(), was);
+    }
+
+    /// `file.exportLayers` and `data.fill` write into a folder, naming each file after its layer
+    /// and then adding its format's extension, so they can't make a canvas file's name even from
+    /// the worst layer name: no check is needed, which is why they aren't among `WRITERS`.
+    #[test]
+    fn exports_into_a_folder_never_make_a_canvas_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let canvas = canvas_files(dir.path());
+        let folder = dir.path().join(".nyawit");
+        let mut board = design();
+        let frame = made(
+            &mut board,
+            "node.create",
+            json!({"type": "frame", "x": 0, "y": 0, "width": 100, "height": 100}),
+        );
+        let name = json!({"ids": [frame], "props": {"name": "canvas.figcraft"}});
+        board.execute("node.set", &name).unwrap();
+        let png = json!({"ids": [frame], "setting": {"format": "png"}});
+        board.execute("export.add", &png).unwrap();
+
+        let reply = send(&mut board, "file.exportLayers", json!({"dir": folder}));
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        let rows = json!([{"name": "canvas.figcraft"}]);
+        let fill = json!({"id": frame, "rows": rows, "dir": folder, "format": "svg"});
+        let reply = send(&mut board, "data.fill", fill);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+
+        // What they made ends in an image extension, and the canvas files are as they were.
+        let names = names_in(&folder);
+        assert!(
+            names.iter().any(|n| n == "canvas.figcraft.png"),
+            "{names:?}"
+        );
+        assert!(names.iter().any(|n| n.ends_with(".svg")), "{names:?}");
+        for file in &canvas {
+            let path = file.to_string_lossy();
+            assert_eq!(std::fs::read(file).unwrap(), path.as_bytes());
+        }
     }
 
     #[test]
