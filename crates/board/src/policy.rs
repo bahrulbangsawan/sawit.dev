@@ -138,6 +138,14 @@ pub fn is_clipboard(id: &str) -> bool {
     CLIPBOARD.contains(&id)
 }
 
+/// Whether command `id` acts on the text being typed in, and so runs with the edit still open:
+/// the Text menu's commands (`text.*`), which style the text or the characters selected in it,
+/// and copy and paste ([`CLIPBOARD`]), which take its characters. Before any other command the
+/// canvas ends the edit first ([`crate::input::end_text_edit_before`], ruling R-TEXTEDIT).
+pub fn keeps_text_edit(id: &str) -> bool {
+    id.starts_with("text.") || is_clipboard(id)
+}
+
 #[cfg(test)]
 mod tests {
     use figcraft_engine::cmd::view;
@@ -207,6 +215,38 @@ mod tests {
         }
         assert!(!is_clipboard("edit.copyAsPng"));
         assert!(!is_clipboard("edit.pasteProperties"));
+    }
+
+    #[test]
+    fn only_text_commands_and_copy_and_paste_keep_a_text_edit_open() {
+        // They act on the text being typed in: its style, or its characters.
+        for id in [
+            "text.bold",
+            "text.alignCenter",
+            "text.bulletList",
+            "edit.copy",
+            "edit.cut",
+            "edit.paste",
+            "edit.pasteOver",
+        ] {
+            assert!(keeps_text_edit(id), "{id}");
+        }
+        // Any other ends the edit first, those that drop it without ending it among them: Select
+        // none, deleting what is typed in, a page or tool switch.
+        for id in [
+            "select.none",
+            "select.all",
+            "edit.delete",
+            "edit.undo",
+            "page.select",
+            "tool.hand",
+            "view.zoomFit",
+            "board.nextSticky",
+            "file.export",
+            "edit.copyAsText",
+        ] {
+            assert!(!keeps_text_edit(id), "{id}");
+        }
     }
 
     #[test]

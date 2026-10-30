@@ -20,10 +20,11 @@
 //! panel on its right ([`design_panel`]). Their buttons run their commands through
 //! [`BoardView::choose`]. The menus (spec D8: the top bar's main menu, the context menu, the
 //! Actions palette and the shortcuts sheet) run theirs through [`BoardView::run_menu`]
-//! ([`menus`]). What the canvas carries out itself instead of the engine, from the menus and the
-//! keys alike (import, save, export, copy as), is in [`commands`]. While the UI is hidden (`⌘\`,
-//! `view.toggleUi`) only the canvas shows, and the context menu, the palette and the sheet when
-//! they are open.
+//! ([`menus`]). Both end the text being typed in first, unless the command acts on it
+//! ([`BoardView::end_text_edit`]). What the canvas carries out itself instead of the engine, from
+//! the menus and the keys alike (import, save, export, copy as), is in [`commands`]. While the UI
+//! is hidden (`⌘\`, `view.toggleUi`) only the canvas shows, and the context menu, the palette and
+//! the sheet when they are open.
 
 mod commands;
 mod context_bar;
@@ -443,8 +444,13 @@ impl BoardView {
     /// (ui-egui `app/commands.rs`): the engine runs it, the canvas carries out what the engine
     /// asked of it, then the engine's error shows as a toast (last, so that it is the toast that
     /// shows), and the canvas redraws. Any command goes through as it is given.
+    ///
+    /// A text being typed in on the canvas ends first, unless the command acts on it
+    /// ([`Self::end_text_edit`], ruling R-TEXTEDIT).
     pub fn choose(&mut self, command: &str, params: Value, cx: &mut Context<Self>) {
-        self.run(|board| board.execute(command, &params), cx);
+        if self.end_text_edit(Some(command), cx) {
+            self.run(|board| board.execute(command, &params), cx);
+        }
     }
 
     /// Runs `f` on the document as [`Self::choose`] runs a command, with what follows it: the
@@ -717,6 +723,40 @@ impl BoardView {
     fn editing_text(&self) -> bool {
         self.board()
             .is_some_and(|board| board.session.ds().is_ok_and(|ds| ds.text_edit.is_some()))
+    }
+
+    /// Ends the text being typed in on the canvas, if there is one, as a press outside the text
+    /// ends it: what was typed becomes one undo step, a sticky's text gives the selection back to
+    /// its sticky, and a new text left empty goes. `before` is the command the caller runs next.
+    /// When that command acts on the text, the edit stays open: the Text menu's commands, and copy
+    /// and paste (`sawit_board::input::end_text_edit_before`). `None` ends the edit whatever comes
+    /// next, as a right-click does ([`events`]).
+    ///
+    /// It is ruling R-TEXTEDIT's one helper: the canvas ends typing through it before a command of
+    /// its chrome and its menus ([`Self::choose`], [`Self::run_menu`]) and before a right-click's
+    /// selection. A command that drops the edit without ending it (Select none, a page or a tool
+    /// switch, deleting the text) left the engine's "Edit text" gesture open. The next click on a
+    /// layer then cancelled the gesture, which took the typing back (Plan 6 final review C1).
+    ///
+    /// Whether the caller may go on: false when the edit couldn't end, which a toast then says.
+    /// The caller then runs nothing, since its command could drop the edit without ending it.
+    fn end_text_edit(&mut self, before: Option<&str>, cx: &mut Context<Self>) -> bool {
+        if !self.editing_text() {
+            return true;
+        }
+        let Some(board) = self.board_mut() else {
+            return true;
+        };
+        let ended = match before {
+            Some(command) => input::end_text_edit_before(board, command),
+            None => input::end_text_edit(board),
+        };
+        if let Err(error) = ended {
+            self.show_toast(error.to_string(), cx);
+            return false;
+        }
+        cx.notify();
+        true
     }
 
     /// The answer to an op when the file couldn't be opened: why, as `{ok: false, error}`.

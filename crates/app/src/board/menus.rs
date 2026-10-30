@@ -5,9 +5,9 @@
 //!
 //! - **The main menu** drops from the top bar's ≡ button ([`super::top_bar`]): FigCraft's menu
 //!   catalog under Sawit's policy, its submenus nested, each item with its keys on the right.
-//! - **The context menu** opens where the right button goes down on the canvas, once what is there
-//!   is selected ([`BoardView::on_right_down`]), and under the selection for ⇧F10
-//!   (`view.contextMenu`). Its Paste here pastes where it opened.
+//! - **The context menu** opens where the right button goes down on the canvas, once the text
+//!   being typed in has ended and what is there is selected ([`BoardView::on_right_down`]), and
+//!   under the selection for ⇧F10 (`view.contextMenu`). Its Paste here pastes where it opened.
 //! - **The Actions palette** (⌘K, ⌘/) searches the main menu's commands and lists the best
 //!   [`PALETTE_RESULTS`]. Up and Down move the highlight, Enter runs it, and Escape or a press
 //!   outside closes the palette, as in FigCraft.
@@ -134,7 +134,9 @@ impl Palette {
 
 impl BoardView {
     /// Runs item `id` of the main menu, the context menu or the Actions palette, as a click on it
-    /// does (spec, "Menu policy"). The menu open closes, and the canvas takes the keyboard. Then:
+    /// does (spec, "Menu policy"). The menu open closes, and the canvas takes the keyboard. A text
+    /// being typed in on the canvas ends, unless the command acts on it: the Text menu's commands,
+    /// and copy and paste ([`Self::end_text_edit`], ruling R-TEXTEDIT). Then:
     /// - Copy, cut and paste go the keyboard's way ([`Self::run_clipboard`], ruling P6-C4): the
     ///   context menu's Paste here pastes where the menu opened.
     /// - A command Sawit carries out itself (import, export, save, copy as) is carried out by the
@@ -148,6 +150,9 @@ impl BoardView {
             .flatten();
         self.close_menus(cx);
         window.focus(&self.focus, cx);
+        if !self.end_text_edit(Some(id), cx) {
+            return;
+        }
         if policy::is_clipboard(id) {
             self.run_clipboard(id, here, cx);
         } else if policy::is_ui(id) {
@@ -786,7 +791,8 @@ mod tests {
     use figcraft_doc::NodeId;
     use figcraft_doc::geom::Rect;
     use gpui_kit::{
-        Entity, Modifiers, MouseButton, Pixels, Point, TestAppContext, VisualTestContext, point, px,
+        Entity, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point,
+        TestAppContext, VisualTestContext, point, px,
     };
     use sawit_board::menu::context_menu;
     use serde_json::{Value, json};
@@ -893,6 +899,91 @@ mod tests {
 
     fn toast(view: &Entity<BoardView>, cx: &TestAppContext) -> Option<String> {
         view.read_with(cx, |view, _| view.toast.as_ref().map(ToString::to_string))
+    }
+
+    /// Puts a sticky note reading `text` with its top left corner at page point `at`, selected,
+    /// as an agent's command does, and returns it.
+    fn sticky_reading(
+        view: &Entity<BoardView>,
+        at: (f64, f64),
+        text: &str,
+        cx: &mut TestAppContext,
+    ) -> NodeId {
+        let op = json!({
+            "op": "command", "command": "board.sticky",
+            "params": {"x": at.0, "y": at.1, "text": text},
+        });
+        let made = run_op(view, op, cx);
+        figcraft_engine::params::id_of(&made["result"]["id"]).unwrap()
+    }
+
+    /// Two quick presses of the left button at `at` in the window: a double-click, which on a
+    /// sticky starts typing in it, all of its text selected.
+    fn double_click(cx: &mut VisualTestContext, at: Point<Pixels>) {
+        let (button, modifiers) = (MouseButton::Left, Modifiers::default());
+        for click_count in [1, 2] {
+            cx.simulate_event(MouseDownEvent {
+                position: at,
+                button,
+                modifiers,
+                click_count,
+                first_mouse: false,
+            });
+            cx.simulate_event(MouseUpEvent {
+                position: at,
+                button,
+                modifiers,
+                click_count,
+            });
+        }
+    }
+
+    /// Whether a text is being typed in on the canvas.
+    fn typing(view: &Entity<BoardView>, cx: &TestAppContext) -> bool {
+        view.read_with(cx, |view, _| view.editing_text())
+    }
+
+    /// What sticky `note` reads.
+    fn reads(view: &Entity<BoardView>, note: NodeId, cx: &TestAppContext) -> String {
+        view.read_with(cx, |view, _| {
+            let doc = view.board().unwrap().doc().unwrap();
+            let text = figcraft_engine::board::text_of(&doc, note).unwrap();
+            let text = doc.node(text).and_then(|node| node.kind.text()).unwrap();
+            text.characters.clone()
+        })
+    }
+
+    /// How many steps the canvas's undo takes back.
+    fn undo_steps(view: &Entity<BoardView>, cx: &TestAppContext) -> usize {
+        view.read_with(cx, |view, _| view.board().unwrap().session.undo_depth().0)
+    }
+
+    /// The engine's gesture that is open, if one is: typing holds one, "Edit text", until the
+    /// typing ends.
+    fn gesture(view: &Entity<BoardView>, cx: &TestAppContext) -> Option<String> {
+        view.read_with(cx, |view, _| {
+            let ds = view.board().unwrap().session.ds().unwrap();
+            ds.interaction.as_ref().map(|gesture| gesture.label.clone())
+        })
+    }
+
+    /// Two stickies side by side with nothing selected, the first reading "old", then typing in
+    /// the first as a person does: a double-click on it, and "new" typed in place of its text.
+    /// The two stickies, and how many undo steps there were before the typing.
+    fn typing_in_the_first_of_two(
+        view: &Entity<BoardView>,
+        cx: &mut VisualTestContext,
+    ) -> (NodeId, NodeId, usize) {
+        let note = sticky_reading(view, (-300.0, -100.0), "old", cx);
+        let other = sticky_reading(view, (100.0, -100.0), "B", cx);
+        run_op(view, command("select.none"), cx);
+        let steps = undo_steps(view, cx);
+        let at = middle_of(view, note, cx);
+        double_click(cx, at);
+        assert!(typing(view, cx), "the double-click started no typing");
+        cx.simulate_input("new");
+        assert_eq!(reads(view, note, cx), "new");
+        (note, other, steps)
     }
 
     #[gpui_kit::test]
@@ -1056,6 +1147,121 @@ mod tests {
         );
         assert_eq!(open_menus(&view, &cx), CLOSED);
         assert!(canvas_has_keyboard(&view, &mut cx));
+        assert_eq!(toast(&view, &cx), None);
+    }
+
+    /// Final review C1 (ruling R-TEXTEDIT): a right-click on empty canvas while a sticky is typed
+    /// in ends the typing first, as a press outside it does, and then clears the selection
+    /// (ruling P6-C10). What was typed is an undo step of its own, and it stays after the next
+    /// click. Clearing the selection alone left the engine's "Edit text" gesture open, and the
+    /// next click on a layer cancelled it, which took the typing back.
+    #[gpui_kit::test]
+    fn a_right_click_on_empty_canvas_keeps_what_was_typed(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("right-click-typing");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        let (note, other, steps) = typing_in_the_first_of_two(&view, &mut cx);
+
+        // Empty canvas, above the gap between the stickies.
+        let empty = on_screen(&view, (0.0, -150.0), &cx);
+        right_click(&mut cx, empty);
+        assert!(!typing(&view, &cx));
+        assert_eq!(gesture(&view, &cx), None);
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+        assert!(selection(&view, &cx).is_empty());
+        assert!(cx.debug_bounds("board-menu-view.zoomFit").is_some());
+        cx.simulate_keystrokes("escape");
+        assert_eq!(open_menus(&view, &cx), CLOSED);
+        assert!(canvas_has_keyboard(&view, &mut cx));
+
+        // A click on the other sticky selects it, and what was typed stays.
+        cx.simulate_click(middle_of(&view, other, &cx), Modifiers::default());
+        assert_eq!(selection(&view, &cx), [other]);
+        assert_eq!(reads(&view, note, &cx), "new");
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+        assert_eq!(toast(&view, &cx), None);
+    }
+
+    /// Final review C1: Delete in the context menu of the sticky being typed in. The right-click
+    /// ends the typing as one undo step, so the menu is the sticky's: Delete takes the sticky off
+    /// the canvas as a step of its own, and it stays off after the next click. Inside the open
+    /// edit, Delete took the text being typed, and that click brought it back as it was.
+    #[gpui_kit::test]
+    fn delete_in_the_menu_of_the_sticky_typed_in_keeps_it_deleted(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("delete-typed-in");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        let (note, other, steps) = typing_in_the_first_of_two(&view, &mut cx);
+
+        let on_note = middle_of(&view, note, &cx);
+        right_click(&mut cx, on_note);
+        assert!(!typing(&view, &cx));
+        assert_eq!(selection(&view, &cx), [note]);
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+        click(&mut cx, "board-menu-edit.delete");
+        assert_eq!(layers(&view, &cx), [other]);
+        assert_eq!(undo_steps(&view, &cx), steps + 2);
+
+        cx.simulate_click(middle_of(&view, other, &cx), Modifiers::default());
+        assert_eq!(selection(&view, &cx), [other]);
+        assert_eq!(layers(&view, &cx), [other]);
+        assert_eq!(gesture(&view, &cx), None);
+        assert_eq!(toast(&view, &cx), None);
+        // Undone a step at a time: the sticky comes back as it was typed in, then as it read.
+        cx.simulate_keystrokes("cmd-z");
+        assert_eq!(reads(&view, note, &cx), "new");
+        cx.simulate_keystrokes("cmd-z");
+        assert_eq!(reads(&view, note, &cx), "old");
+    }
+
+    /// Ruling R-TEXTEDIT from the ≡ menu and the palette ([`BoardView::run_menu`]): a Text menu
+    /// command, and copy and paste, act on the text being typed, which stays open; any other
+    /// command ends the typing first, as one undo step. Edit ▸ Delete then takes the sticky off
+    /// the canvas as a step of its own. Inside the open edit it took the text being typed, and
+    /// left the engine's "Edit text" gesture open.
+    #[gpui_kit::test]
+    fn menu_commands_end_the_typing_unless_they_act_on_it(cx: &mut TestAppContext) {
+        let _turn = clipboard_turn();
+        let tmp = Scratch::new("menu-typing");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        let (note, other, steps) = typing_in_the_first_of_two(&view, &mut cx);
+
+        run_menu(&view, "text.alignCenter", &mut cx);
+        run_menu(&view, "edit.copy", &mut cx);
+        assert!(typing(&view, &cx));
+        assert_eq!(undo_steps(&view, &cx), steps);
+        cx.simulate_input("er");
+        assert_eq!(reads(&view, note, &cx), "newer");
+
+        run_menu(&view, "edit.delete", &mut cx);
+        assert!(!typing(&view, &cx));
+        assert_eq!(layers(&view, &cx), [other]);
+        assert_eq!(undo_steps(&view, &cx), steps + 2);
+        cx.simulate_click(middle_of(&view, other, &cx), Modifiers::default());
+        assert_eq!(layers(&view, &cx), [other]);
+        assert_eq!(toast(&view, &cx), None);
+        cx.simulate_keystrokes("cmd-z");
+        assert_eq!(reads(&view, note, &cx), "newer");
+    }
+
+    /// Ruling R-TEXTEDIT from the chrome ([`BoardView::choose`]): a tool picked in the toolbar
+    /// while a sticky is typed in ends the typing first, as one undo step. Picking the Hand tool
+    /// drops the text edit without ending it, which left the engine's "Edit text" gesture open:
+    /// back on the Move tool, the next click on a layer cancelled it, and the typing was gone.
+    #[gpui_kit::test]
+    fn a_tool_picked_while_typing_keeps_what_was_typed(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("tool-typing");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        let (note, other, steps) = typing_in_the_first_of_two(&view, &mut cx);
+
+        click(&mut cx, "tool.hand");
+        assert_eq!(tool(&view, &cx), "hand");
+        assert!(!typing(&view, &cx));
+        assert_eq!(gesture(&view, &cx), None);
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+        click(&mut cx, "tool.move");
+        cx.simulate_click(middle_of(&view, other, &cx), Modifiers::default());
+        assert_eq!(selection(&view, &cx), [other]);
+        assert_eq!(reads(&view, note, &cx), "new");
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
         assert_eq!(toast(&view, &cx), None);
     }
 

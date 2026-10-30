@@ -18,7 +18,7 @@ use figcraft_engine::{
 use figcraft_geom::Point;
 use serde_json::json;
 
-use crate::policy::{is_clipboard, is_hidden, is_ui};
+use crate::policy::{is_clipboard, is_hidden, is_ui, keeps_text_edit};
 use crate::{BoardDoc, BoardError};
 
 pub use figcraft_engine::keymap::Mods;
@@ -337,11 +337,32 @@ fn text_editor_key(
     Ok(KeyOutcome::Handled)
 }
 
-/// End the text edit, which makes what was typed one undo step.
-fn end_text_edit(board: &mut BoardDoc) -> Result<(), BoardError> {
+/// Ends the text edit, if a text is being typed in, as a press outside the text ends it: what was
+/// typed becomes one undo step ("Edit text"), a sticky's text gives the selection back to its
+/// sticky, and a new text left empty goes. With nothing typed in, it does nothing. Errors are the
+/// engine's, and its panics caught by [`guard::run`].
+pub fn end_text_edit(board: &mut BoardDoc) -> Result<(), BoardError> {
     let session = &mut board.session;
     guard::run("ui.textEnd", || textedit::end(session))?;
     Ok(())
+}
+
+/// Ends the text edit ([`end_text_edit`]) before command `id` runs, unless `id` acts on the text
+/// being typed in ([`keeps_text_edit`]: the Text menu's commands, and copy and paste). The
+/// canvas's chrome and menus call it before the commands they run (ruling R-TEXTEDIT).
+///
+/// The engine types inside one gesture, "Edit text", which only the edit's end commits. A command
+/// that drops the edit without ending it leaves that gesture open: Select none, a page or tool
+/// switch, or deleting the text being typed in. With the gesture open, no later command is an
+/// undo step of its own. The next click on a layer then cancels the gesture, which puts the
+/// document back as it was before the typing, and the autosave writes that (Plan 6 final review
+/// C1).
+pub fn end_text_edit_before(board: &mut BoardDoc, id: &str) -> Result<(), BoardError> {
+    if keeps_text_edit(id) {
+        Ok(())
+    } else {
+        end_text_edit(board)
+    }
 }
 
 /// Enter on the canvas: with a shape or frame tool chosen it places one in the middle of the view;
@@ -1145,6 +1166,104 @@ mod tests {
         );
         assert!(!editing(&board));
         assert_eq!(sticky_text(&board, note), "x");
+    }
+
+    /// A new sticky reading `text`, 200 × 200 with its top left corner at page point (`x`, 0).
+    fn sticky_at(board: &mut BoardDoc, x: f64, text: &str) -> NodeId {
+        let made = board
+            .execute("board.sticky", &json!({"x": x, "y": 0, "text": text}))
+            .unwrap();
+        figcraft_engine::params::id_of(&made["id"]).unwrap()
+    }
+
+    /// Starts typing in sticky `note` as a double-click does, all of its text selected, and types
+    /// `typed` in place of it.
+    fn type_into(board: &mut BoardDoc, note: NodeId, typed: &str) {
+        assert!(figcraft_engine::board::edit_text(&mut board.session, note).unwrap());
+        textedit::insert(&mut board.session, typed).unwrap();
+        assert_eq!(sticky_text(board, note), typed);
+    }
+
+    /// The engine's gesture that is open, if one is: typing holds one, "Edit text".
+    fn gesture(board: &BoardDoc) -> Option<String> {
+        let ds = board.session.ds().unwrap();
+        ds.interaction.as_ref().map(|gesture| gesture.label.clone())
+    }
+
+    /// Plan 6 final review C1, what the canvas does on a right-click on empty canvas while a
+    /// sticky is typed in: it ends the edit, then clears the selection (ruling P6-C10). No gesture
+    /// is left open, so a click on another sticky keeps what was typed, and later commands are
+    /// undo steps of their own: one undo takes back the last sticky only.
+    #[test]
+    fn ending_the_edit_before_select_none_keeps_what_was_typed() {
+        let mut board = board();
+        let note = sticky_at(&mut board, 0.0, "old");
+        let other = sticky_at(&mut board, 600.0, "B");
+        board.execute("select.none", &json!({})).unwrap();
+        type_into(&mut board, note, "new");
+        end_text_edit(&mut board).unwrap();
+        assert!(!editing(&board));
+        assert_eq!(gesture(&board), None);
+        // The sticky's text gives the selection back to the sticky.
+        assert_eq!(board.session.selection(), [note]);
+        board.execute("select.none", &json!({})).unwrap();
+        click(&mut board, 700.0, 100.0);
+        assert_eq!(board.session.selection(), [other]);
+        assert_eq!(sticky_text(&board, note), "new");
+        // The two stickies, and the typing.
+        assert_eq!(board.session.undo_depth(), (3, 0));
+        let last = sticky_at(&mut board, 1200.0, "C");
+        assert_eq!(board.session.undo_depth(), (4, 0));
+        board.execute("edit.undo", &json!({})).unwrap();
+        assert!(board.doc().unwrap().node(last).is_none());
+        assert_eq!(layers(&board), [note, other]);
+        assert_eq!(sticky_text(&board, note), "new");
+    }
+
+    /// Ruling R-TEXTEDIT: the Text menu's commands, and copy and paste, run inside the edit, which
+    /// goes on; any other command ends it first, as one undo step.
+    #[test]
+    fn only_text_commands_and_copy_and_paste_run_inside_the_edit() {
+        let mut board = board();
+        let note = sticky_at(&mut board, 0.0, "old");
+        type_into(&mut board, note, "new");
+        let steps = board.session.undo_depth();
+        for id in ["text.bold", "text.alignCenter", "edit.copy", "edit.paste"] {
+            end_text_edit_before(&mut board, id).unwrap();
+            assert!(editing(&board), "{id}");
+            assert_eq!(gesture(&board).as_deref(), Some("Edit text"), "{id}");
+        }
+        assert_eq!(board.session.undo_depth(), steps);
+        end_text_edit_before(&mut board, "view.zoomFit").unwrap();
+        assert!(!editing(&board));
+        assert_eq!(gesture(&board), None);
+        assert_eq!(board.session.undo_depth(), (steps.0 + 1, 0));
+        assert_eq!(sticky_text(&board, note), "new");
+        // With nothing typed in, there is nothing to end.
+        end_text_edit_before(&mut board, "edit.delete").unwrap();
+        assert_eq!(board.session.undo_depth(), (steps.0 + 1, 0));
+        assert_eq!(board.session.selection(), [note]);
+    }
+
+    /// Plan 6 final review C1: Delete on the sticky being typed in, from its context menu or the
+    /// Edit menu. The edit ends first, so the whole sticky goes, as an undo step of its own, and
+    /// it stays gone after a click on another sticky; undone, it comes back as it was typed in.
+    #[test]
+    fn delete_after_the_edit_ends_keeps_the_sticky_typed_in_deleted() {
+        let mut board = board();
+        let note = sticky_at(&mut board, 0.0, "old");
+        let other = sticky_at(&mut board, 600.0, "B");
+        type_into(&mut board, note, "new");
+        end_text_edit_before(&mut board, "edit.delete").unwrap();
+        board.execute("edit.delete", &json!({})).unwrap();
+        assert_eq!(layers(&board), [other]);
+        click(&mut board, 700.0, 100.0);
+        assert_eq!(layers(&board), [other]);
+        assert_eq!(gesture(&board), None);
+        assert_eq!(board.session.undo_depth(), (4, 0));
+        board.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(layers(&board), [note, other]);
+        assert_eq!(sticky_text(&board, note), "new");
     }
 
     #[test]

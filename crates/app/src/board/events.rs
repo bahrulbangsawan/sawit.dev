@@ -7,8 +7,9 @@
 //! pointer is, off the canvas or out of the window too, and its release ends the gesture there:
 //! listeners on the whole window, registered with each paint ([`track_drags`]), see those events
 //! where the canvas can't. Without a button the pointer hovers, and leaving the canvas tells the
-//! engine that nothing there is hovered any more. The right button selects what is under the
-//! pointer, as FigCraft's canvas does, and opens the context menu there ([`super::menus`]).
+//! engine that nothing there is hovered any more. The right button ends the text being typed in,
+//! as a press outside it does, then selects what is under the pointer, as FigCraft's canvas does,
+//! and opens the context menu there ([`super::menus`]).
 //!
 //! The canvas pans by hand as FigCraft's own canvas does, outside the engine: a drag of the middle
 //! button, whatever the tool, or of the left button while Space is held down (not while text is
@@ -103,13 +104,20 @@ impl BoardView {
     /// The right button went down on the canvas: what is under the pointer is selected, as
     /// FigCraft's canvas selects it for its context menu (ui-egui `canvas/input.rs`,
     /// `open_context_menu`), and the context menu opens there ([`super::menus`]):
+    /// - A text being typed in ends first, as a press outside it ends it
+    ///   ([`BoardView::end_text_edit`], ruling R-TEXTEDIT). What was typed is an undo step of its
+    ///   own, and a sticky's text gives the selection back to its sticky.
     /// - A frame's name label is its frame, as for a press.
     /// - A layer already selected keeps the whole selection. Another becomes the selection: the
     ///   layer a click there selects, or with ⌘ held the nested layer under the pointer.
     /// - Empty canvas clears the selection, so the menu is the empty canvas's: Paste here, Select
-    ///   all, Zoom to fit and Show/Hide UI (ruling P6-C10).
+    ///   all, Zoom to fit and Show/Hide UI (ruling P6-C10). Without the end of the edit before
+    ///   it, clearing the selection dropped the edit and left the engine's "Edit text" gesture
+    ///   open, and the next click on a layer took the typing back (Plan 6 final review C1).
     ///
-    /// Not while a drag or a pan is on.
+    /// The selection changes as a click on the chrome runs a command ([`BoardView::run`]): the
+    /// engine's refusal shows as a toast, and the menu opens all the same. Not while a drag or a
+    /// pan is on.
     pub(super) fn on_right_down(
         &mut self,
         event: &MouseDownEvent,
@@ -120,33 +128,18 @@ impl BoardView {
             return;
         }
         cx.stop_propagation();
-        let local = event.position - self.bounds.origin;
-        let Some(board) = self.board_mut() else {
+        if !self.end_text_edit(None, cx) {
             return;
-        };
-        let Ok(ds) = board.session.ds() else {
+        }
+        let local = event.position - self.bounds.origin;
+        let Some(ds) = self.board().and_then(|board| board.session.ds().ok()) else {
             return;
         };
         let page = ds
             .view
             .screen_to_page(f64::from(local.x), f64::from(local.y));
-        let session = &board.session;
         let deep = event.modifiers.platform;
-        let target = guard::run("ui.contextMenu", || Ok(context_target(session, page, deep)));
-        let selected = session.selection();
-        let chosen = match target {
-            Ok(Some(target)) if selected.contains(&target) => Ok(()),
-            Ok(Some(target)) => board
-                .execute("select.set", &json!({"ids": [target]}))
-                .map(drop),
-            Ok(None) => board.execute("select.none", &json!({})).map(drop),
-            Err(error) => Err(error.into()),
-        };
-        self.handle_ui_requests(Vec::new(), cx);
-        // After the requests' toast, so that the error's is the one that shows.
-        if let Err(error) = chosen {
-            self.show_toast(error.to_string(), cx);
-        }
+        self.run(|board| select_for_menu(board, page, deep), cx);
         self.open_context_menu(event.position, page, cx);
     }
 
@@ -381,6 +374,23 @@ fn cursor_style(cursor: &Cursor) -> CursorStyle {
         Cursor::Copy => CursorStyle::DragCopy,
         Cursor::Pointer => CursorStyle::PointingHand,
         Cursor::NotAllowed => CursorStyle::OperationNotAllowed,
+    }
+}
+
+/// Selects in `board` what a right-click at page point `page` selects for the context menu
+/// ([`context_target`]; `deep` while ⌘ is held): a layer that isn't selected becomes the
+/// selection, and empty canvas clears it (ruling P6-C10). A layer already selected keeps the whole
+/// selection.
+fn select_for_menu(board: &mut BoardDoc, page: (f64, f64), deep: bool) -> Result<(), BoardError> {
+    let session = &board.session;
+    let target = guard::run("ui.contextMenu", || Ok(context_target(session, page, deep)))?;
+    let selected = session.selection();
+    match target {
+        Some(target) if selected.contains(&target) => Ok(()),
+        Some(target) => board
+            .execute("select.set", &json!({"ids": [target]}))
+            .map(drop),
+        None => board.execute("select.none", &json!({})).map(drop),
     }
 }
 
