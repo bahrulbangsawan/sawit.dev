@@ -38,6 +38,7 @@ pub mod rt;
 pub mod scripts;
 pub mod search;
 pub mod shell_config;
+pub mod site_design;
 pub mod ssh;
 pub mod terminal;
 pub mod update;
