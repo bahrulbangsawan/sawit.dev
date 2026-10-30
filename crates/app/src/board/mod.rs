@@ -104,8 +104,11 @@ pub fn bindings() -> Vec<KeyBinding> {
 }
 
 /// A canvas tab: the board in one `.figcraft` file, drawn as its view and its document change,
-/// and saved as it is edited.
+/// and saved as it is edited. An `.excalidraw` file opens imported, in the `.figcraft` file beside
+/// it ([`BoardView::import`]).
 pub struct BoardView {
+    /// The `.figcraft` file the canvas is bound to: the one it opened, or the one an imported
+    /// `.excalidraw` file is saved to.
     path: PathBuf,
     /// The document, or why the file couldn't be opened: the tab then says so, and never saves.
     board: Result<BoardDoc, SharedString>,
@@ -151,8 +154,9 @@ pub struct BoardView {
     /// This canvas's own writer: the error it keeps is of its newest save, so it's read right
     /// after each save it waits for.
     writer: Arc<Writer>,
-    /// The document as loaded or last saved. `None` when the last save failed: the file holds
-    /// something older.
+    /// The document the file holds: as loaded, or as last saved. `None` when the file holds
+    /// something older (the last save failed), or nothing yet of a board with layers (the old
+    /// canvas migrated, an `.excalidraw` file imported).
     saved: Option<Arc<Document>>,
     /// The document the autosave waits to save, or saved last.
     pending: Option<Arc<Document>>,
@@ -174,10 +178,53 @@ impl BoardView {
     /// Opens the canvas file at `path` ([`store::open_with_issues`]).
     ///
     /// - A missing file is a new, empty board. Nothing is written until there is an edit.
+    /// - A missing project canvas file with the old canvas beside it opens as the old canvas,
+    ///   imported. That isn't on disk yet, so the first autosave, or a flush, writes it, edited or
+    ///   not: the old canvas is imported once.
     /// - A file that can't be read is shown as an error, and stays as it is: this view never saves.
     /// - What loading repaired or left out, or saving would drop, shows as a toast. The original
     ///   was kept as `<path>.lossy.bak` before the file opened.
+    /// - The file's version history and branches are saved with it. A file that holds images the
+    ///   loader left out (past what it reads from one file) is never saved over, which would delete
+    ///   them: an edit says so instead, in FigCraft's words.
     pub fn open(path: PathBuf, cx: &mut Context<Self>) -> Self {
+        let on_disk = path.exists();
+        let opened = store::open_with_issues(&path)
+            .map(|(board, issues)| (board, issues_line(&path, &issues)));
+        Self::with_board(path, opened, on_disk, cx)
+    }
+
+    /// Opens the Excalidraw file at `path` imported ([`store::import_file`]), as a canvas bound to
+    /// the `<stem>.figcraft` file beside it ([`store::bound_file`]), which it saves to (spec D14).
+    /// The `.excalidraw` file is never written.
+    ///
+    /// - When that `.figcraft` file is there, the scene was imported before, and the file is what
+    ///   opens ([`BoardView::open`]).
+    /// - Else the scene is drawn on a new board, and what the import left out shows as a toast
+    ///   that names the `.excalidraw` file. The board isn't on disk yet, so its first autosave, or
+    ///   a flush, writes the `.figcraft` file, edited or not. A scene with nothing in it is a blank
+    ///   board, written once there is an edit, as a new canvas is.
+    /// - A file that can't be imported is shown as an error that names it, as a canvas file that
+    ///   can't be read is, and nothing is written.
+    pub fn import(path: PathBuf, cx: &mut Context<Self>) -> Self {
+        let file = store::bound_file(&path);
+        if file.exists() {
+            return Self::open(file, cx);
+        }
+        let imported =
+            store::import_file(&path).map(|(board, issues)| (board, issues_line(&path, &issues)));
+        Self::with_board(file, imported, false, cx)
+    }
+
+    /// The canvas of the file at `path`, as it was opened: its board and the toast that says what
+    /// opening it left out, or why it couldn't be opened. `on_disk` says whether the file was
+    /// there.
+    fn with_board(
+        path: PathBuf,
+        opened: Result<(BoardDoc, Option<String>), BoardError>,
+        on_disk: bool,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let (worker, mut frames) = Worker::spawn();
         let frames = cx.spawn(async move |this, cx| {
             while let Some(frame) = frames.next().await {
@@ -189,18 +236,23 @@ impl BoardView {
                 }
             }
         });
-        let (board, toast) = match store::open_with_issues(&path) {
-            Ok((mut board, issues)) => {
+        let (board, toast) = match opened {
+            Ok((mut board, toast)) => {
                 // As each frame does. Done before the document counts as saved: the blank page
                 // of a file nothing was done to takes the dark theme's colour (as FigCraft's new
                 // files do), which is no edit to save.
                 board.session.set_ui_dark(cx.theme().mode.is_dark());
                 board.session.apply_view_prefs();
-                (Ok(board), issues_line(&path, &issues))
+                (Ok(board), toast)
             }
             Err(err) => (Err(err.to_string().into()), None),
         };
-        let saved = board.as_ref().ok().and_then(|board| board.doc().ok());
+        // The document the file holds. A board with layers whose file isn't there yet (the old
+        // canvas migrated, an `.excalidraw` file imported) is in no file, so the first autosave or
+        // flush writes it; a blank one waits for an edit.
+        let saved = (board.as_ref().ok())
+            .and_then(|board| board.document_itself().ok())
+            .filter(|doc| on_disk || store::is_empty(doc));
         Self {
             path,
             board,
@@ -236,6 +288,7 @@ impl BoardView {
         }
     }
 
+    /// The `.figcraft` file the canvas is bound to, and saves to.
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -466,8 +519,9 @@ impl BoardView {
     }
 
     /// Saves the document now if it isn't the one in the file, and waits until it is on disk.
-    /// When that fails the error is logged, and the next flush or edit tries again; the writer's
-    /// [`Writer::last_error`] still says why.
+    /// When that fails, or the save is refused (it would delete images the file holds), the error
+    /// is logged, and the next flush or edit tries again; the writer's [`Writer::last_error`] still
+    /// says why a write failed.
     pub fn flush(&mut self) {
         if let Err(err) = self.queue_save() {
             log::warn!("the canvas couldn't be saved: {err}");
@@ -480,15 +534,21 @@ impl BoardView {
     }
 
     /// Hands the document to the writer if it isn't the one saved last. The document handed
-    /// over, if any.
+    /// over, if any. It is the document itself: a version the engine shows in its place is no
+    /// edit, and is never saved.
+    ///
+    /// A save over a file that holds images the loader left out (past what it reads from one
+    /// file) would delete them, so it is refused, as FigCraft's own save refuses it: the refusal
+    /// is the error, and the file stays as it is.
     fn queue_save(&mut self) -> Result<Option<Arc<Document>>, BoardError> {
         let Ok(board) = &self.board else {
             return Ok(None);
         };
-        let doc = board.doc()?;
+        let doc = board.document_itself()?;
         if same(&self.saved, &doc) {
             return Ok(None);
         }
+        board.refuse_dropping_images(&self.path)?;
         let bytes = board.to_bytes()?;
         self.writer
             .save(self.path.clone(), bytes, store::is_empty(&doc));
@@ -499,9 +559,9 @@ impl BoardView {
 
     /// After a frame: when the document isn't the one saved, saves it once the canvas has been
     /// still for [`SAVE_DELAY`]. Every new document (each edit makes one) starts the wait over,
-    /// so a drag is saved once it ends. A failed save shows its error as a toast.
+    /// so a drag is saved once it ends. A failed or refused save shows its error as a toast.
     fn autosave(&mut self, cx: &mut Context<Self>) {
-        let Some(doc) = self.board().and_then(|board| board.doc().ok()) else {
+        let Some(doc) = self.board().and_then(|board| board.document_itself().ok()) else {
             return;
         };
         if same(&self.saved, &doc) || same(&self.pending, &doc) {
@@ -1123,6 +1183,153 @@ mod tests {
         assert_eq!(names(&tmp.0), ["canvas.figcraft"]);
     }
 
+    /// An old canvas as Excalidraw saved it (sawit-board's import fixture): nine layers on the
+    /// page, and an embed that can't be imported.
+    const FIXTURE: &str = include_str!("../../../board/tests/fixtures/excalidraw/basic.excalidraw");
+
+    /// The `.excalidraw` file at `path`, imported as the workspace opens it.
+    fn import(cx: &mut TestAppContext, path: &Path) -> Entity<BoardView> {
+        cx.executor().allow_parking();
+        cx.update(gpui_kit::init);
+        cx.new(|cx| BoardView::import(path.to_path_buf(), cx))
+    }
+
+    fn path_of(view: &Entity<BoardView>, cx: &TestAppContext) -> PathBuf {
+        view.read_with(cx, |view, _| view.path().to_path_buf())
+    }
+
+    #[gpui_kit::test]
+    fn excalidraw_file_opens_bound_to_sibling(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("import");
+        let old = tmp.0.join("x.excalidraw");
+        std::fs::write(&old, FIXTURE).unwrap();
+        let view = import(cx, &old);
+        let file = tmp.0.join("x.figcraft");
+        assert_eq!(path_of(&view, cx), file);
+        // The scene is on the canvas. What the import left out is said of the file it is in.
+        assert_eq!(layers(&view, cx).len(), 9);
+        let toast = view.read_with(cx, |view, _| view.toast.clone());
+        assert_eq!(toast.as_deref(), Some("x.excalidraw: skipped 1 embed"));
+        // The import isn't on disk yet, so a flush writes it, with no edit, beside the scene.
+        view.update(cx, |view, _| view.flush());
+        assert_eq!(saved_layers(&file), 9);
+        assert_eq!(std::fs::read(&old).unwrap(), FIXTURE.as_bytes());
+        assert_eq!(names(&tmp.0), ["x.excalidraw", "x.figcraft"]);
+    }
+
+    #[gpui_kit::test]
+    fn an_excalidraw_file_with_its_figcraft_beside_it_opens_that(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("import-again");
+        let old = tmp.0.join("x.excalidraw");
+        let file = tmp.0.join("x.figcraft");
+        std::fs::write(&old, FIXTURE).unwrap();
+        // Saved there before, and edited since: a sticky, not the scene's nine layers.
+        let mut board = BoardDoc::new_board("x").unwrap();
+        board
+            .execute("board.sticky", &json!({"x": 0, "y": 0, "text": "edited"}))
+            .unwrap();
+        let bytes = write_board(&file, &board);
+        let view = import(cx, &old);
+        assert_eq!(path_of(&view, cx), file);
+        assert_eq!(layers(&view, cx).len(), 1);
+        assert!(view.read_with(cx, |view, _| view.toast.is_none()));
+        // Opening it is no edit: neither file is written.
+        cx.executor().advance_clock(SAVE_DELAY * 2);
+        cx.run_until_parked();
+        view.update(cx, |view, _| view.flush());
+        assert!(std::fs::read(&file).unwrap() == bytes, "the file was saved");
+        assert_eq!(std::fs::read(&old).unwrap(), FIXTURE.as_bytes());
+    }
+
+    #[gpui_kit::test]
+    fn an_excalidraw_file_that_cannot_be_imported_shows_error_and_makes_no_figcraft(
+        cx: &mut TestAppContext,
+    ) {
+        let tmp = Scratch::new("import-corrupt");
+        let old = tmp.0.join("x.excalidraw");
+        std::fs::write(&old, b"{ not json").unwrap();
+        let view = import(cx, &old);
+        assert!(view.read_with(cx, |view, _| view.board().is_none()));
+        assert_eq!(path_of(&view, cx), tmp.0.join("x.figcraft"));
+        // Ops answer why, naming the file that couldn't be imported.
+        let reply = run_op(&view, json!({"op": "get"}), cx);
+        assert_eq!(reply["ok"], json!(false), "{reply}");
+        let error = reply["error"].as_str().expect("an error string");
+        assert!(
+            error.contains("x.excalidraw") && error.contains("isn't valid JSON"),
+            "{error}"
+        );
+        // Nothing is written, and the file is as it was.
+        cx.executor().advance_clock(SAVE_DELAY * 2);
+        cx.run_until_parked();
+        view.update(cx, |view, _| view.flush());
+        assert_eq!(std::fs::read(&old).unwrap(), b"{ not json");
+        assert_eq!(names(&tmp.0), ["x.excalidraw"]);
+    }
+
+    #[gpui_kit::test]
+    fn an_excalidraw_file_with_nothing_in_it_opens_blank(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("import-blank");
+        let old = tmp.0.join("x.excalidraw");
+        std::fs::write(&old, b" \n").unwrap();
+        let view = import(cx, &old);
+        let kind = view.read_with(cx, |view, _| view.board().map(|board| board.kind()));
+        assert_eq!(kind, Some(DocKind::Board));
+        assert!(layers(&view, cx).is_empty());
+        assert!(view.read_with(cx, |view, _| view.toast.is_none()));
+        // A blank board is no edit, as a new canvas isn't: it is written once there is one.
+        view.update(cx, |view, _| view.flush());
+        assert_eq!(names(&tmp.0), ["x.excalidraw"]);
+        add_sticky(&view, cx);
+        view.update(cx, |view, _| view.flush());
+        assert_eq!(saved_layers(&tmp.0.join("x.figcraft")), 1);
+        assert_eq!(std::fs::read(&old).unwrap(), b" \n");
+    }
+
+    #[gpui_kit::test]
+    fn a_migrated_canvas_is_written_once_and_then_opens_from_its_file(cx: &mut TestAppContext) {
+        // A project with only its old canvas: the canvas opens it imported, and saves the import
+        // with no edit, so that it is imported once (spec D5).
+        let project = |test: &str| {
+            let tmp = Scratch::new(test);
+            let nyawit = tmp.0.join(".nyawit");
+            std::fs::create_dir(&nyawit).unwrap();
+            std::fs::write(nyawit.join("canvas.excalidraw"), FIXTURE).unwrap();
+            (tmp, nyawit)
+        };
+        cx.update(gpui_kit::init);
+
+        // Painted: its first autosave writes canvas.figcraft.
+        let (_painted, nyawit) = project("migrate-painted");
+        let path = nyawit.join("canvas.figcraft");
+        let (_, view) = open_in_window(cx, &path);
+        next_frame(cx, &view, None);
+        assert!(!path.exists(), "saved before the canvas was still");
+        cx.executor().advance_clock(SAVE_DELAY);
+        cx.run_until_parked();
+        // (A canvas file that isn't there would open as the old canvas again: the folder says
+        // whether it was written.)
+        assert_eq!(names(&nyawit), ["canvas.excalidraw", "canvas.figcraft"]);
+        assert_eq!(saved_layers(&path), 9);
+        let old = std::fs::read(nyawit.join("canvas.excalidraw")).unwrap();
+        assert_eq!(old, FIXTURE.as_bytes());
+        // Opened again, it is read from that file, not imported again: the same layers, and the
+        // import's note isn't said again.
+        let again = cx.new(|cx| BoardView::open(path.clone(), cx));
+        assert_eq!(layers(&again, cx).len(), 9);
+        assert!(again.read_with(cx, |view, _| view.toast.is_none()));
+
+        // Never painted (its tab closed, or the app quit, before a frame): a flush writes it.
+        let (_unpainted, nyawit) = project("migrate-flush");
+        let path = nyawit.join("canvas.figcraft");
+        let view = cx.new(|cx| BoardView::open(path.clone(), cx));
+        view.update(cx, |view, _| view.flush());
+        assert_eq!(names(&nyawit), ["canvas.excalidraw", "canvas.figcraft"]);
+        assert_eq!(saved_layers(&path), 9);
+        let old = std::fs::read(nyawit.join("canvas.excalidraw")).unwrap();
+        assert_eq!(old, FIXTURE.as_bytes());
+    }
+
     #[gpui_kit::test]
     fn edits_are_saved_after_flush(cx: &mut TestAppContext) {
         let tmp = Scratch::new("flush");
@@ -1184,28 +1391,141 @@ mod tests {
         assert!(view.read_with(cx, |view, _| view.toast.is_none()));
     }
 
-    #[gpui_kit::test]
-    fn a_lossy_open_says_what_saving_drops(cx: &mut TestAppContext) {
-        let tmp = Scratch::new("lossy");
-        let path = tmp.0.join("canvas.figcraft");
-        // A file with a version history, which the canvas doesn't keep.
+    /// A 1 × 1 PNG.
+    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+    /// A canvas file with a sticky, and an image whose bytes are damaged: the loader leaves the
+    /// image out, and says that a save drops it.
+    fn file_with_a_damaged_image() -> Vec<u8> {
         let mut board = BoardDoc::new_board("Canvas").unwrap();
         board
             .execute("board.sticky", &json!({"x": 0, "y": 0, "text": "kept"}))
             .unwrap();
-        board
-            .execute("file.saveVersion", &json!({"name": "First"}))
+        let placed = board
+            .execute("image.place", &json!({"data": PNG, "x": 0, "y": 300}))
             .unwrap();
-        board
-            .execute("file.saveAs", &json!({"path": path.to_str().unwrap()}))
+        let hash = placed["image"].as_str().unwrap().to_string();
+        let png = board.doc().unwrap().images[&hash].bytes.clone();
+        let mut bytes = board.to_bytes().unwrap();
+        let at = bytes
+            .windows(png.len())
+            .position(|w| w == png.as_slice())
             .unwrap();
+        bytes[at + png.len() / 2] ^= 0xFF;
+        bytes
+    }
+
+    /// Writes `board` to `path` as its canvas file, and returns what was written.
+    fn write_board(path: &Path, board: &BoardDoc) -> Vec<u8> {
+        let bytes = board.to_bytes().unwrap();
+        std::fs::write(path, &bytes).unwrap();
+        bytes
+    }
+
+    #[gpui_kit::test]
+    fn a_lossy_open_says_what_saving_drops(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("lossy");
+        let path = tmp.0.join("canvas.figcraft");
+        std::fs::write(&path, file_with_a_damaged_image()).unwrap();
         let view = open(cx, &path);
         let toast = view.read_with(cx, |view, _| view.toast.clone()).unwrap();
         assert!(toast.starts_with("canvas.figcraft: "), "{toast}");
-        assert!(toast.contains("version history"), "{toast}");
+        assert!(toast.contains("saving this file again drops it"), "{toast}");
         cx.executor().advance_clock(TOAST_TIME);
         cx.run_until_parked();
         assert!(view.read_with(cx, |view, _| view.toast.is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn an_in_place_save_keeps_the_files_version_history(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("history");
+        let path = tmp.0.join("canvas.figcraft");
+        let mut board = BoardDoc::new_board("Canvas").unwrap();
+        board
+            .execute("board.sticky", &json!({"x": 0, "y": 0, "text": "then"}))
+            .unwrap();
+        board
+            .execute("file.saveVersion", &json!({"name": "Then"}))
+            .unwrap();
+        write_board(&path, &board);
+        let view = open(cx, &path);
+        // The canvas keeps it, so opening has nothing to say, and keeps no copy.
+        assert!(view.read_with(cx, |view, _| view.toast.is_none()));
+        let edit =
+            json!({"op": "command", "command": "board.sticky", "params": {"x": 300, "y": 0}});
+        let reply = run_op(&view, edit, cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        view.update(cx, |view, _| view.flush());
+        assert_eq!(saved_layers(&path), 2);
+        let saved = store::open(&path).unwrap();
+        let versions: Vec<String> = (saved.session.ds().unwrap().versions.iter())
+            .map(|version| version.name.clone())
+            .collect();
+        assert_eq!(versions, ["Then"]);
+        assert_eq!(names(&tmp.0), ["canvas.figcraft"]);
+    }
+
+    #[gpui_kit::test]
+    fn a_version_shown_in_place_of_the_document_is_not_saved(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("preview");
+        let path = tmp.0.join("canvas.figcraft");
+        // A canvas with a sticky, and a version from when it was blank.
+        let mut board = BoardDoc::new_board("Canvas").unwrap();
+        board
+            .execute("file.saveVersion", &json!({"name": "Blank"}))
+            .unwrap();
+        board
+            .execute("board.sticky", &json!({"x": 0, "y": 0, "text": "now"}))
+            .unwrap();
+        let bytes = write_board(&path, &board);
+        let view = open(cx, &path);
+        // An agent shows the blank version in its place: the canvas shows it, and that is no
+        // edit. Nothing is saved, so the file keeps the document, and no backup of a canvas
+        // being emptied is made either.
+        let preview =
+            json!({"op": "command", "command": "version.preview", "params": {"index": 0}});
+        let reply = run_op(&view, preview, cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        assert!(layers(&view, cx).is_empty());
+        cx.executor().advance_clock(SAVE_DELAY * 2);
+        cx.run_until_parked();
+        view.update(cx, |view, _| view.flush());
+        assert!(std::fs::read(&path).unwrap() == bytes, "the file was saved");
+        assert_eq!(names(&tmp.0), ["canvas.figcraft"]);
+    }
+
+    #[gpui_kit::test]
+    fn a_file_with_images_left_in_it_is_not_saved_over(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("images-left");
+        let path = tmp.0.join("canvas.figcraft");
+        let mut board = BoardDoc::new_board("Canvas").unwrap();
+        board
+            .execute("board.sticky", &json!({"x": 0, "y": 0, "text": "kept"}))
+            .unwrap();
+        let bytes = write_board(&path, &board);
+        let view = open(cx, &path);
+        // As FigCraft's loader records a file whose images it didn't all read, past what it reads
+        // from one file (sawit-board's tests open such a file, of 20 001 images): three of them.
+        view.update(cx, |view, _| {
+            let session = &mut view.board_mut().unwrap().session;
+            let ds = session.docs.remove(0);
+            let ds = ds.with_images_left_in_file(&path.to_string_lossy(), 3);
+            session.docs.insert(0, ds);
+        });
+        // An edit isn't saved over the file, which would delete them, and the canvas says so in
+        // FigCraft's words. Closing the tab doesn't save it either.
+        let reply = run_op(&view, sticky_op(), cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        cx.executor().advance_clock(SAVE_DELAY);
+        cx.run_until_parked();
+        let toast = view.read_with(cx, |view, _| view.toast.clone()).unwrap();
+        assert!(
+            toast.starts_with("canvas wasn't saved: 3 of its images weren't loaded"),
+            "{toast}"
+        );
+        view.update(cx, |view, _| view.flush());
+        assert!(std::fs::read(&path).unwrap() == bytes, "the file was saved");
+        assert_eq!(names(&tmp.0), ["canvas.figcraft"]);
     }
 
     #[gpui_kit::test]
@@ -1367,8 +1687,8 @@ mod tests {
             doc.node(doc.first_page().unwrap()).unwrap().children.len()
         });
         assert_eq!(in_document, 1);
-        // An op the canvas doesn't have yet is an error reply, not a panic.
-        let reply = run_op(&view, json!({"op": "mermaid", "source": "graph TD"}), cx);
+        // An op the canvas doesn't have is an error reply, not a panic.
+        let reply = run_op(&view, json!({"op": "teleport"}), cx);
         assert_eq!(reply["ok"], json!(false), "{reply}");
     }
 

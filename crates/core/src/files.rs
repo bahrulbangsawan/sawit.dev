@@ -299,6 +299,11 @@ pub enum FileKind {
     Image,
     Pdf,
     Video,
+    /// A FigCraft document (`.figcraft`), shown on a canvas bound to the file.
+    Figcraft,
+    /// An Excalidraw scene (`.excalidraw`), imported onto a canvas that is saved as the
+    /// `.figcraft` file beside it.
+    Excalidraw,
 }
 
 fn extension(path: &Path) -> String {
@@ -318,6 +323,8 @@ pub fn classify(path: &Path) -> FileKind {
         | "heif" | "avif" => FileKind::Image,
         "pdf" => FileKind::Pdf,
         "mp4" | "m4v" | "mov" | "webm" | "mkv" | "avi" => FileKind::Video,
+        "figcraft" => FileKind::Figcraft,
+        "excalidraw" => FileKind::Excalidraw,
         _ => FileKind::Text,
     }
 }
@@ -651,6 +658,25 @@ mod tests {
             ("clip.mov", Video),
             ("clip.webm", Video),
             ("noext", Text),
+        ] {
+            assert_eq!(classify(Path::new(file)), kind, "{file}");
+        }
+    }
+
+    #[test]
+    fn classify_figcraft_and_excalidraw() {
+        use FileKind::*;
+        for (file, kind) in [
+            ("board.figcraft", Figcraft),
+            ("/p/.nyawit/canvas.figcraft", Figcraft),
+            ("Board.FIGCRAFT", Figcraft),
+            ("sketch.excalidraw", Excalidraw),
+            ("/p/.nyawit/canvas.excalidraw", Excalidraw),
+            ("Sketch.Excalidraw", Excalidraw),
+            // An Excalidraw library, and names without the extension, are something else.
+            ("shapes.excalidrawlib", Text),
+            ("figcraft", Text),
+            (".excalidraw", Text),
         ] {
             assert_eq!(classify(Path::new(file)), kind, "{file}");
         }

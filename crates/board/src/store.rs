@@ -58,6 +58,9 @@ pub fn open(path: &Path) -> Result<BoardDoc, BoardError> {
 ///   imported is an error that names it, and then nothing is made either; no new board takes its
 ///   place, because the first save would hide it.
 /// - A corrupt or truncated file is `Err(BoardError::Format)`, and stays as it is.
+/// - A file opens with its version history and branches, which a save writes back
+///   ([`BoardDoc::to_bytes`]). Images past the loader's limits stay in the file, unread, so a save
+///   over it is refused ([`BoardDoc::refuse_dropping_images`]); one elsewhere isn't.
 /// - With notes, the original is first copied to `<path>.lossy.bak`, so the first save can't
 ///   silently drop what the loader left out. When that copy can't be made the file is not opened
 ///   either: it stays as it is rather than get saved over unprotected. The copy has a name of its
@@ -73,7 +76,7 @@ pub fn open_with_issues(path: &Path) -> Result<(BoardDoc, Vec<String>), BoardErr
             )));
         }
     };
-    let (board, issues) = BoardDoc::from_bytes_with_issues(&bytes)?;
+    let (board, issues) = BoardDoc::from_file_bytes(&bytes, path)?;
     if !issues.is_empty() {
         let bak = lossy_backup(path);
         std::fs::write(&bak, &bytes).map_err(|e| {
@@ -106,15 +109,46 @@ fn old_canvas(path: &Path) -> Option<PathBuf> {
     old.is_file().then_some(old)
 }
 
-/// A board that holds the old canvas `old`, and the notes on what the import left out. It opens as
-/// a file does, with no undo step ([`excalidraw::to_board`]).
+/// A board that holds the old canvas `old`, and the notes on what the import left out, as
+/// [`import_file`] imports a file.
+fn import_old_canvas(old: &Path) -> Result<(BoardDoc, Vec<String>), BoardError> {
+    import_as(old, NAME)
+}
+
+/// The `.figcraft` file that a canvas opened on the file at `path` is bound to, and saves to (spec
+/// D14): for an `.excalidraw` file the `<stem>.figcraft` beside it (so the old project canvas is
+/// bound to the canvas file), for any other file the file itself.
+pub fn bound_file(path: &Path) -> PathBuf {
+    let excalidraw = path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("excalidraw"));
+    if excalidraw {
+        path.with_extension("figcraft")
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// The `.excalidraw` file at `path` as a new board named after it, and the notes on what the
+/// import left out ([`excalidraw::to_board`]). The board opens as a file does, with no undo step.
+/// Nothing is written, and the file stays as it is.
 ///
 /// A file with nothing in it (empty, or only white space) is a blank board with nothing to say,
-/// as it was on the old canvas ([`excalidraw::read_file_or_blank`]).
-fn import_old_canvas(old: &Path) -> Result<(BoardDoc, Vec<String>), BoardError> {
-    let scene = excalidraw::read_file_or_blank(old)?;
-    excalidraw::to_board(NAME, &scene)
-        .map_err(|e| BoardError::Format(format!("{} can't be imported: {e}", old.display())))
+/// as it was on the old canvas ([`excalidraw::read_file_or_blank`]). Any other file that can't be
+/// imported is an error that names it.
+pub fn import_file(path: &Path) -> Result<(BoardDoc, Vec<String>), BoardError> {
+    let name = path
+        .file_stem()
+        .map_or_else(|| NAME.into(), |stem| stem.to_string_lossy());
+    import_as(path, &name)
+}
+
+/// The `.excalidraw` file at `path` imported as a new board called `name`, and the notes on what
+/// the import left out ([`import_file`]).
+fn import_as(path: &Path, name: &str) -> Result<(BoardDoc, Vec<String>), BoardError> {
+    let scene = excalidraw::read_file_or_blank(path)?;
+    excalidraw::to_board(name, &scene)
+        .map_err(|e| BoardError::Format(format!("{} can't be imported: {e}", path.display())))
 }
 
 /// Whether `doc` has no layers on any page: nothing drawn, so nothing to lose.
@@ -361,7 +395,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::doc::DocKind;
+    use crate::doc::{DocKind, file_with_a_damaged_image, file_with_an_image_past_the_limit};
 
     /// A board with one sticky for each of `texts`.
     fn board_with(texts: &[&str]) -> BoardDoc {
@@ -397,7 +431,7 @@ mod tests {
         names
     }
 
-    /// A `.figcraft` file that loads, with one note that saving it would drop its version history.
+    /// A `.figcraft` file of a board with a sticky "kept", and a version history.
     fn file_with_a_history() -> Vec<u8> {
         let doc = board_with(&["kept"]).doc().unwrap();
         let history = [figcraft_format::Version::new(
@@ -466,7 +500,7 @@ mod tests {
         let path = dir.path().join("canvas.figcraft");
         let bak = lossy_backup(&path);
         assert_eq!(bak, dir.path().join("canvas.figcraft.lossy.bak"));
-        let original = file_with_a_history();
+        let original = file_with_a_damaged_image();
         std::fs::write(&path, &original).unwrap();
 
         let (board, issues) = open_with_issues(&path).unwrap();
@@ -503,7 +537,7 @@ mod tests {
     fn open_with_issues_refuses_a_file_it_cannot_back_up() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("canvas.figcraft");
-        let original = file_with_a_history();
+        let original = file_with_a_damaged_image();
         std::fs::write(&path, &original).unwrap();
         // A folder where the backup should go.
         std::fs::create_dir(lossy_backup(&path)).unwrap();
@@ -515,6 +549,109 @@ mod tests {
             "{err}"
         );
         assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn a_file_with_a_history_opens_without_notes_or_a_backup() {
+        // A save writes the history back, so there is nothing to warn about or to keep a copy of.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("canvas.figcraft");
+        std::fs::write(&path, file_with_a_history()).unwrap();
+
+        let (board, issues) = open_with_issues(&path).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert!(has_text(&board, "kept"));
+        assert_eq!(board.session.ds().unwrap().versions.len(), 1);
+        assert_eq!(names(dir.path()), ["canvas.figcraft"], "no backup");
+    }
+
+    #[test]
+    fn images_left_in_a_file_make_saving_over_it_refused() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("design.figcraft");
+        let original = file_with_an_image_past_the_limit();
+        std::fs::write(&path, &original).unwrap();
+
+        let (board, issues) = open_with_issues(&path).unwrap();
+        assert!(!issues.is_empty());
+        let refused = board.refuse_dropping_images(&path).unwrap_err().to_string();
+        assert!(
+            refused.starts_with("design wasn't saved: 1 of its images weren't loaded"),
+            "{refused}"
+        );
+        // A copy anywhere else loses nothing of this file.
+        let copy = dir.path().join("copy.figcraft");
+        assert!(board.refuse_dropping_images(&copy).is_ok());
+        // `open` records them too, and the original is kept beside the file, as for any open
+        // with notes.
+        assert!(open(&path).unwrap().refuse_dropping_images(&path).is_err());
+        assert_eq!(std::fs::read(lossy_backup(&path)).unwrap(), original);
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn an_excalidraw_file_is_bound_to_the_figcraft_beside_it() {
+        let bound = |path: &str| bound_file(Path::new(path));
+        assert_eq!(
+            bound("/p/sketch.excalidraw"),
+            Path::new("/p/sketch.figcraft")
+        );
+        assert_eq!(bound("/p/v1.2.Excalidraw"), Path::new("/p/v1.2.figcraft"));
+        // The old project canvas is bound to the project canvas.
+        assert_eq!(
+            bound("/p/.nyawit/canvas.excalidraw"),
+            nyawit::board_file(Path::new("/p"))
+        );
+        // A `.figcraft` file is bound to itself.
+        assert_eq!(bound("/p/board.figcraft"), Path::new("/p/board.figcraft"));
+    }
+
+    #[test]
+    fn importing_a_file_draws_it_on_a_board_named_after_it_and_writes_nothing() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("sketch.excalidraw");
+        std::fs::write(&path, FIXTURE).unwrap();
+
+        let (board, issues) = import_file(&path).unwrap();
+        assert_eq!(board.kind(), DocKind::Board);
+        assert_eq!(top_level(&board), 9);
+        assert_eq!(board.doc().unwrap().name, "sketch");
+        assert_eq!(issues, ["skipped 1 embed"]);
+        // It opens as a file does: nothing to undo.
+        assert_eq!(board.session.undo_depth(), (0, 0));
+        // The file is as it was, and nothing is made beside it.
+        assert_eq!(std::fs::read(&path).unwrap(), FIXTURE.as_bytes());
+        assert_eq!(names(dir.path()), ["sketch.excalidraw"]);
+    }
+
+    #[test]
+    fn a_file_with_nothing_in_it_imports_blank_and_any_other_failure_names_it() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("sketch.excalidraw");
+        for blank in [
+            &b""[..],
+            b" \n",
+            br#"{"type": "excalidraw", "elements": []}"#,
+        ] {
+            std::fs::write(&path, blank).unwrap();
+            let (board, issues) = import_file(&path).unwrap();
+            assert!(is_empty(&board.doc().unwrap()), "{blank:?}");
+            assert!(issues.is_empty(), "{blank:?}: {issues:?}");
+        }
+        for (scene, says) in [
+            (&b"{ not json"[..], "isn't valid JSON"),
+            (br#"{"type": "excalidraw"}"#, "`elements`"),
+        ] {
+            std::fs::write(&path, scene).unwrap();
+            let error = import_file(&path).err().unwrap();
+            assert!(matches!(error, BoardError::Format(_)), "{error:?}");
+            let message = error.to_string();
+            assert!(
+                message.contains("sketch.excalidraw") && message.contains(says),
+                "{message}"
+            );
+        }
+        assert_eq!(names(dir.path()), ["sketch.excalidraw"]);
     }
 
     /// The old canvas as Excalidraw saved it: nine layers on the page, a frame's child among the
@@ -903,12 +1040,12 @@ mod tests {
 
     #[test]
     fn clearing_after_a_lossy_open_keeps_the_original() {
-        // Opened with notes, edited and saved (the save drops the history), then cleared, as an
-        // agent's add then clear does: the emptying save keeps the edited canvas, and the
+        // Opened with notes, edited and saved (the save drops the damaged image), then cleared,
+        // as an agent's add then clear does: the emptying save keeps the edited canvas, and the
         // original stays where the open put it.
         let dir = tempdir().unwrap();
         let path = dir.path().join("canvas.figcraft");
-        let original = file_with_a_history();
+        let original = file_with_a_damaged_image();
         std::fs::write(&path, &original).unwrap();
         let (_, issues) = open_with_issues(&path).unwrap();
         assert!(!issues.is_empty());

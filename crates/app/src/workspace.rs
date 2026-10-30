@@ -47,7 +47,7 @@ use crate::tools_page::{ToolsEvent, ToolsPage};
 use crate::update::{Updater, updater};
 use crate::viewers::{ImageView, PdfView, VideoView};
 use crate::welcome::{Welcome, WelcomeEvent};
-use sawit_board::store::board_file;
+use sawit_board::store::{self, board_file};
 use sawit_core::files::{FileKind, classify};
 use sawit_core::instances::AppPaths;
 use sawit_core::recent::RecentProjects;
@@ -526,7 +526,13 @@ impl Workspace {
     }
 
     pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let viewer = match classify(&path) {
+        let kind = classify(&path);
+        // Canvas files open on the native canvas. Without it they open as any other file does.
+        if self.native_canvas && matches!(kind, FileKind::Figcraft | FileKind::Excalidraw) {
+            self.open_board_file(path, kind, cx);
+            return;
+        }
+        let viewer = match kind {
             FileKind::Image => Some(Lucide::Image),
             FileKind::Pdf => Some(Lucide::FileText),
             FileKind::Video => Some(Lucide::Film),
@@ -549,7 +555,7 @@ impl Workspace {
                 .unwrap_or_default()
                 .into();
             let path_for_icon = path.clone();
-            let view: AnyView = match classify(&path) {
+            let view: AnyView = match kind {
                 FileKind::Image => cx.new(|cx| ImageView::new(path, cx)).into(),
                 FileKind::Pdf => cx.new(|cx| PdfView::new(path, cx)).into(),
                 _ => cx.new(|cx| VideoView::new(path, window, cx)).into(),
@@ -583,6 +589,65 @@ impl Workspace {
             self.push_tab(PaneItem::File(editor), group, cx);
         }
         cx.notify();
+    }
+
+    /// Opens a canvas file in a canvas tab (spec D14): a `.figcraft` file bound to itself, or an
+    /// `.excalidraw` file imported and bound to the `<stem>.figcraft` beside it
+    /// ([`BoardView::import`]).
+    ///
+    /// A file has one canvas in the window, whichever of its two names opens it, because two
+    /// canvases of one file would each save over the other's edits. A project's canvas file is
+    /// that project's canvas tab ([`Self::open_canvas_of`]); any other file's tab is keyed by the
+    /// `.figcraft` file it is bound to, and shown again when the file is opened again.
+    fn open_board_file(&mut self, path: PathBuf, kind: FileKind, cx: &mut Context<Self>) {
+        let file = store::bound_file(&path);
+        let roots: Vec<Option<PathBuf>> = self.projects.iter().map(|p| p.root(cx)).collect();
+        if let Some(root) = canvas_project(&file, roots, &AppPaths::default_macos().root) {
+            self.open_canvas_of(root, cx);
+            return;
+        }
+        if let Some((ix, _)) = self.board_tab(&file, cx) {
+            self.activate_tab(ix, cx);
+            return;
+        }
+        let view = cx.new(|cx| match kind {
+            FileKind::Excalidraw => BoardView::import(path, cx),
+            _ => BoardView::open(path, cx),
+        });
+        cx.subscribe(&view, |this, _, _: &ToggleCanvasMaximize, cx| {
+            this.toggle_canvas_maximized(cx)
+        })
+        .detach();
+        let title: SharedString = file
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+            .into();
+        let group = self.group_of(&file, cx);
+        self.push_tab(
+            PaneItem::Other {
+                view: view.into(),
+                key: format!("file\u{0}{}", file.display()).into(),
+                title,
+                icon: crate::canvas::ICON,
+                file: Some(file),
+            },
+            group,
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// The tab of the canvas bound to the `.figcraft` file `file` ([`BoardView::path`]), and the
+    /// canvas, whatever opened it: a project's canvas tab, or a canvas file's.
+    fn board_tab(&self, file: &Path, cx: &App) -> Option<(usize, Entity<BoardView>)> {
+        self.tabs.iter().enumerate().find_map(|(ix, tab)| {
+            let PaneItem::Other { view, .. } = &tab.item else {
+                return None;
+            };
+            let board = view.clone().downcast::<BoardView>().ok()?;
+            (board.read(cx).path() == file).then_some((ix, board))
+        })
     }
 
     /// Opens an arbitrary view as a center tab (used by the database tools).
@@ -1260,9 +1325,12 @@ impl Workspace {
                     PaneItem::Other {
                         title, icon, file, ..
                     } => (
+                        // The file's logo, else the tab's own icon (a canvas file has no logo).
                         match file {
-                            Some(path) => crate::file_icons::file_icon(path, cx),
-                            None => glyph(*icon),
+                            Some(path) if crate::file_icons::logo_for(path).is_some() => {
+                                crate::file_icons::file_icon(path, cx)
+                            }
+                            _ => glyph(*icon),
                         },
                         title.to_string(),
                         false,
@@ -1977,11 +2045,23 @@ impl Workspace {
     /// `.nyawit/canvas.figcraft` (else `canvas.figcraft` in Sawit's own
     /// folder) instead of the Excalidraw board.
     fn open_canvas(&mut self, cx: &mut Context<Self>) -> Option<CanvasTab> {
+        let root = self.root(cx);
+        self.open_canvas_of(root, cx)
+    }
+
+    /// Opens the canvas of the project at `root`, or the app-wide one for `None`, as
+    /// [`Self::open_canvas`] opens the active project's. A native canvas whose file is open in a
+    /// canvas file's tab already (opened before its project was in this window) is that tab: two
+    /// canvases of one file would each save over the other's edits.
+    fn open_canvas_of(
+        &mut self,
+        root: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> Option<CanvasTab> {
         self.leave_welcome(CENTER_ONLY, cx);
         if !self.layout.center {
             self.layout.toggle(Area::Center);
         }
-        let root = self.root(cx);
         let key: SharedString = match &root {
             Some(root) => format!("canvas\u{0}{}", root.display()).into(),
             None => "canvas".into(),
@@ -2004,6 +2084,10 @@ impl Workspace {
         }
         let tab = if self.native_canvas {
             let file = board_file(root.as_deref(), &AppPaths::default_macos().root);
+            if let Some((ix, board)) = self.board_tab(&file, cx) {
+                self.activate_tab(ix, cx);
+                return Some(CanvasTab::Native(board));
+            }
             let view = cx.new(|cx| BoardView::open(file, cx));
             cx.subscribe(&view, |this, _, _: &ToggleCanvasMaximize, cx| {
                 this.toggle_canvas_maximized(cx)
@@ -2035,10 +2119,12 @@ impl Workspace {
         Some(tab)
     }
 
-    /// The canvas whose tab is showing in the center pane.
+    /// The canvas whose tab is showing in the center pane: a project's canvas, or a canvas file's.
     fn active_canvas(&self) -> Option<EntityId> {
         match self.tabs.get(self.active).map(|t| &t.item) {
-            Some(PaneItem::Other { key, view, .. }) if key.starts_with("canvas") => {
+            Some(PaneItem::Other { key, view, .. })
+                if key.starts_with("canvas") || view.clone().downcast::<BoardView>().is_ok() =>
+            {
                 Some(view.entity_id())
             }
             _ => None,
@@ -2627,11 +2713,46 @@ fn cached(view: AnyView) -> AnyElement {
         .into_any_element()
 }
 
+/// The project that `file` is the canvas file of (spec D5), among `roots`, the folders of the
+/// window's projects: `Some` of its folder as `roots` has it, which is `None` for a project with no
+/// folder (its canvas is the app's own, in `app_root`). `None` when it is no project's.
+fn canvas_project(
+    file: &Path,
+    roots: impl IntoIterator<Item = Option<PathBuf>>,
+    app_root: &Path,
+) -> Option<Option<PathBuf>> {
+    roots
+        .into_iter()
+        .find(|root| board_file(root.as_deref(), app_root) == file)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
 
-    use super::{bindings, canvas_passthrough_keys, page_key};
+    use super::{bindings, canvas_passthrough_keys, canvas_project, page_key};
+
+    #[test]
+    fn a_projects_canvas_file_is_that_projects_canvas() {
+        let app = Path::new("/support/sawit");
+        let (a, b) = (PathBuf::from("/work/a"), PathBuf::from("/work/b"));
+        let roots = vec![Some(a.clone()), Some(b.clone()), None];
+        let project = |file: &str| canvas_project(Path::new(file), roots.clone(), app);
+        // Each project's canvas file, and for the project with no folder the app's own.
+        assert_eq!(project("/work/b/.nyawit/canvas.figcraft"), Some(Some(b)));
+        assert_eq!(project("/work/a/.nyawit/canvas.figcraft"), Some(Some(a)));
+        assert_eq!(project("/support/sawit/canvas.figcraft"), Some(None));
+        // Any other file is one of its own: another file in `.nyawit`, a canvas file elsewhere,
+        // the canvas file of a project the window doesn't have.
+        assert_eq!(project("/work/a/.nyawit/sketch.figcraft"), None);
+        assert_eq!(project("/work/a/canvas.figcraft"), None);
+        assert_eq!(project("/work/c/.nyawit/canvas.figcraft"), None);
+        // With every project in a folder, the app's canvas file is one of its own too.
+        let app_canvas = Path::new("/support/sawit/canvas.figcraft");
+        let folders = [Some(PathBuf::from("/work/a"))];
+        assert_eq!(canvas_project(app_canvas, folders, app), None);
+    }
 
     #[test]
     fn no_two_shortcuts_share_a_keystroke() {

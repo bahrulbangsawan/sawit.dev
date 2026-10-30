@@ -1,10 +1,11 @@
 //! The canvas document: a FigCraft [`Session`] holding one file, behind the few calls the rest of
 //! the app needs. Make, load and save it; read it; run engine commands on it.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use figcraft_doc::Document;
-use figcraft_engine::{EngineError, Session, board};
+use figcraft_engine::{DocState, EngineError, Session, board};
 use figcraft_format::FormatError;
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -56,9 +57,9 @@ impl BoardDoc {
         Ok(Self { session })
     }
 
-    /// The file in `bytes` (a `.figcraft` archive). The notes on what the loader repaired or left
-    /// out, and on what saving would drop, are only logged, so a caller that may save back to the
-    /// file should use [`BoardDoc::from_bytes_with_issues`].
+    /// The file in `bytes` (a `.figcraft` archive), with its version history and branches. The
+    /// notes on what the loader repaired or left out are only logged, so a caller that may save
+    /// back to a file should use [`BoardDoc::from_file_bytes`].
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, BoardError> {
         let (board, issues) = Self::from_bytes_with_issues(bytes)?;
         for issue in issues {
@@ -69,51 +70,95 @@ impl BoardDoc {
 
     /// Like [`BoardDoc::from_bytes`], with notes on what saving the returned document over the same
     /// file would lose, one sentence each. An empty list means a save writes back everything the
-    /// loader read, bar a stored thumbnail (a preview, not content). The list holds:
+    /// loader read ([`BoardDoc::to_bytes`]: the document, its version history and its branches),
+    /// bar a stored thumbnail (a preview, not content). The list holds:
     /// - the loader's own notes: what it repaired, and what it could not read and left out (an
     ///   image, version, branch or published library that is damaged or past its limits);
-    /// - a note for each kind of content that was read fine but that [`BoardDoc::to_bytes`] never
-    ///   writes: a version history, branches, and the images past the loader's limits (those stay
-    ///   in the file, unread).
+    /// - a note on the images past the loader's limits, which stay in the file, unread: a save over
+    ///   the file would drop them, so [`BoardDoc::from_file_bytes`] keeps a save from doing that.
     pub fn from_bytes_with_issues(bytes: &[u8]) -> Result<(Self, Vec<String>), BoardError> {
+        Self::load(bytes, None)
+    }
+
+    /// The `.figcraft` file at `path`, whose bytes are `bytes`, read as
+    /// [`BoardDoc::from_bytes_with_issues`] reads it, and with what FigCraft's own `file.open` notes
+    /// of the file: the images it holds past the loader's limits, which a save over it would delete
+    /// ([`BoardDoc::refuse_dropping_images`]). The session keeps no path, so nothing in it can
+    /// write or reload the file behind the canvas's store.
+    pub fn from_file_bytes(bytes: &[u8], path: &Path) -> Result<(Self, Vec<String>), BoardError> {
+        Self::load(bytes, Some(path))
+    }
+
+    /// The board in `bytes`, with its version history and branches, and when it is read from the
+    /// file at `file`, the images left in that file. The notes are
+    /// [`BoardDoc::from_bytes_with_issues`]'s.
+    fn load(bytes: &[u8], file: Option<&Path>) -> Result<(Self, Vec<String>), BoardError> {
         let loaded = figcraft_format::load_bytes_with_versions(bytes).map_err(format_error)?;
         let mut issues = loaded.issues;
-        if !loaded.versions.is_empty() {
-            issues.push(
-                "the file has a version history, which the canvas doesn't keep: \
-                 saving this file again drops it"
-                    .into(),
-            );
-        }
-        if !loaded.branches.is_empty() {
-            issues.push(
-                "the file has branches, which the canvas doesn't keep: \
-                 saving this file again drops them"
-                    .into(),
-            );
-        }
-        if loaded.images_past_budget > 0 {
+        let left_in_file = loaded.images_past_budget;
+        if left_in_file > 0 {
             issues.push(format!(
-                "images past the limit of what can be loaded stay in the file ({} of them): \
-                 saving this file again drops them",
-                loaded.images_past_budget
+                "images past the limit of what can be loaded stay in the file ({left_in_file} of \
+                 them): saving over the file would drop them"
             ));
         }
-        let board = Self {
-            session: Session::with_document(loaded.doc),
-        };
-        Ok((board, issues))
+        let mut ds = DocState::new(loaded.doc, None)
+            .with_versions(loaded.versions)
+            .with_branches(loaded.branches);
+        if let Some(file) = file {
+            ds = ds.with_images_left_in_file(&file.to_string_lossy(), left_in_file);
+        }
+        let mut session = Session::empty();
+        session.docs.push(ds);
+        Ok((Self { session }, issues))
     }
 
-    /// The document as a `.figcraft` archive, without a thumbnail.
+    /// The document as a `.figcraft` archive, with its version history and branches, and without a
+    /// thumbnail (a preview, not content). It is the document itself
+    /// ([`BoardDoc::document_itself`]), never a version shown in its place.
     pub fn to_bytes(&self) -> Result<Vec<u8>, BoardError> {
-        let doc = self.doc()?;
-        figcraft_format::save_bytes(&doc, None).map_err(format_error)
+        let ds = self.session.ds()?;
+        figcraft_format::save_bytes_with_history(
+            ds.document_itself(),
+            None,
+            &ds.versions,
+            &ds.branches,
+        )
+        .map_err(format_error)
     }
 
-    /// The current document. It is a snapshot: later edits make a new one.
+    /// Refuses a save over the file at `path` that would delete images the loader left in it,
+    /// past its limits ([`BoardDoc::from_file_bytes`]), as FigCraft's own `file.save` refuses it,
+    /// and in its words. A save anywhere else loses nothing of that file, and neither does one of a
+    /// document that wasn't read from it.
+    pub fn refuse_dropping_images(&self, path: &Path) -> Result<(), BoardError> {
+        match self
+            .session
+            .ds()?
+            .images_lost_saving_to(&path.to_string_lossy())
+        {
+            Some(count) => Err(BoardError::Engine(format!(
+                "{} wasn't saved: {count} of its images weren't loaded (together they pass what \
+                 FigCraft reads from one file), and saving over it would delete them. Save it \
+                 under another name; this file keeps them.",
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("Untitled")
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    /// The current document. It is a snapshot: later edits make a new one. While the engine shows a
+    /// version, or a live text preview, in place of the document, this is what it shows.
     pub fn doc(&self) -> Result<Arc<Document>, BoardError> {
         Ok(self.session.ds()?.doc.clone())
+    }
+
+    /// The document itself, which a save writes: [`BoardDoc::doc`], except while the engine shows
+    /// a version of it, or a live text preview, in its place.
+    pub fn document_itself(&self) -> Result<Arc<Document>, BoardError> {
+        Ok(self.session.ds()?.document_itself().clone())
     }
 
     /// Whether this is a board or a design file. A session without a document is not a board.
@@ -135,6 +180,43 @@ impl BoardDoc {
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, BoardError> {
         Ok(self.session.execute(id, params)?)
     }
+}
+
+/// A `.figcraft` file of a board with a sticky "kept", and an image whose bytes are damaged: the
+/// loader leaves the image out, and says that a save drops it.
+#[cfg(test)]
+pub(crate) fn file_with_a_damaged_image() -> Vec<u8> {
+    // A 1 × 1 PNG.
+    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    let mut board = BoardDoc::new_board("Canvas").unwrap();
+    board
+        .execute("board.sticky", &json!({"x": 0, "y": 0, "text": "kept"}))
+        .unwrap();
+    let placed = board
+        .execute("image.place", &json!({"data": PNG, "x": 0, "y": 300}))
+        .unwrap();
+    let hash = placed["image"].as_str().unwrap().to_string();
+    let png = board.doc().unwrap().images[&hash].bytes.clone();
+    let mut bytes = board.to_bytes().unwrap();
+    let at = bytes
+        .windows(png.len())
+        .position(|w| w == png.as_slice())
+        .unwrap();
+    bytes[at + png.len() / 2] ^= 0xFF;
+    bytes
+}
+
+/// A `.figcraft` file of a blank design with one image more than FigCraft reads from a file (its
+/// `IMAGE_BUDGET` is 20 000): that image stays in the file, unread. Building its 20 001 archive
+/// members takes most of a second.
+#[cfg(test)]
+pub(crate) fn file_with_an_image_past_the_limit() -> Vec<u8> {
+    let document = Document::new("File");
+    let document = serde_json::to_vec(&figcraft_format::to_json(&document).unwrap()).unwrap();
+    let names: Vec<String> = (0..=20_000).map(|n| format!("images/i{n}")).collect();
+    let members = std::iter::once(("document.json", document.as_slice()))
+        .chain(names.iter().map(|name| (name.as_str(), &b"x"[..])));
+    figcraft_format::zip_files(members).unwrap()
 }
 
 #[cfg(test)]
@@ -226,8 +308,15 @@ mod tests {
         assert!(BoardDoc::from_bytes(&damaged).is_ok());
     }
 
+    /// Sticky notes on the document, whatever it shows.
+    fn stickies(doc: &Document) -> usize {
+        doc.nodes()
+            .filter(|n| matches!(n.board, Some(figcraft_doc::BoardItem::Sticky { .. })))
+            .count()
+    }
+
     #[test]
-    fn a_version_history_is_noted_because_saving_drops_it() {
+    fn a_version_history_is_kept_by_a_save() {
         let board = BoardDoc::new_board("Canvas").unwrap();
         let doc = board.doc().unwrap();
         let history = [figcraft_format::Version::new(
@@ -239,23 +328,23 @@ mod tests {
         )];
         let bytes = figcraft_format::save_bytes_with_versions(&doc, None, &history).unwrap();
 
-        let (board, issues) = BoardDoc::from_bytes_with_issues(&bytes).unwrap();
-        assert_eq!(issues.len(), 1, "{issues:?}");
-        assert!(issues[0].contains("version history"), "{issues:?}");
-        // The note is true: the saved file has no history, and says nothing once it has none.
+        // It is read with the file, so there is nothing to say about it.
+        let (mut board, issues) = BoardDoc::from_bytes_with_issues(&bytes).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        // A save writes it back, after an edit too.
+        board
+            .execute("board.sticky", &json!({"x": 0, "y": 0, "text": "after"}))
+            .unwrap();
         let saved = board.to_bytes().unwrap();
         let loaded = figcraft_format::load_bytes_with_versions(&saved).unwrap();
-        assert!(loaded.versions.is_empty());
-        assert!(
-            BoardDoc::from_bytes_with_issues(&saved)
-                .unwrap()
-                .1
-                .is_empty()
-        );
+        let names: Vec<&str> = loaded.versions.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, ["First"]);
+        assert!(loaded.issues.is_empty(), "{:?}", loaded.issues);
+        assert_eq!(stickies(&loaded.doc), 1);
     }
 
     #[test]
-    fn branches_are_noted_because_saving_drops_them() {
+    fn branches_are_kept_by_a_save() {
         let board = BoardDoc::new_board("Canvas").unwrap();
         let doc = board.doc().unwrap();
         let branch = figcraft_format::Branch {
@@ -270,31 +359,71 @@ mod tests {
         };
         let bytes = figcraft_format::save_bytes_with_history(&doc, None, &[], &[branch]).unwrap();
 
-        let (board, issues) = BoardDoc::from_bytes_with_issues(&bytes).unwrap();
-        assert_eq!(issues.len(), 1, "{issues:?}");
-        assert!(issues[0].contains("branches"), "{issues:?}");
+        let (mut board, issues) = BoardDoc::from_bytes_with_issues(&bytes).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        board
+            .execute("board.sticky", &json!({"x": 0, "y": 0, "text": "after"}))
+            .unwrap();
         let loaded = figcraft_format::load_bytes_with_versions(&board.to_bytes().unwrap()).unwrap();
-        assert!(loaded.branches.is_empty());
+        let names: Vec<&str> = loaded.branches.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["Explore"]);
+        assert_eq!(stickies(&loaded.doc), 1);
     }
 
     #[test]
-    fn images_past_the_loaders_limit_are_noted_because_saving_drops_them() {
-        // FigCraft's IMAGE_BUDGET reads at most 20 000 images from a file; the rest stay in the
-        // file, unread. Building 20 001 archive members takes most of a second.
-        let document = Document::new("File");
-        let document = serde_json::to_vec(&figcraft_format::to_json(&document).unwrap()).unwrap();
-        let names: Vec<String> = (0..=20_000).map(|n| format!("images/i{n}")).collect();
-        let members = std::iter::once(("document.json", document.as_slice()))
-            .chain(names.iter().map(|name| (name.as_str(), &b"x"[..])));
-        let bytes = figcraft_format::zip_files(members).unwrap();
+    fn a_save_writes_the_document_not_a_version_shown_in_its_place() {
+        let mut board = BoardDoc::new_board("Canvas").unwrap();
+        let sticky = |board: &mut BoardDoc, text: &str| {
+            let at = json!({"x": stickies(&board.doc().unwrap()) * 300, "y": 0, "text": text});
+            board.execute("board.sticky", &at).unwrap();
+        };
+        sticky(&mut board, "then");
+        board
+            .execute("file.saveVersion", &json!({"name": "Then"}))
+            .unwrap();
+        sticky(&mut board, "now");
+        let now = board.doc().unwrap();
 
-        let (_, issues) = BoardDoc::from_bytes_with_issues(&bytes).unwrap();
+        // The canvas shows the version in place of the document...
+        board
+            .execute("version.preview", &json!({"index": 0}))
+            .unwrap();
+        assert_eq!(stickies(&board.doc().unwrap()), 1);
+        // ...and the document is still what is saved, with its history.
+        assert!(Arc::ptr_eq(&board.document_itself().unwrap(), &now));
+        let loaded = figcraft_format::load_bytes_with_versions(&board.to_bytes().unwrap()).unwrap();
+        assert_eq!(stickies(&loaded.doc), 2);
+        assert_eq!(loaded.versions.len(), 1);
+    }
+
+    #[test]
+    fn images_past_the_loaders_limit_make_saving_over_their_file_refused() {
+        let bytes = file_with_an_image_past_the_limit();
+        let path = Path::new("/work/design.figcraft");
+        let (board, issues) = BoardDoc::from_file_bytes(&bytes, path).unwrap();
         let note = |i: &&String| i.contains("past the limit");
         assert_eq!(issues.iter().filter(note).count(), 1, "{issues:?}");
         assert!(
             issues.iter().any(|i| i.contains("(1 of them)")),
             "{issues:?}"
         );
+        // Saved over, the file would lose the image it holds unread. That is refused, in
+        // FigCraft's own words; saved anywhere else, nothing is lost.
+        let refused = board.refuse_dropping_images(path).unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "design wasn't saved: 1 of its images weren't loaded (together they pass what \
+             FigCraft reads from one file), and saving over it would delete them. Save it under \
+             another name; this file keeps them."
+        );
+        assert!(
+            board
+                .refuse_dropping_images(Path::new("/work/copy.figcraft"))
+                .is_ok()
+        );
+        // Read with no file, it has no file to save over.
+        let (board, _) = BoardDoc::from_bytes_with_issues(&bytes).unwrap();
+        assert!(board.refuse_dropping_images(path).is_ok());
     }
 
     #[test]
