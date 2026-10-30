@@ -128,7 +128,9 @@ gpui_kit::assets::icon_assets!(
         UnfoldVertical,
         UnfoldHorizontal,
         // The browser's device menu (src/browser/toolbar.rs).
-        Smartphone
+        Smartphone,
+        // The browser's Annotate panel (src/browser/annotate.rs).
+        Camera
     ]
 );
 

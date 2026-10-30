@@ -229,7 +229,12 @@ fn cut_text(text: &str) -> String {
 /// The next annotation number for `url`'s page (hash ignored).
 pub fn next_number(existing: &[Annotation], url: &str) -> u32 {
     let key = page_key(url);
-    existing.iter().filter(|a| page_key(&a.url) == key).count() as u32 + 1
+    existing
+        .iter()
+        .filter(|a| page_key(&a.url) == key)
+        .map(|a| a.n)
+        .max()
+        .map_or(1, |n| n + 1)
 }
 
 /// The URL without `#…`.
@@ -480,6 +485,29 @@ mod tests {
         assert_eq!(next_number(&existing, "http://a/x"), 3);
         assert_eq!(next_number(&existing, "http://a/x#other"), 3);
         assert_eq!(next_number(&existing, "http://a/z"), 1);
+    }
+
+    #[test]
+    fn numbers_follow_the_highest_after_a_delete() {
+        let at = |n| Annotation {
+            n,
+            url: "http://a/x".into(),
+            ..annotation()
+        };
+        // 2 was deleted: the next is 4, so 3 keeps its number.
+        assert_eq!(next_number(&[at(1), at(3)], "http://a/x"), 4);
+    }
+
+    #[test]
+    fn screenshot_names_never_collide() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = screenshot_name("http://localhost:5173/", 1);
+        assert_eq!(name, "localhost-5173-1.png");
+        let first = crate::nyawit::unique(dir.path(), &name);
+        std::fs::write(&first, b"x").unwrap();
+        let second = crate::nyawit::unique(dir.path(), &name);
+        assert_eq!(first.file_name().unwrap(), "localhost-5173-1.png");
+        assert_eq!(second.file_name().unwrap(), "localhost-5173-1-2.png");
     }
 
     #[test]

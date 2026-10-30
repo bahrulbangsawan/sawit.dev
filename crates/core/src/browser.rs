@@ -597,6 +597,29 @@ pub fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
+/// Decodes standard base64 (padding optional); `None` on other characters.
+pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for c in text.trim_end_matches('=').bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        acc = acc << 6 | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits & 0xff) as u8);
+        }
+    }
+    Some(out)
+}
+
 /// The website data store (cookies, storage) of the project's browser:
 /// one per folder, stable across launches.
 pub fn data_store_id(project: &Path) -> [u8; 16] {
@@ -755,6 +778,14 @@ mod tests {
         assert_eq!(v["matching"], 2);
         assert_eq!(v["failed"], 2);
         assert_eq!(logs.network_json(Some("A/OK"), false, None)["matching"], 1);
+    }
+
+    #[test]
+    fn base64_round_trips() {
+        for bytes in [&b""[..], b"a", b"ab", b"abc", b"\x00\xff\xfe\x10"] {
+            assert_eq!(base64_decode(&base64_encode(bytes)).unwrap(), bytes);
+        }
+        assert!(base64_decode("a$b").is_none());
     }
 
     #[test]

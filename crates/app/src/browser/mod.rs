@@ -7,6 +7,7 @@
 //! rest by the page agent (`sawit_core::browser::page_script`), injected into
 //! every page, through `Engine::eval_with_callback`.
 
+mod annotate;
 mod engine;
 mod panel;
 mod toolbar;
@@ -24,6 +25,10 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use sawit_core::annotations::{
+    Annotation, ElementDetails, Intent, PageGroup, PageInfo, next_number, page_key,
+    relative_source, screenshot_dir, screenshot_name,
+};
 use sawit_core::browser::{
     BrowserOp, ConsoleEntry, Logs, PageEvent, Target, ViewportMode, fit, normalize_address,
     page_script, parse_ipc, resize_mode,
@@ -31,6 +36,7 @@ use sawit_core::browser::{
 use sawit_core::probe;
 use serde_json::{Value, json};
 
+use annotate::{AnnotateEvent, AnnotatePanel, group_order, padded_rect};
 use engine::{Engine, EngineEvent, EngineSpec, Frame};
 
 use crate::rt;
@@ -136,6 +142,7 @@ pub struct BrowserView {
     /// Keeps the "Browser" key context on the dispatch path (⌘⇧.).
     focus: FocusHandle,
     panel: Option<Panel>,
+    annotate: Entity<AnnotatePanel>,
     pick: PickMode,
     /// Picking was asked for but the page had no agent yet; it is armed
     /// again when the page has loaded.
@@ -158,23 +165,31 @@ impl BrowserView {
     ) -> Self {
         let address =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search or enter address"));
-        let subscriptions = vec![cx.subscribe_in(
-            &address,
-            window,
-            |this, address, event: &InputEvent, _, cx| match event {
-                InputEvent::PressEnter { .. } => {
-                    let typed = address.read(cx).value().to_string();
-                    this.navigate(&typed, cx);
-                }
-                // Typing goes to the address field, not the page.
-                InputEvent::Focus => {
-                    if let Some(engine) = &this.engine {
-                        engine.focus_parent();
+        let annotate = cx.new(|cx| AnnotatePanel::new(window, cx));
+        let subscriptions = vec![
+            cx.subscribe_in(
+                &annotate,
+                window,
+                |this, _, event: &AnnotateEvent, _, cx| this.on_annotate(event, cx),
+            ),
+            cx.subscribe_in(
+                &address,
+                window,
+                |this, address, event: &InputEvent, _, cx| match event {
+                    InputEvent::PressEnter { .. } => {
+                        let typed = address.read(cx).value().to_string();
+                        this.navigate(&typed, cx);
                     }
-                }
-                _ => {}
-            },
-        )];
+                    // Typing goes to the address field, not the page.
+                    InputEvent::Focus => {
+                        if let Some(engine) = &this.engine {
+                            engine.focus_parent();
+                        }
+                    }
+                    _ => {}
+                },
+            ),
+        ];
         let (to_view, mut from_page) = unbounded();
         let ipc = cx.spawn_in(window, async move |this, cx| {
             while let Some(message) = from_page.next().await {
@@ -220,6 +235,7 @@ impl BrowserView {
             viewport: ViewportMode::Responsive,
             focus: cx.focus_handle(),
             panel: None,
+            annotate,
             pick: PickMode::Off,
             pick_waiting: false,
             to_view,
@@ -296,8 +312,142 @@ impl BrowserView {
 
     /// Ops to run when a page has loaded: its agent starts fresh, so
     /// picking has to be armed again.
-    fn ops_after_load(&self) -> Vec<Value> {
-        rearm_ops(self.pick)
+    fn ops_after_load(&self, cx: &App) -> Vec<Value> {
+        let mut ops = rearm_ops(self.pick);
+        let markers = self.annotate.read(cx).markers_for(&self.current_url());
+        if !markers.is_empty() {
+            ops.push(markers_op(&markers));
+        }
+        ops
+    }
+
+    /// Draws the numbered markers of the page on show (none clears them).
+    fn sync_markers(&self, cx: &App) {
+        let markers = self.annotate.read(cx).markers_for(&self.current_url());
+        drop(self.page_op(markers_op(&markers)));
+    }
+
+    fn on_annotate(&mut self, event: &AnnotateEvent, cx: &mut Context<Self>) {
+        match event {
+            AnnotateEvent::Show(selector) => {
+                drop(self.page_op(json!({ "op": "flash", "selector": selector })));
+            }
+            AnnotateEvent::Changed => self.sync_markers(cx),
+            AnnotateEvent::Copy => {
+                if let Some(md) = self.annotations_markdown(cx) {
+                    cx.write_to_clipboard(ClipboardItem::new_string(md));
+                    self.annotate.update(cx, |a, cx| a.set_note("Copied", cx));
+                }
+            }
+            // Pasting into a terminal is wired up separately.
+            AnnotateEvent::Send => {}
+        }
+    }
+
+    /// The annotations as the markdown agents read; `None` without any.
+    pub fn annotations_markdown(&self, cx: &App) -> Option<String> {
+        let panel = self.annotate.read(cx);
+        let items = panel.annotations(cx);
+        if items.is_empty() {
+            return None;
+        }
+        let url = self.current_url();
+        let viewport = self.viewport_json();
+        let size = (
+            viewport["width"].as_f64().unwrap_or_default() as u32,
+            viewport["height"].as_f64().unwrap_or_default() as u32,
+        );
+        let device = match &self.viewport {
+            ViewportMode::Fixed { name, .. } => name.clone(),
+            ViewportMode::Responsive => None,
+        };
+        let groups: Vec<PageGroup> = group_order(&url, &items)
+            .into_iter()
+            .map(|key| {
+                let title = if key == page_key(&url) && !self.title.is_empty() {
+                    self.title.clone()
+                } else {
+                    key.clone()
+                };
+                PageGroup {
+                    page: PageInfo {
+                        title,
+                        url: key.clone(),
+                        viewport: size,
+                        device: device.clone(),
+                    },
+                    items: items
+                        .iter()
+                        .filter(|a| page_key(&a.url) == key)
+                        .cloned()
+                        .collect(),
+                }
+            })
+            .collect();
+        let errors = if panel.include_errors() {
+            self.logs.page_errors(20)
+        } else {
+            Vec::new()
+        };
+        Some(sawit_core::annotations::markdown(
+            &groups,
+            Some((page_key(&url), &errors)),
+        ))
+    }
+
+    /// An element was clicked in annotate mode: capture it, then add a row
+    /// (whose comment gets the keyboard) and redraw the markers.
+    fn on_picked(
+        &mut self,
+        mut element: ElementDetails,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let url = self.current_url();
+        if let Some(source) = &mut element.source {
+            source.file = relative_source(&source.file, self.project.as_deref());
+        }
+        let viewport = self.viewport_json();
+        let size = (
+            viewport["width"].as_f64().unwrap_or_default() as u32,
+            viewport["height"].as_f64().unwrap_or_default() as u32,
+        );
+        let rect = padded_rect(&element.rect, size, 8.);
+        let (tx, rx) = oneshot::channel();
+        if rect.2 >= 1. && rect.3 >= 1. {
+            self.shoot(Some(rect), tx, cx);
+        } else {
+            let _ = tx.send(Err("The element isn't on screen.".into()));
+        }
+        let project = self.project.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let shot = rx
+                .await
+                .unwrap_or_else(|_| Err("The screenshot was cancelled.".into()));
+            let _ = this.update_in(cx, |this, window, cx| {
+                let existing = this.annotate.read(cx).annotations(cx);
+                let n = next_number(&existing, &url);
+                let screenshot = shot
+                    .ok()
+                    .and_then(|v| save_screenshot(&v, project.as_deref(), &url, n));
+                let annotation = Annotation {
+                    n,
+                    url,
+                    element,
+                    comment: String::new(),
+                    intent: Intent::Fix,
+                    screenshot,
+                    include_screenshot: true,
+                };
+                // The keyboard moves from the page to the panel.
+                if let Some(engine) = &this.engine {
+                    engine.focus_parent();
+                }
+                this.annotate
+                    .update(cx, |panel, cx| panel.add(annotation, window, cx));
+            });
+        })
+        .detach();
     }
 
     /// Runs `op` on the page and answers with what the page says.
@@ -448,6 +598,12 @@ impl BrowserView {
             FromPage::Event(PageEvent::Network(entry)) => self.logs.push_network(entry),
             FromPage::Event(PageEvent::Picked(pick)) => {
                 self.last_pick = pick["element"]["selector"].as_str().map(str::to_string);
+                // Inspecting is the design panel's.
+                if pick["mode"] == "annotate"
+                    && let Ok(element) = serde_json::from_value(pick["element"].clone())
+                {
+                    self.on_picked(element, window, cx);
+                }
                 cx.notify();
             }
             // Hovers wait for the design panel.
@@ -461,6 +617,10 @@ impl BrowserView {
             FromPage::Event(PageEvent::Url(url)) => {
                 self.url = url;
                 self.show_address(window, cx);
+                // Route changes without a load still move to another page.
+                let url = self.current_url();
+                self.annotate.update(cx, |a, cx| a.set_current(&url, cx));
+                self.sync_markers(cx);
             }
             FromPage::Engine(EngineEvent::Ipc(body)) => {
                 if let Some(event) = parse_ipc(&body, &self.token) {
@@ -470,8 +630,12 @@ impl BrowserView {
             FromPage::Engine(EngineEvent::Load { started, url }) => {
                 self.loading = started;
                 if !started {
-                    for op in self.ops_after_load() {
-                        self.send_pick(op, cx);
+                    for op in self.ops_after_load(cx) {
+                        if op["op"] == "pick" {
+                            self.send_pick(op, cx);
+                        } else {
+                            drop(self.page_op(op));
+                        }
                     }
                 }
                 if started && url != "about:blank" {
@@ -486,6 +650,8 @@ impl BrowserView {
                 }
                 self.url = url;
                 self.show_address(window, cx);
+                let url = self.current_url();
+                self.annotate.update(cx, |a, cx| a.set_current(&url, cx));
             }
             FromPage::Engine(EngineEvent::Title(title)) => self.title = title,
             FromPage::Engine(EngineEvent::NewWindow(url)) => self.navigate(&url, cx),
@@ -899,6 +1065,35 @@ fn rearm_ops(pick: PickMode) -> Vec<Value> {
     }
 }
 
+/// Numbers drawn over the annotated elements of the page.
+fn markers_op(markers: &[(u32, String)]) -> Value {
+    let items: Vec<Value> = markers
+        .iter()
+        .map(|(n, selector)| json!({ "n": n, "selector": selector }))
+        .collect();
+    json!({ "op": "markers", "items": items })
+}
+
+/// Writes a screenshot answer (`png_base64`) to the project's annotation
+/// folder (else the app cache); `None` when it can't be saved.
+fn save_screenshot(
+    shot: &Value,
+    project: Option<&std::path::Path>,
+    url: &str,
+    n: u32,
+) -> Option<PathBuf> {
+    let png = sawit_core::browser::base64_decode(shot["png_base64"].as_str()?)?;
+    let cache = sawit_core::instances::AppPaths::default_macos().cache_dir();
+    let dir = screenshot_dir(project, &cache, &sawit_core::date::local_date());
+    match project {
+        Some(project) => sawit_core::nyawit::ensure(project, &dir).ok()?,
+        None => std::fs::create_dir_all(&dir).ok()?,
+    }
+    let path = sawit_core::nyawit::unique(&dir, &screenshot_name(url, n));
+    std::fs::write(&path, png).ok()?;
+    Some(path)
+}
+
 /// Around every screenshot: hide the overlay, then show it again.
 fn shoot_ops() -> [Value; 2] {
     [overlay_op(true), overlay_op(false)]
@@ -954,8 +1149,8 @@ fn agent_result(result: &str) -> OpResult {
 #[cfg(test)]
 mod tests {
     use super::{
-        Frame, PickMode, Target, ViewportMode, agent_call, agent_result, caption, new_token,
-        overlay_op, page_frame, rearm_ops, rect_op, rotated, shoot_ops,
+        Frame, PickMode, Target, ViewportMode, agent_call, agent_result, caption, markers_op,
+        new_token, overlay_op, page_frame, rearm_ops, rect_op, rotated, shoot_ops,
     };
     use serde_json::json;
 
@@ -1046,6 +1241,16 @@ mod tests {
             rearm_ops(PickMode::Inspect),
             vec![json!({"op": "pick", "mode": "inspect"})]
         );
+    }
+
+    #[test]
+    fn markers_are_numbered_selectors() {
+        assert_eq!(
+            markers_op(&[(1, "#a".into()), (3, "b > i".into())]),
+            json!({"op": "markers", "items": [
+                {"n": 1, "selector": "#a"}, {"n": 3, "selector": "b > i"}]})
+        );
+        assert_eq!(markers_op(&[]), json!({"op": "markers", "items": []}));
     }
 
     #[test]

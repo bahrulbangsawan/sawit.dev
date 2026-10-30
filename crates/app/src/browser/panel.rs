@@ -59,17 +59,17 @@ pub fn frame(
 impl BrowserView {
     /// The open panel. Plans for Annotate and Design replace the bodies.
     pub(super) fn side_panel(&self, panel: Panel, cx: &mut Context<Self>) -> AnyElement {
-        let (title, text) = match panel {
-            Panel::Annotate => ("Annotate", "Click an element on the page to annotate it."),
+        let (title, body) = match panel {
+            Panel::Annotate => ("Annotate", self.annotate.clone().into_any_element()),
             Panel::Design => (
                 "Design",
-                "Inspect, colors, fonts, assets and the design system appear here.",
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Inspect, colors, fonts, assets and the design system appear here.")
+                    .into_any_element(),
             ),
         };
-        let body = div()
-            .text_sm()
-            .text_color(cx.theme().muted_foreground)
-            .child(text);
         let close = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.toggle_panel(panel, window, cx);
         });
