@@ -238,7 +238,7 @@ fn navigate_op(url: Option<String>, action: Option<&str>) -> Result<Option<Brows
     }
 }
 
-fn target(reference: Option<String>, selector: Option<String>) -> Target {
+pub(crate) fn target(reference: Option<String>, selector: Option<String>) -> Target {
     let some = |s: Option<String>| s.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     Target {
         reference: some(reference),
@@ -246,7 +246,7 @@ fn target(reference: Option<String>, selector: Option<String>) -> Target {
     }
 }
 
-fn required(target: Target) -> Result<Target, String> {
+pub(crate) fn required(target: Target) -> Result<Target, String> {
     if target.is_empty() {
         return Err("Give a ref (from browser_snapshot) or a CSS selector.".into());
     }
@@ -271,7 +271,11 @@ fn screenshot_path(cache: &std::path::Path) -> PathBuf {
 }
 
 impl Sawit {
-    async fn browser(&self, project: &Option<String>, op: BrowserOp) -> Result<Value, String> {
+    pub(crate) async fn browser(
+        &self,
+        project: &Option<String>,
+        op: BrowserOp,
+    ) -> Result<Value, String> {
         self.app_call(project.clone(), Command::Browser { op })
             .await
     }
