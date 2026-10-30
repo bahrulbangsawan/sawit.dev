@@ -5,6 +5,7 @@ mod input;
 mod layout;
 mod palette;
 mod session;
+mod tab;
 
 pub use input::{
     KeyInput, Modes, MouseAction, MouseButton, ScrollAccumulator, cd_bytes, drop_bytes,
@@ -18,6 +19,7 @@ pub use session::{
     CellView, Command, CursorView, GridSize, SelectKind, Session, Snapshot, TermEvent,
     default_shell, multiplexer_markers, wrap_unsetting,
 };
+pub use tab::{MIN_COLS, MIN_ROWS, PaneMeta, TabState};
 
 #[cfg(test)]
 mod tests;
