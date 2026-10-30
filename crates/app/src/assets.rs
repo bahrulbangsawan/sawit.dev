@@ -82,7 +82,24 @@ gpui_kit::assets::icon_assets!(
         KeyRound,
         Funnel,
         FunnelX,
-        ArrowUpDown
+        ArrowUpDown,
+        // The native canvas's tools and chrome (src/board).
+        MousePointer2,
+        Hand,
+        Scaling,
+        SquareDashed,
+        Slice,
+        Slash,
+        ArrowUpRight,
+        Triangle,
+        PenTool,
+        Type,
+        PenLine,
+        Highlighter,
+        StickyNote,
+        Spline,
+        Stamp,
+        LayoutTemplate
     ]
 );
 

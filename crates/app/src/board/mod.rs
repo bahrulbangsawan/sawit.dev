@@ -13,11 +13,19 @@
 //! [`BoardView::on_key`]). Copy and paste reach the other canvas tabs and the system clipboard
 //! ([`BoardView::run_clipboard`]). While a text is edited, what the keys type and what an input
 //! method composes go into it ([`text_input`]).
+//!
+//! Around the canvas goes its chrome (spec D11): the top bar over it ([`top_bar`]), the toolbar
+//! floating at its bottom centre ([`toolbar`]) and the context bar floating over a board's
+//! selection ([`context_bar`]). Their buttons run their commands through [`BoardView::choose`].
+//! While the UI is hidden (`⌘\`, `view.toggleUi`) only the canvas shows.
 
+mod context_bar;
 mod events;
 mod overlay_paint;
 mod paint;
 mod text_input;
+mod toolbar;
+mod top_bar;
 mod worker;
 
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -37,6 +45,7 @@ use sawit_board::clipboard::{self, PasteSource};
 use sawit_board::input::KeyOutcome;
 use sawit_board::overlay::{self, Composition};
 use sawit_board::store::{self, Stamp, Writer};
+use sawit_board::toolbar::Flyout;
 use sawit_board::view::{self, PREVIEW_QUALITY, Viewport};
 use sawit_board::{BoardDoc, BoardError, DocKind, input, ops, policy};
 use serde_json::{Value, json};
@@ -44,6 +53,7 @@ use serde_json::{Value, json};
 use crate::canvas::ToggleCanvasMaximize;
 use crate::states::Placeholder;
 use paint::Painting;
+use toolbar::Picker;
 use worker::{Frame, Job, Worker};
 
 /// How long the canvas must be still after an edit before the edit is saved.
@@ -52,6 +62,10 @@ const SAVE_DELAY: Duration = Duration::from_millis(300);
 const ZOOM_SETTLE: Duration = Duration::from_millis(150);
 /// How long a toast stays up.
 const TOAST_TIME: Duration = Duration::from_secs(3);
+/// How far the toast stays off the canvas's bottom edge.
+const TOAST_BOTTOM: f32 = 16.;
+/// How far the toast stays off the toolbar while that shows (ruling P3-C10).
+const TOAST_OVER_TOOLBAR: f32 = 8.;
 /// How far a mouse wheel's scroll of one line pans the canvas.
 const SCROLL_LINE: Pixels = px(20.);
 
@@ -167,6 +181,13 @@ pub struct BoardView {
     pub(crate) toast: Option<SharedString>,
     /// Takes the toast down.
     toast_timer: Option<Task<()>>,
+    /// The toolbar's flyout that is open, if any ([`toolbar`]).
+    open_flyout: Option<Flyout>,
+    /// The toolbar's Templates & table picker, while it is open ([`toolbar`]).
+    picker: Option<Picker>,
+    /// The kind of file the chrome was last drawn for: when another kind is on show, an open
+    /// flyout or picker closes ([`Self::settle_chrome`]).
+    shown_kind: Option<DocKind>,
     _frames: Task<()>,
     _quit: Subscription,
     _release: Subscription,
@@ -288,6 +309,9 @@ impl BoardView {
             save_later: None,
             toast_timer: toast.is_some().then(|| hide_toast_later(cx)),
             toast: toast.map(SharedString::from),
+            open_flyout: None,
+            picker: None,
+            shown_kind: None,
             _frames: frames,
             // ⌘Q quits without dropping the views: what isn't on disk yet is written first.
             _quit: cx.on_app_quit(|this, _| {
@@ -329,6 +353,65 @@ impl BoardView {
         self.autosave(cx);
         cx.notify();
         reply
+    }
+
+    /// Runs engine command `command` with `params`, as a click on the chrome does: a tool's
+    /// button, a flyout's or the context bar's choice, an item of the zoom menu. It is the one way
+    /// the chrome runs a command (ruling P3-C13), in the order FigCraft's own app runs one
+    /// (ui-egui `app/commands.rs`): the engine runs it, the canvas carries out what the engine
+    /// asked of it, then the engine's error shows as a toast (last, so that it is the toast that
+    /// shows), and the canvas redraws. Any command goes through as it is given.
+    pub fn choose(&mut self, command: &str, params: Value, cx: &mut Context<Self>) {
+        self.run(|board| board.execute(command, &params), cx);
+    }
+
+    /// Runs `f` on the document as [`Self::choose`] runs a command, with what follows it: the
+    /// engine's requests, the error's toast and a redraw. What `f` gave, or `None` when it failed
+    /// or no file is open.
+    fn run<T>(
+        &mut self,
+        f: impl FnOnce(&mut BoardDoc) -> Result<T, BoardError>,
+        cx: &mut Context<Self>,
+    ) -> Option<T> {
+        let done = f(self.board_mut()?);
+        self.handle_ui_requests(Vec::new(), cx);
+        let done = match done {
+            Ok(done) => Some(done),
+            Err(error) => {
+                self.show_toast(error.to_string(), cx);
+                None
+            }
+        };
+        cx.notify();
+        done
+    }
+
+    /// Settles the chrome before it is drawn. A flyout or the picker that is open closes while
+    /// the UI is hidden, and once another kind of file is on show than the chrome was drawn for
+    /// (a board became a design file, or the other way round), whose tools aren't the ones it
+    /// belonged to (Review Focus 4). Whether the chrome shows: not while the UI is hidden, nor
+    /// without a document.
+    fn settle_chrome(&mut self) -> bool {
+        let Some(board) = self.board() else {
+            return false;
+        };
+        let kind = board.kind();
+        let hidden = board.session.ds().is_ok_and(|ds| ds.view.ui_hidden);
+        let other_kind = self
+            .shown_kind
+            .replace(kind)
+            .is_some_and(|shown| shown != kind);
+        if hidden || other_kind {
+            self.open_flyout = None;
+            self.picker = None;
+        }
+        !hidden
+    }
+
+    /// Puts `board` on show in place of the document, as a file opened over it does.
+    #[cfg(test)]
+    fn replace_doc(&mut self, board: BoardDoc) {
+        self.board = Ok(board);
     }
 
     /// Carries out what the engine asked of the canvas: `requests`, which an input already took
@@ -675,12 +758,22 @@ impl BoardView {
         Composition::refresh(&mut self.composition, &board.session);
         let ds = board.session.ds_mut().ok()?;
         let (width, height) = (f64::from(bounds.size.width), f64::from(bounds.size.height));
+        // The chrome is laid out before this, from the view the last paint left: when the canvas
+        // has changed size, or the view is fitted now, it is drawn again for the zoom it shows and
+        // the context bar's place to catch up. A redraw asked for while painting would be lost,
+        // so it is asked for once the paint is over.
+        let mut moved = (ds.view.vw, ds.view.vh) != (width, height);
         ds.view.vw = width;
         ds.view.vh = height;
         let (doc, page) = (ds.doc.clone(), ds.page);
         if !self.fitted && width >= 1.0 && height >= 1.0 {
             view::zoom_to_fit(&mut ds.view, &doc, page);
             self.fitted = true;
+            moved = true;
+        }
+        if moved {
+            let this = cx.entity_id();
+            cx.defer(move |cx| cx.notify(this));
         }
         // The page as the screen shows it; the render takes it as the document holds it, and
         // the worker converts its pixels the same way.
@@ -800,49 +893,58 @@ impl Render for BoardView {
                 .into_any_element();
         }
         self.watch_keyboard(window, cx);
-        let this = cx.entity().downgrade();
-        let painted = this.clone();
-        let cursor = self.cursor();
+        let chrome = self.settle_chrome();
         // The keys the canvas takes while it edits text are bound in a context of their own.
         let key_context = if self.editing_text() {
             "Board BoardText"
         } else {
             "Board"
         };
-        let theme = cx.theme();
-        let toast = self.toast.clone().map(|text| {
-            div()
-                .absolute()
-                .bottom_4()
-                .left_0()
-                .right_0()
-                .flex()
-                .justify_center()
-                .child(
-                    div()
-                        .max_w(px(560.))
-                        .px_3()
-                        .py_1p5()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(theme.border)
-                        .bg(theme.popover)
-                        .text_color(theme.popover_foreground)
-                        .text_xs()
-                        .shadow_md()
-                        .child(text),
-                )
-        });
+        let top = chrome.then(|| top_bar::render_top_bar(self, window, cx));
+        let canvas = self.render_canvas(chrome, window, cx);
         div()
             .id("board")
             .key_context(key_context)
-            .relative()
+            .flex()
+            .flex_col()
             .size_full()
             .overflow_hidden()
             .track_focus(&self.focus)
-            .cursor(cursor)
             .on_key_down(cx.listener(Self::on_key))
             .on_key_up(cx.listener(Self::on_key_up))
+            .children(top)
+            .child(canvas)
+            .into_any_element()
+    }
+}
+
+impl BoardView {
+    /// The canvas, under the top bar: the document as rendered and its overlay, and over them,
+    /// while the `chrome` shows, the context bar and the toolbar, then the toast. The pointer on
+    /// the canvas drives the tools ([`events`]); the chrome floating over it takes its own clicks,
+    /// so none of them reaches the tools.
+    fn render_canvas(
+        &mut self,
+        chrome: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let this = cx.entity().downgrade();
+        let painted = this.clone();
+        let cursor = self.cursor();
+        let over_selection = chrome
+            .then(|| context_bar::render_context_bar(self, window, cx))
+            .flatten();
+        let tools = chrome.then(|| toolbar::render_toolbar(self, window, cx));
+        let toast = self.render_toast(chrome, cx);
+        div()
+            .id("board-canvas")
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .overflow_hidden()
+            .cursor(cursor)
             .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| this.on_scroll(event, cx)))
             .on_pinch(cx.listener(|this, event: &PinchEvent, _, cx| this.on_pinch(event, cx)))
             // The right button is left for the context menu.
@@ -869,8 +971,45 @@ impl Render for BoardView {
                 )
                 .size_full(),
             )
+            .children(over_selection)
+            .children(tools)
             .children(toast)
-            .into_any_element()
+    }
+
+    /// The toast at the bottom of the canvas, or just above the toolbar while that shows (ruling
+    /// P3-C10).
+    fn render_toast(&self, above_toolbar: bool, cx: &App) -> Option<impl IntoElement + use<>> {
+        let text = self.toast.clone()?;
+        let bottom = if above_toolbar {
+            toolbar::BOTTOM + toolbar::HEIGHT + TOAST_OVER_TOOLBAR
+        } else {
+            TOAST_BOTTOM
+        };
+        let theme = cx.theme();
+        Some(
+            div()
+                .absolute()
+                .bottom(px(bottom))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .debug_selector(|| "board-toast".into())
+                        .max_w(px(560.))
+                        .px_3()
+                        .py_1p5()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.popover)
+                        .text_color(theme.popover_foreground)
+                        .text_xs()
+                        .shadow_md()
+                        .child(text),
+                ),
+        )
     }
 }
 
@@ -1029,26 +1168,28 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use figcraft_doc::NodeId;
     use figcraft_doc::color::Color;
     use figcraft_doc::geom::Point as PagePoint;
-    use figcraft_engine::ViewState;
+    use figcraft_doc::{Document, NodeId};
+    use figcraft_engine::board_templates::TEMPLATES;
     use figcraft_engine::keymap::{self, KEYS, Platform};
+    use figcraft_engine::{ToolId, ViewState};
     use gpui_kit::component::{Theme, ThemeMode};
     use gpui_kit::{
-        App, AppContext as _, Bounds, Context, Entity, EntityInputHandler as _, KeyBinding,
-        KeyContext, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent,
-        MouseExitEvent, MouseUpEvent, OperatingSystem, PinchEvent, PlatformInput, RenderImage,
-        ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, Window, WindowHandle, point,
-        px, size,
+        App, AppContext as _, AssetSource as _, Bounds, Context, Entity, EntityInputHandler as _,
+        KeyBinding, KeyContext, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton,
+        MouseDownEvent, MouseExitEvent, MouseUpEvent, OperatingSystem, PinchEvent, PlatformInput,
+        RenderImage, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, Window,
+        WindowHandle, point, px, size,
     };
     use sawit_board::input::gpui_keystroke;
     use sawit_board::overlay::{self, Composition, Shape};
     use sawit_board::policy::{self, SAWIT_WINS, SAWIT_WINS_UNLESS_EDITING};
+    use sawit_board::toolbar::Flyout;
     use sawit_board::{BoardDoc, DocKind, store};
     use serde_json::{Value, json};
 
-    use super::{BoardView, SAVE_DELAY, TOAST_TIME, issues_line};
+    use super::{BoardView, SAVE_DELAY, TOAST_TIME, issues_line, toolbar, top_bar};
 
     /// A folder of the test's own, removed when the test ends.
     struct Scratch(PathBuf);
@@ -1657,9 +1798,11 @@ mod tests {
         let (window, view) = open_in_window(cx, &tmp.0.join("canvas.figcraft"));
         let first = next_frame(cx, &view, None);
         assert!(in_atlas(cx, window, &first));
-        // The engine has the canvas's size, which the first frame fitted the view to.
+        // The engine has the canvas's size, the window's less the top bar, which the first frame
+        // fitted the view to.
         let state = view_state(&view, cx);
-        assert_eq!((state.vw, state.vh), (400.0, 300.0));
+        let canvas_height = 300.0 - f64::from(top_bar::HEIGHT);
+        assert_eq!((state.vw, state.vh), (400.0, canvas_height));
         assert!(view.read_with(cx, |view, _| view.fitted));
 
         // A pan asks for another frame. Painting it takes the first one out of the atlas.
@@ -2269,8 +2412,9 @@ mod tests {
         assert!(view.read_with(cx, |view, _| view.zooming_until.is_none()));
     }
 
-    /// A new, empty canvas in a 400 × 300 window, painted once: at 100%, with page point (0, 0)
-    /// in the middle of the window, (200, 150). What simulates input in that window, and the app.
+    /// A new, empty canvas in a 400 × 300 window, painted once: under the top bar, at 100%, with
+    /// page point (0, 0) in the middle of the canvas, (200, 168) in the window. What simulates
+    /// input in that window, and the app.
     fn painted_canvas(
         cx: &mut TestAppContext,
         tmp: &Scratch,
@@ -2361,7 +2505,7 @@ mod tests {
     fn a_double_click_types_in_a_sticky(cx: &mut TestAppContext) {
         let tmp = Scratch::new("double-click");
         let (view, mut cx) = painted_canvas(cx, &tmp);
-        // A 200 × 200 sticky about page point (0, 0), the middle of the window, not selected.
+        // A 200 × 200 sticky about page point (0, 0), the middle of the canvas, not selected.
         let sticky = json!({
             "op": "command", "command": "board.sticky", "params": {"x": -100, "y": -100},
         });
@@ -2420,7 +2564,7 @@ mod tests {
         };
         let (over, none) = (point(px(200.), px(150.)), Modifiers::default());
 
-        // From over the canvas to off it (it fills the window).
+        // From over the canvas to off it (it is as wide as the window).
         cx.simulate_mouse_move(over, None, none);
         measure(&mut cx);
         cx.simulate_mouse_move(point(px(600.), px(150.)), None, none);
@@ -2998,7 +3142,7 @@ mod tests {
     fn a_cancelled_composition_leaves_no_text(cx: &mut TestAppContext) {
         let tmp = Scratch::new("ime-cancel");
         let (view, mut cx) = painted_canvas(cx, &tmp);
-        // A 200 × 200 sticky about page point (0, 0), the middle of the window, typed in.
+        // A 200 × 200 sticky about page point (0, 0), the middle of the canvas, typed in.
         let sticky = json!({
             "op": "command", "command": "board.sticky", "params": {"x": -100, "y": -100},
         });
@@ -3018,7 +3162,7 @@ mod tests {
         // unmark the input method sends after that commits nothing.
         mark(&view, "ni", &mut cx);
         let (away, left, none) = (
-            point(px(20.), px(20.)),
+            point(px(20.), px(60.)),
             MouseButton::Left,
             Modifiers::default(),
         );
@@ -3162,5 +3306,461 @@ mod tests {
         replace(0..1, "C", &mut cx);
         assert_eq!(sticky_reads(&view, note, &cx), "Café");
         assert_eq!(caret(&mut cx), 1..1);
+    }
+
+    /// A new, empty canvas in an 800 × 600 window, wide enough for the whole toolbar, painted
+    /// once: under the top bar, at 100%, with page point (0, 0) in the middle of the canvas.
+    fn chrome_canvas(
+        cx: &mut TestAppContext,
+        tmp: &Scratch,
+    ) -> (Entity<BoardView>, VisualTestContext) {
+        cx.update(gpui_kit::init);
+        cx.executor().allow_parking();
+        let path = tmp.0.join("canvas.figcraft");
+        let window = cx.open_window(size(px(800.), px(600.)), |_, cx| BoardView::open(path, cx));
+        let view = window.root(cx).unwrap();
+        next_frame(cx, &view, None);
+        (view, VisualTestContext::from_window(window.into(), cx))
+    }
+
+    /// Clicks the middle of what the window drew with debug selector `selector`.
+    fn click(cx: &mut VisualTestContext, selector: &'static str) {
+        let drawn = cx.debug_bounds(selector);
+        let bounds = drawn.unwrap_or_else(|| panic!("{selector} isn't drawn"));
+        cx.simulate_click(bounds.center(), Modifiers::default());
+    }
+
+    /// The tool the canvas's pointer events go to.
+    fn active_tool(view: &Entity<BoardView>, cx: &TestAppContext) -> ToolId {
+        view.read_with(cx, |view, _| {
+            sawit_board::toolbar::active(&view.board().unwrap().session)
+        })
+    }
+
+    #[gpui_kit::test]
+    fn toolbar_click_selects_tool(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("toolbar-click");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        assert_eq!(active_tool(&view, &cx), ToolId::Move);
+        // What the Sticky button does.
+        view.update(&mut cx, |view, cx| {
+            view.choose("tool.sticky", json!({}), cx)
+        });
+        assert_eq!(active_tool(&view, &cx), ToolId::Sticky);
+        cx.run_until_parked();
+        // A click on a tool's button chooses it.
+        click(&mut cx, "tool.hand");
+        assert_eq!(active_tool(&view, &cx), ToolId::Hand);
+        // The toolbar takes its clicks: with the sticky tool on, a click on a button puts no
+        // sticky on the canvas under it.
+        click(&mut cx, "tool.sticky");
+        assert_eq!(active_tool(&view, &cx), ToolId::Sticky);
+        click(&mut cx, "tool.hand");
+        assert_eq!(active_tool(&view, &cx), ToolId::Hand);
+        assert!(layers(&view, &cx).is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn toggle_ui_hides_chrome(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("toggle-ui");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        // ⌘\, as the canvas gets it.
+        let toggle = |cx: &mut VisualTestContext| {
+            let event = KeyDownEvent {
+                keystroke: Keystroke::parse("cmd-\\").unwrap(),
+                is_held: false,
+                prefer_character_input: false,
+            };
+            cx.update(|window, cx| view.update(cx, |view, cx| view.on_key(&event, window, cx)));
+            cx.run_until_parked();
+        };
+        let hidden = |cx: &VisualTestContext| {
+            view.read_with(cx, |view, _| {
+                view.board().unwrap().session.ds().unwrap().view.ui_hidden
+            })
+        };
+        let chrome = |cx: &mut VisualTestContext| {
+            ["board-top-bar", "board-toolbar"].map(|selector| cx.debug_bounds(selector).is_some())
+        };
+        let canvas_height = |cx: &VisualTestContext| {
+            view.read_with(cx, |view, _| f32::from(view.bounds.size.height))
+        };
+        assert!(!hidden(&cx));
+        assert_eq!(chrome(&mut cx), [true, true]);
+        // The canvas is the window, less the top bar.
+        assert_eq!(canvas_height(&cx), 600. - top_bar::HEIGHT);
+
+        // Only the canvas renders, and it fills the window.
+        toggle(&mut cx);
+        assert!(hidden(&cx));
+        assert_eq!(chrome(&mut cx), [false, false]);
+        assert_eq!(canvas_height(&cx), 600.);
+
+        toggle(&mut cx);
+        assert!(!hidden(&cx));
+        assert_eq!(chrome(&mut cx), [true, true]);
+        assert_eq!(canvas_height(&cx), 600. - top_bar::HEIGHT);
+    }
+
+    #[gpui_kit::test]
+    fn flyout_closes_on_kind_change(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("flyout-kind");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        let open = |cx: &VisualTestContext| view.read_with(cx, |view, _| view.open_flyout);
+        view.update(&mut cx, |view, cx| {
+            view.open_flyout = Some(Flyout::StickyColors);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        // Drawn over the board whose tool it belongs to, it stays open.
+        assert_eq!(open(&cx), Some(Flyout::StickyColors));
+        assert!(cx.debug_bounds("board-flyout").is_some());
+
+        // A design file takes the board's place: drawn again, the flyout is closed, and the
+        // toolbar is the design file's.
+        view.update(&mut cx, |view, cx| {
+            let design = figcraft_engine::Session::with_document(Document::new("Design"));
+            view.replace_doc(BoardDoc { session: design });
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(open(&cx), None);
+        assert!(cx.debug_bounds("board-flyout").is_none());
+        assert!(cx.debug_bounds("tool.frame").is_some());
+        assert!(cx.debug_bounds("tool.sticky").is_none());
+    }
+
+    #[gpui_kit::test]
+    fn a_flyout_choice_chooses_its_tool_and_closes_the_flyout(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("flyout-choice");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        let open = |cx: &VisualTestContext| view.read_with(cx, |view, _| view.open_flyout);
+        let sticky_colour = |cx: &VisualTestContext| {
+            view.read_with(cx, |view, _| {
+                let session = &view.board().unwrap().session;
+                let items = sawit_board::toolbar::flyout(session, Flyout::StickyColors);
+                let chosen = items.into_iter().find(|item| item.selected);
+                chosen.map(|item| item.label)
+            })
+        };
+        assert_eq!(sticky_colour(&cx).as_deref(), Some("yellow"));
+        // The chevron beside the Sticky button opens the colours of new stickies.
+        click(&mut cx, "board-flyout-StickyColors");
+        cx.run_until_parked();
+        assert_eq!(open(&cx), Some(Flyout::StickyColors));
+        // A colour picked chooses the tool with that colour, and the flyout closes.
+        click(&mut cx, "board-flyout-item-blue");
+        cx.run_until_parked();
+        assert_eq!(active_tool(&view, &cx), ToolId::Sticky);
+        assert_eq!(sticky_colour(&cx).as_deref(), Some("blue"));
+        assert_eq!(open(&cx), None);
+        assert!(cx.debug_bounds("board-flyout").is_none());
+        // A list of labels works the same way.
+        click(&mut cx, "board-flyout-Shapes");
+        cx.run_until_parked();
+        click(&mut cx, "board-flyout-item-Ellipse");
+        cx.run_until_parked();
+        assert_eq!(active_tool(&view, &cx), ToolId::BoardShape);
+        let shape = view.read_with(&cx, |view, _| {
+            view.board().unwrap().session.tool.board.shape
+        });
+        assert_eq!(shape, figcraft_doc::BoardShape::Ellipse);
+        assert_eq!(open(&cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn the_context_bar_runs_the_options_it_shows(cx: &mut TestAppContext) {
+        use sawit_board::context_bar::{Control, context_bar};
+
+        let tmp = Scratch::new("context-options");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        // A rectangle with text, selected.
+        let shape = json!({
+            "op": "command", "command": "board.shape",
+            "params": {"shape": "rectangle", "x": -80, "y": 0},
+        });
+        run_op(&view, shape, &mut cx);
+        cx.run_until_parked();
+        let controls = |cx: &VisualTestContext| {
+            view.read_with(cx, |view, _| {
+                context_bar(&view.board().unwrap().session).map(|bar| bar.controls)
+            })
+        };
+        let undo_steps = |cx: &VisualTestContext| {
+            view.read_with(cx, |view, _| view.board().unwrap().session.undo_depth().0)
+        };
+        let toast = |cx: &VisualTestContext| view.read_with(cx, |view, _| view.toast.clone());
+        let steps = undo_steps(&cx);
+        // Its colours, shape and text size fill the bar, inside its border and padding: the bar is
+        // as wide as the place it is given in the canvas takes it to be.
+        let bar = cx.debug_bounds("board-context-bar").expect("a context bar");
+        let first = cx
+            .debug_bounds("board-context-color-yellow")
+            .expect("a colour");
+        let last = cx
+            .debug_bounds("board-context-size")
+            .expect("the text size");
+        assert_eq!(first.left(), bar.left() + px(7.));
+        assert_eq!(last.right(), bar.right() - px(7.));
+
+        // A swatch sets the selection's colour.
+        click(&mut cx, "board-context-color-blue");
+        cx.run_until_parked();
+        let colours = controls(&cx).and_then(|controls| controls.into_iter().next());
+        assert!(
+            matches!(
+                colours,
+                Some(Control::Colors {
+                    current: Some("blue"),
+                    ..
+                })
+            ),
+            "{colours:?}"
+        );
+        assert_eq!(undo_steps(&cx), steps + 1);
+
+        // The shape it has already, picked from its menu, does nothing: no command the engine
+        // would refuse, and no toast (ruling P3-C2).
+        click(&mut cx, "board-context-shape");
+        cx.run_until_parked();
+        click(&mut cx, "board-context-shape-Rectangle");
+        cx.run_until_parked();
+        assert_eq!(toast(&cx), None);
+        assert_eq!(undo_steps(&cx), steps + 1);
+        // Another one changes it.
+        click(&mut cx, "board-context-shape");
+        cx.run_until_parked();
+        click(&mut cx, "board-context-shape-Ellipse");
+        cx.run_until_parked();
+        assert_eq!(toast(&cx), None);
+        let shape = controls(&cx).and_then(|controls| {
+            controls.into_iter().find_map(|control| match control {
+                Control::Shape { current } => current,
+                _ => None,
+            })
+        });
+        assert_eq!(shape, Some(figcraft_doc::BoardShape::Ellipse));
+        assert_eq!(undo_steps(&cx), steps + 2);
+
+        // A connector's bar, the widest, fits its controls the same way.
+        let connector = json!({
+            "op": "command", "command": "board.connector",
+            "params": {"from": {"x": -200, "y": 300}, "to": {"x": 200, "y": 300}},
+        });
+        run_op(&view, connector, &mut cx);
+        cx.run_until_parked();
+        let bar = cx.debug_bounds("board-context-bar").expect("a context bar");
+        let first = cx
+            .debug_bounds("board-context-color-yellow")
+            .expect("a colour");
+        let last = cx.debug_bounds("board-context-end").expect("the end cap");
+        assert!(cx.debug_bounds("board-context-routing").is_some());
+        assert_eq!(first.left(), bar.left() + px(7.));
+        assert_eq!(last.right(), bar.right() - px(7.));
+    }
+
+    #[gpui_kit::test]
+    fn the_top_bar_buttons_run_their_commands(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("top-bar");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        let zoom = |cx: &VisualTestContext| view_state(&view, cx).zoom;
+        assert_eq!(zoom(&cx), 1.0);
+        // The zoom menu.
+        click(&mut cx, "board-zoom");
+        cx.run_until_parked();
+        click(&mut cx, "board-zoom-view.zoom200");
+        cx.run_until_parked();
+        assert_eq!(zoom(&cx), 2.0);
+        // Maximize asks the workspace to fill the window with the canvas.
+        let asked = Rc::new(Cell::new(0));
+        cx.update(|_, cx| {
+            let asked = asked.clone();
+            cx.subscribe(&view, move |_, _: &super::ToggleCanvasMaximize, _| {
+                asked.set(asked.get() + 1)
+            })
+            .detach();
+        });
+        click(&mut cx, "board-maximize");
+        assert_eq!(asked.get(), 1);
+        // Hide UI hides the chrome, itself with it.
+        click(&mut cx, "board-hide-ui");
+        cx.run_until_parked();
+        let hidden = view.read_with(&cx, |view, _| {
+            view.board().unwrap().session.ds().unwrap().view.ui_hidden
+        });
+        assert!(hidden);
+        assert!(cx.debug_bounds("board-top-bar").is_none());
+    }
+
+    #[gpui_kit::test]
+    fn choose_carries_out_what_its_command_asks(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("choose");
+        let view = open(cx, &tmp.0.join("canvas.figcraft"));
+        // A sticky, selected, then ⇧⌘↩'s command with typing to go on in the next one: the
+        // engine asks the view to start it, which `choose` carries out at once.
+        run_op(&view, sticky_op(), cx);
+        view.update(cx, |view, cx| {
+            view.choose("board.nextSticky", json!({"edit": true}), cx);
+        });
+        let [_, next] = layers(&view, cx)[..] else {
+            panic!("layers {:?}", layers(&view, cx))
+        };
+        view.read_with(cx, |view, _| {
+            let board = view.board().unwrap();
+            let ds = board.session.ds().unwrap();
+            let text = figcraft_engine::board::text_of(&ds.doc, next).unwrap();
+            assert_eq!(ds.text_edit.as_ref().map(|edit| edit.id), Some(text));
+            assert!(board.session.ui_requests.is_empty());
+            assert_eq!(view.toast, None);
+        });
+        // A command the engine refuses says why, in a toast.
+        view.update(cx, |view, cx| view.choose("no.such", json!({}), cx));
+        assert!(view.read_with(cx, |view, _| view.toast.is_some()));
+    }
+
+    #[gpui_kit::test]
+    fn the_context_bar_floats_over_the_selection_inside_the_canvas(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("context-bar");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        assert!(cx.debug_bounds("board-context-bar").is_none());
+        // A sticky that an op makes is selected. Its top is on page point (0, 0).
+        let sticky = json!({
+            "op": "command", "command": "board.sticky", "params": {"x": -100, "y": 0},
+        });
+        let made = run_op(&view, sticky, &mut cx);
+        cx.run_until_parked();
+        let canvas = view.read_with(&cx, |view, _| view.bounds);
+        // Where page point (x, y) is in the window.
+        let on_screen = |cx: &VisualTestContext, (x, y): (f64, f64)| {
+            let (x, y) = view_state(&view, cx).page_to_screen(x, y);
+            point(
+                canvas.origin.x + px(x as f32),
+                canvas.origin.y + px(y as f32),
+            )
+        };
+        let bar = cx.debug_bounds("board-context-bar").expect("a context bar");
+        // Its bottom 12 px over the sticky's top, its middle over the sticky's.
+        let top = on_screen(&cx, (0.0, 0.0));
+        assert_eq!(bar.bottom(), top.y - px(12.));
+        assert_eq!(bar.center().x, top.x);
+
+        // With the sticky's top 20 px under the canvas's, the bar stays in the canvas, 8 px from
+        // its edge.
+        let pan = json!({
+            "op": "command", "command": "view.set",
+            "params": {"cx": 0, "cy": f64::from(canvas.size.height) / 2.0 - 20.0},
+        });
+        run_op(&view, pan, &mut cx);
+        cx.run_until_parked();
+        assert_eq!(on_screen(&cx, (0.0, 0.0)).y, canvas.top() + px(20.));
+        let bar = cx.debug_bounds("board-context-bar").expect("a context bar");
+        assert_eq!(bar.top(), canvas.top() + px(8.));
+        assert!(bar.left() >= canvas.left() + px(8.) && bar.right() <= canvas.right() - px(8.));
+
+        // A drag hides it until the drag ends.
+        let (left, none) = (MouseButton::Left, Modifiers::default());
+        let middle = on_screen(&cx, (0.0, 100.0));
+        cx.simulate_mouse_down(middle, left, none);
+        cx.simulate_mouse_move(middle + point(px(20.), px(10.)), left, none);
+        assert!(cx.debug_bounds("board-context-bar").is_none());
+        cx.simulate_mouse_up(middle + point(px(20.), px(10.)), left, none);
+        assert!(cx.debug_bounds("board-context-bar").is_some());
+
+        // So does typing in the sticky.
+        type_in(&view, &made, &mut cx);
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("board-context-bar").is_none());
+    }
+
+    #[gpui_kit::test]
+    fn the_toast_sits_over_the_toolbar(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("toast-place");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        view.update(&mut cx, |view, cx| view.choose("no.such", json!({}), cx));
+        cx.run_until_parked();
+        let toast = cx.debug_bounds("board-toast").expect("a toast");
+        let toolbar = cx.debug_bounds("board-toolbar").expect("the toolbar");
+        assert_eq!(toast.bottom(), toolbar.top() - px(8.));
+        // With the UI hidden, it is at the bottom of the canvas, where the toolbar was.
+        view.update(&mut cx, |view, cx| {
+            view.choose("view.toggleUi", json!({}), cx)
+        });
+        cx.run_until_parked();
+        let toast = cx.debug_bounds("board-toast").expect("a toast");
+        let canvas = view.read_with(&cx, |view, _| view.bounds);
+        assert_eq!(toast.bottom(), canvas.bottom() - px(16.));
+    }
+
+    #[gpui_kit::test]
+    fn the_picker_lists_the_templates_once_and_places_one(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("picker");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        click(&mut cx, "board-picker");
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("board-picker-content").is_some());
+        let listed = view.read_with(&cx, |view, _| {
+            view.picker.as_ref().map(|picker| picker.templates.len())
+        });
+        assert_eq!(listed, Some(TEMPLATES.len()));
+        // The frames drawn while it is open ask the engine for nothing more: the list is the one
+        // it gave when the picker opened (ruling P3-C14).
+        let revision =
+            |cx: &VisualTestContext| view.read_with(cx, |view, _| view.board().unwrap().revision());
+        let before = revision(&cx);
+        for _ in 0..3 {
+            view.update(&mut cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        }
+        assert_eq!(revision(&cx), before);
+        // A template picked is placed, and the picker closes.
+        view.update(&mut cx, |view, cx| view.place_template(TEMPLATES[0].id, cx));
+        cx.run_until_parked();
+        assert!(!layers(&view, &cx).is_empty());
+        assert!(view.read_with(&cx, |view, _| view.picker.is_none()));
+        assert!(cx.debug_bounds("board-picker-content").is_none());
+        // And so does a table.
+        let placed = layers(&view, &cx).len();
+        click(&mut cx, "board-picker");
+        cx.run_until_parked();
+        view.update(&mut cx, |view, cx| view.place_table(2, 3, cx));
+        cx.run_until_parked();
+        assert_eq!(layers(&view, &cx).len(), placed + 1);
+        assert!(view.read_with(&cx, |view, _| view.picker.is_none()));
+    }
+
+    #[test]
+    fn every_icon_of_the_chrome_is_embedded() {
+        let tools = [DocKind::Board, DocKind::Design]
+            .into_iter()
+            .flat_map(sawit_board::toolbar::groups)
+            .flat_map(|group| group.tools)
+            .map(|tool| toolbar::tool_icon(tool.icon));
+        let chrome = [
+            toolbar::CHEVRON_ICON,
+            toolbar::PICKER_ICON,
+            toolbar::CHECK_ICON,
+            top_bar::HIDE_UI_ICON,
+            top_bar::MAXIMIZE_ICON,
+        ];
+        for icon in tools.chain(chrome) {
+            let path = icon.path();
+            let svg = crate::assets::AppAssets.load(&path).unwrap();
+            assert!(svg.is_some(), "{path} isn't embedded");
+        }
+    }
+
+    #[test]
+    fn the_top_bar_names_the_canvas_and_shows_its_zoom() {
+        let name = |path: &str| top_bar::document_name(Path::new(path));
+        // The canvas of a project, and the one of a window without a project.
+        assert_eq!(name("/p/.nyawit/canvas.figcraft").as_ref(), "Canvas");
+        assert_eq!(name("/sawit/canvas.figcraft").as_ref(), "Canvas");
+        assert_eq!(
+            name("/p/design/ridgeline-app.figcraft").as_ref(),
+            "ridgeline-app.figcraft"
+        );
+        assert_eq!(top_bar::zoom_label(1.0), "100%");
+        assert_eq!(top_bar::zoom_label(0.5), "50%");
+        assert_eq!(top_bar::zoom_label(1.234), "123%");
     }
 }

@@ -1,0 +1,206 @@
+//! The context bar (spec, "Toolbar and context bar"; FigCraft's `ui-egui/src/canvas/board_bar.rs`
+//! ported): the row of small controls floating over a board's selection with what its sticky
+//! notes, shapes, connectors and ink share (`sawit_board::context_bar`). The colours are swatches;
+//! the shape, the text size, how connectors run and their caps are menus. Every control shows the
+//! options the model lists for it, and a pick runs its option's command through
+//! [`BoardView::choose`], but for the shape the selection has already: the engine refuses that
+//! one, so picking it does nothing (ruling P3-C2).
+//!
+//! The bar's bottom goes 12 px above the selection, and the bar stays inside the canvas
+//! (`context_bar::clamp_anchor`, ruling P3-C3). It hides while a gesture is on (a drag) and while
+//! a text is edited, and with the rest of the chrome while the UI is hidden.
+
+use figcraft_engine::guard;
+use gpui_kit::component::button::*;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::*;
+use gpui_kit::*;
+use sawit_board::context_bar::{self as model, Control, ControlOption};
+
+use super::BoardView;
+use super::toolbar::{SWATCH, divider, swatch};
+
+/// The bar's height.
+pub(super) const HEIGHT: f64 = 40.;
+/// The room between the bar's edge and its controls.
+const PADDING: f64 = 6.;
+/// The width of the bar's border.
+const BORDER: f64 = 1.;
+/// The gap between two swatches.
+const GAP: f64 = 2.;
+/// The room a line between two controls takes: the line and a margin each side
+/// ([`divider`]).
+const DIVIDER: f64 = 9.;
+
+/// How wide `control` is: its swatches side by side, or its menu's button, wide enough for the
+/// longest of its labels (or cut short with an ellipsis).
+fn width(control: &Control) -> f64 {
+    match control {
+        Control::Colors { items, .. } => {
+            let swatches = items.len() as f64;
+            swatches * f64::from(SWATCH) + (swatches - 1.0).max(0.0) * GAP
+        }
+        // "Rounded rectangle", "Speech bubble".
+        Control::Shape { .. } => 160.,
+        Control::FontSize { .. } => 52.,
+        Control::Routing { .. } => 92.,
+        // "Reversed triangle", "Triangle arrow".
+        Control::StartCap { .. } | Control::EndCap { .. } => 156.,
+    }
+}
+
+/// The size of the bar that holds `controls`, as it is drawn: their widths, the lines between
+/// them, its padding and border.
+pub(super) fn size(controls: &[Control]) -> (f64, f64) {
+    let widths: f64 = controls.iter().map(width).sum();
+    let lines = controls.len().saturating_sub(1) as f64 * DIVIDER;
+    (widths + lines + 2.0 * (PADDING + BORDER), HEIGHT)
+}
+
+/// What the tooltip of `control`'s menu calls it.
+fn name(control: &Control) -> &'static str {
+    match control {
+        Control::Colors { .. } => "Color",
+        Control::Shape { .. } => "Shape",
+        Control::FontSize { .. } => "Text size",
+        Control::Routing { .. } => "Line style",
+        Control::StartCap { .. } => "Line start",
+        Control::EndCap { .. } => "Line end",
+    }
+}
+
+/// The context bar over the selection of `view`'s board, if it has one to show: not while a
+/// gesture is on or a text is edited, nor when nothing selected takes a control. The model is read
+/// on every frame, behind the engine's guard: a panic in it costs that frame its bar (D15).
+pub(super) fn render_context_bar(
+    view: &mut BoardView,
+    _: &mut Window,
+    cx: &mut Context<BoardView>,
+) -> Option<impl IntoElement + use<>> {
+    if view.editing_text() {
+        return None;
+    }
+    let board = view.board()?;
+    let session = &board.session;
+    if session.tool.busy() {
+        return None;
+    }
+    let ds = session.ds().ok()?;
+    let canvas = (ds.view.vw, ds.view.vh);
+    let (bar, options) = guard::run("ui.contextBar", || {
+        Ok(model::context_bar(session).map(|bar| {
+            let options: Vec<Vec<ControlOption>> =
+                bar.controls.iter().map(model::options).collect();
+            (bar, options)
+        }))
+    })
+    .ok()
+    .flatten()?;
+    let (width, height) = size(&bar.controls);
+    // The anchor is where the bar's bottom-centre goes; the clamp takes and gives its top-centre.
+    let top_centre = (bar.anchor.0, bar.anchor.1 - height);
+    let (x, y) = model::clamp_anchor(top_centre, (width, height), canvas);
+    let this = cx.entity().downgrade();
+    let theme = cx.theme();
+    let line = theme.border;
+    let mut row = h_flex()
+        .id("board-context-bar")
+        .debug_selector(|| "board-context-bar".into())
+        // Its clicks are its own: none reaches the canvas under it.
+        .occlude()
+        .absolute()
+        .left(px((x - width / 2.0) as f32))
+        .top(px(y as f32))
+        .w(px(width as f32))
+        .h(px(height as f32))
+        .px(px(PADDING as f32))
+        .rounded(px(10.))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.popover)
+        .text_color(theme.popover_foreground)
+        .shadow_md();
+    for (i, (control, options)) in bar.controls.iter().zip(options).enumerate() {
+        if i > 0 {
+            row = row.child(divider(line));
+        }
+        row = match control {
+            Control::Colors { .. } => row.child(swatches(options, &this)),
+            _ => row.child(menu(control, options, &this)),
+        };
+    }
+    Some(row)
+}
+
+/// The board colours as swatches, the selection's own marked.
+fn swatches(options: Vec<ControlOption>, view: &WeakEntity<BoardView>) -> Div {
+    let swatches = options.into_iter().enumerate().map(|(i, option)| {
+        let (command, params, view) = (option.command, option.params, view.clone());
+        let rgba = option.swatch.unwrap_or_default();
+        let pick = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+            let _ = view.update(cx, |view, cx| view.choose(command, params.clone(), cx));
+        };
+        let name = option.label.clone();
+        swatch(
+            ("board-context-color", i),
+            rgba,
+            &name,
+            option.selected,
+            pick,
+        )
+        .debug_selector(move || format!("board-context-color-{name}"))
+    });
+    h_flex().gap(px(GAP as f32)).children(swatches)
+}
+
+/// The menu of `control`: its button shows the selection's value ("Mixed" when the items differ),
+/// and its items are `options`, the selection's one checked.
+fn menu(
+    control: &Control,
+    options: Vec<ControlOption>,
+    view: &WeakEntity<BoardView>,
+) -> impl IntoElement + use<> {
+    let id = match control {
+        Control::Colors { .. } => "board-context-colors",
+        Control::Shape { .. } => "board-context-shape",
+        Control::FontSize { .. } => "board-context-size",
+        Control::Routing { .. } => "board-context-routing",
+        Control::StartCap { .. } => "board-context-start",
+        Control::EndCap { .. } => "board-context-end",
+    };
+    let current = (options.iter())
+        .find(|option| option.selected)
+        .map_or_else(|| "Mixed".to_owned(), |option| option.label.clone());
+    // The engine refuses the shape the selection has already: picking it does nothing.
+    let shape = matches!(control, Control::Shape { .. });
+    let view = view.clone();
+    Button::new(id)
+        .ghost()
+        .small()
+        .label(current)
+        .dropdown_caret(true)
+        .w(px(width(control) as f32))
+        .tooltip(name(control))
+        .debug_selector(move || id.to_owned())
+        .dropdown_menu(move |mut menu: PopupMenu, _, _| {
+            for option in &options {
+                let runs = !(shape && option.selected);
+                let (command, params, view) = (option.command, option.params.clone(), view.clone());
+                let label = option.label.clone();
+                let item = PopupMenuItem::element(move |_, _| {
+                    div()
+                        .debug_selector(|| format!("{id}-{label}"))
+                        .child(label.clone())
+                })
+                .checked(option.selected)
+                .on_click(move |_, _, cx| {
+                    if runs {
+                        let _ =
+                            view.update(cx, |view, cx| view.choose(command, params.clone(), cx));
+                    }
+                });
+                menu = menu.item(item);
+            }
+            menu
+        })
+}
