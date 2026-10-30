@@ -29,6 +29,9 @@ use super::top_bar::with_keys;
 pub(super) const HEIGHT: f32 = 44.;
 /// How far the toolbar floats off the canvas's bottom edge.
 pub(super) const BOTTOM: f32 = 16.;
+/// The least room the toolbar leaves at each side of the canvas: in a canvas narrower than the
+/// toolbar and this room, the toolbar is as wide as the canvas less it, and its buttons scroll.
+const MARGIN: f32 = 8.;
 /// A tool button's side.
 const BUTTON: f32 = 32.;
 /// The width of the chevron beside a tool that opens its flyout.
@@ -142,8 +145,13 @@ fn shown(view: &BoardView) -> Shown {
     .unwrap_or_default()
 }
 
-/// The toolbar of `view`'s canvas, centred [`BOTTOM`] off its bottom edge. It takes its clicks:
-/// none reaches the canvas under it.
+/// The toolbar of `view`'s canvas, centred [`BOTTOM`] off its bottom edge. It takes the pointer:
+/// no click or scroll over it reaches the canvas under it.
+///
+/// It keeps its full width while the canvas has room for it and [`MARGIN`] at each side, and is
+/// never wider than the canvas less that room. Narrower than its buttons, it keeps them at their
+/// size and they scroll sideways inside it, under a swipe or the wheel (FigCraft's toolbar pill,
+/// ui-egui `toolbar.rs`, `pill_rect` and `pill_scroll`).
 pub(super) fn render_toolbar(
     view: &mut BoardView,
     _: &mut Window,
@@ -154,43 +162,60 @@ pub(super) fn render_toolbar(
     let picker = view.picker.clone();
     let theme = cx.theme();
     let line = theme.border;
-    let mut bar = h_flex()
-        .id("board-toolbar")
-        .debug_selector(|| "board-toolbar".into())
-        .occlude()
-        .flex_shrink_0()
-        .h(px(HEIGHT))
-        .px(px(6.))
-        .gap(px(2.))
-        .rounded(px(12.))
-        .border_1()
-        .border_color(theme.border)
-        .bg(theme.popover)
-        .text_color(theme.popover_foreground)
-        .shadow_md();
+    // The buttons, chevrons and lines, at their full size: the row never shrinks.
+    let mut row = h_flex().flex_shrink_0().gap(px(2.));
     for (i, group) in shown.groups.iter().enumerate() {
         if i > 0 {
-            bar = bar.child(divider(line));
+            row = row.child(divider(line));
         }
         for tool in &group.tools {
-            bar = bar.child(tool_button(tool, shown.active == Some(tool.tool), &this));
+            row = row.child(tool_button(tool, shown.active == Some(tool.tool), &this));
         }
         if let Some(f) = group.flyout {
             let items = (shown.flyout.as_ref())
                 .filter(|(open, _)| *open == f)
                 .map(|(_, items)| items.clone());
-            bar = bar.child(flyout(f, items, &this));
+            row = row.child(flyout(f, items, &this));
         }
     }
     if shown.board {
-        bar = bar.child(divider(line)).child(picker_button(picker, &this));
+        row = row.child(divider(line)).child(picker_button(picker, &this));
     }
-    // The row around the toolbar takes no clicks: only the toolbar does.
+    // The part of the row the toolbar has room for. A swipe scrolls it sideways, and so does the
+    // wheel: GPUI turns a vertical scroll into a sideways one in a box that only scrolls
+    // sideways. The row is cut inside the toolbar's border, never over it. The toolbar's 6 px of
+    // padding is split: half is the strip's own, room for the focus ring a button draws outside
+    // itself (3 px in gpui-component), which the cut would otherwise take off the first and last
+    // buttons. The flyouts and the picker still open above it: GPUI draws popovers last, uncut.
+    let strip = h_flex()
+        .id("board-toolbar-strip")
+        .min_w_0()
+        .h_full()
+        .px(px(3.))
+        .overflow_x_scroll()
+        .child(row);
+    let bar = h_flex()
+        .id("board-toolbar")
+        .debug_selector(|| "board-toolbar".into())
+        .occlude()
+        .min_w_0()
+        .h(px(HEIGHT))
+        .px(px(3.))
+        .rounded(px(12.))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.popover)
+        .text_color(theme.popover_foreground)
+        .shadow_md()
+        .child(strip);
+    // The row around the toolbar takes no clicks: only the toolbar does. Its padding is the room
+    // the toolbar leaves at the canvas's sides: the toolbar shrinks to fit inside it.
     h_flex()
         .absolute()
         .left_0()
         .right_0()
         .bottom(px(BOTTOM))
+        .px(px(MARGIN))
         .justify_center()
         .child(bar)
 }

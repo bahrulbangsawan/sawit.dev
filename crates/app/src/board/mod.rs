@@ -1178,9 +1178,9 @@ mod tests {
     use gpui_kit::{
         App, AppContext as _, AssetSource as _, Bounds, Context, Entity, EntityInputHandler as _,
         KeyBinding, KeyContext, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton,
-        MouseDownEvent, MouseExitEvent, MouseUpEvent, OperatingSystem, PinchEvent, PlatformInput,
-        RenderImage, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, Window,
-        WindowHandle, point, px, size,
+        MouseDownEvent, MouseExitEvent, MouseUpEvent, OperatingSystem, PinchEvent, Pixels,
+        PlatformInput, RenderImage, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext,
+        Window, WindowHandle, point, px, size,
     };
     use sawit_board::input::gpui_keystroke;
     use sawit_board::overlay::{self, Composition, Shape};
@@ -3772,6 +3772,72 @@ mod tests {
         // It stays in sight, 8 px over the toolbar, as the toast does.
         assert_eq!(bar.bottom(), toolbar.top() - px(8.));
         assert_eq!(bar.center().x, toolbar.center().x);
+    }
+
+    #[gpui_kit::test]
+    fn the_toolbar_scrolls_inside_a_narrow_canvas(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("toolbar-narrow");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        let drawn = |cx: &mut VisualTestContext, selector: &'static str| {
+            let drawn = cx.debug_bounds(selector);
+            drawn.unwrap_or_else(|| panic!("{selector} isn't drawn"))
+        };
+        let resize = |cx: &mut VisualTestContext, width: f32| {
+            cx.simulate_resize(size(px(width), px(600.)));
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+            view.read_with(&*cx, |view, _| view.bounds)
+        };
+        // Its whole width shows: the first and the last buttons just inside its border and
+        // padding, as the context bar's controls are, and in the middle of its height.
+        let whole = |cx: &mut VisualTestContext| {
+            let toolbar = drawn(cx, "board-toolbar");
+            let (first, last) = (drawn(cx, "tool.move"), drawn(cx, "board-picker"));
+            assert_eq!(first.left(), toolbar.left() + px(7.));
+            assert_eq!(last.right(), toolbar.right() - px(7.));
+            assert_eq!(first.center().y, toolbar.center().y);
+            toolbar
+        };
+        // The 800 × 600 window has room for all of it, centred in the canvas.
+        let canvas = view.read_with(&cx, |view, _| view.bounds);
+        let toolbar = whole(&mut cx);
+        assert_eq!(toolbar.center().x, canvas.center().x);
+        assert!(toolbar.size.width < canvas.size.width - px(16.));
+
+        // A canvas narrower than the toolbar: it is as wide as the canvas less 8 px at each side,
+        // and its buttons keep their size, the last ones past its right edge.
+        let canvas = resize(&mut cx, 400.);
+        let inside = |bounds: Bounds<Pixels>| {
+            bounds.left() >= canvas.left() + px(8.) && bounds.right() <= canvas.right() - px(8.)
+        };
+        let toolbar = drawn(&mut cx, "board-toolbar");
+        assert_eq!(toolbar.left(), canvas.left() + px(8.));
+        assert_eq!(toolbar.right(), canvas.right() - px(8.));
+        assert!(inside(drawn(&mut cx, "tool.move")));
+        assert!(!inside(drawn(&mut cx, "board-picker")));
+        // The wheel over it scrolls them sideways, and the picker's button comes into sight. The
+        // toolbar takes the scroll: the canvas under it doesn't pan.
+        let before = view_state(&view, &cx);
+        cx.simulate_event(ScrollEvent {
+            position: toolbar.center(),
+            delta: ScrollDelta::Lines(point(0., -50.)),
+            ..ScrollEvent::default()
+        });
+        cx.run_until_parked();
+        let picker = drawn(&mut cx, "board-picker");
+        assert!(inside(picker), "{picker:?} in {canvas:?}");
+        // Scrolled to its end, it sits where it does in a toolbar of full width.
+        assert_eq!(picker.right(), toolbar.right() - px(7.));
+        assert!(!inside(drawn(&mut cx, "tool.move")));
+        let after = view_state(&view, &cx);
+        assert_eq!(
+            (after.cx, after.cy, after.zoom),
+            (before.cx, before.cy, before.zoom)
+        );
+
+        // With room again, it shows its whole width once more, from its first button.
+        resize(&mut cx, 800.);
+        whole(&mut cx);
     }
 
     #[gpui_kit::test]
