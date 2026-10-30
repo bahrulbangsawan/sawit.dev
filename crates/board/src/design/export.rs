@@ -162,7 +162,12 @@ pub fn export_bytes(
         ))
     })?;
     let params = json!({"ids": ids, "format": format.ext(), "scale": row.scale});
-    let reply = board.execute("file.export", &params)?;
+    exported_file(&board.execute("file.export", &params)?)
+}
+
+/// The file an export command answered with (`file.export`, `file.exportFramesPdf`): its base64
+/// `data`, decoded.
+pub(crate) fn exported_file(reply: &Value) -> Result<Vec<u8>, BoardError> {
     let data = reply
         .get("data")
         .and_then(Value::as_str)

@@ -26,6 +26,10 @@
 //! and answers an error. A `command` op that fails also leaves the file's version history and
 //! branches as they were ([`FileHistory`]): they are part of the file, and the engine keeps them
 //! outside undo.
+//!
+//! It also holds the document's side of the commands Sawit carries out itself instead of the
+//! engine, which the canvas's menus and keys run ([`export_page`], [`frames_pdf`], [`copy_as`],
+//! [`import_file`]).
 
 use std::ffi::OsStr;
 use std::fmt::Display;
@@ -33,7 +37,10 @@ use std::path::Path;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use figcraft_doc::{BoardItem, Document, NodeId};
+use figcraft_doc::{BoardItem, Document, ExportSetting, NodeId};
+use figcraft_engine::cmd::file::export_area;
+use figcraft_engine::codegen::{self, CodeLang};
+use figcraft_engine::params::id_of;
 use figcraft_engine::{
     EngineError, PointerKind, Result as EngineResult, Session, UiRequest, guard, textedit,
 };
@@ -41,10 +48,11 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
+use crate::design::export::{ExportRow, export_bytes, exported_file};
 use crate::doc::{BoardDoc, BoardError};
 use crate::input::{self, KeyOutcome, Mods};
 use crate::skeleton::{self, Applied, Label, Skeleton};
-use crate::{excalidraw, policy, summary};
+use crate::{clipboard, excalidraw, policy, summary};
 use sawit_core::mermaid::{Palette, render};
 
 /// The commands the `command` op refuses: they switch, open, close or write documents behind the
@@ -870,6 +878,219 @@ fn diagram_corner(board: &BoardDoc, op: &Value) -> Result<(f64, f64), BoardError
     let (x, y) = held.map_or((0.0, 0.0), |held| (held.x1 + MERMAID_GAP, held.y0));
     let given = |key| op.get(key).and_then(Value::as_f64);
     Ok((given("x").unwrap_or(x), given("y").unwrap_or(y)))
+}
+
+// The document's side of the commands Sawit carries out itself (spec, "Menu policy": UI-handled
+// ids): the files File ▸ Export and Import from file… make and read, and what Edit ▸ Copy as
+// copies. The canvas's view (crates/app/src/board/commands.rs) asks for files and writes them, and
+// puts what is copied on the system clipboard.
+
+/// The longest side, in pixels, of the image Copy as PNG puts on the clipboard
+/// ([`copy_png_scale`]).
+pub const COPY_PNG_MAX_SIDE: f64 = 4096.0;
+/// The scale Copy as PNG wants, as FigCraft's own app copies at, before [`copy_png_scale`] caps it.
+const COPY_PNG_SCALE: f64 = 2.0;
+/// The least scale `file.export` takes: it raises any less to it, which would make a PNG longer
+/// than [`COPY_PNG_MAX_SIDE`] (ruling P6-C14).
+const LEAST_EXPORT_SCALE: f64 = 0.01;
+
+/// What Edit ▸ Copy as puts on the system clipboard ([`copy_as`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Copied {
+    /// The layers' text, CSS or SVG.
+    Text(String),
+    /// A PNG file.
+    Png(Vec<u8>),
+}
+
+/// The page on show as one `format` file at `scale`: its top-level layers exported together,
+/// whatever is selected, as [`export_bytes`] exports layers (`format` is the file's extension:
+/// `png`, `jpg`, `svg`, `pdf`, `webp` or `xml`). It is what File ▸ Export makes with nothing
+/// selected.
+///
+/// Nothing in the document changes, its selection included. A page with nothing on it has nothing
+/// to export: that is the error, as is a format that is none of those.
+pub fn export_page(board: &mut BoardDoc, format: &str, scale: f64) -> Result<Vec<u8>, BoardError> {
+    let layers = page_layers(board)?;
+    let row = ExportRow {
+        format: format.to_string(),
+        scale,
+    };
+    export_bytes(board, &layers, &row)
+}
+
+/// The frames of the page on show as one PDF, a page for each visible top-level frame in reading
+/// order: `file.exportFramesPdf`, which answers with the file as base64. Nothing in the document
+/// changes. A page without a visible frame is the engine's refusal, which says so ("the page has
+/// no visible frames").
+pub fn frames_pdf(board: &mut BoardDoc) -> Result<Vec<u8>, BoardError> {
+    exported_file(&board.execute("file.exportFramesPdf", &json!({}))?)
+}
+
+/// The scale Copy as PNG exports layers at whose export area is `bounds` (its width and height on
+/// the page): `wanted`, or less, for an area that would be more than [`COPY_PNG_MAX_SIDE`] pixels
+/// long at it, so that its longest side is that long.
+pub fn copy_png_scale(bounds: (f64, f64), wanted: f64) -> f64 {
+    let longest = bounds.0.max(bounds.1);
+    if longest * wanted > COPY_PNG_MAX_SIDE {
+        COPY_PNG_MAX_SIDE / longest
+    } else {
+        wanted
+    }
+}
+
+/// What Edit ▸ Copy as `id` copies: `edit.copyAsText`, `edit.copyAsCss`, `edit.copyAsSvg` or
+/// `edit.copyAsPng`, as FigCraft's own app copies it.
+///
+/// - Text: the text of each selected layer, a line each: a text layer's, a sticky's or a shape's,
+///   a connector's label's, or the text layers' inside a frame or a group.
+/// - CSS: the first selected layer's, as Dev Mode writes it.
+/// - SVG: the selected layers together, as one SVG file.
+/// - PNG: the selected layers together, as one PNG at 2×, or at the scale that makes its longest
+///   side [`COPY_PNG_MAX_SIDE`] pixels long when 2× would make it longer ([`copy_png_scale`]). An
+///   area too long even at the least scale the engine exports at is refused.
+///
+/// With nothing selected, SVG and PNG copy the page's top-level layers, as File ▸ Export exports
+/// them; text and CSS have nothing to copy. A selection without text has no text to copy. That is
+/// the error, as is any other `id`. Nothing in the document changes.
+pub fn copy_as(board: &mut BoardDoc, id: &str) -> Result<Copied, BoardError> {
+    let selection = board.session.selection();
+    match id {
+        "edit.copyAsText" => text_of(board, &selection).map(Copied::Text),
+        "edit.copyAsCss" => css_of(board, &selection).map(Copied::Text),
+        "edit.copyAsSvg" | "edit.copyAsPng" => {
+            let (ids, what) = if selection.is_empty() {
+                (page_layers(board)?, "page")
+            } else {
+                (selection, "selection")
+            };
+            if id == "edit.copyAsSvg" {
+                svg_of(board, &ids).map(Copied::Text)
+            } else {
+                png_of(board, &ids, what).map(Copied::Png)
+            }
+        }
+        _ => Err(BoardError::Engine(format!("`{id}` is no Copy as command"))),
+    }
+}
+
+/// The error of a Copy as that needs a selection, with nothing selected.
+fn nothing_selected() -> BoardError {
+    BoardError::Engine("nothing is selected".to_string())
+}
+
+/// The text of layers `ids`, a line each, for Copy as text ([`copy_as`]). Each text is copied
+/// once, however many of the layers hold it, and an empty one not at all.
+fn text_of(board: &BoardDoc, ids: &[NodeId]) -> Result<String, BoardError> {
+    if ids.is_empty() {
+        return Err(nothing_selected());
+    }
+    let doc = board.doc()?;
+    let is_text = |layer: &NodeId| {
+        doc.node(*layer)
+            .is_some_and(|node| node.kind.text().is_some())
+    };
+    let mut texts: Vec<NodeId> = Vec::new();
+    for &id in ids {
+        let held = match summary::text_layer(&doc, id) {
+            Some(text) => vec![text],
+            None => doc.subtree(id).into_iter().filter(is_text).collect(),
+        };
+        for text in held {
+            if !texts.contains(&text) {
+                texts.push(text);
+            }
+        }
+    }
+    let lines: Vec<&str> = (texts.iter())
+        .filter_map(|text| Some(doc.node(*text)?.kind.text()?.characters.as_str()))
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return Err(BoardError::Engine("the selection has no text".to_string()));
+    }
+    Ok(lines.join("\n"))
+}
+
+/// The CSS of the first of layers `ids`, as Dev Mode writes it, for Copy as CSS ([`copy_as`]).
+fn css_of(board: &BoardDoc, ids: &[NodeId]) -> Result<String, BoardError> {
+    let first = *ids.first().ok_or_else(nothing_selected)?;
+    let doc = board.doc()?;
+    Ok(guard::run("ui.copyAsCss", || {
+        Ok(codegen::code_for(&doc, first, CodeLang::Css))
+    })?)
+}
+
+/// Layers `ids` together as one SVG file, for Copy as SVG ([`copy_as`]).
+fn svg_of(board: &mut BoardDoc, ids: &[NodeId]) -> Result<String, BoardError> {
+    let row = ExportRow {
+        format: "svg".to_string(),
+        scale: 1.0,
+    };
+    let svg = export_bytes(board, ids, &row)?;
+    String::from_utf8(svg).map_err(|_| BoardError::Engine("the SVG export isn't text".to_string()))
+}
+
+/// Layers `ids` together as one PNG, for Copy as PNG ([`copy_as`]): at 2×, or smaller, so that its
+/// longest side is at most [`COPY_PNG_MAX_SIDE`] pixels. `what` they are (the selection, the page)
+/// names them when they are too long for that.
+fn png_of(board: &mut BoardDoc, ids: &[NodeId], what: &str) -> Result<Vec<u8>, BoardError> {
+    let doc = board.doc()?;
+    let setting = ExportSetting::default();
+    let area = guard::run("ui.copyAsPng", || Ok(export_area(&doc, ids, &setting)))?;
+    // Without an area the layers paint nothing, and the export says so.
+    let scale = area.map_or(COPY_PNG_SCALE, |area| {
+        copy_png_scale((area.width(), area.height()), COPY_PNG_SCALE)
+    });
+    if scale < LEAST_EXPORT_SCALE {
+        return Err(BoardError::Engine(format!(
+            "The {what} is too large to copy as PNG"
+        )));
+    }
+    let row = ExportRow {
+        format: "png".to_string(),
+        scale,
+    };
+    export_bytes(board, ids, &row)
+}
+
+/// Imports the file at `path` into the page on show, as File ▸ Import from file… does
+/// (`file.import`), or with `place` as Place image… does (`file.placeImage`), which takes only
+/// images. The layer it made, which is then selected.
+///
+/// The import lands in the middle of the view, as a paste does ([`clipboard::paste`]): an image or
+/// an SVG file is centred there. A design file (`.figcraft`, `.fig`, `.sketch`, `.penpot`) adds its
+/// pages after the canvas's own instead, and makes no layer on the page on show. One undo step. A
+/// file that can't be read, or that the engine can't import, is the error, which doesn't name the
+/// file, and nothing changes.
+pub fn import_file(
+    board: &mut BoardDoc,
+    path: &Path,
+    place: bool,
+) -> Result<Vec<NodeId>, BoardError> {
+    let bytes = std::fs::read(path).map_err(|error| BoardError::Io(error.to_string()))?;
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let svg =
+        (Path::new(name.as_ref()).extension()).is_some_and(|ext| ext.eq_ignore_ascii_case("svg"));
+    let mut params = if svg && !place {
+        let view = &board.session.ds()?.view;
+        json!({"x": view.cx, "y": view.cy, "center": true})
+    } else {
+        clipboard::centred(board, &bytes)?
+    };
+    params["data"] = json!(STANDARD.encode(&bytes));
+    let command = if place {
+        // The layer's name, which an import takes from the file's.
+        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+        params["name"] = json!(stem);
+        "file.placeImage"
+    } else {
+        // Its extension says what the file is.
+        params["name"] = json!(name);
+        "file.import"
+    };
+    let made = board.execute(command, &params)?;
+    Ok(id_of(&made["id"]).into_iter().collect())
 }
 
 #[cfg(test)]
@@ -3022,5 +3243,308 @@ mod tests {
         // Nothing was typed, and the edit goes on.
         assert_eq!(sticky_text(&board, note), "");
         assert!(editing(&board));
+    }
+
+    /// A 100 × 100 rectangle on the board with its top left corner at (`x`, 0).
+    fn square_at(board: &mut BoardDoc, x: f64) -> NodeId {
+        let params = json!({"shape": "rectangle", "x": x, "y": 0, "width": 100, "height": 100});
+        let made = board.execute("board.shape", &params).unwrap();
+        figcraft_engine::params::id_of(&made["id"]).unwrap()
+    }
+
+    /// The width an SVG file gives itself, in its `<svg ...>` tag.
+    fn svg_width(svg: &str) -> f64 {
+        let tag = &svg[..svg.find('>').expect("an <svg> tag")];
+        let (_, after) = tag.split_once(" width=\"").expect("a width");
+        let (width, _) = after.split_once('"').expect("a quoted width");
+        width.parse().expect("a number")
+    }
+
+    /// Review Focus 3 and ruling P6-C13: the whole page is exported, whatever is selected.
+    #[test]
+    fn export_without_selection_exports_page() {
+        let mut board = board();
+        let left = square_at(&mut board, 0.0);
+        square_at(&mut board, 1000.0);
+        board.session.set_selection(vec![left]);
+        let steps = board.session.undo_depth();
+        let svg = String::from_utf8(export_page(&mut board, "svg", 1.0).unwrap()).unwrap();
+        assert!(svg.starts_with("<svg"), "{svg}");
+        // From the left square's left edge to the right one's right edge: both are in it.
+        let width = svg_width(&svg);
+        assert!(width >= 1100.0, "width {width}: {svg}");
+        // The selected square alone is a tenth of that.
+        let one = crate::design::export::export_bytes(
+            &mut board,
+            &[left],
+            &ExportRow {
+                format: "svg".into(),
+                scale: 1.0,
+            },
+        );
+        let one = svg_width(&String::from_utf8(one.unwrap()).unwrap());
+        assert!(one < 200.0, "width {one}");
+        // Exporting changes nothing: the selection stays, and there is no undo step.
+        assert_eq!(board.session.selection(), [left]);
+        assert_eq!(board.session.undo_depth(), steps);
+        // At another scale and format: a PNG.
+        let png = export_page(&mut board, "png", 0.5).unwrap();
+        assert!(png.starts_with(b"\x89PNG"), "{:02x?}", &png[..8]);
+    }
+
+    #[test]
+    fn an_empty_page_or_an_unknown_format_exports_nothing() {
+        let mut board = board();
+        let error = export_page(&mut board, "png", 1.0).unwrap_err();
+        assert!(error.to_string().contains("nothing to export"), "{error}");
+        square_at(&mut board, 0.0);
+        let error = export_page(&mut board, "gif", 1.0).unwrap_err();
+        assert!(
+            error.to_string().contains("not an export format"),
+            "{error}"
+        );
+    }
+
+    /// Review Focus 3: a page without frames says why it has no PDF.
+    #[test]
+    fn the_frames_of_the_page_make_a_pdf() {
+        let mut board = board();
+        let error = frames_pdf(&mut board).unwrap_err();
+        assert!(
+            error.to_string().contains("the page has no visible frames"),
+            "{error}"
+        );
+        let mut design = design();
+        for x in [0, 400] {
+            let frame = json!({"type": "frame", "x": x, "y": 0, "width": 300, "height": 200});
+            design.execute("node.create", &frame).unwrap();
+        }
+        let pdf = frames_pdf(&mut design).unwrap();
+        assert!(pdf.starts_with(b"%PDF"), "{:02x?}", &pdf[..8]);
+    }
+
+    /// Review Focus 5 and ruling P6-C14: Copy as PNG makes no image longer than 4096 px.
+    #[test]
+    fn copy_png_is_capped() {
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
+        let wide = copy_png_scale((10000.0, 500.0), 2.0);
+        assert!(close(wide, 4096.0 / 10000.0), "{wide}");
+        let tall = copy_png_scale((500.0, 10000.0), 2.0);
+        assert!(close(tall, 4096.0 / 10000.0), "{tall}");
+        assert!(close(copy_png_scale((100.0, 50.0), 2.0), 2.0));
+        // Exactly 4096 px long at the scale wanted, and nothing to measure: as wanted.
+        assert!(close(copy_png_scale((2048.0, 10.0), 2.0), 2.0));
+        assert!(close(copy_png_scale((0.0, 0.0), 2.0), 2.0));
+    }
+
+    /// Runs engine command `id` with `params`, and returns the layer it made.
+    fn made(board: &mut BoardDoc, id: &str, params: Value) -> NodeId {
+        let made = board.execute(id, &params).unwrap();
+        id_of(&made["id"]).unwrap()
+    }
+
+    /// The width and height of the PNG file `png`.
+    fn png_size(png: &[u8]) -> (u32, u32) {
+        figcraft_render::images::dimensions(png).expect("a PNG")
+    }
+
+    /// Text, its own CSS or SVG, as Copy as gives it.
+    fn copied_text(board: &mut BoardDoc, id: &str) -> String {
+        match copy_as(board, id).unwrap() {
+            Copied::Text(text) => text,
+            Copied::Png(_) => panic!("{id} copied a PNG"),
+        }
+    }
+
+    /// A PNG file, as Copy as PNG gives it.
+    fn copied_png(board: &mut BoardDoc) -> Vec<u8> {
+        match copy_as(board, "edit.copyAsPng").unwrap() {
+            Copied::Png(png) => png,
+            Copied::Text(text) => panic!("Copy as PNG copied text: {text}"),
+        }
+    }
+
+    #[test]
+    fn copy_as_text_copies_the_text_of_each_selected_layer() {
+        let mut board = board();
+        let note = made(
+            &mut board,
+            "board.sticky",
+            json!({"x": 0, "y": 0, "text": "Ship it"}),
+        );
+        let shape = json!({"shape": "ellipse", "x": 300, "y": 0, "text": "Review"});
+        let shape = made(&mut board, "board.shape", shape);
+        let empty = made(&mut board, "board.sticky", json!({"x": 600, "y": 0}));
+        let text = json!({"type": "text", "text": "Notes", "x": 0, "y": 400});
+        let text = made(&mut board, "node.create", text);
+        // A line each, in the order they were selected; the empty sticky has no line.
+        board.session.set_selection(vec![shape, note, empty, text]);
+        assert_eq!(
+            copied_text(&mut board, "edit.copyAsText"),
+            "Review\nShip it\nNotes"
+        );
+        // A frame's text is the text of the text layers in it, each copied once.
+        let mut design = design();
+        let frame = json!({"type": "frame", "width": 300, "height": 200});
+        let frame = made(&mut design, "node.create", frame);
+        let texts: Vec<NodeId> = ["Title", "Body"]
+            .into_iter()
+            .map(|text| {
+                let text = json!({"type": "text", "text": text, "parent": frame});
+                made(&mut design, "node.create", text)
+            })
+            .collect();
+        design.session.set_selection(vec![frame, texts[0]]);
+        assert_eq!(copied_text(&mut design, "edit.copyAsText"), "Title\nBody");
+    }
+
+    #[test]
+    fn copy_as_text_and_css_need_something_selected_to_copy() {
+        let mut board = board();
+        for id in ["edit.copyAsText", "edit.copyAsCss"] {
+            let error = copy_as(&mut board, id).unwrap_err();
+            assert_eq!(error.to_string(), "nothing is selected", "{id}");
+        }
+        let square = square_at(&mut board, 0.0);
+        board.session.set_selection(vec![square]);
+        let error = copy_as(&mut board, "edit.copyAsText").unwrap_err();
+        assert_eq!(error.to_string(), "the selection has no text");
+        let error = copy_as(&mut board, "edit.copy").unwrap_err();
+        assert_eq!(error.to_string(), "`edit.copy` is no Copy as command");
+    }
+
+    #[test]
+    fn copy_as_css_is_the_first_selected_layers() {
+        let mut design = design();
+        let rectangle = json!({"type": "rectangle", "width": 120, "height": 80});
+        let first = made(&mut design, "node.create", rectangle);
+        let ellipse = json!({"type": "ellipse", "width": 30, "height": 30});
+        let second = made(&mut design, "node.create", ellipse);
+        design.session.set_selection(vec![first, second]);
+        let css = copied_text(&mut design, "edit.copyAsCss");
+        assert!(css.contains("width: 120px"), "{css}");
+        assert!(!css.contains("width: 30px"), "{css}");
+    }
+
+    /// Copy as SVG and PNG copy the selection together, and with nothing selected, the page, as
+    /// File ▸ Export does. Nothing in the document changes.
+    #[test]
+    fn copy_as_svg_and_png_copy_the_selection_or_the_page() {
+        let mut board = board();
+        let left = square_at(&mut board, 0.0);
+        square_at(&mut board, 1000.0);
+        board.session.set_selection(vec![left]);
+        let steps = board.session.undo_depth();
+        let svg = copied_text(&mut board, "edit.copyAsSvg");
+        assert!(svg.starts_with("<svg"), "{svg}");
+        assert!(svg_width(&svg) < 200.0, "{svg}");
+        // At 2×, as FigCraft's own app copies.
+        let doc = board.doc().unwrap();
+        let area = export_area(&doc, &[left], &ExportSetting::default()).unwrap();
+        let at_2x = |side: f64| (side * 2.0).ceil() as u32;
+        assert_eq!(
+            png_size(&copied_png(&mut board)),
+            (at_2x(area.width()), at_2x(area.height()))
+        );
+        // Nothing selected: the page, both squares.
+        board.session.set_selection(Vec::new());
+        assert!(svg_width(&copied_text(&mut board, "edit.copyAsSvg")) >= 1100.0);
+        assert!(png_size(&copied_png(&mut board)).0 >= 2200);
+        assert_eq!(board.session.undo_depth(), steps);
+        assert!(board.session.selection().is_empty());
+    }
+
+    /// Review Focus 5 and ruling P6-C14: the PNG's longest side is at most 4096 px, and an area
+    /// too long for that at the engine's least scale is refused instead of copied longer.
+    #[test]
+    fn copy_as_png_caps_the_longest_side() {
+        let mut design = design();
+        let wide = json!({"type": "rectangle", "width": 10000, "height": 500});
+        let wide = made(&mut design, "node.create", wide);
+        design.session.set_selection(vec![wide]);
+        let (width, height) = png_size(&copied_png(&mut design));
+        assert_eq!(width, 4096);
+        // 500 at 4096 / 10000, on whole pixels.
+        assert_eq!(height, 205);
+        let longer = json!({"ids": [wide], "props": {"width": 500_000}});
+        design.execute("node.set", &longer).unwrap();
+        let error = copy_as(&mut design, "edit.copyAsPng").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "The selection is too large to copy as PNG"
+        );
+        design.session.set_selection(Vec::new());
+        let error = copy_as(&mut design, "edit.copyAsPng").unwrap_err();
+        assert_eq!(error.to_string(), "The page is too large to copy as PNG");
+    }
+
+    /// One red rectangle, 100 × 80, as an SVG file holds it.
+    const RECT_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80"><rect width="100" height="80" fill="#f00"/></svg>"##;
+
+    /// A board whose view shows page point (300.5, 200) in its middle.
+    fn board_seen_about_its_point() -> BoardDoc {
+        let mut board = board();
+        let view = json!({"zoom": 1, "vw": 1000, "vh": 800, "cx": 300.5, "cy": 200});
+        board.execute("view.set", &view).unwrap();
+        board
+    }
+
+    /// Layer `id`'s top left corner and size on the page.
+    fn placed(board: &BoardDoc, id: NodeId) -> (f64, f64, f64, f64) {
+        let bounds = board.doc().unwrap().world_bounds(id).unwrap();
+        (bounds.x0, bounds.y0, bounds.width(), bounds.height())
+    }
+
+    /// File ▸ Import and Place image: what they make is centred in the view, as a paste is, and
+    /// selected, one undo step each.
+    #[test]
+    fn an_imported_file_is_centred_in_the_view() {
+        let dir = tempfile::tempdir().unwrap();
+        // A 160 × 90 PNG, as Export makes one.
+        let mut design = design();
+        let rectangle = json!({"type": "rectangle", "width": 160, "height": 90});
+        let rectangle = made(&mut design, "node.create", rectangle);
+        let png = export_bytes(&mut design, &[rectangle], &ExportRow::default()).unwrap();
+        let photo = dir.path().join("photo.png");
+        std::fs::write(&photo, png).unwrap();
+        // An SVG file, whatever the case of its extension.
+        let logo = dir.path().join("Logo.SVG");
+        std::fs::write(&logo, RECT_SVG).unwrap();
+
+        let mut board = board_seen_about_its_point();
+        let [image] = import_file(&mut board, &photo, false).unwrap()[..] else {
+            panic!("no image")
+        };
+        // Its middle on the view's, its corner on whole units.
+        assert_eq!(placed(&board, image), (221.0, 155.0, 160.0, 90.0));
+        assert_eq!(board.session.selection(), [image]);
+        let name = |board: &BoardDoc, id| board.doc().unwrap().node(id).unwrap().name.clone();
+        assert_eq!(name(&board, image), "photo");
+        let [frame] = import_file(&mut board, &logo, false).unwrap()[..] else {
+            panic!("no frame")
+        };
+        assert_eq!(placed(&board, frame), (251.0, 160.0, 100.0, 80.0));
+        let [again] = import_file(&mut board, &photo, true).unwrap()[..] else {
+            panic!("no placed image")
+        };
+        assert_eq!(placed(&board, again), (221.0, 155.0, 160.0, 90.0));
+        assert_eq!(name(&board, again), "photo");
+        assert_eq!(board.session.selection(), [again]);
+        assert_eq!(board.session.undo_depth().0, 3);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_imported_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut board = board();
+        let missing = dir.path().join("missing.png");
+        let error = import_file(&mut board, &missing, false).unwrap_err();
+        assert!(matches!(error, BoardError::Io(_)), "{error:?}");
+        // Place image takes images only.
+        let notes = dir.path().join("notes.txt");
+        std::fs::write(&notes, "hello").unwrap();
+        assert!(import_file(&mut board, &notes, true).is_err());
+        assert!(page_layers(&board).unwrap().is_empty());
+        assert_eq!(board.session.undo_depth(), (0, 0));
     }
 }

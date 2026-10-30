@@ -20,9 +20,12 @@
 //! panel on its right ([`design_panel`]). Their buttons run their commands through
 //! [`BoardView::choose`]. The menus (spec D8: the top bar's main menu, the context menu, the
 //! Actions palette and the shortcuts sheet) run theirs through [`BoardView::run_menu`]
-//! ([`menus`]). While the UI is hidden (`⌘\`, `view.toggleUi`) only the canvas shows, and the
-//! context menu, the palette and the sheet when they are open.
+//! ([`menus`]). What the canvas carries out itself instead of the engine, from the menus and the
+//! keys alike (import, save, export, copy as), is in [`commands`]. While the UI is hidden (`⌘\`,
+//! `view.toggleUi`) only the canvas shows, and the context menu, the palette and the sheet when
+//! they are open.
 
+mod commands;
 mod context_bar;
 mod design_panel;
 mod events;
@@ -530,8 +533,10 @@ impl BoardView {
     /// command policy ([`input::route_key`]), and then the canvas carries out what the engine
     /// asked of it, as after every input:
     ///
-    /// - A key the canvas uses stops here. The shortcut of a command Sawit carries out itself
-    ///   says it is coming, for now, and a command the engine refuses says why, in a toast.
+    /// - A key the canvas uses stops here. The shortcut of a command Sawit carries out itself is
+    ///   carried out here as its menu item is: copy and paste ([`Self::run_clipboard`]), and
+    ///   import, save, export and copy as ([`commands`], ruling P6-C2). A command the engine
+    ///   refuses says why, in a toast.
     /// - Any other key goes on: while text is edited, typing reaches the input method.
     ///
     /// Space held down without modifiers, while no text is edited, arms a pan instead
@@ -576,7 +581,11 @@ impl BoardView {
             Ok(KeyOutcome::Handled) => cx.stop_propagation(),
             Ok(KeyOutcome::Ui(id)) => {
                 cx.stop_propagation();
-                self.run_ui_command(id, cx);
+                if policy::is_clipboard(id) {
+                    self.run_clipboard(id, None, cx);
+                } else {
+                    commands::run_ui(self, id, window, cx);
+                }
             }
             // After the requests' toast, so that the error's is the one that shows.
             Err(error) => {
@@ -585,18 +594,6 @@ impl BoardView {
             }
         }
         cx.notify();
-    }
-
-    /// Carries out `id`, a command Sawit does itself instead of the engine: copy and paste
-    /// ([`Self::run_clipboard`]), and import, export, save and copy as
-    /// (`sawit_board::policy::UI_COMMANDS`), none of which is done yet, so each says it is coming.
-    fn run_ui_command(&mut self, id: &'static str, cx: &mut Context<Self>) {
-        if policy::is_clipboard(id) {
-            self.run_clipboard(id, None, cx);
-            return;
-        }
-        log::debug!("the canvas doesn't carry out {id} yet");
-        self.show_toast("Coming soon", cx);
     }
 
     /// Copies, cuts or pastes (`id` is one of `sawit_board::policy::CLIPBOARD`), with the system
@@ -726,14 +723,22 @@ impl BoardView {
     /// what another app or window wrote to it since), the error is logged, and the next flush or
     /// edit tries again; the writer's [`Writer::last_error`] still says why a write failed.
     pub fn flush(&mut self) {
-        if let Err(err) = self.queue_save() {
+        if let Err(err) = self.save_now() {
             log::warn!("the canvas couldn't be saved: {err}");
         }
+    }
+
+    /// [`Self::flush`], with why the document isn't on disk as the error, a sentence for a toast:
+    /// what File ▸ Save (⌘S) does ([`commands`]).
+    fn save_now(&mut self) -> Result<(), String> {
+        let queued = self.queue_save();
         self.writer.flush();
-        if let Some(err) = self.writer.last_error() {
-            log::warn!("{err}");
+        let written = self.writer.last_error();
+        if written.is_some() {
             self.saved = None;
         }
+        queued.map_err(|err| err.to_string())?;
+        written.map_or(Ok(()), Err)
     }
 
     /// Hands the document to the writer if it isn't the one saved last. The document handed
@@ -1369,7 +1374,7 @@ mod tests {
     }
 
     /// The names in `dir`, sorted.
-    fn names(dir: &Path) -> Vec<String> {
+    pub(super) fn names(dir: &Path) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(dir)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -1388,7 +1393,7 @@ mod tests {
     }
 
     /// How many layers the first page of the canvas saved at `path` has.
-    fn saved_layers(path: &Path) -> usize {
+    pub(super) fn saved_layers(path: &Path) -> usize {
         let doc = store::open(path).unwrap().doc().unwrap();
         let page = doc.first_page().unwrap();
         doc.node(page).unwrap().children.len()
@@ -1400,7 +1405,7 @@ mod tests {
     }
 
     /// The op that puts a sticky note on the board.
-    fn sticky_op() -> Value {
+    pub(super) fn sticky_op() -> Value {
         json!({"op": "command", "command": "board.sticky", "params": {"x": 0, "y": 0}})
     }
 
@@ -2985,7 +2990,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn keys_reach_the_tools_and_sawits_own_commands_say_coming_soon(cx: &mut TestAppContext) {
+    fn keys_reach_the_tools_and_cmd_s_saves(cx: &mut TestAppContext) {
         let tmp = Scratch::new("key-tools");
         let (view, mut cx) = painted_canvas(cx, &tmp);
         focus_canvas(&view, &mut cx);
@@ -2994,10 +2999,13 @@ mod tests {
             view.read_with(cx, |view, _| view.board().unwrap().session.tool.tool.id())
         };
         assert_eq!(tool(&cx), "rectangle");
-        // ⌘S is the save, which Sawit carries out itself, once Plan 6 has it.
+        // ⌘S is Save, which Sawit carries out itself (ruling P6-C2): the file is written now,
+        // before the canvas has been still for the autosave's delay.
+        run_op(&view, sticky_op(), &mut cx);
         cx.simulate_keystrokes("cmd-s");
         let toast = view.read_with(&cx, |view, _| view.toast.clone());
-        assert_eq!(toast.as_deref(), Some("Coming soon"));
+        assert_eq!(toast.as_deref(), Some("Saved"));
+        assert_eq!(saved_layers(&tmp.0.join("canvas.figcraft")), 1);
     }
 
     /// Releases the keys of `keystrokes`, last first, as `simulate_keystrokes` presses them.
@@ -3539,9 +3547,17 @@ mod tests {
         cx: &mut TestAppContext,
         tmp: &Scratch,
     ) -> (Entity<BoardView>, VisualTestContext) {
+        chrome_canvas_at(cx, &tmp.0.join("canvas.figcraft"))
+    }
+
+    /// [`chrome_canvas`], of the canvas file at `path`.
+    pub(super) fn chrome_canvas_at(
+        cx: &mut TestAppContext,
+        path: &Path,
+    ) -> (Entity<BoardView>, VisualTestContext) {
         cx.update(gpui_kit::init);
         cx.executor().allow_parking();
-        let path = tmp.0.join("canvas.figcraft");
+        let path = path.to_path_buf();
         let window = cx.open_window(size(px(800.), px(600.)), |_, cx| BoardView::open(path, cx));
         let view = window.root(cx).unwrap();
         next_frame(cx, &view, None);

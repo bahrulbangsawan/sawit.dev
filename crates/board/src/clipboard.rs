@@ -205,8 +205,9 @@ pub fn paste(
 /// Where the image `bytes` goes to be centred in the view, as FigCraft pastes one: its top left
 /// corner, on whole units, from the size `file.import` places it at (its pixels over its density,
 /// at most 4096 units a side). An image whose size can't be read gets no point: `file.import` puts
-/// its corner in the middle of the view, or refuses it.
-fn centred(board: &BoardDoc, bytes: &[u8]) -> Result<Value, BoardError> {
+/// its corner in the middle of the view, or refuses it. File ▸ Import places its images the same
+/// way ([`crate::ops::import_file`]).
+pub(crate) fn centred(board: &BoardDoc, bytes: &[u8]) -> Result<Value, BoardError> {
     let view = &board.session.ds()?.view;
     let size = guard::run("ui.pasteImage", || {
         Ok(

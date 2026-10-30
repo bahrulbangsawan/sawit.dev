@@ -7,6 +7,10 @@
 //!   row. Until then the Export button exports each with its own settings.
 //! - The settings change only through `sawit_board::design::export::set_export_rows`, which keeps
 //!   what a setting holds besides its format and scale while its row is left as it is.
+//!
+//! It also holds the canvas's one export writer (ruling P6-C8), which File ▸ Export, Export as SVG
+//! and Export frames to PDF write through too (`super::super::commands`): into the exports folder,
+//! then the first file shows in the Finder ([`BoardView::reveal_exports`]).
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -19,7 +23,7 @@ use gpui_kit::component::*;
 use gpui_kit::*;
 use sawit_board::design::export::{ExportRow, export_bytes, export_rows, set_export_rows};
 use sawit_board::design::{DesignSelection, Edit, Mixed};
-use sawit_board::{BoardDoc, BoardError};
+use sawit_board::{BoardDoc, BoardError, ops};
 use sawit_core::instances::AppPaths;
 use sawit_core::nyawit;
 use serde_json::Value;
@@ -45,6 +49,8 @@ const SCALES: [f64; 5] = [0.5, 1.0, 2.0, 3.0, 4.0];
 const PIXEL_FORMATS: [&str; 3] = ["png", "jpg", "webp"];
 /// The folder in Sawit's own folder that takes the exports of a canvas outside a project.
 const EXPORTS: &str = "exports";
+/// The format the page is exported in with nothing selected, when no other is asked for.
+const PAGE_FORMAT: &str = "png";
 
 /// The Export section for the layers of `sel`.
 pub(super) fn render(sel: &Rc<DesignSelection>, cx: &mut Context<BoardView>) -> AnyElement {
@@ -220,9 +226,11 @@ fn export_button(count: usize, view: &WeakEntity<BoardView>) -> AnyElement {
 }
 
 impl BoardView {
-    /// Exports the selected layers, or, with nothing selected, the page's top-level layers
-    /// (ruling P5-C13), as their export settings say: a file for each layer and each of its
-    /// settings, and a PNG at 1× for a layer that has none (`sawit_board::design::export`).
+    /// Exports the selected layers as their export settings say: a file for each layer and each
+    /// of its settings, and a PNG at 1× for a layer that has none (`sawit_board::design::export`).
+    /// With nothing selected, the page: its top-level layers together, as one PNG at 1× named
+    /// after the page (rulings P5-C13 and P6-C8). It is what the Export button and File ▸ Export
+    /// do.
     ///
     /// - The files go into the project's `.nyawit/exports/`, made if it isn't there, for a canvas
     ///   in a project's `.nyawit` folder; any other canvas's go into `exports/` in Sawit's own
@@ -234,15 +242,52 @@ impl BoardView {
     ///   that paints nothing) is the error, and no file is written.
     ///
     /// The files written, in order; nothing in the document changes. Showing them is the
-    /// caller's: the Export button shows the first in the Finder.
+    /// caller's ([`Self::reveal_exports`]).
     pub fn export_selection(&mut self, cx: &mut Context<Self>) -> Result<Vec<PathBuf>, BoardError> {
+        self.export(|board| export_files(board, None), cx)
+    }
+
+    /// File ▸ Export as SVG: as [`Self::export_selection`], with one SVG file for each selected
+    /// layer whatever its settings, and for the page with nothing selected.
+    pub(in crate::board) fn export_selection_as_svg(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<Vec<PathBuf>, BoardError> {
+        self.export(|board| export_files(board, Some("svg")), cx)
+    }
+
+    /// File ▸ Export frames to PDF: the page's visible top-level frames, a PDF page each, as one
+    /// file named after the page (`sawit_board::ops::frames_pdf`), written where
+    /// [`Self::export_selection`] writes. A page without frames is the error, which says so.
+    pub(in crate::board) fn export_frames_pdf(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<Vec<PathBuf>, BoardError> {
+        self.export(
+            |board| {
+                let pdf = ops::frames_pdf(board)?;
+                Ok(vec![(page_file_name(board, "pdf")?, pdf)])
+            },
+            cx,
+        )
+    }
+
+    /// The canvas's one export writer (ruling P6-C8): makes the files with `make`, each one's name
+    /// and bytes, then writes them into the canvas's exports folder ([`exports_folder`]), each
+    /// under a name of its own there, as [`Self::export_selection`] says. The files are all made
+    /// before any is written, so an export that fails writes nothing. What failed is the error.
+    fn export(
+        &mut self,
+        make: impl FnOnce(&mut BoardDoc) -> Result<Vec<(String, Vec<u8>)>, BoardError>,
+        cx: &mut Context<Self>,
+    ) -> Result<Vec<PathBuf>, BoardError> {
         let (folder, project) = exports_folder(self.path(), || AppPaths::default_macos().root);
         let Some(board) = self.board_mut() else {
             return Err(BoardError::Engine(
                 "the canvas file couldn't be opened".to_string(),
             ));
         };
-        let files = export_files(board);
+        let files = make(board);
         // What the engine asked of the canvas meanwhile, as after every command it runs.
         self.handle_ui_requests(Vec::new(), cx);
         let files = files?;
@@ -261,10 +306,14 @@ impl BoardView {
         Ok(written)
     }
 
-    /// The Export button's click: exports the selected layers ([`Self::export_selection`]) and
-    /// shows the first file in the Finder, or says in a toast why it couldn't.
-    fn export_and_reveal(&mut self, cx: &mut Context<Self>) {
-        match self.export_selection(cx) {
+    /// After an export: shows the first of the files it wrote, `written`, in the Finder, or says
+    /// in a toast why it failed. The Export button and File ▸ Export's commands end with it.
+    pub(in crate::board) fn reveal_exports(
+        &mut self,
+        written: Result<Vec<PathBuf>, BoardError>,
+        cx: &mut Context<Self>,
+    ) {
+        match written {
             Ok(written) => {
                 if let Some(first) = written.first() {
                     cx.reveal_path(first);
@@ -272,6 +321,13 @@ impl BoardView {
             }
             Err(error) => self.show_toast(error.to_string(), cx),
         }
+    }
+
+    /// The Export button's click: exports the selected layers ([`Self::export_selection`]) and
+    /// shows the first file in the Finder, or says in a toast why it couldn't.
+    fn export_and_reveal(&mut self, cx: &mut Context<Self>) {
+        let written = self.export_selection(cx);
+        self.reveal_exports(written, cx);
     }
 }
 
@@ -289,19 +345,21 @@ fn exports_folder(board: &Path, app_root: impl FnOnce() -> PathBuf) -> (PathBuf,
 }
 
 /// The files exporting the selected layers makes, each one's name and bytes, in the order of the
-/// layers and of their rows. With nothing selected, the page's top-level layers.
-fn export_files(board: &mut BoardDoc) -> Result<Vec<(String, Vec<u8>)>, BoardError> {
+/// layers and of their rows; with `format`, one file in that format for each layer instead,
+/// whatever its rows. With nothing selected, one file of the page, its top-level layers together:
+/// a PNG at 1×, or `format` (ruling P6-C8).
+fn export_files(
+    board: &mut BoardDoc,
+    format: Option<&str>,
+) -> Result<Vec<(String, Vec<u8>)>, BoardError> {
+    let selection = board.session.ds()?.selection.clone();
+    if selection.is_empty() {
+        let format = format.unwrap_or(PAGE_FORMAT);
+        let bytes = ops::export_page(board, format, 1.0)?;
+        return Ok(vec![(page_file_name(board, format)?, bytes)]);
+    }
     let doc = board.doc()?;
-    let ids = {
-        let ds = board.session.ds()?;
-        if ds.selection.is_empty() {
-            let page = doc.node(ds.page);
-            page.map(|page| page.children.clone()).unwrap_or_default()
-        } else {
-            ds.selection.clone()
-        }
-    };
-    let exports = guard::run("ui.export", || Ok(exports_of(&doc, &ids)))?;
+    let exports = guard::run("ui.export", || Ok(exports_of(&doc, &selection, format)))?;
     if exports.is_empty() {
         return Err(BoardError::Engine("there is nothing to export".to_string()));
     }
@@ -313,17 +371,32 @@ fn export_files(board: &mut BoardDoc) -> Result<Vec<(String, Vec<u8>)>, BoardErr
     Ok(files)
 }
 
+/// The name of a file of the whole page on show: `<page name>.<ext>`, by [`file_stem`]'s rules.
+fn page_file_name(board: &BoardDoc, ext: &str) -> Result<String, BoardError> {
+    let ds = board.session.ds()?;
+    let name = ds.doc.node(ds.page).map_or("", |page| page.name.as_str());
+    Ok(format!("{}.{ext}", file_stem(name, "Page")))
+}
+
 /// The exports of layers `ids` of `doc`: each layer, the name of its files, and each of its rows.
-/// Layers whose settings differ are exported each with its own rows.
-fn exports_of(doc: &Document, ids: &[NodeId]) -> Vec<(NodeId, String, ExportRow)> {
+/// Layers whose settings differ are exported each with its own rows. With `format`, each layer
+/// has one row of that format instead, at 1×.
+fn exports_of(
+    doc: &Document,
+    ids: &[NodeId],
+    format: Option<&str>,
+) -> Vec<(NodeId, String, ExportRow)> {
     let sel = DesignSelection::read(doc, ids);
     let shared = export_rows(&sel);
     let mut exports = Vec::new();
     for id in &sel.ids {
-        let rows = if shared.is_empty() {
-            export_rows(&DesignSelection::read(doc, &[*id]))
-        } else {
-            shared.clone()
+        let rows = match format {
+            Some(format) => vec![ExportRow {
+                format: format.to_string(),
+                scale: 1.0,
+            }],
+            None if shared.is_empty() => export_rows(&DesignSelection::read(doc, &[*id])),
+            None => shared.clone(),
         };
         let stem = doc.node(*id).map_or_else(
             || "Layer".to_string(),
@@ -427,7 +500,7 @@ mod tests {
     }
 
     /// A layer's own settings make its files, a format and a scale each; with nothing selected,
-    /// the page's top-level layers are exported (ruling P5-C13).
+    /// the page is exported, its top-level layers together in one PNG (rulings P5-C13, P6-C8).
     #[gpui_kit::test]
     fn exports_follow_the_settings_and_fall_back_to_the_page(cx: &mut TestAppContext) {
         let tmp = Scratch::new("export-settings");
@@ -452,18 +525,62 @@ mod tests {
         );
         let svg = std::fs::read_to_string(&written[1]).unwrap();
         assert!(svg.contains("<svg"), "{svg}");
-        // Nothing selected: every layer on the page, each with its own settings.
+        // Nothing selected: the page, both cards in one PNG named after it, whatever their
+        // settings.
         view.update(cx, |view, _| {
             view.board_mut().unwrap().session.set_selection(Vec::new());
         });
         let written = view
             .update(cx, |view, cx| view.export_selection(cx))
             .unwrap();
-        let names: Vec<_> = written
-            .iter()
-            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(names, ["Card@2x-2.png", "Card-2.svg", "Icons-Arrow.png"]);
+        assert_eq!(written, [exports.join("Page 1.png")]);
+        let png = std::fs::read(&written[0]).unwrap();
+        let picture = image::load_from_memory_with_format(&png, image::ImageFormat::Png).unwrap();
+        // From the first card's left edge to the second's right edge.
+        assert_eq!((picture.width(), picture.height()), (300, 60));
+    }
+
+    /// File ▸ Export as SVG makes one SVG of each selected layer whatever its settings, or of the
+    /// page, and Export frames to PDF one PDF of the page's frames; they write where Export does
+    /// (ruling P6-C8).
+    #[gpui_kit::test]
+    fn export_as_svg_and_frames_pdf_write_where_export_does(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("export-svg-pdf");
+        let project = tmp.0.join("proj");
+        let (path, ids) = project_canvas(&project, |design| {
+            let first = card(design, "Card", 0.0);
+            let settings = json!([
+                {"format": "png", "size": {"by": "scale", "value": 2.0}},
+                {"format": "jpg", "size": {"by": "scale", "value": 1.0}},
+            ]);
+            design.set(&[first], json!({ "exports": settings }));
+            let slide = json!({
+                "type": "frame", "name": "Slide", "x": 200, "y": 0, "width": 160, "height": 90,
+            });
+            vec![first, design.make(slide)]
+        });
+        let view = open(cx, &path, &ids[..1]);
+        let exports = project.join(".nyawit").join("exports");
+        let svg = view
+            .update(cx, |view, cx| view.export_selection_as_svg(cx))
+            .unwrap();
+        assert_eq!(svg, [exports.join("Card.svg")]);
+        let text = std::fs::read_to_string(&svg[0]).unwrap();
+        assert!(text.starts_with("<svg"), "{text}");
+        view.update(cx, |view, _| {
+            view.board_mut().unwrap().session.set_selection(Vec::new());
+        });
+        let page = view
+            .update(cx, |view, cx| view.export_selection_as_svg(cx))
+            .unwrap();
+        assert_eq!(page, [exports.join("Page 1.svg")]);
+        let pdf = view
+            .update(cx, |view, cx| view.export_frames_pdf(cx))
+            .unwrap();
+        assert_eq!(pdf, [exports.join("Page 1.pdf")]);
+        let bytes = std::fs::read(&pdf[0]).unwrap();
+        assert!(bytes.starts_with(b"%PDF"), "{:02x?}", &bytes[..8]);
+        assert_eq!(undo_steps(&view, cx), 0);
     }
 
     /// The Export section: a row's format and scale are picked from its menus, rows are added

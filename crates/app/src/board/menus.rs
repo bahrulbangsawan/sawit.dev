@@ -40,7 +40,7 @@ use sawit_board::policy;
 use sawit_board::shortcuts::{self, ShortcutGroup};
 use serde_json::{Value, json};
 
-use super::BoardView;
+use super::{BoardView, commands};
 
 /// How many of the best matches the palette lists.
 const PALETTE_RESULTS: usize = 12;
@@ -137,8 +137,8 @@ impl BoardView {
     /// does (spec, "Menu policy"). The menu open closes, and the canvas takes the keyboard. Then:
     /// - Copy, cut and paste go the keyboard's way ([`Self::run_clipboard`], ruling P6-C4): the
     ///   context menu's Paste here pastes where the menu opened.
-    /// - A command Sawit carries out itself (import, export, save, copy as) says it is coming, as
-    ///   its shortcut does, for now (ruling P6-C1).
+    /// - A command Sawit carries out itself (import, export, save, copy as) is carried out by the
+    ///   canvas, as its shortcut is ([`commands::run_ui`], ruling P6-C1).
     /// - Any other runs in the engine ([`Self::choose`]), and a refusal says why, in a toast.
     ///
     /// Last, the canvas carries out what the command asked of it, as after every input.
@@ -151,7 +151,7 @@ impl BoardView {
         if policy::is_clipboard(id) {
             self.run_clipboard(id, here, cx);
         } else if policy::is_ui(id) {
-            self.run_ui_command(id, cx);
+            commands::run_ui(self, id, window, cx);
         } else {
             self.choose(id, json!({}), cx);
         }
@@ -793,7 +793,8 @@ mod tests {
 
     use super::super::BoardView;
     use super::super::tests::{
-        Scratch, chrome_canvas, click, clipboard_turn, focus_canvas, layers, run_op, view_state,
+        Scratch, chrome_canvas, click, clipboard_turn, focus_canvas, layers, run_op, saved_layers,
+        view_state,
     };
     use super::{MenuAt, menu_part};
 
@@ -903,11 +904,11 @@ mod tests {
         run_menu(&view, "edit.duplicate", &mut cx);
         assert_eq!(layers(&view, &cx).len(), 2);
         assert_eq!(toast(&view, &cx), None);
-        // A command Sawit carries out itself says it is coming, as its shortcut does, until Plan
-        // 6 Task 3 carries it out (ruling P6-C1). The engine never runs it.
-        run_menu(&view, "file.export", &mut cx);
-        assert_eq!(toast(&view, &cx).as_deref(), Some("Coming soon"));
-        assert_eq!(layers(&view, &cx).len(), 2);
+        // A command Sawit carries out itself goes to the canvas, never to the engine (ruling
+        // P6-C1): Save writes the canvas's file now, and says so.
+        run_menu(&view, "file.save", &mut cx);
+        assert_eq!(toast(&view, &cx).as_deref(), Some("Saved"));
+        assert_eq!(saved_layers(&tmp.0.join("canvas.figcraft")), 2);
     }
 
     #[gpui_kit::test]
