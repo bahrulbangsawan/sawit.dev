@@ -8,8 +8,10 @@
 //!
 //! The bar's bottom goes 12 px above the selection, and the bar stays inside the canvas
 //! (`context_bar::clamp_anchor`, ruling P3-C3), over the toolbar that floats at the canvas's
-//! bottom: under it, the toolbar would cover the bar. It hides while a gesture is on (a drag) and
-//! while a text is edited, and with the rest of the chrome while the UI is hidden.
+//! bottom: under it, the toolbar would cover the bar. It is never wider than the canvas less 8 px
+//! at each side: in a narrower canvas its controls keep their size and scroll sideways inside it,
+//! as the toolbar's buttons do. It hides while a gesture is on (a drag) and while a text is edited,
+//! and with the rest of the chrome while the UI is hidden.
 
 use figcraft_engine::guard;
 use gpui_kit::component::button::*;
@@ -23,7 +25,8 @@ use super::toolbar::{self, SWATCH, divider, swatch};
 
 /// The bar's height.
 pub(super) const HEIGHT: f64 = 40.;
-/// The room between the bar's edge and its controls.
+/// The room between the bar's edge and its controls. Half of it is the bar's padding and half the
+/// padding of the strip its controls scroll in ([`render_context_bar`]).
 const PADDING: f64 = 6.;
 /// The width of the bar's border.
 const BORDER: f64 = 1.;
@@ -54,8 +57,9 @@ fn width(control: &Control) -> f64 {
     }
 }
 
-/// The size of the bar that holds `controls`, as it is drawn: their widths, the lines between
-/// them, its padding and border.
+/// The size of the bar that holds `controls` with room for all of them: their widths, the lines
+/// between them, its padding and border. A canvas too narrow for it gets a narrower bar
+/// ([`render_context_bar`]).
 pub(super) fn size(controls: &[Control]) -> (f64, f64) {
     let widths: f64 = controls.iter().map(width).sum();
     let lines = controls.len().saturating_sub(1) as f64 * DIVIDER;
@@ -77,6 +81,13 @@ fn name(control: &Control) -> &'static str {
 /// The context bar over the selection of `view`'s board, if it has one to show: not while a
 /// gesture is on or a text is edited, nor when nothing selected takes a control. The model is read
 /// on every frame, behind the engine's guard: a panic in it costs that frame its bar (D15).
+///
+/// The bar takes the pointer: no click or scroll over it reaches the canvas under it. It keeps its
+/// full width ([`size`]) while the canvas has room for it and [`model::MARGIN`] at each side, and
+/// is never wider than the canvas less that room, so that the clamp keeps all of it inside the
+/// canvas (spec, "The bar is clamped inside the canvas"). Narrower than its controls, it keeps them
+/// at their size and they scroll sideways inside it, under a swipe or the wheel: the toolbar's rule
+/// (`toolbar::render_toolbar`).
 pub(super) fn render_context_bar(
     view: &mut BoardView,
     _: &mut Window,
@@ -104,30 +115,17 @@ pub(super) fn render_context_bar(
     })
     .ok()
     .flatten()?;
-    let (width, height) = size(&bar.controls);
+    let (full, height) = size(&bar.controls);
+    // Never wider than the canvas less its margins, which the clamp then keeps the bar inside.
+    let width = full.min(canvas.0 - 2.0 * model::MARGIN).max(0.0);
     // The anchor is where the bar's bottom-centre goes; the clamp takes and gives its top-centre.
     let top_centre = (bar.anchor.0, bar.anchor.1 - height);
     let (x, y) = model::clamp_anchor(top_centre, (width, height), canvas);
     let this = cx.entity().downgrade();
     let theme = cx.theme();
     let line = theme.border;
-    let mut row = h_flex()
-        .id("board-context-bar")
-        .debug_selector(|| "board-context-bar".into())
-        // Its clicks are its own: none reaches the canvas under it.
-        .occlude()
-        .absolute()
-        .left(px((x - width / 2.0) as f32))
-        .top(px(y as f32))
-        .w(px(width as f32))
-        .h(px(height as f32))
-        .px(px(PADDING as f32))
-        .rounded(px(10.))
-        .border_1()
-        .border_color(theme.border)
-        .bg(theme.popover)
-        .text_color(theme.popover_foreground)
-        .shadow_md();
+    // The controls and the lines between them, at their full size: the row never shrinks.
+    let mut row = h_flex().flex_shrink_0();
     for (i, (control, options)) in bar.controls.iter().zip(options).enumerate() {
         if i > 0 {
             row = row.child(divider(line));
@@ -137,7 +135,40 @@ pub(super) fn render_context_bar(
             _ => row.child(menu(control, options, &this)),
         };
     }
-    Some(row)
+    // The part of the row the bar has room for, as in the toolbar: a swipe scrolls it sideways,
+    // and so does the wheel, which GPUI turns sideways in a box that only scrolls sideways. The
+    // row is cut inside the bar's border, and the strip's half of the padding keeps a button's
+    // focus ring, drawn outside it, off the cut. The menus still open whole: GPUI draws their
+    // popovers last, uncut.
+    let inset = px((PADDING / 2.0) as f32);
+    let strip = h_flex()
+        .id("board-context-bar-strip")
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .px(inset)
+        .overflow_x_scroll()
+        .child(row);
+    Some(
+        h_flex()
+            .id("board-context-bar")
+            .debug_selector(|| "board-context-bar".into())
+            // Its clicks and scrolls are its own: none reaches the canvas under it.
+            .occlude()
+            .absolute()
+            .left(px((x - width / 2.0) as f32))
+            .top(px(y as f32))
+            .w(px(width as f32))
+            .h(px(height as f32))
+            .px(inset)
+            .rounded(px(10.))
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.popover)
+            .text_color(theme.popover_foreground)
+            .shadow_md()
+            .child(strip),
+    )
 }
 
 /// The board colours as swatches, the selection's own marked.

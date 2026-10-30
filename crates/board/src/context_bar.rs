@@ -36,8 +36,9 @@ use serde_json::{Value, json};
 /// How far above the selection the bar's bottom edge floats.
 const GAP: f64 = 12.0;
 
-/// The room the bar keeps to each edge of the canvas.
-const MARGIN: f64 = 8.0;
+/// The room the bar keeps to each edge of the canvas. The view draws the bar no wider than the
+/// canvas less this room at each side, so that [`clamp_anchor`] keeps all of it inside.
+pub const MARGIN: f64 = 8.0;
 
 /// One control of the bar, with the value the selection has for it now: `None` when the selected
 /// items differ, or have none of the named values. [`options`] lists what it offers, the buttons

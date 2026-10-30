@@ -3896,6 +3896,99 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn the_context_bar_scrolls_inside_a_narrow_canvas(cx: &mut TestAppContext) {
+        use sawit_board::context_bar::{Control, context_bar};
+
+        let tmp = Scratch::new("context-bar-narrow");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        let drawn = |cx: &mut VisualTestContext, selector: &'static str| {
+            let drawn = cx.debug_bounds(selector);
+            drawn.unwrap_or_else(|| panic!("{selector} isn't drawn"))
+        };
+        let resize = |cx: &mut VisualTestContext, width: f32| {
+            cx.simulate_resize(size(px(width), px(600.)));
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+            view.read_with(&*cx, |view, _| view.bounds)
+        };
+        // Its whole width shows: the first and the last controls just inside its border and
+        // padding.
+        let whole = |cx: &mut VisualTestContext| {
+            let bar = drawn(cx, "board-context-bar");
+            let first = drawn(cx, "board-context-color-yellow");
+            let last = drawn(cx, "board-context-end");
+            assert_eq!(first.left(), bar.left() + px(7.));
+            assert_eq!(last.right(), bar.right() - px(7.));
+            bar
+        };
+        // A connector across the middle of the canvas, selected. Its bar is the widest: its
+        // colours, how it runs and both its caps.
+        let connector = json!({
+            "op": "command", "command": "board.connector",
+            "params": {"from": {"x": -100, "y": 0}, "to": {"x": 100, "y": 0}},
+        });
+        run_op(&view, connector, &mut cx);
+        cx.run_until_parked();
+        // The 800 px canvas has room for all of it.
+        let canvas = view.read_with(&cx, |view, _| view.bounds);
+        let bar = whole(&mut cx);
+        assert!(bar.size.width < canvas.size.width - px(16.));
+
+        // A 400 px canvas, narrower than the bar: the bar is as wide as the canvas less 8 px at
+        // each side, and its controls keep their size, the end cap's menu past its right edge.
+        let canvas = resize(&mut cx, 400.);
+        assert_eq!(canvas.size.width, px(400.));
+        let inside = |bounds: Bounds<Pixels>| {
+            bounds.left() >= canvas.left() + px(8.) && bounds.right() <= canvas.right() - px(8.)
+        };
+        let bar = drawn(&mut cx, "board-context-bar");
+        assert_eq!(bar.left(), canvas.left() + px(8.));
+        assert_eq!(bar.right(), canvas.right() - px(8.));
+        let first = drawn(&mut cx, "board-context-color-yellow");
+        assert_eq!(first.left(), bar.left() + px(7.));
+        assert!(!inside(drawn(&mut cx, "board-context-end")));
+        // The wheel over it scrolls them sideways, and the end cap's menu comes into sight. The
+        // bar takes the scroll: the canvas under it doesn't pan.
+        let before = view_state(&view, &cx);
+        cx.simulate_event(ScrollEvent {
+            position: bar.center(),
+            delta: ScrollDelta::Lines(point(0., -50.)),
+            ..ScrollEvent::default()
+        });
+        cx.run_until_parked();
+        let end = drawn(&mut cx, "board-context-end");
+        assert!(inside(end), "{end:?} in {canvas:?}");
+        // Scrolled to its end, it sits where it does in a bar of full width.
+        assert_eq!(end.right(), bar.right() - px(7.));
+        assert!(!inside(drawn(&mut cx, "board-context-color-yellow")));
+        let after = view_state(&view, &cx);
+        assert_eq!(
+            (after.cx, after.cy, after.zoom),
+            (before.cx, before.cy, before.zoom)
+        );
+        // Its menu opens there, and the cap picked from it is the connector's.
+        let end_cap = |cx: &VisualTestContext| {
+            view.read_with(cx, |view, _| {
+                let bar = context_bar(&view.board().unwrap().session)?;
+                bar.controls.into_iter().find_map(|control| match control {
+                    Control::EndCap { current } => current,
+                    _ => None,
+                })
+            })
+        };
+        assert_eq!(end_cap(&cx).as_deref(), Some("triangleArrow"));
+        click(&mut cx, "board-context-end");
+        cx.run_until_parked();
+        click(&mut cx, "board-context-end-Circle");
+        cx.run_until_parked();
+        assert_eq!(end_cap(&cx).as_deref(), Some("circleFilled"));
+
+        // With room again, it shows its whole width once more, from its first control.
+        resize(&mut cx, 800.);
+        whole(&mut cx);
+    }
+
+    #[gpui_kit::test]
     fn the_picker_lists_the_templates_once_and_places_one(cx: &mut TestAppContext) {
         let tmp = Scratch::new("picker");
         let (view, mut cx) = chrome_canvas(cx, &tmp);
