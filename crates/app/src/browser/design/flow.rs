@@ -344,7 +344,9 @@ impl BrowserView {
             .to_path_buf();
         let job = rt::spawn(cx, async move {
             // `assets` is what was chosen, videos included.
-            let outcomes = download_all(assets, &dir, &url, true, MAX_TOTAL, |_, _| {}).await;
+            let file_page = is_file_url(&url);
+            let outcomes =
+                download_all(assets, &dir, &url, file_page, true, MAX_TOTAL, |_, _| {}).await;
             let saved = outcomes.iter().filter(|o| o.error.is_none()).count();
             let first_error = outcomes.iter().find_map(|o| o.error.clone());
             (saved, outcomes.len(), first_error)
@@ -849,6 +851,8 @@ async fn run_export(
     cx: &mut AsyncApp,
 ) -> Result<(ExportReport, usize), String> {
     let ready = scan.await?;
+    // Local files are copied for a local page by the tab's own URL, not the page's word.
+    let file_page = is_file_url(&url);
     let referer = if ready.scan.url.is_empty() {
         url
     } else {
@@ -904,6 +908,7 @@ async fn run_export(
             items,
             &assets_dir,
             &referer,
+            file_page,
             include_videos,
             MAX_TOTAL,
             report,
@@ -942,6 +947,10 @@ async fn run_export(
         skipped_videos,
     };
     Ok((report, total))
+}
+
+fn is_file_url(url: &str) -> bool {
+    url.trim().to_ascii_lowercase().starts_with("file://")
 }
 
 /// Only web pages and local files have styles to read.
@@ -1238,6 +1247,13 @@ mod tests {
         ] {
             assert!(design_part(&ready, part).is_ok(), "{part}");
         }
+    }
+
+    #[test]
+    fn file_pages_by_their_url() {
+        assert!(is_file_url("file:///Users/a/index.html"));
+        assert!(is_file_url(" FILE:///x"));
+        assert!(!is_file_url("https://a.dev/file://x"));
     }
 
     #[test]

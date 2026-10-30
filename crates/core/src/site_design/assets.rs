@@ -513,10 +513,14 @@ pub fn is_skipped_video(o: &AssetOutcome) -> bool {
     o.kind == AssetKind::Video && o.error.as_deref() == Some(VIDEO_SKIPPED)
 }
 
+/// Downloads `items` into `assets_dir`. `file_page` says whether the tab shows a
+/// `file://` page by its own URL (not the page's word): only then are `file://` assets
+/// copied.
 pub async fn download_all(
     items: Vec<AssetRef>,
     assets_dir: &Path,
     referer: &str,
+    file_page: bool,
     include_videos: bool,
     budget: u64,
     progress: impl Fn(usize, usize) + Send + Sync,
@@ -542,7 +546,7 @@ pub async fn download_all(
                 Some(write_local(a, assets_dir, &mut taken, &total))
             }
         } else if let Some(u) = url.filter(|u| u.starts_with("file://")) {
-            if referer.starts_with("file://") {
+            if file_page {
                 Some(copy_file_url(a, u, assets_dir, &mut taken, &total, budget))
             } else {
                 Some(outcome(
@@ -698,6 +702,7 @@ mod tests {
             dir.path(),
             "https://x.com/",
             false,
+            false,
             1 << 20,
             |_, _| {},
         )
@@ -715,17 +720,32 @@ mod tests {
             dir.path(),
             "https://x.com/",
             false,
+            false,
             1 << 20,
             |_, _| {},
         )
         .await;
         assert!(out[0].error.is_some());
         assert!(!dir.path().join("images/h.png").exists());
+        // A page saying it is a file doesn't make it one.
+        let out = download_all(
+            mk(),
+            dir.path(),
+            "file:///tmp/index.html",
+            false,
+            false,
+            1 << 20,
+            |_, _| {},
+        )
+        .await;
+        assert!(out[0].error.is_some());
+        assert!(!dir.path().join("images").exists());
 
         let out = download_all(
             mk(),
             dir.path(),
             "file:///tmp/index.html",
+            true,
             false,
             1 << 20,
             |_, _| {},
@@ -741,7 +761,16 @@ mod tests {
             None,
             "j",
         )];
-        let out = download_all(js, dir.path(), "https://x.com/", false, 1 << 20, |_, _| {}).await;
+        let out = download_all(
+            js,
+            dir.path(),
+            "https://x.com/",
+            false,
+            false,
+            1 << 20,
+            |_, _| {},
+        )
+        .await;
         assert!(out[0].error.is_some());
     }
 
@@ -774,7 +803,16 @@ mod tests {
             asset(AssetKind::Image, Some("blob:https://x.com/abc"), None, "b"),
         ];
         let dir = tempfile::tempdir().unwrap();
-        let out = download_all(items, dir.path(), "https://x.com/", false, 500, |_, _| {}).await;
+        let out = download_all(
+            items,
+            dir.path(),
+            "https://x.com/",
+            false,
+            false,
+            500,
+            |_, _| {},
+        )
+        .await;
         assert_eq!(out.len(), 5);
         assert_eq!(out[0].file.as_deref(), Some("svg/mark.svg"));
         assert_eq!(out[0].bytes, 6);
