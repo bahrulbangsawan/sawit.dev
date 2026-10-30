@@ -2232,19 +2232,24 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let note = match self.terminal.read(cx).paste_target(cx) {
-            Some(ix) => {
-                if !self.layout.terminal {
-                    self.layout.toggle(Area::Terminal);
-                }
-                let sent = self
-                    .terminal
-                    .update(cx, |t, cx| t.paste(ix, markdown, window, cx));
-                match sent {
-                    Ok(()) => format!("Sent to Terminal {}", ix + 1),
-                    Err(e) => e,
+        let target = self.terminal.read(cx).paste_target(cx);
+        let sent = target.and_then(|ix| {
+            if !self.layout.terminal {
+                self.layout.toggle(Area::Terminal);
+            }
+            match self
+                .terminal
+                .update(cx, |t, cx| t.paste(ix, markdown, window, cx))
+            {
+                Ok(()) => Some(ix),
+                Err(e) => {
+                    eprintln!("annotate: paste failed: {e}");
+                    None
                 }
             }
+        });
+        let note = match sent {
+            Some(ix) => format!("Sent to Terminal {}", ix + 1),
             None => {
                 cx.write_to_clipboard(ClipboardItem::new_string(markdown.to_string()));
                 "No terminal is ready for a paste, so it was copied.".to_string()
