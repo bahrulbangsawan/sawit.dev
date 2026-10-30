@@ -203,14 +203,155 @@ pub fn curl_args(url: &str, out: &Path, referer: &str) -> Vec<OsString> {
     curl_args_with(url, Some(out), referer, "30", "52428800")
 }
 
+/// A fetched text resource, and what curl says about where it came from.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Fetched {
+    pub text: String,
+    /// The response's `Content-Type`, as sent.
+    pub content_type: String,
+    /// Where redirects ended.
+    pub final_url: String,
+    /// The address curl connected to last.
+    pub remote_ip: String,
+}
+
+/// What curl writes after the body: one value per line (none can hold a newline).
+const WRITE_OUT: &str = "\n%{content_type}\n%{url_effective}\n%{remote_ip}";
+
 /// Fetches a small text resource (cross-origin CSS, manifests).
-pub async fn fetch_text(url: &str, referer: &str) -> crate::Result<String> {
-    let args = curl_args_with(url, None, referer, "10", "5242880");
+pub async fn fetch_text(url: &str, referer: &str) -> crate::Result<Fetched> {
+    let mut args = curl_args_with(url, None, referer, "10", "5242880");
+    // Before `--`: the URL stays last.
+    let at = args.len() - 2;
+    args.splice(at..at, ["-w".into(), OsString::from(WRITE_OUT)]);
     let out = cmd::run("/usr/bin/curl", args, Duration::from_secs(15)).await?;
     if out.code != Some(0) {
         return Err(CoreError::Download(out.stderr.trim().to_string()));
     }
-    Ok(out.stdout)
+    parse_fetched(&out.stdout)
+        .ok_or_else(|| CoreError::Download("curl's answer couldn't be read.".into()))
+}
+
+/// The body and [`WRITE_OUT`]'s lines after it.
+fn parse_fetched(stdout: &str) -> Option<Fetched> {
+    let mut parts = stdout.rsplitn(4, '\n');
+    let remote_ip = parts.next()?.trim().to_string();
+    let final_url = parts.next()?.trim().to_string();
+    let content_type = parts.next()?.trim().to_string();
+    let text = parts.next()?.to_string();
+    Some(Fetched {
+        text,
+        content_type,
+        final_url,
+        remote_ip,
+    })
+}
+
+/// Whether `content_type` is a style sheet's (`text/css`, any parameters).
+pub fn is_css(content_type: &str) -> bool {
+    content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .eq_ignore_ascii_case("text/css")
+}
+
+/// The URL's host: lowercased, decoded, without userinfo, port, brackets or trailing dot.
+pub fn url_host(url: &str) -> Option<String> {
+    let (_, rest) = url.trim().split_once("://")?;
+    let authority = rest.split(['/', '?', '#', '\\']).next().unwrap_or("");
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => authority.split(':').next().unwrap_or(""),
+    };
+    let host = String::from_utf8_lossy(&percent_decode(host.as_bytes())).to_ascii_lowercase();
+    let host = host.trim_end_matches('.');
+    (!host.is_empty()).then(|| host.to_string())
+}
+
+/// An IPv4 address as `inet_aton` (and so curl) reads it: `127.1`, `0x7f000001`, `0177.0.0.1`.
+fn loose_v4(host: &str) -> Option<std::net::Ipv4Addr> {
+    let num = |p: &str| -> Option<u64> {
+        if let Some(hex) = p.strip_prefix("0x") {
+            u64::from_str_radix(hex, 16).ok()
+        } else if p.len() > 1 && p.starts_with('0') {
+            u64::from_str_radix(&p[1..], 8).ok()
+        } else {
+            p.parse().ok()
+        }
+    };
+    let parts: Vec<u64> = host.split('.').map(num).collect::<Option<_>>()?;
+    let (last, head) = parts.split_last()?;
+    if head.len() > 3 || head.iter().any(|&n| n > 255) {
+        return None;
+    }
+    let rest = 4 - head.len() as u32;
+    if *last >= 1u64 << (8 * rest) {
+        return None;
+    }
+    let v = head.iter().fold(0u64, |v, &n| v << 8 | n) << (8 * rest) | last;
+    Some(std::net::Ipv4Addr::from(v as u32))
+}
+
+fn local_v4(ip: std::net::Ipv4Addr) -> bool {
+    ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.octets()[0] == 0
+}
+
+/// Whether `host` (a name or an address) is this Mac or its network: loopback, private,
+/// link-local and unique-local addresses, `localhost` and `.local` names.
+pub fn is_local_host(host: &str) -> bool {
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    if let Some(ip) = loose_v4(host) {
+        return local_v4(ip);
+    }
+    // A scoped address (`fe80::1%en0`) is link-local whatever its zone.
+    if let Ok(ip) = host
+        .split('%')
+        .next()
+        .unwrap_or("")
+        .parse::<std::net::Ipv6Addr>()
+    {
+        let first = ip.segments()[0];
+        return ip.is_loopback()
+            || ip.is_unspecified()
+            || first & 0xfe00 == 0xfc00
+            || first & 0xffc0 == 0xfe80
+            || ip.to_ipv4_mapped().is_some_and(local_v4);
+    }
+    host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local")
+}
+
+/// Whether Sawit may fetch `url` for the page at `page_url`: a host on this Mac or its
+/// network only when it is the page's own.
+pub fn may_fetch_for(url: &str, page_url: &str) -> bool {
+    let Some(host) = url_host(url) else {
+        return false;
+    };
+    !is_local_host(&host) || url_host(page_url).is_some_and(|p| p == host)
+}
+
+/// The text of a sheet fetched from `href`, when it may go back to the page at `page_url`
+/// (Sawit's own URL for the tab, not the page's word): served as CSS, and from a host the
+/// page may reach ([`may_fetch_for`]) — where it asked, where redirects ended, and the
+/// address connected to. Otherwise why not.
+pub fn sheet_for_page(href: &str, fetched: Fetched, page_url: &str) -> Result<String, String> {
+    if !is_css(&fetched.content_type) {
+        return Err(format!(
+            "it was served as “{}”, not text/css",
+            fetched.content_type
+        ));
+    }
+    if !may_fetch_for(href, page_url) || !may_fetch_for(&fetched.final_url, page_url) {
+        return Err("it is on this Mac or its network".into());
+    }
+    let own_host = url_host(&fetched.final_url).is_some_and(|h| url_host(page_url) == Some(h));
+    if !own_host && is_local_host(&fetched.remote_ip) {
+        return Err(format!("its host is at {}", fetched.remote_ip));
+    }
+    Ok(fetched.text)
 }
 
 pub fn font_assets(faces: &[FontFace]) -> Vec<AssetRef> {
@@ -637,6 +778,110 @@ mod tests {
         assert!(out[2].file.is_none());
         assert_eq!(out[3].error.as_deref(), Some("Videos weren't included."));
         assert_eq!(out[4].error.as_deref(), Some(BLOB_MSG));
+    }
+
+    fn css(text: &str, final_url: &str, remote_ip: &str) -> Fetched {
+        Fetched {
+            text: text.into(),
+            content_type: "text/css; charset=utf-8".into(),
+            final_url: final_url.into(),
+            remote_ip: remote_ip.into(),
+        }
+    }
+
+    #[test]
+    fn curl_reports_follow_the_body() {
+        let f = parse_fetched("a{}\nb{}\n\ntext/css\nhttps://c.dev/x.css\n1.2.3.4").unwrap();
+        assert_eq!(f.text, "a{}\nb{}\n");
+        assert_eq!(f.content_type, "text/css");
+        assert_eq!(f.final_url, "https://c.dev/x.css");
+        assert_eq!(f.remote_ip, "1.2.3.4");
+        assert_eq!(parse_fetched("no report"), None);
+    }
+
+    #[test]
+    fn only_css_goes_back_to_the_page() {
+        let page = "https://a.dev/";
+        let href = "https://cdn.b.dev/site.css";
+        assert_eq!(
+            sheet_for_page(href, css("a{}", href, "93.184.216.34"), page),
+            Ok("a{}".into())
+        );
+        let mut js = css("export default 1", href, "93.184.216.34");
+        js.content_type = "application/javascript".into();
+        assert!(sheet_for_page(href, js, page).is_err());
+        let mut none = css("a{}", href, "93.184.216.34");
+        none.content_type.clear();
+        assert!(sheet_for_page(href, none, page).is_err());
+    }
+
+    #[test]
+    fn local_sheets_only_for_their_own_host() {
+        let dev = "http://localhost:5173/src/App.css";
+        // A public page can't read the dev server (or the LAN) through Sawit.
+        assert!(sheet_for_page(dev, css("a{}", dev, "127.0.0.1"), "https://evil.dev/").is_err());
+        let lan = "http://192.168.1.5/admin.css";
+        assert!(sheet_for_page(lan, css("a{}", lan, "192.168.1.5"), "https://evil.dev/").is_err());
+        // Nor by a redirect there, or a public name for a local address.
+        let public = "https://cdn.b.dev/x.css";
+        assert!(sheet_for_page(public, css("a{}", dev, "127.0.0.1"), "https://a.dev/").is_err());
+        assert!(sheet_for_page(public, css("a{}", public, "10.0.0.2"), "https://a.dev/").is_err());
+        // The dev server's own page keeps its sheets.
+        assert_eq!(
+            sheet_for_page(dev, css("a{}", dev, "::1"), "http://localhost:5173/"),
+            Ok("a{}".into())
+        );
+        assert!(may_fetch_for(dev, "http://localhost:3000/"));
+        assert!(!may_fetch_for(dev, "http://127.0.0.1:5173/"));
+        assert!(!may_fetch_for("not a url", "https://a.dev/"));
+    }
+
+    #[test]
+    fn local_hosts() {
+        for h in [
+            "127.0.0.1",
+            "127.1",
+            "0x7f000001",
+            "2130706433",
+            "0177.0.0.1",
+            "0.0.0.0",
+            "10.1.2.3",
+            "172.16.0.1",
+            "172.31.255.255",
+            "192.168.0.10",
+            "169.254.169.254",
+            "::1",
+            "[::1]",
+            "::",
+            "fc00::1",
+            "fd12:3456::1",
+            "fe80::1%en0",
+            "::ffff:127.0.0.1",
+            "localhost",
+            "LocalHost.",
+            "app.localhost",
+            "printer.local",
+        ] {
+            assert!(is_local_host(h), "{h}");
+        }
+        for h in [
+            "93.184.216.34",
+            "172.32.0.1",
+            "8.8.8.8",
+            "2606:4700::1",
+            "example.com",
+            "localhost.example.com",
+            "deadbeef",
+            "",
+        ] {
+            assert!(!is_local_host(h), "{h}");
+        }
+        assert_eq!(url_host("http://user@[::1]:8080/a").as_deref(), Some("::1"));
+        assert_eq!(
+            url_host("http://%6cocalhost./x").as_deref(),
+            Some("localhost")
+        );
+        assert_eq!(url_host("https://A.dev:443?q").as_deref(), Some("a.dev"));
     }
 
     #[test]

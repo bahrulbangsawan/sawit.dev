@@ -14,7 +14,9 @@ use futures::channel::oneshot;
 use futures::future::Shared;
 use gpui_kit::{AsyncApp, Context, SharedString, Task, WeakEntity};
 use sawit_core::annotations::page_key;
-use sawit_core::site_design::assets::{MAX_TOTAL, download_all, fetch_text, font_assets};
+use sawit_core::site_design::assets::{
+    MAX_TOTAL, download_all, fetch_text, font_assets, may_fetch_for, sheet_for_page,
+};
 use sawit_core::site_design::export::write_folder;
 use sawit_core::site_design::inspect::{StyleInfo, contrast, css_rule};
 use sawit_core::site_design::scan::{AssetKind, AssetOutcome, AssetRef, Scan, SheetRules};
@@ -623,7 +625,7 @@ async fn run_scan(
         return Err(NOTHING.into());
     }
     let referer = if scan.url.is_empty() {
-        url
+        url.clone()
     } else {
         scan.url.clone()
     };
@@ -631,6 +633,7 @@ async fn run_scan(
         scan.blocked_sheets.clone(),
         scan.manifest.clone(),
         referer,
+        url,
         fetch_deadline,
     );
     let extras = this
@@ -684,28 +687,37 @@ fn is_http(url: &str) -> bool {
 
 /// Fetches the sheets the page couldn't read and its manifest's icons, within
 /// `deadline` (the scan's start + [`FETCH_BUDGET`]); what fails or is late is left out.
+/// A sheet's text goes back to the page, whose scripts can read it: only CSS, and from
+/// this Mac or its network only for a page of that host (`page`, the tab's URL as Sawit
+/// knows it), so a page can't read the dev server or the LAN through Sawit.
 async fn fetch_extras(
     hrefs: Vec<String>,
     manifest: Option<String>,
     referer: String,
+    page: String,
     deadline: std::time::Instant,
 ) -> Extras {
     let deadline = tokio::time::Instant::from_std(deadline);
-    let referer = referer.as_str();
+    let (referer, page) = (referer.as_str(), page.as_str());
     let sheets = async {
-        let mut stream =
-            futures::stream::iter(hrefs.into_iter().filter(|h| is_http(h)).enumerate().map(
-                |(i, href)| async move {
-                    let text = fetch_text(&href, referer).await;
-                    (i, href, text)
-                },
-            ))
-            .buffer_unordered(FETCHES_AT_ONCE);
+        let wanted = hrefs.into_iter().filter(|h| {
+            let ok = may_fetch_for(h, page);
+            if is_http(h) && !ok {
+                eprintln!("sawit: left out the stylesheet {h}: it is on this Mac or its network");
+            }
+            is_http(h) && ok
+        });
+        let mut stream = futures::stream::iter(wanted.enumerate().map(|(i, href)| async move {
+            let text = fetch_text(&href, referer).await;
+            (i, href, text)
+        }))
+        .buffer_unordered(FETCHES_AT_ONCE);
         let mut got = Vec::new();
         while let Ok(Some((i, href, text))) = tokio::time::timeout_at(deadline, stream.next()).await
         {
-            match text {
-                Ok(text) => got.push((i, href, text)),
+            match text.map(|f| sheet_for_page(&href, f, page)) {
+                Ok(Ok(text)) => got.push((i, href, text)),
+                Ok(Err(why)) => eprintln!("sawit: left out the stylesheet {href}: {why}"),
                 Err(e) => eprintln!("sawit: couldn't fetch the stylesheet {href}: {e}"),
             }
         }
@@ -717,7 +729,7 @@ async fn fetch_extras(
             return Vec::new();
         };
         match tokio::time::timeout_at(deadline, fetch_text(&manifest, referer)).await {
-            Ok(Ok(text)) => manifest_icons(&text, &manifest),
+            Ok(Ok(fetched)) => manifest_icons(&fetched.text, &manifest),
             Ok(Err(e)) => {
                 eprintln!("sawit: couldn't fetch the manifest {manifest}: {e}");
                 Vec::new()
