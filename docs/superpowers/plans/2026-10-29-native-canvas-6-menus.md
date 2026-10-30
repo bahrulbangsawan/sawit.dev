@@ -233,3 +233,64 @@ git commit -m "feat(canvas): import, save as, export and copy as from the canvas
 - [ ] **Step 4: Stop the instance** with `/bin/kill`, then run the full gates:
 Run: `cargo test --workspace`
 Expected: all pass.
+
+#### Task 4 notes: live check (2026-10-31, at `df633b9`, lane 4)
+
+Steps 1 and 2 and the carried socket checks passed. Step 3 needs the user: see "Hand checks" below.
+Debug build, launched per R-LAUNCH with a scratch `SAWIT_HOME` and `SAWIT_NATIVE_CANVAS=1`; stopped
+with `/bin/kill`. `vm.loadavg` at launch was 4.12 4.43 3.13 (other lanes building). No defect found,
+so no code change. Everything was driven over the control socket; no AX, osascript or posted events.
+
+- Board: two stickies (`"2"` at -300,-100 and `"4"` at 100,-100, 200 x 200), made with `tool.sticky`
+  and a pointer down/up (the pointer op's field is `kind`, not `type`), Escape after each.
+- Step 1, `app.actions`: the screenshot shows the palette over the canvas with 12 rows in menu order
+  (Import from file…, Place image…, Save, Save as…, Export…, Export frames to PDF…, Export selection
+  as SVG…, Color profile…, Revert to saved, Undo, Redo, Copy as text). Each row that has keys ends in
+  a right-aligned keycap (⇧⌘I, ⇧⌘K, ⌘S, ⇧⌘S, ⇧⌘E, ⌘Z, ⇧⌘Z); the rows without keys show none. No
+  label is printed twice. `{"op":"key","key":"Escape"}` answers `handled: true` and the palette closes.
+- Step 2, `help.shortcuts`: the sheet shows Essential, Tools, View, Zoom, Text and Shape groups in
+  three columns. No ⌘W row and no ⌘J row in the visible part; the sheet scrolls, and the part below
+  the fold (Object, Vector) was not seen: the hand check lists it. Escape closes the sheet.
+- Carry (P6.T2 ruling): with both stickies selected, `view.contextMenu` opens the context menu under
+  the selection. Cut ⌘X, Copy ⌘C, Paste here ⌘V, Duplicate ⌘D, Delete ⌫, Bring to front ⌥⌘], ... show
+  their keys in one right-aligned column, labels at the left. Escape closes it. The same `menu_item`
+  builder draws the ≡ menu, so this stands for its key column.
+- Carry (P6.T3 ruling): with nothing selected, `file.exportFramesPdf` answers ok with `pages: 2`
+  (the stickies are FigCraft frames; kept on purpose under that ruling).
+- Follow-up (P6-C18, P6.T1 ruling, P2.T4 ruling), not failures: input dialogs for `text.link`
+  (also its keys ⌘K and ⇧⌘U while text is edited), `vector.offset`, `object.moveToPage`,
+  `object.batchRename`, `file.colorProfile`, `pref.nudge`; `file.revert` is always refused on a canvas.
+
+##### Hand checks (pending — needs the user)
+
+Run `SAWIT_NATIVE_CANVAS=1 target/debug/sawit` on a project, open the Canvas page, click the canvas
+once so it has the keyboard, and put two stickies on it. Record each answer under its number.
+
+1. ≡ menu and each submenu: the keys sit flush right in one column and stay readable on the
+   highlighted row. Answer: ______
+2. Context menus: a two-finger tap (or the mouse's right button) and a ⌃-click each open the menu at
+   the pointer, on an unselected sticky (it becomes the selection) and on empty canvas with something
+   selected (the selection clears and the four empty-canvas items show). A ⌃-click does nothing else
+   (no drag, marquee or tool stroke). Answer: ______
+3. Shortcut sheet (⌃⇧? or ≡ ▸ Help): its groups scroll with a two-finger swipe; scroll to the end and
+   confirm no ⌘W row and no ⌘J row. Answer: ______
+4. Import from file… (⇧⌘I): the open panel's button reads Import, ⌘-click picks two images, both come
+   in at the middle of the view, selected. Place image… (⇧⌘K): its button reads Place. Cancel in either
+   changes nothing and shows no toast. Answer: ______
+5. Save as… (⇧⌘S) on a project's canvas: the save panel opens in the project folder with
+   canvas.figcraft in its name field; Save toasts "Saved a copy as canvas.figcraft". Answer: ______
+6. Export… (⇧⌘E) with a sticky selected, then with nothing selected: each time a Finder window opens
+   on .nyawit/exports/ with the new file selected. Export selection as SVG… and Export frames to
+   PDF… do the same. Answer: ______
+7. Export frames to PDF… on a canvas with 3 stickies, one inside a section, and a connector between
+   the other two, nothing selected: Preview shows 3 pages, one sticky each, ordered by top edge then
+   left edge, no page for the section or the connector. Then say whether boards keep this rule or get
+   their own (the whole board on one page, or a page per section). Neither answer fails the task.
+   Answer: ______
+8. Copy as ▸ Copy as PNG (⇧⌘C) with two stickies selected, then Preview ▸ File ▸ New from Clipboard:
+   one picture of both, in the canvas's colours. Answer: ______
+9. Copy as text, CSS and SVG, each pasted into TextEdit in plain-text mode: the stickies' text one
+   line each, the first sticky's CSS with its width and height, and an `<svg …>` document.
+   Answer: ______
+10. After each dialog above closes, the canvas has the keyboard again (V and H switch tools).
+    Answer: ______
