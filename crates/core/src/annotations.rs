@@ -166,15 +166,20 @@ fn item_markdown(a: &Annotation) -> String {
     out.push('\n');
 
     if let Some(src) = &el.source {
-        let mut at = src.file.clone();
-        if let Some(line) = src.line {
-            at.push_str(&format!(":{line}"));
+        let component = src.component.as_deref().filter(|c| !c.is_empty());
+        if !src.file.is_empty() {
+            let mut at = src.file.clone();
+            if let Some(line) = src.line {
+                at.push_str(&format!(":{line}"));
+            }
+            let mut who = src.framework.clone();
+            if let Some(c) = component {
+                who.push_str(&format!(", <{c}>"));
+            }
+            out.push_str(&format!("- **Source:** `{at}` ({who})\n"));
+        } else if let Some(c) = component {
+            out.push_str(&format!("- **Source:** <{c}> ({})\n", src.framework));
         }
-        let mut who = src.framework.clone();
-        if let Some(c) = src.component.as_deref().filter(|c| !c.is_empty()) {
-            who.push_str(&format!(", <{c}>"));
-        }
-        out.push_str(&format!("- **Source:** `{at}` ({who})\n"));
     }
 
     let r = &el.rect;
@@ -526,5 +531,32 @@ mod tests {
         assert_eq!(d.styles[0], ("display".to_string(), "flex".to_string()));
         assert_eq!(d.source.unwrap().line, Some(7));
         assert!(!d.off_screen);
+    }
+
+    #[test]
+    fn component_only_source_names_the_component() {
+        let mut a = annotation();
+        a.element.source = Some(SourceHint {
+            file: String::new(),
+            line: None,
+            framework: "React".into(),
+            component: Some("Checkout".into()),
+        });
+        let md = markdown(&[group(vec![a])], None);
+        assert!(md.contains("- **Source:** <Checkout> (React)\n"));
+        assert!(!md.contains("``"));
+    }
+
+    #[test]
+    fn source_with_no_file_and_no_component_is_left_out() {
+        let mut a = annotation();
+        a.element.source = Some(SourceHint {
+            file: String::new(),
+            line: None,
+            framework: "React".into(),
+            component: None,
+        });
+        let md = markdown(&[group(vec![a])], None);
+        assert!(!md.contains("**Source:**"));
     }
 }

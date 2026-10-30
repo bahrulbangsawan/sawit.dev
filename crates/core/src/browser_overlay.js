@@ -98,13 +98,13 @@
     const r = el.getBoundingClientRect();
     return el.localName + (el.id ? "#" + el.id : "") + cls + " " + Math.round(r.width) + "×" + Math.round(r.height);
   };
-  const info = (el) => ({
+  const info = (el, max = 120) => ({
     selector: selectorFor(el),
     label: describe(el),
     tag: el.localName,
     id: el.id || "",
     classes: typeof el.className === "string" ? el.className.trim().split(/\s+/).filter(Boolean) : [],
-    text: clip(oneLine(el.innerText || el.textContent), 120),
+    text: clip(oneLine(el.innerText || el.textContent), max),
     rect: rectOf(el),
   });
 
@@ -186,8 +186,7 @@
     const r = el.getBoundingClientRect();
     const rect = { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
     return {
-      ...info(el),
-      text: oneLine(el.innerText || el.textContent),
+      ...info(el, 500),
       rect,
       styles: stylesOf(el),
       source: sourceOf(el),
