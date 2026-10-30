@@ -189,6 +189,39 @@ fn wait_for(session: &Session, palette: &Palette, needle: &str) -> Snapshot {
     }
 }
 
+fn wait_until(ok: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !ok() {
+        assert!(Instant::now() < deadline, "timed out waiting for condition");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn cwd_follows_the_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path().canonicalize().unwrap();
+    let cmd = Command {
+        program: "/bin/sh".into(),
+        cwd: Some(dir.clone()),
+        ..Command::default()
+    };
+    let (s, _rx) = Session::spawn(
+        cmd,
+        GridSize {
+            cols: 80,
+            rows: 24,
+            cell_width: 8,
+            cell_height: 17,
+        },
+    )
+    .unwrap();
+    wait_until(|| s.cwd().as_deref() == Some(dir.as_path()));
+    s.write(b"cd /\n".to_vec());
+    wait_until(|| s.cwd().as_deref() == Some(std::path::Path::new("/")));
+}
+
 #[test]
 fn session_renders_program_output() {
     let size = GridSize {
