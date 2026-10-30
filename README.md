@@ -62,7 +62,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with Web Inspector, and that AI agents drive through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (110 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (112 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 
 ## Install
 
@@ -237,14 +237,40 @@ explained. A conflict on the same address can't be forced.
 
 ### Canvas
 
-<img src="docs/media/canvas.png" alt="Canvas: a Mermaid flowchart of the demo app turned into editable Excalidraw shapes, with boxes for the browser, acme-store, the checkout API, payments, acme-admin, an AI agent and the shop database" width="100%">
+<img src="docs/media/canvas.png" alt="Canvas: a Mermaid flowchart of the demo app turned into editable shapes, with boxes for the browser, acme-store, the checkout API, payments, acme-admin, an AI agent and the shop database" width="100%">
 
-- Click **Canvas** in the title bar for an [Excalidraw](https://excalidraw.com) whiteboard, fully offline. It saves
-  by itself in the format excalidraw.com opens, and exports land in `~/Downloads`.
-- Excalidraw's **Mermaid to Excalidraw** tool (and the `canvas_add_mermaid` MCP tool) turns Mermaid into
-  **editable shapes**: boxes, arrows bound to them, and labels. Charts (pie, Gantt, XY,
-  quadrant, journey, Sankey, architecture) are placed as one image. Pele, the renderer the rest of the app uses,
-  does the conversion.
+- Click **Canvas** in the title bar, or press <kbd>⌃</kbd><kbd>⌘</kbd><kbd>C</kbd>, for a native whiteboard and
+  design canvas on the [FigCraft](https://github.com/storytold/figcraft) engine. It saves by itself.
+- **Boards and design files**: the project's canvas is a board, for sticky notes, shapes with text, connectors,
+  marker drawing, stamps and sections. A `.figcraft` file opened from the **Files** tab gets its own canvas tab,
+  as a board or as a design file (frames, vectors, auto layout and components), and saves back to the same file.
+- **Tools and the toolbar**: the toolbar floats at the bottom of the canvas, and each button's tooltip shows its key.
+  - A board has Move and Hand, Marker, Highlighter and Eraser, Sticky notes in eight colours, Shapes, Connectors
+    (straight, elbow or curved), Text, Section, Stamps, and a picker for templates and tables. A bar over the
+    selection offers its colour, shape, text size and connector style and ends.
+  - A design file has Move, Scale and Hand, Frame, Section and Slice, Rectangle, Line, Arrow, Ellipse, Polygon and
+    Star, Pen and Pencil, and Text.
+- **Layers and Design panels**: the layers panel on the left (<kbd>⌥</kbd><kbd>1</kbd>) lists the pages and layers.
+  Click to select, double-click to rename, hide or lock a layer, drag layers to reorder or nest them, and filter by
+  name. The Design panel on the right (<kbd>⌥</kbd><kbd>8</kbd>) edits the selection: position and size, auto layout,
+  appearance, fill, stroke, effects, typography and export. A board opens with both panels hidden and a design file
+  with both shown, and the top bar toggles them.
+- **Menus and shortcuts**: the ≡ button opens the main menu, and a right-click opens the context menu.
+  <kbd>⌘</kbd><kbd>K</kbd> (or <kbd>⌘</kbd><kbd>/</kbd>) opens the **Actions** palette, which finds any menu command
+  by name, and <kbd>⌃</kbd><kbd>⇧</kbd><kbd>?</kbd> lists every shortcut. While the canvas has the keyboard,
+  <kbd>⌘</kbd><kbd>K</kbd> belongs to the palette, so the tab chords that start with it don't work there.
+- **Where files live**: the project's canvas is `.nyawit/canvas.figcraft` in its folder. With no project it is
+  `canvas.figcraft` in Sawit's data folder. Exports go to `.nyawit/exports/` (`exports/` in the data folder with no
+  project), and Sawit shows them in Finder. **Save as…** (<kbd>⇧</kbd><kbd>⌘</kbd><kbd>S</kbd>) writes a `.figcraft`
+  copy anywhere. `.nyawit/` has its own `.gitignore`, so nothing in it is committed until you delete that file.
+- **From the old canvas**: a project that has only its old `.nyawit/canvas.excalidraw` opens it imported the first
+  time. The `.excalidraw` file is never changed, and the canvas says what the import left out (the hand-drawn look
+  doesn't carry over). An `.excalidraw` file in the Files tab opens the same way and saves as `<name>.figcraft`
+  beside it.
+- Agents draw on it through the `canvas_*` MCP tools. `canvas_add_mermaid` turns Mermaid into **editable shapes**:
+  boxes, connectors joined to them, and labels. Charts (pie, Gantt, XY, quadrant, journey, Sankey, architecture) are
+  placed as one picture. Pele, the renderer the rest of the app uses, lays the diagram out. `canvas_command` runs any
+  other canvas command by its id.
 
 ### Git
 
@@ -430,7 +456,7 @@ sawit pupuk bun -y                           # upgrade one tool without asking
 
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 110 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 112 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it).
 
 | Area | Tools |
@@ -451,7 +477,7 @@ except the app-control ones, which drive the running app (`launch_app` starts it
 | App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page`, `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
 | Terminal (app running) | `terminal_run`, `terminal_read`, `terminal_input`, `terminal_close` |
 | Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot` |
-| Canvas (app running) | `canvas_get`, `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear`, `canvas_load`, `canvas_export` |
+| Canvas | `canvas_get`, `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear`, `canvas_load`, `canvas_export`, `canvas_command` (any command of the canvas engine, by id), `canvas_commands` (lists them; pass a `filter` to see what each takes). All of them work on the saved canvas file when the app is closed |
 
 Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`
 and `uninstall_mcp_server` take the name again as `confirm` (so does `remove_instance` when it deletes the data), and `install_dev_tools` and `upgrade_dev_tools` need
@@ -604,6 +630,13 @@ Figures for other apps are not listed because they have not been measured on the
 - With transaction-mode poolers, session settings (`SET`) are not guaranteed to persist. The table browser still only
   runs `SELECT`.
 - Schema diagrams show tables only; views have no keys to relate.
+
+## Credits
+
+- Sawit includes [FigCraft](https://github.com/storytold/figcraft), Copyright (c) 2026 ArtCraft Team and the FigCraft
+  contributors, licensed under MIT OR Apache-2.0. See [`NOTICE`](NOTICE).
+- Sawit embeds [Inter](https://github.com/rsms/inter), Copyright 2020 The Inter Project Authors, licensed under the
+  SIL Open Font License 1.1. See [`NOTICE`](NOTICE).
 
 <sub>Screenshots and video in `docs/media/` were recorded from a release build with demo data (separate `SAWIT_HOME`,
 Homebrew PostgreSQL 16).</sub>

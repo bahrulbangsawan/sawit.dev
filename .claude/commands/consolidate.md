@@ -53,8 +53,6 @@ cargo build --release
 
 - For a failure, find the root cause (superpowers:systematic-debugging). Fix the code, not the check: no
   `#[allow]`, `#[ignore]` or deleted tests to make it green unless the user agrees.
-- If `web/canvas` sources changed (`git status` shows `web/canvas/**`), rebuild the canvas bundle with
-  `npm run build` in `web/canvas`, so `crates/app/canvas/*.br` matches its sources.
 - Look at untracked files: anything that belongs to the product gets added. Build output, logs, `.env`,
   secrets, `*.local.*` and scratch files must not be committed. Add a `.gitignore` entry if one keeps
   showing up.
