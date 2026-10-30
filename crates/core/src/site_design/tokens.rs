@@ -264,14 +264,23 @@ fn merged<'a>(uses: impl Iterator<Item = &'a ColorUse>) -> Vec<Seen> {
     out
 }
 
-/// Merges colors within ΔE_OK < 0.02 into the most-used one; most-used first.
+/// Alpha as a byte, the precision `to_hex` keeps.
+fn alpha8(c: Rgba) -> u8 {
+    (c.a.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+/// Opaque enough to be a palette role: a translucent tint isn't the color the page shows.
+fn opaque(c: Rgba) -> bool {
+    c.a >= 0.99
+}
+
+/// Merges colors of equal alpha within ΔE_OK < 0.02 into the most-used one; most-used first.
 fn clustered(seen: Vec<Seen>) -> Vec<Seen> {
     let mut out: Vec<Seen> = Vec::new();
     for s in seen {
-        match out
-            .iter_mut()
-            .find(|c| color::delta_e(c.color, s.color) < CLUSTER)
-        {
+        match out.iter_mut().find(|c| {
+            alpha8(c.color) == alpha8(s.color) && color::delta_e(c.color, s.color) < CLUSTER
+        }) {
             Some(c) => {
                 c.count += s.count;
                 c.button_bg += s.button_bg;
@@ -312,8 +321,9 @@ fn derive_colors(scan: &Scan) -> Colors {
     let distinct = merged(scan.colors.iter());
     let seen = distinct.len();
     let all = clustered(distinct);
-    let chromatic: Vec<&Seen> = all.iter().filter(|s| chroma(s.color) >= CHROMA).collect();
-    let neutral = all.iter().find(|s| chroma(s.color) < CHROMA);
+    let candidates = || all.iter().filter(|s| opaque(s.color));
+    let chromatic: Vec<&Seen> = candidates().filter(|s| chroma(s.color) >= CHROMA).collect();
+    let neutral = candidates().find(|s| chroma(s.color) < CHROMA);
     let primary = most(&chromatic, |s| s.button_bg)
         .or_else(|| most(&chromatic, |s| s.link_text))
         .or_else(|| chromatic.first().copied());
@@ -359,11 +369,16 @@ fn derive_colors(scan: &Scan) -> Colors {
             .filter(|c| chroma(*c) < CHROMA)
             .collect()
     };
+    // "Second most-used": the most-used neutral that isn't the background / foreground itself.
+    let other_than = |v: Vec<Rgba>, first: Option<Rgba>| {
+        v.into_iter()
+            .find(|c| first.is_none_or(|f| color::delta_e(*c, f) >= CLUSTER))
+    };
     let foreground = texts.first().map(|s| s.color);
-    let muted = neutral_of(in_role(scan, ColorRole::Background))
-        .get(1)
-        .copied();
-    let muted_fg = neutral_of(texts).get(1).copied();
+    let backgrounds = in_role(scan, ColorRole::Background);
+    let first_bg = background.or_else(|| backgrounds.first().map(|s| s.color));
+    let muted = other_than(neutral_of(backgrounds), first_bg);
+    let muted_fg = other_than(neutral_of(texts), foreground);
     let border = in_role(scan, ColorRole::Border).first().map(|s| s.color);
     let primary_c = primary.map(|p| p.color);
     let primary_fg = primary_c.map(|p| {
@@ -1162,6 +1177,72 @@ mod tests {
         assert_eq!(hex("ring").as_deref(), Some("#0066cc"));
         assert!(hex("background").is_none() && hex("border").is_none());
         assert!(t.components.is_empty() && t.type_roles.is_empty() && t.type_scale.is_empty());
+    }
+
+    fn use_(value: &str, role: ColorRole, count: u32) -> crate::site_design::scan::ColorUse {
+        crate::site_design::scan::ColorUse {
+            value: value.into(),
+            role,
+            count,
+            on_button: 0,
+            on_link: 0,
+        }
+    }
+
+    #[test]
+    fn translucent_colors_are_not_roles() {
+        let scan = Scan {
+            colors: vec![
+                use_("rgba(0, 0, 0, 0.1)", ColorRole::Shadow, 900),
+                use_("rgba(0, 113, 227, 0.1)", ColorRole::Background, 400),
+                use_("rgb(51, 51, 51)", ColorRole::Text, 100),
+                use_("rgb(0, 0, 0)", ColorRole::Text, 50),
+                use_("rgba(0, 0, 0, 0.12)", ColorRole::Border, 30),
+            ],
+            ..Default::default()
+        };
+        let t = derive(&scan, "2026-10-30");
+        let roles: Vec<(&str, String)> = t
+            .palette
+            .iter()
+            .map(|r| (r.role.as_str(), r.base.to_hex()))
+            .collect();
+        assert_eq!(roles, vec![("neutral", "#333333".to_string())]);
+        assert_eq!(t.palette[0].uses, 100);
+        // An observed translucent border stays translucent.
+        let border = semantic(&t, "border").unwrap();
+        assert_eq!(border.to_hex(), "#0000001f");
+        // Equal hue and lightness but different alpha don't cluster.
+        let scan = Scan {
+            colors: vec![
+                use_("rgb(0, 0, 0)", ColorRole::Text, 10),
+                use_("rgba(0, 0, 0, 0.5)", ColorRole::Text, 50),
+            ],
+            ..Default::default()
+        };
+        let t = derive(&scan, "2026-10-30");
+        assert_eq!(t.palette[0].uses, 10);
+    }
+
+    #[test]
+    fn muted_skips_the_body_colors() {
+        let scan = Scan {
+            body_background: Some("rgb(243, 244, 246)".into()),
+            colors: vec![
+                use_("rgb(255, 255, 255)", ColorRole::Background, 300),
+                use_("rgb(243, 244, 246)", ColorRole::Background, 100),
+                use_("rgb(30, 41, 59)", ColorRole::Text, 200),
+                use_("rgb(107, 114, 128)", ColorRole::Text, 50),
+                use_("rgb(156, 163, 175)", ColorRole::Text, 20),
+            ],
+            ..Default::default()
+        };
+        let t = derive(&scan, "2026-10-30");
+        let hex = |n: &str| semantic(&t, n).map(|c| c.to_hex());
+        assert_eq!(hex("background").as_deref(), Some("#f3f4f6"));
+        assert_eq!(hex("muted").as_deref(), Some("#ffffff"));
+        assert_eq!(hex("foreground").as_deref(), Some("#1e293b"));
+        assert_eq!(hex("muted-foreground").as_deref(), Some("#6b7280"));
     }
 
     #[test]
