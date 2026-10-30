@@ -1,6 +1,7 @@
 //! The System segment: the derived design tokens, and the export.
 
 use gpui_kit::component::button::*;
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -98,6 +99,15 @@ fn export_block(
                         .tooltip("Write DESIGN.md, tokens and assets to the export folder")
                         .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                             cx.emit(DesignEvent::Export { include_videos });
+                        })),
+                )
+                .child(
+                    Checkbox::new("design-export-videos")
+                        .label("Include videos")
+                        .checked(include_videos)
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.include_videos = *checked;
+                            cx.notify();
                         })),
                 )
                 .when_some(finished, |el, folder| {

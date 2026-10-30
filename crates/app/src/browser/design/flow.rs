@@ -140,6 +140,7 @@ impl BrowserView {
         let state = self.design.state.clone();
         self.design_panel
             .update(cx, |panel, cx| panel.set_scan(state, cx));
+        self.sync_export(cx);
     }
 
     /// With the Design panel open, scans the page (a cached scan answers at once).
@@ -336,16 +337,11 @@ impl BrowserView {
             let outcomes = download_all(assets, &dir, &url, false, MAX_TOTAL, |_, _| {}).await;
             let saved = outcomes.iter().filter(|o| o.error.is_none()).count();
             let first_error = outcomes.iter().find_map(|o| o.error.clone());
-            (saved, first_error)
+            (saved, outcomes.len(), first_error)
         });
         cx.spawn(async move |this, cx| {
             let note = match job.await {
-                Ok((0, error)) => error.unwrap_or_else(|| "Nothing was saved.".to_string()),
-                Ok((n, _)) => format!(
-                    "Saved {n} file{} to {}",
-                    if n == 1 { "" } else { "s" },
-                    shown.display()
-                ),
+                Ok((saved, total, error)) => save_note(saved, total, error, &shown),
                 Err(_) => "The save was cancelled.".to_string(),
             };
             let _ = this.update(cx, |this, cx| this.design_note(note, cx));
@@ -355,20 +351,24 @@ impl BrowserView {
 
     /// Hands the export's progress to the Design panel.
     fn sync_export(&mut self, cx: &mut Context<Self>) {
-        let shown = self.export_job().map(|job| ExportShown {
-            folder: job.folder.clone(),
-            done: job.done,
-            total: job.total,
-            outcome: job.result.as_ref().map(|r| {
-                r.as_ref()
-                    .map(|report| ExportDone {
-                        files: report.files.len(),
-                        failed: report.failed.len(),
-                        screenshot_error: report.screenshot_error.clone(),
-                    })
-                    .map_err(Clone::clone)
-            }),
-        });
+        let host = export_host(&self.current_url());
+        let shown = self
+            .export_job()
+            .filter(|job| job.folder.file_name().is_some_and(|n| *n == *host))
+            .map(|job| ExportShown {
+                folder: job.folder.clone(),
+                done: job.done,
+                total: job.total,
+                outcome: job.result.as_ref().map(|r| {
+                    r.as_ref()
+                        .map(|report| ExportDone {
+                            files: report.files.len(),
+                            failed: report.failed.len(),
+                            screenshot_error: report.screenshot_error.clone(),
+                        })
+                        .map_err(Clone::clone)
+                }),
+            });
         self.design_panel
             .update(cx, |p, cx| p.set_export(shown, cx));
     }
@@ -548,6 +548,25 @@ impl BrowserView {
         })
         .detach();
     }
+}
+
+/// The footer note after a save of `total` files, `saved` of which arrived.
+fn save_note(saved: usize, total: usize, first_error: Option<String>, dir: &Path) -> String {
+    let failed = total - saved;
+    if saved == 0 {
+        return first_error.unwrap_or_else(|| "Nothing was saved.".to_string());
+    }
+    let mut note = format!(
+        "Saved {saved} file{} to {}",
+        if saved == 1 { "" } else { "s" },
+        dir.display()
+    );
+    if failed > 0 {
+        note.push_str(&format!(
+            ". {failed} of {total} assets couldn't be downloaded"
+        ));
+    }
+    note
 }
 
 fn empty_ready() -> Ready {
@@ -1122,6 +1141,17 @@ fn export_status(job: &ExportJob) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn save_note_reports_failures() {
+        let d = std::path::Path::new("a/assets");
+        assert_eq!(super::save_note(3, 3, None, d), "Saved 3 files to a/assets");
+        assert_eq!(
+            super::save_note(28, 40, Some("x".into()), d),
+            "Saved 28 files to a/assets. 12 of 40 assets couldn't be downloaded"
+        );
+        assert_eq!(super::save_note(0, 2, Some("403".into()), d), "403");
+    }
+
     use super::*;
     use sawit_core::site_design::scan::{ColorRole, ColorUse};
 
