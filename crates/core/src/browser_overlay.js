@@ -23,6 +23,9 @@
   let frame = 0;
   let lastHover = 0;
   let hoverTimer = 0;
+  // Inspect: the picked element, and whether Alt is held to measure from it.
+  let pinned = null;
+  let altHeld = false;
 
   const ensureHost = () => {
     if (!ready || !document.documentElement) return null;
@@ -235,6 +238,46 @@
         ";color:#fff;font:bold 11px/20px system-ui,sans-serif;text-align:center", String(item.n)));
     }
   };
+  // Alt-measure: distance lines with px labels between the picked box `a` and
+  // the hovered box `b`.
+  const MEASURE = "#ff375f";
+  const drawMeasure = () => {
+    if (mode !== "inspect" || !altHeld || !pinned || !pinned.isConnected || !current || current === pinned) return;
+    const a = pinned.getBoundingClientRect();
+    const b = current.getBoundingClientRect();
+    layer.appendChild(box("left:" + px(a.left) + ";top:" + px(a.top) + ";width:" + px(a.width) + ";height:" + px(a.height) +
+      ";outline:1px dashed " + MEASURE + ";outline-offset:-1px"));
+    const tag = (x, y, d) => {
+      layer.appendChild(box("left:" + px(x) + ";top:" + px(y) + ";transform:translate(-50%,-50%);padding:1px 4px;border-radius:3px;background:" +
+        MEASURE + ";color:#fff;font:10px/13px system-ui,sans-serif;white-space:nowrap", Math.round(d * 10) / 10 + "px"));
+    };
+    const hLine = (x1, x2, y) => {
+      if (x2 - x1 < 0.5) return;
+      layer.appendChild(box("left:" + px(x1) + ";top:" + px(y) + ";width:" + px(x2 - x1) + ";height:1px;background:" + MEASURE));
+      tag((x1 + x2) / 2, y, x2 - x1);
+    };
+    const vLine = (y1, y2, x) => {
+      if (y2 - y1 < 0.5) return;
+      layer.appendChild(box("left:" + px(x) + ";top:" + px(y1) + ";width:1px;height:" + px(y2 - y1) + ";background:" + MEASURE));
+      tag(x, (y1 + y2) / 2, y2 - y1);
+    };
+    // Where a line between the boxes runs: the middle of their overlap, else the picked box's middle.
+    const midY = Math.max(a.top, b.top) < Math.min(a.bottom, b.bottom) ? (Math.max(a.top, b.top) + Math.min(a.bottom, b.bottom)) / 2 : a.top + a.height / 2;
+    const midX = Math.max(a.left, b.left) < Math.min(a.right, b.right) ? (Math.max(a.left, b.left) + Math.min(a.right, b.right)) / 2 : a.left + a.width / 2;
+    // Horizontal: the gap between them, else (overlapping) the distance between matching edges.
+    if (b.left >= a.right) hLine(a.right, b.left, midY);
+    else if (a.left >= b.right) hLine(b.right, a.left, midY);
+    else {
+      hLine(Math.min(a.left, b.left), Math.max(a.left, b.left), midY);
+      hLine(Math.min(a.right, b.right), Math.max(a.right, b.right), midY);
+    }
+    if (b.top >= a.bottom) vLine(a.bottom, b.top, midX);
+    else if (a.top >= b.bottom) vLine(b.bottom, a.top, midX);
+    else {
+      vLine(Math.min(a.top, b.top), Math.max(a.top, b.top), midX);
+      vLine(Math.min(a.bottom, b.bottom), Math.max(a.bottom, b.bottom), midX);
+    }
+  };
   const render = () => {
     if (!host && items.length === 0 && mode === "off") return;
     if (!ensureHost()) return;
@@ -243,6 +286,7 @@
     }
     drawMarkers();
     if (mode !== "off") drawHighlight();
+    drawMeasure();
   };
   const schedule = () => {
     if (frame) return;
@@ -308,6 +352,10 @@
     else hoverTimer = setTimeout(hover, wait);
   };
   const move = (e) => {
+    if (e.altKey !== altHeld) {
+      altHeld = e.altKey;
+      schedule();
+    }
     const el = hit(e.clientX, e.clientY);
     if (el && el !== current) {
       down = [];
@@ -333,9 +381,18 @@
     swallow(e);
     const h = hit(e.clientX, e.clientY);
     const el = current && h && current.contains(h) ? current : h || current;
-    if (el) send("picked", { mode, element: details(el) });
+    if (!el) return;
+    if (mode === "inspect") pinned = el;
+    send("picked", { mode, element: details(el) });
+  };
+  const altKey = (e) => {
+    if (e.key === "Alt" && altHeld !== (e.type === "keydown")) {
+      altHeld = e.type === "keydown";
+      schedule();
+    }
   };
   const keydown = (e) => {
+    altKey(e);
     if (e.key === "Escape") {
       swallow(e);
       send("key", "escape");
@@ -359,6 +416,7 @@
     ...SWALLOWED.map((type) => [type, swallow]),
     ["click", click],
     ["keydown", keydown],
+    ["keyup", altKey],
     ["wheel", wheel],
   ];
   const stopPicking = () => {
@@ -366,6 +424,8 @@
     for (const [type, fn] of LISTENERS) window.removeEventListener(type, fn, { capture: true });
     mode = "off";
     current = null;
+    pinned = null;
+    altHeld = false;
     down = [];
     clearTimeout(hoverTimer);
     hoverTimer = 0;
@@ -402,6 +462,7 @@
     } else {
       mode = op.mode;
     }
+    if (mode !== "inspect") pinned = null;
     return { mode };
   };
   const markers = (op) => {

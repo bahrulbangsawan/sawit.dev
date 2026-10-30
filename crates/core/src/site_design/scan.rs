@@ -210,6 +210,15 @@ mod tests {
         assert_eq!(back["spacing"][0], serde_json::json!([4.0, 50]));
     }
 
+    /// What `browser_design.js`'s `scan` and `rules` emit, field for field.
+    #[test]
+    fn page_output_is_the_contract() {
+        crate::site_design::assert_wire_exact::<Scan>(include_str!("fixtures/page_scan.json"));
+        crate::site_design::assert_wire_exact::<SheetRules>(include_str!(
+            "fixtures/page_rules.json"
+        ));
+    }
+
     #[test]
     fn merge_rules_dedupes() {
         let mut s = Scan {

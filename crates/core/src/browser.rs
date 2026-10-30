@@ -21,12 +21,14 @@ pub const AGENT_JS: &str = include_str!("browser_agent.js");
 pub const TOKEN_PLACEHOLDER: &str = "__SAWIT_TOKEN__";
 /// The picker, highlights and markers (a page module).
 pub const OVERLAY_JS: &str = include_str!("browser_overlay.js");
+/// The design scan, stylesheet rules and element styles (a page module; uses the overlay's helpers).
+pub const DESIGN_JS: &str = include_str!("browser_design.js");
 /// Where the agent takes its page modules.
 pub const MODULES_PLACEHOLDER: &str = "/*__SAWIT_MODULES__*/";
 
 /// The agent with its page modules spliced in and `token` set.
 pub fn page_script(token: &str) -> String {
-    let modules = [OVERLAY_JS].join("\n");
+    let modules = [OVERLAY_JS, DESIGN_JS].join("\n");
     AGENT_JS
         .replace(MODULES_PLACEHOLDER, &modules)
         .replace(TOKEN_PLACEHOLDER, token)
@@ -1005,6 +1007,8 @@ mod tests {
             1
         );
         assert!(s.find("sawit-overlay").unwrap() < s.find("const OPS").unwrap());
+        assert!(s.contains("blocked_sheets"));
+        assert!(s.find("blocked_sheets").unwrap() < s.find("const OPS").unwrap());
     }
 
     #[test]
@@ -1021,6 +1025,43 @@ mod tests {
             Some(PageEvent::Key("toggle-annotate".into()))
         );
         assert_eq!(parse_ipc("bad\nkey\n\"escape\"", "tok"), None);
+    }
+
+    /// Every field of the design contract fixtures is written by the design module.
+    #[test]
+    fn design_module_writes_the_contract_fields() {
+        fn keys(v: &Value, out: &mut Vec<String>) {
+            match v {
+                Value::Object(m) => {
+                    for (k, v) in m {
+                        out.push(k.clone());
+                        keys(v, out);
+                    }
+                }
+                Value::Array(a) => a.iter().for_each(|v| keys(v, out)),
+                _ => {}
+            }
+        }
+        let mut all = Vec::new();
+        for fixture in [
+            include_str!("site_design/fixtures/page_scan.json"),
+            include_str!("site_design/fixtures/page_rules.json"),
+            include_str!("site_design/fixtures/page_style.json"),
+        ] {
+            keys(&serde_json::from_str(fixture).unwrap(), &mut all);
+        }
+        for key in all {
+            let written = [
+                format!("{key}:"),
+                format!("{{ {key},"),
+                format!(" {key},"),
+                format!(" {key} }}"),
+            ];
+            assert!(
+                written.iter().any(|w| DESIGN_JS.contains(w.as_str())),
+                "browser_design.js never writes `{key}`"
+            );
+        }
     }
 
     #[test]
