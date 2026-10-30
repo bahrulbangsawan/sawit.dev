@@ -1635,24 +1635,44 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn a_headless_export_of_text_has_glyphs() {
+    /// The SVG `canvas_export` writes, with no app running, for a canvas of one sticky that says
+    /// `text`.
+    async fn exported_sticky(text: &str) -> String {
         let dir = tempfile::tempdir().unwrap();
         let server = native(dir.path());
         let project = dir.path().join("project");
-        write_board(&board_file(&project), 1);
+        let file = board_file(&project);
+        let mut board = BoardDoc::new_board("Canvas").unwrap();
+        let sticky = json!({"x": 0, "y": 0, "text": text});
+        board.execute("board.sticky", &sticky).unwrap();
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, board.to_bytes().unwrap()).unwrap();
 
+        let out = dir.path().join("page.svg");
         let done = server
             .canvas_export(Parameters(CanvasExportArgs {
                 format: Some("svg".into()),
-                output_path: Some(dir.path().join("page.svg").display().to_string()),
+                output_path: Some(out.display().to_string()),
                 project: project_arg(&project),
             }))
             .await;
         assert_ne!(done.is_error, Some(true), "{}", said(&done));
-        let svg = std::fs::read_to_string(dir.path().join("page.svg")).unwrap();
-        // The sticky's text is drawn as outlines: more than the sticky's own rectangle.
-        let paths = svg.matches("<path").count();
-        assert!(paths >= 2, "{paths} paths in {svg}");
+        std::fs::read_to_string(out).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_headless_export_of_text_has_glyphs() {
+        let with_text = exported_sticky("note 0").await;
+        let without_text = exported_sticky("").await;
+
+        // Text laid out with no font to draw it in comes out as a path with no outline (`d=""`),
+        // and a sticky that says something then exports as one that says nothing. The sticky's own
+        // rectangle and the text's path are two paths either way, so counting them proves nothing.
+        assert!(!with_text.contains(r#"d="""#), "{with_text}");
+        let (with, without) = (with_text.len(), without_text.len());
+        assert!(
+            with > without,
+            "{with} bytes, no more than the {without} of a sticky with no text: {with_text}"
+        );
     }
 }
