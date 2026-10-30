@@ -14,12 +14,15 @@ use serde_json::Value;
 
 use crate::app::pretty;
 use crate::browser::{required, target};
-use crate::{Sawit, fail, ok, tri};
+use crate::{Sawit, clip, fail, ok, tri};
+
+fn clip_out(text: String) -> String {
+    clip(text, 60_000)
+}
 
 const FORMATS: [&str; 4] = ["json", "css", "tailwind", "html"];
 const EXPORT_POLL: Duration = Duration::from_millis(500);
 const EXPORT_LIMIT: Duration = Duration::from_secs(600);
-const MAX_OUTPUT: usize = 60_000;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct InspectArgs {
@@ -68,41 +71,20 @@ fn inspect_op(
     Ok(BrowserOp::Inspect { target, format })
 }
 
-/// Keeps an answer within the tool output limit, on a character boundary.
-fn capped(mut text: String) -> String {
-    if text.len() > MAX_OUTPUT {
-        let mut end = MAX_OUTPUT;
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        text.truncate(end);
-        text.push_str("\n… cut at 60 KB.");
-    }
-    text
-}
-
-/// The finished export as text: folder, files, failed downloads.
-fn export_report(v: &Value) -> String {
+/// The finished export as text (folder, failed downloads, files), or the
+/// job's error.
+fn export_report(v: &Value) -> Result<String, String> {
     let folder = v["folder"].as_str().unwrap_or("");
-    let mut out = String::new();
     if let Some(e) = v["error"].as_str() {
-        out.push_str(&format!("The export failed: {e}\n"));
+        let mut out = format!("The export failed: {e}");
         if !folder.is_empty() {
-            out.push_str(&format!("Folder: {folder}\n"));
+            out.push_str(&format!("\nFolder: {folder}"));
         }
-        return capped(out);
+        return Err(out);
     }
-    out.push_str(&format!("Exported to {folder}\n"));
+    let mut out = format!("Exported to {folder}\n");
     if let Some(e) = v["screenshot_error"].as_str() {
         out.push_str(&format!("No screenshot.png: {e}\n"));
-    }
-    let files: Vec<&str> = v["files"]
-        .as_array()
-        .map(|a| a.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
-    out.push_str(&format!("\n{} files:\n", files.len()));
-    for f in &files {
-        out.push_str(&format!("{f}\n"));
     }
     let failed = v["failed"].as_array().map(Vec::as_slice).unwrap_or(&[]);
     if !failed.is_empty() {
@@ -116,7 +98,15 @@ fn export_report(v: &Value) -> String {
             out.push_str(&format!("{what} — {why}\n"));
         }
     }
-    capped(out)
+    let files: Vec<&str> = v["files"]
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    out.push_str(&format!("\n{} files:\n", files.len()));
+    for f in &files {
+        out.push_str(&format!("{f}\n"));
+    }
+    Ok(clip_out(out))
 }
 
 #[tool_router(router = browser_design_router, vis = "pub(crate)")]
@@ -137,7 +127,7 @@ impl Sawit {
             }
             _ => pretty(&v),
         };
-        ok(capped(text))
+        ok(clip_out(text))
     }
 
     #[tool(
@@ -148,7 +138,7 @@ impl Sawit {
             self.browser(&a.project, BrowserOp::Design { part: a.part })
                 .await
         );
-        ok(capped(pretty(&v)))
+        ok(clip_out(pretty(&v)))
     }
 
     #[tool(
@@ -172,12 +162,18 @@ impl Sawit {
             tokio::time::sleep(EXPORT_POLL).await;
             let v = tri!(self.browser(&a.project, BrowserOp::ExportStatus).await);
             if v["done"] == true {
-                return ok(export_report(&v));
+                return match export_report(&v) {
+                    Ok(t) => ok(t),
+                    Err(e) => fail(e),
+                };
             }
             if Instant::now() >= deadline {
-                let (d, t) = (v["progress"][0].clone(), v["progress"][1].clone());
+                let progress = match (v["progress"][0].as_u64(), v["progress"][1].as_u64()) {
+                    (Some(d), Some(t)) => format!(" ({d} of {t} downloads)"),
+                    _ => String::new(),
+                };
                 return fail(format!(
-                    "The export is still running after 10 minutes ({d} of {t} downloads). It keeps going in the app; folder: {}",
+                    "The export is still running after 10 minutes{progress}. It keeps going in the app; folder: {}",
                     v["folder"].as_str().unwrap_or("")
                 ));
             }
@@ -214,17 +210,18 @@ mod tests {
             "files": ["DESIGN.md"], "screenshot_error": "The tab moved.",
             "failed": [{"url": "https://a.dev/x.png", "error": "HTTP 404"}],
         });
-        let t = export_report(&v);
+        let t = export_report(&v).unwrap();
+        assert!(t.find("downloads failed") < t.find("files:"));
         assert!(t.contains("Exported to /p/.nyawit/design/a.dev"));
         assert!(t.contains("DESIGN.md"));
         assert!(t.contains("https://a.dev/x.png — HTTP 404"));
         assert!(t.contains("The tab moved."));
         let e = export_report(&json!({"done": true, "folder": "/f", "error": "disk full"}));
-        assert!(e.starts_with("The export failed: disk full"));
+        assert!(e.unwrap_err().starts_with("The export failed: disk full"));
     }
 
     #[test]
-    fn output_is_capped() {
-        assert!(capped("é".repeat(40_000)).len() < 60_100);
+    fn output_is_clip_out() {
+        assert!(clip_out("é".repeat(40_000)).len() < 60_100);
     }
 }
