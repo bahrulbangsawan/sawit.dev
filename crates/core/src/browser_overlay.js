@@ -41,8 +41,6 @@
   };
   const applyMode = () => {
     if (!host) return;
-    host.style.pointerEvents = mode === "off" ? "none" : "auto";
-    host.style.cursor = mode === "off" ? "" : "crosshair";
     host.style.display = hidden ? "none" : "block";
   };
   const box = (css, text) => {
@@ -146,6 +144,7 @@
     }
   };
   const render = () => {
+    if (!host && items.length === 0 && mode === "off") return;
     if (!ensureHost()) return;
     for (const child of [...layer.children]) {
       if (!child.hasAttribute("data-flash")) child.remove();
@@ -240,7 +239,8 @@
   };
   const click = (e) => {
     swallow(e);
-    const el = hit(e.clientX, e.clientY) || current;
+    const h = hit(e.clientX, e.clientY);
+    const el = current && h && current.contains(h) ? current : h || current;
     if (el) send("picked", { mode, element: info(el) });
   };
   const keydown = (e) => {
