@@ -251,10 +251,15 @@ so no code change. Everything was driven over the control socket; no AX, osascri
 - Step 2, `help.shortcuts`: the sheet shows Essential, Tools, View, Zoom, Text and Shape groups in
   three columns. No ⌘W row and no ⌘J row in the visible part; the sheet scrolls, and the part below
   the fold (Object, Vector) was not seen: the hand check lists it. Escape closes the sheet.
-- Carry (P6.T2 ruling): with both stickies selected, `view.contextMenu` opens the context menu under
-  the selection. Cut ⌘X, Copy ⌘C, Paste here ⌘V, Duplicate ⌘D, Delete ⌫, Bring to front ⌥⌘], ... show
-  their keys in one right-aligned column, labels at the left. Escape closes it. The same `menu_item`
-  builder draws the ≡ menu, so this stands for its key column.
+- Carry (P6.T2 ruling): with both stickies selected, `view.contextMenu` opens the selection's context
+  menu. It is anchored 8 pt under the selection's bottom-left corner, but the shot shows it higher.
+  The selection's menu has 25 rows and lines (19 items and 6 lines), more than `SCROLLS_PAST` (20),
+  so it scrolls, and gpui-component caps its height at half the window (400 pt in this 801 pt
+  window, 450 pt at most). To stay 8 pt inside the window it moved up, over the left sticky, and its
+  visible part ends mid-row at Flip horizontal. The rest, Flip vertical to Select all, scrolls into
+  view (HC 2). This is by design, not a defect. Cut ⌘X, Copy ⌘C, Paste here ⌘V, Duplicate ⌘D,
+  Delete ⌫, Bring to front ⌥⌘], ... show their keys in one right-aligned column, labels at the left.
+  Escape closes it. The same `menu_item` builder draws the ≡ menu, so this stands for its key column.
 - Carry (P6.T3 ruling): with nothing selected, `file.exportFramesPdf` answers ok with `pages: 2`
   (the stickies are FigCraft frames; kept on purpose under that ruling).
 - Follow-up (P6-C18, P6.T1 ruling, P2.T4 ruling), not failures: input dialogs for `text.link`
@@ -271,7 +276,9 @@ once so it has the keyboard, and put two stickies on it. Record each answer unde
 2. Context menus: a two-finger tap (or the mouse's right button) and a ⌃-click each open the menu at
    the pointer, on an unselected sticky (it becomes the selection) and on empty canvas with something
    selected (the selection clears and the four empty-canvas items show). A ⌃-click does nothing else
-   (no drag, marquee or tool stroke). Answer: ______
+   (no drag, marquee or tool stroke). With a sticky selected, the menu stays inside the window, also
+   when opened near the window's bottom edge, and a two-finger swipe scrolls it to its last item,
+   Select all. Answer: ______
 3. Shortcut sheet (⌃⇧? or ≡ ▸ Help): its groups scroll with a two-finger swipe; scroll to the end and
    confirm no ⌘W row and no ⌘J row. Answer: ______
 4. Import from file… (⇧⌘I): the open panel's button reads Import, ⌘-click picks two images, both come
@@ -292,5 +299,26 @@ once so it has the keyboard, and put two stickies on it. Record each answer unde
 9. Copy as text, CSS and SVG, each pasted into TextEdit in plain-text mode: the stickies' text one
    line each, the first sticky's CSS with its width and height, and an `<svg …>` document.
    Answer: ______
-10. After each dialog above closes, the canvas has the keyboard again (V and H switch tools).
+10. The canvas has the keyboard again (V and H switch tools) after each dialog above closes. It also
+    has it after the ≡ menu, the palette, the sheet and the context menu close: on Escape in each,
+    and on a choice in the ≡ menu, the palette and the context menu that opens no dialog or sheet.
+    Tests check this for the palette, the sheet and the context menu, but not for the ≡ menu.
     Answer: ______
+
+#### Final review fixes (FINAL.P6, 2026-10-31)
+
+- C1: typing in a sticky or a text could be lost. Select none (the empty-canvas right-click of
+  ruling P6-C10), a tool or page switch, or deleting the text being typed dropped the edit without
+  ending it. That left FigCraft's "Edit text" gesture open: no later command made an undo step, and
+  the next click on a layer cancelled the gesture, which put the document back to before the
+  typing. Now one BoardView helper, `end_text_edit` (ruling R-TEXTEDIT), ends the edit first, as a
+  press outside the text does. It runs at the top of `on_right_down`, before its selection rule, so
+  P6-C10 now reads "end the text edit, then clear the selection". It also runs in `run_menu` and
+  `choose` before any command but the Text menu's (`text.*`) and copy and paste
+  (`sawit_board::policy::keeps_text_edit`). The keys needed no change: while a text is typed in,
+  only its own shortcuts run, and ⌘Z ends the edit first. FINAL.P7 routes the layers panel's own
+  actions and the command op through the same helper. Tests: four GPUI tests in `board::menus`,
+  each failing without the fix, and four sawit-board tests.
+- T4-1 and T4-3: HC 10 now also covers the ≡ menu, the palette, the sheet and the context menu
+  giving the keyboard back. HC 2 covers the selection's context menu staying in the window and
+  scrolling. The context-menu note above now says where that menu sits.
