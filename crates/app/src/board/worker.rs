@@ -18,6 +18,9 @@ use sawit_board::view::{screen_rgb, to_bgra};
 pub struct Job {
     /// The document as it is now: a snapshot, which later edits leave alone.
     pub doc: Arc<Document>,
+    /// The document's [`figcraft_engine::DocState::uid`], which names it for good (each edit
+    /// makes a new `doc`): with `page`, what the frame is an image of.
+    pub uid: u64,
     pub page: NodeId,
     /// The page area to draw and its size in device px (`sawit_board::view::render_view`).
     pub view: View,
@@ -42,6 +45,18 @@ pub struct Frame {
     pub image: Arc<RenderImage>,
     /// The [`Job::key`] of the request this answers.
     pub key: u64,
+    /// What the image is of: the [`Job::uid`] and [`Job::page`] of that request.
+    pub uid: u64,
+    pub page: NodeId,
+}
+
+impl Frame {
+    /// Whether this is an image of page `page` of the document whose uid is `uid`. The canvas
+    /// paints only an image of the page on show, as FigCraft's own canvas does: one of another
+    /// page or file, moved over this one, would show content that isn't there.
+    pub fn shows(&self, uid: u64, page: NodeId) -> bool {
+        self.uid == uid && self.page == page
+    }
 }
 
 /// The render thread of one canvas (named `canvas-render`). It ends when the worker drops, once
@@ -170,6 +185,8 @@ fn render(retained: &mut Retained, job: &Job) -> Option<Frame> {
         view,
         image,
         key: job.key,
+        uid: job.uid,
+        page: job.page,
     })
 }
 
@@ -254,6 +271,7 @@ mod tests {
         let [r, g, b] = rgb;
         Job {
             doc: doc.clone(),
+            uid: 1,
             page,
             view: View {
                 origin: (-100.0, -100.0),
@@ -282,10 +300,17 @@ mod tests {
     fn renders_a_job() {
         let (doc, page) = board_with_a_sticky();
         let (worker, mut frames) = Worker::spawn();
-        worker.request(job(&doc, page, 7));
+        let mut asked = job(&doc, page, 7);
+        asked.uid = 42;
+        worker.request(asked);
         let frame = next_frame(&mut frames).expect("a frame");
 
         assert_eq!(frame.key, 7);
+        // It says what it is an image of: the document and the page asked for, and no other.
+        assert_eq!((frame.uid, frame.page), (42, page));
+        assert!(frame.shows(42, page));
+        assert!(!frame.shows(41, page));
+        assert!(!frame.shows(42, NodeId(page.0 + 1)));
         // The view drawn is the one asked for, snapped outwards to whole device pixels: it covers
         // the view asked for, with one more pixel each way. The image is that view's size.
         let view = &frame.view;

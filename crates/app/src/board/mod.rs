@@ -423,10 +423,16 @@ impl BoardView {
         cx.notify();
     }
 
-    /// A frame from the render thread replaces the one shown.
+    /// A frame from the render thread replaces the one shown, if it is of the document and page
+    /// on show. One of another page (the page changed while it rendered) would never be painted:
+    /// it is dropped, and the frame shown stays until the page's own comes.
     fn show_frame(&mut self, frame: Frame, cx: &mut Context<Self>) {
         // Which request the frame answers, to follow a stutter from its request to its paint.
         log::trace!("canvas frame of request {:016x}", frame.key);
+        let on_show = self.board().and_then(|board| board.session.ds().ok());
+        if !on_show.is_some_and(|ds| frame.shows(ds.uid, ds.page)) {
+            return;
+        }
         if let Some(old) = self.frame.replace(frame) {
             self.stale.push(old.image);
         }
@@ -511,6 +517,7 @@ impl BoardView {
                 };
                 self.worker.request(Job {
                     doc: doc.clone(),
+                    uid: ds.uid,
                     page,
                     view: wanted,
                     opts,
@@ -520,10 +527,14 @@ impl BoardView {
                 self.requested = Some((key, doc));
             }
         }
-        let frame = self.frame.as_ref().map(|frame| {
-            let at = paint::image_bounds(bounds, &frame.view, &ds.view, scale_factor);
-            (frame.image.clone(), at)
-        });
+        // Only an image of the document and page on show: until the page's own frame comes, one
+        // of the page shown before stays off screen (FigCraft's canvas: `tex_of == shown`).
+        let frame = (self.frame.as_ref())
+            .filter(|frame| frame.shows(ds.uid, page))
+            .map(|frame| {
+                let at = paint::image_bounds(bounds, &frame.view, &ds.view, scale_factor);
+                (frame.image.clone(), at)
+            });
         // What goes over the frame, its labels measured. The frames' names go back to the engine
         // as they are painted: it takes a press or a hover on one as on its frame.
         // On a panic, guard::run logs it and this frame paints no overlay and no names to press.
@@ -1008,6 +1019,91 @@ mod tests {
         let second = next_frame(cx, &view, Some(&first));
         assert!(in_atlas(cx, window, &second));
         assert!(!in_atlas(cx, window, &first));
+    }
+
+    /// The frame image the canvas's next paint would put on screen, as its prepaint works it out
+    /// at the bounds of its last paint.
+    fn painted_image(
+        cx: &mut TestAppContext,
+        window: WindowHandle<BoardView>,
+        view: &Entity<BoardView>,
+    ) -> Option<Arc<RenderImage>> {
+        cx.update_window(window.into(), |_, window, cx| {
+            view.update(cx, |view, cx| {
+                let bounds = view.bounds;
+                let painting = view.prepaint(bounds, window, cx)?;
+                painting.frame.map(|(image, _)| image)
+            })
+        })
+        .unwrap()
+    }
+
+    #[gpui_kit::test]
+    fn only_a_frame_of_the_page_on_show_is_painted(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("pages");
+        let path = tmp.0.join("design.figcraft");
+        // A design file of two pages: a frame on the first, nothing on the second.
+        let mut session = figcraft_engine::Session::new();
+        let frame =
+            json!({"type": "frame", "name": "Frame", "x": 0, "y": 0, "width": 200, "height": 100});
+        session.execute("node.create", &frame).unwrap();
+        let added = session.execute("page.add", &json!({})).unwrap();
+        let second = NodeId(added["id"].as_u64().unwrap());
+        session
+            .execute("page.select", &json!({"index": 0}))
+            .unwrap();
+        session
+            .execute("file.saveAs", &json!({"path": path.to_str().unwrap()}))
+            .unwrap();
+        cx.update(gpui_kit::init);
+        let (window, view) = open_in_window(cx, &path);
+        let first = next_frame(cx, &view, None);
+        let (uid, first_page) = view.read_with(cx, |view, _| {
+            let ds = view.board().unwrap().session.ds().unwrap();
+            (ds.uid, ds.page)
+        });
+        assert_ne!(first_page, second);
+        let painted = painted_image(cx, window, &view);
+        assert!(painted.is_some_and(|image| Arc::ptr_eq(&image, &first)));
+
+        // The second page goes on show, as an agent's `page.select` or `replace` shows one. Until
+        // its own frame comes, the first page's is not painted over it: the canvas shows the
+        // page's colour alone.
+        let select = json!({"op": "command", "command": "page.select", "params": {"id": second.0}});
+        let reply = run_op(&view, select, cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        let painted = painted_image(cx, window, &view);
+        assert!(
+            painted.is_none_or(|image| !Arc::ptr_eq(&image, &first)),
+            "the first page's frame was painted over the second page"
+        );
+
+        // The second page's own frame comes, and is painted.
+        let second_frame = next_frame(cx, &view, Some(&first));
+        view.read_with(cx, |view, _| {
+            assert!(view.frame.as_ref().unwrap().shows(uid, second));
+        });
+        assert!(in_atlas(cx, window, &second_frame));
+
+        // A render of the first page that comes late (asked for before the page changed) is
+        // dropped: the second page keeps its frame.
+        let late = super::worker::Frame {
+            view: figcraft_render::View {
+                origin: (0.0, 0.0),
+                scale: 1.0,
+                width: 1,
+                height: 1,
+            },
+            image: first.clone(),
+            key: 0,
+            uid,
+            page: first_page,
+        };
+        view.update(cx, |view, cx| view.show_frame(late, cx));
+        view.read_with(cx, |view, _| {
+            let shown = &view.frame.as_ref().unwrap().image;
+            assert!(Arc::ptr_eq(shown, &second_frame));
+        });
     }
 
     #[gpui_kit::test]
