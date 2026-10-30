@@ -442,7 +442,11 @@ git commit -m "feat(canvas): open the native canvas with SAWIT_NATIVE_CANVAS and
 
 ### Task 7: Live verification
 
-- [ ] **Step 1: Build and launch** (memory recipe "Visual verify Sawit"):
+Rulings C4, C6 and C7 replaced the commands of Steps 1, 2 and 5: run them as the **launch
+recipe** in "Task 7 notes" below does. That recipe is what "launch as in Plan 1 Task 7" means.
+
+- [ ] **Step 1: Build and launch** (memory recipe "Visual verify Sawit"; as run: the launch recipe
+  below, ruling C4):
 ```bash
 cargo build -p sawit
 S=$(mktemp -d /tmp/sawit-nc-XXXX); mkdir -p $S/home $S/proj/.nyawit
@@ -450,7 +454,8 @@ cp $(ls -d ~/.cargo/git/checkouts/figcraft-*/0971d09*/examples | head -1)/ridgel
 SAWIT_HOME=$S/home SAWIT_NATIVE_CANVAS=1 RUST_LOG=sawit=debug target/debug/sawit $S/proj &
 ```
 
-- [ ] **Step 2: Open the canvas through the control socket.**
+- [ ] **Step 2: Open the canvas through the control socket.** (As run: the launch recipe's
+  `open_page` line and its socket, ruling C6.)
   - Send `{"cmd":"page","page":"canvas"}`. Find the socket with `{"cmd":"state"}`, and only for this
     instance's socket.
   - Then send `{"cmd":"canvas","op":{"op":"get"}}`.
@@ -466,7 +471,8 @@ SAWIT_HOME=$S/home SAWIT_NATIVE_CANVAS=1 RUST_LOG=sawit=debug target/debug/sawit
   - Record the p50 and p95 for the fit view in this plan's notes. The Plan 8 budget compares against
     them.
 
-- [ ] **Step 5: Stop only this instance** with `/bin/kill <pid>` (`pgrep -f "$S/home"`), then run the full gates:
+- [ ] **Step 5: Stop only this instance** with `/bin/kill <pid>` (`pgrep -f "$S/home"`; as run:
+  `/bin/kill $PID` from the launch recipe, ruling C7), then run the full gates:
 Run: `cargo test --workspace`
 Expected: all pass.
 
@@ -500,7 +506,9 @@ ctl '{"cmd":"canvas","op":{"op":"get"}}'    # each reply is one line: "ok <json>
   again with stderr sent to `/dev/null`.
 - Screenshots: list `$PID`'s windows with `CGWindowListCopyWindowInfo` (a few lines of Swift), and
   take the 1280×801 one with `screencapture -x -o -l <window id>`. A covered window doesn't
-  repaint, and only `{"cmd":"focus"}` makes the control server raise the window.
+  repaint. Two control commands raise the window: `{"cmd":"focus"}`, and `{"cmd":"open",...}`,
+  which goes through the same handler as `sawit <path>` (`handle` in `crates/app/src/cli.rs`).
+  The others, `open_page` and the canvas ops among them, leave the window where it is.
 - A `get` that answers `type: "other"` with numeric-string ids is how a check tells the native
   canvas from the web one (C8).
 - Drop `SAWIT_NATIVE_CANVAS=1` once Plan 8 Task 1 has removed the flag.
@@ -510,9 +518,10 @@ ctl '{"cmd":"canvas","op":{"op":"get"}}'    # each reply is one line: "ok <json>
 - Build: `cargo build -p sawit` succeeds. Its only linker line is the known R-EHFRAME warning.
 - (a) `open_page canvas` answers `{"tab":0}`. `state` then lists exactly one tab: kind `canvas`,
   active, with `canvas_open: true`.
-- C8: `get` answers `ok:true` with the page's 4 top-level layers (Components, Home — Light,
-  Trail — Light and Home — Dark). All are `type: "other"`, with ids `"349"`, `"68"`, `"239"` and
-  `"178"`: this is the native canvas.
+- C8: `get` answers `ok:true` with the page's 4 top-level layers, back to front: `"349"`
+  Components, `"68"` Home — Light, `"239"` Home — Dark and `"178"` Trail — Light (the order of the
+  page's children in the example's `document.json`). All are `type: "other"` with numeric-string
+  ids: this is the native canvas.
 - (b) A second `open_page canvas` leaves the tab count (1) and the active index (0) unchanged.
   `get` answers the same ids.
 - Step 3: the screenshot shows the example zoomed to fit on a 1040×471 pt canvas. The zoom is
@@ -557,8 +566,9 @@ at 2×.
 | **Fit view**, with the sidebar and terminal hidden | 1280×711 | ≈3585×2447 (8.8 Mpx) | 20 | **179.2** | **183.9** | 165.6–185.0 | { 4.48 3.42 3.14 } → { 4.04 3.39 3.13 } |
 | Zoom cycles from fit, with the sidebar and terminal hidden | 1280×711 | 8.8 Mpx | 20 | 164.7 | 186.7 | 141.9–187.4 | { 4.04 3.39 3.13 } → { 3.57 3.31 3.11 } |
 
-- Single edits, with the sidebar and terminal hidden: `text.create` took 146.0 ms and
-  `board.sticky` 135.9 ms.
+- Single edits, with the sidebar and terminal hidden: `text.create` took 146.0 ms on the example,
+  and `board.sticky` 135.9 ms on the second project's empty board (the example is a design file,
+  which takes no stickies).
 - What a line times: `Retained::render`, whose FigCraft crates are at opt-level 3 since Task 5,
   plus `sawit_board::view::to_bgra` and the image wrap. The dev profile builds those two at
   opt-level 0.
@@ -606,12 +616,28 @@ Launch with the recipe above, and run its `open_page` line.
    - During the gesture the image is a little soft, because it renders at half resolution. About
      0.15 s after the fingers stop, it is sharp again.
    - At rest, text and 1 px lines are crisp, with no half-pixel blur.
-4. **Opening the canvas by hand.** Put the canvas tab in the background, press ⌃⌘C, and then click
-   the title bar's Canvas button. Expect each to bring the same canvas tab forward, with no second
-   canvas tab.
-5. **Quitting right after an edit (needs Plan 2's editing).** For now, an edit made over the socket
-   is saved 0.3 s later, which is too soon to press ⌘Q first.
-   - Once Plan 2 lands, move a layer with the mouse and press ⌘Q at once.
-   - Relaunch and open the canvas. Expect the move to be kept, which shows that the quit hook saved
-     it.
+4. **Opening the canvas by hand.** Each way in must bring the open canvas tab forward, with no
+   second canvas tab. Put the tab in the background before each: a way in that brings nothing
+   forward would pass otherwise.
+   - Run `ctl '{"cmd":"open_page","page":"changelog"}'`. The Changelog tab comes forward, with the
+     canvas tab behind it. Click the Sawit window's title bar, and press ⌃⌘C. Expect the canvas tab
+     to come forward.
+   - Run the same `open_page changelog` line again. Then click the title bar's Canvas button.
+     Expect the canvas tab to come forward again.
+   - Run `ctl '{"cmd":"state"}'`. Expect exactly one tab of kind `canvas`.
+5. **Quitting before an edit is on disk.** The quit hook writes what isn't saved yet. This runs now
+   through a failed save, which leaves an edit unsaved until the next edit or flush (closing the
+   tab, quitting): the autosave doesn't try again by itself.
+   - Run `chmod 555 "$S/proj/.nyawit"`, then
+     `ctl '{"cmd":"canvas","op":{"op":"command","command":"text.create","params":{"x":0,"y":0,"text":"quit-save"}}}'`.
+     Expect `ok:true`, and then the toast "The canvas couldn't be saved to …/canvas.figcraft:
+     Permission denied (os error 13)".
+   - Run `chmod 755 "$S/proj/.nyawit"`, then
+     `unzip -p "$S/proj/.nyawit/canvas.figcraft" document.json | grep -c quit-save`. Expect 0:
+     nothing has saved it since.
+   - Click the Sawit window's title bar (not the canvas: a drag there is an edit, which saves),
+     and press ⌘Q. Expect the app to quit, and `$PID` to end.
+   - Run the `unzip … | grep -c quit-save` line again. Expect 1 or more: the quit hook saved it.
+   - Once Plan 2's editing has landed, check the same by hand: move a layer with the mouse, press
+     ⌘Q at once, relaunch and open the canvas. Expect the move to be kept.
    - Closing the tab uses the same save, and that was checked live above.
