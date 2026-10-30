@@ -109,9 +109,7 @@ pub struct TerminalRunArgs {
 pub struct TerminalReadArgs {
     #[schemars(description = "Terminal tab index (from app_state); default the active one")]
     pub tab: Option<usize>,
-    #[schemars(
-        description = "Pane within the tab (from app_state); default: the focused pane, or for close, the whole tab"
-    )]
+    #[schemars(description = "Pane within the tab (from app_state); default: the focused pane")]
     pub pane: Option<usize>,
     #[schemars(description = "Lines of scrollback + screen to return (default 200, max 5000)")]
     pub lines: Option<usize>,
@@ -122,9 +120,7 @@ pub struct TerminalReadArgs {
 pub struct TerminalInputArgs {
     #[schemars(description = "Terminal tab index; default the active one")]
     pub tab: Option<usize>,
-    #[schemars(
-        description = "Pane within the tab (from app_state); default: the focused pane, or for close, the whole tab"
-    )]
+    #[schemars(description = "Pane within the tab (from app_state); default: the focused pane")]
     pub pane: Option<usize>,
     #[schemars(description = "Text to type as is (no Enter added)")]
     pub text: Option<String>,
@@ -139,9 +135,7 @@ pub struct TerminalInputArgs {
 pub struct TerminalCloseArgs {
     #[schemars(description = "Terminal tab index (from app_state)")]
     pub tab: usize,
-    #[schemars(
-        description = "Pane within the tab (from app_state); default: the focused pane, or for close, the whole tab"
-    )]
+    #[schemars(description = "Pane within the tab (from app_state); default: the whole tab")]
     pub pane: Option<usize>,
     pub project: Option<String>,
 }
@@ -1100,6 +1094,28 @@ mod tests {
                 .unwrap_err()
                 .contains("ports")
         );
+    }
+
+    #[test]
+    fn only_closing_defaults_to_the_whole_tab() {
+        let pane = |schema: schemars::Schema| {
+            schema.as_value()["properties"]["pane"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        };
+        for read_or_input in [
+            pane(schemars::schema_for!(TerminalReadArgs)),
+            pane(schemars::schema_for!(TerminalInputArgs)),
+        ] {
+            assert_eq!(
+                read_or_input,
+                "Pane within the tab (from app_state); default: the focused pane"
+            );
+        }
+        let close = pane(schemars::schema_for!(TerminalCloseArgs));
+        assert!(close.contains("the whole tab"), "{close}");
+        assert!(!close.contains("focused pane"), "{close}");
     }
 
     #[test]
