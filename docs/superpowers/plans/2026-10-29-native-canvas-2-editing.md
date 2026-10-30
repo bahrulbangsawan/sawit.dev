@@ -430,3 +430,243 @@ git commit -m "feat(canvas): copy and paste between canvases and from other apps
 - [ ] **Step 5: Stop the instance** with `/bin/kill`, then run the full gates:
 Run: `cargo test --workspace`
 Expected: all pass.
+
+#### Task 7 notes: live check (2026-10-30, at `c16f0e3` and `17a6e48`, lane 1)
+
+Steps 1–3 passed over the control socket, and so did the overlay checks carried over from Task
+3's review. The check found one defect: the caret didn't show at the start of a line, so a new
+sticky showed none. It is fixed in `17a6e48` (see "The caret at the start of a line" below).
+`cargo test --workspace` passes: 1095 passed, 9 ignored and 0 failed at `c16f0e3`, and 1097
+passed, 9 ignored and 0 failed at `17a6e48`. Step 4 needs the user: its checks are under "Hand
+checks (pending — needs the user)" below, together with the ones carried over from the reviews of
+Tasks 1–6. Machine: Apple M3 (8 cores, 16 GB), macOS 26.6.1, window scale factor 2, debug build.
+Other lanes were compiling, so `vm.loadavg` was 2.9–10.8.
+
+**How it ran.** The app was launched with Plan 1 Task 7's launch recipe for an empty board (no
+`.nyawit/`), from lane 1. The debug build's only linker line is the known R-EHFRAME warning.
+`{"cmd":"layout","terminal":false}` gave the canvas 1040×711 pt. The view stayed at zoom 1, with
+page point (0, 0) in the middle of the canvas. Pointer ops take page points. The app ran four
+times, each stopped with `/bin/kill $PID`: for Steps 1–3 and most checks; after a relaunch, for
+the equal gaps; and for the caret, before and after its fix.
+
+**Answers (Steps 1–3, and the checks carried over from Task 3).**
+
+- Step 1: `open_page canvas` answers `{"tab":0}`, and `get` answers `[]`. Nothing is written until
+  the first edit.
+- Step 2:
+  - `tool.sticky` answers `{"tool":"sticky"}`.
+  - `pointer` down and up at (0, 0) place a sticky centred there and start typing in it. Both answer
+    `selection: ["3"]` (the sticky's text) and `tool: "move"`.
+  - `type "Hello from Sawit"` answers `{ok: true}`. A screenshot taken before Escape shows the text
+    on two lines ("Hello from" / "Sawit") in the outlined text box, with the caret after "Sawit".
+  - `key Escape` answers `handled: true`. `get` then shows 1 element: `"2"`, a sticky at
+    (−100, −100), 200×200, `#FFE78A`, reading "Hello from Sawit".
+  - The screenshot shows the sticky reading "Hello from Sawit" with no caret. The sticky itself is
+    selected: outline, 4 handles and `200 × 200`.
+  - The first edit created `.nyawit/canvas.figcraft` and `.nyawit/.gitignore`. The file's
+    `document.json` holds the text.
+- Step 3, read as "place a shape" (C19):
+  - `tool.shape`, then `pointer` down at (200, −50), two moves to (320, 40), and up there.
+  - The press places a 160×160 shape centred on it: `"4"`, at (120, −130). It also puts the Move
+    tool back. The moves don't resize the shape.
+  - The screenshot shows the shape's outline, 4 handles and `160 × 160`.
+- Carried over from Task 3's review:
+  - (a) `node.create` a frame (at (−470, −280), 260×150: `"7"`) and a section (at (−470, 20),
+    300×220: `"8"`), then `select.none`. The screenshot shows "Frame 1" in grey just above the frame's
+    top-left corner, and "Section 1" on a grey pill inside the section's top-left corner.
+  - (b) `view.zoom100` answers `{"zoom":1.0}`. `pointer` down and up at (frame x + 4, frame y − 11),
+    which is (−466, −291), select the frame (`selection: ["7"]`). The screenshot shows its outline,
+    4 handles, `260 × 150`, and its name in blue.
+  - (c) `tool.move`, then `pointer` down on empty canvas at (120, 150), and moves to (240, 230) with
+    no up. The screenshot shows the 120×80 marquee: pale blue, with a blue outline. After the up it
+    is gone, and nothing is selected.
+- Also checked over the socket:
+  - **A drag snaps, and is one undo step.**
+    - Shape `"4"` was dragged by its middle: down at (200, −50), then moves to (206, −21).
+    - It snapped level with the sticky (its top went from −101 to −100), and the screenshot shows a
+      red-orange guide along both tops. After the up it is at (126, −100).
+    - The key op ⌘Z (`{"key":"z","cmd":true}`) puts it back at (120, −130) in one step. ⇧⌘Z moves
+      it again.
+  - **Equal gaps get distance pills.**
+    - A third shape was placed at x 320, in line with the sticky and shape `"4"`, then dragged 7 px
+      left.
+    - It snapped to x 312. There, its gap to `"4"` is the same as the gap between the sticky and
+      `"4"`.
+    - Each of the two gaps showed a red-orange line with a `26` pill.
+  - **A double-click edits a sticky's text.**
+    - `pointer` down, up, `double` and up on the sticky's text start the edit with all of the text
+      selected. The highlight covers both lines, and the caret is at the end.
+    - `type "x"` replaced all of the text.
+    - The key op ⌘Z then ended the edit, and undid the typing in one step. The sticky reads "Hello
+      from Sawit" again, and `type` answers "not editing text".
+  - **Several layers selected.** A click on the sticky, then a shift-click on the shape, select both.
+    Each is outlined, and a box around both has the 4 handles and `386 × 200` (C15).
+  - **Hover.** A `hover` over the unselected shape with the Move tool outlines it in blue, without
+    handles.
+  - **After a restart.** After `/bin/kill`, a new launch on the same project opened the board as it
+    was left.
+  - **Idle while typing.** A sticky's text was being edited, with its caret showing. `top`'s 1 s
+    samples of the app read 0.0–1.8 % CPU over 10 s, and no render line was logged. The caret that
+    holds steady (Task 5, Decision 6) costs nothing at rest.
+  - **The log.** All 30 lines of the four runs' debug logs are `canvas render` lines (90–157 ms).
+    There are no warnings or errors.
+- **The caret at the start of a line (a defect, fixed in `17a6e48`).**
+  - In Step 2, the screenshot of the new sticky before typing showed its outlined text box, but no
+    caret. With "Hello from Sawit" typed, a double-click and the key op ArrowLeft put the caret
+    before the H: again no caret showed. After ArrowRight it showed, after the H.
+  - The cause: the caret was a 1 px line in the selection colour, drawn on the line before its
+    character. At the start of a line, that line is the left edge of the text's box, and the box's
+    outline is the same colour and width there. FigCraft draws its caret in its theme's text colour,
+    which the canvas's fixed colours (D4) leave out.
+  - The fix: the caret is painted as a 2 px band from that line toward the text
+    (`overlay::caret_band`), as a text view draws its insertion point. At a line's start, it stands
+    inside the box, beside the outline. Tests: `a_caret_at_a_line_start_shows_inside_the_outlined_box`
+    and `a_caret_band_runs_toward_the_text`.
+  - After a rebuild, the same steps showed the caret: a thick bar inside the left edge, both before
+    the H and in a new sticky. After the H, it is a 2 px bar between the H and the e.
+- **Bold doesn't show in stickies on this Mac.**
+  - ⌘B through the key op, with the sticky's text selected, answered `handled: true`. `node.get` on
+    the text then gave `fontStyle: "Bold"`. But the screenshot showed no change.
+  - The cause:
+    - Stickies are set in Inter. This Mac has no Inter (`text.fonts {family: "Inter"}` answers
+      `[]`), and Sawit embeds none.
+    - FigCraft's own builds embed Inter through the craft-fonts build input (`CRAFT_FONTS_DIR`, set
+      in its `.cargo/config.toml`).
+    - figcraft-text lays out a missing family in its default face, Helvetica Neue Regular, whatever
+      the style asked for (figcraft-text `layout.rs:356`, `fontdb.rs` `default_face`).
+  - The render path is fine: a Helvetica Neue text layer bolded with `text.bold` showed bold.
+  - So until Sawit embeds Inter, or Inter is installed, bold, italic and weight changes to Inter text
+    change the document but not the canvas. This went to the controller as a concern. Hand check 4
+    below works around it.
+
+#### Hand checks (pending — needs the user)
+
+Launch with Plan 1 Task 7's launch recipe for an empty board (skip the line that copies the example),
+and run its `open_page` line. Click the canvas once, so that it has the keyboard. Then press R and drag
+out three rectangles in a row, a little apart. Where a check already passed over the socket, it says
+so.
+
+1. **Drag a shape** (Step 4, and Task 3's review).
+   - Press V. Drag a rectangle by its middle, and let go. It follows the pointer all the way, then
+     stays there, selected: a blue outline, 4 corner handles and its size under it.
+   - Drag it level with another rectangle. While the button is held, red-orange guides join the edges
+     that line up, and the rectangle snaps into line.
+   - Drag an end rectangle until the gaps on both sides of the middle one are equal. Each gap shows a
+     red-orange line with a pill that gives its width in px.
+   - The guides go when the button comes up.
+   - Over the socket, the snap, the guide and the `26` pills showed as described above.
+2. **A drag released outside the window** (Review Focus 1, and Task 2's review).
+   - Press R. Press on the canvas, drag out past the window's edge, and release outside the window.
+   - Expect one rectangle, selected, with the Move tool back. Moving back over the canvas draws
+     nothing.
+   - One ⌘Z removes the whole rectangle.
+3. **⌘Z** (Step 4).
+   - Right after a drag, ⌘Z puts the rectangle back where it was, in one step. ⇧⌘Z moves it again.
+   - Double-click a sticky that has text, and type x: the x replaces the text. Press ⌘Z while still
+     typing. Expect the edit to end, and the sticky to read its old text again, in one step.
+   - Both passed through the key op.
+4. **⌘B while editing versus not** (Step 4).
+   - Click empty canvas, so that no text is edited, and press ⌘B. Sawit's left sidebar hides, and the
+     canvas doesn't change. ⌘B again shows the sidebar.
+   - Double-click a sticky, which selects all of its text, and press ⌘B. The sidebar stays where it
+     is.
+   - The word in a sticky doesn't look bold unless Inter is installed (see "Bold doesn't show in
+     stickies on this Mac" above). To see the bold, make a text in an installed font:
+     `ctl '{"cmd":"canvas","op":{"op":"command","command":"text.create","params":{"text":"Bold me","x":0,"y":300,"props":{"fontFamily":"Helvetica Neue","fontSize":24}}}}'`
+     Double-click it, which selects all of its text, then press ⌘B. The text turns bold, and the
+     sidebar stays.
+5. **⌘W closes the tab** (Step 4).
+   - Click the canvas, and press ⌘W. The Canvas tab closes.
+   - Reopen it with ⌃⌘C, or the title bar's Canvas button. The board is as it was.
+   - Double-click a sticky, type a word, and press ⌘W while still typing. The tab closes here too:
+     ⌘W is Sawit's even while text is edited. Reopen it. The sticky reads what was typed.
+6. **Cursors** (Task 2's review; P2-C3 shows only by eye).
+   - R: a crosshair.
+   - T: a crosshair over empty canvas, and an I-beam over a text layer. To make one: T, a click, a
+     word, then Escape.
+   - V, with a rectangle selected:
+     - ↔ on its left and right edges, and ↕ on its top and bottom edges;
+     - the ↖↘ diagonal on its top-left and bottom-right corners, and the ↗↙ diagonal on its top-right
+       and bottom-left corners;
+     - a crosshair just outside a corner (rotate).
+   - H: an open hand, and a closed hand while the button is held.
+7. **Double-click into a sticky** (Task 2's review).
+   - Press Q, and click to place a sticky. Type a, press Escape, then V.
+   - Double-click the sticky. Its text shows selected, and typing x replaces it. Without the edit, x
+     would pick the Connector tool.
+   - Over the socket, the double-click selected all of the text, and x replaced it.
+8. **Panning by hand** (the reviews of Tasks 2 and 4).
+   - Hold Space over the canvas: an open hand. Drag: the canvas follows the pointer, under a closed
+     hand. Release Space: the tool's cursor is back.
+   - With a mouse, press R, then drag with the middle button. The canvas pans, and nothing is drawn.
+   - Drag with the middle button again, on past the window's edge, and release outside the window.
+     The pan ends there: back over the canvas, the crosshair shows, not the closed hand.
+   - While typing in a sticky, Space types a space.
+9. **Shifted digits on a real keyboard** (Task 1's review; a US layout).
+   - Select a shape, and zoom out. ⇧2 zooms to the selection, ⇧1 zooms to fit, and ⇧0 sets 100 %.
+   - While typing in a sticky, ⇧⌘8 makes the paragraph a bulleted list, and ⇧⌘8 again ends it. ⇧⌘7
+     makes a numbered list.
+10. **Typing with a Chinese input method** (Step 4, Task 5's review, and Review Focus 3).
+    - Set-up: add Pinyin – Simplified (System Settings › Keyboard › Text Input › Edit › +). Press Q,
+      and click to place a sticky. You are now typing in it.
+    - (1) With Pinyin, type ni.
+      - ni shows underlined in the sticky. The candidate window opens just below it, from its left
+        end: not at a corner of the window or of the screen. Check this again after a pinch zoom-in.
+      - Press Space (or 1). The first candidate (你) replaces the underlined ni, and no space is
+        typed.
+      - Type ni, then press Return. Pinyin commits the letters ni, and no new line starts.
+    - (2) Type ni, then press Escape. The letters vanish, and nothing goes in. The caret stays, and
+      typing composes again. A second Escape ends the edit.
+    - (3) Click away while composing:
+      - Type ni, and click empty canvas. The edit ends with no underline, caret or candidate window
+        left.
+      - Write down what the sticky then reads: ni, 你, or nothing added. Each passes Review Focus 3.
+        For comparison, write down what TextEdit keeps on the same click.
+      - Double-click the sticky, and type a. The a composes alone, never nia.
+    - (4) An edit that ends under the input method:
+      - In another app's terminal (not Sawit's own), with the launch recipe's `ctl` and `SOCK`, run
+        `sleep 5; ctl '{"cmd":"canvas","op":{"op":"key","key":"Escape"}}'`.
+      - Switch back with ⌘Tab (a click would end the edit), and type ni in the sticky within the 5 s.
+        The edit ends, and the underline goes.
+      - Double-click the sticky, and type a. Write down whether the a composes alone, or nia shows.
+    - (5) Switch to ABC or U.S., with press-and-hold on (the macOS default). Type caf, then hold e.
+      The accents menu opens by the e. Choose é: the sticky reads café.
+    - (6) ⌥E: ´ shows underlined at the caret. Then E: é, with no ´ left.
+    - (7) Space: while typing in a sticky, Space types a space (check 8). With Pinyin on and nothing
+      composed, Space types a space too.
+    - (8) The caret holds steady, where FigCraft's blinks (Task 5, Decision 6). Say whether that is
+      fine. Live, it cost 0–1.8 % CPU at rest. It is a 2 px blue bar since `17a6e48`, so that it
+      shows at the start of a line too: check that it shows in a new sticky, and after ⌘← (the
+      start of the line).
+    - (9) While ni is composing, pan with two fingers. The candidate window stays where it was until
+      the next key (Task 5's review, a deferred minor). Say whether that bothers you.
+11. **Pasting while composing** (Task 6's review).
+    - Copy hello in TextEdit. In a sticky being edited, with Pinyin, type ni: it is underlined, and
+      the candidates are open. Then press ⌘V.
+    - hello is in the sticky. No underlined ni stays once nothing is being composed. Typing on
+      composes and commits as usual.
+    - Write down where the composition's own text went, if anywhere.
+12. **The system clipboard** (Task 6's review). The socket can't reach it: the key op answers
+    `handled: true` for ⌘C without copying (C7).
+    - (a) Select a sticky, ⌘C, then ⌘V in TextEdit. It types `sawit-canvas:N`, where N counts the
+      copies since launch.
+    - (b) Copy a word in TextEdit, click empty canvas, and press ⌘V. A text layer reads that word, its
+      top-left in the middle of the view, and no toast shows.
+    - (c) Press ⌃⇧⌘4, and drag over part of the screen (the capture goes to the clipboard). Then ⌘V
+      on the canvas: an image layer shows it.
+    - (d) In a text editor, copy the source of an SVG file that starts with `<?xml`. Then ⌘V on the
+      canvas: its shapes come in, in a frame, not as a text layer.
+    - (e) ⌘C a sticky in one canvas, and ⌘V in another: the canvas of a second Sawit window on
+      another folder, or a second canvas tab once Plan 7's `.figcraft` file tabs are in. The sticky
+      pastes there, and ⇧⌘V pastes it again.
+    - (f) While typing in a sticky, select a word and press ⌘C. Then ⌘V in TextEdit types that word,
+      not a marker.
+    - (g) Copy text in TextEdit, then press ⌘V in a sticky being edited. The text is typed at the
+      caret, and no layer appears.
+    - (h) ⌘C a sticky, quit Sawit with ⌘Q, and relaunch it. ⌘V on the canvas pastes nothing: no
+      toast, and no `sawit-canvas:N` text layer (Decision 15).
+13. Plan 1's hand check 5 ends with a check that waited for Plan 2's editing, and it can run now: move
+    a layer with the mouse, press ⌘Q at once, relaunch, and open the canvas. Expect the move to be
+    kept.
+
+Write the answers here once the checks have run (R5).
