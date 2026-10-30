@@ -221,19 +221,19 @@ mod tests {
     #[test]
     fn search_puts_labels_that_start_with_the_query_first() {
         let all = actions();
-        let found = search(&all, "layout");
-        // "Layout grids" starts with it. "Add auto layout" only has a word that does.
-        assert_eq!(found[0].label, "Layout grids");
-        assert!(labels(&found).contains(&"Add auto layout"));
+        let found = search(&all, "outline");
+        // "Outline stroke" starts with it. "Show outlines" only has a word that does.
+        assert_eq!(found[0].label, "Outline stroke");
+        assert!(labels(&found).contains(&"Show outlines"));
         // The word matches come after every prefix match.
         let first_word_match = found
             .iter()
-            .position(|a| !a.label.to_lowercase().starts_with("layout"))
+            .position(|a| !a.label.to_lowercase().starts_with("outline"))
             .unwrap();
         assert!(
             found[first_word_match..]
                 .iter()
-                .all(|a| !a.label.to_lowercase().starts_with("layout")),
+                .all(|a| !a.label.to_lowercase().starts_with("outline")),
             "{:?}",
             labels(&found)
         );

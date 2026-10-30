@@ -186,6 +186,86 @@ pub fn to_bgra(pixmap: &Pixmap, page_rgb: [u8; 3]) -> Vec<u8> {
     bgra
 }
 
+/// What soft-proof sRGB paints over a colour the screen can't show: a mid grey, opaque, BGRA.
+pub const PROOF_GREY: [u8; 4] = [128, 128, 128, 255];
+
+/// Soft-proof sRGB: diagonal stripes of [`PROOF_GREY`] over the pixels of `bgra` whose colours
+/// sRGB can't show, as FigCraft's canvas marks them (ui-egui `mark_outside_srgb`). `bgra` is
+/// `pixmap` made ready for the screen ([`to_bgra`]), and `pixmap` a render of a document whose
+/// colours are in `profile`; nothing of an sRGB document is marked.
+pub fn mark_outside_srgb(bgra: &mut [u8], pixmap: &Pixmap, profile: ColorProfile) {
+    let width = (pixmap.width() as usize).max(1);
+    let outside = profile
+        .conversion_to(ColorProfile::Srgb)
+        .clipped_pixels(pixmap.data());
+    let (pixels, _) = bgra.as_chunks_mut::<4>();
+    for (at, (pixel, outside)) in pixels.iter_mut().zip(outside).enumerate() {
+        if outside && (at % width + at / width) % 8 < 4 {
+            *pixel = PROOF_GREY;
+        }
+    }
+}
+
+/// The render behind pixel preview: the page area of `screen` (a view at the screen's density,
+/// [`render_view`]) at `pixels` pixels per page unit, one more each way. [`magnify`] lays it over
+/// the screen's pixels. `None` when that wouldn't be coarser than the screen (FigCraft shows pixel
+/// preview only zoomed in past its resolution), or for numbers that make no view.
+pub fn pixel_view(screen: &View, pixels: f64) -> Option<View> {
+    let coarser = pixels.is_finite() && pixels > 0.0 && pixels < screen.scale;
+    if !(coarser && screen.scale.is_finite()) {
+        return None;
+    }
+    let size = |screen_px: u32| (f64::from(screen_px) / screen.scale * pixels).ceil() + 1.0;
+    let (width, height) = (size(screen.width), size(screen.height));
+    (width.is_finite() && height.is_finite()).then_some(View {
+        origin: screen.origin,
+        scale: pixels,
+        width: width as u32,
+        height: height as u32,
+    })
+}
+
+/// `bgra`, an image of the page area `from`, laid over the pixels of `to`, the screen's, which
+/// are finer: each screen pixel takes the image's pixel under its centre, so every pixel of the
+/// image shows as a block with hard edges, as in FigCraft's pixel preview (a texture sampled
+/// nearest). GPUI smooths an image it stretches, so the canvas stretches this one itself. Screen
+/// pixels past the image take its nearest edge.
+pub fn magnify(bgra: &[u8], from: &View, to: &View) -> Vec<u8> {
+    let (width, height) = (to.width as usize, to.height as usize);
+    let mut out = vec![0; width * height * 4];
+    let from_width = from.width as usize;
+    if width == 0 || from_width == 0 {
+        return out;
+    }
+    // The image pixel under the centre of the screen's pixel `at`, along one axis.
+    let under = |at: usize, screen_origin: f64, origin: f64, size: u32| {
+        let page = screen_origin + (at as f64 + 0.5) / to.scale;
+        let pixel = ((page - origin) * from.scale).floor();
+        if pixel.is_finite() && pixel > 0.0 {
+            (pixel as usize).min(size.saturating_sub(1) as usize)
+        } else {
+            0
+        }
+    };
+    let columns: Vec<usize> = (0..width)
+        .map(|x| under(x, to.origin.0, from.origin.0, from.width))
+        .collect();
+    let (image, _) = bgra.as_chunks::<4>();
+    let (pixels, _) = out.as_chunks_mut::<4>();
+    for (y, row) in pixels.chunks_exact_mut(width).enumerate() {
+        let line = under(y, to.origin.1, from.origin.1, from.height);
+        let Some(line) = image.get(line * from_width..(line + 1) * from_width) else {
+            continue;
+        };
+        for (pixel, &column) in row.iter_mut().zip(&columns) {
+            if let Some(value) = line.get(column) {
+                *pixel = *value;
+            }
+        }
+    }
+    out
+}
+
 /// Whether the centre and zoom of `view` are numbers.
 fn is_finite(view: &ViewState) -> bool {
     view.cx.is_finite() && view.cy.is_finite() && view.zoom.is_finite()
@@ -763,5 +843,113 @@ mod tests {
         assert!(darker > 0, "no dots");
         assert_eq!(darker, other, "everything but the page colour is a dot");
         assert!(other < pixels.len() / 10, "{other} of {}", pixels.len());
+    }
+
+    /// `width` × `height` px of the page from `origin`, at `scale` px per page unit.
+    fn page_area(origin: (f64, f64), scale: f64, width: u32, height: u32) -> View {
+        View {
+            origin,
+            scale,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn pixel_preview_renders_the_screens_area_at_its_own_resolution() {
+        // 400 × 300 device px at 8 px per page unit: 50 × 37.5 page units.
+        let screen = page_area((-10.25, 5.5), 8.0, 400, 300);
+        let one = pixel_view(&screen, 1.0).unwrap();
+        assert_eq!(one.origin, screen.origin);
+        assert_eq!(one.scale, 1.0);
+        // One more each way: the render snaps its origin down onto its own pixels.
+        assert_eq!((one.width, one.height), (51, 39));
+        let two = pixel_view(&screen, 2.0).unwrap();
+        assert_eq!((two.scale, two.width, two.height), (2.0, 101, 76));
+        // Only coarser than the screen: at 8 px per unit and up the screen shows the pixels.
+        for pixels in [8.0, 16.0, 0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(pixel_view(&screen, pixels).is_none(), "{pixels}");
+        }
+        assert!(pixel_view(&page_area((0.0, 0.0), f64::NAN, 400, 300), 1.0).is_none());
+    }
+
+    /// One distinct opaque BGRA colour for each pixel of a `width` × `height` image.
+    fn numbered(width: u32, height: u32) -> Vec<u8> {
+        (0..width * height)
+            .flat_map(|n| [n as u8, 10, 20, 255])
+            .collect()
+    }
+
+    /// The pixel at (`x`, `y`) of a BGRA image `width` px wide.
+    fn bgra_at(bgra: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
+        let at = ((y * width + x) * 4) as usize;
+        bgra[at..at + 4].try_into().unwrap()
+    }
+
+    #[test]
+    fn magnify_shows_each_pixel_as_a_block() {
+        // A 3 × 2 image at 1 px per unit, over a screen at 4: each pixel is a 4 × 4 block.
+        let (from, to) = (
+            page_area((0.0, 0.0), 1.0, 3, 2),
+            page_area((0.0, 0.0), 4.0, 12, 8),
+        );
+        let image = numbered(3, 2);
+        let screen = magnify(&image, &from, &to);
+        assert_eq!(screen.len(), 12 * 8 * 4);
+        for y in 0..8 {
+            for x in 0..12 {
+                assert_eq!(
+                    bgra_at(&screen, 12, x, y),
+                    bgra_at(&image, 3, x / 4, y / 4),
+                    "({x}, {y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn magnify_takes_the_pixel_under_each_screen_pixels_centre() {
+        // The screen starts half a unit into the image and runs past its right side: its first
+        // two columns are still under the image's first pixel, and its last ones take the
+        // image's last column.
+        let (from, to) = (
+            page_area((0.0, 0.0), 1.0, 3, 1),
+            page_area((0.5, 0.0), 4.0, 12, 2),
+        );
+        let image = numbered(3, 1);
+        let screen = magnify(&image, &from, &to);
+        let columns: Vec<u8> = (0..12).map(|x| bgra_at(&screen, 12, x, 1)[0]).collect();
+        assert_eq!(columns, [0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2]);
+        // Nothing to lay over: no pixels, and no panic.
+        assert!(magnify(&image, &from, &page_area((0.0, 0.0), 4.0, 0, 0)).is_empty());
+        let short = magnify(&image[..4], &from, &to);
+        assert_eq!(short.len(), 12 * 2 * 4);
+    }
+
+    #[test]
+    fn soft_proof_stripes_what_srgb_cannot_show() {
+        // Display P3's own green is past sRGB's; this orange is in both ([`screen_rgb`]'s test).
+        let (green, orange) = ([0, 255, 0, 255], [200, 100, 50, 255]);
+        let mut row = vec![green; 16];
+        row.extend([orange; 4]);
+        let pixmap = pixmap(&row);
+        let clean = to_bgra(&pixmap, [255; 3]);
+
+        let mut proofed = clean.clone();
+        mark_outside_srgb(&mut proofed, &pixmap, ColorProfile::DisplayP3);
+        for x in 0..16 {
+            // Diagonal stripes, four pixels on and four off along a row.
+            let expected = if x % 8 < 4 {
+                PROOF_GREY
+            } else {
+                bgra_at(&clean, 20, x, 0)
+            };
+            assert_eq!(bgra_at(&proofed, 20, x, 0), expected, "{x}");
+        }
+        // What sRGB can show is left alone, and so is all of an sRGB document.
+        assert_eq!(proofed[16 * 4..], clean[16 * 4..]);
+        let mut srgb = clean.clone();
+        mark_outside_srgb(&mut srgb, &pixmap, ColorProfile::Srgb);
+        assert_eq!(srgb, clean);
     }
 }

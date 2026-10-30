@@ -9,10 +9,10 @@ use std::time::Instant;
 
 use figcraft_doc::color::ColorProfile;
 use figcraft_doc::{Document, NodeId};
-use figcraft_render::{Options, Pixmap, Retained, View};
+use figcraft_render::{Options, Pixmap, Retained, View, retained};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use gpui_kit::RenderImage;
-use sawit_board::view::{screen_rgb, to_bgra};
+use sawit_board::view::{self, screen_rgb, to_bgra};
 
 /// What to render: a view of a page of a document, and how to draw it.
 pub struct Job {
@@ -31,6 +31,13 @@ pub struct Job {
     /// around the frames and which the dot grid's light/dark test reads, is
     /// `sawit_board::view::screen_rgb(doc.color_profile, page_rgb)`.
     pub page_rgb: [u8; 3],
+    /// Soft-proof sRGB: stripes over the colours the screen can't show
+    /// (`sawit_board::view::mark_outside_srgb`). Only a document in another profile has any.
+    pub proof: bool,
+    /// Pixel preview: the page is rendered at this many pixels per page unit, and each of them
+    /// is shown as the block of `view`'s pixels it covers (`sawit_board::view::magnify`). `None`
+    /// renders `view` itself.
+    pub pixels: Option<f64>,
     /// The caller's name for this request, handed back with its frame.
     pub key: u64,
 }
@@ -170,11 +177,27 @@ fn run(slot: &Slot, frames: &UnboundedSender<Frame>) {
 /// can't be drawn (not finite, or too large to allocate), and when the renderer panics.
 fn render(retained: &mut Retained, job: &Job) -> Option<Frame> {
     let started = Instant::now();
-    let (view, (width, height), bgra) = guarded(retained, |retained| {
-        let (view, pixmap, _) = retained.render(&job.doc, job.page, &job.view, &job.opts)?;
-        let bgra = screen_bgra(pixmap, job.doc.color_profile, job.page_rgb);
-        Some((view, (pixmap.width(), pixmap.height()), bgra))
+    // Pixel preview renders the job's page area coarser, then lays it over the job's pixels.
+    let coarse = job
+        .pixels
+        .and_then(|pixels| view::pixel_view(&job.view, pixels));
+    let (drawn, (width, height), bgra) = guarded(retained, |retained| {
+        let asked = coarse.as_ref().unwrap_or(&job.view);
+        let (drawn, pixmap, _) = retained.render(&job.doc, job.page, asked, &job.opts)?;
+        let bgra = screen_bgra(pixmap, job.doc.color_profile, job.page_rgb, job.proof);
+        Some((drawn, (pixmap.width(), pixmap.height()), bgra))
     })?;
+    let (shown, (width, height), bgra) = match coarse {
+        Some(_) => {
+            // Over the job's own pixels, snapped outwards to whole device pixels as a render's
+            // view is, so the frame is placed as any other.
+            let (screen, _) = retained::snap(&job.view)?;
+            let bgra = view::magnify(&bgra, &drawn, &screen);
+            let size = (screen.width, screen.height);
+            (screen, size, bgra)
+        }
+        None => (drawn, (width, height), bgra),
+    };
     // As `viewers/pdf.rs` wraps its pages: GPUI takes the bytes as they are, BGRA.
     let pixels = image::RgbaImage::from_raw(width, height, bgra)?;
     let image = Arc::new(RenderImage::new([image::Frame::new(pixels)]));
@@ -182,7 +205,7 @@ fn render(retained: &mut Retained, job: &Job) -> Option<Frame> {
     let millis = started.elapsed().as_secs_f64() * 1000.0;
     log::debug!("canvas render {millis:.1} ms");
     Some(Frame {
-        view,
+        view: shown,
         image,
         key: job.key,
         uid: job.uid,
@@ -207,15 +230,20 @@ fn guarded<T>(retained: &mut Retained, draw: impl FnOnce(&mut Retained) -> Optio
 /// `pixmap`, a render of a document whose colours are in `profile`, as BGRA bytes for the screen,
 /// which shows sRGB. As in FigCraft's own canvas, a document in another profile has its pixels
 /// converted to sRGB (ui-egui `screen_image`) and its page colour too ([`screen_rgb`], as ui-egui
-/// `doc_c32` does).
-fn screen_bgra(pixmap: &Pixmap, profile: ColorProfile, page_rgb: [u8; 3]) -> Vec<u8> {
+/// `doc_c32` does). With `proof`, the colours sRGB can't show are striped
+/// ([`view::mark_outside_srgb`]).
+fn screen_bgra(pixmap: &Pixmap, profile: ColorProfile, page_rgb: [u8; 3], proof: bool) -> Vec<u8> {
     if profile.is_srgb() {
         return to_bgra(pixmap, page_rgb);
     }
     let to_srgb = profile.conversion_to(ColorProfile::Srgb);
     let mut converted = pixmap.clone();
     to_srgb.apply_pixels(converted.data_mut());
-    to_bgra(&converted, screen_rgb(profile, page_rgb))
+    let mut bgra = to_bgra(&converted, screen_rgb(profile, page_rgb));
+    if proof {
+        view::mark_outside_srgb(&mut bgra, pixmap, profile);
+    }
+    bgra
 }
 
 #[cfg(test)]
@@ -284,6 +312,8 @@ mod tests {
                 ..Options::default()
             },
             page_rgb: rgb,
+            proof: false,
+            pixels: None,
             key,
         }
     }
@@ -447,6 +477,97 @@ mod tests {
         translucent.opts.background = None;
         worker.request(translucent);
         shows_srgb(&next_frame(&mut frames).expect("a frame"));
+    }
+
+    /// Whether every pixel of `frame` is the one at the top-left of its `block` × `block` square:
+    /// whether the image is made of such blocks.
+    fn in_blocks(frame: &Frame, block: u32) -> bool {
+        let size = frame.image.size(0);
+        let (width, height) = (size.width.0 as u32, size.height.0 as u32);
+        (0..height).all(|y| {
+            (0..width).all(|x| pixel(frame, x, y) == pixel(frame, x - x % block, y - y % block))
+        })
+    }
+
+    /// A design file with one rectangle half a unit off the page's grid, from (10.5, 10.5) to
+    /// (30.5, 30.5), and its page.
+    fn page_with_a_rectangle() -> (Arc<Document>, NodeId) {
+        let mut session = figcraft_engine::Session::new();
+        let rectangle =
+            json!({"type": "rectangle", "x": 10.5, "y": 10.5, "width": 20, "height": 20});
+        session.execute("node.create", &rectangle).unwrap();
+        let ds = session.ds().unwrap();
+        (ds.doc.clone(), ds.page)
+    }
+
+    #[test]
+    fn pixel_preview_shows_each_rendered_pixel_as_a_block() {
+        let (doc, page) = page_with_a_rectangle();
+        // 50 × 37.5 page units from the page origin at 8 device px per unit: the rectangle's left
+        // side is half way across a preview pixel, which starts where the image does.
+        let view = View {
+            origin: (0.0, 0.0),
+            scale: 8.0,
+            width: 400,
+            height: 300,
+        };
+        let asked = |pixels: Option<f64>, key: u64| Job {
+            view: view.clone(),
+            pixels,
+            ..job(&doc, page, key)
+        };
+        let (worker, mut frames) = Worker::spawn();
+        worker.request(asked(Some(1.0), 1));
+        let frame = next_frame(&mut frames).expect("a frame");
+
+        // On the job's own pixels, placed as any frame: its view snapped as a render's is.
+        let (snapped, _) = retained::snap(&view).unwrap();
+        assert_eq!(frame.view.origin, snapped.origin);
+        assert_eq!(frame.view.scale, 8.0);
+        assert_eq!((frame.view.width, frame.view.height), (401, 301));
+        let size = frame.image.size(0);
+        assert_eq!((size.width.0, size.height.0), (401, 301));
+        // Each page unit is one pixel of the preview, an 8 × 8 block on the screen: the column
+        // the rectangle's side halves is one block of a colour between the two.
+        assert!(in_blocks(&frame, 8));
+        let [r, g, b] = page_rgb(&doc, page);
+        let page_colour = [b, g, r, 255];
+        let inside = pixel(&frame, 200, 150);
+        assert_ne!(inside, page_colour, "no rectangle");
+        let side = pixel(&frame, 84, 150);
+        assert!(side != page_colour && side != inside, "{side:?}");
+
+        // The same view without the preview draws the side where it is, half way into a block.
+        worker.request(asked(None, 2));
+        let frame = next_frame(&mut frames).expect("a frame");
+        assert!(!in_blocks(&frame, 8));
+        assert_eq!(pixel(&frame, 83, 150), page_colour);
+        assert_eq!(pixel(&frame, 84, 150), inside);
+    }
+
+    #[test]
+    fn soft_proof_stripes_the_colours_srgb_cannot_show() {
+        // A Display P3 page in P3's own green, which sRGB can't show.
+        let (doc, page) = p3_page([0, 255, 0, 255]);
+        let (worker, mut frames) = Worker::spawn();
+        let mut proofed = job(&doc, page, 1);
+        proofed.proof = true;
+        worker.request(proofed);
+        let frame = next_frame(&mut frames).expect("a frame");
+        // Diagonal stripes: four pixels on and four off along a row, a pixel to the left on the
+        // next row.
+        assert_eq!(pixel(&frame, 0, 0), view::PROOF_GREY);
+        assert_eq!(pixel(&frame, 3, 0), view::PROOF_GREY);
+        assert_ne!(pixel(&frame, 4, 0), view::PROOF_GREY);
+        assert_eq!(pixel(&frame, 2, 1), view::PROOF_GREY);
+        assert_ne!(pixel(&frame, 3, 1), view::PROOF_GREY);
+        assert_eq!(pixel(&frame, 7, 1), view::PROOF_GREY);
+
+        // Without the proof the page shows its colour, clipped to sRGB, everywhere.
+        worker.request(job(&doc, page, 2));
+        let frame = next_frame(&mut frames).expect("a frame");
+        assert_ne!(pixel(&frame, 0, 0), view::PROOF_GREY);
+        assert_eq!(pixel(&frame, 0, 0), pixel(&frame, 4, 0));
     }
 
     #[test]

@@ -471,11 +471,11 @@ mod tests {
             MenuNode::Item { checked, .. } => *checked,
             _ => unreachable!(),
         };
-        assert_eq!(checked(&board, "view.rulers"), Some(false));
-        board.execute("view.rulers", &json!({})).unwrap();
-        assert_eq!(checked(&board, "view.rulers"), Some(true));
-        board.execute("view.rulers", &json!({})).unwrap();
-        assert_eq!(checked(&board, "view.rulers"), Some(false));
+        assert_eq!(checked(&board, "view.outlines"), Some(false));
+        board.execute("view.outlines", &json!({})).unwrap();
+        assert_eq!(checked(&board, "view.outlines"), Some(true));
+        board.execute("view.outlines", &json!({})).unwrap();
+        assert_eq!(checked(&board, "view.outlines"), Some(false));
         // A command that is not a toggle shows no check mark at all.
         assert_eq!(checked(&board, "edit.duplicate"), None);
     }

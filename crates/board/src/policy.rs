@@ -2,6 +2,10 @@
 //! policy (docs/superpowers/specs/2026-10-29-native-canvas-design.md): the FigCraft commands the
 //! canvas hides, the ones Sawit carries out itself instead of the engine, and the keystrokes Sawit
 //! keeps while the canvas has the keyboard.
+//!
+//! The hidden commands also take the View menu's toggles of what the canvas doesn't draw: in
+//! FigCraft its own canvas draws them over the page, and the native canvas's overlay
+//! ([`crate::overlay`]) has none of them, so they would tick and change nothing.
 
 /// Commands the canvas never shows and never runs from the keyboard: out of scope, or Sawit owns
 /// them. Whole families are hidden through [`HIDDEN_PREFIXES`].
@@ -37,6 +41,14 @@ pub const HIDDEN: &[&str] = &[
     "view.themeSystem",
     "view.fullscreen",
     "view.panelWidths",
+    // View toggles of what the canvas doesn't draw (its overlay has no rulers, grids, slices, or
+    // mask and frame outlines). Shown, they would tick and change nothing.
+    "view.pixelGrid",
+    "view.layoutGrids",
+    "view.rulers",
+    "view.slices",
+    "view.maskOutlines",
+    "view.frameOutlines",
     // Object and Text
     "object.setThumbnail",
     "text.missingFonts",
@@ -109,6 +121,7 @@ pub fn is_ui(id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use figcraft_engine::cmd::view;
     use figcraft_engine::{catalog, keymap};
 
     use super::*;
@@ -119,6 +132,45 @@ mod tests {
         assert!(is_hidden("plugins.manage"));
         assert!(!is_hidden("edit.copy"));
         assert!(is_ui("file.export"));
+    }
+
+    #[test]
+    fn every_view_toggle_shown_is_one_the_canvas_carries_out() {
+        // The toggles that tick in the menus: the render draws the outline modes, the soft proof
+        // and pixel preview (`render_job` in crates/app/src/board/mod.rs), and the engine's own
+        // tools snap as the three snapping ones say. Any other would tick and change nothing.
+        const CARRIED_OUT: &[&str] = &[
+            "view.outlines",
+            "view.outlinesSelection",
+            "view.outlinesHiddenLayers",
+            "view.outlinesObjectBounds",
+            "view.pixelPreview",
+            "view.proofSrgb",
+            "view.snapGeometry",
+            "view.snapObjects",
+            "view.snapPixel",
+        ];
+        let session = crate::BoardDoc::new_board("Canvas").unwrap().session;
+        let ticking: Vec<&str> = catalog::items()
+            .map(|item| item.id)
+            .filter(|id| !is_hidden(id) && view::checked(&session, id).is_some())
+            .collect();
+        assert_eq!(ticking, CARRIED_OUT);
+        // What the canvas doesn't draw is out of the menus and off the keyboard.
+        for id in [
+            "view.pixelGrid",
+            "view.layoutGrids",
+            "view.rulers",
+            "view.slices",
+            "view.maskOutlines",
+            "view.frameOutlines",
+        ] {
+            assert!(
+                view::checked(&session, id).is_some(),
+                "{id} is no View toggle"
+            );
+            assert!(is_hidden(id), "{id}");
+        }
     }
 
     #[test]

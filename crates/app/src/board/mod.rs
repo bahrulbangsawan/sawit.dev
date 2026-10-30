@@ -472,11 +472,7 @@ impl BoardView {
         let dark = cx.theme().mode.is_dark();
         let scale_factor = f64::from(window.scale_factor());
         let now = cx.background_executor().now();
-        let quality = if self.zooming_until.is_some_and(|until| until > now) {
-            PREVIEW_QUALITY
-        } else {
-            1.0
-        };
+        let zooming = self.zooming_until.is_some_and(|until| until > now);
         let board = self.board.as_mut().ok()?;
         board.session.set_ui_dark(dark);
         board.session.apply_view_prefs();
@@ -490,40 +486,27 @@ impl BoardView {
             view::zoom_to_fit(&mut ds.view, &doc, page);
             self.fitted = true;
         }
-        let page_rgb = view::page_rgb(&doc, page);
         // The page as the screen shows it; the render takes it as the document holds it, and
         // the worker converts its pixels the same way.
-        let screen_rgb = view::screen_rgb(doc.color_profile, page_rgb);
+        let screen_rgb = view::screen_rgb(doc.color_profile, view::page_rgb(&doc, page));
         let viewport = Viewport {
             width,
             height,
             scale_factor,
         };
+        // Pixel preview's pixels are the point of it: no softer preview of them while zooming.
+        let quality = if zooming && ds.view.pixel_preview_scale().is_none() {
+            PREVIEW_QUALITY
+        } else {
+            1.0
+        };
         if let Some(wanted) = view::render_view(&ds.view, viewport, quality) {
-            let key = job_key(&doc, page, &wanted, ds.view.zoom, dark);
+            let job = render_job(ds, kind, wanted);
+            let key = job_key(&job, ds.view.zoom, dark);
             let asked = (self.requested.as_ref())
                 .is_some_and(|(asked, of)| *asked == key && Arc::ptr_eq(of, &doc));
             if !asked {
-                let [r, g, b] = page_rgb;
-                let opts = Options {
-                    lod: true,
-                    magnified_image_pixels: true,
-                    background: Some(Color::from_rgba8(r, g, b, 255)),
-                    dots: match kind {
-                        DocKind::Board => view::dots(ds.view.zoom, screen_rgb),
-                        DocKind::Design => None,
-                    },
-                    ..Options::default()
-                };
-                self.worker.request(Job {
-                    doc: doc.clone(),
-                    uid: ds.uid,
-                    page,
-                    view: wanted,
-                    opts,
-                    page_rgb,
-                    key,
-                });
+                self.worker.request(Job { key, ..job });
                 self.requested = Some((key, doc));
             }
         }
@@ -709,16 +692,73 @@ fn same(kept: &Option<Arc<Document>>, doc: &Arc<Document>) -> bool {
     kept.as_ref().is_some_and(|kept| Arc::ptr_eq(kept, doc))
 }
 
-/// The name of a render request: the same for requests that would draw the same frame. Another
-/// document (each edit makes one), page, view, set of fonts or theme makes another.
-fn job_key(doc: &Arc<Document>, page: NodeId, view: &View, zoom: f64, dark: bool) -> u64 {
+/// The render of the page on show in `ds` at `wanted` ([`view::render_view`]), drawn as the View
+/// menu has it, as FigCraft's own canvas asks for its renders (ui-egui `canvas/render.rs`):
+/// - Outlines ▸ Show outlines draws every layer as its outline, and Show outlines for selection
+///   the layers selected; Include hidden layers and Include object bounds add to either.
+/// - Soft-proof sRGB stripes the colours of a document in another profile that the screen can't
+///   show.
+/// - Pixel preview, zoomed in past its resolution, shows the page at 1 or 2 pixels per unit.
+///
+/// It is drawn on the page's colour, and a board on its dot grid. The key is left for
+/// [`job_key`] to name.
+fn render_job(ds: &figcraft_engine::DocState, kind: DocKind, wanted: View) -> Job {
+    let doc = ds.doc.clone();
+    let page_rgb = view::page_rgb(&doc, ds.page);
+    let [r, g, b] = page_rgb;
+    let shown = &ds.view;
+    let opts = Options {
+        lod: true,
+        magnified_image_pixels: true,
+        background: Some(Color::from_rgba8(r, g, b, 255)),
+        dots: match kind {
+            DocKind::Board => view::dots(shown.zoom, view::screen_rgb(doc.color_profile, page_rgb)),
+            DocKind::Design => None,
+        },
+        outline_mode: shown.outlines,
+        outline: figcraft_render::Outline {
+            hidden: shown.outline_hidden,
+            bounds: shown.outline_bounds,
+            // The renderer turns the lines light on a dark page itself.
+            light: false,
+        },
+        outlined: if shown.outlines_selection {
+            ds.selection.clone()
+        } else {
+            Vec::new()
+        },
+        ..Options::default()
+    };
+    Job {
+        uid: ds.uid,
+        page: ds.page,
+        view: wanted,
+        opts,
+        page_rgb,
+        proof: shown.proof_srgb && !doc.color_profile.is_srgb(),
+        pixels: shown.pixel_preview_scale(),
+        doc,
+        key: 0,
+    }
+}
+
+/// The name of render request `job` at `zoom` in the `dark` theme or not: the same for requests
+/// that would draw the same frame. Another document (each edit makes one), page, view, way of
+/// drawing it (the View menu's outlines, soft proof and pixel preview), set of fonts or theme
+/// makes another.
+fn job_key(job: &Job, zoom: f64, dark: bool) -> u64 {
     let mut hasher = DefaultHasher::new();
-    Arc::as_ptr(doc).hash(&mut hasher);
-    page.hash(&mut hasher);
+    Arc::as_ptr(&job.doc).hash(&mut hasher);
+    (job.uid, job.page).hash(&mut hasher);
+    let view = &job.view;
     for number in [view.origin.0, view.origin.1, view.scale, zoom] {
         number.to_bits().hash(&mut hasher);
     }
     (view.width, view.height).hash(&mut hasher);
+    let opts = &job.opts;
+    (opts.outline_mode, opts.outline.hidden, opts.outline.bounds).hash(&mut hasher);
+    opts.outlined.hash(&mut hasher);
+    (job.proof, job.pixels.map(f64::to_bits)).hash(&mut hasher);
     figcraft_text::layout_generation().hash(&mut hasher);
     dark.hash(&mut hasher);
     hasher.finish()
@@ -1351,6 +1391,130 @@ mod tests {
                  e.g. a layer was repaired"
             )
         );
+    }
+
+    /// A design file in a session of its own, with a 100 × 50 rectangle at the page origin.
+    fn design_with_a_rectangle() -> (figcraft_engine::Session, NodeId) {
+        let mut session = figcraft_engine::Session::new();
+        let rectangle = json!({"type": "rectangle", "x": 0, "y": 0, "width": 100, "height": 50});
+        let made = session.execute("node.create", &rectangle).unwrap();
+        (session, NodeId(made["id"].as_u64().unwrap()))
+    }
+
+    #[test]
+    fn the_view_menus_render_toggles_reach_the_render() {
+        let (mut session, rectangle) = design_with_a_rectangle();
+        let job = |session: &figcraft_engine::Session| {
+            let wanted = figcraft_render::View {
+                origin: (0.0, 0.0),
+                scale: 2.0,
+                width: 100,
+                height: 100,
+            };
+            super::render_job(session.ds().unwrap(), DocKind::Design, wanted)
+        };
+        let key = |session: &figcraft_engine::Session| super::job_key(&job(session), 1.0, false);
+        let run = |session: &mut figcraft_engine::Session, id: &str, params: Value| {
+            session.execute(id, &params).unwrap();
+        };
+
+        let plain = job(&session);
+        let ds = session.ds().unwrap();
+        assert_eq!((plain.uid, plain.page), (ds.uid, ds.page));
+        assert!(!plain.opts.outline_mode && plain.opts.outlined.is_empty());
+        assert_eq!(plain.opts.outline, figcraft_render::Outline::default());
+        assert!(!plain.proof);
+        assert_eq!(plain.pixels, None);
+        let plain_key = key(&session);
+
+        // Outlines ▸ Show outlines.
+        run(&mut session, "view.outlines", json!({}));
+        assert!(job(&session).opts.outline_mode);
+        assert_ne!(key(&session), plain_key);
+        run(&mut session, "view.outlines", json!({}));
+        assert_eq!(key(&session), plain_key);
+
+        // Show outlines for selection: the layers selected, and so none while none is.
+        run(&mut session, "view.outlinesSelection", json!({}));
+        session.set_selection(vec![rectangle]);
+        assert_eq!(job(&session).opts.outlined, [rectangle]);
+        assert_ne!(key(&session), plain_key);
+        session.set_selection(Vec::new());
+        assert!(job(&session).opts.outlined.is_empty());
+        assert_eq!(key(&session), plain_key);
+
+        // Include hidden layers and Include object bounds.
+        run(&mut session, "view.outlinesHiddenLayers", json!({}));
+        let hidden_key = key(&session);
+        assert!(job(&session).opts.outline.hidden);
+        run(&mut session, "view.outlinesObjectBounds", json!({}));
+        assert!(job(&session).opts.outline.bounds);
+        assert!(![plain_key, hidden_key].contains(&key(&session)));
+
+        // Soft-proof sRGB: nothing to mark in an sRGB file, and the stripes in a Display P3 one.
+        run(&mut session, "view.proofSrgb", json!({}));
+        assert!(!job(&session).proof);
+        let profile = json!({"profile": "displayP3"});
+        run(&mut session, "file.colorProfile", profile);
+        assert!(job(&session).proof);
+        let proofed_key = key(&session);
+        run(&mut session, "view.proofSrgb", json!({}));
+        assert!(!job(&session).proof);
+        assert_ne!(key(&session), proofed_key);
+
+        // Pixel preview: at its resolution once zoomed in past it, and not before.
+        session.ds_mut().unwrap().view.zoom = 4.0;
+        let unpreviewed_key = key(&session);
+        run(&mut session, "view.pixelPreview", json!({}));
+        assert_eq!(job(&session).pixels, Some(1.0));
+        assert_ne!(key(&session), unpreviewed_key);
+        run(&mut session, "view.pixelPreview", json!({"scale": 2}));
+        assert_eq!(job(&session).pixels, Some(2.0));
+        session.ds_mut().unwrap().view.zoom = 2.0;
+        assert_eq!(job(&session).pixels, None);
+    }
+
+    /// The colour (BGRA) of the frame shown at page point `at`.
+    fn frame_pixel(view: &Entity<BoardView>, cx: &TestAppContext, at: (f64, f64)) -> [u8; 4] {
+        view.read_with(cx, |view, _| {
+            let frame = view.frame.as_ref().unwrap();
+            let pixel = |page: f64, origin: f64| ((page - origin) * frame.view.scale) as usize;
+            let (x, y) = (
+                pixel(at.0, frame.view.origin.0),
+                pixel(at.1, frame.view.origin.1),
+            );
+            let start = (y * frame.view.width as usize + x) * 4;
+            let bytes = frame.image.as_bytes(0).unwrap();
+            bytes[start..start + 4].try_into().unwrap()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn show_outlines_redraws_the_page_as_outlines(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("outlines");
+        let path = tmp.0.join("design.figcraft");
+        let (mut session, _) = design_with_a_rectangle();
+        session
+            .execute("file.saveAs", &json!({"path": path.to_str().unwrap()}))
+            .unwrap();
+        cx.update(gpui_kit::init);
+        let (_, view) = open_in_window(cx, &path);
+        let filled = next_frame(cx, &view, None);
+        let (middle, outside) = ((50.0, 25.0), (-50.0, -50.0));
+        let page = frame_pixel(&view, cx, outside);
+        assert_ne!(frame_pixel(&view, cx, middle), page, "no rectangle");
+
+        // ⇧⌘O's command: the canvas draws again, and the rectangle is its outline alone.
+        let outlines = json!({"op": "command", "command": "view.outlines"});
+        let reply = run_op(&view, outlines.clone(), cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        let outlined = next_frame(cx, &view, Some(&filled));
+        assert_eq!(frame_pixel(&view, cx, middle), page);
+
+        // And back.
+        run_op(&view, outlines, cx);
+        next_frame(cx, &view, Some(&outlined));
+        assert_ne!(frame_pixel(&view, cx, middle), page);
     }
 
     #[gpui_kit::test]
