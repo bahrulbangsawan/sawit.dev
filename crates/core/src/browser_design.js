@@ -596,9 +596,13 @@
     const count = (map, key) => map.set(key, (map.get(key) || 0) + 1);
 
     // Assets.
+    // The header: `header` or `[role=banner]`; on a page with neither, the first
+    // `nav` outside main, aside, article and footer (apple.com's #globalnav).
+    const topNav = document.querySelector("header, [role=banner]")
+      ? null
+      : [...document.querySelectorAll("nav")].find((n) => !n.closest("main, aside, article, footer")) || null;
     const isLogo = (el, url) => {
-      // A site's top nav is its header when there's no <header> (apple.com's #globalnav).
-      const head = el.closest("header, [role=banner], nav") && !el.closest("footer, [role=contentinfo]");
+      const head = el.closest("header, [role=banner]") || (topNav && topNav.contains(el));
       const home = el.closest("a[href]");
       if (head && home) {
         try {

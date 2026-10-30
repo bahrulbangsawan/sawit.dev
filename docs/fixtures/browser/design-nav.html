@@ -1,0 +1,30 @@
+<!doctype html>
+<!-- Fixture for the design scan's logo rule (docs/superpowers/plans/2026-10-29-browser-preview-3-design.md, Task 11).
+     No <header>: the first nav outside main/aside/article/footer is the header, so only its home-link SVG is the logo. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Design nav · fixture</title>
+    <style>
+      body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #1d1d1f; background: #ffffff; }
+      nav, main, footer { padding: 12px 24px; }
+    </style>
+  </head>
+  <body>
+    <nav id="globalnav" aria-label="Global">
+      <a href="/"><svg aria-label="Site" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#1d1d1f" /></svg></a>
+      <a href="/store/">Store</a>
+    </nav>
+    <main>
+      <nav aria-label="Breadcrumb">
+        <a href="/"><svg aria-label="Home" width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" fill="#6e6e73" /></svg></a>
+        › <a href="/store/">Store</a>
+      </nav>
+      <p>A page whose header is a nav. The breadcrumb's home link and the footer mark aren't the logo.</p>
+    </main>
+    <footer>
+      <a href="/"><svg aria-label="Footer mark" width="20" height="20" viewBox="0 0 20 20"><polygon points="10,1 19,19 1,19" fill="#86868b" /></svg></a>
+    </footer>
+  </body>
+</html>

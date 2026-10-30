@@ -297,6 +297,29 @@ fn in_role(scan: &Scan, role: ColorRole) -> Vec<Seen> {
     clustered(merged(scan.colors.iter().filter(|u| u.role == role)))
 }
 
+/// Text colors, most-used first. "Most-used" is by text length (the samples'
+/// `chars`), like type sampling, so a link-heavy page doesn't make its link
+/// color the foreground. Without samples it falls back to element counts.
+fn text_colors(scan: &Scan) -> Vec<Seen> {
+    let weighted: Vec<ColorUse> = scan
+        .texts
+        .iter()
+        .filter(|t| t.chars > 0)
+        .map(|t| ColorUse {
+            value: t.color.clone(),
+            role: ColorRole::Text,
+            count: t.chars,
+            on_button: 0,
+            on_link: 0,
+        })
+        .collect();
+    if weighted.is_empty() {
+        in_role(scan, ColorRole::Text)
+    } else {
+        clustered(merged(weighted.iter()))
+    }
+}
+
 /// The first entry with the largest positive key.
 fn most<'a>(items: &[&'a Seen], key: impl Fn(&Seen) -> u32) -> Option<&'a Seen> {
     let mut best: Option<&Seen> = None;
@@ -362,7 +385,7 @@ fn derive_colors(scan: &Scan) -> Colors {
         .as_deref()
         .and_then(color::parse)
         .filter(|c| c.a > 0.0);
-    let texts = in_role(scan, ColorRole::Text);
+    let texts = text_colors(scan);
     let neutral_of = |v: Vec<Seen>| -> Vec<Rgba> {
         v.into_iter()
             .map(|s| s.color)
@@ -1248,6 +1271,42 @@ mod tests {
         assert_eq!(hex("muted").as_deref(), Some("#ffffff"));
         assert_eq!(hex("foreground").as_deref(), Some("#1e293b"));
         assert_eq!(hex("muted-foreground").as_deref(), Some("#6b7280"));
+    }
+
+    #[test]
+    fn foreground_is_weighted_by_text_length() {
+        let text = |color: &str, tag: &str, chars: u32| TextSample {
+            tag: tag.into(),
+            in_main: true,
+            family: "Inter".into(),
+            used_family: Some("Inter".into()),
+            size: 16.0,
+            weight: 400,
+            line_height: None,
+            letter_spacing: None,
+            color: color.into(),
+            chars,
+        };
+        let scan = Scan {
+            body_background: Some("rgb(255, 255, 255)".into()),
+            // Elements: 9 links, 3 paragraphs, 1 muted note.
+            colors: vec![
+                use_("rgb(0, 102, 204)", ColorRole::Text, 9),
+                use_("rgb(29, 29, 31)", ColorRole::Text, 3),
+                use_("rgb(110, 110, 115)", ColorRole::Text, 1),
+            ],
+            // Text: the paragraphs carry most of it.
+            texts: vec![
+                text("rgb(0, 102, 204)", "a", 60),
+                text("rgb(29, 29, 31)", "p", 900),
+                text("rgb(110, 110, 115)", "p", 40),
+            ],
+            ..Default::default()
+        };
+        let t = derive(&scan, "2026-10-31");
+        let hex = |n: &str| semantic(&t, n).map(|c| c.to_hex());
+        assert_eq!(hex("foreground").as_deref(), Some("#1d1d1f"));
+        assert_eq!(hex("muted-foreground").as_deref(), Some("#6e6e73"));
     }
 
     #[test]
