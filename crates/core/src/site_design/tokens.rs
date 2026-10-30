@@ -297,6 +297,9 @@ fn in_role(scan: &Scan, role: ColorRole) -> Vec<Seen> {
     clustered(merged(scan.colors.iter().filter(|u| u.role == role)))
 }
 
+/// The least contrast `foreground` needs against `background`.
+const FG_CONTRAST: f64 = 3.0;
+
 /// Text colors, most-used first. "Most-used" is by text length (the samples'
 /// `chars`) inside `main`, the scope `body-md` uses, so neither links nor
 /// footer fine print make the foreground. With nothing in `main` all samples
@@ -403,7 +406,16 @@ fn derive_colors(scan: &Scan) -> Colors {
                 .all(|f| color::delta_e(*c, *f) >= CLUSTER)
         })
     };
-    let foreground = texts.first().map(|s| s.color);
+    // The text color *of the background*: the most-used one readable on it
+    // (≥ 3:1), so light text on dark hero tiles doesn't win on a white page.
+    let foreground = background
+        .and_then(|bg| {
+            texts
+                .iter()
+                .find(|s| color::contrast_ratio(s.color, bg) >= FG_CONTRAST)
+        })
+        .or(texts.first())
+        .map(|s| s.color);
     let backgrounds = in_role(scan, ColorRole::Background);
     let first_bg = background.or_else(|| backgrounds.first().map(|s| s.color));
     let muted = other_than(neutral_of(backgrounds), &[first_bg]);
@@ -1318,6 +1330,43 @@ mod tests {
         let t = derive(&outside, "2026-10-31");
         let fg = semantic(&t, "foreground").map(|c| c.to_hex());
         assert_eq!(fg.as_deref(), Some("#0000008f"));
+    }
+
+    #[test]
+    fn foreground_is_readable_on_the_background() {
+        let text = |color: &str, chars: u32| TextSample {
+            tag: "p".into(),
+            in_main: true,
+            family: "Inter".into(),
+            used_family: Some("Inter".into()),
+            size: 17.0,
+            weight: 400,
+            line_height: None,
+            letter_spacing: None,
+            color: color.into(),
+            chars,
+        };
+        let mut scan = Scan {
+            body_background: Some("rgb(255, 255, 255)".into()),
+            // Light text on dark hero tiles has the most characters.
+            texts: vec![
+                text("rgb(245, 245, 247)", 860),
+                text("rgb(29, 29, 31)", 250),
+            ],
+            ..Default::default()
+        };
+        let fg = |s: &Scan| {
+            let t = derive(s, "2026-10-31");
+            semantic(&t, "foreground").map(|c| c.to_hex())
+        };
+        assert_eq!(fg(&scan).as_deref(), Some("#1d1d1f"));
+        // Nothing readable on the background: the unfiltered pick.
+        scan.texts.truncate(1);
+        assert_eq!(fg(&scan).as_deref(), Some("#f5f5f7"));
+        // Unknown background: no filter.
+        scan.body_background = None;
+        scan.texts.push(text("rgb(29, 29, 31)", 250));
+        assert_eq!(fg(&scan).as_deref(), Some("#f5f5f7"));
     }
 
     #[test]
