@@ -19,6 +19,18 @@ use crate::ports::PortJob;
 /// The page agent; the app replaces [`TOKEN_PLACEHOLDER`] before injecting it.
 pub const AGENT_JS: &str = include_str!("browser_agent.js");
 pub const TOKEN_PLACEHOLDER: &str = "__SAWIT_TOKEN__";
+/// The picker, highlights and markers (a page module).
+pub const OVERLAY_JS: &str = include_str!("browser_overlay.js");
+/// Where the agent takes its page modules.
+pub const MODULES_PLACEHOLDER: &str = "/*__SAWIT_MODULES__*/";
+
+/// The agent with its page modules spliced in and `token` set.
+pub fn page_script(token: &str) -> String {
+    let modules = [OVERLAY_JS].join("\n");
+    AGENT_JS
+        .replace(MODULES_PLACEHOLDER, &modules)
+        .replace(TOKEN_PLACEHOLDER, token)
+}
 
 /// Console messages and requests kept per browser tab, newest last.
 pub const MAX_CONSOLE: usize = 500;
@@ -279,6 +291,12 @@ pub enum PageEvent {
     Network(NetworkEntry),
     /// The address changed without a load (`pushState`, hash).
     Url(String),
+    /// The user picked an element: `{mode, element}`.
+    Picked(Value),
+    /// The pointer is over an element in inspect mode: `{selector, label, rect}`.
+    Hovered(Value),
+    /// A shortcut pressed in the page: `toggle-annotate` or `escape`.
+    Key(String),
 }
 
 /// A page message, if it carries `token`.
@@ -291,6 +309,11 @@ pub fn parse_ipc(body: &str, token: &str) -> Option<PageEvent> {
         "url" => serde_json::from_str::<String>(json)
             .ok()
             .map(PageEvent::Url),
+        "picked" => serde_json::from_str(json).ok().map(PageEvent::Picked),
+        "hovered" => serde_json::from_str(json).ok().map(PageEvent::Hovered),
+        "key" => serde_json::from_str::<String>(json)
+            .ok()
+            .map(PageEvent::Key),
         _ => None,
     }
 }
@@ -626,13 +649,42 @@ mod tests {
     }
 
     #[test]
+    fn page_script_splices_the_modules() {
+        let s = page_script("abc123");
+        assert!(!s.contains(MODULES_PLACEHOLDER) && !s.contains(TOKEN_PLACEHOLDER));
+        assert!(s.contains("\"abc123\""));
+        assert_eq!(
+            s.matches("Object.defineProperty(window, \"__sawitAgent\"")
+                .count(),
+            1
+        );
+        assert!(s.find("sawit-overlay").unwrap() < s.find("const OPS").unwrap());
+    }
+
+    #[test]
+    fn ipc_reads_picks_hovers_and_keys() {
+        let picked = parse_ipc(
+            "tok\npicked\n{\"mode\":\"annotate\",\"element\":{\"selector\":\"#a\"}}",
+            "tok",
+        );
+        assert!(matches!(picked, Some(PageEvent::Picked(v)) if v["element"]["selector"] == "#a"));
+        let hovered = parse_ipc("tok\nhovered\n{\"selector\":\"#a\"}", "tok");
+        assert!(matches!(hovered, Some(PageEvent::Hovered(v)) if v["selector"] == "#a"));
+        assert_eq!(
+            parse_ipc("tok\nkey\n\"toggle-annotate\"", "tok"),
+            Some(PageEvent::Key("toggle-annotate".into()))
+        );
+        assert_eq!(parse_ipc("bad\nkey\n\"escape\"", "tok"), None);
+    }
+
+    #[test]
     fn agent_script_parses() {
         assert!(AGENT_JS.contains(TOKEN_PLACEHOLDER) && AGENT_JS.contains("__sawitAgent"));
         let rt = rquickjs::Runtime::new().unwrap();
         let ctx = rquickjs::Context::full(&rt).unwrap();
         ctx.with(|ctx| {
             // Compiles without running: there is no DOM here.
-            let source = format!("(function () {{ {AGENT_JS} }})");
+            let source = format!("(function () {{ {} }})", page_script("t"));
             ctx.eval::<rquickjs::Value, _>(source)
                 .map(|_| ())
                 .unwrap_or_else(|e| panic!("agent script doesn't parse: {e:?}"));

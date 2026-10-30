@@ -4,7 +4,7 @@
 //!
 //! Agents drive it through [`BrowserView::apply`] (`sawit-mcp`'s `browser_*`
 //! tools): navigation, state, logs and screenshots are answered here; the
-//! rest by the page agent (`sawit_core::browser::AGENT_JS`), injected into
+//! rest by the page agent (`sawit_core::browser::page_script`), injected into
 //! every page, through `Engine::eval_with_callback`.
 
 mod engine;
@@ -23,8 +23,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{Sizable as _, h_flex, v_flex};
 use gpui_kit::*;
 use sawit_core::browser::{
-    AGENT_JS, BrowserOp, ConsoleEntry, Logs, PageEvent, TOKEN_PLACEHOLDER, Target,
-    normalize_address, parse_ipc,
+    BrowserOp, ConsoleEntry, Logs, PageEvent, Target, normalize_address, page_script, parse_ipc,
 };
 use sawit_core::probe;
 use serde_json::{Value, json};
@@ -70,6 +69,8 @@ pub struct BrowserView {
     /// Signs page messages; page scripts can't read it.
     token: String,
     logs: Logs,
+    /// Selector of the element picked last.
+    last_pick: Option<String>,
     to_view: UnboundedSender<FromPage>,
     /// Ops sent before the webview exists, in order.
     queued: Vec<(BrowserOp, oneshot::Sender<OpResult>)>,
@@ -146,6 +147,7 @@ impl BrowserView {
             navigated,
             token: new_token(),
             logs: Logs::default(),
+            last_pick: None,
             to_view,
             queued: Vec::new(),
             _ipc: ipc,
@@ -184,6 +186,12 @@ impl BrowserView {
         match message {
             FromPage::Event(PageEvent::Console(entry)) => self.logs.push_console(entry),
             FromPage::Event(PageEvent::Network(entry)) => self.logs.push_network(entry),
+            FromPage::Event(PageEvent::Picked(pick)) => {
+                self.last_pick = pick["element"]["selector"].as_str().map(str::to_string);
+                cx.notify();
+            }
+            // Hovers wait for the design panel; keys are handled with the panel.
+            FromPage::Event(PageEvent::Hovered(_) | PageEvent::Key(_)) => {}
             FromPage::Event(PageEvent::Url(url)) => {
                 self.url = url;
                 self.show_address(window, cx);
@@ -430,7 +438,7 @@ impl BrowserView {
         Engine::build(
             EngineSpec {
                 url: self.url.clone(),
-                init_script: AGENT_JS.replace(TOKEN_PLACEHOLDER, &self.token),
+                init_script: page_script(&self.token),
                 data_store: self
                     .project
                     .as_deref()
