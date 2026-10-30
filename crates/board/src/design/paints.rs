@@ -2,9 +2,16 @@
 //!
 //! `fills` and `strokes` are lists of paints. A solid paint reads as
 //! `{type: "solid", color: "#RRGGBB", opacity?, blend?, visible?}`, and a gradient, an image or a
-//! pattern as the engine's own paint JSON. An edit sends the whole list back through `node.set`,
-//! so every row it doesn't change goes back as it was read, and a gradient or an image is never
-//! rewritten as a solid: only [`replace_with_solid`] does that.
+//! pattern as the engine's own paint JSON. An edit that changes or adds a row sends the whole list
+//! back through `node.set`, so every row it doesn't change goes back as it was read, and a
+//! gradient or an image is never rewritten as a solid: only [`replace_with_solid`] does that.
+//! [`remove_paint`] uses the engine's command for one row, so the variable bindings of the rows
+//! after it move with them.
+//!
+//! The one thing a whole list sent back can lose is a binding a solid row holds: the row goes back
+//! as its 8-bit hex, and a colour bound to a variable that isn't on the 8-bit grid (or isn't
+//! opaque) lets go of the variable when another row of the list is edited. Variables are a
+//! non-goal of the spec, and the final review accepts this (its m1).
 //!
 //! Where a list can't be edited row by row, because the layers hold different lists, the panel
 //! shows "Mixed" with a "Replace all" button. [`add_paint`] is that button: it makes one new paint
@@ -15,7 +22,7 @@
 
 use serde_json::{Map, Value, json};
 
-use super::lists::{change_row, remove_row, replace, rows};
+use super::lists::{change_row, refused, remove_row, replace, rows};
 use super::{DesignSelection, Edit};
 
 /// A new fill's colour: the default of a new shape in Figma.
@@ -96,10 +103,17 @@ pub fn add_paint(sel: &DesignSelection, key: &str) -> Edit {
     replace(sel, key, list)
 }
 
-/// The edit that removes row `index` of list `key`. A row that isn't there, or lists that differ
-/// from layer to layer, make an edit the engine refuses and that changes nothing.
+/// The edit that removes row `index` of list `key`, with the engine's `fill.remove` or
+/// `stroke.remove`: the rows after it keep their variable bindings. A row that isn't there, a
+/// list that is neither `fills` nor `strokes`, or lists that differ from layer to layer make an
+/// edit the engine refuses and that changes nothing.
 pub fn remove_paint(sel: &DesignSelection, key: &str, index: usize) -> Edit {
-    remove_row(sel, key, index)
+    let command = match key {
+        "fills" => "fill.remove",
+        "strokes" => "stroke.remove",
+        _ => return refused(),
+    };
+    remove_row(sel, key, index, command)
 }
 
 /// The edit that turns row `index` of list `key` into a solid, the explicit "Replace with solid"
@@ -295,7 +309,8 @@ mod tests {
     use super::*;
     use crate::design::Mixed;
     use crate::design::lists::testing::{
-        apply, design_file, node_set, read, rectangle, undo_steps,
+        apply, bind, bound, design_file, node_set, read, rectangle, set_variable, undo_steps,
+        variables,
     };
     use crate::design::lists::whole_numbers;
     use crate::doc::{BoardDoc, BoardError};
@@ -653,6 +668,51 @@ mod tests {
         assert_eq!(rows_of(&board, &[r], "strokes").len(), 1);
     }
 
+    /// Final review m1: removing a paint keeps the variable bindings of the rows after it, which
+    /// move down one with their rows, on every selected layer, as one undo step; for the fills
+    /// and the strokes. The variables then still colour the rows they were bound to.
+    #[test]
+    fn removing_a_paint_keeps_the_bindings_of_the_rows_after_it() {
+        let mut board = design_file();
+        let r1 = rectangle(&mut board, "R1", 0.0);
+        let r2 = rectangle(&mut board, "R2", 300.0);
+        node_set(
+            &mut board,
+            &[r1, r2],
+            json!({"fills": ["#FF0000", "#00FF00", "#0000FF"], "strokes": ["#111111", "#222222"]}),
+        );
+        variables(
+            &mut board,
+            &[
+                ("brand", "color", json!("#0000FF")),
+                ("line", "color", json!("#222222")),
+            ],
+        );
+        for id in [r1, r2] {
+            bind(&mut board, id, "fills/2/color", "brand");
+            bind(&mut board, id, "strokes/1/color", "line");
+        }
+        let steps = undo_steps(&board);
+
+        let edit = remove_paint(&read(&board, &[r1, r2]), "fills", 0);
+        assert_eq!(edit.command, "fill.remove");
+        apply(&mut board, &edit);
+        let edit = remove_paint(&read(&board, &[r1, r2]), "strokes", 0);
+        assert_eq!(edit.command, "stroke.remove");
+        apply(&mut board, &edit);
+        assert_eq!(undo_steps(&board), steps + 2);
+        set_variable(&mut board, "brand", json!("#ABCDEF"));
+        set_variable(&mut board, "line", json!("#FEDCBA"));
+        for id in [r1, r2] {
+            assert_eq!(bound(&board, id), ["fills/1/color", "strokes/0/color"]);
+            assert_eq!(
+                rows_of(&board, &[id], "fills"),
+                [solid("#00FF00", 1.0), solid("#ABCDEF", 1.0)]
+            );
+            assert_eq!(rows_of(&board, &[id], "strokes"), [solid("#FEDCBA", 1.0)]);
+        }
+    }
+
     #[test]
     fn mixed_paints_are_none() {
         let mut board = design_file();
@@ -758,6 +818,7 @@ mod tests {
             replace_with_solid(&one, "fills", 1),
             set_visible(&one, "fills", 1, false),
             remove_paint(&one, "strokes", 0),
+            remove_paint(&one, "effects", 0),
             remove_paint(&differing, "fills", 0),
             replace_with_solid(&differing, "fills", 0),
             set_visible(&differing, "fills", 0, false),

@@ -4,8 +4,10 @@
 //! `color` (`{r, g, b, a}`), an `offset` (`[x, y]`), a `radius` (its blur), a `spread`, a `blend`
 //! and `showBehind`; a blur has a `radius` and its progressive settings. The engine has three
 //! kinds more (noise, texture and glass) that the panel lists, hides and removes but doesn't edit.
-//! An edit sends the whole list back through `node.set`, so every effect it doesn't change goes
-//! back as it was read, and an effect the panel can't edit is neither lost nor rewritten.
+//! An edit that changes or adds an effect sends the whole list back through `node.set`, so every
+//! effect it doesn't change goes back as it was read, and an effect the panel can't edit is
+//! neither lost nor rewritten. [`remove_effect`] uses the engine's command for one effect, whose
+//! variable bindings follow the effects that move (`node.set` would leave them by place).
 //!
 //! Where the layers hold different lists there is no row to change. [`add_effect`] then makes the
 //! one new effect the only effect of every layer, and the other edits are refused.
@@ -148,10 +150,12 @@ pub fn set_effect(sel: &DesignSelection, index: usize, row: &EffectRow) -> Edit 
     change_row(sel, KEY, index, |old| written(old, row))
 }
 
-/// The edit that removes effect `index`. A row that isn't there, or lists that differ from layer
-/// to layer, make an edit the engine refuses and that changes nothing.
+/// The edit that removes effect `index`, with the engine's `effect.remove`: the variable bindings
+/// of the effects after it move with them, and none is left on the effect that moves into its
+/// place. A row that isn't there, or lists that differ from layer to layer, make an edit the
+/// engine refuses and that changes nothing.
 pub fn remove_effect(sel: &DesignSelection, index: usize) -> Edit {
-    remove_row(sel, KEY, index)
+    remove_row(sel, KEY, index, "effect.remove")
 }
 
 /// What the row for `effect` shows.
@@ -263,7 +267,8 @@ mod tests {
 
     use super::*;
     use crate::design::lists::testing::{
-        apply, design_file, edit, node_set, read, rectangle, undo_steps,
+        apply, bind, bound, design_file, edit, node_set, read, rectangle, set_variable, undo_steps,
+        variables,
     };
     use crate::doc::{BoardDoc, BoardError};
 
@@ -704,6 +709,34 @@ mod tests {
         edit(&mut board, &[r], |sel| remove_effect(sel, 0));
         assert_eq!(held(&board, r), []);
         assert_eq!(effects(&read(&board, &[r])), Some(vec![]));
+    }
+
+    /// Final review m1: removing an effect moves the variable bindings of the effects after it
+    /// down one with their effects, as one undo step, so that none is left on the effect that
+    /// moves into the place of the one bound.
+    #[test]
+    fn removing_an_effect_keeps_each_binding_on_its_effect() {
+        let mut board = design_file();
+        let r = with_effects(
+            &mut board,
+            json!([
+                {"type": "layerBlur", "radius": 1},
+                {"type": "layerBlur", "radius": 2},
+                {"type": "layerBlur", "radius": 3},
+            ]),
+        );
+        variables(&mut board, &[("soft", "number", json!(2))]);
+        bind(&mut board, r, "effects/1/radius", "soft");
+        let steps = undo_steps(&board);
+        let made = remove_effect(&read(&board, &[r]), 0);
+        assert_eq!(made.command, "effect.remove");
+        apply(&mut board, &made);
+        assert_eq!(undo_steps(&board), steps + 1);
+        assert_eq!(bound(&board, r), ["effects/0/radius"]);
+        // The variable moves the radius of the effect it was bound to, and of no other.
+        set_variable(&mut board, "soft", json!(20));
+        let radii: Vec<f64> = rows_of(&board, &[r]).iter().map(|row| row.blur).collect();
+        assert_eq!(radii, [20.0, 3.0]);
     }
 
     #[test]

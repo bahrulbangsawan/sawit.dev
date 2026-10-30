@@ -1,7 +1,9 @@
 //! What the paint and effect lists have in common. `fills`, `strokes` and `effects` are each one
-//! property of a layer whose value is a list of rows, and the panel changes one row by sending the
-//! whole list back through `node.set`. So the rows it doesn't touch have to go back as they were
-//! read, and an edit that can't apply needs one answer, given here.
+//! property of a layer whose value is a list of rows, and the panel changes or adds one row by
+//! sending the whole list back through `node.set`. So the rows it doesn't touch have to go back as
+//! they were read, and an edit that can't apply needs one answer, given here. A row is removed
+//! with the engine's own command for one row instead ([`remove_row`]), so that the variable
+//! bindings of the rows after it move with them (final review m1).
 
 use serde_json::{Value, json};
 
@@ -31,14 +33,24 @@ pub(super) fn replace(sel: &DesignSelection, key: &str, rows: Vec<Value>) -> Edi
     sel.set(key, Value::Array(rows))
 }
 
-/// The edit that removes row `index` of list `key`. Refused ([`refused`]) when there is no such
+/// The edit that removes row `index` of list `key` from every selected layer, with `command`, the
+/// engine's own command for one row of that list (`fill.remove`, `stroke.remove` or
+/// `effect.remove`): one undo step. The rows after it move down one, and the variable bindings on
+/// them move with them. The shorter list sent back through `node.set` would lose those bindings
+/// (the engine rebinds a paint list by place, and an effect list not at all, so a binding would
+/// stay on the effect that moves into the place). Refused ([`refused`]) when there is no such
 /// row, or the layers hold different lists.
-pub(super) fn remove_row(sel: &DesignSelection, key: &str, index: usize) -> Edit {
+pub(super) fn remove_row(
+    sel: &DesignSelection,
+    key: &str,
+    index: usize,
+    command: &'static str,
+) -> Edit {
     match rows(sel, key) {
-        Some(mut list) if index < list.len() => {
-            list.remove(index);
-            replace(sel, key, list)
-        }
+        Some(list) if index < list.len() => Edit {
+            command,
+            params: json!({"ids": sel.ids, "index": index}),
+        },
         _ => refused(),
     }
 }
@@ -153,6 +165,36 @@ pub(super) mod testing {
     /// How many undo steps the file has.
     pub fn undo_steps(board: &BoardDoc) -> usize {
         board.session.undo_depth().0
+    }
+
+    /// Makes a collection of variables, each a name, a type (`color` or `number`) and a value.
+    pub fn variables(board: &mut BoardDoc, variables: &[(&str, &str, Value)]) {
+        board
+            .execute("variable.createCollection", &json!({"name": "Tokens"}))
+            .unwrap();
+        for (name, kind, value) in variables {
+            let params =
+                json!({"collection": "Tokens", "name": name, "type": kind, "value": value});
+            board.execute("variable.create", &params).unwrap();
+        }
+    }
+
+    /// Binds field `field` of layer `id` (`fills/1/color`, `effects/0/radius`) to variable `name`.
+    pub fn bind(board: &mut BoardDoc, id: NodeId, field: &str, name: &str) {
+        let params = json!({"ids": [id], "field": field, "variable": name});
+        board.execute("variable.bind", &params).unwrap();
+    }
+
+    /// The fields of layer `id` bound to a variable, in order.
+    pub fn bound(board: &BoardDoc, id: NodeId) -> Vec<String> {
+        let doc = board.doc().unwrap();
+        doc.node(id).unwrap().bound.keys().cloned().collect()
+    }
+
+    /// Gives variable `name` the value `value`: the fields bound to it take it.
+    pub fn set_variable(board: &mut BoardDoc, name: &str, value: Value) {
+        let params = json!({"variable": name, "value": value});
+        board.execute("variable.set", &params).unwrap();
     }
 }
 
