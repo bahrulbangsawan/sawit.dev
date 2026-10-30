@@ -79,7 +79,20 @@ impl BrowserView {
             .flex_none()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, window, cx| this.take_keyboard(window, cx)),
+                cx.listener(|this, _, window, cx| {
+                    // A field in the panel has already taken focus.
+                    if window.default_prevented() {
+                        return;
+                    }
+                    if this.focus.contains_focused(window, cx) {
+                        // GPUI focus is ours; the page may still hold the keys.
+                        if let Some(engine) = &this.engine {
+                            engine.focus_parent();
+                        }
+                    } else {
+                        this.take_keyboard(window, cx);
+                    }
+                }),
             )
             .border_l_1()
             .border_color(cx.theme().border)
