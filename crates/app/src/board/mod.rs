@@ -3750,6 +3750,31 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn the_context_bar_stays_over_the_toolbar(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("context-bar-toolbar");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        // A sticky that an op makes is selected. Its top is on page point (0, 0).
+        let sticky = json!({
+            "op": "command", "command": "board.sticky", "params": {"x": -100, "y": 0},
+        });
+        run_op(&view, sticky, &mut cx);
+        // The view moves until the sticky is below the canvas, where the bar would follow it to
+        // the canvas's bottom edge, under the toolbar.
+        let canvas = view.read_with(&cx, |view, _| view.bounds);
+        let pan = json!({
+            "op": "command", "command": "view.set",
+            "params": {"cx": 0, "cy": -f64::from(canvas.size.height)},
+        });
+        run_op(&view, pan, &mut cx);
+        cx.run_until_parked();
+        let bar = cx.debug_bounds("board-context-bar").expect("a context bar");
+        let toolbar = cx.debug_bounds("board-toolbar").expect("the toolbar");
+        // It stays in sight, 8 px over the toolbar, as the toast does.
+        assert_eq!(bar.bottom(), toolbar.top() - px(8.));
+        assert_eq!(bar.center().x, toolbar.center().x);
+    }
+
+    #[gpui_kit::test]
     fn the_picker_lists_the_templates_once_and_places_one(cx: &mut TestAppContext) {
         let tmp = Scratch::new("picker");
         let (view, mut cx) = chrome_canvas(cx, &tmp);

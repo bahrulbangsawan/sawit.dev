@@ -7,8 +7,9 @@
 //! one, so picking it does nothing (ruling P3-C2).
 //!
 //! The bar's bottom goes 12 px above the selection, and the bar stays inside the canvas
-//! (`context_bar::clamp_anchor`, ruling P3-C3). It hides while a gesture is on (a drag) and while
-//! a text is edited, and with the rest of the chrome while the UI is hidden.
+//! (`context_bar::clamp_anchor`, ruling P3-C3), over the toolbar that floats at the canvas's
+//! bottom: under it, the toolbar would cover the bar. It hides while a gesture is on (a drag) and
+//! while a text is edited, and with the rest of the chrome while the UI is hidden.
 
 use figcraft_engine::guard;
 use gpui_kit::component::button::*;
@@ -18,7 +19,7 @@ use gpui_kit::*;
 use sawit_board::context_bar::{self as model, Control, ControlOption};
 
 use super::BoardView;
-use super::toolbar::{SWATCH, divider, swatch};
+use super::toolbar::{self, SWATCH, divider, swatch};
 
 /// The bar's height.
 pub(super) const HEIGHT: f64 = 40.;
@@ -90,7 +91,10 @@ pub(super) fn render_context_bar(
         return None;
     }
     let ds = session.ds().ok()?;
-    let canvas = (ds.view.vw, ds.view.vh);
+    // The room the bar is kept in: the canvas above the toolbar, which shows whenever the bar
+    // does. FigCraft's own bar keeps clear of its toolbar too (ui-egui `board_bar.rs`, `place`).
+    let under = f64::from(toolbar::BOTTOM + toolbar::HEIGHT);
+    let canvas = (ds.view.vw, ds.view.vh - under);
     let (bar, options) = guard::run("ui.contextBar", || {
         Ok(model::context_bar(session).map(|bar| {
             let options: Vec<Vec<ControlOption>> =
