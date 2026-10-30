@@ -5,6 +5,8 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+# The canvas tools read and edit the stored canvas file themselves while Sawit is closed.
+sawit-board = { path = "../board" }
 sawit-core = { path = "../core" }
 rmcp = { version = "=3.8.0", features = ["server", "macros", "transport-io"] }
 futures.workspace = true

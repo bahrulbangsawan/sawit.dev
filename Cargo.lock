@@ -7544,6 +7544,7 @@ version = "0.0.7"
 dependencies = [
  "futures",
  "rmcp",
+ "sawit-board",
  "sawit-core",
  "schemars",
  "serde",

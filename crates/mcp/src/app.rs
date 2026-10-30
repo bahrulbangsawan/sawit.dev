@@ -3,15 +3,18 @@
 //! panel, SSH sessions, database tabs and the canvas.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
+use sawit_board::store::{self, Writer};
+use sawit_board::{BoardDoc, ops};
 use sawit_core::app_control::{self, Command, InstanceAction, Page, Panel, Request};
 use serde_json::{Value, json};
 
-use crate::{Sawit, fail, ok};
+use crate::{Sawit, blocking, fail, ok};
 
 /// Most commands answer at once; canvas ops wait for the page (the app
 /// gives up after 30 s).
@@ -247,6 +250,28 @@ pub struct CanvasLoadArgs {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasCommandArgs {
+    #[schemars(
+        description = "Command id, as canvas_commands lists them: board.sticky, node.set, align.left, edit.undo, ..."
+    )]
+    pub command: String,
+    #[schemars(
+        description = "The command's parameters as an object, e.g. {\"x\": 0, \"y\": 0, \"text\": \"Idea\"} for board.sticky"
+    )]
+    pub params: Option<Value>,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasCommandsArgs {
+    #[schemars(
+        description = "Only the commands whose id or label contains this text (any case), such as board. or align, each with the parameters it takes. Without it: every command's id and label"
+    )]
+    pub filter: Option<String>,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasExportArgs {
     #[schemars(description = "svg (default) or png")]
     pub format: Option<String>,
@@ -300,8 +325,60 @@ impl Sawit {
         }
     }
 
+    /// Runs canvas op `op` and answers it. A running app answers every canvas tool, as it always
+    /// has. With the native canvas on and no app running, the op runs on the stored canvas file
+    /// itself ([`headless`]), which is how an agent edits a canvas while Sawit is closed. The two
+    /// are never both at work, so the app's autosave and the file never race.
     async fn canvas(&self, project: Option<String>, op: Value) -> Result<Value, String> {
-        self.app_call(project, Command::Canvas { op }).await
+        if self.native_canvas && !app_control::is_running(&self.paths) {
+            let file = self.canvas_board_file(project.as_deref());
+            return blocking(move || headless(&file, &op)).await?;
+        }
+        op_reply(self.app_call(project, Command::Canvas { op }).await?)
+    }
+
+    /// The file `project`'s canvas is saved in: its `.nyawit/canvas.figcraft` (the project is the
+    /// folder the agent runs in, unless it names one), else `canvas.figcraft` in Sawit's own
+    /// folder. This is the app's choice of file too.
+    fn canvas_board_file(&self, project: Option<&str>) -> PathBuf {
+        store::board_file(crate::project_dir(project).as_deref(), &self.paths.root)
+    }
+
+    pub async fn canvas_get_tool(&self, a: WindowArgs) -> CallToolResult {
+        let reply = if app_control::is_running(&self.paths) {
+            self.canvas(a.project, json!({ "op": "get" })).await
+        } else if self.native_canvas {
+            self.canvas_get_stored(a.project).await
+        } else {
+            self.canvas_file_summary(a.project.as_deref())
+        };
+        match reply {
+            Ok(v) => ok(pretty(&v)),
+            Err(e) => fail(e),
+        }
+    }
+
+    pub async fn canvas_command_tool(&self, a: CanvasCommandArgs) -> CallToolResult {
+        let op = json!({ "op": "command", "command": a.command, "params": a.params });
+        match self.canvas(a.project, op).await {
+            Ok(v) => ok(pretty(&v)),
+            Err(e) => fail(e),
+        }
+    }
+
+    /// `canvas_get` with the native canvas on and the app closed: the layers of the stored canvas,
+    /// as the app would show them. A project that has only its old Excalidraw canvas is read
+    /// through the importer, and that file stays as it is.
+    ///
+    /// The one exception is an old canvas the importer can't read, while no canvas file has been
+    /// made from it: the old reader says what it always did. Once the canvas file is there its own
+    /// error is the answer, because the old canvas is months behind it.
+    async fn canvas_get_stored(&self, project: Option<String>) -> Result<Value, String> {
+        let file = self.canvas_board_file(project.as_deref());
+        match self.canvas(project.clone(), json!({ "op": "get" })).await {
+            Err(_) if !file.exists() => self.canvas_file_summary(project.as_deref()),
+            reply => reply,
+        }
     }
 
     /// The board as saved on disk, for `canvas_get` while the app is
@@ -361,6 +438,108 @@ fn summarize_element(e: &Value) -> Value {
         }
     }
     Value::Object(out)
+}
+
+/// A canvas op's reply as a tool's result. The native canvas answers an op that failed with
+/// `{ok: false, error}` (the old canvas's page turned those into errors before they got here), so
+/// this is where an agent's failed op becomes a tool error, rather than a success it has to read
+/// through. A reply that isn't a failure is as it came.
+fn op_reply(reply: Value) -> Result<Value, String> {
+    if reply.get("ok") != Some(&Value::Bool(false)) {
+        return Ok(reply);
+    }
+    let error = reply.get("error").and_then(Value::as_str);
+    Err(error.unwrap_or("The canvas op failed.").to_string())
+}
+
+/// The `commands` op's reply as `canvas_commands` shows it. The engine's list is over 500 commands
+/// and 120 KB, most of it the parameters each documents, and a tool's output is cut at 100 KB: the
+/// commands at its end would be lost, and those are the board's own. So the whole list is each
+/// command's id and label, and the parameters come with the commands that match `filter`, a
+/// case-insensitive part of an id or a label.
+fn command_list(reply: &Value, filter: Option<&str>) -> String {
+    let filter = filter
+        .map(|f| f.trim().to_lowercase())
+        .filter(|f| !f.is_empty());
+    let commands = reply["commands"].as_array().map_or(&[][..], Vec::as_slice);
+    let shown: Vec<Value> = commands
+        .iter()
+        .filter_map(|command| {
+            let text = |key: &str| command[key].as_str().unwrap_or_default();
+            match &filter {
+                None => Some(json!({ "id": text("id"), "label": text("label") })),
+                Some(part) => (text("id").to_lowercase().contains(part)
+                    || text("label").to_lowercase().contains(part))
+                .then(|| command.clone()),
+            }
+        })
+        .collect();
+    json!({ "ok": true, "commands": shown }).to_string()
+}
+
+/// The stored canvas is opened, changed and saved by one call after another: two at once (an
+/// agent's parallel tool calls) would each open the file as it was, and the later save would drop
+/// the work of the earlier.
+static STORED_CANVAS: Mutex<()> = Mutex::new(());
+
+fn take_turn() -> MutexGuard<'static, ()> {
+    // A call that panicked has left the file whole (it is written by rename), so the next may go on.
+    STORED_CANVAS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Runs canvas op `op` on the canvas stored in `file` while no app is running, as the app would run
+/// it, and saves the canvas if the op changed it. The reply is the op's, and an op that fails is
+/// an `Err` that has changed nothing in the file.
+///
+/// - The canvas is opened as the app opens it ([`store::open`]): a canvas file that isn't there is
+///   a new, empty board, and one that is missing beside an old `canvas.excalidraw` is that board,
+///   imported. Nothing is written until an op changes the canvas, and the old canvas is never
+///   touched. A canvas that can't be opened is an error, and then nothing is written, so a blank
+///   board never takes its place.
+/// - A change is saved through the store's [`Writer`], like the app's autosave: a temporary file
+///   renamed into place, a `.bak` kept before a save that empties a canvas, and a `.nyawit/` made
+///   with its `.gitignore`.
+fn headless(file: &Path, op: &Value) -> Result<Value, String> {
+    let _turn = take_turn();
+    let mut board = store::open(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    run_and_save(&mut board, file, op)
+}
+
+/// Runs `op` on `board` and saves it to `file` if the op changed the document: a new document, as
+/// the engine makes one for every edit, is how the app tells too. Selection and view changes are
+/// not in it, so they save nothing.
+fn run_and_save(board: &mut BoardDoc, file: &Path, op: &Value) -> Result<Value, String> {
+    let before = board.doc().map_err(|e| e.to_string())?;
+    let reply = op_reply(ops::run(board, op))?;
+    let after = board.doc().map_err(|e| e.to_string())?;
+    if !Arc::ptr_eq(&before, &after) {
+        let bytes = board.to_bytes().map_err(|e| e.to_string())?;
+        let writer = Writer::spawn();
+        writer.save(file.to_path_buf(), bytes, store::is_empty(&after));
+        writer.flush();
+        if let Some(error) = writer.last_error() {
+            return Err(error);
+        }
+    }
+    Ok(reply)
+}
+
+/// Whether `path` names a `.figcraft` file.
+fn is_figcraft(path: &str) -> bool {
+    let extension = Path::new(path.trim()).extension();
+    extension.is_some_and(|e| e.eq_ignore_ascii_case("figcraft"))
+}
+
+/// `path` as the app, whose working folder is not the agent's, can open it: `~` expanded, and a
+/// relative path taken from the folder the agent runs in. It is text for a JSON op, so a folder
+/// that isn't valid UTF-8 comes out with replacement characters, and the canvas says it can't be read.
+fn absolute_path(path: &str) -> String {
+    let path = crate::expand_home(path.trim());
+    let path = match std::env::current_dir() {
+        Ok(cwd) if path.is_relative() => cwd.join(path),
+        _ => path,
+    };
+    path.to_string_lossy().into_owned()
 }
 
 /// Where an export goes when no path is given: the project's
@@ -655,16 +834,7 @@ impl Sawit {
         description = "List the elements on Sawit's Excalidraw canvas: id, type, position, size, text, colors and arrow bindings. Works from the saved file when the app isn't running"
     )]
     async fn canvas_get(&self, Parameters(a): Parameters<WindowArgs>) -> CallToolResult {
-        if !app_control::is_running(&self.paths) {
-            return match self.canvas_file_summary(a.project.as_deref()) {
-                Ok(v) => ok(pretty(&v)),
-                Err(e) => fail(e),
-            };
-        }
-        match self.canvas(a.project, json!({ "op": "get" })).await {
-            Ok(v) => ok(pretty(&v)),
-            Err(e) => fail(e),
-        }
+        self.canvas_get_tool(a).await
     }
 
     #[tool(
@@ -729,24 +899,25 @@ impl Sawit {
 
     #[tool(description = "Replace the canvas with an .excalidraw file or scene JSON")]
     async fn canvas_load(&self, Parameters(a): Parameters<CanvasLoadArgs>) -> CallToolResult {
-        let scene = match (a.scene, a.path) {
-            (Some(scene), _) => scene,
+        let op = match (a.scene, a.path) {
+            (Some(scene), _) => json!({ "op": "replace", "scene": scene }),
+            // A .figcraft file is loaded by the canvas itself, from where it is.
+            (None, Some(path)) if is_figcraft(&path) => {
+                json!({ "op": "replace", "path": absolute_path(&path) })
+            }
             (None, Some(path)) => {
                 let text = match std::fs::read_to_string(&path) {
                     Ok(t) => t,
                     Err(e) => return fail(format!("Unable to read {path}: {e}")),
                 };
-                match serde_json::from_str(&text) {
-                    Ok(scene) => scene,
+                match serde_json::from_str::<Value>(&text) {
+                    Ok(scene) => json!({ "op": "replace", "scene": scene }),
                     Err(e) => return fail(format!("{path} isn't valid JSON: {e}")),
                 }
             }
             (None, None) => return fail("Give a path or a scene."),
         };
-        match self
-            .canvas(a.project, json!({ "op": "replace", "scene": scene }))
-            .await
-        {
+        match self.canvas(a.project, op).await {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
         }
@@ -796,6 +967,26 @@ impl Sawit {
                 bytes.len()
             )),
             Err(e) => fail(format!("Unable to write {}: {e}", path.display())),
+        }
+    }
+
+    #[tool(
+        description = "Run one command of the canvas engine by its id, with its parameters as JSON: board.sticky {x, y, text}, node.set, align.left, edit.undo, view.zoomFit, ... The reply is the command's result, and a command the engine refuses is an error. canvas_commands lists the ids, and with a filter what each takes"
+    )]
+    async fn canvas_command(&self, Parameters(a): Parameters<CanvasCommandArgs>) -> CallToolResult {
+        self.canvas_command_tool(a).await
+    }
+
+    #[tool(
+        description = "List the commands canvas_command runs: the id and label of each. The parameters each takes make the full list too long to return at once, so pass `filter` (board., align, sticky, ...) to get the matching commands with theirs"
+    )]
+    async fn canvas_commands(
+        &self,
+        Parameters(a): Parameters<CanvasCommandsArgs>,
+    ) -> CallToolResult {
+        match self.canvas(a.project, json!({ "op": "commands" })).await {
+            Ok(reply) => ok(command_list(&reply, a.filter.as_deref())),
+            Err(e) => fail(e),
         }
     }
 }
@@ -854,7 +1045,18 @@ fn launch(paths: &sawit_core::instances::AppPaths, path: Option<&str>) -> Result
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixListener;
+    use std::sync::mpsc::Receiver;
+
+    use sawit_core::instances::AppPaths;
+
     use super::*;
+
+    /// The Excalidraw board of `sawit-board`'s importer tests: 12 live elements, which import as
+    /// 9 layers.
+    const OLD_BOARD: &str = include_str!("../../board/tests/fixtures/excalidraw/basic.excalidraw");
 
     #[test]
     fn panel_and_page_names() {
@@ -899,5 +1101,457 @@ mod tests {
             summarize_element(&e),
             json!({"id": "a1", "type": "arrow", "x": 1, "y": 2, "width": 3, "height": 4, "startBinding": "box"})
         );
+    }
+
+    // The canvas tools, with the app and without it. Each test gives its server a Sawit home of
+    // its own, so that no app answers on its socket but the one a test stands in, and names its
+    // project folder, so that nothing is written under the repository.
+
+    /// A server with the native canvas on, as `SAWIT_NATIVE_CANVAS=1` has it, whose home is in `dir`.
+    fn native(dir: &Path) -> Sawit {
+        Sawit::new(AppPaths {
+            root: dir.join("home"),
+        })
+        .with_native_canvas(true)
+    }
+
+    fn project_arg(project: &Path) -> Option<String> {
+        Some(project.display().to_string())
+    }
+
+    /// `<project>/.nyawit/canvas.figcraft`.
+    fn board_file(project: &Path) -> PathBuf {
+        project.join(".nyawit").join("canvas.figcraft")
+    }
+
+    /// A canvas file at `path` with `stickies` stickies, written as the app writes one.
+    fn write_board(path: &Path, stickies: usize) {
+        let mut board = BoardDoc::new_board("Canvas").unwrap();
+        for n in 0..stickies {
+            let sticky = json!({"x": n as f64 * 300.0, "y": 0, "text": format!("note {n}")});
+            board.execute("board.sticky", &sticky).unwrap();
+        }
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, board.to_bytes().unwrap()).unwrap();
+    }
+
+    /// What `get` lists on the canvas file at `path`, opened as the app opens it.
+    fn layers_in(path: &Path) -> Vec<Value> {
+        let mut board = store::open(path).unwrap();
+        let reply = ops::run(&mut board, &json!({"op": "get"}));
+        reply["elements"].as_array().unwrap().clone()
+    }
+
+    /// The text of a tool's result.
+    fn said(result: &CallToolResult) -> String {
+        let texts = result.content.iter().filter_map(|c| c.as_text());
+        texts.map(|t| t.text.clone()).collect::<Vec<_>>().join("\n")
+    }
+
+    /// The JSON a tool that succeeded answered.
+    fn answer(result: &CallToolResult) -> Value {
+        assert_ne!(result.is_error, Some(true), "{}", said(result));
+        serde_json::from_str(&said(result)).unwrap()
+    }
+
+    /// A stand-in for the running app: it listens where the app does, and answers each canvas
+    /// request with the next of `answers` (`{ok: true}` once they are used up). The ops it was
+    /// asked to run come out of the receiver.
+    fn fake_app(paths: &AppPaths, answers: Vec<Value>) -> Receiver<Value> {
+        std::fs::create_dir_all(&paths.root).unwrap();
+        let listener = UnixListener::bind(paths.cli_socket()).unwrap();
+        let (asked, ops) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut answers = answers.into_iter();
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut bytes = Vec::new();
+                // `is_running` only connects, and sends nothing.
+                if stream.read_to_end(&mut bytes).is_err() || bytes.is_empty() {
+                    continue;
+                }
+                let Some(Ok(Request {
+                    command: Command::Canvas { op },
+                    ..
+                })) = app_control::decode(&bytes)
+                else {
+                    break;
+                };
+                let _ = asked.send(op);
+                let answer = answers.next().unwrap_or_else(|| json!({"ok": true}));
+                let line = format!("{}\n", app_control::reply_ok(&answer));
+                let _ = stream.write_all(line.as_bytes());
+            }
+        });
+        ops
+    }
+
+    /// The next op the stand-in app was asked for. It is waited for, but not for ever: a tool that
+    /// didn't go to the app fails the test instead of hanging it.
+    fn next(asked: &Receiver<Value>) -> Value {
+        asked
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the app was asked for an op")
+    }
+
+    #[tokio::test]
+    async fn a_running_app_answers_every_canvas_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = dir.path().join("project");
+        write_board(&board_file(&project), 3);
+        let asked = fake_app(
+            &server.paths,
+            vec![
+                json!({"ok": true, "elements": [{"id": "7", "type": "sticky"}]}),
+                json!({"ok": false, "error": "add: the engine said no"}),
+                json!({"ok": true, "result": {"id": "9"}}),
+                json!({"ok": true, "commands": [{"id": "a.b", "label": "A B", "params": "{}"}]}),
+            ],
+        );
+
+        // The app's answer to `get`, though the native canvas is on and the file could be read:
+        // the app is the one that has the canvas.
+        let got = server
+            .canvas_get_tool(WindowArgs {
+                project: project_arg(&project),
+            })
+            .await;
+        assert_eq!(answer(&got)["elements"].as_array().unwrap().len(), 1);
+        assert_eq!(next(&asked), json!({"op": "get"}));
+
+        // An op the app answers with `{ok: false, error}` is the tool's error, in the engine's words.
+        let failed = server
+            .canvas_add_elements(Parameters(CanvasElementsArgs {
+                elements: vec![json!({"type": "rectangle"})],
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_eq!(failed.is_error, Some(true), "{}", said(&failed));
+        assert_eq!(said(&failed), "add: the engine said no");
+        assert_eq!(next(&asked)["op"], json!("add"));
+
+        let ran = server
+            .canvas_command_tool(CanvasCommandArgs {
+                command: "board.sticky".into(),
+                params: Some(json!({"x": 0, "y": 0})),
+                project: project_arg(&project),
+            })
+            .await;
+        assert_eq!(answer(&ran)["result"]["id"], json!("9"));
+        let op = json!({"op": "command", "command": "board.sticky", "params": {"x": 0, "y": 0}});
+        assert_eq!(next(&asked), op);
+
+        let listed = server
+            .canvas_commands(Parameters(CanvasCommandsArgs {
+                filter: None,
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_eq!(answer(&listed)["commands"][0]["id"], json!("a.b"));
+        assert_eq!(next(&asked), json!({"op": "commands"}));
+
+        // None of it went to the file behind the app's back.
+        assert_eq!(layers_in(&board_file(&project)).len(), 3);
+    }
+
+    #[tokio::test]
+    async fn the_other_canvas_tools_edit_the_stored_canvas_while_the_app_is_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = dir.path().join("project");
+        let file = board_file(&project);
+
+        // Two boxes and an arrow between them, with the agent's own ids.
+        let added = server
+            .canvas_add_elements(Parameters(CanvasElementsArgs {
+                elements: vec![
+                    json!({"type": "rectangle", "id": "api", "x": 0, "y": 0, "width": 160, "height": 60, "label": {"text": "API"}}),
+                    json!({"type": "rectangle", "id": "db", "x": 300, "y": 0, "width": 160, "height": 60, "label": {"text": "DB"}}),
+                    json!({"type": "arrow", "id": "calls", "x": 160, "y": 30, "start": {"id": "api"}, "end": {"id": "db"}}),
+                ],
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_eq!(answer(&added)["added"], json!(3), "{}", said(&added));
+        assert_eq!(layers_in(&file).len(), 3);
+
+        // The ids come back in the next call, which opens the file again.
+        let updated = server
+            .canvas_update(Parameters(CanvasUpdateArgs {
+                elements: vec![json!({"id": "db", "text": "Database"})],
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_eq!(answer(&updated)["updated"], json!(1), "{}", said(&updated));
+        let layers = layers_in(&file);
+        let texts: Vec<&str> = layers.iter().filter_map(|l| l["text"].as_str()).collect();
+        assert!(
+            texts.contains(&"Database") && texts.contains(&"API"),
+            "{texts:?}"
+        );
+        let arrow = layers
+            .iter()
+            .find(|l| l["type"] == json!("connector"))
+            .unwrap();
+        assert!(
+            arrow["from"].is_string() && arrow["to"].is_string(),
+            "{arrow}"
+        );
+
+        // A diagram from Mermaid is drawn as shapes the next call can edit.
+        let drawn = server
+            .canvas_add_mermaid(Parameters(CanvasMermaidArgs {
+                source: "graph TD; A-->B".into(),
+                x: Some(0.0),
+                y: Some(400.0),
+                project: project_arg(&project),
+            }))
+            .await;
+        assert!(
+            answer(&drawn)["added"].as_u64().unwrap() >= 3,
+            "{}",
+            said(&drawn)
+        );
+        let after_mermaid = layers_in(&file).len();
+        assert!(after_mermaid > 3, "{after_mermaid}");
+
+        // A command without parameters.
+        let zoomed = server
+            .canvas_command_tool(CanvasCommandArgs {
+                command: "view.zoomFit".into(),
+                params: None,
+                project: project_arg(&project),
+            })
+            .await;
+        assert_ne!(zoomed.is_error, Some(true), "{}", said(&zoomed));
+
+        let deleted = server
+            .canvas_delete(Parameters(CanvasDeleteArgs {
+                ids: vec!["calls".into(), "nope".into()],
+                project: project_arg(&project),
+            }))
+            .await;
+        let deleted = answer(&deleted);
+        assert_eq!(deleted["deleted"], json!(1), "{deleted}");
+        assert_eq!(deleted["missing"], json!(["nope"]), "{deleted}");
+        assert_eq!(layers_in(&file).len(), after_mermaid - 1);
+
+        // Clearing the canvas keeps what it held, in the `.bak` beside it.
+        let cleared = server
+            .canvas_clear(Parameters(WindowArgs {
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_ne!(cleared.is_error, Some(true), "{}", said(&cleared));
+        assert!(layers_in(&file).is_empty());
+        let kept = std::fs::read(file.with_extension("figcraft.bak")).unwrap();
+        let kept = BoardDoc::from_bytes(&kept).unwrap();
+        let kept = ops::run(&mut { kept }, &json!({"op": "get"}));
+        assert_eq!(
+            kept["elements"].as_array().unwrap().len(),
+            after_mermaid - 1
+        );
+    }
+
+    #[tokio::test]
+    async fn parallel_calls_each_land_in_the_stored_canvas() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = dir.path().join("project");
+
+        // An agent's parallel tool calls: each opens the file, adds its box and saves.
+        let calls = (0..8).map(|n| {
+            server.canvas_add_elements(Parameters(CanvasElementsArgs {
+                elements: vec![json!({"type": "rectangle", "id": format!("box-{n}"), "x": n * 200, "y": 0, "width": 100, "height": 60})],
+                project: project_arg(&project),
+            }))
+        });
+        for result in futures::future::join_all(calls).await {
+            assert_ne!(result.is_error, Some(true), "{}", said(&result));
+        }
+
+        assert_eq!(layers_in(&board_file(&project)).len(), 8);
+    }
+
+    #[tokio::test]
+    async fn canvas_load_takes_a_figcraft_file_where_it_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = dir.path().join("project");
+        let file = board_file(&project);
+        write_board(&file, 1);
+        let other = dir.path().join("elsewhere").join("board.FIGCRAFT");
+        write_board(&other, 3);
+        let other_bytes = std::fs::read(&other).unwrap();
+        let load = |path: &Path| CanvasLoadArgs {
+            path: Some(path.display().to_string()),
+            scene: None,
+            project: project_arg(&project),
+        };
+
+        let loaded = server.canvas_load(Parameters(load(&other))).await;
+        assert_eq!(answer(&loaded)["elements"].as_array().unwrap().len(), 3);
+        assert_eq!(layers_in(&file).len(), 3);
+        assert_eq!(std::fs::read(&other).unwrap(), other_bytes);
+
+        // An Excalidraw file is still read here and sent as a scene.
+        let old = dir.path().join("old.excalidraw");
+        std::fs::write(&old, OLD_BOARD).unwrap();
+        let loaded = server.canvas_load(Parameters(load(&old))).await;
+        assert_eq!(answer(&loaded)["elements"].as_array().unwrap().len(), 9);
+        assert_eq!(layers_in(&file).len(), 9);
+
+        // A .figcraft file that isn't there is an error that changes nothing.
+        let before = std::fs::read(&file).unwrap();
+        let missing = server
+            .canvas_load(Parameters(load(&dir.path().join("nope.figcraft"))))
+            .await;
+        assert_eq!(missing.is_error, Some(true), "{}", said(&missing));
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+
+        // Neither is no load at all.
+        let nothing = server
+            .canvas_load(Parameters(CanvasLoadArgs {
+                path: None,
+                scene: None,
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_eq!(said(&nothing), "Give a path or a scene.");
+    }
+
+    #[tokio::test]
+    async fn canvas_commands_lists_every_command_and_filters_with_their_parameters() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let list = |filter: Option<&str>| {
+            server.canvas_commands(Parameters(CanvasCommandsArgs {
+                filter: filter.map(str::to_string),
+                project: project_arg(&dir.path().join("project")),
+            }))
+        };
+
+        // The list reaches the agent whole, with no cut: the board's own commands are the last
+        // that the engine registers, so a list that doesn't fit would lose exactly those.
+        let all = list(None).await;
+        assert!(!said(&all).contains("truncated"), "{}", said(&all).len());
+        let all = answer(&all);
+        let commands = all["commands"].as_array().unwrap();
+        assert!(commands.len() > 500, "{}", commands.len());
+        let ids: Vec<&str> = commands.iter().filter_map(|c| c["id"].as_str()).collect();
+        assert!(ids.contains(&"board.sticky") && ids.contains(&"edit.undo"));
+        // It is what `canvas_command` runs: what Sawit does itself isn't there.
+        assert!(!ids.contains(&"file.save"));
+        assert!(
+            commands
+                .iter()
+                .all(|c| c["label"].is_string() && c.get("params").is_none())
+        );
+
+        // With a filter, the commands that match come with the parameters they take.
+        let board = answer(&list(Some(" BOARD. ")).await);
+        let board = board["commands"].as_array().unwrap();
+        assert!(!board.is_empty() && board.len() < 50, "{}", board.len());
+        let sticky = board
+            .iter()
+            .find(|c| c["id"] == json!("board.sticky"))
+            .unwrap();
+        assert!(
+            sticky["params"].as_str().unwrap().contains("text"),
+            "{sticky}"
+        );
+        // A part of a label counts too, and a filter that matches nothing is an empty list.
+        let by_label = answer(&list(Some("sticky note")).await);
+        assert!(
+            by_label["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["id"] == json!("board.sticky"))
+        );
+        assert_eq!(
+            answer(&list(Some("no such command")).await)["commands"],
+            json!([])
+        );
+        // Blank is no filter.
+        assert_eq!(answer(&list(Some("  ")).await), all);
+    }
+
+    #[tokio::test]
+    async fn a_canvas_that_can_not_be_saved_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = dir.path().join("project");
+        let file = board_file(&project);
+        write_board(&file, 1);
+        let before = std::fs::read(&file).unwrap();
+        let folder = file.parent().unwrap();
+        let writable =
+            |mode| std::fs::set_permissions(folder, std::fs::Permissions::from_mode(mode));
+        writable(0o555).unwrap();
+        if std::fs::write(folder.join("probe"), b"x").is_ok() {
+            // Whoever may write to a folder that is read-only (root) can't make a save fail this way.
+            writable(0o755).unwrap();
+            return;
+        }
+
+        let result = server
+            .canvas_command_tool(CanvasCommandArgs {
+                command: "board.sticky".into(),
+                params: Some(json!({"x": 0, "y": 0})),
+                project: project_arg(&project),
+            })
+            .await;
+        writable(0o755).unwrap();
+
+        // Not a success with the sticky in the reply: it is not in the file.
+        assert_eq!(result.is_error, Some(true), "{}", said(&result));
+        assert!(
+            said(&result).contains("couldn't be saved"),
+            "{}",
+            said(&result)
+        );
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+    }
+
+    #[test]
+    fn a_failed_reply_is_an_error_and_any_other_is_the_answer() {
+        assert_eq!(
+            op_reply(json!({"ok": false, "error": "add: no"})),
+            Err("add: no".to_string())
+        );
+        assert_eq!(
+            op_reply(json!({"ok": false})),
+            Err("The canvas op failed.".to_string())
+        );
+        let fine = json!({"ok": true, "added": 1});
+        assert_eq!(op_reply(fine.clone()), Ok(fine));
+        // The old canvas's page leaves `ok` out of what it answers.
+        let old = json!({"count": 2, "elements": []});
+        assert_eq!(op_reply(old.clone()), Ok(old));
+        assert_eq!(op_reply(Value::Null), Ok(Value::Null));
+    }
+
+    #[test]
+    fn figcraft_files_are_told_by_their_extension() {
+        assert!(is_figcraft("/a/b/board.figcraft"));
+        assert!(is_figcraft("board.FigCraft"));
+        assert!(is_figcraft("  ~/board.figcraft "));
+        assert!(!is_figcraft("/a/b/board.excalidraw"));
+        assert!(!is_figcraft("figcraft"));
+        assert!(!is_figcraft("/a/figcraft/board"));
+    }
+
+    #[test]
+    fn a_path_for_the_app_is_absolute() {
+        assert_eq!(absolute_path("/a/b.figcraft"), "/a/b.figcraft");
+        let relative = absolute_path("b.figcraft");
+        assert!(Path::new(&relative).is_absolute(), "{relative}");
+        assert!(relative.ends_with("/b.figcraft"), "{relative}");
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = Path::new(&home).join("b.figcraft");
+            assert_eq!(absolute_path("~/b.figcraft"), home.to_string_lossy());
+        }
     }
 }

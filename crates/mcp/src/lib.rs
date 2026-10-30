@@ -85,6 +85,7 @@ These control the running Sawit app (start it with launch_app; app_state shows w
 - app_*: open files/folders, show panels, layout, tabs, pages (canvas, MCP, tools, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
 - terminal_*: run commands in Sawit's terminal and read their output, type keys (ctrl-c), close tabs.
 - canvas_*: the Excalidraw board: list, add shapes/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG.
+- canvas_command: run any command of the canvas engine by id with its parameters (board.sticky, node.set, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes.
 - browser_*: a browser tab (WebKit) to check the app being built: navigate (default the project's dev server), snapshot the page as an outline with element refs, click/hover/type/press keys/select/scroll by ref or CSS selector, wait for text, screenshot, read console errors and network requests, evaluate JS. Take a new browser_snapshot after the page changes; refs reset.
 Most app tools take `project` to pick the window that has that folder open; otherwise the frontmost window is used.
 Targets: database tools take a Sawit instance name or a saved connection name (see list_connections).";
@@ -93,6 +94,10 @@ Targets: database tools take a Sawit instance name or a saved connection name (s
 pub struct Sawit {
     paths: AppPaths,
     tool_router: ToolRouter<Sawit>,
+    /// The native canvas is on, as in the app: with no app running, the canvas tools then work on
+    /// the stored canvas file (see `app::headless`). Off, they need the app, and only `canvas_get`
+    /// reads the Excalidraw file, as it always did.
+    native_canvas: bool,
 }
 
 pub(crate) fn ok(text: impl Into<String>) -> CallToolResult {
@@ -213,11 +218,20 @@ pub(crate) fn utc_time(secs: i64) -> String {
 }
 
 impl Sawit {
+    /// A server for the Sawit data folder `paths`. The native canvas is on when the environment
+    /// variable `SAWIT_NATIVE_CANVAS` is set, as it is for the app, and is read once, here.
     pub fn new(paths: AppPaths) -> Self {
         Self {
             paths,
             tool_router: Self::router(),
+            native_canvas: std::env::var_os("SAWIT_NATIVE_CANVAS").is_some(),
         }
+    }
+
+    /// This server with the native canvas on or off, whatever the environment said.
+    pub fn with_native_canvas(mut self, on: bool) -> Self {
+        self.native_canvas = on;
+        self
     }
 
     /// Every tool, from each area's router.
@@ -379,6 +393,8 @@ mod tests {
             "canvas_clear",
             "canvas_load",
             "canvas_export",
+            "canvas_command",
+            "canvas_commands",
             // browser
             "browser_navigate",
             "browser_snapshot",
@@ -412,7 +428,11 @@ mod tests {
         });
         let info = sawit.get_info();
         assert!(info.capabilities.tools.is_some());
-        assert!(info.instructions.as_deref().unwrap().contains("app_*"));
+        let instructions = info.instructions.as_deref().unwrap();
+        assert!(instructions.contains("app_*"));
+        // The engine's commands are reachable, and an agent is told where to find their ids.
+        assert!(instructions.contains("canvas_command"), "{instructions}");
+        assert!(instructions.contains("canvas_commands"), "{instructions}");
     }
 
     #[test]
