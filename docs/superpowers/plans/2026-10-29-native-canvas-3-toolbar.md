@@ -231,3 +231,195 @@ git commit -m "feat(canvas): floating toolbar, top bar and context bar on the na
 - [ ] **Step 5: Stop the instance** with `/bin/kill`, then run the full gates:
 Run: `cargo test --workspace`
 Expected: all pass.
+
+#### Task 4 notes: live check (2026-10-30, at `c5d882b` and `b978572`, lane 4)
+
+Steps 1–3 passed over the control socket. So did the checks that the reviews of Tasks 2 and 3 left
+to this one: the context bar's menu widths, its clamping, the marked tool button and the toast over
+the toolbar. The check found one defect: a selection below the view sent the context bar under the
+toolbar. It is fixed in `b978572` (see "The context bar under the toolbar" below).
+`cargo test --workspace` passes at `b978572`: 1136 passed, 9 ignored and 0 failed. Step 4 needs the
+user: its checks are under "Hand checks (pending — needs the user)" below, with the ones the reviews
+of Tasks 2 and 3 asked for. Machine: Apple M3 (8 cores, 16 GB), macOS 26.6.1, window scale factor 2,
+debug build. Other lanes were building, so `vm.loadavg` was 5.1–8.3.
+
+**How it ran.** As rulings C15–C17 amend Steps 1–3. The app was launched from lane 4 with Plan 1
+Task 7's launch recipe for an empty board (no `.nyawit/`, C15), and stopped with `/bin/kill $PID`
+each time (C17 as amended). It ran three times:
+- Steps 1–2 and the board checks, at `c5d882b`;
+- the fix, on the same board, at `b978572`;
+- Step 3, with `ridgeline-app.figcraft` copied over `.nyawit/canvas.figcraft` before the launch, at
+  `b978572`. The fix touches nothing a design file shows.
+
+Another app's window covered Sawit's at times, and a covered window doesn't repaint, so each batch
+of screenshots started with `{"cmd":"focus"}`. After Step 1, `{"cmd":"layout","terminal":false}`
+gave the canvas 1040 × 675 pt. Pointer ops take page points.
+
+**Answers (Steps 1–3).**
+
+- Step 1:
+  - `open_page canvas` answers `{"tab":0}`, and `get` answers `[]`.
+  - The screenshot shows the board toolbar at the bottom centre of the 1040 × 435 pt canvas: Move,
+    Hand | Marker, Highlighter, Eraser | Sticky note ⌃ | Shapes ⌃ | Connector ⌃ | Text | Section |
+    Stamp ⌃ | Templates & table. It is 508 × 44 pt and 16 pt off the canvas's bottom edge, and its
+    middle is within 1 pt of the canvas's.
+  - The Move button is marked: a 26 × 26 pt square of `#454a56` on the toolbar's `#2f343e`.
+  - The top bar reads "Canvas" and "100%" side by side (C19), with a caret after the zoom. The Hide
+    UI and Maximize buttons are at its right.
+- Step 2, with Escape before `select.all` (C16):
+  - `tool.sticky` answers `{"tool":"sticky"}`. `pointer` down and up at (0, 0) answer
+    `selection: ["41"]` (the sticky's text, now being typed in) and `tool: "move"`.
+  - A screenshot then shows the sticky's text box with its caret, and no context bar: the bar hides
+    while text is edited.
+  - `key Escape` answers `handled: true`, and `select.all` answers `{"selection":[40]}`.
+  - The screenshot shows the context bar over the sticky: 8 swatches (yellow, orange, red, pink,
+    violet, blue, green and gray), yellow marked. It is 220 × 40 pt. Its middle is over the
+    sticky's, and its bottom 12 pt over the sticky's top.
+- Step 3, reopened as C17 (amended) says:
+  - `ridgeline-app.figcraft` was copied over `.nyawit/canvas.figcraft` (same SHA-1) before the third
+    launch. `open_page canvas` answers `{"tab":0}`. `get` answers its 4 layers: `"349"` Components,
+    `"68"` Home — Light, `"239"` Home — Dark and `"178"` Trail — Light.
+  - The screenshot shows the design toolbar: Move, Scale, Hand | Frame, Section, Slice | Rectangle,
+    Line, Arrow, Ellipse, Polygon, Star | Pen, Pencil | Text. It has no chevrons and no Templates &
+    table button, and it is 476 pt wide. The top bar reads "Canvas" and "28%".
+  - There is no context bar, and still none once `select.all` has selected all 4 layers
+    (2639 × 1116).
+  - Key R marks Rectangle. The file was still byte-identical after the run.
+
+**Also checked over the socket.** The board held the sticky `"40"`, a rectangle `"42"` reading
+"Shape", a connector `"45"` from the sticky to it, and an ellipse `"46"` reading "Big" in XL text.
+
+- **The context bar for each kind** (Review Focus 2):
+  - The rectangle: the swatches, yellow marked, then the "Rectangle" and "M" menus.
+  - The connector: the swatches, none marked (its line, `#3A3936`, is no board colour's), then
+    "Elbow", "None" and "Triangle arrow".
+  - The sticky and the connector together: the swatches alone, none marked.
+  - The rectangle and the ellipse together: yellow marked, then "Mixed" and "Mixed".
+  - All four: the swatches alone.
+  - The longest labels, on a second board (a second project opened in the window with
+    `{"cmd":"open"}`): "Rounded rectangle" and "Speech bubble" in the 160 pt shape menu, "Curved" in
+    the 92 pt style menu, and "Reversed triangle" in both 156 pt cap menus. Every label shows whole,
+    and so does "Mixed" in the 76 pt size menu (Task 3's fix).
+- **Clamping** (Review Focus 1):
+  - The view was moved so that the selected sticky's top was 20 pt under the canvas's top and its
+    middle on the canvas's left edge (`view.set {cx: 500, cy: 217.5}`). The bar is 8 pt from the
+    canvas's left and top edges. It covers the sticky's top, as the model's clamp pins
+    (`anchor_is_clamped_inside_canvas`).
+  - With the sticky's middle on the right edge instead, the bar is 8 pt from the right and top
+    edges.
+  - The rectangle's bar, wider than the room right of the rectangle, is held 8 pt from the right
+    edge.
+- **A drag hides the bar.** `pointer` down on the sticky and two moves, with no up: the bar is gone
+  while the sticky moves. After the up it is back, 12 pt over the moved sticky. `edit.undo` put the
+  sticky back.
+- **Tool keys** (Review Focus 3): keys Q, B, X and V each mark their tool's button (Sticky note,
+  Shapes, Connector, Move) in the next screenshot. On the design file, R marks Rectangle.
+- **⌘\\** (`{"op":"key","key":"\\","cmd":true}`) answers `handled: true`. The top bar, the toolbar
+  and the context bar go, and the canvas takes their room. The selection's outline, handles and size
+  stay: they are the canvas's own. ⌘\ again brings all three back.
+- **The zoom button** follows the zoom menu's commands: `view.zoom50` reads "50%", `view.zoom200`
+  "200%", `view.zoomFit` (zoom 1.334) "133%" and `view.zoom100` "100%". `view.zoomSelection`,
+  `view.zoomIn` and `view.zoomOut` answered zooms 2.735, 4 and 2.
+- **Templates** (Review Focus 5):
+  - `board.templates` lists 5: retrospective, brainstorm, weeklyPlanner, flowChart and kanban.
+  - At zoom 0.05, `board.template {name: "flowChart"}` places its 12 layers in the middle of the
+    view, selected (1220 × 360, at "5%"), with a colour bar over them. One `edit.undo` removes them
+    all.
+  - kanban at 60 % lands in the middle of the view too: its title and 3 sections, selected, and no
+    bar. Sections and text take no control (P3-C6).
+- **A 3 × 3 table:** `board.table {rows: 3, columns: 3}` answers 3 × 3 cells, and `get` lists one
+  new top-level layer, `"49"`, a table. The screenshot shows it in the middle of the view, 480 × 122,
+  selected, its header row shaded. There is no bar: tables take no control.
+- **The toast over the toolbar** (P3-C10): `edit.pickColor`, then a click on the sticky, shows the
+  toast "Picked #FFE78A", its bottom 8 pt over the toolbar's top.
+- **After a restart**, the board opened as it was left, zoomed to fit (73 %).
+- **The logs** hold only `canvas render` lines, 60, 4 and 6 in the three runs. There are no warnings
+  or errors.
+- **Someone used the window by hand.** In the first run, between Steps 1 and 2, while the window was
+  in front, the board got FigCraft's Flow chart template, and the zoom became 34 %. By Step 2 the
+  board was empty again. `canvas.figcraft.bak` (written 18:18:21) holds that board. No op of this
+  check did it, synthetic input can't reach the window, and only the Templates & table picker places
+  a template. That is why Step 2's sticky is `"40"`, and why the view was set back to 100 % around
+  (0, 0) before Step 2's screenshot.
+- **The context bar under the toolbar (a defect, fixed in `b978572`).**
+  - With the sticky selected, the view was moved until the sticky was below the canvas
+    (`view.set {cx: 0, cy: -600}`). The bar went to the canvas's bottom edge, under the toolbar,
+    which covered all of it but a 7.5 pt strip below the toolbar's own bottom edge.
+  - The cause: the view clamped the bar inside the whole canvas. The toolbar floats over the
+    canvas's bottom 60 pt and is drawn over the bar. FigCraft's own bar stays clear of its toolbar
+    (ui-egui `board_bar.rs`, `place`).
+  - The fix: the view clamps the bar in the part of the canvas above the toolbar, so it stops 8 pt
+    over the toolbar, as the toast does (P3-C10). The model's clamp (`clamp_anchor`) is unchanged.
+    Test: `the_context_bar_stays_over_the_toolbar`.
+  - After a rebuild, the same view put the whole bar 8 pt over the toolbar. A selection in view keeps
+    its bar 12 pt over it.
+- **A narrow canvas** (Task 3's review; the controller decides before Plans 4 and 5 land):
+  - The window can't be resized over the socket. Its smallest size is 720 × 480 pt.
+  - The toolbars don't wrap or scroll. They are centred and keep their width, 508 pt on a board and
+    476 pt on a design file, so a narrower canvas cuts both ends evenly.
+  - With Sawit's sidebar shown, the narrowest window leaves a 480 pt canvas: the board toolbar loses
+    14 pt at each end.
+  - With Plans 4 and 5's panels (240 + 264 pt) beside a design file, a 1280 pt window leaves 536 pt
+    with Sawit's sidebar shown (the toolbar fits) and 776 pt without it. The narrowest window
+    without the sidebar leaves 216 pt, and 130 pt of the toolbar is cut at each end.
+  - Hand check 6 is how it looks.
+
+#### Hand checks (pending — needs the user)
+
+Launch with Plan 1 Task 7's launch recipe for an empty board (skip the line that copies the example),
+and run its `open_page` line. Click the canvas once, so that it has the keyboard. Where a check
+already passed over the socket, it says so.
+
+1. **Tools and flyouts** (Step 4, and Task 3's review).
+   - Click each tool button. It shows marked (a lighter square), and its tool is on: after Sticky
+     note, a click on the canvas places a sticky. Hover a button: its tooltip reads its name and key
+     ("Sticky note  Q").
+   - Press Q, B, X and V: the marked button follows at once. This passed over the socket.
+   - Click the chevron beside Sticky note. The flyout opens above the toolbar, centred on the
+     chevron: 8 swatches, the current colour marked. Pick blue: the flyout closes, the Sticky note
+     tool is on, and the next sticky is blue.
+   - The chevron beside Shapes lists the 7 shapes, the current one checked. Pick Ellipse: the
+     Shapes tool now places ellipses. The Connector chevron lists Straight, Elbow and Curved, and
+     the Stamp chevron the 6 stamps.
+   - Open a flyout, then press ⌘\ twice. Once the chrome is back, no flyout is open.
+   - Say whether the marked look of a tool button is clear enough.
+2. **Placing a template** (Step 4, and Review Focus 5).
+   - Click the last button, Templates & table. The picker opens above the toolbar: Retrospective,
+     Brainstorm, Weekly planner, Flow chart and Kanban board, each with a line of description, then
+     "Table" and a 6 × 6 grid.
+   - Zoom far out (the zoom menu's 50 %, then ⌘− a few times), open the picker, and click Flow
+     chart. It lands in the middle of the view, selected, and the picker closes. One ⌘Z removes all
+     of it. Over the socket, the same command at 5 % did this.
+   - Open the picker, and leave it open for 10 s. Activity Monitor shows Sawit at about 0 % CPU:
+     the list isn't asked for on every frame (P3-C14).
+3. **A 3 × 3 table** (Step 4).
+   - Open the picker, and move the pointer over the grid. The cells from the top left to the one
+     under the pointer light up, and over the third cell of the third row the heading reads
+     "Table  3 × 3".
+   - Click it. A 3 × 3 table lands in the middle of the view, selected, and the picker closes. ⌘Z
+     removes it. Over the socket, `board.table` placed the same table.
+4. **The zoom menu** (Step 4).
+   - Click "100%" in the top bar. The menu lists Zoom in and Zoom out, then Zoom to fit and Zoom to
+     selection, then 50 %, 100 % and 200 % (the engine's labels), each with its keys on the right.
+   - Each item does what it says, and the button then shows the new zoom. Over the socket, the same
+     commands changed the label.
+5. **The context bar** (Task 3's review, and Review Focus 2).
+   - Select a sticky, and click the blue swatch. The sticky turns blue, and that swatch is marked.
+   - Select a shape, and open its shape menu: the 7 shapes, the current one checked. Pick the checked
+     one: nothing happens, and no toast shows (P3-C2). Pick Diamond: the shape becomes a diamond.
+     The size menu offers S, M, L and XL.
+   - Select a connector. Its style and cap menus change it.
+   - Each menu opens by its button, and the bar's buttons look right when hovered and when marked.
+6. **A narrow canvas** (Task 3's review; the controller decides).
+   - With Sawit's sidebar shown, drag the window's edge in until it stops (720 pt wide). The canvas
+     is then about 480 pt wide.
+   - Expect both ends of the board toolbar cut off by about 14 pt: the Move button's left edge and
+     the Templates & table button's right edge. Say whether that is acceptable, or whether the
+     toolbar should wrap, scroll or shrink.
+7. **Hide UI and Maximize** (Task 3).
+   - Hover the eye-off button at the top bar's right: "Hide UI  ⌘\". Click it: all the chrome goes.
+     ⌘\ brings it back. The button only hides (P3-C12).
+   - Hover the Maximize button: "Maximize  ⇧⌘↩". Click it: Sawit's sidebar and terminal go, and the
+     canvas takes the window. Click it again: they come back.
+
+Write the answers here once the checks have run (R5).
