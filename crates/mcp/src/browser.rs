@@ -13,7 +13,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock as Content};
 use rmcp::{schemars, tool, tool_router};
 use sawit_core::app_control::Command;
-use sawit_core::browser::{BrowserOp, Target, pick_dev_server};
+use sawit_core::browser::{BrowserOp, Target, pick_dev_server, resize_mode};
 use serde_json::{Value, json};
 
 use crate::app::{base64_decode, pretty};
@@ -203,6 +203,27 @@ pub struct EvaluateArgs {
     pub project: Option<String>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct AnnotationsArgs {
+    #[schemars(description = "Remove the annotations after reading them")]
+    #[serde(default)]
+    pub clear: bool,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ResizeArgs {
+    #[schemars(
+        description = "iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop, Desktop, or responsive to fill the tab"
+    )]
+    pub device: Option<String>,
+    #[schemars(description = "Viewport width in CSS px (with height)")]
+    pub width: Option<u32>,
+    #[schemars(description = "Viewport height in CSS px (with width)")]
+    pub height: Option<u32>,
+    pub project: Option<String>,
+}
+
 /// `back` / `forward` / `reload`, or the page at `url`.
 fn navigate_op(url: Option<String>, action: Option<&str>) -> Result<Option<BrowserOp>, String> {
     match (url.filter(|u| !u.trim().is_empty()), action.map(str::trim)) {
@@ -217,7 +238,7 @@ fn navigate_op(url: Option<String>, action: Option<&str>) -> Result<Option<Brows
     }
 }
 
-fn target(reference: Option<String>, selector: Option<String>) -> Target {
+pub(crate) fn target(reference: Option<String>, selector: Option<String>) -> Target {
     let some = |s: Option<String>| s.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     Target {
         reference: some(reference),
@@ -225,7 +246,7 @@ fn target(reference: Option<String>, selector: Option<String>) -> Target {
     }
 }
 
-fn required(target: Target) -> Result<Target, String> {
+pub(crate) fn required(target: Target) -> Result<Target, String> {
     if target.is_empty() {
         return Err("Give a ref (from browser_snapshot) or a CSS selector.".into());
     }
@@ -250,7 +271,11 @@ fn screenshot_path(cache: &std::path::Path) -> PathBuf {
 }
 
 impl Sawit {
-    async fn browser(&self, project: &Option<String>, op: BrowserOp) -> Result<Value, String> {
+    pub(crate) async fn browser(
+        &self,
+        project: &Option<String>,
+        op: BrowserOp,
+    ) -> Result<Value, String> {
         self.app_call(project.clone(), Command::Browser { op })
             .await
     }
@@ -497,7 +522,7 @@ impl Sawit {
         };
         let v = tri!(self.browser(&a.project, op).await);
         let encoded = v["png_base64"].as_str().unwrap_or_default().to_string();
-        let bytes = tri!(base64_decode(&encoded));
+        let bytes = tri!(base64_decode(&encoded, "The browser"));
         if bytes.is_empty() {
             return fail("The browser sent an empty screenshot.");
         }
@@ -553,6 +578,47 @@ impl Sawit {
     }
 
     #[tool(
+        description = "Set the browser tab's viewport: a device (iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop, Desktop), a width and height in CSS px, or responsive to fill the tab again"
+    )]
+    async fn browser_resize(&self, Parameters(a): Parameters<ResizeArgs>) -> CallToolResult {
+        if let Err(e) = resize_mode(a.device.as_deref(), a.width, a.height) {
+            return fail(e);
+        }
+        let v = tri!(
+            self.browser(
+                &a.project,
+                BrowserOp::Resize {
+                    device: a.device,
+                    width: a.width,
+                    height: a.height,
+                },
+            )
+            .await
+        );
+        ok(pretty(&v))
+    }
+
+    #[tool(
+        description = "Read the annotations the user made in the browser tab: what to change, on which element (selector, styles, source file), with screenshot paths. clear removes them after reading"
+    )]
+    async fn browser_annotations(
+        &self,
+        Parameters(a): Parameters<AnnotationsArgs>,
+    ) -> CallToolResult {
+        let v = tri!(
+            self.browser(&a.project, BrowserOp::Annotations { clear: a.clear })
+                .await
+        );
+        match v["markdown"].as_str() {
+            Some(md) => ok(md.to_string()),
+            None => ok(
+                "No annotations yet. The user adds them with Annotate (⌘⇧.) in the Browser tab."
+                    .to_string(),
+            ),
+        }
+    }
+
+    #[tool(
         description = "Run JavaScript in the browser tab's page and return its JSON value (DOM nodes are described); a returned promise is awaited"
     )]
     async fn browser_evaluate(&self, Parameters(a): Parameters<EvaluateArgs>) -> CallToolResult {
@@ -580,6 +646,19 @@ impl Sawit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resize_args_need_a_device_or_size() {
+        let a = ResizeArgs {
+            device: None,
+            width: None,
+            height: None,
+            project: None,
+        };
+        let e = resize_mode(a.device.as_deref(), a.width, a.height).unwrap_err();
+        assert!(!e.is_empty());
+        assert_eq!(Err(e), sawit_core::browser::resize_mode(None, None, None));
+    }
 
     #[test]
     fn navigation_ops() {

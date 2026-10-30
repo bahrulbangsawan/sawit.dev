@@ -19,6 +19,20 @@ use crate::ports::PortJob;
 /// The page agent; the app replaces [`TOKEN_PLACEHOLDER`] before injecting it.
 pub const AGENT_JS: &str = include_str!("browser_agent.js");
 pub const TOKEN_PLACEHOLDER: &str = "__SAWIT_TOKEN__";
+/// The picker, highlights and markers (a page module).
+pub const OVERLAY_JS: &str = include_str!("browser_overlay.js");
+/// The design scan, stylesheet rules and element styles (a page module; uses the overlay's helpers).
+pub const DESIGN_JS: &str = include_str!("browser_design.js");
+/// Where the agent takes its page modules.
+pub const MODULES_PLACEHOLDER: &str = "/*__SAWIT_MODULES__*/";
+
+/// The agent with its page modules spliced in and `token` set.
+pub fn page_script(token: &str) -> String {
+    let modules = [OVERLAY_JS, DESIGN_JS].join("\n");
+    AGENT_JS
+        .replace(MODULES_PLACEHOLDER, &modules)
+        .replace(TOKEN_PLACEHOLDER, token)
+}
 
 /// Console messages and requests kept per browser tab, newest last.
 pub const MAX_CONSOLE: usize = 500;
@@ -140,6 +154,44 @@ pub enum BrowserOp {
     },
     /// Opens Safari's Web Inspector on the page.
     Devtools,
+    /// Sizes the page like a device (`device`) or `width` × `height`, or
+    /// back to filling the tab (`device: "responsive"`).
+    Resize {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<u32>,
+    },
+    /// The annotations the user made, as markdown; `clear` removes them
+    /// after the answer is built.
+    Annotations {
+        #[serde(default)]
+        clear: bool,
+    },
+    /// An element's computed styles; `format` is `json` (default, with
+    /// contrast), `css`, `tailwind` or `html`.
+    Inspect {
+        #[serde(flatten)]
+        target: Target,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format: Option<String>,
+    },
+    /// The page's design scan and derived tokens; `part` is `summary`
+    /// (default), `colors`, `fonts`, `assets`, `tokens` or `variables`.
+    Design {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        part: Option<String>,
+    },
+    /// Starts writing the design export folder in the background (or joins
+    /// the one running).
+    ExportDesign {
+        #[serde(default)]
+        include_videos: bool,
+    },
+    /// How the last design export is doing.
+    ExportStatus,
 }
 
 impl BrowserOp {
@@ -156,12 +208,160 @@ impl BrowserOp {
                 | Self::Console { .. }
                 | Self::Network { .. }
                 | Self::Devtools
+                | Self::Resize { .. }
+                | Self::Annotations { .. }
+                | Self::Inspect { .. }
+                | Self::Design { .. }
+                | Self::ExportDesign { .. }
+                | Self::ExportStatus
         )
     }
 
     /// Brings the browser tab to the front (others work in the background).
     pub fn shows_tab(&self) -> bool {
-        matches!(self, Self::Navigate { .. } | Self::Screenshot { .. })
+        matches!(
+            self,
+            Self::Navigate { .. } | Self::Screenshot { .. } | Self::Resize { .. }
+        )
+    }
+}
+
+/// A device the browser tab can imitate.
+#[derive(Debug, PartialEq)]
+pub struct Device {
+    pub name: &'static str,
+    pub width: u32,
+    pub height: u32,
+}
+
+pub const DEVICES: &[Device] = &[
+    Device {
+        name: "iPhone 15",
+        width: 393,
+        height: 852,
+    },
+    Device {
+        name: "Pixel 8",
+        width: 412,
+        height: 915,
+    },
+    Device {
+        name: "iPad mini",
+        width: 744,
+        height: 1133,
+    },
+    Device {
+        name: "iPad Pro 11″",
+        width: 834,
+        height: 1194,
+    },
+    Device {
+        name: "Laptop",
+        width: 1280,
+        height: 800,
+    },
+    Device {
+        name: "Desktop",
+        width: 1440,
+        height: 900,
+    },
+];
+
+fn device_key(name: &str) -> String {
+    name.trim()
+        .chars()
+        .filter(|c| !matches!(c, '″' | '"'))
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// A device by name, ignoring case and the inch mark.
+pub fn device_by_name(name: &str) -> Option<&'static Device> {
+    let key = device_key(name);
+    DEVICES.iter().find(|d| device_key(d.name) == key)
+}
+
+/// How the page is sized in its tab.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+pub enum ViewportMode {
+    /// Fills the tab.
+    #[default]
+    Responsive,
+    Fixed {
+        name: Option<String>,
+        width: u32,
+        height: u32,
+    },
+}
+
+/// A device size scaled down to fit an area.
+#[derive(Debug, PartialEq)]
+pub struct Fit {
+    pub scale: f64,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// `size` (CSS px) at the largest scale up to 1 that fits `area`.
+///
+/// Scaled down, the view gets a whole number of points (WebKit rounds the
+/// view's size, then `innerWidth` is that size over the zoom, whole), and
+/// the zoom is set so the width comes out a quarter pixel over the device's:
+/// `innerWidth` is exactly the device width. The height lands within a pixel
+/// or so of the device's.
+pub fn fit(size: (u32, u32), area: (f32, f32)) -> Fit {
+    let (w, h) = (f64::from(size.0), f64::from(size.1));
+    let scale = (f64::from(area.0) / w)
+        .min(f64::from(area.1) / h)
+        .clamp(0.0, 1.0);
+    if scale >= 1.0 {
+        return Fit {
+            scale: 1.0,
+            width: w as f32,
+            height: h as f32,
+        };
+    }
+    let width = (w * scale).floor().max(1.0);
+    let scale = width / (w + 0.25);
+    Fit {
+        scale,
+        width: width as f32,
+        height: ((h + 0.25) * scale).round().max(1.0) as f32,
+    }
+}
+
+/// The mode an agent asks for: a device name, `responsive`, or a size.
+pub fn resize_mode(
+    device: Option<&str>,
+    width: Option<u32>,
+    height: Option<u32>,
+) -> Result<ViewportMode, String> {
+    if let Some(name) = device {
+        if name.trim().eq_ignore_ascii_case("responsive") {
+            return Ok(ViewportMode::Responsive);
+        }
+        return device_by_name(name)
+            .map(|d| ViewportMode::Fixed {
+                name: Some(d.name.into()),
+                width: d.width,
+                height: d.height,
+            })
+            .ok_or_else(|| {
+                format!(
+                    "Unknown device “{}”. Use iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop, Desktop or responsive.",
+                    name.trim()
+                )
+            });
+    }
+    match (width, height) {
+        (Some(w), Some(h)) => {
+            if (200..=3840).contains(&w) && (200..=3840).contains(&h) {
+                Ok(ViewportMode::Fixed { name: None, width: w, height: h })
+            } else {
+                Err("Width and height must be between 200 and 3840.".into())
+            }
+        }
+        _ => Err("Give a device (iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop, Desktop or responsive) or a width and height.".into()),
     }
 }
 
@@ -279,6 +479,12 @@ pub enum PageEvent {
     Network(NetworkEntry),
     /// The address changed without a load (`pushState`, hash).
     Url(String),
+    /// The user picked an element: `{mode, element}`.
+    Picked(Value),
+    /// The pointer is over an element in inspect mode: `{selector, label, rect}`.
+    Hovered(Value),
+    /// A shortcut pressed in the page: `toggle-annotate` or `escape`.
+    Key(String),
 }
 
 /// A page message, if it carries `token`.
@@ -291,6 +497,11 @@ pub fn parse_ipc(body: &str, token: &str) -> Option<PageEvent> {
         "url" => serde_json::from_str::<String>(json)
             .ok()
             .map(PageEvent::Url),
+        "picked" => serde_json::from_str(json).ok().map(PageEvent::Picked),
+        "hovered" => serde_json::from_str(json).ok().map(PageEvent::Hovered),
+        "key" => serde_json::from_str::<String>(json)
+            .ok()
+            .map(PageEvent::Key),
         _ => None,
     }
 }
@@ -308,6 +519,26 @@ impl Logs {
             self.console.pop_front();
         }
         self.console.push_back(entry);
+    }
+
+    /// Errors from the current page (after its last `— navigated to`
+    /// marker): the newest `limit`, oldest first.
+    pub fn page_errors(&self, limit: usize) -> Vec<ConsoleEntry> {
+        let start = self
+            .console
+            .iter()
+            .rposition(|e| e.text.starts_with("— navigated to"))
+            .map_or(0, |i| i + 1);
+        let errors: Vec<&ConsoleEntry> = self
+            .console
+            .iter()
+            .skip(start)
+            .filter(|e| e.level == "error")
+            .collect();
+        errors[errors.len().saturating_sub(limit)..]
+            .iter()
+            .map(|e| (*e).clone())
+            .collect()
     }
 
     pub fn push_network(&mut self, entry: NetworkEntry) {
@@ -399,6 +630,31 @@ pub fn base64_encode(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+/// Decodes standard base64 (padding optional, line breaks skipped); `None` on other
+/// characters.
+pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    let text = text.trim_end().trim_end_matches('=');
+    for c in text.bytes().filter(|c| !c.is_ascii_whitespace()) {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        acc = acc << 6 | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits & 0xff) as u8);
+        }
+    }
+    Some(out)
 }
 
 /// The website data store (cookies, storage) of the project's browser:
@@ -515,6 +771,20 @@ mod tests {
     }
 
     #[test]
+    fn page_errors_since_navigation() {
+        let mut logs = Logs::default();
+        logs.push_console(console("error", "old"));
+        logs.push_console(console("info", "— navigated to http://x/"));
+        for i in 0..25 {
+            logs.push_console(console("error", &format!("e{i}")));
+        }
+        let errors = logs.page_errors(20);
+        assert_eq!(errors.len(), 20);
+        assert_eq!(errors[0].text, "e5");
+        assert_eq!(errors[19].text, "e24");
+    }
+
+    #[test]
     fn console_ring_and_filters() {
         let mut logs = Logs::default();
         for i in 0..MAX_CONSOLE + 5 {
@@ -545,6 +815,18 @@ mod tests {
         assert_eq!(v["matching"], 2);
         assert_eq!(v["failed"], 2);
         assert_eq!(logs.network_json(Some("A/OK"), false, None)["matching"], 1);
+    }
+
+    #[test]
+    fn base64_round_trips() {
+        for bytes in [&b""[..], b"a", b"ab", b"abc", b"\x00\xff\xfe\x10"] {
+            assert_eq!(base64_decode(&base64_encode(bytes)).unwrap(), bytes);
+        }
+        assert!(base64_decode("a$b").is_none());
+        assert_eq!(
+            base64_decode("iVBO\nRw==\n").unwrap(),
+            [0x89, b'P', b'N', b'G']
+        );
     }
 
     #[test]
@@ -626,13 +908,296 @@ mod tests {
     }
 
     #[test]
+    fn fits_devices_to_areas() {
+        let f = fit((393, 852), (1000., 1000.));
+        assert_eq!(
+            f,
+            Fit {
+                scale: 1.0,
+                width: 393.,
+                height: 852.
+            }
+        );
+        let f = fit((1440, 900), (720., 900.));
+        assert_eq!((f.width, f.height), (720., 450.));
+        assert!((f.scale - 0.5).abs() < 1e-3);
+        assert!((fit((393, 852), (393., 426.)).scale - 0.5).abs() < 5e-3);
+    }
+
+    /// WebKit rounds the view to whole points, and `innerWidth` is whole too:
+    /// 393 × 0.3644 = 143.2 pt became 143 pt, so `innerWidth` was 392.
+    #[test]
+    fn scaled_devices_keep_their_css_width() {
+        for (size, area) in [
+            ((393, 852), (500., 310.5)),
+            ((393, 852), (232., 384.)),
+            ((412, 915), (301.7, 600.)),
+            ((1440, 900), (700., 435.)),
+            ((834, 1194), (333.3, 333.3)),
+        ] {
+            let f = fit(size, area);
+            assert_eq!(f.width, f.width.round(), "{size:?} in {area:?}");
+            assert_eq!(f.height, f.height.round(), "{size:?} in {area:?}");
+            assert!(f.width <= area.0, "{size:?} in {area:?}");
+            let css_width = f64::from(f.width) / f.scale;
+            assert_eq!(css_width as u32, size.0, "{size:?} in {area:?}");
+            let css_height = f64::from(f.height) / f.scale;
+            assert!(
+                (css_height - f64::from(size.1)).abs() < 1.0 / f.scale,
+                "{size:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn devices_by_name() {
+        for name in [
+            "iphone 15",
+            "IPAD PRO 11",
+            "Desktop",
+            "iPad Pro 11\"",
+            "iPad Pro 11″",
+        ] {
+            assert!(device_by_name(name).is_some(), "{name}");
+        }
+        assert!(device_by_name("watch").is_none());
+        assert_eq!(DEVICES.len(), 6);
+    }
+
+    #[test]
+    fn resize_modes() {
+        assert_eq!(
+            resize_mode(Some("responsive"), None, None),
+            Ok(ViewportMode::Responsive)
+        );
+        assert_eq!(
+            resize_mode(Some("iPhone 15"), None, None),
+            Ok(ViewportMode::Fixed {
+                name: Some("iPhone 15".into()),
+                width: 393,
+                height: 852
+            })
+        );
+        assert_eq!(
+            resize_mode(None, Some(800), Some(600)),
+            Ok(ViewportMode::Fixed {
+                name: None,
+                width: 800,
+                height: 600
+            })
+        );
+        assert_eq!(
+            resize_mode(None, Some(100), Some(600)),
+            Err("Width and height must be between 200 and 3840.".into())
+        );
+        assert_eq!(
+            resize_mode(None, None, None),
+            Err("Give a device (iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop, Desktop or responsive) or a width and height.".into())
+        );
+        assert_eq!(
+            resize_mode(Some("watch"), None, None),
+            Err("Unknown device “watch”. Use iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop, Desktop or responsive.".into())
+        );
+        let op: BrowserOp =
+            serde_json::from_str(r#"{"op":"resize","device":"iPhone 15"}"#).unwrap();
+        assert_eq!(
+            op,
+            BrowserOp::Resize {
+                device: Some("iPhone 15".into()),
+                width: None,
+                height: None
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&op).unwrap(),
+            json!({"op": "resize", "device": "iPhone 15"})
+        );
+        assert!(op.is_native() && op.shows_tab());
+    }
+
+    #[test]
+    fn annotations_op_is_native_and_stays_in_the_background() {
+        let op: BrowserOp = serde_json::from_str(r#"{"op":"annotations","clear":true}"#).unwrap();
+        assert_eq!(op, BrowserOp::Annotations { clear: true });
+        assert_eq!(
+            serde_json::to_value(&op).unwrap(),
+            json!({"op": "annotations", "clear": true})
+        );
+        let bare: BrowserOp = serde_json::from_str(r#"{"op":"annotations"}"#).unwrap();
+        assert_eq!(bare, BrowserOp::Annotations { clear: false });
+        assert!(op.is_native() && !op.shows_tab());
+    }
+
+    #[test]
+    fn design_ops_are_native_and_round_trip() {
+        let target = Target {
+            reference: Some("e3".into()),
+            selector: None,
+        };
+        for (op, wire) in [
+            (
+                BrowserOp::Inspect {
+                    target: target.clone(),
+                    format: Some("css".into()),
+                },
+                json!({"op": "inspect", "ref": "e3", "format": "css"}),
+            ),
+            (
+                BrowserOp::Inspect {
+                    target: Target {
+                        reference: None,
+                        selector: Some("h1".into()),
+                    },
+                    format: None,
+                },
+                json!({"op": "inspect", "selector": "h1"}),
+            ),
+            (
+                BrowserOp::Design {
+                    part: Some("colors".into()),
+                },
+                json!({"op": "design", "part": "colors"}),
+            ),
+            (BrowserOp::Design { part: None }, json!({"op": "design"})),
+            (
+                BrowserOp::ExportDesign {
+                    include_videos: true,
+                },
+                json!({"op": "export_design", "include_videos": true}),
+            ),
+            (BrowserOp::ExportStatus, json!({"op": "export_status"})),
+        ] {
+            assert_eq!(serde_json::to_value(&op).unwrap(), wire);
+            assert_eq!(serde_json::from_value::<BrowserOp>(wire).unwrap(), op);
+            assert!(op.is_native(), "{op:?}");
+            assert!(!op.shows_tab(), "{op:?}");
+        }
+        let bare: BrowserOp = serde_json::from_str(r#"{"op":"export_design"}"#).unwrap();
+        assert_eq!(
+            bare,
+            BrowserOp::ExportDesign {
+                include_videos: false
+            }
+        );
+    }
+
+    #[test]
+    fn page_script_splices_the_modules() {
+        let s = page_script("abc123");
+        assert!(!s.contains(MODULES_PLACEHOLDER) && !s.contains(TOKEN_PLACEHOLDER));
+        assert!(s.contains("\"abc123\""));
+        assert_eq!(
+            s.matches("Object.defineProperty(window, \"__sawitAgent\"")
+                .count(),
+            1
+        );
+        assert!(s.find("sawit-overlay").unwrap() < s.find("const OPS").unwrap());
+        assert!(s.contains("blocked_sheets"));
+        assert!(s.find("blocked_sheets").unwrap() < s.find("const OPS").unwrap());
+    }
+
+    #[test]
+    fn ipc_reads_picks_hovers_and_keys() {
+        let picked = parse_ipc(
+            "tok\npicked\n{\"mode\":\"annotate\",\"element\":{\"selector\":\"#a\"}}",
+            "tok",
+        );
+        assert!(matches!(picked, Some(PageEvent::Picked(v)) if v["element"]["selector"] == "#a"));
+        let hovered = parse_ipc("tok\nhovered\n{\"selector\":\"#a\"}", "tok");
+        assert!(matches!(hovered, Some(PageEvent::Hovered(v)) if v["selector"] == "#a"));
+        assert_eq!(
+            parse_ipc("tok\nkey\n\"toggle-annotate\"", "tok"),
+            Some(PageEvent::Key("toggle-annotate".into()))
+        );
+        assert_eq!(parse_ipc("bad\nkey\n\"escape\"", "tok"), None);
+    }
+
+    /// Every field of the design contract fixtures is written by the design module.
+    #[test]
+    fn design_module_writes_the_contract_fields() {
+        fn keys(v: &Value, out: &mut Vec<String>) {
+            match v {
+                Value::Object(m) => {
+                    for (k, v) in m {
+                        out.push(k.clone());
+                        keys(v, out);
+                    }
+                }
+                Value::Array(a) => a.iter().for_each(|v| keys(v, out)),
+                _ => {}
+            }
+        }
+        let mut all = Vec::new();
+        for fixture in [
+            include_str!("site_design/fixtures/page_scan.json"),
+            include_str!("site_design/fixtures/page_rules.json"),
+            include_str!("site_design/fixtures/page_style.json"),
+        ] {
+            keys(&serde_json::from_str(fixture).unwrap(), &mut all);
+        }
+        for key in all {
+            let written = [
+                format!("{key}:"),
+                format!("{{ {key},"),
+                format!(" {key},"),
+                format!(" {key} }}"),
+            ];
+            assert!(
+                written.iter().any(|w| DESIGN_JS.contains(w.as_str())),
+                "browser_design.js never writes `{key}`"
+            );
+        }
+    }
+
+    /// The design module's color reader handles the syntaxes WebKit computes (Tailwind v4's
+    /// palette is oklch), so chromatic buttons and translucent layers are read on such pages.
+    #[test]
+    fn design_color_math_reads_modern_syntax() {
+        let start = DESIGN_JS.find("// ---- Color math").unwrap();
+        let end = DESIGN_JS.find("// ---- End of color math").unwrap();
+        let source = format!(
+            "(() => {{ {}\n const out = (c) => {{ const p = readColor(c); return p ? [Math.round(p[0]), Math.round(p[1]), Math.round(p[2]), p[3], Math.round(chromaOf(p) * 1000) / 1000] : null; }};\n\
+             return JSON.stringify([\"oklch(0.623 0.214 259.815)\", \"oklch(0.985 0 0)\", \"oklab(0.628 0.225 0.126)\", \"lab(54.29 80.8 69.89)\", \"lch(54.29 106.84 40.85 / 0.5)\", \"color(display-p3 1 0 0)\", \"color(srgb 0 0.5 1)\", \"rgb(0 113 227 / 50%)\", \"rgba(0, 0, 0, 0)\", \"#0f7fff\", \"oklch(0.7 0.1 none)\", \"hsl(0 0% 0%)\"].map(out)); }})()",
+            &DESIGN_JS[start..end]
+        );
+        let rt = rquickjs::Runtime::new().unwrap();
+        let ctx = rquickjs::Context::full(&rt).unwrap();
+        let json: String = ctx.with(|ctx| ctx.eval::<String, _>(source).unwrap());
+        let got: Vec<Option<[f64; 5]>> = serde_json::from_str(&json).unwrap();
+        let near = |i: usize, rgb: [f64; 3], alpha: f64| {
+            let c = got[i].unwrap_or_else(|| panic!("color {i} unread"));
+            for k in 0..3 {
+                assert!((c[k] - rgb[k]).abs() <= 2.0, "color {i}: {c:?} vs {rgb:?}");
+            }
+            assert!((c[3] - alpha).abs() < 1e-6, "color {i} alpha: {c:?}");
+            c[4]
+        };
+        // Tailwind v4 blue-500 (just outside sRGB, clipped): chromatic.
+        assert!(near(0, [43.0, 127.0, 255.0], 1.0) >= 0.03);
+        // Tailwind neutral-50: not.
+        assert!(near(1, [250.0, 250.0, 250.0], 1.0) < 0.03);
+        near(2, [255.0, 0.0, 0.0], 1.0);
+        near(3, [255.0, 0.0, 0.0], 1.0);
+        near(4, [255.0, 0.0, 0.0], 0.5);
+        // Out of sRGB: clamped.
+        near(5, [255.0, 0.0, 0.0], 1.0);
+        near(6, [0.0, 128.0, 255.0], 1.0);
+        near(7, [0.0, 113.0, 227.0], 0.5);
+        near(8, [0.0, 0.0, 0.0], 0.0);
+        near(9, [15.0, 127.0, 255.0], 1.0);
+        assert!(got[10].is_some());
+        // Left to the browser's canvas in the page.
+        assert!(got[11].is_none());
+    }
+
+    #[test]
     fn agent_script_parses() {
         assert!(AGENT_JS.contains(TOKEN_PLACEHOLDER) && AGENT_JS.contains("__sawitAgent"));
         let rt = rquickjs::Runtime::new().unwrap();
         let ctx = rquickjs::Context::full(&rt).unwrap();
         ctx.with(|ctx| {
             // Compiles without running: there is no DOM here.
-            let source = format!("(function () {{ {AGENT_JS} }})");
+            let source = format!("(function () {{ {} }})", page_script("t"));
             ctx.eval::<rquickjs::Value, _>(source)
                 .map(|_| ())
                 .unwrap_or_else(|e| panic!("agent script doesn't parse: {e:?}"));

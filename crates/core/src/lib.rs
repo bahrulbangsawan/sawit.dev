@@ -1,12 +1,14 @@
 //! Core logic for Sawit: process management, port probing, connections and
 //! queries. Must not depend on GPUI so it can be tested with plain `cargo test`.
 
+pub mod annotations;
 pub mod app_control;
 pub mod binaries;
 pub mod browser;
 pub mod cli;
 mod cmd;
 pub mod control;
+pub mod date;
 pub mod db;
 pub mod dev_tools;
 pub mod download;
@@ -36,6 +38,7 @@ pub mod rt;
 pub mod scripts;
 pub mod search;
 pub mod shell_config;
+pub mod site_design;
 pub mod ssh;
 pub mod terminal;
 pub mod update;

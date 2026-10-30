@@ -31,7 +31,7 @@ use crate::git::{
 use crate::layout::{Area, Layout};
 use crate::mcp_page::McpPage;
 use crate::network::NetworkPanel;
-use crate::ports::PortsPanel;
+use crate::ports::{PortsEvent, PortsPanel};
 use crate::prompts::{PromptStore, PromptStoreEvent, PromptView, PromptsEvent, PromptsPanel};
 use crate::run::{RunEvent, RunPanel, RunStore};
 use crate::servers::{ServerDetail, ServerList, ServerStore, ShowServerTab};
@@ -145,6 +145,7 @@ fn bindings() -> Vec<KeyBinding> {
 
 pub fn init(cx: &mut App) {
     cx.bind_keys(bindings());
+    crate::browser::init(cx);
     crate::board::init(cx);
 }
 
@@ -319,6 +320,15 @@ impl Workspace {
                 window,
                 |this, _, event: &WelcomeEvent, window, cx| {
                     this.on_welcome_event(event, window, cx)
+                },
+            ),
+            cx.subscribe_in(
+                &ports_panel,
+                window,
+                |this, _, event: &PortsEvent, window, cx| match event {
+                    PortsEvent::OpenInBrowser(url) => {
+                        this.open_browser(Some(url.clone()), window, cx)
+                    }
                 },
             ),
             cx.subscribe(&servers, |this, _, _: &ShowServerTab, cx| {
@@ -2193,6 +2203,11 @@ impl Workspace {
             let project = self.root(cx);
             let view = cx.new(|cx| BrowserView::new(project, url, window, cx));
             self.browser = Some(view.downgrade());
+            cx.subscribe_in(&view, window, |this, browser, event, window, cx| {
+                let crate::browser::BrowserEvent::SendToTerminal(md) = event;
+                this.send_to_terminal(browser, md, window, cx);
+            })
+            .detach();
             self.push_tab(
                 PaneItem::Other {
                     view: view.into(),
@@ -2205,6 +2220,42 @@ impl Workspace {
                 cx,
             );
         }
+        cx.notify();
+    }
+
+    /// Pastes annotations into the terminal running an agent; copies them
+    /// when no tab has bracketed paste on.
+    fn send_to_terminal(
+        &mut self,
+        browser: &Entity<BrowserView>,
+        markdown: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target = self.terminal.read(cx).paste_target(cx);
+        let sent = target.and_then(|ix| {
+            if !self.layout.terminal {
+                self.layout.toggle(Area::Terminal);
+            }
+            match self
+                .terminal
+                .update(cx, |t, cx| t.paste(ix, markdown, window, cx))
+            {
+                Ok(()) => Some(ix),
+                Err(e) => {
+                    eprintln!("annotate: paste failed: {e}");
+                    None
+                }
+            }
+        });
+        let note = match sent {
+            Some(ix) => format!("Sent to Terminal {}", ix + 1),
+            None => {
+                cx.write_to_clipboard(ClipboardItem::new_string(markdown.to_string()));
+                "No terminal is ready for a paste, so it was copied.".to_string()
+            }
+        };
+        browser.update(cx, |b, cx| b.set_annotate_note(&note, cx));
         cx.notify();
     }
 

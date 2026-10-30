@@ -343,6 +343,7 @@
       const el = node;
       if (el.nodeType === Node.ELEMENT_NODE) {
         if (["script", "style", "noscript", "template", "head", "meta", "link", "title"].includes(el.localName)) return;
+        if (el.hasAttribute("data-sawit-overlay")) return;
         const contents = getComputedStyle(el).display === "contents";
         if (!contents && !shown(el)) return;
         let r = role(el);
@@ -745,7 +746,12 @@
     return { done: true, value: toJson(state.value) };
   };
 
-  const OPS = { snapshot, click, hover, type, press, select, scroll, query, rect, evaluate, settled };
+  // Page modules (see browser.rs `page_script`) add ops and share helpers.
+  const modules = {};
+  const helpers = {};
+  /*__SAWIT_MODULES__*/
+
+  const OPS = { snapshot, click, hover, type, press, select, scroll, query, rect, evaluate, settled, ...modules };
   const run = (op) => {
     try {
       const f = OPS[op && op.op];

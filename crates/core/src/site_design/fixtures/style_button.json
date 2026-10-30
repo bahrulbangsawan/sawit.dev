@@ -1,0 +1,19 @@
+{
+  "selector": "button.buy",
+  "label": "button.buy",
+  "rect": {"x": 120, "y": 340, "width": 96, "height": 36},
+  "box": {"margin": [0,0,0,0], "border": [0,0,0,0], "padding": [8,16,8,16]},
+  "typography": {
+    "family": "\"SF Pro Text\", system-ui, sans-serif",
+    "used_family": "SF Pro Text",
+    "size": 17, "weight": 400, "line_height": 20, "letter_spacing": null,
+    "color": "rgb(255, 255, 255)", "align": "start", "transform": "none"
+  },
+  "background": {"color": "rgb(0, 113, 227)", "image": null},
+  "border": {"color": "rgb(255, 255, 255)", "style": "none", "width": [0,0,0,0], "radius": "980px"},
+  "effects": {"shadow": null, "opacity": 1, "transition": "all 0s ease 0s"},
+  "layout": {"display": "inline-flex", "position": "static", "gap": "normal", "flex_direction": "row", "justify": "center", "align": "center", "grid_template_columns": null},
+  "states": [["hover", [["background-color", "rgb(0, 102, 204)"]]]],
+  "effective_background": "rgb(0, 113, 227)",
+  "html": "<button class=\"buy\">Buy</button>"
+}

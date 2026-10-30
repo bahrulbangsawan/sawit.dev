@@ -560,30 +560,9 @@ fn export_path(project: Option<&Path>, cache: &Path, ext: &str) -> PathBuf {
     }
 }
 
-pub(crate) fn base64_decode(text: &str) -> Result<Vec<u8>, String> {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut lookup = [255u8; 256];
-    for (i, &c) in ALPHABET.iter().enumerate() {
-        lookup[c as usize] = i as u8;
-    }
-    let mut out = Vec::with_capacity(text.len() * 3 / 4);
-    let (mut acc, mut bits) = (0u32, 0u32);
-    for c in text
-        .bytes()
-        .filter(|c| !c.is_ascii_whitespace() && *c != b'=')
-    {
-        let v = lookup[c as usize];
-        if v == 255 {
-            return Err("The canvas sent invalid base64.".into());
-        }
-        acc = (acc << 6) | v as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
-        }
-    }
-    Ok(out)
+/// An image the app sent as base64; `from` names the sender in the error.
+pub(crate) fn base64_decode(text: &str, from: &str) -> Result<Vec<u8>, String> {
+    sawit_core::browser::base64_decode(text).ok_or_else(|| format!("{from} sent invalid base64."))
 }
 
 #[tool_router(router = app_router, vis = "pub(crate)")]
@@ -937,7 +916,10 @@ impl Sawit {
             Err(e) => return fail(e),
         };
         let bytes = if png {
-            match base64_decode(value["png_base64"].as_str().unwrap_or_default()) {
+            match base64_decode(
+                value["png_base64"].as_str().unwrap_or_default(),
+                "The canvas",
+            ) {
                 Ok(b) => b,
                 Err(e) => return fail(e),
             }
@@ -1083,12 +1065,15 @@ mod tests {
 
     #[test]
     fn decodes_base64() {
-        assert_eq!(base64_decode("aGVsbG8=").unwrap(), b"hello");
+        assert_eq!(base64_decode("aGVsbG8=", "The canvas").unwrap(), b"hello");
         assert_eq!(
-            base64_decode("iVBO\nRw==").unwrap(),
+            base64_decode("iVBO\nRw==", "The canvas").unwrap(),
             [0x89, b'P', b'N', b'G']
         );
-        assert!(base64_decode("@@").is_err());
+        assert_eq!(
+            base64_decode("@@", "The browser"),
+            Err("The browser sent invalid base64.".into())
+        );
     }
 
     #[test]
