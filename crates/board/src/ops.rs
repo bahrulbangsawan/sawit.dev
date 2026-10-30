@@ -20,7 +20,9 @@
 //! `command` op may leave another document open or on show. The ones that do that by name are
 //! refused up front ([`HANDLED_BY_SAWIT`], as the steps of a `command.batch` too); any other
 //! command that does it anyway (`file.recover`, `version.duplicate`, `branch.create`...) is undone
-//! and answers an error.
+//! and answers an error. A `command` op that fails also leaves the file's version history and
+//! branches as they were ([`FileHistory`]): they are part of the file, and the engine keeps them
+//! outside undo.
 
 use std::ffi::OsStr;
 use std::fmt::Display;
@@ -524,6 +526,7 @@ fn command(board: &mut BoardDoc, op: &Value) -> Value {
     if let Some(refused) = refused(id, &params) {
         return failure(format!("{refused} is handled by Sawit"));
     }
+    let history = FileHistory::of(&board.session);
     let ran = if id == BATCH {
         batch(board, &params)
     } else {
@@ -531,7 +534,45 @@ fn command(board: &mut BoardDoc, op: &Value) -> Value {
     };
     match ran {
         Ok(result) => json!({"ok": true, "result": result}),
-        Err(error) => failure(error),
+        Err(error) => {
+            if let Some(history) = history {
+                history.restore(&mut board.session);
+            }
+            failure(error)
+        }
+    }
+}
+
+/// The version history and branches of the canvas's file, as a command op found them.
+///
+/// The engine keeps them outside undo, so neither its rollback of a failed command or group nor
+/// [`Documents::restore`] puts them back: a refused `branch.create` has already added its branch,
+/// with two copies of the document, before the guard closes the branch's tab. A command op that
+/// fails puts them back, so the canvas's next save writes nothing of what the op tried.
+struct FileHistory {
+    /// The uid of the canvas's document, which holds them.
+    uid: u64,
+    versions: Vec<figcraft_format::Version>,
+    branches: Vec<figcraft_format::Branch>,
+}
+
+impl FileHistory {
+    /// Those of the document on show, the canvas's. `None` without one.
+    fn of(session: &Session) -> Option<Self> {
+        let ds = session.ds().ok()?;
+        Some(Self {
+            uid: ds.uid,
+            versions: ds.versions.clone(),
+            branches: ds.branches.clone(),
+        })
+    }
+
+    /// Puts them back on the document they were read from.
+    fn restore(self, session: &mut Session) {
+        if let Some(ds) = session.docs.iter_mut().find(|ds| ds.uid == self.uid) {
+            ds.versions = self.versions;
+            ds.branches = self.branches;
+        }
     }
 }
 
@@ -1166,6 +1207,60 @@ mod tests {
             assert!(Arc::ptr_eq(&doc_before, &board.doc().unwrap()), "{id}");
         }
         assert_eq!(elements(&mut board).len(), 1);
+    }
+
+    /// How many versions and branches the canvas's file has: what its next save would write of
+    /// them.
+    fn history(board: &BoardDoc) -> (usize, usize) {
+        let ds = board.session.ds().unwrap();
+        (ds.versions.len(), ds.branches.len())
+    }
+
+    #[test]
+    fn a_failed_command_op_leaves_no_version_or_branch_to_save() {
+        let mut board = board();
+        let reply = send(&mut board, "board.sticky", json!({"x": 0, "y": 0}));
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+
+        // `branch.create` adds its branch (two copies of the document) to the canvas's file
+        // before it opens it in a tab. The guard closes the tab, and the branch goes with it.
+        let reply = send(&mut board, "branch.create", json!({"name": "Try it"}));
+        assert_eq!(reply, would_switch("branch.create"));
+        assert_eq!(history(&board), (0, 0));
+
+        // A batch the guard refuses: what its steps added to the file goes with it too.
+        let reply = send(
+            &mut board,
+            "command.batch",
+            json!({"commands": [
+                {"command": "file.saveVersion", "params": {"name": "First"}},
+                {"command": "branch.create", "params": {"name": "Try it"}},
+            ]}),
+        );
+        assert_eq!(reply, would_switch("command.batch"));
+        assert_eq!(history(&board), (0, 0));
+
+        // So does a batch that fails on a step of its own: none of it is done.
+        let reply = send(
+            &mut board,
+            "command.batch",
+            json!({"commands": [
+                {"command": "file.saveVersion", "params": {"name": "First"}},
+                {"command": "no.such.command"},
+            ]}),
+        );
+        assert_eq!(reply["ok"], json!(false), "{reply}");
+        assert_eq!(history(&board), (0, 0));
+
+        // A command that goes through keeps what it adds.
+        let reply = send(&mut board, "file.saveVersion", json!({"name": "Kept"}));
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        assert_eq!(history(&board), (1, 0));
+        // And a refusal after it leaves that version where it is.
+        let reply = send(&mut board, "branch.create", json!({}));
+        assert_eq!(reply, would_switch("branch.create"));
+        assert_eq!(history(&board), (1, 0));
+        assert_eq!(board.session.ds().unwrap().versions[0].name, "Kept");
     }
 
     /// A session whose one document is a board called "Canvas", made by the engine itself.
