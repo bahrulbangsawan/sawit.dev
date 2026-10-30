@@ -109,6 +109,24 @@ const CAPTION_BAND: f32 = 24.;
 
 type OpResult = Result<Value, String>;
 
+/// How long a shot waits for the overlay to hide, and then for WebKit's capture, so a
+/// lost callback can't keep the overlay hidden and the next shots waiting.
+const SHOT_STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long a pick waits for its screenshot (its turn included) before adding its row
+/// without one.
+const PICK_SHOT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+
+/// `fut`'s output, or `None` when `timer` fires first.
+async fn within<F: std::future::Future + Unpin>(
+    fut: F,
+    timer: impl std::future::Future<Output = ()> + Unpin,
+) -> Option<F::Output> {
+    match futures::future::select(fut, timer).await {
+        futures::future::Either::Left((out, _)) => Some(out),
+        futures::future::Either::Right(_) => None,
+    }
+}
+
 /// What the engine reports, from its handlers (any thread) to the view.
 enum FromPage {
     Event(PageEvent),
@@ -518,9 +536,12 @@ impl BrowserView {
         }
         let project = self.project.clone();
         cx.spawn_in(window, async move |this, cx| {
-            let shot = rx
-                .await
-                .unwrap_or_else(|_| Err("The screenshot was cancelled.".into()));
+            // Shots wait their turn; a row without a screenshot beats no row.
+            let timer = cx.background_executor().timer(PICK_SHOT_TIMEOUT);
+            let shot = match within(rx, timer).await {
+                Some(shot) => shot.unwrap_or_else(|_| Err("The screenshot was cancelled.".into())),
+                None => Err("The screenshot took too long.".into()),
+            };
             let _ = this.update_in(cx, |this, window, cx| {
                 let existing = this.annotate.read(cx).annotations(cx);
                 let n = next_number(&existing, &url);
@@ -590,15 +611,25 @@ impl BrowserView {
             }
             let [hide, show] = shoot_ops();
             let hidden = this.update(cx, |this, _| this.page_op(hide));
-            // A page without an agent has no overlay to hide.
+            // A page without an agent has no overlay to hide; one that doesn't answer
+            // is shot as it is.
             if let Ok(hidden) = hidden {
-                let _ = hidden.await;
+                let timer = cx.background_executor().timer(SHOT_STEP_TIMEOUT);
+                let _ = within(hidden, timer).await;
             }
             let (tx, rx) = oneshot::channel();
             let started = this.update(cx, |this, _| this.snap(css_rect, tx));
             let result = if started.is_ok() {
-                rx.await
-                    .unwrap_or_else(|_| Err("The screenshot was cancelled.".into()))
+                let timer = cx.background_executor().timer(SHOT_STEP_TIMEOUT);
+                match within(rx, timer).await {
+                    Some(shot) => {
+                        shot.unwrap_or_else(|_| Err("The screenshot was cancelled.".into()))
+                    }
+                    None => Err(format!(
+                        "WebKit didn't capture the page within {} s.",
+                        SHOT_STEP_TIMEOUT.as_secs()
+                    )),
+                }
             } else {
                 Err("The browser isn't open.".into())
             };
@@ -1330,7 +1361,7 @@ fn agent_result(result: &str) -> OpResult {
 mod tests {
     use super::{
         Frame, PickMode, Target, ViewportMode, agent_call, agent_result, caption, markers_op,
-        new_token, overlay_op, page_frame, rearm_ops, rect_op, rotated, shoot_ops,
+        new_token, overlay_op, page_frame, rearm_ops, rect_op, rotated, shoot_ops, within,
     };
     use serde_json::json;
 
@@ -1471,6 +1502,21 @@ mod tests {
             })
         );
         assert_eq!(rotated(&ViewportMode::Responsive), None);
+    }
+
+    #[test]
+    fn a_wait_ends_when_its_timer_fires() {
+        use futures::executor::block_on;
+        use futures::future::{pending, ready};
+        let never = pending::<u8>();
+        assert_eq!(block_on(within(never, ready(()))), None);
+        assert_eq!(block_on(within(ready(7), pending::<()>())), Some(7));
+        let (tx, rx) = futures::channel::oneshot::channel::<u8>();
+        drop(tx);
+        assert!(matches!(
+            block_on(within(rx, pending::<()>())),
+            Some(Err(_))
+        ));
     }
 
     #[test]
