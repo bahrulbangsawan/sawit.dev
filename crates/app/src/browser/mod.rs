@@ -143,6 +143,8 @@ pub struct BrowserView {
     focus: FocusHandle,
     panel: Option<Panel>,
     annotate: Entity<AnnotatePanel>,
+    /// Shots take turns: the overlay has one hidden flag.
+    shots: ShotGate,
     pick: PickMode,
     /// Picking was asked for but the page had no agent yet; it is armed
     /// again when the page has loaded.
@@ -236,6 +238,7 @@ impl BrowserView {
             focus: cx.focus_handle(),
             panel: None,
             annotate,
+            shots: ShotGate::default(),
             pick: PickMode::Off,
             pick_waiting: false,
             to_view,
@@ -427,9 +430,14 @@ impl BrowserView {
             let _ = this.update_in(cx, |this, window, cx| {
                 let existing = this.annotate.read(cx).annotations(cx);
                 let n = next_number(&existing, &url);
-                let screenshot = shot
-                    .ok()
-                    .and_then(|v| save_screenshot(&v, project.as_deref(), &url, n));
+                let screenshot =
+                    match shot.and_then(|v| save_screenshot(&v, project.as_deref(), &url, n)) {
+                        Ok(path) => Some(path),
+                        Err(e) => {
+                            eprintln!("sawit: no screenshot for annotation {n}: {e}");
+                            None
+                        }
+                    };
                 let annotation = Annotation {
                     n,
                     url,
@@ -480,11 +488,18 @@ impl BrowserView {
         reply: oneshot::Sender<OpResult>,
         cx: &mut Context<Self>,
     ) {
-        let [hide, show] = shoot_ops();
-        let hidden = self.page_op(hide);
+        let turn = self.shots.enter();
         cx.spawn(async move |this, cx| {
+            // Another shot has the overlay hidden: wait for it to finish.
+            if let Some(turn) = turn {
+                let _ = turn.await;
+            }
+            let [hide, show] = shoot_ops();
+            let hidden = this.update(cx, |this, _| this.page_op(hide));
             // A page without an agent has no overlay to hide.
-            let _ = hidden.await;
+            if let Ok(hidden) = hidden {
+                let _ = hidden.await;
+            }
             let (tx, rx) = oneshot::channel();
             let started = this.update(cx, |this, _| this.snap(css_rect, tx));
             let result = if started.is_ok() {
@@ -493,7 +508,10 @@ impl BrowserView {
             } else {
                 Err("The browser isn't open.".into())
             };
-            let _ = this.update(cx, |this, _| drop(this.page_op(show)));
+            let _ = this.update(cx, |this, _| {
+                drop(this.page_op(show));
+                this.shots.leave();
+            });
             let _ = reply.send(result);
         })
         .detach();
@@ -599,10 +617,11 @@ impl BrowserView {
             FromPage::Event(PageEvent::Picked(pick)) => {
                 self.last_pick = pick["element"]["selector"].as_str().map(str::to_string);
                 // Inspecting is the design panel's.
-                if pick["mode"] == "annotate"
-                    && let Ok(element) = serde_json::from_value(pick["element"].clone())
-                {
-                    self.on_picked(element, window, cx);
+                if pick["mode"] == "annotate" {
+                    match serde_json::from_value(pick["element"].clone()) {
+                        Ok(element) => self.on_picked(element, window, cx),
+                        Err(e) => eprintln!("sawit: a picked element couldn't be read: {e}"),
+                    }
                 }
                 cx.notify();
             }
@@ -1081,17 +1100,52 @@ fn save_screenshot(
     project: Option<&std::path::Path>,
     url: &str,
     n: u32,
-) -> Option<PathBuf> {
-    let png = sawit_core::browser::base64_decode(shot["png_base64"].as_str()?)?;
+) -> Result<PathBuf, String> {
+    let png = shot["png_base64"]
+        .as_str()
+        .and_then(sawit_core::browser::base64_decode)
+        .ok_or("the capture has no readable image")?;
     let cache = sawit_core::instances::AppPaths::default_macos().cache_dir();
     let dir = screenshot_dir(project, &cache, &sawit_core::date::local_date());
     match project {
-        Some(project) => sawit_core::nyawit::ensure(project, &dir).ok()?,
-        None => std::fs::create_dir_all(&dir).ok()?,
+        Some(project) => sawit_core::nyawit::ensure(project, &dir),
+        None => std::fs::create_dir_all(&dir),
     }
+    .map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = sawit_core::nyawit::unique(&dir, &screenshot_name(url, n));
-    std::fs::write(&path, png).ok()?;
-    Some(path)
+    std::fs::write(&path, png).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(path)
+}
+
+/// Lets one screenshot at a time hide the overlay: `enter` returns `None`
+/// when it is free, else a receiver that fires on this shot's turn; every
+/// shot calls `leave` when done.
+#[derive(Default)]
+struct ShotGate {
+    busy: bool,
+    waiting: std::collections::VecDeque<oneshot::Sender<()>>,
+}
+
+impl ShotGate {
+    fn enter(&mut self) -> Option<oneshot::Receiver<()>> {
+        if !self.busy {
+            self.busy = true;
+            return None;
+        }
+        let (tx, rx) = oneshot::channel();
+        self.waiting.push_back(tx);
+        Some(rx)
+    }
+
+    fn leave(&mut self) {
+        // A waiter that went away is skipped.
+        while let Some(next) = self.waiting.pop_front() {
+            if next.send(()).is_ok() {
+                return;
+            }
+        }
+        self.busy = false;
+    }
 }
 
 /// Around every screenshot: hide the overlay, then show it again.
@@ -1241,6 +1295,22 @@ mod tests {
             rearm_ops(PickMode::Inspect),
             vec![json!({"op": "pick", "mode": "inspect"})]
         );
+    }
+
+    #[test]
+    fn shots_take_turns() {
+        let mut gate = super::ShotGate::default();
+        assert!(gate.enter().is_none());
+        let mut second = gate.enter().expect("waits");
+        let mut third = gate.enter().expect("waits");
+        assert!(second.try_recv().unwrap().is_none());
+        gate.leave();
+        assert!(second.try_recv().unwrap().is_some());
+        assert!(third.try_recv().unwrap().is_none());
+        gate.leave();
+        assert!(third.try_recv().unwrap().is_some());
+        gate.leave();
+        assert!(gate.enter().is_none());
     }
 
     #[test]
