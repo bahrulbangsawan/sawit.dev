@@ -700,7 +700,8 @@ fn is_http(url: &str) -> bool {
 /// `deadline` (the scan's start + [`FETCH_BUDGET`]); what fails or is late is left out.
 /// A sheet's text goes back to the page, whose scripts can read it: only CSS, and from
 /// this Mac or its network only for a page of that host (`page`, the tab's URL as Sawit
-/// knows it), so a page can't read the dev server or the LAN through Sawit.
+/// knows it), so a page can't read the dev server or the LAN through Sawit. The manifest
+/// is asked for under the same host rule.
 async fn fetch_extras(
     hrefs: Vec<String>,
     manifest: Option<String>,
@@ -739,6 +740,10 @@ async fn fetch_extras(
         let Some(manifest) = manifest.filter(|m| is_http(m)) else {
             return Vec::new();
         };
+        if !may_fetch_for(&manifest, page) {
+            eprintln!("sawit: left out the manifest {manifest}: it is on this Mac or its network");
+            return Vec::new();
+        }
         match tokio::time::timeout_at(deadline, fetch_text(&manifest, referer)).await {
             Ok(Ok(fetched)) => manifest_icons(&fetched.text, &manifest),
             Ok(Err(e)) => {
