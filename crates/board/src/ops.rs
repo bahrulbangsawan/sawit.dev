@@ -3,9 +3,9 @@
 //!
 //! Every answer is `{ok: true, ...}` or `{ok: false, error}`, and an op never panics: a failure of
 //! the engine, or an op that is malformed, is an `error` the agent can read. The ops are `get`,
-//! `add`, `update`, `delete`, `clear`, `replace`, `command`, `commands`, `pointer`, `mermaid`,
-//! `key` and `type`; the others of the contract get their own answer, "<op> is not supported
-//! yet".
+//! `add`, `update`, `delete`, `clear`, `replace`, `export_svg`, `export_png`, `command`,
+//! `commands`, `pointer`, `mermaid`, `key` and `type`; the others of the contract get their own
+//! answer, "<op> is not supported yet".
 //!
 //! Each op that draws, changes or removes layers (all but `command`, which is the engine's, and
 //! the input ops below) is one undo step, and when the engine refuses a part of it, none of it is
@@ -115,6 +115,10 @@ const MERMAID_GAP: f64 = 100.0;
 ///   `path`. It runs in the canvas's own session, so the canvas stays what it is (a board, with
 ///   its file), and undo brings the old pages back. A scene that has no `elements`, and a file
 ///   that can't be read, are errors that change nothing.
+/// - `export_svg` and `export_png` take no parameters and answer `{ok, svg}` and
+///   `{ok, png_base64}`: the whole page on show as one file, whatever is selected, at 1×
+///   ([`export_page`]). The PNG is encoded as base64. Nothing in the document changes. A page with
+///   nothing on it has nothing to export, and that is the error, as is any other the engine gives.
 /// - `command` (`{command, params?}`) runs engine command `command` and answers `{ok, result}`,
 ///   or the engine's own `error`. It refuses the commands Sawit handles itself, as the steps of a
 ///   `command.batch` too ("<id> is handled by Sawit"). A command that would leave the canvas with
@@ -148,6 +152,8 @@ pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
         Some("delete") => delete(board, op),
         Some("clear") => clear(board),
         Some("replace") => replace(board, op),
+        Some("export_svg") => export_svg(board),
+        Some("export_png") => export_png(board),
         Some("command") => command(board, op),
         Some("commands") => commands(),
         Some("pointer") => pointer(board, op),
@@ -880,6 +886,26 @@ fn diagram_corner(board: &BoardDoc, op: &Value) -> Result<(f64, f64), BoardError
     Ok((given("x").unwrap_or(x), given("y").unwrap_or(y)))
 }
 
+/// The scale the `export_svg` and `export_png` ops export at. They take no parameters (spec,
+/// "Agent wire contract"), so it is 1×.
+const EXPORT_OP_SCALE: f64 = 1.0;
+
+/// The `export_svg` op: the page on show as one SVG file, answered as text.
+fn export_svg(board: &mut BoardDoc) -> Value {
+    match export_page(board, "svg", EXPORT_OP_SCALE).and_then(svg_text) {
+        Ok(svg) => json!({"ok": true, "svg": svg}),
+        Err(error) => failure(error),
+    }
+}
+
+/// The `export_png` op: the page on show as one PNG file, answered as base64.
+fn export_png(board: &mut BoardDoc) -> Value {
+    match export_page(board, "png", EXPORT_OP_SCALE) {
+        Ok(png) => json!({"ok": true, "png_base64": STANDARD.encode(png)}),
+        Err(error) => failure(error),
+    }
+}
+
 // The document's side of the commands Sawit carries out itself (spec, "Menu policy": UI-handled
 // ids): the files File ▸ Export and Import from file… make and read, and what Edit ▸ Copy as
 // copies. The canvas's view (crates/app/src/board/commands.rs) asks for files and writes them, and
@@ -1027,8 +1053,13 @@ fn svg_of(board: &mut BoardDoc, ids: &[NodeId]) -> Result<String, BoardError> {
         format: "svg".to_string(),
         scale: 1.0,
     };
-    let svg = export_bytes(board, ids, &row)?;
-    String::from_utf8(svg).map_err(|_| BoardError::Engine("the SVG export isn't text".to_string()))
+    svg_text(export_bytes(board, ids, &row)?)
+}
+
+/// The SVG file `bytes` as text.
+fn svg_text(bytes: Vec<u8>) -> Result<String, BoardError> {
+    String::from_utf8(bytes)
+        .map_err(|_| BoardError::Engine("the SVG export isn't text".to_string()))
 }
 
 /// Layers `ids` together as one PNG, for Copy as PNG ([`copy_as`]): at 2×, or smaller, so that its
@@ -2890,6 +2921,8 @@ mod tests {
             json!({"op": "clear"}),
             json!({"op": "replace", "path": "/tmp/canvas.figcraft"}),
             json!({"op": "replace", "scene": {"elements": []}}),
+            json!({"op": "export_svg"}),
+            json!({"op": "export_png"}),
             json!({"op": "command", "command": "board.sticky", "params": {"x": 0, "y": 0}}),
             json!({"op": "pointer", "kind": "down", "x": 0, "y": 0}),
             json!({"op": "type", "text": "hi"}),
@@ -3303,6 +3336,79 @@ mod tests {
             error.to_string().contains("not an export format"),
             "{error}"
         );
+    }
+
+    /// The text of an SVG file after its optional `<?xml ...?>` prolog.
+    fn after_prolog(svg: &str) -> &str {
+        let svg = svg.trim_start();
+        match svg.strip_prefix("<?xml") {
+            Some(rest) => (rest.split_once("?>"))
+                .map_or(rest, |(_, after)| after)
+                .trim_start(),
+            None => svg,
+        }
+    }
+
+    #[test]
+    fn export_png_is_base64_png() {
+        let mut board = board();
+        square_at(&mut board, 0.0);
+        let reply = ask(&mut board, json!({"op": "export_png"}));
+        let encoded = reply["png_base64"].as_str().expect("png_base64");
+        let png = STANDARD.decode(encoded).unwrap();
+        assert!(
+            png.starts_with(b"\x89PNG\r\n\x1a\n"),
+            "{:02x?}",
+            &png[..png.len().min(8)]
+        );
+        // At 1×, as the page is exported at that scale: not at another, which makes another size.
+        let at = |board: &mut BoardDoc, scale| png_size(&export_page(board, "png", scale).unwrap());
+        assert_eq!(png_size(&png), at(&mut board, 1.0));
+        assert_ne!(png_size(&png), at(&mut board, 2.0));
+    }
+
+    #[test]
+    fn export_svg_has_svg_root() {
+        let mut board = board();
+        square_at(&mut board, 0.0);
+        let reply = ask(&mut board, json!({"op": "export_svg"}));
+        let svg = reply["svg"].as_str().expect("svg");
+        assert!(after_prolog(svg).starts_with("<svg"), "{svg}");
+        assert!(svg.trim_end().ends_with("</svg>"), "{svg}");
+    }
+
+    /// Spec, "Agent wire contract": the ops answer the whole page, and exporting changes nothing
+    /// in it.
+    #[test]
+    fn the_export_ops_export_the_whole_page_and_change_nothing() {
+        let mut board = board();
+        let left = square_at(&mut board, 0.0);
+        square_at(&mut board, 1000.0);
+        board.session.set_selection(vec![left]);
+        let (doc, steps) = (board.doc().unwrap(), board.session.undo_depth());
+
+        // Both squares are in the picture, though one is selected.
+        let svg = ask(&mut board, json!({"op": "export_svg"}));
+        let width = svg_width(svg["svg"].as_str().unwrap());
+        assert!(width >= 1100.0, "width {width}");
+        let png = ask(&mut board, json!({"op": "export_png"}));
+        let png = STANDARD
+            .decode(png["png_base64"].as_str().unwrap())
+            .unwrap();
+        assert!(png_size(&png).0 >= 1100, "{:?}", png_size(&png));
+
+        assert_eq!(board.session.selection(), [left]);
+        assert_eq!(board.session.undo_depth(), steps);
+        assert!(Arc::ptr_eq(&doc, &board.doc().unwrap()));
+    }
+
+    #[test]
+    fn the_export_ops_of_an_empty_page_are_errors_not_panics() {
+        let mut board = board();
+        for op in ["export_svg", "export_png"] {
+            let error = refusal(&mut board, json!({"op": op}));
+            assert!(error.contains("nothing to export"), "{op}: {error}");
+        }
     }
 
     /// Review Focus 3: a page without frames says why it has no PDF.
