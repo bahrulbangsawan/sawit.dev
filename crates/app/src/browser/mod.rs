@@ -133,6 +133,8 @@ pub struct BrowserView {
     last_pick: Option<String>,
     /// Responsive, or a device size (kept per tab).
     viewport: ViewportMode,
+    /// Keeps the "Browser" key context on the dispatch path (⌘⇧.).
+    focus: FocusHandle,
     panel: Option<Panel>,
     pick: PickMode,
     /// Picking was asked for but the page had no agent yet; it is armed
@@ -216,6 +218,7 @@ impl BrowserView {
             logs: Logs::default(),
             last_pick: None,
             viewport: ViewportMode::Responsive,
+            focus: cx.focus_handle(),
             panel: None,
             pick: PickMode::Off,
             pick_waiting: false,
@@ -237,6 +240,14 @@ impl BrowserView {
             "pick_mode": self.pick.as_str(),
             "last_pick": self.last_pick,
         })
+    }
+
+    /// Gives the keyboard to the view (not the page), so ⌘⇧. reaches it.
+    fn take_keyboard(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(engine) = &self.engine {
+            engine.focus_parent();
+        }
+        self.focus.focus(window, cx);
     }
 
     pub fn panel(&self) -> Option<Panel> {
@@ -727,6 +738,12 @@ impl Drop for BrowserView {
     }
 }
 
+impl Focusable for BrowserView {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
 impl Render for BrowserView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(error) = &self.error {
@@ -775,6 +792,7 @@ impl Render for BrowserView {
         let side = self.panel.map(|panel| self.side_panel(panel, cx));
         v_flex()
             .key_context("Browser")
+            .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &ToggleAnnotate, window, cx| {
                 this.toggle_panel(Panel::Annotate, window, cx);
             }))

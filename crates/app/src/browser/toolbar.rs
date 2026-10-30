@@ -88,6 +88,7 @@ impl BrowserView {
                     .tooltip(tip(Panel::Annotate, "Annotate (⌘⇧.)"))
                     .selected(self.panel() == Some(Panel::Annotate))
                     .on_click(cx.listener(|this, _, window, cx| {
+                        this.take_keyboard(window, cx);
                         this.toggle_panel(Panel::Annotate, window, cx);
                     })),
             )
@@ -99,6 +100,7 @@ impl BrowserView {
                     .tooltip(tip(Panel::Design, "Design"))
                     .selected(self.panel() == Some(Panel::Design))
                     .on_click(cx.listener(|this, _, window, cx| {
+                        this.take_keyboard(window, cx);
                         this.toggle_panel(Panel::Design, window, cx);
                     })),
             )

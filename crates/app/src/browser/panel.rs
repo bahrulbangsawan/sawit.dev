@@ -77,6 +77,10 @@ impl BrowserView {
             .w(px(PANEL_WIDTH))
             .h_full()
             .flex_none()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| this.take_keyboard(window, cx)),
+            )
             .border_l_1()
             .border_color(cx.theme().border)
             .child(frame(title, body, close, cx))
