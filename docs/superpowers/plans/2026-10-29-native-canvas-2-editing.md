@@ -220,8 +220,10 @@ git commit -m "feat(canvas): pointer tools and cursors on the native canvas"
   8. `drop_target`: an outline. `insert_line`: a 2 px line.
   9. Pen, rubber and brush previews: polylines.
   10. Vector-edit points and handles (`ds.vector_edit`, `overlay.pen_handles`, `overlay.vector_hover`).
-- Not ported (the spec's non-goals or later work): face, builder_regions, lasso, measure_box, scale, arc,
-  shape handles, drop_cell, swap_target, comments, rulers, spacing.
+- Not ported (the spec's non-goals or later work): face, builder_regions, lasso, measure_box, scale,
+  drop_cell, swap_target, comments, rulers, spacing. The arc and shape handles were left out at first;
+  the final review had them drawn, because the Move tool answers a press on them (see "Final review
+  fixes" under Task 7).
 - The app paints each `Shape` with `paint_path` / `paint_quad`. Labels use `window.text_system().shape_line`.
 - After painting, the app writes `session.tool.labels` from each frame `Label`'s measured box through
   `label_quad`.
@@ -431,13 +433,14 @@ git commit -m "feat(canvas): copy and paste between canvases and from other apps
 Run: `cargo test --workspace`
 Expected: all pass.
 
-#### Task 7 notes: live check (2026-10-30, at `c16f0e3` and `17a6e48`, lane 1)
+#### Task 7 notes: live check (2026-10-30, at `c16f0e3` and `84053c2`, lane 1)
 
 Steps 1–3 passed over the control socket, and so did the overlay checks carried over from Task
 3's review. The check found one defect: the caret didn't show at the start of a line, so a new
-sticky showed none. It is fixed in `17a6e48` (see "The caret at the start of a line" below).
+sticky showed none. It is fixed in `84053c2` (see "The caret at the start of a line" below).
 `cargo test --workspace` passes: 1095 passed, 9 ignored and 0 failed at `c16f0e3`, and 1097
-passed, 9 ignored and 0 failed at `17a6e48`. Step 4 needs the user: its checks are under "Hand
+passed, 9 ignored and 0 failed with the caret fix on top of it, run in the lane before the fix
+landed on `main` as `84053c2`. Step 4 needs the user: its checks are under "Hand
 checks (pending — needs the user)" below, together with the ones carried over from the reviews of
 Tasks 1–6. Machine: Apple M3 (8 cores, 16 GB), macOS 26.6.1, window scale factor 2, debug build.
 Other lanes were compiling, so `vm.loadavg` was 2.9–10.8.
@@ -510,7 +513,7 @@ the equal gaps; and for the caret, before and after its fix.
     holds steady (Task 5, Decision 6) costs nothing at rest.
   - **The log.** All 30 lines of the four runs' debug logs are `canvas render` lines (90–157 ms).
     There are no warnings or errors.
-- **The caret at the start of a line (a defect, fixed in `17a6e48`).**
+- **The caret at the start of a line (a defect, fixed in `84053c2`).**
   - In Step 2, the screenshot of the new sticky before typing showed its outlined text box, but no
     caret. With "Hello from Sawit" typed, a double-click and the key op ArrowLeft put the caret
     before the H: again no caret showed. After ArrowRight it showed, after the H.
@@ -539,12 +542,35 @@ the equal gaps; and for the caret, before and after its fix.
     change the document but not the canvas. This went to the controller as a concern. Hand check 4
     below works around it.
 
+#### Final review fixes (2026-10-30, lane 1)
+
+The final review's fixes each come with `sawit-board` or GPUI tests. What the socket can drive was
+also checked live, in a debug build on an empty board at 100 %, launched with Plan 1 Task 7's recipe:
+
+- **Arc and corner radius handles.** The engine's Move tool takes a press on these before the box's
+  handles, so the overlay now draws them (a port of ui-egui `arc_overlay` and `shape_overlay`).
+  - A selected 200 × 200 sticky shows a small round handle just inside each corner, beside the 4
+    square ones.
+  - `pointer` down on the top-left one, then moves to 20 px in, held: the corners round as it moves,
+    that handle is drawn larger, and a `Radius 20` pill sits beside it, its top-left 12 px right of
+    and below the handle. The up keeps radius 20, and the key op ⌘Z puts back 2 in one step.
+  - A selected 240 × 160 ellipse shows one round handle just inside its right edge. Dragged up to
+    the top, held: the ellipse opens into a pie, with its Start handle (a dot inside) at the right
+    edge, its Ratio handle in the middle, and a `Sweep 75%` pill beside the dragged handle.
+- **Keys, through the key op.** ⌘→ on the selected sticky widens it from 200 to 201, its x unchanged
+  (`transform.nudgeSize`). With the Pen, two clicks and then Backspace leave the path on the canvas:
+  Backspace finishes it, where it used to delete it.
+- **A triple click, and pasting an image or SVG,** need real input, so they are in hand checks 7 and
+  12 (c) and (d).
+- The run's log holds 12 `canvas render` lines and nothing else.
+
 #### Hand checks (pending — needs the user)
 
 Launch with Plan 1 Task 7's launch recipe for an empty board (skip the line that copies the example),
-and run its `open_page` line. Click the canvas once, so that it has the keyboard. Then press R and drag
-out three rectangles in a row, a little apart. Where a check already passed over the socket, it says
-so.
+and run its `open_page` line. Click the canvas once, so that it has the keyboard. Then make three
+rectangles in a row, a little apart: press R before each one, and drag it out. After each rectangle
+the tool goes back to Move, so a second drag without R would draw a selection box instead. Where a
+check already passed over the socket, it says so.
 
 1. **Drag a shape** (Step 4, and Task 3's review).
    - Press V. Drag a rectangle by its middle, and let go. It follows the pointer all the way, then
@@ -595,6 +621,9 @@ so.
    - Double-click the sticky. Its text shows selected, and typing x replaces it. Without the edit, x
      would pick the Connector tool.
    - Over the socket, the double-click selected all of the text, and x replaced it.
+   - Triple click (the final review): type `one`, press Return, type `two`, and press Escape. Click
+     three times quickly on `two`. The text is being typed in, and `two` alone shows selected, not a
+     caret. Typing y replaces just that line.
 8. **Panning by hand** (the reviews of Tasks 2 and 4).
    - Hold Space over the canvas: an open hand. Drag: the canvas follows the pointer, under a closed
      hand. Release Space: the tool's cursor is back.
@@ -635,7 +664,7 @@ so.
     - (7) Space: while typing in a sticky, Space types a space (check 8). With Pinyin on and nothing
       composed, Space types a space too.
     - (8) The caret holds steady, where FigCraft's blinks (Task 5, Decision 6). Say whether that is
-      fine. Live, it cost 0–1.8 % CPU at rest. It is a 2 px blue bar since `17a6e48`, so that it
+      fine. Live, it cost 0–1.8 % CPU at rest. It is a 2 px blue bar since `84053c2`, so that it
       shows at the start of a line too: check that it shows in a new sticky, and after ⌘← (the
       start of the line).
     - (9) While ni is composing, pan with two fingers. The candidate window stays where it was until
@@ -653,9 +682,10 @@ so.
     - (b) Copy a word in TextEdit, click empty canvas, and press ⌘V. A text layer reads that word, its
       top-left in the middle of the view, and no toast shows.
     - (c) Press ⌃⇧⌘4, and drag over part of the screen (the capture goes to the clipboard). Then ⌘V
-      on the canvas: an image layer shows it.
+      on the canvas: an image layer shows it, centred in the view (the final review), at the size it
+      had on screen.
     - (d) In a text editor, copy the source of an SVG file that starts with `<?xml`. Then ⌘V on the
-      canvas: its shapes come in, in a frame, not as a text layer.
+      canvas: its shapes come in, in a frame centred in the view, not as a text layer.
     - (e) ⌘C a sticky in one canvas, and ⌘V in another: the canvas of a second Sawit window on
       another folder, or a second canvas tab once Plan 7's `.figcraft` file tabs are in. The sticky
       pastes there, and ⇧⌘V pastes it again.
@@ -668,5 +698,19 @@ so.
 13. Plan 1's hand check 5 ends with a check that waited for Plan 2's editing, and it can run now: move
     a layer with the mouse, press ⌘Q at once, relaunch, and open the canvas. Expect the move to be
     kept.
+14. **Corner radius and arc handles** (the final review's Important 2).
+    - Press Q, click to place a sticky, and press Escape: the sticky stays selected. Just inside each
+      corner, a little in from the square handle, a small round handle shows.
+    - Hover one: it grows a little. Drag it toward the middle: all four corners round as you drag,
+      and a blue pill beside the handle reads `Radius` and the value. Let go. ⌘Z puts the corners
+      back.
+    - Drag the square corner handle itself: the sticky resizes, and its corners stay as they were.
+    - Make an ellipse:
+      `ctl '{"cmd":"canvas","op":{"op":"command","command":"node.create","params":{"type":"ellipse","x":200,"y":-100,"width":240,"height":160}}}'`.
+      Click it: one round handle shows just inside its right edge. Drag it round the ellipse: the
+      ellipse opens into a pie, and a pill reads `Sweep` with a share in %. A second round handle,
+      with a dot inside, marks where the arc starts. ⌘Z closes the ellipse again.
+    - Say whether the pills and the handles read clearly. Over the socket, they showed as described
+      in "Final review fixes" above.
 
 Write the answers here once the checks have run (R5).
