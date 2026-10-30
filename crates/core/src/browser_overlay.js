@@ -33,7 +33,7 @@
       layer = document.createElement("div");
       layer.style.cssText = "position:absolute;inset:0;overflow:hidden";
       shadow.appendChild(layer);
-      host.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:none;display:block;margin:0;padding:0;border:0";
+      host.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:none;margin:0;padding:0;border:0";
       applyMode();
     }
     if (!host.isConnected) document.documentElement.appendChild(host);
@@ -41,7 +41,8 @@
   };
   const applyMode = () => {
     if (!host) return;
-    host.style.display = hidden ? "none" : "block";
+    // Shown is no inline display at all (position:fixed already makes it a block).
+    host.style.display = hidden ? "none" : "";
   };
   const box = (css, text) => {
     const div = document.createElement("div");
@@ -282,9 +283,10 @@
     render();
   };
 
-  // The annotate shortcut works on every page, picking or not.
+  // The annotate shortcut works on every page, picking or not. Synthetic
+  // events (browser_press_key "Meta+Shift+.") carry no `code`, so the key counts too.
   window.addEventListener("keydown", (e) => {
-    if (e.metaKey && e.shiftKey && e.code === "Period") {
+    if (e.metaKey && e.shiftKey && (e.code === "Period" || e.key === "." || e.key === ">")) {
       e.preventDefault();
       send("key", "toggle-annotate");
     }

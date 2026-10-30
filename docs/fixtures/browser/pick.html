@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- Fixture for the browser preview end-to-end check (docs/superpowers/plans/2026-10-29-browser-preview-1-foundation.md, Task 6). -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pick · fixture</title>
+    <style>
+      body { font: 15px system-ui; margin: 40px; }
+      #target { padding: 10px 18px; font: inherit; }
+      .tall { height: 3000px; background: linear-gradient(#fff, #e8eef8); }
+    </style>
+  </head>
+  <body>
+    <h1>Pick an element</h1>
+    <p>A pick click must never reach the page's own capture listener.</p>
+    <button id="target" type="button">Target</button>
+    <div class="tall"></div>
+    <script>
+      document.addEventListener("click", () => console.log("page saw click"), true);
+    </script>
+  </body>
+</html>

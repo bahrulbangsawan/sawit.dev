@@ -822,9 +822,10 @@ fn page_frame(bounds: Frame, mode: &ViewportMode) -> (Frame, f64) {
         (bounds.height - 2. * DEVICE_PADDING - CAPTION_BAND).max(1.),
     );
     let fit = fit((*width, *height), area);
+    // Whole points, as `fit` gives the size, so WebKit doesn't round the frame.
     let frame = Frame {
-        x: bounds.x + DEVICE_PADDING + (area.0 - fit.width) / 2.,
-        y: bounds.y + CAPTION_BAND + DEVICE_PADDING + (area.1 - fit.height) / 2.,
+        x: (bounds.x + DEVICE_PADDING + (area.0 - fit.width) / 2.).round(),
+        y: (bounds.y + CAPTION_BAND + DEVICE_PADDING + (area.1 - fit.height) / 2.).round(),
         width: fit.width,
         height: fit.height,
     };
@@ -975,7 +976,7 @@ mod tests {
             page_frame(bounds, &phone),
             (
                 Frame {
-                    x: 203.5,
+                    x: 204.,
                     y: 86.,
                     width: 393.,
                     height: 852.
@@ -992,7 +993,7 @@ mod tests {
             height: 440.,
         };
         let (f, scale) = page_frame(small, &phone);
-        assert!((scale - 384. / 852.).abs() < 1e-6 && f.x >= 26. && (f.y - 60.).abs() < 1e-3);
+        assert!((scale - 384. / 852.).abs() < 1e-3 && f.x >= 26. && (f.y - 60.).abs() < 1e-3);
     }
 
     #[test]

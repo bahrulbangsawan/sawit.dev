@@ -268,13 +268,30 @@ pub struct Fit {
 }
 
 /// `size` (CSS px) at the largest scale up to 1 that fits `area`.
+///
+/// Scaled down, the view gets a whole number of points (WebKit rounds the
+/// view's size, then `innerWidth` is that size over the zoom, whole), and
+/// the zoom is set so the width comes out a quarter pixel over the device's:
+/// `innerWidth` is exactly the device width. The height lands within a pixel
+/// or so of the device's.
 pub fn fit(size: (u32, u32), area: (f32, f32)) -> Fit {
-    let (w, h) = (size.0 as f32, size.1 as f32);
-    let scale = f64::from((area.0 / w).min(area.1 / h).clamp(0.0, 1.0));
+    let (w, h) = (f64::from(size.0), f64::from(size.1));
+    let scale = (f64::from(area.0) / w)
+        .min(f64::from(area.1) / h)
+        .clamp(0.0, 1.0);
+    if scale >= 1.0 {
+        return Fit {
+            scale: 1.0,
+            width: w as f32,
+            height: h as f32,
+        };
+    }
+    let width = (w * scale).floor().max(1.0);
+    let scale = width / (w + 0.25);
     Fit {
         scale,
-        width: (f64::from(w) * scale) as f32,
-        height: (f64::from(h) * scale) as f32,
+        width: width as f32,
+        height: ((h + 0.25) * scale).round().max(1.0) as f32,
     }
 }
 
@@ -796,15 +813,34 @@ mod tests {
             }
         );
         let f = fit((1440, 900), (720., 900.));
-        assert_eq!(
-            f,
-            Fit {
-                scale: 0.5,
-                width: 720.,
-                height: 450.
-            }
-        );
-        assert_eq!(fit((393, 852), (393., 426.)).scale, 0.5);
+        assert_eq!((f.width, f.height), (720., 450.));
+        assert!((f.scale - 0.5).abs() < 1e-3);
+        assert!((fit((393, 852), (393., 426.)).scale - 0.5).abs() < 5e-3);
+    }
+
+    /// WebKit rounds the view to whole points, and `innerWidth` is whole too:
+    /// 393 × 0.3644 = 143.2 pt became 143 pt, so `innerWidth` was 392.
+    #[test]
+    fn scaled_devices_keep_their_css_width() {
+        for (size, area) in [
+            ((393, 852), (500., 310.5)),
+            ((393, 852), (232., 384.)),
+            ((412, 915), (301.7, 600.)),
+            ((1440, 900), (700., 435.)),
+            ((834, 1194), (333.3, 333.3)),
+        ] {
+            let f = fit(size, area);
+            assert_eq!(f.width, f.width.round(), "{size:?} in {area:?}");
+            assert_eq!(f.height, f.height.round(), "{size:?} in {area:?}");
+            assert!(f.width <= area.0, "{size:?} in {area:?}");
+            let css_width = f64::from(f.width) / f.scale;
+            assert_eq!(css_width as u32, size.0, "{size:?} in {area:?}");
+            let css_height = f64::from(f.height) / f.scale;
+            assert!(
+                (css_height - f64::from(size.1)).abs() < 1.0 / f.scale,
+                "{size:?}"
+            );
+        }
     }
 
     #[test]

@@ -126,7 +126,9 @@ gpui_kit::assets::icon_assets!(
         FoldVertical,
         ArrowDownToLine,
         UnfoldVertical,
-        UnfoldHorizontal
+        UnfoldHorizontal,
+        // The browser's device menu (src/browser/toolbar.rs).
+        Smartphone
     ]
 );
 
