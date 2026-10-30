@@ -93,14 +93,18 @@
     const r = el.getBoundingClientRect();
     return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
   };
-  const chip = (el) => {
+  // `button#id.a.b`: the element's tag, id and first two classes.
+  const short = (el) => {
     const cls = typeof el.className === "string" && el.className.trim() ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".") : "";
+    return el.localName + (el.id ? "#" + el.id : "") + cls;
+  };
+  const chip = (el) => {
     const r = el.getBoundingClientRect();
-    return el.localName + (el.id ? "#" + el.id : "") + cls + " " + Math.round(r.width) + "×" + Math.round(r.height);
+    return short(el) + " " + Math.round(r.width) + "×" + Math.round(r.height);
   };
   const info = (el, max = 120) => ({
     selector: selectorFor(el),
-    label: describe(el),
+    label: short(el),
     tag: el.localName,
     id: el.id || "",
     classes: typeof el.className === "string" ? el.className.trim().split(/\s+/).filter(Boolean) : [],

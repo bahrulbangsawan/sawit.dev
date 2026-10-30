@@ -186,7 +186,7 @@ impl AnnotatePanel {
                     .children(Intent::ALL.into_iter().enumerate().map(|(j, i)| {
                         Button::new(("annotate-intent", ix * 10 + j))
                             .xsmall()
-                            .label(i.label())
+                            .label(intent_name(i))
                             .selected(intent == i)
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 if let Some(r) = this.rows.get_mut(ix) {
@@ -337,6 +337,16 @@ impl Render for AnnotatePanel {
                         .map(|note| div().text_xs().text_color(muted).child(note)),
                 ),
         )
+    }
+}
+
+/// The intent as its button shows it: "Fix", "Change", "Question", "Copy".
+fn intent_name(i: Intent) -> &'static str {
+    match i {
+        Intent::Fix => "Fix",
+        Intent::Change => "Change",
+        Intent::Question => "Question",
+        Intent::Copy => "Copy",
     }
 }
 

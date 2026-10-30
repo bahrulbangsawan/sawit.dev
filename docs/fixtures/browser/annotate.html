@@ -1,0 +1,24 @@
+<!doctype html>
+<!-- Fixture for the browser annotate end-to-end check (docs/superpowers/plans/2026-10-29-browser-preview-2-annotate.md, Task 6). -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Annotate · fixture</title>
+    <style>
+      body { font: 15px system-ui; margin: 40px; }
+      .btn-primary { padding: 10px 18px; font: inherit; color: #fff; background: #2563eb; border: 0; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <main><div><button class="btn-primary" data-source="src/components/Checkout.tsx:42">Submit order</button></div></main>
+    <p><a id="two" href="#/two">Go to page two</a></p>
+    <script>
+      document.getElementById("two").addEventListener("click", (e) => {
+        e.preventDefault();
+        history.pushState({}, "", "/two");
+      });
+      console.error("Uncaught TypeError: x is undefined");
+    </script>
+  </body>
+</html>

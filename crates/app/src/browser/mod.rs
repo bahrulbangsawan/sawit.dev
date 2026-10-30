@@ -294,6 +294,16 @@ impl BrowserView {
         cx.notify();
     }
 
+    /// ⌘⇧.: like the Annotate button, except that with Annotate open after Esc
+    /// it picks again instead of closing.
+    fn annotate_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panel == Some(Panel::Annotate) && self.pick == PickMode::Off {
+            self.set_pick(PickMode::Annotate, cx);
+        } else {
+            self.toggle_panel(Panel::Annotate, window, cx);
+        }
+    }
+
     /// Arms (or disarms) picking on the page.
     fn set_pick(&mut self, mode: PickMode, cx: &mut Context<Self>) {
         self.pick = mode;
@@ -646,7 +656,7 @@ impl BrowserView {
             FromPage::Event(PageEvent::Hovered(_)) => {}
             // The page has the keyboard: it forwards ⌘⇧. and Esc.
             FromPage::Event(PageEvent::Key(key)) => match key.as_str() {
-                "toggle-annotate" => self.toggle_panel(Panel::Annotate, window, cx),
+                "toggle-annotate" => self.annotate_key(window, cx),
                 "escape" => self.set_pick(PickMode::Off, cx),
                 _ => {}
             },
@@ -1004,7 +1014,7 @@ impl Render for BrowserView {
             .key_context("Browser")
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &ToggleAnnotate, window, cx| {
-                this.toggle_panel(Panel::Annotate, window, cx);
+                this.annotate_key(window, cx);
             }))
             .size_full()
             .child(self.toolbar(cx))
