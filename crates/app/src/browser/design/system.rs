@@ -30,8 +30,14 @@ pub(super) fn export_lines(e: &ExportShown) -> Vec<String> {
             if done.failed > 0 {
                 lines.push(format!(
                     "{} of {} assets couldn't be downloaded",
-                    done.failed, e.total
+                    done.failed,
+                    e.total.saturating_sub(done.skipped_videos)
                 ));
+            }
+            match done.skipped_videos {
+                0 => {}
+                1 => lines.push("1 video wasn't included".into()),
+                n => lines.push(format!("{n} videos weren't included")),
             }
             if let Some(err) = &done.screenshot_error {
                 lines.push(format!("No screenshot: {err}"));
@@ -340,11 +346,35 @@ mod tests {
         let done = ExportDone {
             files: 30,
             failed: 12,
+            skipped_videos: 0,
             screenshot_error: Some("off screen".into()),
         };
         let lines = export_lines(&shown(Some(Ok(done)), 40, 40));
         assert_eq!(lines[0], "Exported 30 files to /p/.nyawit/design/a.dev");
         assert_eq!(lines[1], "12 of 40 assets couldn't be downloaded");
         assert_eq!(lines[2], "No screenshot: off screen");
+        // Skipped videos are said apart, not counted as failures.
+        let done = ExportDone {
+            files: 30,
+            failed: 0,
+            skipped_videos: 3,
+            screenshot_error: None,
+        };
+        let lines = export_lines(&shown(Some(Ok(done)), 40, 40));
+        assert_eq!(lines[1..], ["3 videos weren't included"]);
+        let done = ExportDone {
+            files: 30,
+            failed: 2,
+            skipped_videos: 1,
+            screenshot_error: None,
+        };
+        let lines = export_lines(&shown(Some(Ok(done)), 40, 40));
+        assert_eq!(
+            lines[1..],
+            [
+                "2 of 39 assets couldn't be downloaded",
+                "1 video wasn't included"
+            ]
+        );
     }
 }

@@ -71,6 +71,8 @@ pub enum DesignEvent {
 pub struct ExportDone {
     pub files: usize,
     pub failed: usize,
+    /// Videos left out (not asked for); not failures.
+    pub skipped_videos: usize,
     pub screenshot_error: Option<String>,
 }
 

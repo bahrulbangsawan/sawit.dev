@@ -98,6 +98,13 @@ fn export_report(v: &Value) -> Result<String, String> {
             out.push_str(&format!("{what} — {why}\n"));
         }
     }
+    match v["skipped_videos"].as_u64().unwrap_or(0) {
+        0 => {}
+        n => out.push_str(&format!(
+            "\n{n} video{} not included (include_videos: true downloads them).\n",
+            if n == 1 { " was" } else { "s were" }
+        )),
+    }
     let files: Vec<&str> = v["files"]
         .as_array()
         .map(|a| a.iter().filter_map(Value::as_str).collect())
@@ -216,6 +223,12 @@ mod tests {
         assert!(t.contains("DESIGN.md"));
         assert!(t.contains("https://a.dev/x.png — HTTP 404"));
         assert!(t.contains("The tab moved."));
+        assert!(!t.contains("not included"));
+        let v = json!({"done": true, "folder": "/f", "files": [], "failed": [],
+            "skipped_videos": 2});
+        let t = export_report(&v).unwrap();
+        assert!(!t.contains("downloads failed"));
+        assert!(t.contains("2 videos were not included (include_videos: true downloads them)."));
         let e = export_report(&json!({"done": true, "folder": "/f", "error": "disk full"}));
         assert!(e.unwrap_err().starts_with("The export failed: disk full"));
     }

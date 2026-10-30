@@ -15,7 +15,8 @@ use futures::future::Shared;
 use gpui_kit::{AsyncApp, Context, SharedString, Task, WeakEntity};
 use sawit_core::annotations::page_key;
 use sawit_core::site_design::assets::{
-    MAX_TOTAL, download_all, fetch_text, font_assets, may_fetch_for, sheet_for_page,
+    MAX_TOTAL, download_all, fetch_text, font_assets, is_skipped_video, may_fetch_for,
+    sheet_for_page,
 };
 use sawit_core::site_design::export::write_folder;
 use sawit_core::site_design::inspect::{StyleInfo, contrast, css_rule};
@@ -79,7 +80,10 @@ pub struct ExportReport {
     /// Why `screenshot.png` was left out.
     pub screenshot_error: Option<String>,
     pub files: Vec<String>,
+    /// Downloads that failed; skipped videos aren't among them.
     pub failed: Vec<AssetOutcome>,
+    /// Videos left out because they weren't asked for.
+    pub skipped_videos: usize,
 }
 
 type ScanJob = Shared<Task<Result<Rc<Ready>, String>>>;
@@ -339,7 +343,8 @@ impl BrowserView {
             .unwrap_or(&folder)
             .to_path_buf();
         let job = rt::spawn(cx, async move {
-            let outcomes = download_all(assets, &dir, &url, false, MAX_TOTAL, |_, _| {}).await;
+            // `assets` is what was chosen, videos included.
+            let outcomes = download_all(assets, &dir, &url, true, MAX_TOTAL, |_, _| {}).await;
             let saved = outcomes.iter().filter(|o| o.error.is_none()).count();
             let first_error = outcomes.iter().find_map(|o| o.error.clone());
             (saved, outcomes.len(), first_error)
@@ -369,6 +374,7 @@ impl BrowserView {
                         .map(|report| ExportDone {
                             files: report.files.len(),
                             failed: report.failed.len(),
+                            skipped_videos: report.skipped_videos,
                             screenshot_error: report.screenshot_error.clone(),
                         })
                         .map_err(Clone::clone)
@@ -924,11 +930,16 @@ async fn run_export(
         .await
         .map_err(|_| "The export was cancelled.".to_string())?;
     let (files, outcomes) = written?;
+    let skipped_videos = outcomes.iter().filter(|o| is_skipped_video(o)).count();
     let report = ExportReport {
         folder,
         screenshot_error,
         files,
-        failed: outcomes.into_iter().filter(|o| o.error.is_some()).collect(),
+        failed: outcomes
+            .into_iter()
+            .filter(|o| o.error.is_some() && !is_skipped_video(o))
+            .collect(),
+        skipped_videos,
     };
     Ok((report, total))
 }
@@ -1128,10 +1139,15 @@ fn inspect_answer(info: &StyleInfo, format: &str) -> OpResult {
 }
 
 fn export_status(job: &ExportJob) -> Value {
-    let (files, failed, error) = match &job.result {
-        Some(Ok(report)) => (report.files.as_slice(), report.failed.as_slice(), None),
-        Some(Err(e)) => (&[][..], &[][..], Some(e.as_str())),
-        None => (&[][..], &[][..], None),
+    let (files, failed, skipped_videos, error) = match &job.result {
+        Some(Ok(report)) => (
+            report.files.as_slice(),
+            report.failed.as_slice(),
+            report.skipped_videos,
+            None,
+        ),
+        Some(Err(e)) => (&[][..], &[][..], 0, Some(e.as_str())),
+        None => (&[][..], &[][..], 0, None),
     };
     let screenshot_error = match &job.result {
         Some(Ok(report)) => report.screenshot_error.as_deref(),
@@ -1147,6 +1163,7 @@ fn export_status(job: &ExportJob) -> Value {
         "folder": folder,
         "files": files,
         "failed": failed,
+        "skipped_videos": skipped_videos,
         "screenshot_error": screenshot_error,
         "error": error,
     });
@@ -1381,8 +1398,10 @@ mod tests {
                 .map(|i| format!("assets/images/image-{i}.png"))
                 .collect(),
             failed: vec![],
+            skipped_videos: 2,
         }));
         let v = export_status(&job);
+        assert_eq!(v["skipped_videos"], 2);
         assert!(serde_json::to_string(&v).unwrap().len() <= 60_000);
         assert!(v["note"].as_str().unwrap().starts_with("Cut at 60 KB"));
         assert_eq!(v["folder"], "/p/.nyawit/design/a.dev");

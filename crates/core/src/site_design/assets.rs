@@ -15,6 +15,8 @@ pub const SAFARI_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) App
 pub const MAX_TOTAL: u64 = 300 * 1024 * 1024;
 
 const BLOB_MSG: &str = "Can't save blob: media (made by the page's scripts).";
+/// A video left out because videos weren't asked for: skipped, not failed.
+pub const VIDEO_SKIPPED: &str = "Videos weren't included.";
 const KNOWN_EXTS: [&str; 18] = [
     "png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "ico", "mp4", "webm", "mov", "json",
     "lottie", "woff2", "woff", "ttf", "otf", "eot",
@@ -506,6 +508,11 @@ async fn fetch_one(
     outcome(a, Some(rel), len, None)
 }
 
+/// Whether `o` is a video left out because videos weren't asked for.
+pub fn is_skipped_video(o: &AssetOutcome) -> bool {
+    o.kind == AssetKind::Video && o.error.as_deref() == Some(VIDEO_SKIPPED)
+}
+
 pub async fn download_all(
     items: Vec<AssetRef>,
     assets_dir: &Path,
@@ -527,7 +534,7 @@ pub async fn download_all(
         let res = if url.is_some_and(|u| u.starts_with("blob:")) {
             Some(outcome(a, None, 0, Some(BLOB_MSG.into())))
         } else if a.kind == AssetKind::Video && !include_videos {
-            Some(outcome(a, None, 0, Some("Videos weren't included.".into())))
+            Some(outcome(a, None, 0, Some(VIDEO_SKIPPED.into())))
         } else if local {
             if total.load(Ordering::SeqCst) >= budget {
                 Some(outcome(a, None, 0, Some(budget_msg(budget))))
@@ -776,7 +783,9 @@ mod tests {
         assert!(dir.path().join("images/one.png").exists());
         assert!(out[2].error.as_deref().unwrap().starts_with("Skipped: the"));
         assert!(out[2].file.is_none());
-        assert_eq!(out[3].error.as_deref(), Some("Videos weren't included."));
+        assert_eq!(out[3].error.as_deref(), Some(VIDEO_SKIPPED));
+        assert!(is_skipped_video(&out[3]));
+        assert!(!out.iter().take(3).any(is_skipped_video));
         assert_eq!(out[4].error.as_deref(), Some(BLOB_MSG));
     }
 
