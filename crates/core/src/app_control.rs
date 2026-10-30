@@ -198,7 +198,7 @@ pub enum Command {
     OpenPrompt {
         id: String,
     },
-    /// Changes the canvas (opening it if needed); see `web/canvas`.
+    /// Changes the canvas (opening it if needed): one op of `sawit_board::ops`, answered at once.
     Canvas {
         op: Value,
     },

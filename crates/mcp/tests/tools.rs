@@ -219,12 +219,11 @@ async fn query_is_read_only() {
 /// layers (a label folds into its rectangle, a frame holds its child).
 const OLD_BOARD: &str = include_str!("../../board/tests/fixtures/excalidraw/basic.excalidraw");
 
-/// A server with the native canvas on, as `SAWIT_NATIVE_CANVAS=1` has it, whose app is not running.
+/// A server whose home is in `dir`, where no app is running.
 fn native(dir: &Path) -> Sawit {
     Sawit::new(AppPaths {
         root: dir.join("home"),
     })
-    .with_native_canvas(true)
 }
 
 /// A project folder in `dir`: not made yet, as a project the agent works in for the first time.
@@ -500,36 +499,4 @@ async fn a_corrupt_canvas_is_an_error_and_never_the_old_canvas() {
         names(&project.join(".nyawit")),
         ["canvas.excalidraw", "canvas.figcraft"]
     );
-}
-
-#[tokio::test]
-async fn without_the_native_flag_the_canvas_tools_are_as_they_were() {
-    let dir = tempfile::tempdir().unwrap();
-    let server = native(dir.path()).with_native_canvas(false);
-    let project = project_in(dir.path());
-    write_file(&old_canvas(&project), OLD_BOARD);
-    write_board(&board_file(&project), 2);
-
-    // Offline `canvas_get` reads the Excalidraw file as ever, ids and all, and not the .figcraft.
-    let listed = get(&server, &project).await;
-    let reply: Value = serde_json::from_str(&text(&listed)).unwrap();
-    assert_eq!(reply["count"], json!(12), "{reply}");
-    let ids: Vec<&str> = reply["elements"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|e| e["id"].as_str())
-        .collect();
-    assert!(ids.contains(&"box"), "{ids:?}");
-    assert!(
-        reply["source"].as_str().unwrap().contains("isn't running"),
-        "{reply}"
-    );
-
-    // Every other canvas tool needs the app, and changes nothing without it.
-    let before = std::fs::read(board_file(&project)).unwrap();
-    let sticky = command(&server, &project, "board.sticky", json!({"x": 0, "y": 0})).await;
-    assert_eq!(sticky.is_error, Some(true), "{}", text(&sticky));
-    assert!(text(&sticky).contains("isn't running"), "{}", text(&sticky));
-    assert_eq!(std::fs::read(board_file(&project)).unwrap(), before);
 }

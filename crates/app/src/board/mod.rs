@@ -50,6 +50,7 @@ use figcraft_engine::textedit::ImeEditOwner;
 use figcraft_engine::{UiRequest, ViewState};
 use figcraft_render::{Options, View};
 use futures::StreamExt as _;
+use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
 use sawit_board::clipboard::{self, PasteSource};
@@ -61,7 +62,6 @@ use sawit_board::view::{self, PREVIEW_QUALITY, Viewport};
 use sawit_board::{BoardDoc, BoardError, DocKind, input, ops, policy};
 use serde_json::{Value, json};
 
-use crate::canvas::ToggleCanvasMaximize;
 use crate::states::Placeholder;
 use paint::Painting;
 use toolbar::Picker;
@@ -80,12 +80,23 @@ const TOAST_OVER_TOOLBAR: f32 = 8.;
 /// How far a mouse wheel's scroll of one line pans the canvas.
 const SCROLL_LINE: Pixels = px(20.);
 
+/// The canvas tab's icon, in the tab bar and on the title bar's Canvas button.
+pub const ICON: Lucide = Lucide::Shapes;
+/// The canvas tab's title, and the top bar's name for the canvas a project or the app has.
+pub const TITLE: &str = "Canvas";
+
+/// Asks the workspace to fill the window with the canvas, or to put back the layout it replaced:
+/// the top bar's Maximize button. ⇧⌘↩, the workspace's own key, does the same.
+pub struct ToggleCanvasMaximize;
+
 /// Starts what every canvas shares, once at startup: its key bindings ([`bindings`]), bound after
-/// the workspace's, and the system fonts, read on a background thread. Then every window
-/// repaints: text laid out with FigCraft's bundled fonts meanwhile is laid out again
-/// ([`figcraft_text::layout_generation`] has changed).
+/// the workspace's, Sawit's own fonts ([`sawit_board::fonts::register`]), and the system's, read
+/// on a background thread. Then every window repaints: text laid out meanwhile in the default face
+/// is laid out again in its own ([`figcraft_text::layout_generation`] has changed).
 pub fn init(cx: &mut App) {
     cx.bind_keys(bindings());
+    // Before the scan, so that an Inter installed on the Mac doesn't take the place of Sawit's.
+    sawit_board::fonts::register();
     let scan = cx.background_spawn(async { figcraft_text::scan_system_fonts() });
     cx.spawn(async move |cx| {
         scan.await;

@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 use crate::{Sawit, blocking, fail, ok};
 
-/// Most commands answer at once; canvas ops wait for the page (the app
+/// Most commands answer at once; browser ops wait for the page (the app
 /// gives up after 30 s).
 const REPLY_TIMEOUT: Duration = Duration::from_secs(40);
 /// How long `launch_app` waits for the app to listen.
@@ -328,11 +328,11 @@ impl Sawit {
     }
 
     /// Runs canvas op `op` and answers it. A running app answers every canvas tool, as it always
-    /// has. With the native canvas on and no app running, the op runs on the stored canvas file
-    /// itself ([`headless`]), which is how an agent edits a canvas while Sawit is closed. The two
-    /// are never both at work, so the app's autosave and the file never race.
+    /// has. With no app running, the op runs on the stored canvas file itself ([`headless`]),
+    /// which is how an agent edits a canvas while Sawit is closed. The two are never both at work,
+    /// so the app's autosave and the file never race.
     async fn canvas(&self, project: Option<String>, op: Value) -> Result<Value, String> {
-        if self.native_canvas && !app_control::is_running(&self.paths) {
+        if !app_control::is_running(&self.paths) {
             let file = self.canvas_board_file(project.as_deref());
             return blocking(move || headless(&file, &op)).await?;
         }
@@ -349,10 +349,8 @@ impl Sawit {
     pub async fn canvas_get_tool(&self, a: WindowArgs) -> CallToolResult {
         let reply = if app_control::is_running(&self.paths) {
             self.canvas(a.project, json!({ "op": "get" })).await
-        } else if self.native_canvas {
-            self.canvas_get_stored(a.project).await
         } else {
-            self.canvas_file_summary(a.project.as_deref())
+            self.canvas_get_stored(a.project).await
         };
         match reply {
             Ok(v) => ok(pretty(&v)),
@@ -368,9 +366,9 @@ impl Sawit {
         }
     }
 
-    /// `canvas_get` with the native canvas on and the app closed: the layers of the stored canvas,
-    /// as the app would show them. A project that has only its old Excalidraw canvas is read
-    /// through the importer, and that file stays as it is.
+    /// `canvas_get` with the app closed: the layers of the stored canvas, as the app would show
+    /// them. A project that has only its old Excalidraw canvas is read through the importer, and
+    /// that file stays as it is.
     ///
     /// The one exception is an old canvas the importer can't read, while no canvas file has been
     /// made from it: the old reader says what it always did. Once the canvas file is there its own
@@ -383,11 +381,13 @@ impl Sawit {
         }
     }
 
-    /// The board as saved on disk, for `canvas_get` while the app is
-    /// closed: the project's `.nyawit/canvas.excalidraw`, else the app-wide one.
+    /// The old canvas as saved on disk, listed as `canvas_get` listed it before the native canvas:
+    /// the answer of [`Self::canvas_get_stored`] for an old canvas the importer can't read. It is
+    /// the project's `.nyawit/canvas.excalidraw` ([`sawit_core::nyawit::legacy_canvas_file`]),
+    /// else the app-wide one.
     fn canvas_file_summary(&self, project: Option<&str>) -> Result<Value, String> {
         let file = match crate::project_dir(project) {
-            Some(project) => sawit_core::nyawit::canvas_file(&project),
+            Some(project) => sawit_core::nyawit::legacy_canvas_file(&project),
             None => self.paths.root.join("canvas.excalidraw"),
         };
         let text = match std::fs::read_to_string(&file) {
@@ -503,7 +503,9 @@ fn take_turn() -> MutexGuard<'static, ()> {
 ///   with its `.gitignore`.
 fn headless(file: &Path, op: &Value) -> Result<Value, String> {
     let _turn = take_turn();
-    // No app is scanning the system's fonts here, and Sawit embeds none: text would have no glyphs.
+    // The fonts the app's text has: Sawit's own (Inter), then the system's, which no app is
+    // scanning here, so they are read the first time text is laid out.
+    sawit_board::fonts::register();
     sawit_board::scan_system_fonts_on_demand();
     let mut board = store::open(file).map_err(|e| format!("{}: {e}", file.display()))?;
     run_and_save(&mut board, file, op)
@@ -1122,12 +1124,11 @@ mod tests {
     // its own, so that no app answers on its socket but the one a test stands in, and names its
     // project folder, so that nothing is written under the repository.
 
-    /// A server with the native canvas on, as `SAWIT_NATIVE_CANVAS=1` has it, whose home is in `dir`.
+    /// A server whose home is in `dir`.
     fn native(dir: &Path) -> Sawit {
         Sawit::new(AppPaths {
             root: dir.join("home"),
         })
-        .with_native_canvas(true)
     }
 
     fn project_arg(project: &Path) -> Option<String> {

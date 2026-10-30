@@ -15,9 +15,8 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::board::BoardView;
+use crate::board::{BoardView, ToggleCanvasMaximize};
 use crate::browser::BrowserView;
-use crate::canvas::{CanvasView, ToggleCanvasMaximize};
 use crate::changelog_page::ChangelogPage;
 use crate::cli::{CliStatus, cli_status};
 use crate::db::{DatabasePanel, DbEvent, DbStore, DiagramView, SqlView, TableView};
@@ -148,37 +147,6 @@ pub fn init(cx: &mut App) {
     crate::board::init(cx);
 }
 
-/// The workspace shortcuts the canvas passes to the app while it has the
-/// keyboard, written as the page writes keys (`ctrl-alt-shift-cmd-key`).
-/// Not the ⌘K chords or ⌘0, which Excalidraw uses (link, reset zoom), nor
-/// ⇧⌘↩, which the page handles itself.
-pub fn canvas_passthrough_keys() -> Vec<String> {
-    bindings()
-        .iter()
-        .filter_map(|b| match b.keystrokes() {
-            [k] => Some(page_key(k.modifiers(), k.key())),
-            _ => None,
-        })
-        .filter(|k| k != "cmd-0" && k != "shift-cmd-enter")
-        .chain(["cmd-o", "shift-cmd-n", "cmd-q"].map(String::from))
-        .collect()
-}
-
-fn page_key(m: &Modifiers, key: &str) -> String {
-    let mut out = String::new();
-    for (on, name) in [
-        (m.control, "ctrl-"),
-        (m.alt, "alt-"),
-        (m.shift, "shift-"),
-        (m.platform, "cmd-"),
-    ] {
-        if on {
-            out.push_str(name);
-        }
-    }
-    out + key
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SidebarTab {
     Servers,
@@ -217,23 +185,6 @@ enum PaneItem {
     },
 }
 
-/// The canvas [`Workspace::open_canvas`] opened or found: the Excalidraw page, or the native
-/// canvas while `SAWIT_NATIVE_CANVAS` is set (the Excalidraw page goes once the native canvas
-/// replaces it).
-pub enum CanvasTab {
-    Web(Entity<CanvasView>),
-    Native(Entity<BoardView>),
-}
-
-impl CanvasTab {
-    fn view(&self) -> AnyView {
-        match self {
-            CanvasTab::Web(view) => view.clone().into(),
-            CanvasTab::Native(view) => view.clone().into(),
-        }
-    }
-}
-
 pub struct Workspace {
     servers: Entity<ServerStore>,
     server_list: Entity<ServerList>,
@@ -267,14 +218,8 @@ pub struct Workspace {
     _path_copied_reset: Task<()>,
     /// Layout to go back to when the maximized terminal or canvas is restored.
     unmaximized: Option<Layout>,
-    /// The canvas tabs (owned by their tabs), one per project at most.
-    canvases: Vec<WeakEntity<CanvasView>>,
-    /// The native canvas tabs (owned by their tabs), one per project at most. `canvases` holds
-    /// the Excalidraw ones.
+    /// The projects' canvas tabs (owned by their tabs), one per project at most.
     boards: Vec<WeakEntity<BoardView>>,
-    /// The canvas tab is the native canvas instead of the Excalidraw page: the environment
-    /// variable `SAWIT_NATIVE_CANVAS` is set (read once, when the window opens).
-    native_canvas: bool,
     /// The canvas fills the window: no sidebar, terminal or tab bar.
     canvas_maximized: bool,
     /// The browser tab (owned by its tab), while open.
@@ -471,9 +416,7 @@ impl Workspace {
             path_copied: false,
             _path_copied_reset: Task::ready(()),
             unmaximized: None,
-            canvases: Vec::new(),
             boards: Vec::new(),
-            native_canvas: std::env::var_os("SAWIT_NATIVE_CANVAS").is_some(),
             canvas_maximized: false,
             browser: None,
             welcome: Some(welcome),
@@ -527,8 +470,8 @@ impl Workspace {
 
     pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let kind = classify(&path);
-        // Canvas files open on the native canvas. Without it they open as any other file does.
-        if self.native_canvas && matches!(kind, FileKind::Figcraft | FileKind::Excalidraw) {
+        // Canvas files open on a canvas (spec D14).
+        if matches!(kind, FileKind::Figcraft | FileKind::Excalidraw) {
             self.open_board_file(path, kind, cx);
             return;
         }
@@ -629,7 +572,7 @@ impl Workspace {
                 view: view.into(),
                 key: format!("file\u{0}{}", file.display()).into(),
                 title,
-                icon: crate::canvas::ICON,
+                icon: crate::board::ICON,
                 file: Some(file),
             },
             group,
@@ -1232,8 +1175,7 @@ impl Workspace {
     /// the terminal doesn't have the keyboard; otherwise the terminal does.
     fn toggle_maximize_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let terminal_focused = self.terminal.read(cx).has_focus(window, cx);
-        let canvas_shown =
-            self.welcome.is_none() && self.layout.center && self.active_canvas().is_some();
+        let canvas_shown = self.welcome.is_none() && self.layout.center && self.canvas_active();
         if canvas_shown && !terminal_focused || self.canvas_maximized {
             self.toggle_canvas_maximized(cx);
         } else {
@@ -1585,6 +1527,38 @@ const PANEL_AND_TABS: Layout = Layout {
     center: true,
     terminal: false,
 };
+
+/// ⇧⌘↩ on the canvas: fills the window with it (`maximized`: the tabs alone, without their tab
+/// bar), or puts back the layout it replaced. `unmaximized` is the layout to go back to, which
+/// the terminal's maximize shares.
+fn toggle_canvas_fill(maximized: &mut bool, layout: &mut Layout, unmaximized: &mut Option<Layout>) {
+    if *maximized && *layout == CENTER_ONLY {
+        *maximized = false;
+        *layout = unmaximized.take().unwrap_or_default();
+    } else {
+        if !*maximized && *layout != TERMINAL_ONLY {
+            *unmaximized = Some(*layout);
+        }
+        *maximized = true;
+        *layout = CENTER_ONLY;
+    }
+}
+
+/// Ends the canvas's fill-window (`maximized`) once the window shows something else: `layout` is
+/// no longer the tabs alone (⌘B, ⌘J), or the canvas isn't the tab on screen (`canvas_shown`;
+/// another tab, the welcome screen). The tab bar comes back with it, and the layout stays as it
+/// was changed to.
+fn settle_canvas_fill(
+    maximized: &mut bool,
+    unmaximized: &mut Option<Layout>,
+    layout: Layout,
+    canvas_shown: bool,
+) {
+    if *maximized && !(canvas_shown && layout == CENTER_ONLY) {
+        *maximized = false;
+        *unmaximized = None;
+    }
+}
 
 /// Puts `dir` first in the recent folders the welcome screen lists.
 fn remember_recent(dir: PathBuf) {
@@ -2041,23 +2015,22 @@ impl Workspace {
 
     /// Opens the active project's brainstorming canvas (one tab per
     /// project, saved in its `.nyawit/`), or the app-wide one without a
-    /// project. With `native_canvas` it is the native canvas: its file is
-    /// `.nyawit/canvas.figcraft` (else `canvas.figcraft` in Sawit's own
-    /// folder) instead of the Excalidraw board.
-    fn open_canvas(&mut self, cx: &mut Context<Self>) -> Option<CanvasTab> {
+    /// project. Its file is `.nyawit/canvas.figcraft` (else `canvas.figcraft`
+    /// in Sawit's own folder).
+    fn open_canvas(&mut self, cx: &mut Context<Self>) -> Option<Entity<BoardView>> {
         let root = self.root(cx);
         self.open_canvas_of(root, cx)
     }
 
     /// Opens the canvas of the project at `root`, or the app-wide one for `None`, as
-    /// [`Self::open_canvas`] opens the active project's. A native canvas whose file is open in a
-    /// canvas file's tab already (opened before its project was in this window) is that tab: two
+    /// [`Self::open_canvas`] opens the active project's. A canvas whose file is open in a canvas
+    /// file's tab already (opened before its project was in this window) is that tab: two
     /// canvases of one file would each save over the other's edits.
     fn open_canvas_of(
         &mut self,
         root: Option<PathBuf>,
         cx: &mut Context<Self>,
-    ) -> Option<CanvasTab> {
+    ) -> Option<Entity<BoardView>> {
         self.leave_welcome(CENTER_ONLY, cx);
         if !self.layout.center {
             self.layout.toggle(Area::Center);
@@ -2077,97 +2050,65 @@ impl Workspace {
             let PaneItem::Other { view, .. } = &self.tabs[ix].item else {
                 return None;
             };
-            return match view.clone().downcast::<BoardView>() {
-                Ok(board) => Some(CanvasTab::Native(board)),
-                Err(view) => view.downcast::<CanvasView>().ok().map(CanvasTab::Web),
-            };
+            return view.clone().downcast::<BoardView>().ok();
         }
-        let tab = if self.native_canvas {
-            let file = board_file(root.as_deref(), &AppPaths::default_macos().root);
-            if let Some((ix, board)) = self.board_tab(&file, cx) {
-                self.activate_tab(ix, cx);
-                return Some(CanvasTab::Native(board));
-            }
-            let view = cx.new(|cx| BoardView::open(file, cx));
-            cx.subscribe(&view, |this, _, _: &ToggleCanvasMaximize, cx| {
-                this.toggle_canvas_maximized(cx)
-            })
-            .detach();
-            self.boards.push(view.downgrade());
-            CanvasTab::Native(view)
-        } else {
-            let view = cx.new(|cx| CanvasView::new(root.clone(), cx));
-            cx.subscribe(&view, |this, _, _: &ToggleCanvasMaximize, cx| {
-                this.toggle_canvas_maximized(cx)
-            })
-            .detach();
-            self.canvases.push(view.downgrade());
-            CanvasTab::Web(view)
-        };
+        let file = board_file(root.as_deref(), &AppPaths::default_macos().root);
+        if let Some((ix, board)) = self.board_tab(&file, cx) {
+            self.activate_tab(ix, cx);
+            return Some(board);
+        }
+        let view = cx.new(|cx| BoardView::open(file, cx));
+        cx.subscribe(&view, |this, _, _: &ToggleCanvasMaximize, cx| {
+            this.toggle_canvas_maximized(cx)
+        })
+        .detach();
+        self.boards.retain(|b| b.upgrade().is_some());
+        self.boards.push(view.downgrade());
         self.push_tab(
             PaneItem::Other {
-                view: tab.view(),
+                view: view.clone().into(),
                 key,
-                title: crate::canvas::TITLE.into(),
-                icon: crate::canvas::ICON,
+                title: crate::board::TITLE.into(),
+                icon: crate::board::ICON,
                 file: None,
             },
             root,
             cx,
         );
         cx.notify();
-        Some(tab)
+        Some(view)
     }
 
-    /// The canvas whose tab is showing in the center pane: a project's canvas, or a canvas file's.
-    fn active_canvas(&self) -> Option<EntityId> {
-        match self.tabs.get(self.active).map(|t| &t.item) {
-            Some(PaneItem::Other { key, view, .. })
-                if key.starts_with("canvas") || view.clone().downcast::<BoardView>().is_ok() =>
-            {
-                Some(view.entity_id())
-            }
-            _ => None,
-        }
+    /// A canvas's tab is showing in the center pane: a project's canvas, or a canvas file's.
+    fn canvas_active(&self) -> bool {
+        matches!(
+            self.tabs.get(self.active).map(|t| &t.item),
+            Some(PaneItem::Other { view, .. }) if view.clone().downcast::<BoardView>().is_ok()
+        )
     }
 
     /// Fills the window with the canvas (hiding the tab bar too), or puts
     /// back the layout it replaced, like the terminal's maximize.
     fn toggle_canvas_maximized(&mut self, cx: &mut Context<Self>) {
-        if self.canvas_maximized && self.layout == CENTER_ONLY {
-            self.canvas_maximized = false;
-            self.layout = self.unmaximized.take().unwrap_or_default();
-        } else {
-            if !self.canvas_maximized && self.layout != TERMINAL_ONLY {
-                self.unmaximized = Some(self.layout);
-            }
-            self.canvas_maximized = true;
-            self.layout = CENTER_ONLY;
-        }
+        toggle_canvas_fill(
+            &mut self.canvas_maximized,
+            &mut self.layout,
+            &mut self.unmaximized,
+        );
         cx.notify();
     }
 
-    /// Keeps the canvases' native webviews in step with what is on screen:
-    /// they draw above GPUI, so each is hidden unless its tab is showing.
-    fn sync_canvas(&mut self, cx: &mut Context<Self>) {
-        self.canvases.retain(|c| c.upgrade().is_some());
-        self.boards.retain(|b| b.upgrade().is_some());
-        let shown = self
-            .active_canvas()
-            .filter(|_| self.welcome.is_none() && self.layout.center);
-        // Any other layout change (⌘B, ⌘J, another tab) ends "fill window".
-        if self.canvas_maximized && !(shown.is_some() && self.layout == CENTER_ONLY) {
-            self.canvas_maximized = false;
-            self.unmaximized = None;
-        }
-        let maximized = self.canvas_maximized;
-        for canvas in self.canvases.iter().filter_map(|c| c.upgrade()) {
-            let visible = shown == Some(canvas.entity_id());
-            canvas.update(cx, |c, _| {
-                c.set_visible(visible);
-                c.set_maximized(visible && maximized);
-            });
-        }
+    /// Ends "fill window" once something else changed what is on screen (⌘B, ⌘J, another tab,
+    /// the welcome screen): the canvas fills the window only while its tab is the one showing, on
+    /// its own. Each render checks, because the layout and the active tab change in many places.
+    fn sync_canvas_maximized(&mut self) {
+        let shown = self.welcome.is_none() && self.layout.center && self.canvas_active();
+        settle_canvas_fill(
+            &mut self.canvas_maximized,
+            &mut self.unmaximized,
+            self.layout,
+            shown,
+        );
     }
 
     /// Opens the browser (one tab), at `url` when given; an open browser
@@ -2216,8 +2157,8 @@ impl Workspace {
         )
     }
 
-    /// Keeps the browser's native webview in step with what is on screen,
-    /// as [`Self::sync_canvas`] does for the canvas.
+    /// Keeps the browser's native webview in step with what is on screen:
+    /// it draws above GPUI, so it is hidden unless its tab is showing.
     fn sync_browser(&mut self, cx: &mut Context<Self>) {
         let Some(browser) = self.browser.as_ref().and_then(|b| b.upgrade()) else {
             self.browser = None;
@@ -2428,7 +2369,7 @@ impl Workspace {
                 Button::new("open-canvas")
                     .ghost()
                     .xsmall()
-                    .icon(crate::canvas::ICON)
+                    .icon(crate::board::ICON)
                     .label("Canvas")
                     .tooltip_with_action(
                         "Brainstorm on a Whiteboard",
@@ -2576,7 +2517,7 @@ impl Render for Workspace {
             // Keep workspace shortcuts working when nothing inside has focus.
             self.focus.focus(window, cx);
         }
-        self.sync_canvas(cx);
+        self.sync_canvas_maximized();
         self.sync_browser(cx);
         v_flex()
             .key_context("Workspace")
@@ -2731,7 +2672,26 @@ mod tests {
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
 
-    use super::{bindings, canvas_passthrough_keys, canvas_project, page_key};
+    use gpui_kit::Modifiers;
+
+    use super::{CENTER_ONLY, bindings, canvas_project, settle_canvas_fill, toggle_canvas_fill};
+    use crate::layout::{Area, Layout};
+
+    /// A keystroke written as `ctrl-alt-shift-cmd-key`.
+    fn page_key(m: &Modifiers, key: &str) -> String {
+        let mut out = String::new();
+        for (on, name) in [
+            (m.control, "ctrl-"),
+            (m.alt, "alt-"),
+            (m.shift, "shift-"),
+            (m.platform, "cmd-"),
+        ] {
+            if on {
+                out.push_str(name);
+            }
+        }
+        out + key
+    }
 
     #[test]
     fn a_projects_canvas_file_is_that_projects_canvas() {
@@ -2778,22 +2738,41 @@ mod tests {
         }
     }
 
+    /// ⇧⌘↩ fills the window with the canvas and a second ⇧⌘↩ puts the layout back; anything else
+    /// that changes what the window shows ends it too, and the tab bar comes back (ruling P8-C3).
+    /// The tab bar shows unless the canvas fills the window (`render_center`), and each render
+    /// settles the fill against what is on screen (`sync_canvas_maximized`).
     #[test]
-    fn the_canvas_passes_on_app_shortcuts_but_not_its_own() {
-        let keys = canvas_passthrough_keys();
-        for k in [
-            "cmd-j",
-            "shift-cmd-j",
-            "cmd-1",
-            "ctrl-cmd-c",
-            "ctrl-tab",
-            "cmd-o",
-        ] {
-            assert!(keys.iter().any(|x| x == k), "{k} missing");
-        }
-        // Excalidraw's own: reset zoom, add link; ⇧⌘↩ is handled by the page.
-        for k in ["cmd-0", "cmd-k", "shift-cmd-enter"] {
-            assert!(!keys.iter().any(|x| x == k), "{k} passed on");
-        }
+    fn maximize_still_works_without_webview() {
+        let before = Layout::default();
+        let (mut maximized, mut layout, mut unmaximized) = (false, before, None);
+        toggle_canvas_fill(&mut maximized, &mut layout, &mut unmaximized);
+        assert!(maximized, "the tab bar is hidden");
+        assert_eq!(layout, CENTER_ONLY);
+        // While the canvas stays the tab on screen, renders leave it filling the window.
+        settle_canvas_fill(&mut maximized, &mut unmaximized, layout, true);
+        assert!(maximized);
+        toggle_canvas_fill(&mut maximized, &mut layout, &mut unmaximized);
+        assert!(!maximized, "the tab bar is back");
+        assert_eq!(layout, before);
+
+        // ⌘B shows the sidebar: the next render ends the fill, and the sidebar stays.
+        toggle_canvas_fill(&mut maximized, &mut layout, &mut unmaximized);
+        layout.toggle(Area::Sidebar);
+        settle_canvas_fill(&mut maximized, &mut unmaximized, layout, true);
+        assert!(!maximized, "the tab bar is back");
+        assert_eq!(unmaximized, None);
+        assert!(layout.sidebar && layout.center && !layout.terminal);
+
+        // Another tab is activated: the canvas is no longer on screen, which ends the fill too.
+        let (mut maximized, mut layout, mut unmaximized) = (false, before, None);
+        toggle_canvas_fill(&mut maximized, &mut layout, &mut unmaximized);
+        settle_canvas_fill(&mut maximized, &mut unmaximized, layout, false);
+        assert!(!maximized, "the tab bar is back");
+        assert_eq!(unmaximized, None);
+        // ⇧⌘↩ on the canvas again fills the window from the layout as it is now.
+        toggle_canvas_fill(&mut maximized, &mut layout, &mut unmaximized);
+        assert!(maximized);
+        assert_eq!(unmaximized, Some(CENTER_ONLY));
     }
 }

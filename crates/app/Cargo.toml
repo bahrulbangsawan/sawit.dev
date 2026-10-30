@@ -37,9 +37,6 @@ wry = { version = "0.57", default-features = false, features = ["os-webview", "d
 objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKSnapshotConfiguration"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSResponder", "NSView"] }
 block2 = "0.6"
-include_dir = "0.7"
-# The canvas bundle is embedded brotli-compressed (web/canvas/compress.mjs).
-brotli-decompressor = "6.2.0"
 serde_json = "1"
 
 [dev-dependencies]

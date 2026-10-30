@@ -365,7 +365,7 @@ enum Incoming {
     Control(app_control::Request),
 }
 
-/// How long a canvas op may take before `sawit-mcp` hears it timed out.
+/// How long a browser op may take before `sawit-mcp` hears it timed out.
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Listens on the CLI socket; requests are handled on the UI thread.
@@ -396,7 +396,7 @@ pub fn serve(cx: &mut App) {
         for mut stream in listener.incoming().flatten() {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
             let mut bytes = Vec::new();
-            // Canvas scenes from `sawit-mcp` can be large.
+            // Canvas scenes and images can be large.
             if (&stream).take(64 << 20).read_to_end(&mut bytes).is_err() {
                 continue;
             }
@@ -501,7 +501,7 @@ pub fn handle(request: OpenRequest, mut stream: Option<UnixStream>, cx: &mut App
 }
 
 /// Runs a `sawit-mcp` command and answers on `stream`: right away, or for
-/// canvas ops once the page replies (or [`CONTROL_TIMEOUT`] passes).
+/// browser ops once the page replies (or [`CONTROL_TIMEOUT`] passes).
 fn handle_control(request: app_control::Request, mut stream: UnixStream, cx: &mut App) {
     match control(request, cx) {
         Ok(Answer::Now(value)) => reply(&mut stream, &reply_ok(&value)),
@@ -513,10 +513,10 @@ fn handle_control(request: app_control::Request, mut stream: UnixStream, cx: &mu
                     futures::future::Either::Left((Ok(Ok(value)), _)) => reply_ok(&value),
                     futures::future::Either::Left((Ok(Err(e)), _)) => reply_error(&e),
                     futures::future::Either::Left((Err(_), _)) => {
-                        reply_error("The canvas or browser closed before answering.")
+                        reply_error("The browser closed before answering.")
                     }
                     futures::future::Either::Right(_) => reply_error(
-                        "The canvas or browser page didn't answer in time. Is the Sawit window visible?",
+                        "The browser page didn't answer in time. Is the Sawit window visible?",
                     ),
                 };
                 reply(&mut stream, &line);

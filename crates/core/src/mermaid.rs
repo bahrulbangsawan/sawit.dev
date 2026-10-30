@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// Pele 1.12.0, `dist/pele.global.js` (defines the global `pele`). The canvas
-/// page loads this same copy to turn Mermaid into shapes (web/canvas/src/pele.ts).
+/// turns the SVG this copy draws into shapes (`sawit_board::mermaid`).
 pub const PELE_JS: &str = include_str!("../assets/pele/pele.global.js");
 
 /// A runaway diagram is interrupted after this long.

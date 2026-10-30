@@ -94,10 +94,6 @@ Targets: database tools take a Sawit instance name or a saved connection name (s
 pub struct Sawit {
     paths: AppPaths,
     tool_router: ToolRouter<Sawit>,
-    /// The native canvas is on, as in the app: with no app running, the canvas tools then work on
-    /// the stored canvas file (see `app::headless`). Off, they need the app, and only `canvas_get`
-    /// reads the Excalidraw file, as it always did.
-    native_canvas: bool,
 }
 
 pub(crate) fn ok(text: impl Into<String>) -> CallToolResult {
@@ -218,20 +214,12 @@ pub(crate) fn utc_time(secs: i64) -> String {
 }
 
 impl Sawit {
-    /// A server for the Sawit data folder `paths`. The native canvas is on when the environment
-    /// variable `SAWIT_NATIVE_CANVAS` is set, as it is for the app, and is read once, here.
+    /// A server for the Sawit data folder `paths`.
     pub fn new(paths: AppPaths) -> Self {
         Self {
             paths,
             tool_router: Self::router(),
-            native_canvas: std::env::var_os("SAWIT_NATIVE_CANVAS").is_some(),
         }
-    }
-
-    /// This server with the native canvas on or off, whatever the environment said.
-    pub fn with_native_canvas(mut self, on: bool) -> Self {
-        self.native_canvas = on;
-        self
     }
 
     /// Every tool, from each area's router.

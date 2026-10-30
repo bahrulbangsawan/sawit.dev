@@ -429,7 +429,10 @@ mod tests {
     /// P5.T4).
     #[gpui_kit::test]
     fn a_family_picked_from_the_list_gives_the_keyboard_back(cx: &mut TestAppContext) {
-        // The system's fonts, which the list offers once they are scanned.
+        // The fonts the list offers: Sawit's own, and the system's once they are scanned. Each is
+        // added once per process, and the list is made again when fonts are added, which drops
+        // what was typed in it, so both are added before the list is made.
+        sawit_board::fonts::register();
         figcraft_text::scan_system_fonts();
         let wanted = families()
             .into_iter()

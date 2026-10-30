@@ -19,8 +19,7 @@ use sawit_board::menu::shortcut_label;
 use sawit_core::nyawit;
 use serde_json::json;
 
-use super::{BoardView, menus};
-use crate::canvas::{TITLE, ToggleCanvasMaximize};
+use super::{BoardView, TITLE, ToggleCanvasMaximize, menus};
 
 /// The bar's height.
 pub(super) const HEIGHT: f32 = 36.;

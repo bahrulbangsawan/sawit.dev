@@ -19,9 +19,9 @@ use crate::excalidraw;
 const NAME: &str = "Canvas";
 
 /// The file the project canvas was in before the native canvas
-/// (`<project>/.nyawit/canvas.excalidraw`, [`nyawit::canvas_file`]), which a canvas file that isn't
-/// there yet is imported from. It is found beside the canvas file by its name, because the path of
-/// the canvas file is all the store is given.
+/// (`<project>/.nyawit/canvas.excalidraw`, [`nyawit::legacy_canvas_file`]), which a canvas file
+/// that isn't there yet is imported from. It is found beside the canvas file by its name, because
+/// the path of the canvas file is all the store is given.
 const OLD_CANVAS: &str = "canvas.excalidraw";
 
 /// The canvas file: `<project>/.nyawit/canvas.figcraft`, else `canvas.figcraft` in `app_root`

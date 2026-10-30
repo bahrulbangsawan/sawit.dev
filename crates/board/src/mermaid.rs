@@ -5,15 +5,15 @@
 //! the diagram draws comes in as it is drawn. Charts (pie, gantt, ...) have no shapes worth
 //! editing and come in as one SVG picture.
 //!
-//! It is the converter of `web/canvas/src/pele.ts`, which read the same SVG laid out in a browser,
-//! ported to the SVG's own markup with the same passes: clusters, then nodes, then edges, then
-//! what is left. Styles are resolved down the tree as a browser resolves them, transforms are
-//! composed with `kurbo`, and a shape's box comes from its geometry. A text has no box until
-//! something lays it out, so its place is its `x`/`y` and its `text-anchor`; where a width is
-//! needed it is estimated, because the engine sets the text again in its own font.
+//! It is the converter of the web canvas that the native canvas replaced, which read the same SVG
+//! laid out in a browser, ported to the SVG's own markup with the same passes: clusters, then
+//! nodes, then edges, then what is left. Styles are resolved down the tree as a browser resolves
+//! them, transforms are composed with `kurbo`, and a shape's box comes from its geometry. A text
+//! has no box until something lays it out, so its place is its `x`/`y` and its `text-anchor`;
+//! where a width is needed it is estimated, because the engine sets the text again in its own font.
 //!
-//! A board holds less than an Excalidraw scene, so some of what pele.ts kept is left out: line
-//! widths and dashes, opacity, the size and colour of the text inside a shape, and groups. A
+//! A board holds less than an Excalidraw scene, so some of what that converter kept is left out:
+//! line widths and dashes, opacity, the size and colour of the text inside a shape, and groups. A
 //! connector has one arrowhead, at its end, so the marks it has no cap for stay drawn where Pele
 //! drew them. An edge whose route bends and whose ends join nothing, or one node at both ends (a
 //! message to oneself, a loop back to a node), stays drawn along its route.
@@ -88,7 +88,7 @@ const LINE_HEIGHT: f64 = 1.2;
 const LABEL_SIZE: f64 = 16.0;
 /// The height of a line of a label, in ems, with room to spare.
 const LABEL_LINE_HEIGHT: f64 = 1.25;
-/// The room around the text of a node that is only text (pele.ts `pad`).
+/// The room around the text of a node that is only text (the web canvas's converter's `pad`).
 const TEXT_PAD: f64 = 4.0;
 /// The smallest side the engine takes for a shape.
 const MIN_SIDE: f64 = 1.0;
@@ -659,8 +659,8 @@ enum Room {
 
 /// Grows `shape` around its middle until the engine can set `label` in it with the `room` asked
 /// for. A board shape keeps its label inside its insets, so an ellipse or a diamond holds less
-/// than the shape Pele drew around the same text (pele.ts `fit`, with FigCraft's insets for
-/// Excalidraw's).
+/// than the shape Pele drew around the same text (the web canvas's converter's `fit`, with
+/// FigCraft's insets for Excalidraw's).
 fn fit(shape: &mut Skeleton, label: &str, room: Room) {
     let insets = match shape.kind.as_str() {
         "ellipse" => BoardShape::Ellipse,

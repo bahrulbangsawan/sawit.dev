@@ -15,7 +15,10 @@ pub fn dir(project: &Path) -> PathBuf {
     project.join(DIR)
 }
 
-pub fn canvas_file(project: &Path) -> PathBuf {
+/// The file the project canvas was in before the native canvas: an Excalidraw scene. Only read
+/// now: the native canvas imports it once, leaving it as it is, and `sawit-mcp` falls back to
+/// reading it when the importer can't.
+pub fn legacy_canvas_file(project: &Path) -> PathBuf {
     dir(project).join("canvas.excalidraw")
 }
 

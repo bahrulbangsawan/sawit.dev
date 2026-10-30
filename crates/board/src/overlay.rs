@@ -2381,8 +2381,9 @@ mod tests {
     /// fixture's design file, (200, 150) on screen at 100 %, being edited: the caret before
     /// character `caret`, or all of it selected.
     fn editing_hi(f: &mut Fixture, caret: Option<usize>) -> NodeId {
-        // Without fonts nothing is shaped: the system's are scanned first, so the layer is made
-        // the size its letters are.
+        // Without fonts nothing is shaped: Sawit's own and the system's are added first, each once
+        // per process, so the layer is made the size its letters are and its font stays the same.
+        crate::fonts::register();
         figcraft_text::scan_system_fonts();
         let text = make(
             &mut f.board,
