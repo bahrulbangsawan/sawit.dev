@@ -6,9 +6,11 @@
 //!   keyboard: a number field's through `sawit_board::design::parse_number`, a text field's through
 //!   its rule. Input the field refuses changes nothing, and the field shows the layers' value
 //!   again, as it does after an edit the engine refuses. The layers the value goes to are the ones
-//!   on show when the field took the keyboard, as they are when it is applied: a press on the
-//!   canvas takes the keyboard back and may select others before the field hears of it. The text
-//!   is selected when the field takes the keyboard, so what is typed replaces it.
+//!   on show when the field took the keyboard, as they are when it is applied: another selection
+//!   (an agent's, the layers panel's) may come before the field hears that it lost the keyboard.
+//!   A press on the canvas applies the value before the tools have the press, so that it is an
+//!   undo step of its own and no gesture the press starts takes it in or back. The text is
+//!   selected when the field takes the keyboard, so what is typed replaces it.
 //! - **Scrubbing.** A number field's label is a drag handle: dragging it sideways changes the value
 //!   by 1 per pixel (an opacity by 1%), ten times as fast with ⇧ held, and the whole drag is one
 //!   undo step. Escape puts the value back ([`BoardView::scrub_begin`]). The drag's moves and its
@@ -469,8 +471,14 @@ impl BoardView {
     /// Applies what is typed in the field being typed in, if one is: the one that has the
     /// keyboard, or one that had it and hasn't heard yet that it lost it (it hears that after the
     /// next frame). A scrub applies it before it begins: else it would be applied within the
-    /// scrub, as part of its undo step, and an Escape would take it back with the scrub.
-    pub(super) fn commit_focused_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// scrub, as part of its undo step, and an Escape would take it back with the scrub. A press
+    /// on the canvas applies it before the tools have the press, for the same reason
+    /// ([`BoardView::on_left_down`]).
+    pub(in crate::board) fn commit_focused_field(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let typed: Vec<SharedString> = (self.design.fields.iter())
             .filter(|(_, field)| {
                 field.editing.is_some() || field.input.focus_handle(cx).is_focused(window)

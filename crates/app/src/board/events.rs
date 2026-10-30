@@ -50,12 +50,19 @@ impl BoardView {
     /// over, when the tools have had it: the colour's scrub ends first, kept
     /// ([`BoardView::end_colour_scrub`]), so that what the press starts (a move, a resize, a pen's
     /// point) is a gesture of its own.
+    ///
+    /// A value typed in a field of the Design panel, and not yet applied, is applied first, as an
+    /// undo step of its own ([`BoardView::commit_focused_field`], final review I1). The field
+    /// hears that it lost the keyboard only in the next frame, after the press has opened the
+    /// tools' gesture: applied then, the value would join that gesture, and a click's release
+    /// (which cancels a move that didn't move) or a drag's preview would take it back.
     pub(super) fn on_left_down(
         &mut self,
         event: &MouseDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.commit_focused_field(window, cx);
         window.focus(&self.focus, cx);
         self.end_colour_scrub(cx);
         self.end_drag(event.position, event.modifiers, cx);

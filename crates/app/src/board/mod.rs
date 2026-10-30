@@ -404,15 +404,17 @@ impl BoardView {
     /// While the Actions palette, the shortcuts sheet or the context menu is open, a `key` op of
     /// Escape closes it, as the key does in the window, and the canvas never gets it ([`menus`]).
     ///
-    /// An op other than a read first ends the scrub of a colour picker open in the Design panel,
-    /// kept, and closes the picker ([`BoardView::end_colour_scrub`]): the op is then an undo step
-    /// of its own, which an Escape in the picker can't take back. A read leaves the picker open.
+    /// An op other than a read first ends a scrub of the Design panel that is on, kept
+    /// ([`BoardView::end_scrub`]): a colour picker's closes its picker, and a label's drag
+    /// scrubs nothing more until its release. The op is then an undo step of its own, which an
+    /// Escape in the picker or during the drag can't take back, and an undo op finds no scrub
+    /// over the document it puts back. A read leaves the scrub on.
     pub fn run_op(&mut self, op: &Value, cx: &mut Context<Self>) -> Value {
         if let Some(reply) = self.close_menus_for_op(op, cx) {
             return reply;
         }
         if !reads_only(op) {
-            self.end_colour_scrub(cx);
+            self.end_scrub(cx);
         }
         let reply = match self.board_mut() {
             Some(board) => ops::run(board, op),

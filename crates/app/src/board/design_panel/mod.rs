@@ -41,7 +41,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use figcraft_doc::{Document, NodeId};
-use figcraft_engine::guard;
+use figcraft_engine::{guard, textedit};
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::base::actions::Cancel;
 use gpui_kit::component::button::*;
@@ -117,11 +117,35 @@ impl BoardView {
     /// A scrub still on ends first, kept, rather than take this one into its undo step. The
     /// engine's refusal (a version on show in place of the document) shows as a toast, and no
     /// scrub starts.
+    ///
+    /// The engine has one interaction at a time, and keeps one that is open when another begins,
+    /// so a scrub opens only an interaction of its own (final review C1): its cancel would
+    /// otherwise put the document back to where that other gesture began, and its commit would
+    /// end that gesture early.
+    /// - A text being edited on the canvas holds one for the whole edit. The edit ends first, as
+    ///   ⌘Z ends it (`sawit_board::input`): what was typed is an undo step of its own, which the
+    ///   scrub's Escape doesn't take back. A text left empty goes then, as the engine ends any edit.
+    /// - Any other gesture still open (a pen's path being drawn) is the canvas's: no scrub starts.
+    ///   A colour picker's colours then run as plain edits, which join that gesture's undo step.
+    /// - With no layer selected, no scrub starts either.
     pub fn scrub_begin(&mut self, key: &'static str, cx: &mut Context<Self>) {
         if self.scrub.is_some() {
             self.scrub_end(true, cx);
         }
-        let Some(sel) = self.design_selection() else {
+        if self.editing_text() {
+            self.run(
+                |board| {
+                    let session = &mut board.session;
+                    guard::run("ui.textEnd", || textedit::end(session)).map_err(BoardError::from)
+                },
+                cx,
+            );
+        }
+        if let Some(gesture) = self.open_gesture() {
+            log::debug!("no scrub of {key}: the canvas's gesture \"{gesture}\" is open");
+            return;
+        }
+        let Some(sel) = self.design_selection().filter(|sel| !sel.ids.is_empty()) else {
             return;
         };
         let begun = self.run(
@@ -174,6 +198,24 @@ impl BoardView {
             },
             cx,
         );
+    }
+
+    /// Ends the scrub that is on, kept, whatever it scrubs: a colour picker's closes its picker
+    /// ([`Self::end_colour_scrub`]), a label's drag scrubs nothing more until its release. Without
+    /// a scrub on it does nothing.
+    pub(in crate::board) fn end_scrub(&mut self, cx: &mut Context<Self>) {
+        if self.design.colour.is_some() {
+            self.end_colour_scrub(cx);
+        } else if self.scrub.is_some() {
+            self.scrub_end(true, cx);
+        }
+    }
+
+    /// The label of the engine's interaction that is open, if one is: a gesture on the canvas, or
+    /// a scrub.
+    fn open_gesture(&self) -> Option<String> {
+        let ds = self.board()?.session.ds().ok()?;
+        ds.interaction.as_ref().map(|gesture| gesture.label.clone())
     }
 
     /// The selected layers as the Design panel shows them. They are read again only when the
@@ -590,8 +632,8 @@ mod tests {
 
     use figcraft_doc::NodeId;
     use gpui_kit::{
-        AppContext as _, AssetSource as _, Entity, Modifiers, MouseButton, TestAppContext,
-        VisualTestContext, point, px, size,
+        AppContext as _, AssetSource as _, Entity, Modifiers, MouseButton, Pixels, Point,
+        TestAppContext, VisualTestContext, point, px, size,
     };
     use sawit_board::design::layout::align_cell;
     use sawit_board::design::{DesignSelection, Edit, Mixed};
@@ -772,6 +814,59 @@ mod tests {
         view.read_with(cx, |view, _| view.board().unwrap().session.undo_depth().0)
     }
 
+    /// A text reading `characters` at (0, 0), with the engine's default fill.
+    pub(super) fn text_layer(characters: &str) -> Value {
+        json!({"type": "text", "text": characters, "x": 0, "y": 0})
+    }
+
+    /// Starts editing text `id` on the canvas, the caret after its last character, as a
+    /// double-click on it does, and gives the canvas the keyboard: what is typed then goes into
+    /// the text.
+    pub(super) fn edit_text(view: &Entity<BoardView>, id: NodeId, cx: &mut VisualTestContext) {
+        view.update(cx, |view, cx| {
+            let session = &mut view.board_mut().unwrap().session;
+            figcraft_engine::textedit::begin(session, id, Some(usize::MAX), false).unwrap();
+            cx.notify();
+        });
+        focus_canvas(view, cx);
+    }
+
+    /// Whether a text is being edited on the canvas.
+    pub(super) fn editing(view: &Entity<BoardView>, cx: &VisualTestContext) -> bool {
+        view.read_with(cx, |view, _| view.editing_text())
+    }
+
+    /// The label of the engine's gesture that is open, if one is.
+    pub(super) fn gesture(view: &Entity<BoardView>, cx: &VisualTestContext) -> Option<String> {
+        view.read_with(cx, |view, _| view.open_gesture())
+    }
+
+    /// Where page point `page` is in the window, as the canvas shows it now.
+    pub(super) fn on_canvas(
+        view: &Entity<BoardView>,
+        page: (f64, f64),
+        cx: &VisualTestContext,
+    ) -> Point<Pixels> {
+        view.read_with(cx, |view, _| {
+            let ds = view.board().unwrap().session.ds().unwrap();
+            let (x, y) = ds.view.page_to_screen(page.0, page.1);
+            view.bounds.origin + point(px(x as f32), px(y as f32))
+        })
+    }
+
+    /// The canvas's zoom.
+    pub(super) fn zoom(view: &Entity<BoardView>, cx: &VisualTestContext) -> f64 {
+        view.read_with(cx, |view, _| {
+            view.board().unwrap().session.ds().unwrap().view.zoom
+        })
+    }
+
+    /// Runs the engine's undo, as ⌘Z on the canvas does.
+    pub(super) fn undo(view: &Entity<BoardView>, cx: &mut VisualTestContext) {
+        view.update(cx, |view, cx| view.choose("edit.undo", json!({}), cx));
+        cx.run_until_parked();
+    }
+
     #[gpui_kit::test]
     fn scrub_is_one_undo_step(cx: &mut TestAppContext) {
         let tmp = Scratch::new("scrub-one-step");
@@ -911,6 +1006,71 @@ mod tests {
         assert_eq!(field_text(&view, "width", &cx), "100");
     }
 
+    /// Review I1: a value typed in a field, then a press on a layer on the canvas, with no Enter.
+    /// The value is applied before the press reaches the tools, as an undo step of its own: the
+    /// gesture the press opens (a move, on the Move tool) neither takes it in nor puts it back,
+    /// though the frame drawn before the release is where the field hears it lost the keyboard.
+    #[gpui_kit::test]
+    fn a_value_typed_then_a_press_on_the_canvas_stays(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("typed-then-press");
+        let path = tmp.0.join("design.figcraft");
+        let ids = design_file(&path, &[rectangle(0.0)]);
+        let (view, mut cx) = open_in_window(cx, &path, &ids);
+        let steps = undo_steps(&view, &cx);
+        click(&mut cx, "design-field-width");
+        cx.simulate_input("60");
+        let (left, none) = (MouseButton::Left, Modifiers::default());
+        let on_layer = on_canvas(&view, (20.0, 50.0), &cx);
+        cx.simulate_mouse_down(on_layer, left, none);
+        cx.run_until_parked();
+        assert_eq!(prop(&view, ids[0], "width", &cx), json!(60.0));
+        cx.simulate_mouse_up(on_layer, left, none);
+        assert_eq!(prop(&view, ids[0], "width", &cx), json!(60.0));
+        assert_eq!(field_text(&view, "width", &cx), "60");
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+        assert_eq!(view.read_with(&cx, |view, _| view.toast.clone()), None);
+        // A drag that follows moves the layer as a step of its own, keeping the width.
+        let moved = on_layer + point(px(40.), px(0.));
+        cx.simulate_mouse_down(on_layer, left, none);
+        cx.simulate_mouse_move(moved, left, none);
+        cx.simulate_mouse_up(moved, left, none);
+        assert_eq!(
+            prop(&view, ids[0], "x", &cx),
+            json!(40.0 / zoom(&view, &cx))
+        );
+        assert_eq!(prop(&view, ids[0], "width", &cx), json!(60.0));
+        assert_eq!(undo_steps(&view, &cx), steps + 2);
+        undo(&view, &mut cx);
+        assert_eq!(prop(&view, ids[0], "width", &cx), json!(60.0));
+        undo(&view, &mut cx);
+        assert_eq!(prop(&view, ids[0], "width", &cx), json!(100.0));
+    }
+
+    /// Review I1, the same with a drag: the press that starts it applies the typed value first,
+    /// and the drag's preview, rebuilt from the document as the press found it, keeps it.
+    #[gpui_kit::test]
+    fn a_value_typed_then_a_drag_on_the_canvas_stays(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("typed-then-drag");
+        let path = tmp.0.join("design.figcraft");
+        let ids = design_file(&path, &[rectangle(0.0)]);
+        let (view, mut cx) = open_in_window(cx, &path, &ids);
+        let steps = undo_steps(&view, &cx);
+        click(&mut cx, "design-field-height");
+        cx.simulate_input("60");
+        let (left, none) = (MouseButton::Left, Modifiers::default());
+        let start = on_canvas(&view, (20.0, 20.0), &cx);
+        let end = start + point(px(40.), px(0.));
+        cx.simulate_mouse_down(start, left, none);
+        cx.simulate_mouse_move(end, left, none);
+        cx.simulate_mouse_up(end, left, none);
+        assert_eq!(prop(&view, ids[0], "height", &cx), json!(60.0));
+        assert_eq!(
+            prop(&view, ids[0], "x", &cx),
+            json!(40.0 / zoom(&view, &cx))
+        );
+        assert_eq!(undo_steps(&view, &cx), steps + 2);
+    }
+
     /// The scrub of a label's drag, from the press to a release anywhere (ruling P5-C14): 1 per
     /// pixel, ten times as fast with ⇧, one undo step; an opacity moves 1% a pixel (P5-C7).
     #[gpui_kit::test]
@@ -981,6 +1141,128 @@ mod tests {
         // The canvas didn't see Escape, which would have selected nothing.
         let selected = view.read_with(&cx, |view, _| view.board().unwrap().session.selection());
         assert_eq!(selected, ids);
+    }
+
+    /// Review C1: a label's drag while a text is edited on the canvas. The edit ends when the drag
+    /// begins, so what was typed is an undo step of its own: Escape puts back what the drag
+    /// changed, and keeps the typing.
+    #[gpui_kit::test]
+    fn escape_in_a_label_drag_keeps_the_text_typed(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("label-drag-text");
+        let path = tmp.0.join("design.figcraft");
+        let ids = design_file(&path, &[text_layer("Hello")]);
+        let (view, mut cx) = open_in_window(cx, &path, &ids);
+        let characters = |cx: &VisualTestContext| prop(&view, ids[0], "characters", cx);
+        let steps = undo_steps(&view, &cx);
+        edit_text(&view, ids[0], &mut cx);
+        cx.simulate_input(" world");
+        assert_eq!(characters(&cx), json!("Hello world"));
+        let (left, none) = (MouseButton::Left, Modifiers::default());
+        let start = cx.debug_bounds("design-handle-x").unwrap().center();
+        let moved = start + point(px(30.), px(0.));
+        cx.simulate_mouse_down(start, left, none);
+        // The typing ended there, as one undo step, and the drag has a gesture of its own.
+        assert!(!editing(&view, &cx));
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+        assert_eq!(gesture(&view, &cx).as_deref(), Some("x"));
+        cx.simulate_mouse_move(moved, left, none);
+        assert_eq!(prop(&view, ids[0], "x", &cx), json!(30.0));
+        cx.simulate_keystrokes("escape");
+        assert_eq!(prop(&view, ids[0], "x", &cx), json!(0.0));
+        assert_eq!(characters(&cx), json!("Hello world"));
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+        cx.simulate_mouse_up(moved, left, none);
+        assert_eq!(gesture(&view, &cx), None);
+        // One undo takes back the typing.
+        undo(&view, &mut cx);
+        assert_eq!(characters(&cx), json!("Hello"));
+        assert_eq!(view.read_with(&cx, |view, _| view.toast.clone()), None);
+    }
+
+    /// Review C1: a gesture of the canvas's own that the engine holds open, a pen path being
+    /// drawn, is not a scrub's to take over. A label's drag then scrubs nothing, and the path
+    /// keeps its points and its gesture, which its release doesn't end either.
+    #[gpui_kit::test]
+    fn a_label_drag_leaves_an_open_pen_path_alone(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("label-drag-pen");
+        let path = tmp.0.join("design.figcraft");
+        let ids = design_file(&path, &[rectangle(0.0)]);
+        let (view, mut cx) = open_in_window(cx, &path, &ids);
+        let path_id = draw_pen_path(&view, &mut cx);
+        let x = prop(&view, path_id, "x", &cx);
+        let width = prop(&view, path_id, "width", &cx);
+        let (left, none) = (MouseButton::Left, Modifiers::default());
+        let start = cx.debug_bounds("design-handle-x").unwrap().center();
+        let moved = start + point(px(30.), px(0.));
+        cx.simulate_mouse_down(start, left, none);
+        assert!(view.read_with(&cx, |view, _| view.scrub.is_none()));
+        cx.simulate_mouse_move(moved, left, none);
+        cx.simulate_mouse_up(moved, left, none);
+        assert_eq!(prop(&view, path_id, "x", &cx), x);
+        assert_eq!(prop(&view, path_id, "width", &cx), width);
+        assert_eq!(gesture(&view, &cx).as_deref(), Some("Pen"));
+    }
+
+    /// Draws two points of a path with the pen, which leaves the path open, and returns it: the
+    /// engine holds the pen's gesture open until the path ends.
+    pub(super) fn draw_pen_path(view: &Entity<BoardView>, cx: &mut VisualTestContext) -> NodeId {
+        view.update(cx, |view, cx| view.choose("tool.pen", json!({}), cx));
+        cx.run_until_parked();
+        let (left, none) = (MouseButton::Left, Modifiers::default());
+        let origin = view.read_with(cx, |view, _| view.bounds.origin);
+        for at in [point(px(40.), px(300.)), point(px(160.), px(340.))] {
+            let at = origin + at;
+            cx.simulate_mouse_down(at, left, none);
+            cx.simulate_mouse_up(at, left, none);
+        }
+        assert_eq!(gesture(view, cx).as_deref(), Some("Pen"));
+        let selected = view.read_with(cx, |view, _| view.board().unwrap().session.selection());
+        let [path] = selected[..] else {
+            panic!("the pen selects its path: {selected:?}")
+        };
+        path
+    }
+
+    /// An agent's op during a label's drag ends the drag's scrub first, kept: the op is an undo
+    /// step of its own, which an Escape after it doesn't take back, and the rest of the drag
+    /// changes nothing.
+    #[gpui_kit::test]
+    fn an_op_during_a_label_drag_is_a_step_of_its_own(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("label-drag-op");
+        let path = tmp.0.join("design.figcraft");
+        let ids = design_file(&path, &[rectangle(0.0)]);
+        let (view, mut cx) = open_in_window(cx, &path, &ids);
+        let steps = undo_steps(&view, &cx);
+        let (left, none) = (MouseButton::Left, Modifiers::default());
+        let start = cx.debug_bounds("design-handle-x").unwrap().center();
+        cx.simulate_mouse_down(start, left, none);
+        cx.simulate_mouse_move(start + point(px(30.), px(0.)), left, none);
+        assert_eq!(prop(&view, ids[0], "x", &cx), json!(30.0));
+        // A read leaves the drag as it is.
+        let read = json!({"op": "get"});
+        let reply = view.update(&mut cx, |view, cx| view.run_op(&read, cx));
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        assert!(view.read_with(&cx, |view, _| view.scrubbing_label()));
+        let y = json!({"ids": ids, "props": {"y": 40}});
+        let op = json!({"op": "command", "command": "node.set", "params": y});
+        let reply = view.update(&mut cx, |view, cx| view.run_op(&op, cx));
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        cx.run_until_parked();
+        assert!(view.read_with(&cx, |view, _| view.scrub.is_none()));
+        assert_eq!(undo_steps(&view, &cx), steps + 2);
+        cx.simulate_keystrokes("escape");
+        let moved = start + point(px(60.), px(0.));
+        cx.simulate_mouse_move(moved, left, none);
+        cx.simulate_mouse_up(moved, left, none);
+        assert_eq!(prop(&view, ids[0], "x", &cx), json!(30.0));
+        assert_eq!(prop(&view, ids[0], "y", &cx), json!(40.0));
+        assert_eq!(undo_steps(&view, &cx), steps + 2);
+        // The op is undone first, then the drag.
+        undo(&view, &mut cx);
+        assert_eq!(prop(&view, ids[0], "y", &cx), json!(0.0));
+        assert_eq!(prop(&view, ids[0], "x", &cx), json!(30.0));
+        undo(&view, &mut cx);
+        assert_eq!(prop(&view, ids[0], "x", &cx), json!(0.0));
     }
 
     /// Ruling P5-C18, and the defaults of spec D11: the panel shows beside a design file, goes
