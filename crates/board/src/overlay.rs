@@ -1950,6 +1950,265 @@ mod tests {
         );
     }
 
+    /// The fixture's frame, outlined on screen as a closed 1 px line in `color`.
+    fn frame_outline(color: Rgba) -> Shape {
+        Shape::Outline {
+            points: vec![
+                (100.0, 100.0),
+                (300.0, 100.0),
+                (300.0, 250.0),
+                (100.0, 250.0),
+            ],
+            closed: true,
+            color,
+            width: 1.0,
+            dashed: false,
+        }
+    }
+
+    /// Item 9: where a drag drops.
+    #[test]
+    fn a_drag_into_a_frame_outlines_it() {
+        let mut f = fixture();
+        select(&mut f.board, &[f.rect]);
+        assert!(!overlay(&f.board.session).contains(&frame_outline(SELECTION)));
+        // The rectangle, pressed in its middle and dragged over the frame's middle, held.
+        pointer(&mut f.board, PointerKind::Down, 350.0, 40.0);
+        pointer(&mut f.board, PointerKind::Move, 250.0, 60.0);
+        pointer(&mut f.board, PointerKind::Move, 100.0, 75.0);
+        assert_eq!(f.board.session.tool.overlay.drop_target, Some(f.frame));
+        let shapes = overlay(&f.board.session);
+        assert!(shapes.contains(&frame_outline(SELECTION)), "{shapes:?}");
+        pointer(&mut f.board, PointerKind::Up, 100.0, 75.0);
+        assert!(!overlay(&f.board.session).contains(&frame_outline(SELECTION)));
+    }
+
+    /// Item 9: where a drag goes in an auto layout, a 2 px line, last.
+    #[test]
+    fn an_insert_line_is_drawn_2_px_wide() {
+        let mut f = fixture();
+        f.board.session.tool.overlay.insert_line = Some([0.0, 10.0, 0.0, 90.0]);
+        let shapes = overlay(&f.board.session);
+        let line = Shape::Outline {
+            points: vec![(100.0, 110.0), (100.0, 190.0)],
+            closed: false,
+            color: SELECTION,
+            width: 2.0,
+            dashed: false,
+        };
+        assert_eq!(shapes.last(), Some(&line), "{shapes:?}");
+    }
+
+    /// Whether `shapes` hold the open 1 px line in the selection colour from `a` to `b`, but for
+    /// rounding.
+    fn has_line(shapes: &[Shape], a: (f64, f64), b: (f64, f64), width: f64) -> bool {
+        shapes.iter().any(|s| {
+            matches!(s, Shape::Outline { points, closed: false, color: SELECTION, width: w, dashed: false }
+                if *w == width && points.len() == 2 && near(points[0], a) && near(points[1], b))
+        })
+    }
+
+    /// Item 10: the Pen's points, its handles and the segment a click would add.
+    #[test]
+    fn the_pen_shows_its_points_handles_and_next_segment() {
+        let mut f = fixture();
+        f.board.session.set_tool(ToolId::Pen);
+        // Its first point at (500, 300) on the page, (600, 400) on screen; the pointer moved on
+        // to (700, 450).
+        pointer(&mut f.board, PointerKind::Down, 500.0, 300.0);
+        pointer(&mut f.board, PointerKind::Up, 500.0, 300.0);
+        pointer(&mut f.board, PointerKind::Hover, 600.0, 350.0);
+        let shapes = overlay(&f.board.session);
+        // After the frame's name: the point, white, then the next segment to the pointer.
+        let first = Shape::Handle {
+            center: (600.0, 400.0),
+            size: 7.0,
+            round: true,
+            fill: WHITE,
+            stroke: SELECTION,
+        };
+        assert_eq!(shapes[1], first, "{shapes:?}");
+        assert!(
+            has_line(&shapes, (600.0, 400.0), (700.0, 450.0), 1.0),
+            "{shapes:?}"
+        );
+        // A second point pressed at (700, 300) and dragged right pulls out its handles: each a
+        // line from the point to a white dot.
+        pointer(&mut f.board, PointerKind::Down, 700.0, 300.0);
+        pointer(&mut f.board, PointerKind::Move, 750.0, 300.0);
+        let handles = f.board.session.tool.overlay.pen_handles.clone();
+        assert!(!handles.is_empty());
+        let shapes = overlay(&f.board.session);
+        for [x0, y0, x1, y1] in handles {
+            let (point, end) = ((x0 + 100.0, y0 + 100.0), (x1 + 100.0, y1 + 100.0));
+            assert!(has_line(&shapes, point, end, 1.0), "{point:?} {end:?}");
+            let dot = |s: &Shape| matches!(s, Shape::Handle { center, size: 7.0, round: true, fill: WHITE, .. } if near(*center, end));
+            assert!(shapes.iter().any(dot), "{end:?}");
+        }
+    }
+
+    /// Item 10: a connector being drawn.
+    #[test]
+    fn a_connector_being_drawn_shows_its_line() {
+        let mut board = BoardDoc::new_board("Canvas").unwrap();
+        zoom(&mut board, 1.0);
+        make(&mut board, "board.sticky", json!({"x": -100, "y": -100}));
+        make(&mut board, "board.sticky", json!({"x": 300, "y": -100}));
+        select(&mut board, &[]);
+        board.session.set_tool(ToolId::Connector);
+        // From the first sticky's middle toward the second, held.
+        pointer(&mut board, PointerKind::Down, 0.0, 0.0);
+        pointer(&mut board, PointerKind::Move, 200.0, 0.0);
+        pointer(&mut board, PointerKind::Move, 400.0, 0.0);
+        let [x0, y0, x1, y1] = board
+            .session
+            .tool
+            .overlay
+            .rubber
+            .expect("a connector drawn");
+        assert_eq!((x1, y1), (400.0, 0.0));
+        let shapes = overlay(&board.session);
+        let (from, to) = ((x0 + 100.0, y0 + 100.0), (500.0, 100.0));
+        assert!(has_line(&shapes, from, to, 1.5), "{shapes:?}");
+    }
+
+    /// Item 10: the eraser's reach, while it erases.
+    #[test]
+    fn the_eraser_shows_its_reach() {
+        let mut board = BoardDoc::new_board("Canvas").unwrap();
+        zoom(&mut board, 2.0);
+        board.session.set_tool(ToolId::Eraser);
+        pointer(&mut board, PointerKind::Down, 0.0, 0.0);
+        pointer(&mut board, PointerKind::Move, 10.0, 0.0);
+        let [x, y, r] = board
+            .session
+            .tool
+            .overlay
+            .brush
+            .expect("the eraser's reach");
+        let shapes = overlay(&board.session);
+        // Two rings around the pointer, its reach on the page across at twice the size: white,
+        // with the selection colour over it.
+        let center = (2.0 * (x + 100.0), 2.0 * (y + 100.0));
+        let mut styles = Vec::new();
+        for shape in &shapes {
+            let Shape::Outline {
+                points,
+                closed: true,
+                color,
+                width,
+                ..
+            } = shape
+            else {
+                continue;
+            };
+            styles.push((*color, *width));
+            assert!(points.len() > 8, "{points:?}");
+            for p in points {
+                let from_center = (p.0 - center.0).hypot(p.1 - center.1);
+                assert!((from_center - 2.0 * r).abs() < 0.5, "{p:?}");
+            }
+        }
+        assert_eq!(styles, [(WHITE, 3.0), (SELECTION, 1.5)], "{shapes:?}");
+    }
+
+    /// A round handle drawn at `at` (but for rounding): its size across and its fill.
+    fn round_at(shapes: &[Shape], at: (f64, f64)) -> Vec<(f64, Rgba)> {
+        let round = |s: &Shape| match s {
+            Shape::Handle {
+                center,
+                size,
+                round: true,
+                fill,
+                ..
+            } if near(*center, at) => Some((*size, *fill)),
+            _ => None,
+        };
+        shapes.iter().filter_map(round).collect()
+    }
+
+    /// Item 11: vector edit mode, in place of the selection's box.
+    #[test]
+    fn vector_edit_mode_shows_points_and_segments_and_the_selection_steps_aside() {
+        let mut f = fixture();
+        select(&mut f.board, &[f.rect]);
+        f.board
+            .execute("vector.edit.begin", &json!({"id": f.rect}))
+            .unwrap();
+        let shapes = overlay(&f.board.session);
+        // No box, no corner handles, no size, no corner radius handles.
+        assert!(box_handles(&shapes).is_empty(), "{shapes:?}");
+        assert!(readouts(&shapes).is_empty(), "{shapes:?}");
+        // Its 4 segments, 1.5 px, and a white point 7 px across on each of its corners.
+        let segments = outlines(&shapes)
+            .into_iter()
+            .filter(|s| {
+                matches!(
+                    s,
+                    Shape::Outline {
+                        width: 1.5,
+                        closed: false,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(segments, 4, "{shapes:?}");
+        let corners = [
+            (400.0, 100.0),
+            (500.0, 100.0),
+            (500.0, 180.0),
+            (400.0, 180.0),
+        ];
+        for corner in corners {
+            assert_eq!(round_at(&shapes, corner), [(7.0, WHITE)], "{corner:?}");
+        }
+        assert_eq!(round_handles(&shapes).len(), 4);
+        // A point selected is filled, one under the pointer is larger.
+        f.board
+            .execute("vector.edit.select", &json!({"vertices": [0]}))
+            .unwrap();
+        f.board.session.tool.overlay.vector_hover = Some(VHit::Vertex { index: 1 });
+        let ve = f.board.session.ds().unwrap().vector_edit.clone().unwrap();
+        let o = vectoredit::overlay(&f.board.doc().unwrap(), &ve).unwrap();
+        let screen_of = |[x, y]: [f64; 2]| (x + 100.0, y + 100.0);
+        let shapes = overlay(&f.board.session);
+        assert_eq!(
+            round_at(&shapes, screen_of(o.vertices[0])),
+            [(7.0, SELECTION)]
+        );
+        assert_eq!(round_at(&shapes, screen_of(o.vertices[1])), [(9.0, WHITE)]);
+    }
+
+    /// Item 11: a curve's Bézier handles in vector edit mode, each a line from its point to a dot.
+    #[test]
+    fn vector_edit_mode_shows_bezier_handles() {
+        let mut f = fixture();
+        let ellipse = make(
+            &mut f.board,
+            "node.create",
+            json!({"type": "ellipse", "x": 0, "y": 300, "width": 100, "height": 100}),
+        );
+        f.board
+            .execute("vector.edit.begin", &json!({"id": ellipse}))
+            .unwrap();
+        f.board
+            .execute("vector.edit.select", &json!({"vertices": [0]}))
+            .unwrap();
+        let ve = f.board.session.ds().unwrap().vector_edit.clone().unwrap();
+        let o = vectoredit::overlay(&f.board.doc().unwrap(), &ve).unwrap();
+        assert!(!o.handles.is_empty());
+        let shapes = overlay(&f.board.session);
+        for h in &o.handles {
+            let (vertex, end) = (
+                (h.vertex[0] + 100.0, h.vertex[1] + 100.0),
+                (h.handle[0] + 100.0, h.handle[1] + 100.0),
+            );
+            assert!(has_line(&shapes, vertex, end, 1.0), "{vertex:?} {end:?}");
+            assert!(!round_at(&shapes, end).is_empty(), "{end:?}");
+        }
+    }
+
     #[test]
     fn names_have_their_frames_width() {
         let mut f = fixture();
