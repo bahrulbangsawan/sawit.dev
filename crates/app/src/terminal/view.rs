@@ -3,9 +3,10 @@
 //! selects text and copies it on release; Shift+drag selects even while a
 //! program (herdr, vim) has the mouse. Dropped files are typed as paths.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use gpui_kit::assets::IconName as Lucide;
@@ -17,12 +18,15 @@ use sawit_core::terminal::{
     mouse_report, paste_bytes,
 };
 
+use super::{FocusDown, FocusLeft, FocusRight, FocusUp, SplitDown, SplitRight};
 use crate::files::DraggedFile;
 
 const FONT_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 1.3;
 /// How long the "Copied to clipboard" toast stays up.
-const TOAST: std::time::Duration = std::time::Duration::from_millis(1400);
+const TOAST: Duration = Duration::from_millis(1400);
+/// How long a pane header shows a folder before asking the OS again.
+const FOLDER_TTL: Duration = Duration::from_millis(500);
 
 /// Grid origin and cell size on screen.
 type GridLayout = (Point<Pixels>, Size<Pixels>);
@@ -31,14 +35,34 @@ type GridLayout = (Point<Pixels>, Size<Pixels>);
 /// shell needs would swallow it: Root's Tab/Shift-Tab move focus out of the
 /// terminal (and Tab is completion), Root's Cmd-C copies a stale selection
 /// elsewhere in the window. Unbinding them here hands them to `on_key`.
-/// App shortcuts (Ctrl-Tab, Cmd-…) stay with the workspace.
+/// App shortcuts (Ctrl-Tab, Cmd-…) stay with the workspace. The pane keys
+/// (split, move focus) live here too, so they only act in a terminal.
 pub(super) fn bindings() -> Vec<KeyBinding> {
     let ctx = Some("Terminal");
     vec![
         KeyBinding::new("tab", NoAction, ctx),
         KeyBinding::new("shift-tab", NoAction, ctx),
         KeyBinding::new("cmd-c", NoAction, ctx),
+        KeyBinding::new("cmd-d", SplitRight, ctx),
+        KeyBinding::new("cmd-shift-d", SplitDown, ctx),
+        KeyBinding::new("cmd-alt-left", FocusLeft, ctx),
+        KeyBinding::new("cmd-alt-right", FocusRight, ctx),
+        KeyBinding::new("cmd-alt-up", FocusUp, ctx),
+        KeyBinding::new("cmd-alt-down", FocusDown, ctx),
     ]
+}
+
+/// The size of one grid cell: the mono font's advance by its line height.
+pub(super) fn cell_size(window: &Window, cx: &App) -> Size<Pixels> {
+    let font = font(cx.theme().mono_font_family.clone());
+    let font_id = window.text_system().resolve_font(&font);
+    let font_size = px(FONT_SIZE);
+    let cell_width = window
+        .text_system()
+        .advance(font_id, font_size, 'm')
+        .map(|s| s.width)
+        .unwrap_or(px(8.));
+    size(cell_width, (font_size * LINE_HEIGHT).round())
 }
 
 pub enum TerminalEvent {
@@ -70,6 +94,8 @@ pub struct TerminalView {
     scroll: ScrollAccumulator,
     /// Shows the copy toast while set; finishing hides it.
     toast: Option<Task<()>>,
+    /// The last `cwd()` answer for the pane header, and when it was asked.
+    folder: RefCell<Option<(Instant, Option<PathBuf>)>>,
     _events: Task<()>,
 }
 
@@ -136,6 +162,7 @@ impl TerminalView {
             selecting: false,
             scroll: ScrollAccumulator::default(),
             toast: None,
+            folder: RefCell::new(None),
             _events: task,
         }
     }
@@ -161,6 +188,25 @@ impl TerminalView {
         self.session.clear_selection();
         self.session.cd(dir);
         self.session.scroll_to_bottom();
+    }
+
+    /// The folder the program is in now. Asks the OS on every call.
+    pub fn cwd(&self) -> Option<PathBuf> {
+        self.session.cwd()
+    }
+
+    /// The program's folder for display. Asks the OS at most every 500 ms,
+    /// since headers redraw with every frame of output.
+    pub fn folder(&self) -> Option<PathBuf> {
+        let mut cached = self.folder.borrow_mut();
+        match &*cached {
+            Some((at, dir)) if at.elapsed() < FOLDER_TTL => dir.clone(),
+            _ => {
+                let dir = self.cwd();
+                *cached = Some((Instant::now(), dir.clone()));
+                dir
+            }
+        }
     }
 
     /// The shell is waiting at its prompt, not running a command.
@@ -480,14 +526,7 @@ fn paint_snapshot(snap: &Snapshot, p: &Painter, window: &mut Window, cx: &mut Ap
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let font = font(cx.theme().mono_font_family.clone());
-        let font_id = window.text_system().resolve_font(&font);
-        let font_size = px(FONT_SIZE);
-        let cell_width = window
-            .text_system()
-            .advance(font_id, font_size, 'm')
-            .map(|s| s.width)
-            .unwrap_or(px(8.));
-        let cell = size(cell_width, (font_size * LINE_HEIGHT).round());
+        let cell = cell_size(window, cx);
         let session = self.session.clone();
         let palette = self.palette.clone();
         let layout = self.layout.clone();

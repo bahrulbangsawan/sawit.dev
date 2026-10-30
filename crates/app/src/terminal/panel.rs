@@ -13,10 +13,11 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::probe::find_in_path;
 use sawit_core::ssh::Launch;
-use sawit_core::terminal::{Command, GridSize, Session, default_shell, run_bytes};
+use sawit_core::terminal::{Command, GridSize, Session, SplitDir, default_shell, run_bytes};
 
 use super::tab::{TabEvent, TerminalTab};
 use super::view::TerminalView;
+use super::{SplitDown, SplitRight};
 use crate::states::{Banner, Placeholder};
 use crate::tab_groups::{group_color, group_header, group_stripe, project_name};
 use crate::tabs::{Slot, insert_index, project_of};
@@ -500,18 +501,7 @@ impl TerminalPanel {
         remote: Option<Remote>,
         cx: &mut Context<Self>,
     ) -> Option<Entity<TerminalTab>> {
-        cmd.cwd = cmd
-            .cwd
-            .take()
-            .or_else(|| self.cwd.clone())
-            .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
-        let size = GridSize {
-            cols: 80,
-            rows: 24,
-            cell_width: 8,
-            cell_height: 17,
-        };
-        let shell = cmd.program.is_empty();
+        cmd.cwd = cmd.cwd.take().or_else(|| self.cwd.clone()).or_else(home);
         let group = match &remote {
             Some(_) => None,
             None => cmd
@@ -519,25 +509,65 @@ impl TerminalPanel {
                 .as_deref()
                 .and_then(|d| project_of(&self.projects, d)),
         };
+        let view = self.spawn_view(cmd, title, remote, cx)?;
+        let tab = cx.new(|cx| TerminalTab::new(view, group, cx));
+        cx.subscribe(&tab, Self::on_tab_event).detach();
+        Some(tab)
+    }
+
+    /// Starts `cmd` in a terminal of its own. On failure the error shows
+    /// in the panel and there is no terminal.
+    fn spawn_view(
+        &mut self,
+        cmd: Command,
+        title: &str,
+        remote: Option<Remote>,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<TerminalView>> {
+        let size = GridSize {
+            cols: 80,
+            rows: 24,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let shell = cmd.program.is_empty();
         match Session::spawn(cmd, size) {
             Ok((session, events)) => {
                 let title = title.to_string();
-                let view = cx.new(|cx| {
+                self.error = None;
+                Some(cx.new(|cx| {
                     let mut view = TerminalView::new(session, events, title, cx);
                     view.shell = shell;
                     view.remote = remote;
                     view
-                });
-                let tab = cx.new(|cx| TerminalTab::new(view, group, cx));
-                cx.subscribe(&tab, Self::on_tab_event).detach();
-                self.error = None;
-                Some(tab)
+                }))
             }
             Err(e) => {
                 self.error = Some(format!("{e}"));
                 None
             }
         }
+    }
+
+    /// Splits the active tab's focused pane with a new shell. The shell
+    /// starts in the focused pane's folder if it still exists, else in the
+    /// tab's project, else in `$HOME`.
+    pub fn split_active(&mut self, dir: SplitDir, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(self.active).cloned() else {
+            return;
+        };
+        let (folder, group) = {
+            let t = tab.read(cx);
+            (t.focused_view().read(cx).cwd(), t.group.clone())
+        };
+        let cmd = Command {
+            cwd: folder.filter(|d| d.is_dir()).or(group).or_else(home),
+            ..Command::default()
+        };
+        if let Some(view) = self.spawn_view(cmd, &shell_name(), None, cx) {
+            tab.update(cx, |t, cx| t.add_pane(dir, view, window, cx));
+        }
+        cx.notify();
     }
 
     fn close(&mut self, ix: usize, cx: &mut Context<Self>) {
@@ -557,8 +587,6 @@ impl TerminalPanel {
                 }
             }
             TabEvent::Changed => cx.notify(),
-            // Nothing asks to split a tab yet.
-            TabEvent::Split(_) => {}
         }
     }
 
@@ -808,6 +836,12 @@ impl Render for TerminalPanel {
 
         v_flex()
             .size_full()
+            .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
+                this.split_active(SplitDir::Right, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SplitDown, window, cx| {
+                this.split_active(SplitDir::Down, window, cx)
+            }))
             .bg(cx.theme().background)
             .border_t_1()
             .border_color(cx.theme().border)
@@ -933,6 +967,11 @@ impl Render for TerminalPanel {
 /// The terminal of `tab`'s focused pane.
 fn focused<'a>(tab: &Entity<TerminalTab>, cx: &'a App) -> &'a TerminalView {
     tab.read(cx).focused_view().read(cx)
+}
+
+/// The user's home folder.
+fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
 }
 
 /// Tab title for the default shell ("zsh", "bash", "powershell").
