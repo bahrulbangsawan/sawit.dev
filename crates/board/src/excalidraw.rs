@@ -18,6 +18,11 @@
 //!   to an element the canvas draws (`startBinding`, `endBinding`) joins it, and any other end is
 //!   free, at the first or the last point. A line through more than two points, and a freedraw,
 //!   are ink ([`skeleton::apply`]).
+//! - Two bindings are kept as Excalidraw draws them, where they are, since a connector joined there
+//!   would be drawn otherwise: an end bound to an element it runs beside (a `focus` outside -1 to
+//!   1), as the old canvas's sequence messages are to the note under them, is free; and so are both
+//!   ends of a line bound to one element at both ends, a loop back to it. Such a loop, if it is an
+//!   arrow with no label, is ink along its route with its head drawn in it.
 //! - An arrow points where its head is (`startArrowhead`, `endArrowhead`). With a head at its end,
 //!   or at both ends, it is an arrow. With a head at its start only it is drawn the other way
 //!   round, from its end to its start, so the head stays where it was. With no head it is a line,
@@ -60,6 +65,11 @@ const MAX_SIDE: f64 = 100_000.0;
 
 /// What some editors write at the start of a text file.
 const BYTE_ORDER_MARK: char = '\u{feff}';
+
+/// The longest side of the head that Excalidraw draws for a `triangle` arrowhead, and how far each
+/// side turns off the arrow (`getArrowheadSize` and `getArrowheadAngle` in Excalidraw).
+const HEAD_LENGTH: f64 = 15.0;
+const HEAD_ANGLE: f64 = 25.0;
 
 /// What is said of a scene that isn't one.
 const NO_ELEMENTS: &str =
@@ -495,26 +505,44 @@ impl<'a> Item<'a> {
 
     /// Sets what an arrow or a line runs between on `item`, its skeleton, which has its place and
     /// its points: the two ends and the label. An arrow is then drawn as its heads say ([`Heads`]).
+    ///
+    /// A connector can't join one element at both ends: the engine would draw it from the element
+    /// to where the route ends, a stub. What Excalidraw draws there is the route, a loop back to
+    /// the element (a state's transition to itself, say), so such a line joins neither and keeps
+    /// its route. An arrow of that kind is drawn along it ([`drawn_along_its_route`]).
     fn run_between(&self, item: &mut Skeleton, labels: &Labels, joinable: &HashSet<&str>) {
         let origin = (item.x, item.y);
         let points = item.points.as_deref().unwrap_or_default();
-        let start = end_of(
+        let mut start = end_of(
             self.fields,
             "startBinding",
             points.first(),
             origin,
             joinable,
         );
-        let end = end_of(self.fields, "endBinding", points.last(), origin, joinable);
+        let mut end = end_of(self.fields, "endBinding", points.last(), origin, joinable);
+        let looped = start.id.is_some() && start.id == end.id;
+        if looped {
+            start = free_at(points.first(), origin);
+            end = free_at(points.last(), origin);
+        }
         item.start = Some(start);
         item.end = Some(end);
         item.label = self.label(labels);
-        if self.kind == Kind::Arrow {
-            match Heads::of(self.fields) {
-                Heads::End => {}
-                Heads::Start => turn_around(item),
-                Heads::Neither => without_heads(item),
+        if self.kind != Kind::Arrow {
+            return;
+        }
+        match Heads::of(self.fields) {
+            Heads::End => {}
+            Heads::Start => turn_around(item),
+            // With no head it is a line, and a line that joins nothing keeps its bends.
+            Heads::Neither => {
+                without_heads(item);
+                return;
             }
+        }
+        if looped && item.label.is_none() {
+            drawn_along_its_route(item);
         }
     }
 
@@ -734,8 +762,14 @@ fn points_of(fields: &Fields) -> Option<Vec<[f64; 2]>> {
     (!points.is_empty()).then_some(points)
 }
 
-/// One end of an arrow or a line: the element named in its `binding` when `joinable` has it, else
-/// the end is free, at `point` (relative to `origin`, the line's own place).
+/// One end of an arrow or a line: the element named in its `binding` when `joinable` has it and
+/// the line points into it, else the end is free, at `point` (relative to `origin`, the line's own
+/// place).
+///
+/// Excalidraw's `focus` says where the line, carried on past its end, meets the element it is
+/// bound to: from -1 to 1 across it. A binding whose focus is outside that runs beside the
+/// element, as a sequence message of the old canvas runs beside the note under it, and Excalidraw
+/// draws that end where it is; joined, the end would be moved onto the element.
 fn end_of(
     fields: &Fields,
     binding: &str,
@@ -743,16 +777,25 @@ fn end_of(
     origin: (f64, f64),
     joinable: &HashSet<&str>,
 ) -> End {
-    let bound = fields
-        .get(binding)
+    let binding = fields.get(binding);
+    let bound = binding
         .and_then(|binding| binding.get("elementId"))
         .and_then(Value::as_str);
-    if let Some(id) = bound.filter(|id| joinable.contains(id)) {
-        return End {
+    let beside = binding
+        .and_then(|binding| binding.get("focus"))
+        .and_then(finite)
+        .is_some_and(|focus| focus.abs() > 1.0);
+    match bound.filter(|id| joinable.contains(id)) {
+        Some(id) if !beside => End {
             id: Some(id.to_string()),
             ..End::default()
-        };
+        },
+        _ => free_at(point, origin),
     }
+}
+
+/// A free end of a line, at `point`, which is relative to `origin`, the line's own place.
+fn free_at(point: Option<&[f64; 2]>, origin: (f64, f64)) -> End {
     End {
         id: None,
         x: point.map(|p| origin.0 + p[0]),
@@ -831,6 +874,44 @@ fn without_heads(item: &mut Skeleton) {
         let (first, last) = (points[0], points[points.len() - 1]);
         *points = vec![first, last];
     }
+}
+
+/// Makes `item`, the skeleton of an arrow that loops back to the element it starts from, its
+/// route drawn as Excalidraw draws it: ink, which joins nothing, through every point of the route,
+/// with its head drawn in it at the end ([`head_at_end`]), since ink has no cap. A connector would
+/// run straight across where it loops ([`Item::run_between`]).
+///
+/// An arrow with no bend to draw, two points or fewer, stays as it is: a connector between its
+/// ends, which are free.
+fn drawn_along_its_route(item: &mut Skeleton) {
+    let Some(route) = item.points.as_mut().filter(|route| route.len() > 2) else {
+        return;
+    };
+    if let Some(head) = head_at_end(route) {
+        route.extend(head);
+    }
+    item.kind = Kind::Line.skeleton().to_string();
+}
+
+/// The outline of the head that Excalidraw draws at the end of `route` for a `triangle` head:
+/// from the tip along the route's last step, [`HEAD_ANGLE`] to each side of it, and back to the
+/// tip. Its sides are as long as half of that step, and at most [`HEAD_LENGTH`]. `None` when the
+/// route has no step.
+fn head_at_end(route: &[[f64; 2]]) -> Option<[[f64; 2]; 3]> {
+    let tip = *route.last()?;
+    let before = route.iter().rev().find(|point| **point != tip)?;
+    let back = [before[0] - tip[0], before[1] - tip[1]];
+    let step = back[0].hypot(back[1]);
+    let length = (step / 2.0).min(HEAD_LENGTH);
+    let (along_x, along_y) = (back[0] / step * length, back[1] / step * length);
+    let (sin, cos) = HEAD_ANGLE.to_radians().sin_cos();
+    let side = |turn: f64| {
+        [
+            tip[0] + along_x * cos - along_y * sin * turn,
+            tip[1] + along_x * sin * turn + along_y * cos,
+        ]
+    };
+    Some([side(1.0), side(-1.0), tip])
 }
 
 #[cfg(test)]
@@ -1453,6 +1534,191 @@ mod tests {
         let connectors = of_type(&listed, "connector");
         assert_eq!(connectors.len(), 1);
         assert_eq!(connectors[0]["text"], json!("maybe"));
+    }
+
+    // Bindings the old canvas wrote that a connector can't keep. Its Mermaid diagrams bound a
+    // sequence message to the note Pele put just under it, and a loop back to one node to that
+    // node at both ends. Excalidraw drew both as they were written; joined, the engine would bend
+    // the message onto the note and draw the loop as a stub.
+
+    /// `arrow` with the `focus` of each of its bindings, as Excalidraw writes it.
+    fn focused(mut arrow: Value, focus: (f64, f64)) -> Value {
+        for (key, focus) in [("startBinding", focus.0), ("endBinding", focus.1)] {
+            if arrow[key].is_object() {
+                arrow[key]["focus"] = json!(focus);
+            }
+        }
+        arrow
+    }
+
+    #[test]
+    fn an_end_bound_to_an_element_it_runs_beside_stays_where_it_is_drawn() {
+        // Excalidraw's `focus` says where an arrow, carried on past its end, meets the element it
+        // is bound to: from -1 to 1 across it. A message bound to the note under it runs beside
+        // the note (focus 1.6), and Excalidraw drew it level, from lifeline to lifeline.
+        let note = json!({"id": "note", "type": "rectangle", "x": 75, "y": 10, "width": 61,
+                          "height": 33});
+        let heads = (json!(null), json!("triangle"));
+        let message = |id: &str, focus: f64| {
+            let to_note = (None, Some("note"));
+            let message = arrow(
+                id,
+                (0.0, 0.0),
+                json!([[0, 0], [105, 0]]),
+                heads.clone(),
+                to_note,
+            );
+            focused(message, (0.0, focus))
+        };
+        let elements = json!([
+            note,
+            message("beside", 1.606),
+            message("under", -1.2),
+            message("edge", -1.0),
+            message("into", 0.4)
+        ]);
+        let imported = read(elements.clone());
+        assert_eq!(with_id(&imported, "beside").end, Some(loose(105.0, 0.0)));
+        assert_eq!(with_id(&imported, "under").end, Some(loose(105.0, 0.0)));
+        // Up to its edges, the arrow points into the element, and joins it.
+        assert_eq!(with_id(&imported, "edge").end, Some(joined("note")));
+        assert_eq!(with_id(&imported, "into").end, Some(joined("note")));
+
+        // On the board the message runs level, with its head where it was.
+        let board = drawn(elements);
+        let (from, to, _, cap_end) = connector(&board, "beside");
+        assert_eq!(from, DocEnd::Point { x: 0.0, y: 0.0 });
+        assert_eq!(to, DocEnd::Point { x: 105.0, y: 0.0 });
+        assert_eq!(cap_end, StrokeCap::TriangleArrow);
+        let (_, to, _, _) = connector(&board, "into");
+        assert_eq!(to.node(), node_of(&board, "note"));
+    }
+
+    #[test]
+    fn an_arrow_bound_to_one_element_at_both_ends_joins_neither() {
+        // A reply that runs beside the note under it, bound to that note at both ends. A connector
+        // can't join one element at both ends, so the reply keeps the points it was drawn between
+        // and runs level, as Excalidraw drew it. (Its focus here is 0: the ends alone free it.)
+        let note = json!({"id": "note", "type": "rectangle", "x": -16, "y": 10, "width": 137,
+                          "height": 33});
+        let heads = (json!(null), json!("triangle"));
+        let reply = arrow(
+            "reply",
+            (105.0, 0.0),
+            json!([[0, 0], [-105, 0]]),
+            heads,
+            (Some("note"), Some("note")),
+        );
+        let imported = read(json!([note.clone(), reply.clone()]));
+        let item = with_id(&imported, "reply");
+        assert_eq!(item.kind, "arrow");
+        assert_eq!(item.start, Some(loose(105.0, 0.0)));
+        assert_eq!(item.end, Some(loose(0.0, 0.0)));
+
+        let board = drawn(json!([note, reply]));
+        let (from, to, _, cap_end) = connector(&board, "reply");
+        assert_eq!(from, DocEnd::Point { x: 105.0, y: 0.0 });
+        assert_eq!(to, DocEnd::Point { x: 0.0, y: 0.0 });
+        assert_eq!(cap_end, StrokeCap::TriangleArrow);
+    }
+
+    /// A state of a state diagram, and its transition to itself as the old canvas wrote it: the
+    /// route Pele drew out from the state's right side and back, sampled, bound to the state at
+    /// both ends. `heads` are its `startArrowhead` and `endArrowhead`.
+    fn state_and_loop(heads: (Value, Value)) -> (Value, Value) {
+        let state = json!({"id": "still", "type": "rectangle", "x": 13, "y": 1058, "width": 58,
+                           "height": 44, "roundness": {"type": 3}});
+        let joins = (Some("still"), Some("still"));
+        let ring = arrow("ring", (70.5, 1072.0), json!(loop_route()), heads, joins);
+        (state, focused(ring, (-0.14, 0.07)))
+    }
+
+    /// The route of [`state_and_loop`]'s loop, relative to where it starts.
+    fn loop_route() -> Vec<[f64; 2]> {
+        vec![
+            [-0.5, -0.5],
+            [8.5, -1.3],
+            [14.7, 0.3],
+            [18.6, 3.8],
+            [20.3, 8.3],
+            [19.9, 12.8],
+            [17.4, 16.6],
+            [13.0, 18.7],
+            [0.5, 16.5],
+        ]
+    }
+
+    /// Checks that `head`, three points, outline the triangle head that Excalidraw draws at `tip`,
+    /// the end of a route whose last step comes from `before`: two sides as long as half that
+    /// step (at most 15), 25° off the way back along it, and the tip again, which closes it.
+    fn is_the_head_at(head: &[[f64; 2]], tip: [f64; 2], before: [f64; 2]) {
+        assert_eq!(head.len(), 3, "{head:?}");
+        assert_eq!(head[2], tip, "{head:?}");
+        let back = [before[0] - tip[0], before[1] - tip[1]];
+        let step = back[0].hypot(back[1]);
+        let mut turns = Vec::new();
+        for side in &head[..2] {
+            let out = [side[0] - tip[0], side[1] - tip[1]];
+            let length = out[0].hypot(out[1]);
+            assert!((length - (step / 2.0).min(15.0)).abs() < 1e-9, "{head:?}");
+            let cos = (back[0] * out[0] + back[1] * out[1]) / (step * length);
+            assert!((cos - 25f64.to_radians().cos()).abs() < 1e-9, "{head:?}");
+            turns.push(back[0] * out[1] - back[1] * out[0]);
+        }
+        assert!(turns[0] * turns[1] < 0.0, "one side to each side: {head:?}");
+    }
+
+    #[test]
+    fn a_loop_back_to_one_element_is_drawn_along_its_route_with_its_head() {
+        // A connector can't join one element at both ends (the engine would draw a stub from the
+        // state to where the loop ends), so the loop joins neither and is drawn as Excalidraw drew
+        // it: ink along its route, which has no cap, with its head drawn in it at its end.
+        let (state, ring) = state_and_loop((json!(null), json!("triangle")));
+        let imported = read(json!([state.clone(), ring.clone()]));
+        let item = with_id(&imported, "ring");
+        assert_eq!(item.kind, "line");
+        assert_eq!(item.start, Some(loose(70.0, 1071.5)));
+        assert_eq!(item.end, Some(loose(71.0, 1088.5)));
+        let route = loop_route();
+        let points = item.points.as_ref().unwrap();
+        assert_eq!(points[..route.len()], route[..]);
+        is_the_head_at(&points[route.len()..], route[8], route[7]);
+
+        // On the board it is ink out from the state's right side, as wide as the loop, and there
+        // is no connector.
+        let mut board = drawn(json!([state, ring]));
+        let listed = elements(&mut board);
+        assert_eq!(of_type(&listed, "connector").len(), 0, "{listed:?}");
+        let ink = of_type(&listed, "ink");
+        assert_eq!(ink.len(), 1, "{listed:?}");
+        assert!(ink[0]["width"].as_f64().unwrap() >= 20.0, "{:?}", ink[0]);
+        assert!(ink[0]["x"].as_f64().unwrap() >= 68.0, "{:?}", ink[0]);
+
+        // A loop whose head is at its start is turned around first: its head is drawn where it
+        // points, at the start of the route as written.
+        let (state, back) = state_and_loop((json!("triangle"), json!(null)));
+        let imported = read(json!([state, back]));
+        let item = with_id(&imported, "ring");
+        assert_eq!(item.kind, "line");
+        let points = item.points.as_ref().unwrap();
+        assert_eq!(points.len(), route.len() + 3);
+        // Relative to its new start, the old end; the head closes at the old start.
+        let to_old = |p: [f64; 2]| [p[0] - route[8][0], p[1] - route[8][1]];
+        is_the_head_at(&points[route.len()..], to_old(route[0]), to_old(route[1]));
+
+        // With a label it stays a connector between the ends of its route, free at both, so that
+        // the label isn't lost: ink has no text.
+        let (state, ring) = state_and_loop((json!(null), json!("triangle")));
+        let labelled = json!([state, ring, label("tick", "ring", "tick")]);
+        let item = with_id(&read(labelled.clone()), "ring").clone();
+        assert_eq!(item.kind, "arrow");
+        assert_eq!(item.start, Some(loose(70.0, 1071.5)));
+        assert_eq!(item.end, Some(loose(71.0, 1088.5)));
+        let mut board = drawn(labelled);
+        let listed = elements(&mut board);
+        let connectors = of_type(&listed, "connector");
+        assert_eq!(connectors.len(), 1, "{listed:?}");
+        assert_eq!(connectors[0]["text"], json!("tick"));
     }
 
     #[test]
