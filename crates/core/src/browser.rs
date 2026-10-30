@@ -486,6 +486,26 @@ impl Logs {
         self.console.push_back(entry);
     }
 
+    /// Errors from the current page (after its last `— navigated to`
+    /// marker): the newest `limit`, oldest first.
+    pub fn page_errors(&self, limit: usize) -> Vec<ConsoleEntry> {
+        let start = self
+            .console
+            .iter()
+            .rposition(|e| e.text.starts_with("— navigated to"))
+            .map_or(0, |i| i + 1);
+        let errors: Vec<&ConsoleEntry> = self
+            .console
+            .iter()
+            .skip(start)
+            .filter(|e| e.level == "error")
+            .collect();
+        errors[errors.len().saturating_sub(limit)..]
+            .iter()
+            .map(|e| (*e).clone())
+            .collect()
+    }
+
     pub fn push_network(&mut self, entry: NetworkEntry) {
         if self.network.len() == MAX_NETWORK {
             self.network.pop_front();
@@ -688,6 +708,20 @@ mod tests {
             error: error.map(Into::into),
             time_ms: 0.,
         }
+    }
+
+    #[test]
+    fn page_errors_since_navigation() {
+        let mut logs = Logs::default();
+        logs.push_console(console("error", "old"));
+        logs.push_console(console("info", "— navigated to http://x/"));
+        for i in 0..25 {
+            logs.push_console(console("error", &format!("e{i}")));
+        }
+        let errors = logs.page_errors(20);
+        assert_eq!(errors.len(), 20);
+        assert_eq!(errors[0].text, "e5");
+        assert_eq!(errors[19].text, "e24");
     }
 
     #[test]
