@@ -125,7 +125,6 @@ impl Engine {
     }
 
     /// Page zoom: 1.0 is the page's own size.
-    #[allow(dead_code)] // device sizes (a later task) scale pages with it
     pub fn set_zoom(&self, scale: f64) {
         let _ = self.webview.zoom(scale);
     }

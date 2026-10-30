@@ -21,9 +21,11 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{Sizable as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::browser::{
-    BrowserOp, ConsoleEntry, Logs, PageEvent, Target, normalize_address, page_script, parse_ipc,
+    BrowserOp, ConsoleEntry, Logs, PageEvent, Target, ViewportMode, fit, normalize_address,
+    page_script, parse_ipc, resize_mode,
 };
 use sawit_core::probe;
 use serde_json::{Value, json};
@@ -38,6 +40,9 @@ pub const ICON: Lucide = Lucide::Globe;
 pub const TITLE: &str = "Browser";
 
 const TOOLBAR_HEIGHT: f32 = 36.;
+/// Around the page in device mode, and the strip above it for the caption.
+const DEVICE_PADDING: f32 = 16.;
+const CAPTION_BAND: f32 = 24.;
 
 type OpResult = Result<Value, String>;
 
@@ -71,6 +76,8 @@ pub struct BrowserView {
     logs: Logs,
     /// Selector of the element picked last.
     last_pick: Option<String>,
+    /// Responsive, or a device size (kept per tab).
+    viewport: ViewportMode,
     to_view: UnboundedSender<FromPage>,
     /// Ops sent before the webview exists, in order.
     queued: Vec<(BrowserOp, oneshot::Sender<OpResult>)>,
@@ -148,6 +155,7 @@ impl BrowserView {
             token: new_token(),
             logs: Logs::default(),
             last_pick: None,
+            viewport: ViewportMode::Responsive,
             to_view,
             queued: Vec::new(),
             _ipc: ipc,
@@ -157,7 +165,63 @@ impl BrowserView {
 
     /// The page as `app_state` shows it.
     pub fn describe(&self) -> Value {
-        json!({ "url": self.current_url(), "title": self.title, "loading": self.loading })
+        json!({
+            "url": self.current_url(),
+            "title": self.title,
+            "loading": self.loading,
+            "viewport": self.viewport_json(),
+        })
+    }
+
+    /// The CSS viewport the page sees, and the zoom that makes it fit.
+    fn viewport_json(&self) -> Value {
+        let (width, height, device, scale) = match (&self.viewport, self.bounds) {
+            (
+                ViewportMode::Fixed {
+                    name,
+                    width,
+                    height,
+                },
+                Some(bounds),
+            ) => {
+                let (_, scale) = page_frame(frame(bounds), &self.viewport);
+                (*width as f64, *height as f64, name.clone(), scale)
+            }
+            (
+                ViewportMode::Fixed {
+                    name,
+                    width,
+                    height,
+                },
+                None,
+            ) => (*width as f64, *height as f64, name.clone(), 1.),
+            (ViewportMode::Responsive, bounds) => {
+                let (w, h) = bounds.map_or((0., 0.), |b| {
+                    (
+                        f64::from(f32::from(b.size.width)).round(),
+                        f64::from(f32::from(b.size.height)).round(),
+                    )
+                });
+                (w, h, Some("responsive".to_string()), 1.)
+            }
+        };
+        json!({ "width": width, "height": height, "device": device, "scale": scale })
+    }
+
+    /// Puts the web view where the viewport mode wants it, with the zoom
+    /// that keeps the CSS viewport at the device size.
+    fn apply_layout(&self) {
+        if let (Some(engine), Some(bounds)) = (&self.engine, self.bounds) {
+            let (frame, scale) = page_frame(frame(bounds), &self.viewport);
+            engine.set_frame(frame);
+            engine.set_zoom(scale);
+        }
+    }
+
+    /// The page zoom in force (1 unless a device is scaled down).
+    fn scale(&self) -> f64 {
+        self.bounds
+            .map_or(1., |b| page_frame(frame(b), &self.viewport).1)
     }
 
     fn current_url(&self) -> String {
@@ -220,8 +284,8 @@ impl BrowserView {
             FromPage::Engine(EngineEvent::NewWindow(url)) => self.navigate(&url, cx),
             FromPage::Shoot { rect, reply } => match &self.engine {
                 Some(engine) => {
-                    let width = shot_width(rect, self.bounds);
-                    engine.snapshot(rect, width, 1., reply)
+                    let width = shot_width(rect, self.bounds, &self.viewport);
+                    engine.snapshot(rect, width, self.scale(), reply)
                 }
                 None => {
                     let _ = reply.send(Err("The browser isn't open.".into()));
@@ -336,9 +400,25 @@ impl BrowserView {
                 engine.open_devtools();
                 json!({ "opened": "Web Inspector" })
             }
+            BrowserOp::Resize {
+                device,
+                width,
+                height,
+            } => match resize_mode(device.as_deref(), width, height) {
+                Ok(mode) => {
+                    self.viewport = mode;
+                    self.apply_layout();
+                    cx.notify();
+                    self.viewport_json()
+                }
+                Err(e) => {
+                    let _ = reply.send(Err(e));
+                    return;
+                }
+            },
             BrowserOp::Screenshot { target } if target.is_empty() => {
-                let width = shot_width(None, self.bounds);
-                return engine.snapshot(None, width, 1., reply);
+                let width = shot_width(None, self.bounds, &self.viewport);
+                return engine.snapshot(None, width, self.scale(), reply);
             }
             BrowserOp::Screenshot { target } => {
                 // The element's box first (scrolled into view), then the capture.
@@ -411,6 +491,8 @@ impl BrowserView {
             match self.build(bounds, window) {
                 Ok(engine) => {
                     self.engine = Some(Rc::new(engine));
+                    self.bounds = Some(bounds);
+                    self.apply_layout();
                     for (op, reply) in std::mem::take(&mut self.queued) {
                         self.run(op, reply, cx);
                     }
@@ -427,9 +509,7 @@ impl BrowserView {
         }
         if self.bounds != Some(bounds) {
             self.bounds = Some(bounds);
-            if let Some(engine) = &self.engine {
-                engine.set_frame(frame(bounds));
-            }
+            self.apply_layout();
         }
     }
 
@@ -444,7 +524,7 @@ impl BrowserView {
                     .as_deref()
                     .map(sawit_core::browser::data_store_id),
                 visible: self.visible,
-                frame: frame(bounds),
+                frame: page_frame(frame(bounds), &self.viewport).0,
             },
             move |event| {
                 let _ = to_view.unbounded_send(FromPage::Engine(event));
@@ -530,22 +610,82 @@ impl Render for BrowserView {
                 .into_any_element();
         }
         let this = cx.entity().downgrade();
+        let device = match &self.viewport {
+            ViewportMode::Fixed {
+                name,
+                width,
+                height,
+            } => Some(caption(name.as_deref(), *width, *height, self.scale())),
+            ViewportMode::Responsive => None,
+        };
         v_flex()
             .size_full()
             .child(self.toolbar(cx))
             .child(
-                div().flex_1().min_h_0().child(
-                    canvas(
-                        move |bounds, window, cx| {
-                            let _ = this.update(cx, |this, cx| this.place(bounds, window, cx));
-                        },
-                        |_, _, _, _| {},
-                    )
-                    .size_full(),
-                ),
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .when(device.is_some(), |d| d.bg(cx.theme().muted))
+                    .children(device.map(|text| {
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right_0()
+                            .h(px(CAPTION_BAND))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(text)
+                    }))
+                    .child(
+                        canvas(
+                            move |bounds, window, cx| {
+                                let _ = this.update(cx, |this, cx| this.place(bounds, window, cx));
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .size_full(),
+                    ),
             )
             .into_any_element()
     }
+}
+
+/// Where the web view goes in `bounds`, and the page zoom: the page itself
+/// in responsive mode, else the device size scaled to fit and centered
+/// below the caption band.
+fn page_frame(bounds: Frame, mode: &ViewportMode) -> (Frame, f64) {
+    let ViewportMode::Fixed { width, height, .. } = mode else {
+        return (bounds, 1.);
+    };
+    let area = (
+        (bounds.width - 2. * DEVICE_PADDING).max(1.),
+        (bounds.height - 2. * DEVICE_PADDING - CAPTION_BAND).max(1.),
+    );
+    let fit = fit((*width, *height), area);
+    let frame = Frame {
+        x: bounds.x + DEVICE_PADDING + (area.0 - fit.width) / 2.,
+        y: bounds.y + CAPTION_BAND + DEVICE_PADDING + (area.1 - fit.height) / 2.,
+        width: fit.width,
+        height: fit.height,
+    };
+    (frame, fit.scale)
+}
+
+/// `iPhone 15 · 393 × 852 · 75%`: no name when there is none, no percentage
+/// at full size.
+fn caption(name: Option<&str>, width: u32, height: u32, scale: f64) -> String {
+    let mut parts: Vec<String> = name.map(str::to_string).into_iter().collect();
+    parts.push(format!("{width} × {height}"));
+    let percent = (scale * 100.).round() as u32;
+    if percent < 100 {
+        parts.push(format!("{percent}%"));
+    }
+    parts.join(" · ")
 }
 
 fn frame(bounds: Bounds<Pixels>) -> Frame {
@@ -558,10 +698,17 @@ fn frame(bounds: Bounds<Pixels>) -> Frame {
 }
 
 /// The width a capture is scaled to: the element's, else the view's.
-fn shot_width(rect: Option<(f64, f64, f64, f64)>, bounds: Option<Bounds<Pixels>>) -> f64 {
-    match rect {
-        Some((_, _, w, _)) => w,
-        None => bounds.map_or(1024., |b| f64::from(f32::from(b.size.width))),
+fn shot_width(
+    rect: Option<(f64, f64, f64, f64)>,
+    bounds: Option<Bounds<Pixels>>,
+    mode: &ViewportMode,
+) -> f64 {
+    match (rect, mode) {
+        (Some((_, _, w, _)), _) => w,
+        (None, ViewportMode::Fixed { width, .. }) => f64::from(*width),
+        (None, ViewportMode::Responsive) => {
+            bounds.map_or(1024., |b| f64::from(f32::from(b.size.width)))
+        }
     }
 }
 
@@ -613,8 +760,57 @@ fn agent_result(result: &str) -> OpResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{Target, agent_call, agent_result, new_token, rect_op};
+    use super::{
+        Frame, Target, ViewportMode, agent_call, agent_result, caption, new_token, page_frame,
+        rect_op,
+    };
     use serde_json::json;
+
+    #[test]
+    fn devices_are_centered_below_the_caption() {
+        let bounds = Frame {
+            x: 0.,
+            y: 0.,
+            width: 800.,
+            height: 1000.,
+        };
+        let phone = ViewportMode::Fixed {
+            name: Some("iPhone 15".into()),
+            width: 393,
+            height: 852,
+        };
+        assert_eq!(
+            page_frame(bounds, &phone),
+            (
+                Frame {
+                    x: 203.5,
+                    y: 86.,
+                    width: 393.,
+                    height: 852.
+                },
+                1.0
+            )
+        );
+        assert_eq!(page_frame(bounds, &ViewportMode::Responsive), (bounds, 1.0));
+        // Scaled to fit a small area; offset by the bounds' origin.
+        let small = Frame {
+            x: 10.,
+            y: 20.,
+            width: 232.,
+            height: 440.,
+        };
+        let (f, scale) = page_frame(small, &phone);
+        assert!((scale - 384. / 852.).abs() < 1e-6 && f.x >= 26. && (f.y - 60.).abs() < 1e-3);
+    }
+
+    #[test]
+    fn captions() {
+        assert_eq!(
+            caption(Some("iPhone 15"), 393, 852, 0.75),
+            "iPhone 15 · 393 × 852 · 75%"
+        );
+        assert_eq!(caption(None, 800, 600, 1.), "800 × 600");
+    }
 
     #[test]
     fn agent_answers() {
