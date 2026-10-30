@@ -18,7 +18,7 @@ use sawit_core::terminal::{
     mouse_report, paste_bytes,
 };
 
-use super::{FocusDown, FocusLeft, FocusRight, FocusUp, SplitDown, SplitRight};
+use super::{FocusDown, FocusLeft, FocusRight, FocusUp, SplitDown, SplitRight, ZoomPane};
 use crate::files::DraggedFile;
 
 const FONT_SIZE: f32 = 13.;
@@ -38,7 +38,7 @@ type GridLayout = (Point<Pixels>, Size<Pixels>);
 /// terminal (and Tab is completion), Root's Cmd-C copies a stale selection
 /// elsewhere in the window. Unbinding them here hands them to `on_key`.
 /// App shortcuts (Ctrl-Tab, Cmd-…) stay with the workspace. The pane keys
-/// (split, move focus) live here too, so they only act in a terminal.
+/// (split, move focus, zoom) live here too, so they only act in a terminal.
 pub(super) fn bindings() -> Vec<KeyBinding> {
     let ctx = Some("Terminal");
     vec![
@@ -51,6 +51,7 @@ pub(super) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-alt-right", FocusRight, ctx),
         KeyBinding::new("cmd-alt-up", FocusUp, ctx),
         KeyBinding::new("cmd-alt-down", FocusDown, ctx),
+        KeyBinding::new("cmd-shift-enter", ZoomPane, ctx),
     ]
 }
 

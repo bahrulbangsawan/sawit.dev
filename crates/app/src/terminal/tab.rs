@@ -2,7 +2,9 @@
 //! `TabState` split layout. A tab with one pane shows it full size; with
 //! more, each pane gets a header and a border, and the dividers between
 //! them can be dragged. Right-clicking a pane opens its menu (rename,
-//! split, zoom, right-click routing, close).
+//! split, zoom, right-click routing, close). When a pane's process ends, a
+//! plain shell in a split closes its pane; any other pane says so in a
+//! banner, with what can be done next.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -23,7 +25,8 @@ use sawit_core::terminal::{
 };
 
 use super::view::{PAD_X, TerminalEvent, TerminalView, cell_size};
-use super::{FocusDown, FocusLeft, FocusRight, FocusUp, SplitDown, SplitRight};
+use super::{FocusDown, FocusLeft, FocusRight, FocusUp, SplitDown, SplitRight, ZoomPane};
+use crate::states::Banner;
 
 /// Height of a pane's header, its bottom border included (boxes are
 /// border-box, so the border takes from this height).
@@ -58,6 +61,10 @@ pub enum TabEvent {
     Changed,
     /// The tab's last pane closed.
     Closed,
+    /// The user asked to connect the ended SSH session in this pane again.
+    Reconnect(PaneId),
+    /// The user asked for a new shell tab.
+    NewTerminal,
 }
 
 /// A divider being dragged.
@@ -125,17 +132,84 @@ impl TerminalTab {
         }
     }
 
-    /// Opens the pane menu when asked, and redraws the tab strip when the
-    /// pane's title or state changes.
+    /// Opens the pane menu when asked, handles the pane's process ending,
+    /// and redraws the tab strip when the pane's title changes. Events from
+    /// a terminal the pane no longer holds are ignored.
     fn watch(pane: PaneId, view: &Entity<TerminalView>, cx: &mut Context<Self>) {
-        cx.subscribe(
-            view,
-            move |this, _, event: &TerminalEvent, cx| match event {
+        cx.subscribe(view, move |this, view, event: &TerminalEvent, cx| {
+            if this.views.get(&pane) != Some(&view) {
+                return;
+            }
+            match event {
                 TerminalEvent::MenuRequested(at) => this.request_menu(pane, *at, cx),
-                TerminalEvent::TitleChanged | TerminalEvent::Exited => cx.emit(TabEvent::Changed),
-            },
-        )
+                TerminalEvent::TitleChanged => cx.emit(TabEvent::Changed),
+                TerminalEvent::Exited => this.pane_exited(pane, cx),
+            }
+        })
         .detach();
+    }
+
+    /// `pane`'s process ended. A plain shell (not SSH, not a script) in a
+    /// split closes its pane; any other pane stays and shows its banner.
+    fn pane_exited(&mut self, pane: PaneId, cx: &mut Context<Self>) {
+        let plain_shell = self.views.get(&pane).is_some_and(|view| {
+            let v = view.read(cx);
+            v.shell && v.remote.is_none() && v.job.is_none()
+        });
+        if plain_shell && self.state.is_split() {
+            self.in_window(cx, move |this, window, cx| {
+                if this.state.is_split() {
+                    this.close_pane(pane, window, cx);
+                }
+            });
+        }
+        cx.emit(TabEvent::Changed);
+        cx.notify();
+    }
+
+    /// Runs `f` on the tab with the window it last drew in, once that can
+    /// be reached (events from a pane come without it).
+    fn in_window(
+        &self,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        let Some(handle) = self.window else {
+            return;
+        };
+        let tab = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, cx| tab.update(cx, |t, cx| f(t, window, cx)));
+        });
+    }
+
+    /// The terminal in `pane`, if the tab has that pane.
+    pub fn view(&self, pane: PaneId) -> Option<&Entity<TerminalView>> {
+        self.views.get(&pane)
+    }
+
+    /// Puts `view` in `pane` in place of its terminal (whose process is
+    /// dropped) and focuses the pane. Does nothing for an unknown pane.
+    pub fn replace_view(
+        &mut self,
+        pane: PaneId,
+        view: Entity<TerminalView>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.views.contains_key(&pane) {
+            return;
+        }
+        let send = self
+            .state
+            .panes
+            .get(&pane)
+            .is_some_and(|meta| meta.send_right_clicks);
+        view.update(cx, |v, _| v.send_right_clicks = send);
+        Self::watch(pane, &view, cx);
+        self.views.insert(pane, view);
+        self.state.focus(pane);
+        cx.emit(TabEvent::Changed);
+        cx.notify();
     }
 
     /// The terminal of the pane that has focus.
@@ -284,18 +358,9 @@ impl TerminalTab {
         }
     }
 
-    /// Opens the pane menu for `pane` once the window can be reached (an
-    /// event from a pane comes without it).
+    /// Opens the pane menu for `pane` once the window can be reached.
     fn request_menu(&mut self, pane: PaneId, at: Point<Pixels>, cx: &mut Context<Self>) {
-        let Some(handle) = self.window else {
-            return;
-        };
-        let tab = cx.entity().downgrade();
-        cx.defer(move |cx| {
-            let _ = handle.update(cx, |_, window, cx| {
-                tab.update(cx, |t, cx| t.open_menu(pane, at, window, cx))
-            });
-        });
+        self.in_window(cx, move |t, window, cx| t.open_menu(pane, at, window, cx));
     }
 
     /// Shows the pane menu for `pane` at `at` (window coordinates) and
@@ -312,6 +377,7 @@ impl TerminalTab {
         };
         let back = view.focus_handle(cx);
         let zoomed = self.state.zoomed == Some(pane);
+        let split = self.state.is_split();
         let send = self
             .state
             .panes
@@ -325,7 +391,9 @@ impl TerminalTab {
                 let item = match checked {
                     Some(checked) => PopupMenuItem::new(label).checked(checked),
                     None => PopupMenuItem::new(label),
-                };
+                }
+                // One pane has nothing to zoom over.
+                .disabled(!split && label == "Zoom");
                 menu = menu.item(item.on_click(move |_, window, cx| {
                     let _ = tab.update(cx, |t, cx| t.run_menu_item(pane, label, window, cx));
                 }));
@@ -553,7 +621,69 @@ impl TerminalTab {
             )
     }
 
-    /// One pane at `rect`: header, border and terminal.
+    /// What ended in `pane`, once its process has: an SSH session can
+    /// reconnect, anything else can be replaced by a new shell tab. Either
+    /// can close the pane (the tab, when it is the last).
+    fn render_banner(
+        &self,
+        pane: PaneId,
+        view: &Entity<TerminalView>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let v = view.read(cx);
+        if !v.exited {
+            return None;
+        }
+        let close_label = if self.state.is_split() {
+            "Close Pane"
+        } else {
+            "Close Tab"
+        };
+        let banner = match &v.remote {
+            Some(remote) => Banner::info(
+                ("ssh-ended", pane),
+                format!("Disconnected from {}.", remote.name),
+            )
+            .action(
+                Button::new(("ssh-reconnect", pane))
+                    .ghost()
+                    .xsmall()
+                    .icon(Lucide::RefreshCw)
+                    .label("Reconnect")
+                    .on_click(cx.listener(move |_, _, _, cx| cx.emit(TabEvent::Reconnect(pane)))),
+            )
+            .action(
+                Button::new(("ssh-close", pane))
+                    .ghost()
+                    .xsmall()
+                    .label(close_label)
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.close_pane(pane, window, cx)),
+                    ),
+            ),
+            None => Banner::info(("term-exited", pane), "This process has exited.")
+                .action(
+                    Button::new(("exited-close", pane))
+                        .ghost()
+                        .xsmall()
+                        .label(close_label)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.close_pane(pane, window, cx)
+                        })),
+                )
+                .action(
+                    Button::new(("exited-new", pane))
+                        .ghost()
+                        .xsmall()
+                        .label("New Terminal")
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(TabEvent::NewTerminal))),
+                ),
+        };
+        Some(banner.into_any_element())
+    }
+
+    /// One pane at `rect`: header, border, banner (once its process has
+    /// ended) and terminal.
     fn render_pane(
         &self,
         pane: PaneId,
@@ -580,6 +710,7 @@ impl TerminalTab {
                 cx.listener(move |this, _, window, cx| this.focus_pane(pane, window, cx)),
             )
             .child(self.render_header(pane, view, cx))
+            .children(self.render_banner(pane, view, cx))
             .child(div().flex_1().min_h_0().child(view.clone()))
     }
 }
@@ -638,6 +769,15 @@ impl Render for TerminalTab {
             .on_action(cx.listener(|this, _: &FocusDown, window, cx| {
                 this.move_focus(Direction::Down, window, cx)
             }))
+            .on_action(cx.listener(|this, _: &ZoomPane, _, cx| {
+                // One pane: the workspace's binding for the key maximizes
+                // the dock instead.
+                if this.state.toggle_zoom() {
+                    cx.notify();
+                } else {
+                    cx.propagate();
+                }
+            }))
             .child(
                 canvas(
                     move |area, _, _| bounds.set(Some(area)),
@@ -669,7 +809,17 @@ impl Render for TerminalTab {
         // the tab, with no header.
         let area = self.area().filter(|_| self.state.is_split());
         let Some(area) = area else {
-            return root.child(self.focused_view().clone());
+            let pane = self.state.focused;
+            let view = self.focused_view().clone();
+            return match self.render_banner(pane, &view, cx) {
+                Some(banner) => root.child(
+                    v_flex()
+                        .size_full()
+                        .child(banner)
+                        .child(div().flex_1().min_h_0().child(view)),
+                ),
+                None => root.child(view),
+            };
         };
 
         let pane_min = min_size(cell_size(window, cx));
@@ -735,8 +885,10 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use gpui_kit::{
-        AnyWindowHandle, App, AppContext as _, Bounds, Entity, Modifiers, MouseButton, Pixels,
-        Point, TestAppContext, VisualTestContext, point, px,
+        AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, InteractiveElement as _,
+        IntoElement, Modifiers, MouseButton, ParentElement as _, Pixels, Point, Render,
+        Styled as _, TestAppContext, VisualTestContext, Window, WindowBounds, WindowOptions, div,
+        point, px, size,
     };
     use sawit_core::terminal::{Layout, MIN_COLS, MIN_ROWS, SplitDir};
 
@@ -760,6 +912,17 @@ mod tests {
         while !cx.update(|cx| ok(cx)) {
             assert!(Instant::now() < deadline, "timed out waiting until {what}");
             std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Like `wait_until`, but lets the app handle what the shells sent
+    /// (output, their exit) while it waits.
+    fn run_until(cx: &mut TestAppContext, what: &str, ok: impl Fn(&App) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !cx.update(|cx| ok(cx)) {
+            assert!(Instant::now() < deadline, "timed out waiting until {what}");
+            std::thread::sleep(Duration::from_millis(20));
+            cx.run_until_parked();
         }
     }
 
@@ -1103,6 +1266,188 @@ mod tests {
             .update_window(w, |_, window, cx| tab.read(cx).has_focus(window, cx))
             .unwrap();
         assert!(back, "the keyboard did not go back to the pane");
+    }
+
+    #[gpui_kit::test]
+    fn cmd_shift_enter_zooms_a_split_tab(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let tab = cx.update(|cx| panel.read(cx).tab(0).clone());
+        let focused = cx.update(|cx| tab.read(cx).state.focused);
+        cx.simulate_keystrokes(w, "cmd-shift-enter");
+        cx.update(|cx| assert_eq!(tab.read(cx).state.zoomed, Some(focused)));
+        cx.simulate_keystrokes(w, "cmd-shift-enter");
+        cx.update(|cx| assert_eq!(tab.read(cx).state.zoomed, None));
+    }
+
+    /// Stand-in for the workspace around the panel: counts its maximize
+    /// action.
+    struct Host {
+        panel: Entity<TerminalPanel>,
+        maximized: usize,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .key_context("Workspace")
+                .size_full()
+                .on_action(
+                    cx.listener(|this, _: &crate::workspace::ToggleMaximizePane, _, _| {
+                        this.maximized += 1
+                    }),
+                )
+                .child(self.panel.clone())
+        }
+    }
+
+    #[gpui_kit::test]
+    fn cmd_shift_enter_with_one_pane_reaches_the_workspace(cx: &mut TestAppContext) {
+        cx.update(init);
+        cx.executor().allow_parking();
+        let (w, host) = cx.update(|cx| {
+            let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                ..Default::default()
+            };
+            gpui_kit::open_window(options, cx, |_, cx| {
+                cx.new(|cx| Host {
+                    panel: cx.new(TerminalPanel::new),
+                    maximized: 0,
+                })
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        let panel = cx.update(|cx| host.read(cx).panel.clone());
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-shift-enter");
+        cx.update(|cx| {
+            assert_eq!(
+                host.read(cx).maximized,
+                1,
+                "the workspace did not get the key"
+            );
+            assert_eq!(panel.read(cx).tab(0).read(cx).state.zoomed, None);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn an_exited_shell_in_a_split_closes_its_pane(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let tab = cx.update(|cx| panel.read(cx).tab(0).clone());
+        cx.update(|cx| {
+            let t = tab.read(cx);
+            assert_eq!(t.views().count(), 2);
+            t.focused_view().read(cx).write(b"exit\n".to_vec());
+        });
+        run_until(cx, "the exited pane closes", |cx| {
+            tab.read(cx).views().count() == 1
+        });
+        cx.update(|cx| {
+            let t = tab.read(cx);
+            assert_eq!(t.views.len(), 1, "the closed pane's terminal was kept");
+            assert!(!t.focused_view().read(cx).exited);
+            assert_eq!(panel.read(cx).tab_count(), 1);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn an_exited_single_pane_keeps_its_tab(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        let view = cx.update(|cx| panel.read(cx).tab(0).read(cx).focused_view().clone());
+        cx.update(|cx| view.read(cx).write(b"exit\n".to_vec()));
+        run_until(cx, "the shell exits", |cx| view.read(cx).exited);
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let p = panel.read(cx);
+            assert_eq!(p.tab_count(), 1);
+            assert_eq!(p.tab(0).read(cx).views().count(), 1);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn an_exited_script_in_a_split_keeps_its_pane(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let tab = cx.update(|cx| panel.read(cx).tab(0).clone());
+        let view = cx.update(|cx| tab.read(cx).focused_view().clone());
+        cx.update(|cx| {
+            view.update(cx, |v, _| {
+                v.job = Some(super::super::JobTag {
+                    key: "dev".into(),
+                    name: "dev".into(),
+                });
+                v.write(b"exit\n".to_vec());
+            })
+        });
+        run_until(cx, "the script's shell exits", |cx| view.read(cx).exited);
+        cx.run_until_parked();
+        cx.update(|cx| assert_eq!(tab.read(cx).views().count(), 2));
+    }
+
+    #[gpui_kit::test]
+    fn reconnecting_replaces_only_the_ended_pane(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        let remote = super::super::Remote {
+            key: "test".into(),
+            name: "test".into(),
+            launch: sawit_core::ssh::Launch {
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), "read line".into()],
+                env: Vec::new(),
+            },
+        };
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.open_ssh(remote, Some(window), cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        let (ix, tab) = cx.update(|cx| {
+            let p = panel.read(cx);
+            (p.active_index(), p.tab(p.active_index()).clone())
+        });
+        let (pane, ended) = cx.update(|cx| {
+            let t = tab.read(cx);
+            (t.state.focused, t.focused_view().clone())
+        });
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        cx.update(|cx| assert_eq!(tab.read(cx).views().count(), 2));
+
+        cx.update(|cx| ended.read(cx).write(b"\n".to_vec()));
+        run_until(cx, "the session ends", |cx| ended.read(cx).exited);
+        cx.run_until_parked();
+        cx.update(|cx| assert_eq!(tab.read(cx).views().count(), 2));
+
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.reconnect(ix, pane, window, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let t = tab.read(cx);
+            assert_eq!(t.views().count(), 2);
+            assert_eq!(t.state.focused, pane);
+            let new = t.focused_view();
+            assert!(*new != ended, "the pane still holds the ended session");
+            let v = new.read(cx);
+            assert!(!v.exited && v.remote.is_some());
+        });
     }
 
     #[gpui_kit::test]

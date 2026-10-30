@@ -25,6 +25,9 @@ actions!(
         FocusUp,
         /// Focuses the pane below.
         FocusDown,
+        /// Zooms the focused pane to fill its tab, or unzooms it. With one
+        /// pane the key goes on to the workspace, which maximizes the dock.
+        ZoomPane,
     ]
 );
 

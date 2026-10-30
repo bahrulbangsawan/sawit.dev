@@ -13,7 +13,9 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::probe::find_in_path;
 use sawit_core::ssh::Launch;
-use sawit_core::terminal::{Command, GridSize, Session, SplitDir, default_shell, run_bytes};
+use sawit_core::terminal::{
+    Command, GridSize, PaneId, Session, SplitDir, default_shell, run_bytes,
+};
 
 use super::tab::{TabEvent, TerminalTab};
 use super::view::TerminalView;
@@ -34,6 +36,8 @@ pub struct TerminalPanel {
     error: Option<String>,
     /// Whether the panel fills the window; kept in sync by the workspace.
     pub maximized: bool,
+    /// The window the panel last drew in, for acting on a tab's requests.
+    window: Option<AnyWindowHandle>,
 }
 
 /// Asks the workspace to fill the window with the panel, or to restore.
@@ -75,6 +79,7 @@ impl TerminalPanel {
             collapsed: HashSet::new(),
             error: None,
             maximized: false,
+            window: None,
         };
         panel.open(Command::default(), &shell_name(), None, None, cx);
         panel
@@ -249,18 +254,28 @@ impl TerminalPanel {
         found.is_some()
     }
 
-    /// Connects an ended SSH tab again, in place.
-    fn reconnect(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(remote) = self
-            .tabs
-            .get(ix)
-            .and_then(|t| focused(t, cx).remote.clone())
+    /// Connects the ended SSH session in `pane` of the tab at `ix` again,
+    /// in place, and focuses it. The tab's other panes are left alone.
+    pub(super) fn reconnect(
+        &mut self,
+        ix: usize,
+        pane: PaneId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.get(ix).cloned() else {
+            return;
+        };
+        let Some(remote) = tab
+            .read(cx)
+            .view(pane)
+            .and_then(|v| v.read(cx).remote.clone())
         else {
             return;
         };
         let name = remote.name.clone();
-        if let Some(tab) = self.spawn(ssh_command(&remote.launch), &name, Some(remote), cx) {
-            self.tabs[ix] = tab;
+        if let Some(view) = self.spawn_view(ssh_command(&remote.launch), &name, Some(remote), cx) {
+            tab.update(cx, |t, cx| t.replace_view(pane, view, cx));
             self.active = ix;
             self.focus_active(window, cx);
         }
@@ -578,7 +593,8 @@ impl TerminalPanel {
         }
     }
 
-    /// Drops a tab whose last pane closed and redraws the strip on changes.
+    /// Drops a tab whose last pane closed, redraws the strip on changes,
+    /// and does what a pane's banner asks.
     fn on_tab_event(&mut self, tab: Entity<TerminalTab>, event: &TabEvent, cx: &mut Context<Self>) {
         match event {
             TabEvent::Closed => {
@@ -587,7 +603,36 @@ impl TerminalPanel {
                 }
             }
             TabEvent::Changed => cx.notify(),
+            TabEvent::Reconnect(pane) => {
+                let pane = *pane;
+                self.in_window(cx, move |this, window, cx| {
+                    if let Some(ix) = this.tabs.iter().position(|t| *t == tab) {
+                        this.reconnect(ix, pane, window, cx);
+                    }
+                });
+            }
+            TabEvent::NewTerminal => {
+                self.in_window(cx, |this, window, cx| this.open_shell(Some(window), cx));
+            }
         }
+    }
+
+    /// Runs `f` on the panel with the window it last drew in, once that can
+    /// be reached (a tab's events come without it).
+    fn in_window(
+        &self,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        let Some(handle) = self.window else {
+            return;
+        };
+        let panel = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, cx| {
+                panel.update(cx, |p, cx| f(p, window, cx))
+            });
+        });
     }
 
     /// How many tabs are open (for tests).
@@ -665,7 +710,8 @@ fn install_herdr_button(id: &'static str) -> Button {
 }
 
 impl Render for TerminalPanel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.window = Some(window.window_handle());
         let weak = cx.entity().downgrade();
         let mut tabs: Vec<AnyElement> = Vec::new();
         for (ix, tab) in self.tabs.iter().enumerate() {
@@ -833,14 +879,6 @@ impl Render for TerminalPanel {
             });
         }
         let herdr = Self::herdr_available();
-        let exited = self
-            .tabs
-            .get(self.active)
-            .is_some_and(|t| focused(t, cx).exited);
-        let remote_name = self
-            .tabs
-            .get(self.active)
-            .and_then(|t| focused(t, cx).remote.as_ref().map(|r| r.name.clone()));
         let (max_icon, max_tip) = if self.maximized {
             (Lucide::Minimize, "Restore Layout")
         } else {
@@ -909,52 +947,6 @@ impl Render for TerminalPanel {
                             ),
                     ),
             )
-            .when(exited && remote_name.is_some(), |el| {
-                let ix = self.active;
-                let name = remote_name.clone().unwrap_or_default();
-                el.child(
-                    Banner::info("ssh-ended", format!("Disconnected from {name}."))
-                        .action(
-                            Button::new("ssh-reconnect")
-                                .ghost()
-                                .xsmall()
-                                .icon(Lucide::RefreshCw)
-                                .label("Reconnect")
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.reconnect(ix, window, cx)
-                                })),
-                        )
-                        .action(
-                            Button::new("ssh-close")
-                                .ghost()
-                                .xsmall()
-                                .label("Close Tab")
-                                .on_click(cx.listener(move |this, _, _, cx| this.close(ix, cx))),
-                        ),
-                )
-            })
-            .when(exited && remote_name.is_none(), |el| {
-                let ix = self.active;
-                el.child(
-                    Banner::info("term-exited", "This process has exited.")
-                        .action(
-                            Button::new("exited-close")
-                                .ghost()
-                                .xsmall()
-                                .label("Close Tab")
-                                .on_click(cx.listener(move |this, _, _, cx| this.close(ix, cx))),
-                        )
-                        .action(
-                            Button::new("exited-new")
-                                .ghost()
-                                .xsmall()
-                                .label("New Terminal")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.open_shell(Some(window), cx)
-                                })),
-                        ),
-                )
-            })
             .when(!self.tabs.is_empty(), |el| {
                 el.when_some(self.error.clone(), |el, e| {
                     el.child(Banner::error("term-error", e).on_dismiss(cx.listener(
