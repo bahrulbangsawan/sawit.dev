@@ -435,9 +435,11 @@
   };
 
   // The annotate shortcut works on every page, picking or not. Synthetic
-  // events (browser_press_key "Meta+Shift+.") carry no `code`, so the key counts too.
+  // events (browser_press_key "Meta+Shift+.") carry no `code`, so then the key
+  // counts; a real key's `key` would also match ⌘⇧< on layouts where Shift-< is ">".
   window.addEventListener("keydown", (e) => {
-    if (e.metaKey && e.shiftKey && (e.code === "Period" || e.key === "." || e.key === ">")) {
+    const period = e.code ? e.code === "Period" : e.key === "." || e.key === ">";
+    if (e.metaKey && e.shiftKey && period) {
       e.preventDefault();
       send("key", "toggle-annotate");
     }
