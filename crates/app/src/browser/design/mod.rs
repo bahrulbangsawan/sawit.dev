@@ -62,6 +62,8 @@ pub enum DesignEvent {
     Export { include_videos: bool },
     /// Show this file in Finder.
     Reveal(std::path::PathBuf),
+    /// This segment was chosen (again, maybe): Inspect picks, the others don't.
+    Segment(Segment),
 }
 
 /// What an export that ended wrote.
@@ -136,6 +138,10 @@ impl DesignPanel {
             self.export = export;
             cx.notify();
         }
+    }
+
+    pub fn segment(&self) -> Segment {
+        self.segment
     }
 
     pub fn is_pinned(&self) -> bool {
@@ -238,6 +244,7 @@ impl Render for DesignPanel {
                     .selected(current == s)
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.segment = s;
+                        cx.emit(DesignEvent::Segment(s));
                         cx.notify();
                     }))
             }));

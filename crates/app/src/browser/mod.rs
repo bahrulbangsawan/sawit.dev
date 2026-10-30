@@ -38,7 +38,7 @@ use sawit_core::probe;
 use serde_json::{Value, json};
 
 use annotate::{AnnotateEvent, AnnotatePanel, group_order, padded_rect};
-use design::{DesignEvent, DesignPanel};
+use design::{DesignEvent, DesignPanel, Segment};
 use engine::{Engine, EngineEvent, EngineSpec, Frame};
 
 use crate::rt;
@@ -74,13 +74,15 @@ impl Panel {
             Panel::Design => "design",
         }
     }
+}
 
-    /// What picking does while this panel is open.
-    fn pick_mode(self) -> PickMode {
-        match self {
-            Panel::Annotate => PickMode::Annotate,
-            Panel::Design => PickMode::Inspect,
-        }
+/// What picking does while `panel` is open: Design inspects only on its Inspect segment,
+/// so clicks reach the page on the others.
+fn pick_mode(panel: Panel, segment: Segment) -> PickMode {
+    match (panel, segment) {
+        (Panel::Annotate, _) => PickMode::Annotate,
+        (Panel::Design, Segment::Inspect) => PickMode::Inspect,
+        (Panel::Design, _) => PickMode::Off,
     }
 }
 
@@ -313,14 +315,15 @@ impl BrowserView {
     }
 
     /// Opens `panel`, or closes it when it is the one open. Annotate arms
-    /// element picking, Design inspecting; closing disarms.
+    /// element picking, Design inspecting (on its Inspect segment); closing disarms.
     pub fn toggle_panel(&mut self, panel: Panel, _window: &mut Window, cx: &mut Context<Self>) {
         if self.panel == Some(panel) {
             self.panel = None;
             self.set_pick(PickMode::Off, cx);
         } else {
             self.panel = Some(panel);
-            self.set_pick(panel.pick_mode(), cx);
+            let segment = self.design_panel.read(cx).segment();
+            self.set_pick(pick_mode(panel, segment), cx);
             self.scan_if_design_open(cx);
         }
         cx.notify();
@@ -388,6 +391,12 @@ impl BrowserView {
 
     fn on_design(&mut self, event: &DesignEvent, cx: &mut Context<Self>) {
         match event {
+            // Choosing Inspect again after Esc picks again.
+            DesignEvent::Segment(segment) => {
+                if self.panel == Some(Panel::Design) {
+                    self.set_pick(pick_mode(Panel::Design, *segment), cx);
+                }
+            }
             DesignEvent::Flash(selector) => {
                 drop(self.page_op(json!({ "op": "flash", "selector": selector })));
             }
@@ -1360,8 +1369,9 @@ fn agent_result(result: &str) -> OpResult {
 #[cfg(test)]
 mod tests {
     use super::{
-        Frame, PickMode, Target, ViewportMode, agent_call, agent_result, caption, markers_op,
-        new_token, overlay_op, page_frame, rearm_ops, rect_op, rotated, shoot_ops, within,
+        Frame, Panel, PickMode, Segment, Target, ViewportMode, agent_call, agent_result, caption,
+        markers_op, new_token, overlay_op, page_frame, pick_mode, rearm_ops, rect_op, rotated,
+        shoot_ops, within,
     };
     use serde_json::json;
 
@@ -1517,6 +1527,27 @@ mod tests {
             block_on(within(rx, pending::<()>())),
             Some(Err(_))
         ));
+    }
+
+    #[test]
+    fn design_picks_only_on_inspect() {
+        assert_eq!(
+            pick_mode(Panel::Design, Segment::Inspect),
+            PickMode::Inspect
+        );
+        for s in [
+            Segment::Colors,
+            Segment::Fonts,
+            Segment::Assets,
+            Segment::System,
+        ] {
+            assert_eq!(pick_mode(Panel::Design, s), PickMode::Off, "{s:?}");
+            assert_eq!(pick_mode(Panel::Annotate, s), PickMode::Annotate);
+        }
+        assert_eq!(
+            pick_mode(Panel::Annotate, Segment::Inspect),
+            PickMode::Annotate
+        );
     }
 
     #[test]

@@ -267,7 +267,10 @@ impl BrowserView {
         pin: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.panel != Some(crate::browser::Panel::Design) {
+        // Hovers still on their way after picking stopped are dropped.
+        if self.panel != Some(crate::browser::Panel::Design)
+            || self.pick != crate::browser::PickMode::Inspect
+        {
             return;
         }
         let pinned = self.design_panel.read(cx).is_pinned();
