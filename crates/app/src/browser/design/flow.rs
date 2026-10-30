@@ -45,7 +45,11 @@ const CUT_NOTE: &str = "Cut at 60 KB; ask for one part.";
 const STATUS_CUT_NOTE: &str =
     "Cut at 60 KB; the full lists are in the folder's README.md and assets.json.";
 /// All cross-origin sheets and the manifest, together.
+/// From the start of the scan, so `Design` answers within the 30 s control timeout.
 const FETCH_BUDGET: Duration = Duration::from_secs(20);
+/// A page answer (or a screenshot) that hasn't come by then won't: the job ends with an error,
+/// so a lost callback can't keep a scan or an export running forever.
+const PAGE_ANSWER_TIMEOUT: Duration = Duration::from_secs(25);
 const FETCHES_AT_ONCE: usize = 8;
 
 pub struct Ready {
@@ -70,6 +74,8 @@ pub struct ExportJob {
 
 pub struct ExportReport {
     pub folder: PathBuf,
+    /// Why `screenshot.png` was left out.
+    pub screenshot_error: Option<String>,
     pub files: Vec<String>,
     pub failed: Vec<AssetOutcome>,
 }
@@ -174,11 +180,12 @@ impl BrowserView {
         cx: &mut Context<Self>,
     ) -> Task<Result<Rc<Ready>, String>> {
         let generation = self.design.generation;
+        let fetch_deadline = std::time::Instant::now() + FETCH_BUDGET;
         let scan = self.page_op(json!({ "op": "scan" }));
         self.design.state = ScanState::Scanning;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result = run_scan(&this, scan, url, cx).await;
+            let result = run_scan(&this, scan, url, fetch_deadline, cx).await;
             let _ = this.update(cx, |this, cx| {
                 if this.design.generation == generation {
                     this.design.state = match &result {
@@ -200,8 +207,11 @@ impl BrowserView {
         cx: &mut Context<Self>,
     ) -> Task<Result<StyleInfo, String>> {
         let answer = self.page_op(style_op(target, html));
-        cx.spawn(async move |_, _| {
-            parse("style", serde_json::from_value(page_answer(answer).await?))
+        cx.spawn(async move |_, cx| {
+            parse(
+                "style",
+                serde_json::from_value(page_answer(answer, cx).await?),
+            )
         })
     }
 
@@ -386,11 +396,26 @@ fn cancelled<E>(_: E) -> String {
     "The scan was cancelled.".into()
 }
 
-/// The page's answer to an op.
-async fn page_answer(answer: oneshot::Receiver<OpResult>) -> OpResult {
-    answer
-        .await
-        .unwrap_or_else(|_| Err("The page didn't answer.".into()))
+/// The page's answer to an op, within [`PAGE_ANSWER_TIMEOUT`].
+async fn page_answer(answer: oneshot::Receiver<OpResult>, cx: &AsyncApp) -> OpResult {
+    let timer = cx.background_executor().timer(PAGE_ANSWER_TIMEOUT);
+    answer_or_timeout(answer, timer).await
+}
+
+/// `answer`, unless `timer` fires first.
+async fn answer_or_timeout(
+    answer: oneshot::Receiver<OpResult>,
+    timer: impl std::future::Future<Output = ()> + Unpin,
+) -> OpResult {
+    match futures::future::select(answer, timer).await {
+        futures::future::Either::Left((answer, _)) => {
+            answer.unwrap_or_else(|_| Err("The page didn't answer.".into()))
+        }
+        futures::future::Either::Right(_) => Err(format!(
+            "The page didn't answer within {} s.",
+            PAGE_ANSWER_TIMEOUT.as_secs()
+        )),
+    }
 }
 
 /// A page answer read strictly as the core type; a mismatch is the contract breaking.
@@ -402,9 +427,10 @@ async fn run_scan(
     this: &WeakEntity<BrowserView>,
     scan: oneshot::Receiver<OpResult>,
     url: String,
+    fetch_deadline: std::time::Instant,
     cx: &mut AsyncApp,
 ) -> Result<Rc<Ready>, String> {
-    let mut scan: Scan = parse("scan", serde_json::from_value(page_answer(scan).await?))?;
+    let mut scan: Scan = parse("scan", serde_json::from_value(page_answer(scan, cx).await?))?;
     if scan.colors.is_empty() && scan.texts.is_empty() {
         return Err(NOTHING.into());
     }
@@ -413,7 +439,12 @@ async fn run_scan(
     } else {
         scan.url.clone()
     };
-    let extras = fetch_extras(scan.blocked_sheets.clone(), scan.manifest.clone(), referer);
+    let extras = fetch_extras(
+        scan.blocked_sheets.clone(),
+        scan.manifest.clone(),
+        referer,
+        fetch_deadline,
+    );
     let extras = this
         .update(cx, |_, cx| rt::spawn(cx, extras))
         .map_err(gone)?
@@ -431,7 +462,10 @@ async fn run_scan(
                 this.page_op(json!({ "op": "rules", "sheets": sheets }))
             })
             .map_err(gone)?;
-        let rules: SheetRules = parse("rules", serde_json::from_value(page_answer(rules).await?))?;
+        let rules: SheetRules = parse(
+            "rules",
+            serde_json::from_value(page_answer(rules, cx).await?),
+        )?;
         scan.merge_rules(rules);
     }
     add_icons(&mut scan.assets, extras.icons);
@@ -461,9 +495,14 @@ fn is_http(url: &str) -> bool {
 }
 
 /// Fetches the sheets the page couldn't read and its manifest's icons, within
-/// [`FETCH_BUDGET`]; what fails or is late is left out.
-async fn fetch_extras(hrefs: Vec<String>, manifest: Option<String>, referer: String) -> Extras {
-    let deadline = tokio::time::Instant::now() + FETCH_BUDGET;
+/// `deadline` (the scan's start + [`FETCH_BUDGET`]); what fails or is late is left out.
+async fn fetch_extras(
+    hrefs: Vec<String>,
+    manifest: Option<String>,
+    referer: String,
+    deadline: std::time::Instant,
+) -> Extras {
+    let deadline = tokio::time::Instant::from_std(deadline);
     let referer = referer.as_str();
     let sheets = async {
         let mut stream =
@@ -606,6 +645,38 @@ async fn run_export(
     } else {
         ready.scan.url.clone()
     };
+
+    // The screenshot before the downloads (which can take minutes), and only of the
+    // page that was scanned.
+    let current = this
+        .read_with(cx, |this, _| this.current_url())
+        .map_err(gone)?;
+    let (png, screenshot_error) = if page_key(&current) != page_key(&referer) {
+        (
+            None,
+            Some(format!(
+                "The tab moved to {current} after the scan; screenshot.png was left out."
+            )),
+        )
+    } else {
+        let (tx, rx) = oneshot::channel();
+        this.update(cx, |this, cx| this.shoot(None, tx, cx))
+            .map_err(gone)?;
+        match page_answer(rx, cx).await {
+            Ok(shot) => match shot["png_base64"]
+                .as_str()
+                .and_then(sawit_core::browser::base64_decode)
+            {
+                Some(png) => (Some(png), None),
+                None => (None, Some("The capture has no readable image.".into())),
+            },
+            Err(e) => (None, Some(e)),
+        }
+    };
+    if let Some(e) = &screenshot_error {
+        eprintln!("sawit: no screenshot for the design export: {e}");
+    }
+
     let mut items = ready.scan.assets.clone();
     items.extend(font_assets(&ready.scan.font_faces));
     let total = items.len();
@@ -636,20 +707,6 @@ async fn run_export(
         .await
         .map_err(|_| "The export was cancelled.".to_string())??;
 
-    let (tx, rx) = oneshot::channel();
-    this.update(cx, |this, cx| this.shoot(None, tx, cx))
-        .map_err(gone)?;
-    let png = match rx.await {
-        Ok(Ok(shot)) => shot["png_base64"]
-            .as_str()
-            .and_then(sawit_core::browser::base64_decode),
-        Ok(Err(e)) => {
-            eprintln!("sawit: no screenshot for the design export: {e}");
-            None
-        }
-        Err(_) => None,
-    };
-
     let (scan, tokens) = (ready.scan.clone(), ready.tokens.clone());
     let dir = folder.clone();
     let written = this
@@ -666,6 +723,7 @@ async fn run_export(
     let (files, outcomes) = written?;
     let report = ExportReport {
         folder,
+        screenshot_error,
         files,
         failed: outcomes.into_iter().filter(|o| o.error.is_some()).collect(),
     };
@@ -859,6 +917,10 @@ fn export_status(job: &ExportJob) -> Value {
         Some(Err(e)) => (&[][..], &[][..], Some(e.as_str())),
         None => (&[][..], &[][..], None),
     };
+    let screenshot_error = match &job.result {
+        Some(Ok(report)) => report.screenshot_error.as_deref(),
+        _ => None,
+    };
     let folder = match &job.result {
         Some(Ok(report)) => &report.folder,
         _ => &job.folder,
@@ -869,6 +931,7 @@ fn export_status(job: &ExportJob) -> Value {
         "folder": folder,
         "files": files,
         "failed": failed,
+        "screenshot_error": screenshot_error,
         "error": error,
     });
     cap(&mut v, STATUS_CUT_NOTE);
@@ -1057,6 +1120,7 @@ mod tests {
         );
         job.result = Some(Ok(ExportReport {
             folder: job.folder.clone(),
+            screenshot_error: Some("The tab moved.".into()),
             files: (0..5_000)
                 .map(|i| format!("assets/images/image-{i}.png"))
                 .collect(),
@@ -1066,6 +1130,20 @@ mod tests {
         assert!(serde_json::to_string(&v).unwrap().len() <= 60_000);
         assert!(v["note"].as_str().unwrap().starts_with("Cut at 60 KB"));
         assert_eq!(v["folder"], "/p/.nyawit/design/a.dev");
+        assert_eq!(v["screenshot_error"], "The tab moved.");
+    }
+
+    #[test]
+    fn page_answers_time_out() {
+        let (_keep, pending) = oneshot::channel::<OpResult>();
+        let late =
+            futures::executor::block_on(answer_or_timeout(pending, futures::future::ready(())));
+        assert_eq!(late.unwrap_err(), "The page didn't answer within 25 s.");
+        let (tx, rx) = oneshot::channel::<OpResult>();
+        tx.send(Ok(json!({"n": 1}))).unwrap();
+        let on_time =
+            futures::executor::block_on(answer_or_timeout(rx, futures::future::pending()));
+        assert_eq!(on_time.unwrap(), json!({"n": 1}));
     }
 
     #[test]
