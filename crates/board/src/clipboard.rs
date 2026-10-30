@@ -18,6 +18,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use figcraft_doc::NodeId;
+use figcraft_engine::cmd::create::PLACED_IMAGE_MAX_SIDE;
 use figcraft_engine::params::id_of;
 use figcraft_engine::{Clipboard, guard, looks_like_svg, textedit};
 use serde_json::{Value, json};
@@ -159,13 +160,14 @@ pub fn paste_source(
 ///   `pasted.svg`.
 ///
 /// `at` is the page point to paste at (Paste here): the pasted layers' top left corner goes there.
-/// Without it, text and images go to the middle of the view.
+/// Without it, as in FigCraft's own paste, text starts in the middle of the view, and an image or
+/// SVG is centred there, so that a screenshot shows where it was pasted.
 pub fn paste(
     board: &mut BoardDoc,
     src: PasteSource,
     at: Option<(f64, f64)>,
 ) -> Result<Vec<NodeId>, BoardError> {
-    let point = at.map_or_else(|| json!({}), |(x, y)| json!({"x": x, "y": y}));
+    let mut point = at.map_or_else(|| json!({}), |(x, y)| json!({"x": x, "y": y}));
     match src {
         PasteSource::Canvas => {
             let pasted = board.execute("edit.paste", &point)?;
@@ -184,9 +186,43 @@ pub fn paste(
             let made = board.execute("node.create", &text)?;
             Ok(id_of(&made["id"]).into_iter().collect())
         }
-        PasteSource::Image(png) => import(board, &png, "pasted.png", point),
-        PasteSource::Svg(svg) => import(board, svg.as_bytes(), "pasted.svg", point),
+        PasteSource::Image(png) => {
+            if at.is_none() {
+                point = centred(board, &png)?;
+            }
+            import(board, &png, "pasted.png", point)
+        }
+        PasteSource::Svg(svg) => {
+            // The import centres its frame on the middle of the view.
+            if at.is_none() {
+                point["center"] = json!(true);
+            }
+            import(board, svg.as_bytes(), "pasted.svg", point)
+        }
     }
+}
+
+/// Where the image `bytes` goes to be centred in the view, as FigCraft pastes one: its top left
+/// corner, on whole units, from the size `file.import` places it at (its pixels over its density,
+/// at most 4096 units a side). An image whose size can't be read gets no point: `file.import` puts
+/// its corner in the middle of the view, or refuses it.
+fn centred(board: &BoardDoc, bytes: &[u8]) -> Result<Value, BoardError> {
+    let view = &board.session.ds()?.view;
+    let size = guard::run("ui.pasteImage", || {
+        Ok(
+            figcraft_render::images::dimensions(bytes).map(|(width, height)| {
+                let density = figcraft_format::pixel_density(bytes);
+                figcraft_format::placed_size(width, height, density, PLACED_IMAGE_MAX_SIDE)
+            }),
+        )
+    })?;
+    Ok(match size {
+        Some((width, height)) => json!({
+            "x": (view.cx - width / 2.0).round(),
+            "y": (view.cy - height / 2.0).round(),
+        }),
+        None => json!({}),
+    })
 }
 
 /// Imports the file `bytes`, called `name`, its top left corner at `point` when that has `x` and
@@ -253,6 +289,13 @@ mod tests {
 
     /// A 1 × 1 PNG.
     const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+    /// A 160 × 90 PNG, at 72 dpi: it is placed at its size in pixels.
+    const PNG_160_BY_90: &str = "iVBORw0KGgoAAAANSUhEUgAAAKAAAABaCAIAAACwpMoFAAAAoklEQVR42u3RAQ0AAAjDsEtDGtKQhg9oMgVrqkeHiwWABViABViABViAAQuwAAuwAAuwAAMWYAEWYAEWYAEWYMACLMACLMACLMCABViABViABViAAQuwAAuwAAuwAAswYAEWYAEWYAEWYMACLMACLMACLMCAXQAswAIswAIswAIMWIAFWIAFWIAFGLAAC7AAC7AAC7AAAxZgARZgARZgAf7VAoGLZO1iB8DyAAAAAElFTkSuQmCC";
+
+    /// The same PNG at 144 dpi, as a screenshot on a Retina screen is: it is placed at half its
+    /// size in pixels, 80 × 45.
+    const PNG_160_BY_90_RETINA: &str = "iVBORw0KGgoAAAANSUhEUgAAAKAAAABaCAIAAACwpMoFAAAACXBIWXMAABYlAAAWJQFJUiTwAAAAoklEQVR42u3RAQ0AAAjDsEtDGtKQhg9oMgVrqkeHiwWABViABViABViAAQuwAAuwAAuwAAMWYAEWYAEWYAEWYMACLMACLMACLMCABViABViABViAAQuwAAuwAAuwAAswYAEWYAEWYAEWYMACLMACLMACLMCAXQAswAIswAIswAIMWIAFWIAFWIAFGLAAC7AAC7AAC7AAAxZgARZgARZgAf7VAoGLZO1iB8DyAAAAAElFTkSuQmCC";
 
     /// The tests that copy, or paste what was copied, share the app's one copy: they take turns,
     /// each starting with nothing copied.
@@ -496,6 +539,64 @@ mod tests {
             image.kind
         );
         assert_eq!(doc.images.len(), 1);
+        assert_eq!(top_left(&board, pasted[0]), (10.0, 20.0));
+    }
+
+    /// Layer `id`'s size on the page.
+    fn size(board: &BoardDoc, id: NodeId) -> (f64, f64) {
+        let bounds = board.doc().unwrap().world_bounds(id).unwrap();
+        (bounds.width(), bounds.height())
+    }
+
+    /// A new board whose view shows page point (300.5, 200) in its middle.
+    fn board_seen_about_its_point() -> BoardDoc {
+        let mut board = board();
+        let view = json!({"zoom": 1, "vw": 1000, "vh": 800, "cx": 300.5, "cy": 200});
+        board.execute("view.set", &view).unwrap();
+        board
+    }
+
+    /// As FigCraft's own paste places them (ui-egui menus/clipboard.rs `paste`, `paste_text`): a
+    /// screenshot pasted with its corner in the middle of the view would lie mostly off it.
+    #[test]
+    fn a_pasted_image_is_centred_in_the_view() {
+        for (png, (width, height)) in [
+            (PNG_160_BY_90, (160.0, 90.0)),
+            (PNG_160_BY_90_RETINA, (80.0, 45.0)),
+        ] {
+            let mut board = board_seen_about_its_point();
+            let png = STANDARD.decode(png).unwrap();
+            let pasted = paste(&mut board, PasteSource::Image(png), None).unwrap();
+            let [image] = pasted[..] else {
+                panic!("pasted {pasted:?}")
+            };
+            // At the size it is placed at, its middle on the view's, its corner on whole units.
+            assert_eq!(size(&board, image), (width, height));
+            let corner = (
+                (300.5 - width / 2.0).round(),
+                (200.0 - height / 2.0).round(),
+            );
+            assert_eq!(top_left(&board, image), corner, "{width} × {height}");
+        }
+    }
+
+    #[test]
+    fn a_pasted_svg_is_centred_in_the_view() {
+        let mut board = board_seen_about_its_point();
+        let pasted = paste(&mut board, PasteSource::Svg(RECT_SVG.into()), None).unwrap();
+        let [frame] = pasted[..] else {
+            panic!("pasted {pasted:?}")
+        };
+        assert_eq!(size(&board, frame), (100.0, 80.0));
+        assert_eq!(top_left(&board, frame), (251.0, 160.0));
+    }
+
+    #[test]
+    fn a_pasted_svg_goes_to_the_point_given() {
+        // Paste here: its top-left corner at the point, as for an image and for layers.
+        let mut board = board_seen_about_its_point();
+        let source = PasteSource::Svg(RECT_SVG.into());
+        let pasted = paste(&mut board, source, Some((10.0, 20.0))).unwrap();
         assert_eq!(top_left(&board, pasted[0]), (10.0, 20.0));
     }
 
