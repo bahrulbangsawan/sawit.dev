@@ -28,6 +28,8 @@ use crate::git::{
     CommitView, DiffView, DiffViewEvent, GitHubView, GitPanel, GitPanelEvent, GitStore, GraphEvent,
     GraphView,
 };
+use crate::keymap::editor::KeymapEditor;
+use crate::keymap::{OpenKeymapEditor, OpenKeymapFile};
 use crate::layout::{Area, Layout};
 use crate::mcp_page::McpPage;
 use crate::network::NetworkPanel;
@@ -140,6 +142,8 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-cmd-v", OpenChangelog, ctx),
         KeyBinding::new("ctrl-cmd-u", InstallUpdate, ctx),
         KeyBinding::new("ctrl-cmd-i", crate::cli::InstallCli, ctx),
+        // Zed's.
+        KeyBinding::new("cmd-k cmd-s", OpenKeymapEditor, ctx),
     ]
 }
 
@@ -149,19 +153,31 @@ pub fn init(cx: &mut App) {
 }
 
 /// The workspace shortcuts the canvas passes to the app while it has the
-/// keyboard, written as the page writes keys (`ctrl-alt-shift-cmd-key`).
-/// Not the ⌘K chords or ⌘0, which Excalidraw uses (link, reset zoom), nor
-/// ⇧⌘↩, which the page handles itself.
-pub fn canvas_passthrough_keys() -> Vec<String> {
-    bindings()
-        .iter()
-        .filter_map(|b| match b.keystrokes() {
-            [k] => Some(page_key(k.modifiers(), k.key())),
-            _ => None,
-        })
-        .filter(|k| k != "cmd-0" && k != "shift-cmd-enter")
-        .chain(["cmd-o", "shift-cmd-n", "cmd-q"].map(String::from))
-        .collect()
+/// keyboard, written as the page writes keys (`ctrl-alt-shift-cmd-key`): the
+/// one-key bindings live in the workspace as the keymap is now, the user's
+/// too. Not ⌘0, which Excalidraw uses (reset zoom), nor ⇧⌘↩, which the page
+/// handles itself. Chords (⌘K …) stay the page's: ⌘K is its link.
+pub fn canvas_passthrough_keys(cx: &App) -> Vec<String> {
+    let workspace = [KeyContext::parse("Workspace").unwrap_or_default()];
+    let keymap = cx.key_bindings();
+    let keymap = keymap.borrow();
+    let mut keys: Vec<String> = Vec::new();
+    for binding in keymap.bindings() {
+        if is_no_action(binding.action()) || is_unbind(binding.action()) {
+            continue;
+        }
+        if binding.predicate().is_some_and(|p| !p.eval(&workspace)) {
+            continue;
+        }
+        let [k] = binding.keystrokes() else {
+            continue;
+        };
+        let key = page_key(k.modifiers(), k.key());
+        if key != "cmd-0" && key != "shift-cmd-enter" && !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
 }
 
 fn page_key(m: &Modifiers, key: &str) -> String {
@@ -994,14 +1010,33 @@ impl Workspace {
         cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
         let muted = cx.theme().muted_foreground;
-        let item = |label: &'static str, keys: &'static str| {
+        let keys = |action: &dyn Action| crate::keymap::keys_for(action, "Workspace", window);
+        let [
+            close_keys,
+            others_keys,
+            left_keys,
+            right_keys,
+            clean_keys,
+            all_keys,
+            pin_keys,
+        ] = [
+            &CloseActiveTab as &dyn Action,
+            &CloseOtherTabs,
+            &CloseTabsLeft,
+            &CloseTabsRight,
+            &CloseCleanTabs,
+            &CloseAllTabs,
+            &TogglePinTab,
+        ]
+        .map(keys);
+        let item = |label: &'static str, keys: SharedString| {
             PopupMenuItem::element(move |_, _| {
                 h_flex()
                     .w_full()
                     .gap_6()
                     .justify_between()
                     .child(label)
-                    .child(div().text_color(muted).child(keys))
+                    .child(div().text_color(muted).child(keys.clone()))
             })
         };
         let close = |op: CloseOp| {
@@ -1013,14 +1048,14 @@ impl Workspace {
         let this_pin = this.clone();
         let this_ro = this.clone();
         let menu = Self::group_menu(this.clone(), ix, group, projects, menu, window, cx);
-        menu.item(item("Close", "⌘W").on_click(close(CloseOp::This)))
-            .item(item("Close Others", "⌥⌘T").on_click(close(CloseOp::Others)))
+        menu.item(item("Close", close_keys).on_click(close(CloseOp::This)))
+            .item(item("Close Others", others_keys).on_click(close(CloseOp::Others)))
             .separator()
-            .item(item("Close Left", "⌘K E").on_click(close(CloseOp::Left)))
-            .item(item("Close Right", "⌘K T").on_click(close(CloseOp::Right)))
+            .item(item("Close Left", left_keys).on_click(close(CloseOp::Left)))
+            .item(item("Close Right", right_keys).on_click(close(CloseOp::Right)))
             .separator()
-            .item(item("Close Clean", "⌘K U").on_click(close(CloseOp::Clean)))
-            .item(item("Close All", "⌘K W").on_click(close(CloseOp::All)))
+            .item(item("Close Clean", clean_keys).on_click(close(CloseOp::Clean)))
+            .item(item("Close All", all_keys).on_click(close(CloseOp::All)))
             .when(is_file, |menu| {
                 menu.separator().item(
                     PopupMenuItem::new(if read_only {
@@ -1035,7 +1070,7 @@ impl Workspace {
             })
             .separator()
             .item(
-                item(if pinned { "Unpin Tab" } else { "Pin Tab" }, "⌘K ⇧↩").on_click(
+                item(if pinned { "Unpin Tab" } else { "Pin Tab" }, pin_keys).on_click(
                     move |_, _, cx| {
                         let _ = this_pin.update(cx, |ws, cx| ws.toggle_pin(ix, cx));
                     },
@@ -1384,7 +1419,7 @@ impl Workspace {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::X)
-                            .tooltip("Close (⌘W)")
+                            .tooltip_with_action("Close", &CloseActiveTab, Some("Workspace"))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
                                 this.close(CloseOp::This, ix, window, cx);
@@ -2254,6 +2289,52 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Shows the keymap editor (one tab), with the keyboard.
+    fn open_keymap_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_welcome(CENTER_ONLY, cx);
+        let key: SharedString = "keymap".into();
+        if let Some(ix) = self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
+        {
+            self.active = ix;
+            if let PaneItem::Other { view, .. } = &self.tabs[ix].item
+                && let Ok(editor) = view.clone().downcast::<KeymapEditor>()
+            {
+                window.focus(&editor.focus_handle(cx), cx);
+            }
+        } else {
+            let view = cx.new(|cx| KeymapEditor::new(window, cx));
+            window.focus(&view.focus_handle(cx), cx);
+            self.push_tab(
+                PaneItem::Other {
+                    view: view.into(),
+                    key,
+                    title: "Keymap Editor".into(),
+                    icon: Lucide::Keyboard,
+                    file: None,
+                },
+                None,
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    /// Opens the keymap file in an editor tab, writing a new one with a few lines on how to fill
+    /// it if there is none.
+    fn open_keymap_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let store = crate::keymap::store(cx);
+        let path = store.read(cx).path().to_path_buf();
+        if let Err(error) = store.read(cx).ensure_file() {
+            log::warn!("sawit: can't create {}: {error}", path.display());
+            return;
+        }
+        self.show_center(cx);
+        self.open_file(path, window, cx);
+    }
+
     /// Shows the Dev Tools install page (one tab).
     fn open_tools_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_welcome(CENTER_ONLY, cx);
@@ -2476,6 +2557,16 @@ impl Workspace {
                     )
                     .on_click(cx.listener(|this, _, _, cx| this.open_mcp_page(cx))),
             )
+            .child(
+                Button::new("open-keymap")
+                    .ghost()
+                    .xsmall()
+                    .icon(Lucide::Keyboard)
+                    .tooltip_with_action("Keymap Editor", &OpenKeymapEditor, Some("Workspace"))
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.open_keymap_editor(window, cx)),
+                    ),
+            )
             .child(div().w(px(6.)))
             .child(
                 toggle(
@@ -2665,6 +2756,11 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &OpenDevTools, w, cx| this.open_tools_page(w, cx)))
             .on_action(cx.listener(|this, _: &OpenMcp, _, cx| this.open_mcp_page(cx)))
+            .on_action(cx.listener(|this, _: &OpenKeymapEditor, w, cx| {
+                this.show_center(cx);
+                this.open_keymap_editor(w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &OpenKeymapFile, w, cx| this.open_keymap_file(w, cx)))
             .on_action(cx.listener(|this, _: &OpenChangelog, _, cx| {
                 this.show_center(cx);
                 this.open_changelog_page(cx)
@@ -2731,6 +2827,8 @@ mod tests {
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
 
+    use gpui_kit::KeyBinding;
+
     use super::{bindings, canvas_passthrough_keys, canvas_project, page_key};
 
     #[test]
@@ -2778,9 +2876,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_canvas_passes_on_app_shortcuts_but_not_its_own() {
-        let keys = canvas_passthrough_keys();
+    #[gpui_kit::test]
+    fn the_canvas_passes_on_app_shortcuts_but_not_its_own(cx: &mut gpui_kit::TestAppContext) {
+        let keys = cx.update(|cx| {
+            cx.bind_keys(bindings());
+            cx.bind_keys([
+                KeyBinding::new("cmd-q", crate::cli::Quit, None),
+                KeyBinding::new("cmd-shift-n", crate::cli::NewWindow, None),
+                KeyBinding::new("cmd-o", crate::cli::OpenFolder, None),
+            ]);
+            canvas_passthrough_keys(cx)
+        });
         for k in [
             "cmd-j",
             "shift-cmd-j",

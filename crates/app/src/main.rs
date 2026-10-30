@@ -11,6 +11,7 @@ mod file_icons;
 mod files;
 mod git;
 mod highlight;
+mod keymap;
 mod layout;
 mod mcp_page;
 mod network;
@@ -132,6 +133,7 @@ fn main() -> std::process::ExitCode {
         files::init(cx);
         shell_config::init(cx);
         db::init(cx);
+        git::init(cx);
         workspace::init(cx);
         terminal::init(cx);
         theme::apply_zed_one_dark(cx);
@@ -139,6 +141,8 @@ fn main() -> std::process::ExitCode {
         highlight::prewarm(cx);
         cli::init(cx);
         update::init(cx);
+        // Last of the key bindings: what every feature bound above is the defaults.
+        keymap::init(cx);
         cli::handle(request, None, cx);
         cli::serve(cx);
     });

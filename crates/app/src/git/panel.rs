@@ -51,20 +51,19 @@ pub struct GitPanel {
 
 impl GitPanel {
     pub fn new(store: Entity<GitStore>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let message = cx
-            .new(|cx| TextareaState::new(window, cx).placeholder("Commit message (⌘↩ to commit)"));
+        let message =
+            cx.new(|cx| TextareaState::new(window, cx).placeholder(commit_placeholder(window)));
         let new_branch = cx.new(|cx| InputState::new(window, cx).placeholder("New branch name"));
         let subscriptions = vec![
             cx.observe(&store, |_, _, cx| cx.notify()),
             cx.subscribe_in(
                 &message,
                 window,
-                |this, _, e: &InputEvent, window, cx| match e {
-                    InputEvent::PressEnter {
-                        secondary: true, ..
-                    } => this.commit(window, cx),
-                    InputEvent::Change => cx.notify(),
-                    _ => {}
+                // ⌘↩ commits through its binding (`super::Commit`), which the keymap may change.
+                |_, _, e: &InputEvent, _, cx| {
+                    if matches!(e, InputEvent::Change) {
+                        cx.notify()
+                    }
                 },
             ),
             cx.subscribe_in(
@@ -556,9 +555,16 @@ impl GitPanel {
             .border_b_1()
             .border_color(cx.theme().border)
             .child(
-                Textarea::new(&self.message)
-                    .h(px(64.))
-                    .aria_label("Commit message"),
+                div()
+                    .key_context("GitCommitMessage")
+                    .on_action(
+                        cx.listener(|this, _: &super::Commit, window, cx| this.commit(window, cx)),
+                    )
+                    .child(
+                        Textarea::new(&self.message)
+                            .h(px(64.))
+                            .aria_label("Commit message"),
+                    ),
             )
             .child(
                 h_flex()
@@ -585,10 +591,16 @@ impl GitPanel {
                                     || conflicts > 0
                                     || (staged + changed == 0 && !self.amend),
                             )
-                            .tooltip(if conflicts > 0 {
-                                "Resolve the conflicts first"
-                            } else {
-                                "Commit (⌘↩)"
+                            .map(|button| {
+                                if conflicts > 0 {
+                                    button.tooltip("Resolve the conflicts first")
+                                } else {
+                                    button.tooltip_with_action(
+                                        "Commit",
+                                        &super::Commit,
+                                        Some("GitCommitMessage"),
+                                    )
+                                }
                             })
                             .on_click(cx.listener(|this, _, window, cx| this.commit(window, cx))),
                     ),
@@ -953,5 +965,13 @@ impl Render for GitPanel {
             .bg(cx.theme().sidebar)
             .child(header)
             .child(body)
+    }
+}
+
+/// The commit message box's placeholder, with the keys that commit as the keymap binds them.
+fn commit_placeholder(window: &Window) -> String {
+    match crate::keymap::keys_for(&super::Commit, "GitCommitMessage", window) {
+        keys if keys.is_empty() => "Commit message".into(),
+        keys => format!("Commit message ({keys} to commit)"),
     }
 }

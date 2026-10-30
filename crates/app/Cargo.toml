@@ -41,6 +41,10 @@ include_dir = "0.7"
 # The canvas bundle is embedded brotli-compressed (web/canvas/compress.mjs).
 brotli-decompressor = "6.2.0"
 serde_json = "1"
+# The arguments of actions bound in the keymap (`board::Command`): GPUI builds them from JSON and
+# describes them with a schema.
+serde = { version = "1", features = ["derive"] }
+schemars = "1"
 
 [dev-dependencies]
 # Headless windows and simulated keystrokes for UI tests.

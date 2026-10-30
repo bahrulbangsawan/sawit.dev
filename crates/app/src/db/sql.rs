@@ -58,7 +58,12 @@ impl SqlView {
                     tab_size: 2,
                     hard_tabs: false,
                 })
-                .placeholder("-- Write SQL, then press ⌘↩ to run");
+                .placeholder(
+                    match crate::keymap::keys_for(&RunQuery, "SqlEditor", window) {
+                        keys if keys.is_empty() => "-- Write SQL, then run it".to_string(),
+                        keys => format!("-- Write SQL, then press {keys} to run"),
+                    },
+                );
             crate::highlight::install(&mut state, cx);
             match sql {
                 Some(sql) => state.default_value(sql),
@@ -172,7 +177,19 @@ impl SqlView {
 }
 
 impl Render for SqlView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let run_keys = crate::keymap::keys_for(&RunQuery, "SqlEditor", window);
+        let (run_label, run_hint) = if run_keys.is_empty() {
+            (
+                "Run".to_string(),
+                "Write a query above and run it.".to_string(),
+            )
+        } else {
+            (
+                format!("Run {run_keys}"),
+                format!("Write a query above and press {run_keys} to run it."),
+            )
+        };
         v_flex()
             .key_context("SqlEditor")
             .on_action(cx.listener(Self::run))
@@ -208,7 +225,7 @@ impl Render for SqlView {
                             .primary()
                             .xsmall()
                             .icon(IconName::Play)
-                            .label("Run ⌘↩")
+                            .label(run_label)
                             .loading(self.running)
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.run(&RunQuery, window, cx)),
@@ -246,10 +263,9 @@ impl Render for SqlView {
                     (None, None) if let Some(summary) = self.summary.clone() => {
                         el.child(Placeholder::new(Lucide::Check, "Query complete").detail(summary))
                     }
-                    (None, None) => el.child(
-                        Placeholder::new(Lucide::Play, "No results yet")
-                            .detail("Write a query above and press ⌘↩ to run it."),
-                    ),
+                    (None, None) => {
+                        el.child(Placeholder::new(Lucide::Play, "No results yet").detail(run_hint))
+                    }
                 }
             }))
     }

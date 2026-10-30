@@ -56,6 +56,7 @@ pub enum Page {
     GitGraph,
     Github,
     Instance,
+    Keymap,
 }
 
 /// Data the app keeps in memory and saves itself; after another process

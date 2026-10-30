@@ -290,7 +290,7 @@ fn variant<T: serde::de::DeserializeOwned>(name: &str, choices: &str) -> Result<
 
 const PANELS: &str =
     "instances, files, git, database, run, ports, network, prompts, ssh, shell_config";
-const PAGES: &str = "canvas, browser, mcp, tools, changelog, git_graph, github, instance";
+const PAGES: &str = "canvas, browser, mcp, tools, changelog, git_graph, github, instance, keymap";
 const INSTANCE_ACTIONS: &str = "select, start, stop, restart";
 
 pub(crate) fn pretty(value: &Value) -> String {
