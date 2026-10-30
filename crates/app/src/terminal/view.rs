@@ -3,7 +3,7 @@
 //! selects text and copies it on release; Shift+drag selects even while a
 //! program (herdr, vim) has the mouse. Dropped files are typed as paths.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -25,6 +25,8 @@ const FONT_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 1.3;
 /// How long the "Copied to clipboard" toast stays up.
 const TOAST: Duration = Duration::from_millis(1400);
+/// Space left and right of the grid.
+pub(super) const PAD_X: Pixels = px(8.);
 /// How long a pane header shows a folder before asking the OS again.
 const FOLDER_TTL: Duration = Duration::from_millis(500);
 
@@ -95,7 +97,9 @@ pub struct TerminalView {
     /// Shows the copy toast while set; finishing hides it.
     toast: Option<Task<()>>,
     /// The last `cwd()` answer for the pane header, and when it was asked.
-    folder: RefCell<Option<(Instant, Option<PathBuf>)>>,
+    folder: Option<(Instant, Option<PathBuf>)>,
+    /// Redraws once the cached folder is due to be asked again.
+    folder_refresh: Option<Task<()>>,
     _events: Task<()>,
 }
 
@@ -162,7 +166,8 @@ impl TerminalView {
             selecting: false,
             scroll: ScrollAccumulator::default(),
             toast: None,
-            folder: RefCell::new(None),
+            folder: None,
+            folder_refresh: None,
             _events: task,
         }
     }
@@ -196,17 +201,40 @@ impl TerminalView {
     }
 
     /// The program's folder for display. Asks the OS at most every 500 ms,
-    /// since headers redraw with every frame of output.
-    pub fn folder(&self) -> Option<PathBuf> {
-        let mut cached = self.folder.borrow_mut();
-        match &*cached {
-            Some((at, dir)) if at.elapsed() < FOLDER_TTL => dir.clone(),
-            _ => {
-                let dir = self.cwd();
-                *cached = Some((Instant::now(), dir.clone()));
-                dir
+    /// since headers redraw with every frame of output. A cached answer
+    /// schedules one redraw for when it expires, so after a `cd` the header
+    /// settles on the new folder even if no more output comes.
+    pub fn folder(&mut self, cx: &mut Context<Self>) -> Option<PathBuf> {
+        if let Some((at, dir)) = &self.folder
+            && at.elapsed() < FOLDER_TTL
+        {
+            if self.folder_refresh.is_none() {
+                let wait = FOLDER_TTL.saturating_sub(at.elapsed());
+                self.folder_refresh = Some(cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(wait).await;
+                    let _ = this.update(cx, |this, cx| {
+                        this.folder_refresh = None;
+                        cx.notify();
+                    });
+                }));
             }
+            return dir.clone();
         }
+        let dir = self.cwd();
+        self.folder = Some((Instant::now(), dir.clone()));
+        dir
+    }
+
+    /// The folder the header shows now, without asking the OS (for tests).
+    #[cfg(test)]
+    pub(super) fn cached_folder(&self) -> Option<PathBuf> {
+        self.folder.as_ref().and_then(|(_, dir)| dir.clone())
+    }
+
+    /// The grid size the terminal was last laid out at (for tests).
+    #[cfg(test)]
+    pub(super) fn grid(&self) -> GridSize {
+        self.session.size()
     }
 
     /// The shell is waiting at its prompt, not running a command.
@@ -561,7 +589,7 @@ impl Render for TerminalView {
             .key_context("Terminal")
             .track_focus(&self.focus)
             .size_full()
-            .px_2()
+            .px(PAD_X)
             .bg(hsla(self.palette.background))
             .on_key_down(cx.listener(Self::on_key))
             .on_scroll(cx.listener(Self::on_scroll))

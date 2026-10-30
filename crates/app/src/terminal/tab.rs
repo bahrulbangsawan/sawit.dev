@@ -17,11 +17,19 @@ use sawit_core::terminal::{
     Direction, MIN_COLS, MIN_ROWS, PaneId, Rect, SplitDir, SplitPath, TabState, new_pane_id,
 };
 
-use super::view::{TerminalEvent, TerminalView, cell_size};
+use super::view::{PAD_X, TerminalEvent, TerminalView, cell_size};
 use super::{FocusDown, FocusLeft, FocusRight, FocusUp, SplitRight};
 
-/// Height of a pane's header.
+/// Height of a pane's header, its bottom border included (boxes are
+/// border-box, so the border takes from this height).
 pub const HEADER_H: Pixels = px(24.);
+/// The line under a pane's header.
+const HEADER_BORDER: Pixels = px(1.);
+/// The border around each pane of a split tab.
+const PANE_BORDER: Pixels = px(1.);
+/// Slack for layout rounding, so a pane at its minimum never loses a
+/// column or row to a fraction of a pixel.
+const ROUNDING: f32 = 1.;
 /// Width of the grab strip centred on each divider.
 const DIVIDER_HIT: f32 = 5.;
 
@@ -41,8 +49,8 @@ struct Drag {
     dir: SplitDir,
     /// The split's whole area, in the tab's coordinates.
     span: Rect,
-    /// The smallest each side may get, along `dir`.
-    min: f32,
+    /// The smallest (width, height) any pane may get.
+    pane_min: (f32, f32),
 }
 
 /// One tab of the terminal panel and the panes in it.
@@ -219,7 +227,7 @@ impl TerminalTab {
         let ratio = (at - start) / len;
         self.state
             .layout
-            .set_ratio(&drag.path, ratio, len, drag.min);
+            .set_ratio(&drag.path, ratio, len, drag.pane_min);
         cx.notify();
     }
 
@@ -230,6 +238,7 @@ impl TerminalTab {
         view: &Entity<TerminalView>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        let folder = view.update(cx, |v, cx| v.folder(cx)).map(|dir| tilde(&dir));
         let v = view.read(cx);
         let icon = if v.remote.is_some() {
             Lucide::Server
@@ -239,7 +248,6 @@ impl TerminalTab {
             Lucide::Terminal
         };
         let title = self.pane_title(pane, v);
-        let folder = v.folder().map(|dir| tilde(&dir));
         let zoomed = self.state.zoomed == Some(pane);
         let (zoom_icon, zoom_tip) = if zoomed {
             (Lucide::Minimize, "Unzoom")
@@ -254,7 +262,7 @@ impl TerminalTab {
             .gap_1()
             .text_xs()
             .bg(cx.theme().tab_bar)
-            .border_b_1()
+            .border_b(HEADER_BORDER)
             .border_color(cx.theme().border)
             .child(Icon::new(icon).xsmall())
             .child(div().flex_none().child(title))
@@ -321,7 +329,7 @@ impl TerminalTab {
             .w(px(rect.w))
             .h(px(rect.h))
             .overflow_hidden()
-            .border_1()
+            .border(PANE_BORDER)
             .border_color(border)
             .on_any_mouse_down(
                 cx.listener(move |this, _, window, cx| this.focus_pane(pane, window, cx)),
@@ -331,11 +339,14 @@ impl TerminalTab {
     }
 }
 
-/// The smallest pane, in pixels: 20 columns by 4 rows, plus its header.
+/// The smallest pane rect, in pixels, whose grid still gets 20 columns by
+/// 4 rows: the grid plus the pane's border on both sides, the view's padding
+/// left and right, and the header (which holds its own border) on top.
 fn min_size(cell: Size<Pixels>) -> (f32, f32) {
+    let border = 2. * f32::from(PANE_BORDER);
     (
-        f32::from(cell.width) * f32::from(MIN_COLS),
-        f32::from(cell.height) * f32::from(MIN_ROWS) + f32::from(HEADER_H),
+        f32::from(cell.width) * f32::from(MIN_COLS) + 2. * f32::from(PAD_X) + border + ROUNDING,
+        f32::from(cell.height) * f32::from(MIN_ROWS) + f32::from(HEADER_H) + border + ROUNDING,
     )
 }
 
@@ -405,7 +416,7 @@ impl Render for TerminalTab {
             return root.child(self.focused_view().clone());
         };
 
-        let (min_w, min_h) = min_size(cell_size(window, cx));
+        let pane_min = min_size(cell_size(window, cx));
         let mut panes = Vec::new();
         for (pane, rect) in self.state.visible(area) {
             if let Some(view) = self.views.get(&pane) {
@@ -423,9 +434,9 @@ impl Render for TerminalTab {
                 SplitDir::Right => (divider.at - half, span.y, DIVIDER_HIT, span.h),
                 SplitDir::Down => (span.x, divider.at - half, span.w, DIVIDER_HIT),
             };
-            let min = match divider.dir {
-                SplitDir::Right => min_w,
-                SplitDir::Down => min_h,
+            let span_len = match divider.dir {
+                SplitDir::Right => span.w,
+                SplitDir::Down => span.h,
             };
             div()
                 .id(("pane-divider", ix))
@@ -444,13 +455,13 @@ impl Render for TerminalTab {
                     cx.listener(move |this, e: &MouseDownEvent, _, cx| {
                         if e.click_count >= 2 {
                             this.drag = None;
-                            this.state.layout.even(&divider.path);
+                            this.state.layout.even(&divider.path, span_len, pane_min);
                         } else {
                             this.drag = Some(Drag {
                                 path: divider.path.clone(),
                                 dir: divider.dir,
                                 span,
-                                min,
+                                pane_min,
                             });
                         }
                         cx.stop_propagation();
@@ -467,8 +478,13 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
-    use gpui_kit::{App, AppContext as _, TestAppContext};
-    use sawit_core::terminal::{Layout, SplitDir};
+    use gpui_kit::{
+        AnyWindowHandle, App, AppContext as _, Bounds, Entity, Pixels, Point, TestAppContext,
+        point, px,
+    };
+    use sawit_core::terminal::{Layout, MIN_COLS, MIN_ROWS, SplitDir};
+
+    use super::super::TerminalPanel;
 
     use super::super::testing::{focus_terminal, init, open_panel};
 
@@ -539,34 +555,146 @@ mod tests {
         cx.update(|cx| assert_eq!(panel.read(cx).tab(0).read(cx).state.focused, panes[1]));
     }
 
+    /// Every pane's grid size in `tab`, after the last paint.
+    fn grids(cx: &mut TestAppContext, panel: &Entity<TerminalPanel>) -> Vec<(u16, u16)> {
+        cx.update(|cx| {
+            let tab = panel.read(cx).tab(0).read(cx);
+            tab.views()
+                .map(|(_, v)| {
+                    let g = v.read(cx).grid();
+                    (g.cols, g.rows)
+                })
+                .collect()
+        })
+    }
+
+    fn assert_big_enough(grids: &[(u16, u16)]) {
+        for &(cols, rows) in grids {
+            assert!(
+                cols >= MIN_COLS && rows >= MIN_ROWS,
+                "a pane is {cols}×{rows}, under {MIN_COLS}×{MIN_ROWS}"
+            );
+        }
+    }
+
+    /// Splits with `key` until the tab refuses; returns the pane count.
+    fn split_until_refused(
+        cx: &mut TestAppContext,
+        w: AnyWindowHandle,
+        panel: &Entity<TerminalPanel>,
+        key: &str,
+    ) -> usize {
+        let count = |cx: &mut TestAppContext| {
+            cx.update(|cx| panel.read(cx).tab(0).read(cx).views().count())
+        };
+        let mut last = count(cx);
+        loop {
+            cx.simulate_keystrokes(w, key);
+            cx.run_until_parked();
+            let now = count(cx);
+            if now == last {
+                return now;
+            }
+            assert!(now < 64, "splitting never stopped");
+            last = now;
+        }
+    }
+
     #[gpui_kit::test]
-    fn splitting_stops_before_a_pane_gets_too_short(cx: &mut TestAppContext) {
+    fn splitting_stops_before_a_pane_gets_too_small(cx: &mut TestAppContext) {
         cx.update(init);
         let (w, panel) = open_panel(cx);
         focus_terminal(cx, w, &panel);
-        cx.simulate_keystrokes(
-            w,
-            "cmd-shift-d cmd-shift-d cmd-shift-d cmd-shift-d cmd-shift-d",
-        );
-        cx.run_until_parked();
-        let (min_h, count) = cx
-            .update_window(w, |_, window, cx| {
-                let (_, min_h) = super::min_size(super::cell_size(window, cx));
-                (min_h, panel.read(cx).tab(0).read(cx).views().count())
-            })
-            .unwrap();
-        cx.simulate_keystrokes(w, "cmd-shift-d");
-        cx.run_until_parked();
+        let count = split_until_refused(cx, w, &panel, "cmd-shift-d");
+        assert!(count > 1, "the tab was never split");
         cx.update(|cx| {
             let tab = panel.read(cx).tab(0).read(cx);
-            assert!(count > 1, "the tab was never split");
-            assert_eq!(tab.views().count(), count, "a too-short split went through");
             assert_eq!(tab.views.len(), count, "a refused pane's terminal was kept");
-            let area = tab.area().unwrap();
-            for (_, rect) in tab.state.layout.rects(area) {
-                assert!(rect.h >= min_h, "{} is under {min_h}", rect.h);
-            }
         });
+        assert_big_enough(&grids(cx, &panel));
+
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        assert!(split_until_refused(cx, w, &panel, "cmd-d") > 1);
+        assert_big_enough(&grids(cx, &panel));
+    }
+
+    /// Drags the tab's first divider to `to` (window coordinates) and lets
+    /// the panes repaint.
+    fn drag_root_divider(
+        cx: &mut TestAppContext,
+        w: AnyWindowHandle,
+        panel: &Entity<TerminalPanel>,
+        to: impl Fn(Bounds<Pixels>) -> Point<Pixels>,
+    ) {
+        let tab = cx.update(|cx| panel.read(cx).tab(0).clone());
+        cx.update_window(w, |_, window, cx| {
+            let pane_min = super::min_size(super::cell_size(window, cx));
+            tab.update(cx, |t, cx| {
+                let divider = t.state.layout.dividers(t.area().unwrap()).remove(0);
+                t.drag = Some(super::Drag {
+                    path: divider.path,
+                    dir: divider.dir,
+                    span: divider.span,
+                    pane_min,
+                });
+                let at = to(t.bounds.get().unwrap());
+                t.drag_to(at, cx);
+                t.drag = None;
+            })
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn dragging_a_divider_keeps_20_columns_and_4_rows(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        drag_root_divider(cx, w, &panel, |b| b.origin);
+        assert_big_enough(&grids(cx, &panel));
+        drag_root_divider(cx, w, &panel, |b| b.origin + point(b.size.width, px(0.)));
+        assert_big_enough(&grids(cx, &panel));
+
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-shift-d");
+        cx.run_until_parked();
+        drag_root_divider(cx, w, &panel, |b| b.origin);
+        assert_big_enough(&grids(cx, &panel));
+        drag_root_divider(cx, w, &panel, |b| b.origin + point(px(0.), b.size.height));
+        assert_big_enough(&grids(cx, &panel));
+    }
+
+    #[gpui_kit::test]
+    fn a_pane_header_follows_cd_without_more_output(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let view = cx.update(|cx| panel.read(cx).tab(0).read(cx).focused_view().clone());
+        wait_until(cx, "the header shows a folder", |cx| {
+            view.read(cx).cached_folder().is_some()
+        });
+        let dir = scratch_dir("header-cd");
+        cx.update(|cx| view.read(cx).cd(&dir));
+        // No more input: only the passing of time may bring the header up
+        // to date.
+        let deadline = Instant::now() + Duration::from_millis(1500);
+        while cx.update(|cx| view.read(cx).cached_folder()).as_ref() != Some(&dir) {
+            assert!(
+                Instant::now() < deadline,
+                "the header still shows the old folder"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+            cx.executor().advance_clock(Duration::from_millis(50));
+            cx.run_until_parked();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[gpui_kit::test]

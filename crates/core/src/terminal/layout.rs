@@ -341,7 +341,7 @@ impl Layout {
         best.map(|(id, ..)| id)
     }
 
-    fn split_at_mut(&mut self, path: &SplitPath) -> Option<&mut f32> {
+    fn node_mut(&mut self, path: &SplitPath) -> Option<&mut Layout> {
         let mut node = self;
         for step in &path.0 {
             match node {
@@ -351,30 +351,56 @@ impl Layout {
                 Layout::Pane(_) => return None,
             }
         }
-        match node {
-            Layout::Split { ratio, .. } => Some(ratio),
-            Layout::Pane(_) => None,
+        Some(node)
+    }
+
+    /// The smallest (width, height) this subtree fits in when every pane
+    /// gets at least `pane_min`: side by side the widths add up, stacked
+    /// the heights do; across the split the larger one counts.
+    pub fn min_size(&self, pane_min: (f32, f32)) -> (f32, f32) {
+        match self {
+            Layout::Pane(_) => pane_min,
+            Layout::Split {
+                dir, first, second, ..
+            } => {
+                let (a, b) = (first.min_size(pane_min), second.min_size(pane_min));
+                match dir {
+                    SplitDir::Right => (a.0 + b.0, a.1.max(b.1)),
+                    SplitDir::Down => (a.0.max(b.0), a.1 + b.1),
+                }
+            }
         }
     }
 
-    /// Sets the split's ratio, keeping both sides at least `min_len` of
-    /// `span_len`. If the span is too short for that, the ratio becomes 0.5.
-    pub fn set_ratio(&mut self, path: &SplitPath, ratio: f32, span_len: f32, min_len: f32) {
-        let Some(slot) = self.split_at_mut(path) else {
+    /// Sets the split's ratio, keeping each side at least as long as its
+    /// panes need (`min_size` along the split) out of `span_len`. If the
+    /// span is too short for both sides, the ratio becomes 0.5.
+    pub fn set_ratio(&mut self, path: &SplitPath, ratio: f32, span_len: f32, pane_min: (f32, f32)) {
+        let Some(Layout::Split {
+            dir,
+            ratio: slot,
+            first,
+            second,
+        }) = self.node_mut(path)
+        else {
             return;
         };
-        *slot = if span_len.is_finite() && span_len >= 2.0 * min_len && span_len > 0.0 {
-            let lo = min_len / span_len;
-            safe_ratio(ratio).clamp(lo, 1.0 - lo)
+        let along = |m: (f32, f32)| match dir {
+            SplitDir::Right => m.0,
+            SplitDir::Down => m.1,
+        };
+        let lo = along(first.min_size(pane_min));
+        let hi = along(second.min_size(pane_min));
+        *slot = if span_len.is_finite() && span_len > 0.0 && span_len >= lo + hi {
+            safe_ratio(ratio).clamp(lo / span_len, 1.0 - hi / span_len)
         } else {
             0.5
         };
     }
 
-    /// Resets the split's ratio to 0.5.
-    pub fn even(&mut self, path: &SplitPath) {
-        if let Some(slot) = self.split_at_mut(path) {
-            *slot = 0.5;
-        }
+    /// Evens the split's two sides, as far as their panes' minimums allow
+    /// (see `set_ratio`).
+    pub fn even(&mut self, path: &SplitPath, span_len: f32, pane_min: (f32, f32)) {
+        self.set_ratio(path, 0.5, span_len, pane_min);
     }
 }

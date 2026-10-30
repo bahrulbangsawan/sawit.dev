@@ -699,11 +699,11 @@ fn set_ratio_keeps_both_sides_at_least_min() {
     let mut l = Layout::Pane(1);
     l.split(1, SplitDir::Right, 2);
     let root = SplitPath(vec![]);
-    l.set_ratio(&root, 0.05, 800., 160.);
+    l.set_ratio(&root, 0.05, 800., (160., 80.));
     assert!(matches!(l, Layout::Split { ratio, .. } if (ratio - 0.2).abs() < 1e-6));
-    l.set_ratio(&root, 0.99, 800., 160.);
+    l.set_ratio(&root, 0.99, 800., (160., 80.));
     assert!(matches!(l, Layout::Split { ratio, .. } if (ratio - 0.8).abs() < 1e-6));
-    l.even(&root);
+    l.even(&root, 800., (160., 80.));
     assert!(matches!(l, Layout::Split { ratio, .. } if ratio == 0.5));
     assert_eq!(
         l.dividers(Rect {
@@ -715,6 +715,58 @@ fn set_ratio_keeps_both_sides_at_least_min() {
             .at,
         400.
     );
+    // Too short for two minimums: back to even.
+    l.set_ratio(&root, 0.9, 300., (160., 80.));
+    assert!(matches!(l, Layout::Split { ratio, .. } if ratio == 0.5));
+}
+
+fn root_ratio(l: &Layout) -> f32 {
+    match l {
+        Layout::Split { ratio, .. } => *ratio,
+        Layout::Pane(_) => panic!("not split"),
+    }
+}
+
+#[test]
+fn dragging_a_parent_divider_stops_at_the_nested_panes_minimum() {
+    // A | (B | C): the right side needs room for two panes.
+    let mut l = Layout::Pane(1);
+    l.split(1, SplitDir::Right, 2);
+    l.split(2, SplitDir::Right, 3);
+    let root = SplitPath(vec![]);
+    l.set_ratio(&root, 0.9, 800., (160., 80.));
+    assert!((root_ratio(&l) - 0.6).abs() < 1e-6, "{}", root_ratio(&l));
+    let area = Rect {
+        x: 0.,
+        y: 0.,
+        w: 800.,
+        h: 400.,
+    };
+    for (_, r) in l.rects(area) {
+        assert!(r.w >= 160. - 1e-3, "{r:?}");
+    }
+    l.set_ratio(&root, 0.0, 800., (160., 80.));
+    assert!((root_ratio(&l) - 0.2).abs() < 1e-6);
+
+    // A | (B / C): stacked panes only need one pane's width.
+    let mut l = Layout::Pane(1);
+    l.split(1, SplitDir::Right, 2);
+    l.split(2, SplitDir::Down, 3);
+    l.set_ratio(&root, 0.9, 800., (160., 80.));
+    assert!((root_ratio(&l) - 0.8).abs() < 1e-6);
+}
+
+#[test]
+fn even_respects_nested_minimums() {
+    // A | (B | C | D) in 800: the right side needs 480, so even stops at 0.4.
+    let mut l = Layout::Pane(1);
+    l.split(1, SplitDir::Right, 2);
+    l.split(2, SplitDir::Right, 3);
+    l.split(3, SplitDir::Right, 4);
+    let root = SplitPath(vec![]);
+    l.set_ratio(&root, 0.2, 800., (160., 80.));
+    l.even(&root, 800., (160., 80.));
+    assert!((root_ratio(&l) - 0.4).abs() < 1e-6, "{}", root_ratio(&l));
 }
 
 #[test]
