@@ -5,7 +5,9 @@
 //! Agents drive it through [`BrowserView::apply`] (`sawit-mcp`'s `browser_*`
 //! tools): navigation, state, logs and screenshots are answered here; the
 //! rest by the page agent (`sawit_core::browser::AGENT_JS`), injected into
-//! every page, through `evaluate_script_with_callback`.
+//! every page, through `Engine::eval_with_callback`.
+
+mod engine;
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -26,8 +28,8 @@ use sawit_core::browser::{
 };
 use sawit_core::probe;
 use serde_json::{Value, json};
-use wry::dpi::{LogicalPosition, LogicalSize};
-use wry::{NewWindowResponse, PageLoadEvent, Rect, WebView, WebViewBuilder};
+
+use engine::{Engine, EngineEvent, EngineSpec, Frame};
 
 use crate::rt;
 use crate::states::Placeholder;
@@ -40,16 +42,10 @@ const TOOLBAR_HEIGHT: f32 = 36.;
 
 type OpResult = Result<Value, String>;
 
-/// What the webview reports, from its handlers (any thread) to the view.
+/// What the engine reports, from its handlers (any thread) to the view.
 enum FromPage {
     Event(PageEvent),
-    Load {
-        started: bool,
-        url: String,
-    },
-    Title(String),
-    /// A link asked for a new window: it opens here instead.
-    Open(String),
+    Engine(EngineEvent),
     /// An element's box is known: capture it (or the whole view).
     Shoot {
         rect: Option<(f64, f64, f64, f64)>,
@@ -59,7 +55,7 @@ enum FromPage {
 
 pub struct BrowserView {
     project: Option<PathBuf>,
-    webview: Option<Rc<WebView>>,
+    engine: Option<Rc<Engine>>,
     error: Option<SharedString>,
     bounds: Option<Bounds<Pixels>>,
     /// The tab is active and the center pane is showing.
@@ -102,8 +98,8 @@ impl BrowserView {
                 }
                 // Typing goes to the address field, not the page.
                 InputEvent::Focus => {
-                    if let Some(webview) = &this.webview {
-                        let _ = webview.focus_parent();
+                    if let Some(engine) = &this.engine {
+                        engine.focus_parent();
                     }
                 }
                 _ => {}
@@ -139,7 +135,7 @@ impl BrowserView {
         }
         Self {
             project,
-            webview: None,
+            engine: None,
             error: None,
             bounds: None,
             visible: false,
@@ -163,9 +159,9 @@ impl BrowserView {
     }
 
     fn current_url(&self) -> String {
-        self.webview
+        self.engine
             .as_ref()
-            .and_then(|w| w.url().ok())
+            .and_then(|e| e.url())
             .filter(|u| !u.is_empty())
             .unwrap_or_else(|| self.url.clone())
     }
@@ -175,10 +171,10 @@ impl BrowserView {
         self.navigated = true;
         self.loading = true;
         self.url = url.clone();
-        if let Some(webview) = &self.webview {
-            let _ = webview.load_url(&url);
+        if let Some(engine) = &self.engine {
+            engine.load_url(&url);
             if self.visible {
-                let _ = webview.focus();
+                engine.focus();
             }
         }
         cx.notify();
@@ -192,7 +188,12 @@ impl BrowserView {
                 self.url = url;
                 self.show_address(window, cx);
             }
-            FromPage::Load { started, url } => {
+            FromPage::Engine(EngineEvent::Ipc(body)) => {
+                if let Some(event) = parse_ipc(&body, &self.token) {
+                    self.receive(FromPage::Event(event), window, cx);
+                }
+            }
+            FromPage::Engine(EngineEvent::Load { started, url }) => {
                 self.loading = started;
                 if started && url != "about:blank" {
                     // Marks where each page's messages begin.
@@ -207,10 +208,13 @@ impl BrowserView {
                 self.url = url;
                 self.show_address(window, cx);
             }
-            FromPage::Title(title) => self.title = title,
-            FromPage::Open(url) => self.navigate(&url, cx),
-            FromPage::Shoot { rect, reply } => match &self.webview {
-                Some(webview) => snapshot(webview, rect, self.bounds, reply),
+            FromPage::Engine(EngineEvent::Title(title)) => self.title = title,
+            FromPage::Engine(EngineEvent::NewWindow(url)) => self.navigate(&url, cx),
+            FromPage::Shoot { rect, reply } => match &self.engine {
+                Some(engine) => {
+                    let width = shot_width(rect, self.bounds);
+                    engine.snapshot(rect, width, 1., reply)
+                }
                 None => {
                     let _ = reply.send(Err("The browser isn't open.".into()));
                 }
@@ -242,7 +246,7 @@ impl BrowserView {
             let _ = tx.send(Err(format!("The browser couldn't start: {e}")));
             return rx;
         }
-        if self.webview.is_none() {
+        if self.engine.is_none() {
             self.queued.push((op, tx));
             return rx;
         }
@@ -251,7 +255,7 @@ impl BrowserView {
     }
 
     fn run(&mut self, op: BrowserOp, reply: oneshot::Sender<OpResult>, cx: &mut Context<Self>) {
-        let Some(webview) = self.webview.clone() else {
+        let Some(engine) = self.engine.clone() else {
             let _ = reply.send(Err("The browser isn't open.".into()));
             return;
         };
@@ -262,7 +266,7 @@ impl BrowserView {
             }
             BrowserOp::Back | BrowserOp::Forward => {
                 let back = matches!(op, BrowserOp::Back);
-                let _ = webview.evaluate_script(if back {
+                engine.eval(if back {
                     "history.back()"
                 } else {
                     "history.forward()"
@@ -271,7 +275,7 @@ impl BrowserView {
             }
             BrowserOp::Reload => {
                 self.loading = true;
-                let _ = webview.reload();
+                engine.reload();
                 json!({ "reloading": self.current_url() })
             }
             BrowserOp::State => {
@@ -321,18 +325,19 @@ impl BrowserView {
                 value
             }
             BrowserOp::Devtools => {
-                webview.open_devtools();
+                engine.open_devtools();
                 json!({ "opened": "Web Inspector" })
             }
             BrowserOp::Screenshot { target } if target.is_empty() => {
-                return snapshot(&webview, None, self.bounds, reply);
+                let width = shot_width(None, self.bounds);
+                return engine.snapshot(None, width, 1., reply);
             }
             BrowserOp::Screenshot { target } => {
                 // The element's box first (scrolled into view), then the capture.
                 let to_view = self.to_view.clone();
                 let reply = Mutex::new(Some(reply));
                 let script = agent_call(&rect_op(&target));
-                let _ = webview.evaluate_script_with_callback(&script, move |result| {
+                let _ = engine.eval_with_callback(&script, move |result| {
                     let Some(reply) = reply.lock().ok().and_then(|mut r| r.take()) else {
                         return;
                     };
@@ -361,7 +366,7 @@ impl BrowserView {
             op => {
                 let reply = Mutex::new(Some(reply));
                 let script = agent_call(&serde_json::to_value(&op).unwrap_or_default());
-                let sent = webview.evaluate_script_with_callback(&script, move |result| {
+                let sent = engine.eval_with_callback(&script, move |result| {
                     if let Some(reply) = reply.lock().ok().and_then(|mut r| r.take()) {
                         let _ = reply.send(agent_result(&result));
                     }
@@ -382,10 +387,10 @@ impl BrowserView {
             return;
         }
         self.visible = visible;
-        if let Some(webview) = &self.webview {
-            let _ = webview.set_visible(visible);
+        if let Some(engine) = &self.engine {
+            engine.set_visible(visible);
             if !visible {
-                let _ = webview.focus_parent();
+                engine.focus_parent();
             }
         }
     }
@@ -394,16 +399,16 @@ impl BrowserView {
         if self.error.is_some() {
             return;
         }
-        if self.webview.is_none() {
+        if self.engine.is_none() {
             match self.build(bounds, window) {
-                Ok(webview) => {
-                    self.webview = Some(Rc::new(webview));
+                Ok(engine) => {
+                    self.engine = Some(Rc::new(engine));
                     for (op, reply) in std::mem::take(&mut self.queued) {
                         self.run(op, reply, cx);
                     }
                 }
                 Err(e) => {
-                    self.error = Some(e.to_string().into());
+                    self.error = Some(e.clone().into());
                     for (_, reply) in self.queued.drain(..) {
                         let _ = reply.send(Err(format!("The browser couldn't start: {e}")));
                     }
@@ -414,60 +419,30 @@ impl BrowserView {
         }
         if self.bounds != Some(bounds) {
             self.bounds = Some(bounds);
-            if let Some(webview) = &self.webview {
-                let _ = webview.set_bounds(rect(bounds));
+            if let Some(engine) = &self.engine {
+                engine.set_frame(frame(bounds));
             }
         }
     }
 
-    fn build(&self, bounds: Bounds<Pixels>, window: &Window) -> wry::Result<WebView> {
-        let token = self.token.clone();
-        let events = self.to_view.clone();
-        let loads = self.to_view.clone();
-        let titles = self.to_view.clone();
-        let opens = self.to_view.clone();
-        let mut builder = WebViewBuilder::new()
-            .with_url(&self.url)
-            .with_initialization_script_for_main_only(
-                AGENT_JS.replace(TOKEN_PLACEHOLDER, &self.token),
-                true,
-            )
-            .with_ipc_handler(move |request| {
-                if let Some(event) = parse_ipc(request.body(), &token) {
-                    let _ = events.unbounded_send(FromPage::Event(event));
-                }
-            })
-            .with_on_page_load_handler(move |event, url| {
-                let started = matches!(event, PageLoadEvent::Started);
-                let _ = loads.unbounded_send(FromPage::Load { started, url });
-            })
-            .with_document_title_changed_handler(move |title| {
-                let _ = titles.unbounded_send(FromPage::Title(title));
-            })
-            .with_navigation_handler(|url| {
-                if is_web(&url) {
-                    return true;
-                }
-                // mailto:, tel:, app links: the system's handler.
-                let _ = std::process::Command::new("open").arg(&url).spawn();
-                false
-            })
-            .with_new_window_req_handler(move |url, _| {
-                let _ = opens.unbounded_send(FromPage::Open(url));
-                NewWindowResponse::Deny
-            })
-            .with_devtools(true)
-            .with_back_forward_navigation_gestures(true)
-            .with_accept_first_mouse(true)
-            .with_focused(self.visible)
-            .with_visible(self.visible)
-            .with_bounds(rect(bounds));
-        if let Some(project) = &self.project {
-            use wry::WebViewBuilderExtDarwin as _;
-            builder =
-                builder.with_data_store_identifier(sawit_core::browser::data_store_id(project));
-        }
-        builder.build_as_child(window)
+    fn build(&self, bounds: Bounds<Pixels>, window: &Window) -> Result<Engine, String> {
+        let to_view = self.to_view.clone();
+        Engine::build(
+            EngineSpec {
+                url: self.url.clone(),
+                init_script: AGENT_JS.replace(TOKEN_PLACEHOLDER, &self.token),
+                data_store: self
+                    .project
+                    .as_deref()
+                    .map(sawit_core::browser::data_store_id),
+                visible: self.visible,
+                frame: frame(bounds),
+            },
+            move |event| {
+                let _ = to_view.unbounded_send(FromPage::Engine(event));
+            },
+            window,
+        )
     }
 
     fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -507,8 +482,8 @@ impl BrowserView {
                     .tooltip(if loading { "Stop" } else { "Reload" })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if loading {
-                            if let Some(webview) = &this.webview {
-                                let _ = webview.evaluate_script("window.stop()");
+                            if let Some(engine) = &this.engine {
+                                engine.eval("window.stop()");
                             }
                             this.loading = false;
                             cx.notify();
@@ -533,8 +508,8 @@ impl BrowserView {
 
 impl Drop for BrowserView {
     fn drop(&mut self) {
-        if let Some(webview) = &self.webview {
-            let _ = webview.focus_parent();
+        if let Some(engine) = &self.engine {
+            engine.focus_parent();
         }
     }
 }
@@ -565,10 +540,21 @@ impl Render for BrowserView {
     }
 }
 
-fn is_web(url: &str) -> bool {
-    ["http:", "https:", "about:", "data:", "blob:", "file:"]
-        .iter()
-        .any(|scheme| url.starts_with(scheme))
+fn frame(bounds: Bounds<Pixels>) -> Frame {
+    Frame {
+        x: f32::from(bounds.origin.x),
+        y: f32::from(bounds.origin.y),
+        width: f32::from(bounds.size.width),
+        height: f32::from(bounds.size.height),
+    }
+}
+
+/// The width a capture is scaled to: the element's, else the view's.
+fn shot_width(rect: Option<(f64, f64, f64, f64)>, bounds: Option<Bounds<Pixels>>) -> f64 {
+    match rect {
+        Some((_, _, w, _)) => w,
+        None => bounds.map_or(1024., |b| f64::from(f32::from(b.size.width))),
+    }
 }
 
 fn new_token() -> String {
@@ -617,109 +603,9 @@ fn agent_result(result: &str) -> OpResult {
     Ok(value)
 }
 
-fn rect(bounds: Bounds<Pixels>) -> Rect {
-    Rect {
-        position: LogicalPosition::new(f32::from(bounds.origin.x), f32::from(bounds.origin.y))
-            .into(),
-        size: LogicalSize::new(
-            f32::from(bounds.size.width).max(1.),
-            f32::from(bounds.size.height).max(1.),
-        )
-        .into(),
-    }
-}
-
-/// Captures the view (or `rect` of it, in points) as a PNG at 1×, answered
-/// as `png_base64` with its size.
-fn snapshot(
-    webview: &WebView,
-    rect: Option<(f64, f64, f64, f64)>,
-    bounds: Option<Bounds<Pixels>>,
-    reply: oneshot::Sender<OpResult>,
-) {
-    use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
-    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-    use objc2_foundation::{NSDictionary, NSError, NSNumber};
-    use objc2_web_kit::WKSnapshotConfiguration;
-    use wry::WebViewExtMacOS as _;
-
-    let Some(mtm) = MainThreadMarker::new() else {
-        let _ = reply.send(Err("Screenshots are taken on the main thread.".into()));
-        return;
-    };
-    let width = match rect {
-        Some((_, _, w, _)) => w,
-        None => bounds.map_or(1024., |b| f64::from(f32::from(b.size.width))),
-    };
-    let config = unsafe { WKSnapshotConfiguration::new(mtm) };
-    unsafe {
-        if let Some((x, y, w, h)) = rect {
-            config.setRect(CGRect::new(CGPoint::new(x, y), CGSize::new(w, h)));
-        }
-        config.setSnapshotWidth(Some(&NSNumber::new_f64(width)));
-        config.setAfterScreenUpdates(true);
-    }
-    let reply = Mutex::new(Some(reply));
-    let handler = block2::RcBlock::new(move |image: *mut NSImage, error: *mut NSError| {
-        let Some(reply) = reply.lock().ok().and_then(|mut r| r.take()) else {
-            return;
-        };
-        let result = (|| {
-            if image.is_null() {
-                let reason = unsafe { error.as_ref() }
-                    .map(|e| e.localizedDescription().to_string())
-                    .unwrap_or_else(|| "unknown error".into());
-                return Err(format!("WebKit couldn't take the screenshot: {reason}"));
-            }
-            let image = unsafe { &*image };
-            let tiff = image
-                .TIFFRepresentation()
-                .ok_or("The screenshot has no pixels.")?;
-            let rep =
-                NSBitmapImageRep::imageRepWithData(&tiff).ok_or("The screenshot has no bitmap.")?;
-            let png = unsafe {
-                rep.representationUsingType_properties(
-                    NSBitmapImageFileType::PNG,
-                    &NSDictionary::new(),
-                )
-            }
-            .ok_or("The screenshot couldn't be saved as PNG.")?;
-            let (png, w, h) = at_1x(png.to_vec(), width.round() as u32)?;
-            Ok(json!({
-                "png_base64": sawit_core::browser::base64_encode(&png),
-                "width": w,
-                "height": h,
-            }))
-        })();
-        let _ = reply.send(result);
-    });
-    let wk = webview.webview();
-    unsafe { wk.takeSnapshotWithConfiguration_completionHandler(Some(&config), &handler) };
-}
-
-/// Retina captures are twice the size in pixels; agents get them at the
-/// page's CSS size, which is plenty and costs a quarter of the tokens.
-fn at_1x(png: Vec<u8>, width: u32) -> Result<(Vec<u8>, u32, u32), String> {
-    let image = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
-        .map_err(|e| format!("The screenshot couldn't be read: {e}"))?;
-    if width == 0 || image.width() <= width + width / 10 {
-        let (w, h) = (image.width(), image.height());
-        return Ok((png, w, h));
-    }
-    let height =
-        (u64::from(image.height()) * u64::from(width) / u64::from(image.width())).max(1) as u32;
-    let small = image.resize_exact(width, height, image::imageops::FilterType::Triangle);
-    let mut out = std::io::Cursor::new(Vec::new());
-    small
-        .write_to(&mut out, image::ImageFormat::Png)
-        .map_err(|e| format!("The screenshot couldn't be saved: {e}"))?;
-    Ok((out.into_inner(), width, height))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{Target, agent_call, agent_result, at_1x, is_web, new_token, rect_op};
+    use super::{Target, agent_call, agent_result, new_token, rect_op};
     use serde_json::json;
 
     #[test]
@@ -745,27 +631,10 @@ mod tests {
     }
 
     #[test]
-    fn web_schemes_stay_in_the_tab() {
-        assert!(is_web("https://a.dev") && is_web("about:blank") && is_web("file:///x"));
-        assert!(!is_web("mailto:a@b.c") && !is_web("slack://open"));
-    }
-
-    #[test]
     fn tokens_are_random_hex() {
         let (a, b) = (new_token(), new_token());
         assert_eq!(a.len(), 32);
         assert_ne!(a, b);
         assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
-    }
-
-    #[test]
-    fn retina_screenshots_shrink_to_css_size() {
-        let mut png = std::io::Cursor::new(Vec::new());
-        image::RgbaImage::new(200, 100)
-            .write_to(&mut png, image::ImageFormat::Png)
-            .unwrap();
-        let (small, w, h) = at_1x(png.into_inner(), 100).unwrap();
-        assert_eq!((w, h), (100, 50));
-        assert_eq!(image::load_from_memory(&small).unwrap().width(), 100);
     }
 }
