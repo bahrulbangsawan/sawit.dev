@@ -15,11 +15,13 @@
 //! method composes go into it ([`text_input`]).
 //!
 //! Around the canvas goes its chrome (spec D11): the top bar over it ([`top_bar`]), the toolbar
-//! floating at its bottom centre ([`toolbar`]) and the context bar floating over a board's
-//! selection ([`context_bar`]). Their buttons run their commands through [`BoardView::choose`].
-//! While the UI is hidden (`⌘\`, `view.toggleUi`) only the canvas shows.
+//! floating at its bottom centre ([`toolbar`]), the context bar floating over a board's
+//! selection ([`context_bar`]) and the Design panel on its right ([`design_panel`]). Their buttons
+//! run their commands through [`BoardView::choose`]. While the UI is hidden (`⌘\`,
+//! `view.toggleUi`) only the canvas shows.
 
 mod context_bar;
+mod design_panel;
 mod events;
 mod overlay_paint;
 mod paint;
@@ -188,6 +190,14 @@ pub struct BoardView {
     /// The kind of file the chrome was last drawn for: when another kind is on show, an open
     /// flyout or picker closes ([`Self::settle_chrome`]).
     shown_kind: Option<DocKind>,
+    /// The Design panel shows beside the canvas: at first beside a design file, not beside a
+    /// board (spec D11). `view.design` (⌥8, the top bar's toggle) turns it over. Hiding the UI
+    /// leaves it as it is, and the panel comes back with the UI (ruling P5-C18).
+    show_design: bool,
+    /// What the Design panel keeps between frames ([`design_panel`]).
+    design: design_panel::DesignPanel,
+    /// The scrub of a Design panel field that is on ([`BoardView::scrub_begin`]).
+    scrub: Option<design_panel::Scrub>,
     _frames: Task<()>,
     _quit: Subscription,
     _release: Subscription,
@@ -284,6 +294,9 @@ impl BoardView {
         // Its saves never replace what another app or window wrote to the file since.
         let writer = Writer::spawn();
         writer.guard(path.clone(), read);
+        let show_design = board
+            .as_ref()
+            .is_ok_and(|board| board.kind() == DocKind::Design);
         Self {
             path,
             board,
@@ -312,6 +325,9 @@ impl BoardView {
             open_flyout: None,
             picker: None,
             shown_kind: None,
+            show_design,
+            design: design_panel::DesignPanel::default(),
+            scrub: None,
             _frames: frames,
             // ⌘Q quits without dropping the views: what isn't on disk yet is written first.
             _quit: cx.on_app_quit(|this, _| {
@@ -419,8 +435,10 @@ impl BoardView {
     /// pointer event, key and op, as FigCraft's own canvas handles its requests after each input.
     ///
     /// `sawit_board::input::handle_requests` does the ones that need no view (`board.editText`
-    /// starts typing in a sticky). The panels' and menus' requests get their arms here with Plans
-    /// 4, 5 and 6. A message the engine left for the user shows as a toast.
+    /// starts typing in a sticky). `panel.design` (from `view.design`: ⌥8, the top bar's toggle,
+    /// an agent's command) shows or hides the Design panel. The other panels' and the menus'
+    /// requests get their arms here with Plans 4 and 6. A message the engine left for the user
+    /// shows as a toast.
     fn handle_ui_requests(&mut self, mut requests: Vec<UiRequest>, cx: &mut Context<Self>) {
         let Some(board) = self.board_mut() else {
             return;
@@ -429,7 +447,10 @@ impl BoardView {
         let rest = input::handle_requests(board, &requests);
         let message = board.session.message.take();
         for request in rest {
-            log::debug!("the canvas has no handler yet for request {}", request.kind);
+            match request.kind.as_str() {
+                "panel.design" => self.show_design = !self.show_design,
+                kind => log::debug!("the canvas has no handler yet for request {kind}"),
+            }
         }
         if let Some(message) = message {
             self.show_toast(message, cx);
@@ -447,7 +468,27 @@ impl BoardView {
     ///
     /// Space held down without modifiers, while no text is edited, arms a pan instead
     /// ([`events`]).
-    pub(super) fn on_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    ///
+    /// The canvas takes only the keys pressed while it has the keyboard itself: a key typed in a
+    /// field of the Design panel, inside the canvas's view, goes on to the field. While a label's
+    /// drag scrubs a field, Escape puts the value back and no key runs a command, which would end
+    /// up in the scrub's undo step (ruling P5-C3).
+    pub(super) fn on_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.scrubbing_label() {
+            if event.keystroke.key == "escape" {
+                self.scrub_end(false, cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
+        if !self.focus.is_focused(window) {
+            return;
+        }
         if self.hold_space(event, cx) {
             cx.stop_propagation();
             return;
@@ -902,6 +943,9 @@ impl Render for BoardView {
         };
         let top = chrome.then(|| top_bar::render_top_bar(self, window, cx));
         let canvas = self.render_canvas(chrome, window, cx);
+        // Goes with the rest of the chrome while the UI is hidden, and comes back with it.
+        let design = (chrome && self.show_design)
+            .then(|| design_panel::render_design_panel(self, window, cx));
         div()
             .id("board")
             .key_context(key_context)
@@ -913,16 +957,25 @@ impl Render for BoardView {
             .on_key_down(cx.listener(Self::on_key))
             .on_key_up(cx.listener(Self::on_key_up))
             .children(top)
-            .child(canvas)
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .child(canvas)
+                    .children(design),
+            )
             .into_any_element()
     }
 }
 
 impl BoardView {
-    /// The canvas, under the top bar: the document as rendered and its overlay, and over them,
-    /// while the `chrome` shows, the context bar and the toolbar, then the toast. The pointer on
-    /// the canvas drives the tools ([`events`]); the chrome floating over it takes its own clicks,
-    /// so none of them reaches the tools.
+    /// The canvas, under the top bar and beside the Design panel: the document as rendered and
+    /// its overlay, and over them, while the `chrome` shows, the context bar and the toolbar, then
+    /// the toast. The pointer on the canvas drives the tools ([`events`]); the chrome floating over
+    /// it takes its own clicks, so none of them reaches the tools.
     fn render_canvas(
         &mut self,
         chrome: bool,
@@ -941,8 +994,8 @@ impl BoardView {
             .id("board-canvas")
             .relative()
             .flex_1()
-            .min_h_0()
-            .w_full()
+            .min_w_0()
+            .h_full()
             .overflow_hidden()
             .cursor(cursor)
             .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| this.on_scroll(event, cx)))
@@ -963,6 +1016,7 @@ impl BoardView {
                     },
                     move |bounds, painting, window, cx| {
                         events::track_drags(&painted, window);
+                        design_panel::track_scrub(&painted, window);
                         text_input::handle_input(&painted, bounds, window, cx);
                         if let Some(painting) = painting {
                             paint::paint(bounds, painting, window, cx);
@@ -3422,7 +3476,8 @@ mod tests {
     fn toggle_ui_hides_chrome(cx: &mut TestAppContext) {
         let tmp = Scratch::new("toggle-ui");
         let (view, mut cx) = chrome_canvas(cx, &tmp);
-        // ⌘\, as the canvas gets it.
+        // ⌘\, as the canvas gets it while it has the keyboard (ruling P5-C3).
+        focus_canvas(&view, &mut cx);
         let toggle = |cx: &mut VisualTestContext| {
             let event = KeyDownEvent {
                 keystroke: Keystroke::parse("cmd-\\").unwrap(),

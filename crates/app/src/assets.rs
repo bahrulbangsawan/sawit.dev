@@ -99,7 +99,25 @@ gpui_kit::assets::icon_assets!(
         StickyNote,
         Spline,
         Stamp,
-        LayoutTemplate
+        LayoutTemplate,
+        // The native canvas's Design panel (src/board/design_panel).
+        AlignStartVertical,
+        AlignCenterVertical,
+        AlignEndVertical,
+        AlignStartHorizontal,
+        AlignCenterHorizontal,
+        AlignEndHorizontal,
+        AlignHorizontalDistributeCenter,
+        AlignVerticalDistributeCenter,
+        Unlink,
+        Contrast,
+        SquareRoundCorner,
+        Scan,
+        Blend,
+        EyeDashed,
+        TextWrap,
+        MoveHorizontal,
+        MoveVertical
     ]
 );
 

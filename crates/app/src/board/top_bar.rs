@@ -1,7 +1,7 @@
 //! The canvas's top bar, a strip of [`HEIGHT`] over the canvas (spec D11, "Toolbar and context
-//! bar"): the document's name and the zoom menu on the left, Hide UI and Maximize on the right.
-//! Plan 6 puts the main menu first, and Plans 4 and 5 add their panels' toggles after the zoom
-//! menu (ruling P3-C11).
+//! bar"): the document's name, the zoom menu and the Design panel's toggle on the left, Hide UI
+//! and Maximize on the right. Plan 6 puts the main menu first, and Plan 4 adds the layers panel's
+//! toggle after the zoom menu (ruling P3-C11).
 //!
 //! Like the rest of the chrome, the bar goes while the UI is hidden (`⌘\`, `view.toggleUi`), so
 //! its Hide UI button only ever hides: `⌘\` shows the UI again (ruling P3-C12).
@@ -37,6 +37,9 @@ pub(super) const HIDE_UI_ICON: Lucide = Lucide::EyeOff;
 
 /// The picture of the Maximize button.
 pub(super) const MAXIMIZE_ICON: Lucide = Lucide::Maximize;
+
+/// The picture of the Design panel's toggle.
+pub(super) const DESIGN_ICON: Lucide = Lucide::PanelRight;
 
 /// The top bar of `view`'s canvas.
 pub(super) fn render_top_bar(
@@ -75,7 +78,8 @@ pub(super) fn render_top_bar(
                         .truncate()
                         .child(document_name(view.path())),
                 )
-                .child(zoom_menu(zoom, this.clone())),
+                .child(zoom_menu(zoom, this.clone()))
+                .child(design_toggle(view.show_design, this.clone())),
         )
         .child(
             h_flex()
@@ -156,6 +160,21 @@ fn zoom_menu(zoom: f64, view: WeakEntity<BoardView>) -> impl IntoElement + use<>
                 }
             }
             menu
+        })
+}
+
+/// The Design panel's toggle, marked while the panel is `shown`. It runs `view.design`, as ⌥8
+/// does, and the canvas carries out the engine's `panel.design` request.
+fn design_toggle(shown: bool, view: WeakEntity<BoardView>) -> Button {
+    Button::new("board-design")
+        .ghost()
+        .small()
+        .icon(DESIGN_ICON)
+        .selected(shown)
+        .tooltip(with_keys("Design panel", shortcut_label("view.design")))
+        .debug_selector(|| "board-design".into())
+        .on_click(move |_, _, cx| {
+            let _ = view.update(cx, |view, cx| view.choose("view.design", json!({}), cx));
         })
 }
 
