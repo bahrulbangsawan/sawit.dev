@@ -2203,6 +2203,11 @@ impl Workspace {
             let project = self.root(cx);
             let view = cx.new(|cx| BrowserView::new(project, url, window, cx));
             self.browser = Some(view.downgrade());
+            cx.subscribe_in(&view, window, |this, browser, event, window, cx| {
+                let crate::browser::BrowserEvent::SendToTerminal(md) = event;
+                this.send_to_terminal(browser, md, window, cx);
+            })
+            .detach();
             self.push_tab(
                 PaneItem::Other {
                     view: view.into(),
@@ -2215,6 +2220,37 @@ impl Workspace {
                 cx,
             );
         }
+        cx.notify();
+    }
+
+    /// Pastes annotations into the terminal running an agent; copies them
+    /// when no tab has bracketed paste on.
+    fn send_to_terminal(
+        &mut self,
+        browser: &Entity<BrowserView>,
+        markdown: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let note = match self.terminal.read(cx).paste_target(cx) {
+            Some(ix) => {
+                if !self.layout.terminal {
+                    self.layout.toggle(Area::Terminal);
+                }
+                let sent = self
+                    .terminal
+                    .update(cx, |t, cx| t.paste(ix, markdown, window, cx));
+                match sent {
+                    Ok(()) => format!("Sent to Terminal {}", ix + 1),
+                    Err(e) => e,
+                }
+            }
+            None => {
+                cx.write_to_clipboard(ClipboardItem::new_string(markdown.to_string()));
+                "No terminal is ready for a paste, so it was copied.".to_string()
+            }
+        };
+        browser.update(cx, |b, cx| b.set_annotate_note(&note, cx));
         cx.notify();
     }
 

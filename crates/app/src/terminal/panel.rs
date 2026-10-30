@@ -554,6 +554,40 @@ impl TerminalPanel {
             window.focus(&handle, cx);
         }
     }
+
+    /// The tab a paste may go to: the active one if its program enabled
+    /// bracketed paste, else the highest-numbered that did.
+    pub fn paste_target(&self, cx: &App) -> Option<usize> {
+        let accepts: Vec<bool> = self
+            .tabs
+            .iter()
+            .map(|t| t.read(cx).accepts_paste())
+            .collect();
+        pick_paste_target(self.active, &accepts)
+    }
+
+    /// Pastes `text` into tab `ix` (never pressing Enter) and focuses it.
+    pub fn paste(
+        &mut self,
+        ix: usize,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let view = self
+            .tabs
+            .get(ix)
+            .cloned()
+            .ok_or_else(|| format!("no terminal {}", ix + 1))?;
+        if !view.read(cx).accepts_paste() {
+            return Err(format!("terminal {} is not ready for a paste", ix + 1));
+        }
+        self.active = ix;
+        view.update(cx, |v, _| v.paste(text));
+        self.focus_active(window, cx);
+        cx.notify();
+        Ok(())
+    }
 }
 
 impl TerminalPanel {
@@ -910,5 +944,26 @@ fn ssh_command(launch: &Launch) -> Command {
         args: launch.args.clone(),
         cwd: None,
         env: launch.env.iter().cloned().collect(),
+    }
+}
+
+/// The tab to paste into: `active` if it accepts, else the last that does.
+fn pick_paste_target(active: usize, accepts: &[bool]) -> Option<usize> {
+    if accepts.get(active) == Some(&true) {
+        return Some(active);
+    }
+    accepts.iter().rposition(|&a| a)
+}
+
+#[cfg(test)]
+mod paste_tests {
+    use super::pick_paste_target;
+
+    #[test]
+    fn picks_active_else_highest_accepting() {
+        assert_eq!(pick_paste_target(1, &[true, false, true]), Some(2));
+        assert_eq!(pick_paste_target(0, &[true, false]), Some(0));
+        assert_eq!(pick_paste_target(0, &[false, false]), None);
+        assert_eq!(pick_paste_target(0, &[]), None);
     }
 }

@@ -118,6 +118,14 @@ enum FromPage {
     },
 }
 
+/// What the browser asks of the workspace.
+pub enum BrowserEvent {
+    /// Paste this markdown into the terminal running an agent.
+    SendToTerminal(String),
+}
+
+impl EventEmitter<BrowserEvent> for BrowserView {}
+
 pub struct BrowserView {
     project: Option<PathBuf>,
     engine: Option<Rc<Engine>>,
@@ -330,6 +338,12 @@ impl BrowserView {
         drop(self.page_op(markers_op(&markers)));
     }
 
+    /// Shows `text` in the Annotate footer for a moment.
+    pub fn set_annotate_note(&mut self, text: &str, cx: &mut Context<Self>) {
+        let text = text.to_string();
+        self.annotate.update(cx, |a, cx| a.set_note(text, cx));
+    }
+
     fn on_annotate(&mut self, event: &AnnotateEvent, cx: &mut Context<Self>) {
         match event {
             AnnotateEvent::Show(selector) => {
@@ -342,8 +356,11 @@ impl BrowserView {
                     self.annotate.update(cx, |a, cx| a.set_note("Copied", cx));
                 }
             }
-            // Pasting into a terminal is wired up separately.
-            AnnotateEvent::Send => {}
+            AnnotateEvent::Send => {
+                if let Some(md) = self.annotations_markdown(cx) {
+                    cx.emit(BrowserEvent::SendToTerminal(md));
+                }
+            }
         }
     }
 
