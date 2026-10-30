@@ -349,3 +349,167 @@ git commit -m "feat(canvas): open .figcraft and .excalidraw files in canvas tabs
 - [ ] **Step 4: Stop the instance** with `/bin/kill`, then run the full gates:
 Run: `cargo test --workspace`
 Expected: all pass.
+
+#### Task 7 notes: live check (2026-10-31, at `a0bcf46`, lane 3; the fix and the gates at `78b7f34`)
+
+Steps 1–3 and every carried check passed after one fix. Migrating a board made by today's canvas
+turned its Mermaid self-loops into stubs and bent its sequence messages onto notes; `78b7f34`
+fixes the importer (below). Step 4: `cargo test --workspace` passed. What needs a person is
+under "Hand checks".
+
+How it ran:
+- Debug build of the lane. Six launches per R-LAUNCH (`--foreground`, stderr to a log, a
+  scratch `SAWIT_HOME`, stopped with `/bin/kill`), load average at each launch in brackets:
+  1. the flag on, project `proj`: Steps 1–3, the routing carry, the Mermaid carry (4.67 8.11 7.85);
+  2. the flag on, `real`: a copy of the real old board (1.58 3.45 5.59);
+  3. the flag off, `legacy`: today's canvas (2.19 2.94 5.09);
+  4. the flag on, `legacy`: that board migrated (3.45 3.49 4.98);
+  5. the flag on, `legacy-fixed`: the same file migrated after the fix (2.98 2.40 3.35);
+  6. the flag off, `real-legacy`: the real board as today's canvas draws it (4.15 3.02 3.39).
+- MCP calls went to the lane's `target/debug/sawit-mcp` over stdio JSON-RPC (C18), with the same
+  `SAWIT_HOME`, `SAWIT_NATIVE_CANVAS=1` (unset with the flag off) and `project` set. One offline
+  call ran it as a symlink named `sawit-mcp` to `target/debug/sawit` (`invoked_as_mcp`).
+- Everything else went over the control socket. No AX, osascript or posted events. The window
+  kept Sawit's 1280 × 801; `layout` hid the sidebar and terminal for the closer screenshots.
+  No change was seen that no op of this check made (P3.T4 carry).
+- The board copies and screenshots stayed in the scratchpad (`live-P7.T7/`). The real board's
+  copies and their screenshots were deleted after the check and are not committed.
+
+Step 1 (the Task 4 fixture as `proj/.nyawit/canvas.excalidraw`): `open_page canvas` shows the
+migrated board at 49 %: "Service" with its arrow to the ellipse, the diamond, the free line, the
+freedraw, "Hello board", the "Group A" section with its rectangle, and the picture. A toast says
+"canvas.figcraft: skipped 1 embed". `get` lists 9 top-level layers (section, rectangle "Service",
+ellipse, diamond, image, text, connector 3→6, a free connector, ink). The first autosave wrote
+`canvas.figcraft` (P7-C8), and `canvas.excalidraw` stayed byte-identical.
+
+Carry (P7.T6, one view per file): copies of the fixture at `proj/x.excalidraw` and
+`proj/.nyawit/canvas.excalidraw`. `open` of `x.excalidraw`, `x.figcraft`,
+`.nyawit/canvas.excalidraw` and `.nyawit/canvas.figcraft`, in that order (absolute `/private/tmp`
+paths), then `open_page canvas`, then `state`. Answer: exactly two tabs, one of kind `canvas` and
+one of kind `file` (title `x.figcraft`, path `…/proj/x.figcraft`); no other tab for either file.
+The import wrote `x.figcraft` at its first autosave, and both `.excalidraw` files are unchanged.
+
+Carry (P7.T4 (1), the real old board): a copy of `~/Library/Application Support/sawit/
+canvas.excalidraw` (167,774 bytes now, changed 2026-10-30 13:37, still 134 live elements) as
+`real/.nyawit/canvas.excalidraw`. `get`, with the board unchanged: 31 roundedRectangle,
+8 rectangle, 3 diamond, 2 text and 42 connector (6 with text, 38 joined at both ends, 4 at their
+end only), as expected, and the copy's checksum is unchanged. The import leaves nothing out
+(`canvas_load` of a copy into a scratch project answers 86 layers and no `notes`), and
+`canvas_get` with the app closed answers the same 86 layers from a fresh copy and writes nothing.
+What looks different from the board as today's canvas draws it (launch 6; that canvas also
+follows the app's dark theme, where the native one keeps the document's light page, D12):
+- The headings "sawit.dev — user flow" (36 px) and "Legend" (24 px) come in at 12 px.
+- The 8 legend labels lose their category colours (#495057, #6741d9, #1971c2, #e03131, #f08c00,
+  #0c8599, #2f9e44, #e8590c) and are drawn in ink; the boxes keep their fills and outlines.
+- The 10 texts in Excalidraw's hand-drawn font (the headings and the legend) and the 40 in
+  Nunito all come in in the engine's face; label sizes (14, 16 and 20 px) become the engine's,
+  and some labels break at other words ("Pick version, port, data dir").
+- The 30 edges written with 10–19 points along Pele's routes come in straight. The edges into a
+  box meet at one point of it (the four into "Workspace" fan in as long diagonals, where today
+  they come down as verticals), and "install script" crosses the "Right-click Open / xattr" box.
+- 59 elements carry Excalidraw's `roughness` 1; it isn't carried.
+
+Step 2 (`sawit-mcp`, the Task 3 flowchart): `canvas_get` first (9 layers), then
+`canvas_add_mermaid {source: "flowchart LR; A[Start]-->B{Ok?}; B-->|yes|C[Done]"}` answers
+`{ok, added: 5, ids: [20, 23, 26, 29, 30]}`, placed at x 1100, 100 right of the fixture.
+`canvas_get`: 3 nodes (roundedRectangle "Start", diamond "Ok?", roundedRectangle "Done") and
+2 connectors with `from`/`to`: 20→23, and 23→26 with text "yes". The screenshot (154 %) shows three
+editable shapes and two arrowed connectors. They are attached: `canvas_update` moving "Done" 120
+down rerouted connector 30 to its new top, and `canvas_command edit.undo` (`{undone: true}`) put it
+back.
+
+Carry (P7.T3, Mermaid parity): (a)–(d) drawn with `canvas_add_mermaid` at x 0, 1200, 2400, 3600
+(y 1000), each with Pele's own picture of it (`render_mermaid`, light) placed 80 below through
+`canvas_add_elements {type: image, svg, name: pele.svg}`, which comes in as an SVG frame. No reply
+had notes. All four meet their expectations; the differences are:
+- (a) `stateDiagram-v2` (`[*] --> Still`, `Still --> Still : tick`, `Still --> Moving`): the
+  self-transition is a loop with its head and "tick" beside it. The loop and its head are ink,
+  heavier than Pele's line; "tick" is 12 px to Pele's 14; the nodes are unfilled with ink
+  outlines where Pele fills them grey with grey outlines (today's canvas maps Pele's neutral
+  colours the same way, pele.ts `NEUTRAL_FILLS`).
+- (b) `sequenceDiagram` (`Alice->>Bob: Hello`, `Note over Bob: Thinks`, `Bob-->>Alice: Hi`,
+  `Note over Alice,Bob: Both`): both messages run level and end at the lifelines, and neither
+  bends onto a note. "Hi" is solid where Pele dashes it, and its labels are 12 px. The lifelines
+  are drawn over the notes and through "Thinks", as today's canvas draws them too (pele.ts adds
+  them last).
+- (c) `classDiagram` (`Animal <|-- Dog`, `Animal *-- Leg`, `Animal ..> Food: get`): `from`/`to`
+  on all three edges, and the inheritance head and the composition diamond sit at Animal. The
+  head is a filled triangle cap where Pele's is hollow, the diamond an ink outline where Pele
+  fills it; the three straight edges meet at one point under Animal where Pele's curves leave it
+  apart; "get" is solid where Pele dashes it; the class names are regular where Pele sets them
+  bold.
+- (d) `flowchart LR` (`A -.->|maybe| B`, `A ==> C`, `C --> C`): the self-loop is a loop and
+  "maybe" is on its edge. A→B is solid where Pele dots it, A⇒C thin where Pele draws it thick, and
+  both are straight where Pele curves them.
+- With the flag off (launch 3), today's canvas draws the same four with Pele's curves, dashes and
+  dots, a hollow inheritance triangle, labels at 14 px in Nunito and larger Excalidraw heads.
+
+Carry (P7.T4 (2), migrating today's file): launch 3 also drew `erDiagram` /
+`CUSTOMER ||--o{ ORDER : places` and `flowchart LR` / `A --- B` / `B <--> C` beside (c). Today's
+canvas shows bars and a crow's foot on the ER line, no marker on `A --- B` and heads at both ends of
+`B <--> C`. The app was stopped once `legacy/.nyawit/canvas.excalidraw` held all 71 elements, and
+launch 4 migrated it (48 layers; the file unchanged). `A --- B` is a connector with no caps; the
+class heads stay at Animal; the composition diamond and the crow's foot come in as triangle end
+caps; `B <--> C` and the ER line keep only their end head; dashes and dots come in solid and curves
+straight (recorded, not failed). It also showed a defect: both self-loops were stubs (a head on the
+node's edge and no loop), "Hello" bent down onto "Thinks", and "Hi" ran out of the "Both" note.
+
+Defect, fixed in `78b7f34` ("fix(canvas): migrated loops and sequence messages stay as
+excalidraw drew them"):
+- Cause: today's canvas (pele.ts through Excalidraw) bound a sequence message's end to the note
+  Pele puts just under it (`focus` ±1.61, gap 10: the line runs beside the note), and bound a
+  loop back to one node to that node at both ends. Excalidraw draws the stored points, so both
+  look right today. The importer joined every bound end, so the engine routed each message onto
+  its note, and a connector from a node to itself became a stub (`skeleton::apply` frees one end
+  of such a connector, with a note). `mermaid.rs` handles both cases on the native path already.
+- Fix (`crates/board/src/excalidraw.rs`): an end whose binding `focus` is outside -1..1 stays free
+  where it is drawn; a line bound to one element at both ends joins neither, and such an arrow with
+  no label is ink along its route with its triangle head drawn in it (Excalidraw's size: half the
+  last step, at most 15, 25° to each side). Every other binding in the two files seen here has
+  |focus| ≤ 0.76, and the real board migrates exactly as before (same counts after the fix).
+- Tests (RED before the fix, GREEN after): `an_end_bound_to_an_element_it_runs_beside_stays_where_
+  it_is_drawn`, `an_arrow_bound_to_one_element_at_both_ends_joins_neither`,
+  `a_loop_back_to_one_element_is_drawn_along_its_route_with_its_head`.
+- Live, launch 5 (the same file, a fresh project): both loops are loops with their heads, and
+  "Hello" and "Hi" run level from lifeline to lifeline as today's canvas draws them: 22 connectors
+  and 2 ink, where launch 4 had 24 connectors. `canvas_load` of the file answers no `notes`.
+
+Step 3: `board.templates` lists retrospective, brainstorm, weeklyPlanner, flowChart and kanban.
+`canvas_command board.template {name: "retrospective"}` (C19) answers `{name: "retrospective",
+ids: [234, 235, 240, 245]}` and places the title and its three sections (1280 × 592), centred in
+the view. `canvas_export {format: "png"}` wrote `proj/.nyawit/exports/canvas-1793397241699.png`
+(325,375 bytes, a 3821 × 2552 PNG of the whole page) and made `.nyawit/.gitignore`. With the app
+closed, `canvas_get` read all 65 layers back from `canvas.figcraft`.
+
+Step 4: every instance stopped with `/bin/kill`. `cargo test --workspace` at `78b7f34`: 1294
+passed, 9 ignored, 0 failed (app 263, sawit-board 623, sawit-core 324 + 23, sawit-mcp 61).
+
+Not failures, for the final review:
+- `canvas_command` answers the engine's own result, so `board.template`'s ids are numbers
+  (`[234, …]`) where `get` and `add` give strings (`"234"`).
+- Launch 5 took over 4 s to listen; the first two requests were refused and resent.
+
+##### Hand checks (pending — needs the user)
+
+Run `SAWIT_NATIVE_CANVAS=1 target/debug/sawit` on a scratch project, open the Canvas page, and
+have an agent call `canvas_add_mermaid` for each source below, with `render_mermaid` (light) of
+the same source placed under it. Then quit, start `target/debug/sawit` without the flag on another
+scratch project and draw the same sources there. Record each answer under its number.
+
+1. Mermaid parity (P7.T3 carry). Sources: (a) `stateDiagram-v2` / `[*] --> Still` /
+   `Still --> Still : tick` / `Still --> Moving`; (b) `sequenceDiagram` /
+   `Alice->>Bob: Hello` / `Note over Bob: Thinks` / `Bob-->>Alice: Hi` /
+   `Note over Alice,Bob: Both`; (c) `classDiagram` / `Animal <|-- Dog` / `Animal *-- Leg` /
+   `Animal ..> Food: get`; (d) `flowchart LR` / `A -.->|maybe| B` / `A ==> C` / `C --> C`.
+   Compare each pair, and the flag-off drawing, and choose which Skeleton fields to add for
+   parity: `fontSize` for texts and labels, label colour, `strokeStyle` and `strokeWidth`, a start
+   cap and the kind of each cap, curved or routed bound edges. None of them fails the task.
+   Answer: ______
+2. Import losses (P7.T4 carry (3)). Copy a real old board (never the original), for example
+   `~/Library/Application Support/sawit/canvas.excalidraw`, to `<scratch>/.nyawit/
+   canvas.excalidraw`. Open it once without the flag, then once with it (it migrates), and say
+   which losses matter: text sizes (headings come in at 12 px), label colours (the legend),
+   fonts (Excalidraw's hand-drawn one), marker kinds and a head at each end (crow's feet, bars,
+   diamonds and hollow triangles become one filled triangle at the end), dashes and widths,
+   curved routes, and, for boards drawn by hand, rotation, opacity, fill style, roughness and
+   groups. Answer: ______
