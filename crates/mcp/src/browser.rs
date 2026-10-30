@@ -204,6 +204,14 @@ pub struct EvaluateArgs {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct AnnotationsArgs {
+    #[schemars(description = "Remove the annotations after reading them")]
+    #[serde(default)]
+    pub clear: bool,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ResizeArgs {
     #[schemars(
         description = "iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop, Desktop, or responsive to fill the tab"
@@ -584,6 +592,26 @@ impl Sawit {
             .await
         );
         ok(pretty(&v))
+    }
+
+    #[tool(
+        description = "Read the annotations the user made in the browser tab: what to change, on which element (selector, styles, source file), with screenshot paths. clear removes them after reading"
+    )]
+    async fn browser_annotations(
+        &self,
+        Parameters(a): Parameters<AnnotationsArgs>,
+    ) -> CallToolResult {
+        let v = tri!(
+            self.browser(&a.project, BrowserOp::Annotations { clear: a.clear })
+                .await
+        );
+        match v["markdown"].as_str() {
+            Some(md) => ok(md.to_string()),
+            None => ok(
+                "No annotations yet. The user adds them with Annotate (⌘⇧.) in the Browser tab."
+                    .to_string(),
+            ),
+        }
     }
 
     #[tool(

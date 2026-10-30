@@ -162,6 +162,12 @@ pub enum BrowserOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         height: Option<u32>,
     },
+    /// The annotations the user made, as markdown; `clear` removes them
+    /// after the answer is built.
+    Annotations {
+        #[serde(default)]
+        clear: bool,
+    },
 }
 
 impl BrowserOp {
@@ -179,6 +185,7 @@ impl BrowserOp {
                 | Self::Network { .. }
                 | Self::Devtools
                 | Self::Resize { .. }
+                | Self::Annotations { .. }
         )
     }
 
@@ -972,6 +979,19 @@ mod tests {
             json!({"op": "resize", "device": "iPhone 15"})
         );
         assert!(op.is_native() && op.shows_tab());
+    }
+
+    #[test]
+    fn annotations_op_is_native_and_stays_in_the_background() {
+        let op: BrowserOp = serde_json::from_str(r#"{"op":"annotations","clear":true}"#).unwrap();
+        assert_eq!(op, BrowserOp::Annotations { clear: true });
+        assert_eq!(
+            serde_json::to_value(&op).unwrap(),
+            json!({"op": "annotations", "clear": true})
+        );
+        let bare: BrowserOp = serde_json::from_str(r#"{"op":"annotations"}"#).unwrap();
+        assert_eq!(bare, BrowserOp::Annotations { clear: false });
+        assert!(op.is_native() && !op.shows_tab());
     }
 
     #[test]

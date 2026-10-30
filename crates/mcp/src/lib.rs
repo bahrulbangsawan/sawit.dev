@@ -86,7 +86,7 @@ These control the running Sawit app (start it with launch_app; app_state shows w
 - terminal_*: run commands in Sawit's terminal and read their output, type keys (ctrl-c), close tabs.
 - canvas_*: the Excalidraw board: list, add shapes/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG.
 - canvas_command: run any command of the canvas engine by id with its parameters (board.sticky, node.set, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes.
-- browser_*: a browser tab (WebKit) to check the app being built: navigate (default the project's dev server), snapshot the page as an outline with element refs, click/hover/type/press keys/select/scroll by ref or CSS selector, wait for text, screenshot, read console errors and network requests, evaluate JS, resize to a device. Take a new browser_snapshot after the page changes; refs reset.
+- browser_*: a browser tab (WebKit) to check the app being built: navigate (default the project's dev server), snapshot the page as an outline with element refs, click/hover/type/press keys/select/scroll by ref or CSS selector, wait for text, screenshot, read console errors and network requests, evaluate JS, resize to a device, read the user's annotations. Take a new browser_snapshot after the page changes; refs reset.
 Most app tools take `project` to pick the window that has that folder open; otherwise the frontmost window is used.
 Targets: database tools take a Sawit instance name or a saved connection name (see list_connections).";
 
@@ -410,6 +410,7 @@ mod tests {
             "browser_network",
             "browser_evaluate",
             "browser_resize",
+            "browser_annotations",
         ];
         expected.sort();
         assert_eq!(names, expected);

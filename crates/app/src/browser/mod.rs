@@ -815,6 +815,14 @@ impl BrowserView {
                     return;
                 }
             },
+            BrowserOp::Annotations { clear } => {
+                let markdown = self.annotations_markdown(cx);
+                let count = self.annotate.read(cx).annotations(cx).len();
+                if clear {
+                    self.annotate.update(cx, |a, cx| a.clear(cx));
+                }
+                json!({ "markdown": markdown, "count": count })
+            }
             BrowserOp::Screenshot { target } if target.is_empty() => {
                 return self.shoot(None, reply, cx);
             }
