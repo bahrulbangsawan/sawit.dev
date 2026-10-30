@@ -15,6 +15,7 @@ use figcraft_engine::keymap::{self, Context, Platform};
 use figcraft_engine::{
     PointerEvent, PointerKind, Session, UiRequest, ViewState, guard, textedit, vectoredit,
 };
+use figcraft_geom::Point;
 use serde_json::json;
 
 use crate::policy::{is_clipboard, is_hidden, is_ui};
@@ -474,6 +475,79 @@ pub fn pointer(board: &mut BoardDoc, event: &PointerEvent) -> Result<Vec<UiReque
     let session = &mut board.session;
     guard::run("ui.pointer", || session.pointer(event))?;
     Ok(std::mem::take(&mut board.session.ui_requests))
+}
+
+/// A third quick press of the button (or a later one of the same run of clicks) at `event`'s
+/// point, taken as FigCraft's canvas takes a triple click (ui-egui `canvas/input.rs`, and
+/// `triple_click_line` in `shortcuts.rs`), and what the tools then asked of the view, as
+/// [`pointer`] gives it:
+///
+/// - Where nothing is edited it is a double-click: it edits, enters or opens as one does.
+/// - While text is edited it is a press, which puts the caret where it is, and then the line it
+///   is on is selected (`text.edit.selectLine`), when it is on the text.
+/// - In vector edit mode it is a press, but on empty canvas a double-click, which leaves the
+///   mode: the double-click that entered it counts on.
+///
+/// `event` is the press; its kind is set here. Errors are as [`pointer`]'s, and the engine's
+/// refusal to select the line.
+pub fn triple_click(
+    board: &mut BoardDoc,
+    event: &PointerEvent,
+) -> Result<Vec<UiRequest>, BoardError> {
+    let mut event = event.clone();
+    let session = &board.session;
+    let double = guard::run("ui.tripleClick", || Ok(triple_is_double(session, &event)))?;
+    event.kind = if double {
+        PointerKind::DoubleClick
+    } else {
+        PointerKind::Down
+    };
+    let requests = pointer(board, &event)?;
+    if !double {
+        select_line_at(board, &event)?;
+    }
+    Ok(requests)
+}
+
+/// Whether a triple click at `event`'s point is a double-click to the tools of `s`: unless a text
+/// or a vector is edited, or in vector edit mode on empty canvas, clear of every edited layer
+/// (while the pen goes on from no point).
+fn triple_is_double(s: &Session, event: &PointerEvent) -> bool {
+    let Ok(ds) = s.ds() else { return true };
+    match (&ds.text_edit, &ds.vector_edit) {
+        (None, None) => true,
+        (None, Some(edit)) if edit.anchor.is_none() => {
+            let p = Point::new(event.x, event.y);
+            let reach = 4.0 * 6.0 / ds.view.zoom.max(1e-6);
+            edit.parts().iter().all(|part| {
+                ds.doc
+                    .world_render_bounds(part.id)
+                    .is_none_or(|b| !b.inflate(reach, reach).contains(p))
+            })
+        }
+        _ => false,
+    }
+}
+
+/// While text is edited and `event`'s point is on it, selects the line there, as a triple click
+/// does in FigCraft.
+fn select_line_at(board: &mut BoardDoc, event: &PointerEvent) -> Result<(), BoardError> {
+    let Some(id) = board.session.ds()?.text_edit.as_ref().map(|edit| edit.id) else {
+        return Ok(());
+    };
+    let p = Point::new(event.x, event.y);
+    let session = &board.session;
+    let index = guard::run("ui.textLine", || {
+        let on_text = session
+            .doc()?
+            .world_bounds(id)
+            .is_some_and(|b| b.contains(p));
+        Ok(on_text.then(|| session.text_index_at(id, p).ok()).flatten())
+    })?;
+    if let Some(index) = index {
+        board.execute("text.edit.selectLine", &json!({"index": index}))?;
+    }
+    Ok(())
 }
 
 /// The pointer left the canvas: what hovering there showed goes (what Alt measured, a vector
@@ -1448,5 +1522,79 @@ mod tests {
         );
         assert_ne!(board.session.ds().unwrap().view, view);
         assert_eq!(board.doc().unwrap(), doc);
+    }
+
+    /// The page point in the middle of the line of character `index` of the text being edited,
+    /// where its caret stands.
+    fn on_character(board: &BoardDoc, index: usize) -> (f64, f64) {
+        let ((x, top), (_, bottom)) =
+            crate::overlay::caret_at(&board.session, None, index).unwrap();
+        let view = &board.session.ds().unwrap().view;
+        view.screen_to_page(x, (top + bottom) / 2.0)
+    }
+
+    /// The characters selected in the text being edited: from and to.
+    fn selected(board: &BoardDoc) -> Option<(usize, usize)> {
+        textedit::selected_range(&board.session).map(|(_, from, to)| (from, to))
+    }
+
+    /// As FigCraft selects a line on a triple click in the text being edited (ui-egui
+    /// shortcuts.rs `triple_click_line`), where the third press alone would leave a caret.
+    #[test]
+    fn a_triple_click_in_the_text_being_edited_selects_its_line() {
+        // Laid out in a system font, the two lines lie one under the other.
+        figcraft_text::scan_system_fonts();
+        let mut board = board();
+        let note = sticky(&mut board, "one\ntwo");
+        // As after a double-click: all of the text selected.
+        assert!(figcraft_engine::board::edit_text(&mut board.session, note).unwrap());
+        assert_eq!(selected(&board), Some((0, 7)));
+        let (x, y) = on_character(&board, 5);
+        let requests = triple_click(&mut board, &at(PointerKind::Down, x, y)).unwrap();
+        assert!(requests.is_empty(), "{requests:?}");
+        // The second line, "two".
+        assert_eq!(selected(&board), Some((4, 7)));
+        // The release ends the press, and the line stays selected.
+        send(&mut board, &[at(PointerKind::Up, x, y)]);
+        assert_eq!(selected(&board), Some((4, 7)));
+        assert_eq!(text_edit(&board).id, text_of(&board, note));
+    }
+
+    #[test]
+    fn a_triple_click_where_nothing_is_edited_is_a_double_click() {
+        let mut board = board();
+        let note = sticky(&mut board, "hi");
+        board.execute("select.none", &json!({})).unwrap();
+        // The first click selects the sticky (its middle: it is 200 × 200 from (0, 0)).
+        click(&mut board, 100.0, 100.0);
+        assert!(!editing(&board));
+        // A third quick press, here with no second before it, is taken as a double-click,
+        // which starts typing in the sticky.
+        let requests = triple_click(&mut board, &at(PointerKind::Down, 100.0, 100.0)).unwrap();
+        handle_requests(&mut board, &requests);
+        send(&mut board, &[at(PointerKind::Up, 100.0, 100.0)]);
+        assert!(editing(&board));
+        assert_eq!(text_edit(&board).id, text_of(&board, note));
+    }
+
+    #[test]
+    fn a_triple_click_in_vector_edit_mode_leaves_it_only_on_empty_canvas() {
+        let mut board = design();
+        rectangle(&mut board);
+        assert_eq!(
+            route_key(&mut board, "Enter", NONE),
+            Ok(KeyOutcome::Handled)
+        );
+        let vector_editing = |board: &BoardDoc| board.session.ds().unwrap().vector_edit.is_some();
+        assert!(vector_editing(&board));
+        // On the shape (its top edge) it is a press: a triple has its own meaning there.
+        triple_click(&mut board, &at(PointerKind::Down, 50.0, 0.0)).unwrap();
+        send(&mut board, &[at(PointerKind::Up, 50.0, 0.0)]);
+        assert!(vector_editing(&board));
+        // On empty canvas it is a double-click, which leaves the mode: the double-click that
+        // entered it counts on, so leaving would otherwise take a fourth click.
+        triple_click(&mut board, &at(PointerKind::Down, 500.0, 500.0)).unwrap();
+        send(&mut board, &[at(PointerKind::Up, 500.0, 500.0)]);
+        assert!(!vector_editing(&board));
     }
 }

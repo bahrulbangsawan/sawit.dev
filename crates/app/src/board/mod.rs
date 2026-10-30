@@ -2547,6 +2547,64 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn a_triple_click_selects_the_line_being_typed(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("triple-click");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        // A 200 × 200 sticky about page point (0, 0), reading one line, not selected.
+        let sticky = json!({
+            "op": "command", "command": "board.sticky",
+            "params": {"x": -100, "y": -100, "text": "one two"},
+        });
+        run_op(&view, sticky, &mut cx);
+        run_op(
+            &view,
+            json!({"op": "command", "command": "select.none"}),
+            &mut cx,
+        );
+        let [note] = layers(&view, &cx)[..] else {
+            panic!("layers {:?}", layers(&view, &cx))
+        };
+        // The middle of its text, in the window.
+        let (text, on_text) = view.read_with(&cx, |view, _| {
+            let ds = view.board().unwrap().session.ds().unwrap();
+            let text = figcraft_engine::board::text_of(&ds.doc, note).unwrap();
+            let b = ds.doc.world_bounds(text).unwrap();
+            let (x, y) = ds
+                .view
+                .page_to_screen((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+            let origin = view.bounds.origin;
+            (
+                text,
+                point(origin.x + px(x as f32), origin.y + px(y as f32)),
+            )
+        });
+        let (button, modifiers) = (MouseButton::Left, Modifiers::default());
+        for click_count in [1, 2, 3] {
+            cx.simulate_event(MouseDownEvent {
+                position: on_text,
+                button,
+                modifiers,
+                click_count,
+                first_mouse: false,
+            });
+            cx.simulate_event(MouseUpEvent {
+                position: on_text,
+                button,
+                modifiers,
+                click_count,
+            });
+        }
+
+        // The second click started typing with all of the text selected, and the third selected
+        // the line it is on, all of "one two", where a press alone leaves a caret.
+        view.read_with(&cx, |view, _| {
+            let session = &view.board().unwrap().session;
+            let selected = figcraft_engine::textedit::selected_range(session);
+            assert_eq!(selected, Some((text, 0, 7)));
+        });
+    }
+
+    #[gpui_kit::test]
     fn leaving_the_canvas_clears_what_hovering_showed(cx: &mut TestAppContext) {
         let tmp = Scratch::new("leave");
         let (view, mut cx) = painted_canvas(cx, &tmp);

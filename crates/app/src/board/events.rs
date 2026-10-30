@@ -1,8 +1,9 @@
 //! The pointer on the canvas: GPUI's mouse events as FigCraft's pointer events
 //! (`sawit_board::input`), and the engine's cursor as GPUI's.
 //!
-//! A press of the left button on the canvas starts a gesture with the tools, and a second quick
-//! press is a double-click. Until the button comes up, its moves go to the tools wherever the
+//! A press of the left button on the canvas starts a gesture with the tools, a second quick press
+//! is a double-click, and a third a triple click, which selects a line of the text being edited.
+//! Until the button comes up, its moves go to the tools wherever the
 //! pointer is, off the canvas or out of the window too, and its release ends the gesture there:
 //! listeners on the whole window, registered with each paint ([`track_drags`]), see those events
 //! where the canvas can't. Without a button the pointer hovers, and leaving the canvas tells the
@@ -13,14 +14,14 @@
 //! edited, where Space types). The content follows the pointer until the button comes up, on the
 //! canvas or off it, and the tools see none of it: no gesture, no undo step.
 
-use figcraft_engine::PointerKind;
 use figcraft_engine::tools::Cursor;
+use figcraft_engine::{PointerEvent, PointerKind, UiRequest};
 use gpui_kit::{
     Context, CursorStyle, DispatchPhase, KeyDownEvent, KeyUpEvent, Modifiers, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, WeakEntity, Window,
 };
 use sawit_board::input::{self, Mods, ResizeDir};
-use sawit_board::view;
+use sawit_board::{BoardDoc, BoardError, view};
 
 use super::BoardView;
 
@@ -34,9 +35,11 @@ pub(super) struct Pan {
 
 impl BoardView {
     /// The left button went down on the canvas: the canvas takes the keyboard, and the tools get a
-    /// press there, or a double-click for the second press of one. With Space held down it starts
-    /// a pan instead. A drag or a pan whose release never reached the canvas (the tab was hidden
-    /// meanwhile) ends first, where this press is.
+    /// press there, a double-click for the second press of one, or for the third and later ones a
+    /// triple click, as FigCraft takes it (`sawit_board::input::triple_click`: while text is edited
+    /// it selects the line). With Space held down it starts a pan instead. A drag or a pan whose
+    /// release never reached the canvas (the tab was hidden meanwhile) ends first, where this press
+    /// is.
     pub(super) fn on_left_down(
         &mut self,
         event: &MouseDownEvent,
@@ -50,13 +53,19 @@ impl BoardView {
             self.start_pan(MouseButton::Left, event.position, cx);
             return;
         }
-        let kind = if event.click_count == 2 {
-            PointerKind::DoubleClick
-        } else {
-            PointerKind::Down
-        };
         self.dragging = true;
-        self.send_pointer(kind, event.position, event.modifiers, cx);
+        let (position, modifiers) = (event.position, event.modifiers);
+        match event.click_count {
+            0 | 1 => self.send_pointer(PointerKind::Down, position, modifiers, cx),
+            2 => self.send_pointer(PointerKind::DoubleClick, position, modifiers, cx),
+            _ => self.send(
+                PointerKind::Down,
+                position,
+                modifiers,
+                cx,
+                input::triple_click,
+            ),
+        }
     }
 
     /// The middle button went down on the canvas: the canvas takes the keyboard, and a pan starts
@@ -206,6 +215,19 @@ impl BoardView {
         modifiers: Modifiers,
         cx: &mut Context<Self>,
     ) {
+        self.send(kind, position, modifiers, cx, input::pointer);
+    }
+
+    /// [`Self::send_pointer`], the event going to the tools through `to_tools`
+    /// (`sawit_board::input::pointer`, or `triple_click` for a triple click).
+    fn send(
+        &mut self,
+        kind: PointerKind,
+        position: Point<Pixels>,
+        modifiers: Modifiers,
+        cx: &mut Context<Self>,
+        to_tools: fn(&mut BoardDoc, &PointerEvent) -> Result<Vec<UiRequest>, BoardError>,
+    ) {
         let local = position - self.bounds.origin;
         let local = (f64::from(local.x), f64::from(local.y));
         let Some(board) = self.board_mut() else {
@@ -215,7 +237,7 @@ impl BoardView {
             return;
         };
         let event = input::pointer_event(kind, local, &ds.view, mods(modifiers));
-        let requests = match input::pointer(board, &event) {
+        let requests = match to_tools(board, &event) {
             Ok(requests) => requests,
             Err(error) => {
                 self.show_toast(error.to_string(), cx);
