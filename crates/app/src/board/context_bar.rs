@@ -32,8 +32,10 @@ const GAP: f64 = 2.;
 /// ([`divider`]).
 const DIVIDER: f64 = 9.;
 
-/// How wide `control` is: its swatches side by side, or its menu's button, wide enough for the
-/// longest of its labels (or cut short with an ellipsis).
+/// How wide `control` is: its swatches side by side, or its menu's button. A button fits the
+/// longest label it can show, "Mixed" included, in 14 px text (a small button's text at a 16 px
+/// rem; Sawit's 13 px rem draws it at 11.375 px), plus 34 px for its padding, the gap and the
+/// caret. A longer label is cut short with an ellipsis.
 fn width(control: &Control) -> f64 {
     match control {
         Control::Colors { items, .. } => {
@@ -42,7 +44,9 @@ fn width(control: &Control) -> f64 {
         }
         // "Rounded rectangle", "Speech bubble".
         Control::Shape { .. } => 160.,
-        Control::FontSize { .. } => 52.,
+        // "Mixed", which it shows when the selected texts' sizes differ or aren't S, M, L or XL:
+        // 38.5 px in 14 px text, over twice the longest size, "XL".
+        Control::FontSize { .. } => 76.,
         Control::Routing { .. } => 92.,
         // "Reversed triangle", "Triangle arrow".
         Control::StartCap { .. } | Control::EndCap { .. } => 156.,
