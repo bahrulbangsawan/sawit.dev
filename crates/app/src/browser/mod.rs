@@ -397,10 +397,26 @@ impl BrowserView {
             DesignEvent::SaveAll { include_videos } => self.save_all_assets(*include_videos, cx),
             DesignEvent::Export { include_videos } => self.export_from_panel(*include_videos, cx),
             DesignEvent::Reveal(file) => {
-                let _ = std::process::Command::new("open")
-                    .arg("-R")
-                    .arg(file)
-                    .spawn();
+                let file = file.clone();
+                let job = crate::rt::spawn_blocking(cx, move || {
+                    let status = std::process::Command::new("open")
+                        .arg("-R")
+                        .arg(&file)
+                        .status()
+                        .map_err(|e| e.to_string())?;
+                    status
+                        .success()
+                        .then_some(())
+                        .ok_or_else(|| format!("open exited with {status}"))
+                });
+                cx.spawn(async move |this, cx| {
+                    if let Ok(Err(e)) = job.await {
+                        let _ = this.update(cx, |this, cx| {
+                            this.design_note(format!("Couldn't reveal in Finder: {e}"), cx)
+                        });
+                    }
+                })
+                .detach();
             }
         }
     }
