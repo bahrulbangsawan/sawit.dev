@@ -185,8 +185,9 @@ fn paint_shape(origin: Point<Pixels>, shape: Shape, window: &mut Window) {
             ));
         }
         Shape::Caret { top, bottom, color } => {
-            let path = PathBuilder::stroke(px(1.));
-            paint_points(path, origin, &[top, bottom], false, color, window);
+            if let Some(band) = overlay::caret_band(top, bottom) {
+                paint_points(PathBuilder::fill(), origin, &band, true, color, window);
+            }
         }
         // `layout` made each label an `Item::Label`.
         Shape::Label { .. } => {}

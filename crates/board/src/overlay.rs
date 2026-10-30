@@ -19,7 +19,8 @@
 //! [`COMPONENT`], [`GUIDE`], white), except the names of frames and sections, whose grey reads on
 //! the page they are on, and a stroke being drawn, which shows in the colour it will have. The
 //! caret and the composition's underline, which FigCraft draws in its theme's text colour, are
-//! [`SELECTION`], as the text's box is.
+//! [`SELECTION`], as the text's box is. So the caret is painted wider than FigCraft's, beside its
+//! line ([`caret_band`]), to show where it meets the box's outline.
 
 use std::sync::Arc;
 
@@ -48,6 +49,10 @@ pub const GUIDE: Rgba = [0xF2, 0x48, 0x22, 0xFF];
 /// The size of the labels' text, and the height of their line (logical px).
 pub const LABEL_TEXT: f64 = 11.0;
 pub const LABEL_LINE: f64 = 14.0;
+
+/// How wide the caret is painted (logical px): wider than the 1 px outline of the text's box,
+/// which it meets at the start of a line ([`caret_band`]).
+pub const CARET_WIDTH: f64 = 2.0;
 
 const WHITE: Rgba = [0xFF; 4];
 
@@ -133,7 +138,8 @@ pub enum Shape {
         background: Option<Rgba>,
         node: Option<NodeId>,
     },
-    /// The text caret, from `top` to `bottom`.
+    /// The text caret: its line, from `top` to `bottom`, before the character it is at. It is
+    /// painted as the band [`caret_band`] gives, beside that line.
     Caret {
         top: (f64, f64),
         bottom: (f64, f64),
@@ -168,6 +174,28 @@ impl Shape {
         };
         Some((top_left, size))
     }
+}
+
+/// Where the caret whose line runs from `top` to `bottom` (a [`Shape::Caret`]) is painted, as a
+/// polygon: the band [`CARET_WIDTH`] px wide from that line toward the text's right, as a text view
+/// draws its insertion point. Painted on its line, a caret at the start of a line would vanish into
+/// the outline of the text's box, which is the same colour on the same edge (ui-egui draws the
+/// caret in its theme's text colour instead, which the canvas's fixed colours leave out). `None`
+/// for a caret with no length.
+pub fn caret_band(top: (f64, f64), bottom: (f64, f64)) -> Option<[(f64, f64); 4]> {
+    let (dx, dy) = (bottom.0 - top.0, bottom.1 - top.1);
+    let length = dx.hypot(dy);
+    if !length.is_normal() {
+        return None;
+    }
+    // A quarter turn from down the text's lines is the text's right, however it is turned.
+    let (rx, ry) = (dy / length * CARET_WIDTH, -dx / length * CARET_WIDTH);
+    Some([
+        top,
+        (top.0 + rx, top.1 + ry),
+        (bottom.0 + rx, bottom.1 + ry),
+        bottom,
+    ])
 }
 
 /// What an input method composes in the text being edited: shown in the text, not yet in the
@@ -509,9 +537,10 @@ fn selection(out: &mut Vec<Shape>, s: &Session, ds: &DocState) {
 /// Item 6: while text is edited, the edited text as it shows, with the input method's
 /// composition in it: its box, outlined; its selected characters, tinted 30 % with the selection
 /// colour; the composition, underlined just below its baseline; and the caret, before the
-/// character it is at (the input method's cursor while composing). The caret holds steady, so an
-/// idle canvas draws nothing. Each is laid out in FigCraft's text layout and placed through the
-/// text's world transform and the view (ui-egui `text_edit_overlay`).
+/// character it is at (the input method's cursor while composing), which is painted beside its
+/// line ([`caret_band`]). The caret holds steady, so an idle canvas draws nothing. Each is laid
+/// out in FigCraft's text layout and placed through the text's world transform and the view
+/// (ui-egui `text_edit_overlay`).
 fn text_edit(out: &mut Vec<Shape>, s: &Session, ds: &DocState, composition: Option<&Composition>) {
     // The selected characters, from and to, as the text editor has them.
     let (Some(edit), Some((_, from, to))) = (&ds.text_edit, textedit::selected_range(s)) else {
@@ -1807,6 +1836,70 @@ mod tests {
         };
         assert!(near(top, (400.0, 300.0)), "{top:?}");
         assert!((bottom.1 - top.1 - 2.0 * line).abs() < 1e-6, "{bottom:?}");
+    }
+
+    /// A caret at the start of a line stands on the left edge of the text's box, where the box's
+    /// outline is drawn in the same colour: painted on its line, it would vanish into the
+    /// outline, as in a new sticky. It is painted as a band from its line into the text, wider
+    /// than the outline.
+    #[test]
+    fn a_caret_at_a_line_start_shows_inside_the_outlined_box() {
+        let mut f = fixture();
+        editing_hi(&mut f, Some(0));
+        let shapes = overlay(&f.board.session);
+        let [(top, bottom)] = carets(&shapes)[..] else {
+            panic!("{shapes:?}")
+        };
+        // The caret's line is the box's left edge, which the outline covers.
+        let [
+            Shape::Outline {
+                points,
+                closed: true,
+                width,
+                ..
+            },
+        ] = outlines(&shapes)[..]
+        else {
+            panic!("{shapes:?}")
+        };
+        assert!(near(top, points[0]), "{top:?} {points:?}");
+        assert!(
+            (bottom.0 - points[0].0).abs() < 1e-6,
+            "{bottom:?} {points:?}"
+        );
+        assert!(CARET_WIDTH > *width);
+        // Painted, it is the band from that edge into the box.
+        let band = caret_band(top, bottom).unwrap();
+        let inside = [
+            top,
+            (top.0 + CARET_WIDTH, top.1),
+            (bottom.0 + CARET_WIDTH, bottom.1),
+            bottom,
+        ];
+        assert!(
+            band.iter().zip(inside).all(|(a, b)| near(*a, b)),
+            "{band:?}"
+        );
+    }
+
+    /// A caret's band runs from its line toward the text's right, however the text is turned. A
+    /// caret with no length isn't painted.
+    #[test]
+    fn a_caret_band_runs_toward_the_text() {
+        // Upright: the text's right is the screen's.
+        let band = caret_band((10.0, 0.0), (10.0, 20.0));
+        assert_eq!(
+            band,
+            Some([(10.0, 0.0), (12.0, 0.0), (12.0, 20.0), (10.0, 20.0)])
+        );
+        // A quarter turn clockwise: down its lines is the screen's left, and the text's right is
+        // the screen's down.
+        let band = caret_band((10.0, 0.0), (-10.0, 0.0));
+        assert_eq!(
+            band,
+            Some([(10.0, 0.0), (10.0, 2.0), (-10.0, 2.0), (-10.0, 0.0)])
+        );
+        assert_eq!(caret_band((5.0, 5.0), (5.0, 5.0)), None);
     }
 
     #[test]
