@@ -163,7 +163,7 @@ impl BoardView {
     /// - A missing file is a new, empty board. Nothing is written until there is an edit.
     /// - A file that can't be read is shown as an error, and stays as it is: this view never saves.
     /// - What loading repaired or left out, or saving would drop, shows as a toast. The original
-    ///   was kept as `<path>.bak` before the file opened.
+    ///   was kept as `<path>.lossy.bak` before the file opened.
     pub fn open(path: PathBuf, cx: &mut Context<Self>) -> Self {
         let (worker, mut frames) = Worker::spawn();
         let frames = cx.spawn(async move |this, cx| {

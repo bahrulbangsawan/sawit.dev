@@ -42,9 +42,10 @@ pub fn open(path: &Path) -> Result<BoardDoc, BoardError> {
 /// - A missing file is a new, empty board. Nothing is written, not even the folder: the first
 ///   save does that.
 /// - A corrupt or truncated file is `Err(BoardError::Format)`, and stays as it is.
-/// - With notes, the original is first copied to `<path>.bak`, so the first save can't silently
-///   drop what the loader left out. When that copy can't be made the file is not opened either: it
-///   stays as it is rather than get saved over unprotected.
+/// - With notes, the original is first copied to `<path>.lossy.bak`, so the first save can't
+///   silently drop what the loader left out. When that copy can't be made the file is not opened
+///   either: it stays as it is rather than get saved over unprotected. The copy has a name of its
+///   own: the `<path>.bak` that an emptying save keeps ([`Writer::save`]) would replace it.
 pub fn open_with_issues(path: &Path) -> Result<(BoardDoc, Vec<String>), BoardError> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
@@ -60,7 +61,7 @@ pub fn open_with_issues(path: &Path) -> Result<(BoardDoc, Vec<String>), BoardErr
     };
     let (board, issues) = BoardDoc::from_bytes_with_issues(&bytes)?;
     if !issues.is_empty() {
-        let bak = sibling(path, ".bak");
+        let bak = lossy_backup(path);
         std::fs::write(&bak, &bytes).map_err(|e| {
             BoardError::Io(format!(
                 "couldn't keep a copy of {} at {} before opening it: {e}",
@@ -131,9 +132,9 @@ impl Writer {
     /// Queues `bytes` to be written to `path`, and returns at once.
     ///
     /// `empty` says the bytes are a canvas without layers ([`is_empty`]). Then a file already
-    /// there that has layers is first copied to `<path>.bak`, so clearing the canvas can be undone
-    /// after a restart; if that copy can't be made, the save is not done and the error is
-    /// reported. A `.nyawit` folder that is missing is made with its `.gitignore`, any other
+    /// there that has layers, or that doesn't load, is first copied to `<path>.bak`, so clearing
+    /// the canvas can be undone after a restart; if that copy can't be made, the save is not done
+    /// and the error is reported. A `.nyawit` folder that is missing is made with its `.gitignore`, any other
     /// missing folder without.
     pub fn save(&self, path: PathBuf, bytes: Vec<u8>, empty: bool) {
         let save = Msg::Save(Save { path, bytes, empty });
@@ -261,7 +262,9 @@ fn make_folder(path: &Path) -> io::Result<()> {
 
 /// Before a canvas without layers replaces the file at `path`: when that file loads as a canvas
 /// with layers, keeps it as `<path>.bak`, so "clear canvas" (or an agent's clear) can be undone
-/// even after the app restarts. On failure the error says why, and the save must not go on.
+/// even after the app restarts. So is a file that doesn't load at all (cut short, or written by a
+/// newer FigCraft), which may hold layers too, as the old canvas kept a scene it couldn't read; an
+/// empty file has nothing to keep. On failure the error says why, and the save must not go on.
 fn keep_backup_before_emptying(path: &Path) -> Result<(), String> {
     let old = match std::fs::read(path) {
         Ok(old) => old,
@@ -272,8 +275,9 @@ fn keep_backup_before_emptying(path: &Path) -> Result<(), String> {
             ));
         }
     };
-    let had_layers = figcraft_format::load_bytes(&old).is_ok_and(|(doc, _)| !is_empty(&doc));
-    if !had_layers {
+    let may_have_layers = !old.is_empty()
+        && figcraft_format::load_bytes(&old).map_or(true, |(doc, _)| !is_empty(&doc));
+    if !may_have_layers {
         return Ok(());
     }
     let bak = sibling(path, ".bak");
@@ -283,6 +287,13 @@ fn keep_backup_before_emptying(path: &Path) -> Result<(), String> {
             bak.display()
         )
     })
+}
+
+/// Where [`open_with_issues`] keeps the original of a file it opens with notes:
+/// `<path>.lossy.bak`. That is apart from the copy an emptying save keeps (`<path>.bak`), so that
+/// clearing the canvas after edits can't put the edited canvas over the original.
+fn lossy_backup(path: &Path) -> PathBuf {
+    sibling(path, ".lossy.bak")
 }
 
 /// `path` with `suffix` added to its name: `canvas.figcraft` becomes `canvas.figcraft.bak`.
@@ -409,7 +420,8 @@ mod tests {
     fn open_with_issues_backs_up_the_original() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("canvas.figcraft");
-        let bak = sibling(&path, ".bak");
+        let bak = lossy_backup(&path);
+        assert_eq!(bak, dir.path().join("canvas.figcraft.lossy.bak"));
         let original = file_with_a_history();
         std::fs::write(&path, &original).unwrap();
 
@@ -450,11 +462,14 @@ mod tests {
         let original = file_with_a_history();
         std::fs::write(&path, &original).unwrap();
         // A folder where the backup should go.
-        std::fs::create_dir(sibling(&path, ".bak")).unwrap();
+        std::fs::create_dir(lossy_backup(&path)).unwrap();
 
         let err = open_with_issues(&path).err().unwrap();
         assert!(matches!(err, BoardError::Io(_)), "{err:?}");
-        assert!(err.to_string().contains("canvas.figcraft.bak"), "{err}");
+        assert!(
+            err.to_string().contains("canvas.figcraft.lossy.bak"),
+            "{err}"
+        );
         assert_eq!(std::fs::read(&path).unwrap(), original);
     }
 
@@ -631,6 +646,55 @@ mod tests {
         save(blank(), true);
         assert_eq!(std::fs::read(&bak).unwrap(), two);
         assert_eq!(writer.last_error(), None);
+    }
+
+    #[test]
+    fn clearing_after_a_lossy_open_keeps_the_original() {
+        // Opened with notes, edited and saved (the save drops the history), then cleared, as an
+        // agent's add then clear does: the emptying save keeps the edited canvas, and the
+        // original stays where the open put it.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("canvas.figcraft");
+        let original = file_with_a_history();
+        std::fs::write(&path, &original).unwrap();
+        let (_, issues) = open_with_issues(&path).unwrap();
+        assert!(!issues.is_empty());
+
+        let writer = Writer::spawn();
+        let edited = bytes_with(&["kept", "added"]);
+        writer.save(path.clone(), edited.clone(), false);
+        writer.flush();
+        writer.save(path.clone(), blank(), true);
+        writer.flush();
+        assert_eq!(writer.last_error(), None);
+        assert_eq!(std::fs::read(sibling(&path, ".bak")).unwrap(), edited);
+        assert_eq!(std::fs::read(lossy_backup(&path)).unwrap(), original);
+    }
+
+    #[test]
+    fn emptying_keeps_a_file_that_does_not_load() {
+        // A canvas file another app left unreadable (cut short, or from a newer FigCraft): an
+        // emptying save can't tell that it had no layers, so it keeps it, as the old canvas
+        // kept a scene it couldn't parse. An empty file has nothing to keep.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("canvas.figcraft");
+        let bak = sibling(&path, ".bak");
+        let writer = Writer::spawn();
+        let save_blank = || {
+            writer.save(path.clone(), blank(), true);
+            writer.flush();
+        };
+        std::fs::write(&path, b"").unwrap();
+        save_blank();
+        assert!(!bak.exists());
+
+        let unreadable = bytes_with(&["cut short"])[..100].to_vec();
+        assert!(figcraft_format::load_bytes(&unreadable).is_err());
+        std::fs::write(&path, &unreadable).unwrap();
+        save_blank();
+        assert_eq!(writer.last_error(), None);
+        assert_eq!(std::fs::read(&bak).unwrap(), unreadable);
+        assert!(is_empty(&open(&path).unwrap().doc().unwrap()));
     }
 
     #[test]
