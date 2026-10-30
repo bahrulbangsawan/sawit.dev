@@ -145,6 +145,7 @@ fn bindings() -> Vec<KeyBinding> {
 
 pub fn init(cx: &mut App) {
     cx.bind_keys(bindings());
+    crate::browser::init(cx);
     crate::board::init(cx);
 }
 

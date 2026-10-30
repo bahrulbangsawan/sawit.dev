@@ -8,19 +8,20 @@
 //! every page, through `Engine::eval_with_callback`.
 
 mod engine;
+mod panel;
+mod toolbar;
 
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use futures::StreamExt as _;
 use futures::channel::mpsc::{UnboundedSender, unbounded};
 use futures::channel::oneshot;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{Sizable as _, h_flex, v_flex};
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::browser::{
@@ -38,6 +39,60 @@ use crate::states::Placeholder;
 /// The tab's icon and title.
 pub const ICON: Lucide = Lucide::Globe;
 pub const TITLE: &str = "Browser";
+
+actions!(browser, [ToggleAnnotate]);
+
+/// ⌘⇧. toggles Annotate while Sawit has the keyboard; with the page focused
+/// the overlay posts a `key` message instead.
+pub fn init(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new(
+        "cmd-shift-.",
+        ToggleAnnotate,
+        Some("Browser"),
+    )]);
+}
+
+/// The side panel's modes; one at a time.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Panel {
+    Annotate,
+    Design,
+}
+
+impl Panel {
+    fn as_str(self) -> &'static str {
+        match self {
+            Panel::Annotate => "annotate",
+            Panel::Design => "design",
+        }
+    }
+
+    /// What picking does while this panel is open.
+    fn pick_mode(self) -> PickMode {
+        match self {
+            Panel::Annotate => PickMode::Annotate,
+            Panel::Design => PickMode::Inspect,
+        }
+    }
+}
+
+/// What a click on the page does.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PickMode {
+    Off,
+    Annotate,
+    Inspect,
+}
+
+impl PickMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PickMode::Off => "off",
+            PickMode::Annotate => "annotate",
+            PickMode::Inspect => "inspect",
+        }
+    }
+}
 
 const TOOLBAR_HEIGHT: f32 = 36.;
 /// Around the page in device mode, and the strip above it for the caption.
@@ -78,6 +133,11 @@ pub struct BrowserView {
     last_pick: Option<String>,
     /// Responsive, or a device size (kept per tab).
     viewport: ViewportMode,
+    panel: Option<Panel>,
+    pick: PickMode,
+    /// Picking was asked for but the page had no agent yet; it is armed
+    /// again when the page has loaded.
+    pick_waiting: bool,
     to_view: UnboundedSender<FromPage>,
     /// Ops sent before the webview exists, in order.
     queued: Vec<(BrowserOp, oneshot::Sender<OpResult>)>,
@@ -156,6 +216,9 @@ impl BrowserView {
             logs: Logs::default(),
             last_pick: None,
             viewport: ViewportMode::Responsive,
+            panel: None,
+            pick: PickMode::Off,
+            pick_waiting: false,
             to_view,
             queued: Vec::new(),
             _ipc: ipc,
@@ -170,7 +233,129 @@ impl BrowserView {
             "title": self.title,
             "loading": self.loading,
             "viewport": self.viewport_json(),
+            "panel": self.panel.map(Panel::as_str),
+            "pick_mode": self.pick.as_str(),
+            "last_pick": self.last_pick,
         })
+    }
+
+    pub fn panel(&self) -> Option<Panel> {
+        self.panel
+    }
+
+    /// Opens `panel`, or closes it when it is the one open. Annotate arms
+    /// element picking, Design inspecting; closing disarms.
+    pub fn toggle_panel(&mut self, panel: Panel, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.panel == Some(panel) {
+            self.panel = None;
+            self.set_pick(PickMode::Off, cx);
+        } else {
+            self.panel = Some(panel);
+            self.set_pick(panel.pick_mode(), cx);
+        }
+        cx.notify();
+    }
+
+    /// Arms (or disarms) picking on the page.
+    fn set_pick(&mut self, mode: PickMode, cx: &mut Context<Self>) {
+        self.pick = mode;
+        if mode == PickMode::Off {
+            self.pick_waiting = false;
+        }
+        self.send_pick(pick_op(mode), cx);
+        cx.notify();
+    }
+
+    /// Sends a pick op; when the page has no agent yet, remembers to try
+    /// again once it has loaded.
+    fn send_pick(&mut self, op: Value, cx: &mut Context<Self>) {
+        let armed = self.pick;
+        let reply = self.page_op(op);
+        cx.spawn(async move |this, cx| {
+            let failed = !matches!(reply.await, Ok(Ok(_)));
+            let _ = this.update(cx, |this, cx| {
+                if this.pick == armed {
+                    this.pick_waiting = failed && armed != PickMode::Off;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Ops to run when a page has loaded: its agent starts fresh, so
+    /// picking has to be armed again.
+    fn ops_after_load(&self) -> Vec<Value> {
+        rearm_ops(self.pick)
+    }
+
+    /// Runs `op` on the page and answers with what the page says.
+    pub(crate) fn page_op(&self, op: Value) -> oneshot::Receiver<OpResult> {
+        let (tx, rx) = oneshot::channel();
+        let Some(engine) = &self.engine else {
+            let _ = tx.send(Err("The browser isn't open.".into()));
+            return rx;
+        };
+        let tx = Arc::new(Mutex::new(Some(tx)));
+        let callback_tx = tx.clone();
+        let sent = engine.eval_with_callback(&agent_call(&op), move |result| {
+            if let Some(tx) = callback_tx.lock().ok().and_then(|mut t| t.take()) {
+                let _ = tx.send(agent_result(&result));
+            }
+        });
+        if let Err(e) = sent
+            && let Some(tx) = tx.lock().ok().and_then(|mut t| t.take())
+        {
+            let _ = tx.send(Err(format!("The page couldn't be reached: {e}")));
+        }
+        rx
+    }
+
+    /// Takes a screenshot of the page without the overlay in it: hides the
+    /// overlay, captures, and shows the overlay again whatever happened.
+    pub(crate) fn shoot(
+        &mut self,
+        css_rect: Option<(f64, f64, f64, f64)>,
+        reply: oneshot::Sender<OpResult>,
+        cx: &mut Context<Self>,
+    ) {
+        let [hide, show] = shoot_ops();
+        let hidden = self.page_op(hide);
+        cx.spawn(async move |this, cx| {
+            // A page without an agent has no overlay to hide.
+            let _ = hidden.await;
+            let (tx, rx) = oneshot::channel();
+            let started = this.update(cx, |this, _| this.snap(css_rect, tx));
+            let result = if started.is_ok() {
+                rx.await
+                    .unwrap_or_else(|_| Err("The screenshot was cancelled.".into()))
+            } else {
+                Err("The browser isn't open.".into())
+            };
+            let _ = this.update(cx, |this, _| drop(this.page_op(show)));
+            let _ = reply.send(result);
+        })
+        .detach();
+    }
+
+    /// Captures the view, or `rect` of the page.
+    fn snap(&self, rect: Option<(f64, f64, f64, f64)>, reply: oneshot::Sender<OpResult>) {
+        match &self.engine {
+            Some(engine) => {
+                let width = shot_width(rect, self.bounds, &self.viewport);
+                engine.snapshot(rect, width, self.scale(), reply)
+            }
+            None => {
+                let _ = reply.send(Err("The browser isn't open.".into()));
+            }
+        }
+    }
+
+    /// Sets how the page is sized in the tab.
+    fn set_viewport(&mut self, mode: ViewportMode, cx: &mut Context<Self>) {
+        self.viewport = mode;
+        self.apply_layout();
+        cx.notify();
     }
 
     /// The CSS viewport the page sees, and the zoom that makes it fit.
@@ -254,8 +439,14 @@ impl BrowserView {
                 self.last_pick = pick["element"]["selector"].as_str().map(str::to_string);
                 cx.notify();
             }
-            // Hovers wait for the design panel; keys are handled with the panel.
-            FromPage::Event(PageEvent::Hovered(_) | PageEvent::Key(_)) => {}
+            // Hovers wait for the design panel.
+            FromPage::Event(PageEvent::Hovered(_)) => {}
+            // The page has the keyboard: it forwards ⌘⇧. and Esc.
+            FromPage::Event(PageEvent::Key(key)) => match key.as_str() {
+                "toggle-annotate" => self.toggle_panel(Panel::Annotate, window, cx),
+                "escape" => self.set_pick(PickMode::Off, cx),
+                _ => {}
+            },
             FromPage::Event(PageEvent::Url(url)) => {
                 self.url = url;
                 self.show_address(window, cx);
@@ -267,6 +458,11 @@ impl BrowserView {
             }
             FromPage::Engine(EngineEvent::Load { started, url }) => {
                 self.loading = started;
+                if !started {
+                    for op in self.ops_after_load() {
+                        self.send_pick(op, cx);
+                    }
+                }
                 if started && url != "about:blank" {
                     // Marks where each page's messages begin.
                     self.logs.push_console(ConsoleEntry {
@@ -282,15 +478,7 @@ impl BrowserView {
             }
             FromPage::Engine(EngineEvent::Title(title)) => self.title = title,
             FromPage::Engine(EngineEvent::NewWindow(url)) => self.navigate(&url, cx),
-            FromPage::Shoot { rect, reply } => match &self.engine {
-                Some(engine) => {
-                    let width = shot_width(rect, self.bounds, &self.viewport);
-                    engine.snapshot(rect, width, self.scale(), reply)
-                }
-                None => {
-                    let _ = reply.send(Err("The browser isn't open.".into()));
-                }
-            },
+            FromPage::Shoot { rect, reply } => self.shoot(rect, reply, cx),
         }
     }
 
@@ -406,9 +594,7 @@ impl BrowserView {
                 height,
             } => match resize_mode(device.as_deref(), width, height) {
                 Ok(mode) => {
-                    self.viewport = mode;
-                    self.apply_layout();
-                    cx.notify();
+                    self.set_viewport(mode, cx);
                     self.viewport_json()
                 }
                 Err(e) => {
@@ -417,8 +603,7 @@ impl BrowserView {
                 }
             },
             BrowserOp::Screenshot { target } if target.is_empty() => {
-                let width = shot_width(None, self.bounds, &self.viewport);
-                return engine.snapshot(None, width, self.scale(), reply);
+                return self.shoot(None, reply, cx);
             }
             BrowserOp::Screenshot { target } => {
                 // The element's box first (scrolled into view), then the capture.
@@ -532,66 +717,6 @@ impl BrowserView {
             window,
         )
     }
-
-    fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let loading = self.loading;
-        h_flex()
-            .h(px(TOOLBAR_HEIGHT))
-            .flex_none()
-            .px_2()
-            .gap_1()
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .child(
-                Button::new("browser-back")
-                    .ghost()
-                    .xsmall()
-                    .icon(Lucide::ChevronLeft)
-                    .tooltip("Back")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        drop(this.apply(BrowserOp::Back, cx));
-                    })),
-            )
-            .child(
-                Button::new("browser-forward")
-                    .ghost()
-                    .xsmall()
-                    .icon(Lucide::ChevronRight)
-                    .tooltip("Forward")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        drop(this.apply(BrowserOp::Forward, cx));
-                    })),
-            )
-            .child(
-                Button::new("browser-reload")
-                    .ghost()
-                    .xsmall()
-                    .icon(if loading { Lucide::X } else { Lucide::RotateCw })
-                    .tooltip(if loading { "Stop" } else { "Reload" })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if loading {
-                            if let Some(engine) = &this.engine {
-                                engine.eval("window.stop()");
-                            }
-                            this.loading = false;
-                            cx.notify();
-                        } else {
-                            drop(this.apply(BrowserOp::Reload, cx));
-                        }
-                    })),
-            )
-            .child(div().flex_1().child(Input::new(&self.address).small()))
-            .child(
-                Button::new("browser-inspect")
-                    .ghost()
-                    .xsmall()
-                    .icon(Lucide::Code)
-                    .tooltip("Web Inspector")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        drop(this.apply(BrowserOp::Devtools, cx));
-                    })),
-            )
-    }
 }
 
 impl Drop for BrowserView {
@@ -618,38 +743,50 @@ impl Render for BrowserView {
             } => Some(caption(name.as_deref(), *width, *height, self.scale())),
             ViewportMode::Responsive => None,
         };
+        let page = div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .relative()
+            .when(device.is_some(), |d| d.bg(cx.theme().muted))
+            .children(device.map(|text| {
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(CAPTION_BAND))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(text)
+            }))
+            .child(
+                canvas(
+                    move |bounds, window, cx| {
+                        let _ = this.update(cx, |this, cx| this.place(bounds, window, cx));
+                    },
+                    |_, _, _, _| {},
+                )
+                .size_full(),
+            );
+        let side = self.panel.map(|panel| self.side_panel(panel, cx));
         v_flex()
+            .key_context("Browser")
+            .on_action(cx.listener(|this, _: &ToggleAnnotate, window, cx| {
+                this.toggle_panel(Panel::Annotate, window, cx);
+            }))
             .size_full()
             .child(self.toolbar(cx))
             .child(
-                div()
+                h_flex()
                     .flex_1()
                     .min_h_0()
-                    .relative()
-                    .when(device.is_some(), |d| d.bg(cx.theme().muted))
-                    .children(device.map(|text| {
-                        div()
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .right_0()
-                            .h(px(CAPTION_BAND))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(text)
-                    }))
-                    .child(
-                        canvas(
-                            move |bounds, window, cx| {
-                                let _ = this.update(cx, |this, cx| this.place(bounds, window, cx));
-                            },
-                            |_, _, _, _| {},
-                        )
-                        .size_full(),
-                    ),
+                    .items_start()
+                    .child(page)
+                    .children(side),
             )
             .into_any_element()
     }
@@ -727,6 +864,43 @@ fn agent_call(op: &Value) -> String {
     format!("(() => {{ const a = window.__sawitAgent; return a ? a.run({op}) : \"\"; }})()")
 }
 
+fn overlay_op(hidden: bool) -> Value {
+    json!({ "op": "overlay", "hidden": hidden })
+}
+
+fn pick_op(mode: PickMode) -> Value {
+    json!({ "op": "pick", "mode": mode.as_str() })
+}
+
+/// What a page needs after it loads: its picker armed again.
+fn rearm_ops(pick: PickMode) -> Vec<Value> {
+    match pick {
+        PickMode::Off => vec![],
+        mode => vec![pick_op(mode)],
+    }
+}
+
+/// Around every screenshot: hide the overlay, then show it again.
+fn shoot_ops() -> [Value; 2] {
+    [overlay_op(true), overlay_op(false)]
+}
+
+/// The same size with width and height swapped; nothing in responsive mode.
+fn rotated(mode: &ViewportMode) -> Option<ViewportMode> {
+    match mode {
+        ViewportMode::Responsive => None,
+        ViewportMode::Fixed {
+            name,
+            width,
+            height,
+        } => Some(ViewportMode::Fixed {
+            name: name.clone(),
+            width: *height,
+            height: *width,
+        }),
+    }
+}
+
 fn rect_op(target: &Target) -> Value {
     let mut op = serde_json::to_value(target).unwrap_or_else(|_| json!({}));
     op["op"] = "rect".into();
@@ -761,8 +935,8 @@ fn agent_result(result: &str) -> OpResult {
 #[cfg(test)]
 mod tests {
     use super::{
-        Frame, Target, ViewportMode, agent_call, agent_result, caption, new_token, page_frame,
-        rect_op,
+        Frame, PickMode, Target, ViewportMode, agent_call, agent_result, caption, new_token,
+        overlay_op, page_frame, rearm_ops, rect_op, rotated, shoot_ops,
     };
     use serde_json::json;
 
@@ -840,5 +1014,49 @@ mod tests {
         assert_eq!(a.len(), 32);
         assert_ne!(a, b);
         assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn ops_after_load_rearms_pick() {
+        assert_eq!(rearm_ops(PickMode::Off), Vec::<serde_json::Value>::new());
+        assert_eq!(
+            rearm_ops(PickMode::Annotate),
+            vec![json!({"op": "pick", "mode": "annotate"})]
+        );
+        assert_eq!(
+            rearm_ops(PickMode::Inspect),
+            vec![json!({"op": "pick", "mode": "inspect"})]
+        );
+    }
+
+    #[test]
+    fn screenshot_wraps_overlay() {
+        assert_eq!(overlay_op(true), json!({"op": "overlay", "hidden": true}));
+        assert_eq!(shoot_ops(), [overlay_op(true), overlay_op(false)]);
+    }
+
+    #[test]
+    fn rotating_swaps_the_size() {
+        let phone = ViewportMode::Fixed {
+            name: Some("iPhone 15".into()),
+            width: 393,
+            height: 852,
+        };
+        assert_eq!(
+            rotated(&phone),
+            Some(ViewportMode::Fixed {
+                name: Some("iPhone 15".into()),
+                width: 852,
+                height: 393,
+            })
+        );
+        assert_eq!(rotated(&ViewportMode::Responsive), None);
+    }
+
+    #[test]
+    fn pick_modes_are_named() {
+        assert_eq!(PickMode::Off.as_str(), "off");
+        assert_eq!(PickMode::Annotate.as_str(), "annotate");
+        assert_eq!(PickMode::Inspect.as_str(), "inspect");
     }
 }
