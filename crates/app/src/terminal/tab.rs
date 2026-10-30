@@ -159,7 +159,10 @@ impl TerminalTab {
         if plain_shell && self.state.is_split() {
             self.in_window(cx, move |this, window, cx| {
                 if this.state.is_split() {
-                    this.close_pane(pane, window, cx);
+                    // Nobody asked for this close, so the keyboard stays
+                    // where it is unless it was in this tab.
+                    let refocus = this.has_focus(window, cx);
+                    this.remove_pane(pane, refocus, window, cx);
                 }
             });
         }
@@ -339,6 +342,18 @@ impl TerminalTab {
     /// Closes `pane`, ending its process. The last pane closes the tab: its
     /// terminal goes with the tab, which the panel drops on `Closed`.
     pub fn close_pane(&mut self, pane: PaneId, window: &mut Window, cx: &mut Context<Self>) {
+        self.remove_pane(pane, true, window, cx);
+    }
+
+    /// Closes `pane` like `close_pane`. The tab's next focused pane gets
+    /// the keyboard only when `refocus` is set.
+    fn remove_pane(
+        &mut self,
+        pane: PaneId,
+        refocus: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match self.state.close(pane) {
             Removed::NotFound => {}
             Removed::Last => {
@@ -351,7 +366,9 @@ impl TerminalTab {
                 if self.renaming.as_ref().is_some_and(|r| r.pane == pane) {
                     self.renaming = None;
                 }
-                self.focus(window, cx);
+                if refocus {
+                    self.focus(window, cx);
+                }
                 cx.emit(TabEvent::Changed);
                 cx.notify();
             }
@@ -885,10 +902,10 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use gpui_kit::{
-        AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, InteractiveElement as _,
-        IntoElement, Modifiers, MouseButton, ParentElement as _, Pixels, Point, Render,
-        Styled as _, TestAppContext, VisualTestContext, Window, WindowBounds, WindowOptions, div,
-        point, px, size,
+        AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, Focusable as _,
+        InteractiveElement as _, IntoElement, Modifiers, MouseButton, ParentElement as _, Pixels,
+        Point, Render, Styled as _, TestAppContext, VisualTestContext, Window, WindowBounds,
+        WindowOptions, div, point, px, size,
     };
     use sawit_core::terminal::{Layout, MIN_COLS, MIN_ROWS, SplitDir};
 
@@ -1358,6 +1375,53 @@ mod tests {
             assert!(!t.focused_view().read(cx).exited);
             assert_eq!(panel.read(cx).tab_count(), 1);
         });
+        let kept = cx
+            .update_window(w, |_, window, cx| tab.read(cx).has_focus(window, cx))
+            .unwrap();
+        assert!(kept, "the keyboard did not go to the remaining pane");
+    }
+
+    #[gpui_kit::test]
+    fn an_exited_shell_in_a_background_tab_leaves_the_keyboard_alone(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let background = cx.update(|cx| panel.read(cx).tab(0).clone());
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.open_shell(Some(window), cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        let active = cx.update(|cx| {
+            let p = panel.read(cx);
+            assert_eq!(p.tab_count(), 2);
+            p.tab(p.active_index()).clone()
+        });
+        assert!(active != background, "the new tab is not the active one");
+        let typing = cx.update(|cx| active.read(cx).focused_view().focus_handle(cx));
+        let has_keyboard = |cx: &mut TestAppContext| {
+            cx.update_window(w, |_, window, _| typing.is_focused(window))
+                .unwrap()
+        };
+        assert!(has_keyboard(cx), "the new tab did not take the keyboard");
+
+        cx.update(|cx| {
+            background
+                .read(cx)
+                .focused_view()
+                .read(cx)
+                .write(b"exit\n".to_vec())
+        });
+        run_until(cx, "the background pane closes", |cx| {
+            background.read(cx).views().count() == 1
+        });
+        cx.run_until_parked();
+        assert!(
+            has_keyboard(cx),
+            "closing a background pane took the keyboard"
+        );
     }
 
     #[gpui_kit::test]
