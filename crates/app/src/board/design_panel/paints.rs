@@ -4,7 +4,10 @@
 //! - A solid paint is a swatch, its hex and its opacity. The swatch opens the colour picker
 //!   ([`colour_swatch`], which the shadows of the Effects section share): the colours it goes
 //!   through while it is open are one scrub of the list, one undo step when the picker closes, and
-//!   none when Escape closes it (ruling P5-C15).
+//!   none when Escape closes it (ruling P5-C15). A press on the canvas, an agent's op that isn't a
+//!   read, and the swatch no longer drawn for the layers the scrub began on end the scrub first,
+//!   kept, and close the picker ([`BoardView::end_colour_scrub`]), so that nothing else joins the
+//!   colour's undo step.
 //! - A gradient, an image or a pattern shows what it is, and becomes a solid only when its
 //!   "Replace with solid" button is clicked (Review Focus 4).
 //! - Every paint has its eye and a button that removes it. Layers whose paints differ show
@@ -401,6 +404,9 @@ pub(super) fn colour_swatch(
     cx: &mut Context<BoardView>,
 ) -> AnyElement {
     let state = view.picker(id, of, window, cx);
+    if view.design.colour.as_deref() == Some(id) {
+        view.design.colour_drawn = true;
+    }
     if let Some(colour) = colour_of(hex, opacity) {
         state.update(cx, |picker, cx| {
             if !picker.is_open() && picker.value() != Some(colour) {
@@ -443,9 +449,9 @@ impl BoardView {
         });
         let shown = cx.observe_in(&state, window, {
             let id = id.clone();
-            move |view, state, _, cx| {
+            move |view, state, window, cx| {
                 let open = state.read(cx).is_open();
-                view.picker_shown(&id, open, cx);
+                view.picker_shown(&id, open, window, cx);
             }
         });
         let picker = Picker {
@@ -459,13 +465,22 @@ impl BoardView {
 
     /// Colour picker `id` is `open`, or closed. Opening it starts a scrub of the list it colours,
     /// so that every colour it goes through is one undo step (ruling P5-C15); closing it ends the
-    /// scrub, kept. Escape ends it first, put back ([`Self::cancel_colour_scrub`]).
-    pub(super) fn picker_shown(&mut self, id: &str, open: bool, cx: &mut Context<Self>) {
+    /// scrub, kept. Escape ends it first, put back ([`Self::cancel_colour_scrub`]). A value typed
+    /// in a field, which the click on the swatch took the keyboard from, is applied before the
+    /// scrub begins, as an undo step of its own.
+    pub(super) fn picker_shown(
+        &mut self,
+        id: &str,
+        open: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let scrubbing = self.design.colour.as_deref() == Some(id);
         if open && !scrubbing {
             let Some(of) = self.design.pickers.get(id).map(|picker| picker.of) else {
                 return;
             };
+            self.commit_focused_field(window, cx);
             self.scrub_begin(of.key(), cx);
             if self.scrub.is_some() {
                 self.design.colour = Some(id.to_string().into());
@@ -491,6 +506,55 @@ impl BoardView {
         if self.design.colour.is_some() {
             self.scrub_end(false, cx);
         }
+    }
+
+    /// Ends the scrub of the colour picker that is open, kept, as one undo step, and closes the
+    /// picker. Without a colour picker open it does nothing.
+    ///
+    /// Input on its way to the engine while a picker is open runs this first, so that it isn't
+    /// taken into the colour's undo step: a press on the canvas, which closes the picker only once
+    /// the press has reached the tools (a gesture it starts would find the colour's interaction in
+    /// place of its own), and an agent's op ([`BoardView::run_op`]; an Escape in the picker would
+    /// take back what the op did).
+    pub(in crate::board) fn end_colour_scrub(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.design.colour.clone() else {
+            return;
+        };
+        self.scrub_end(true, cx);
+        if let Some(picker) = self.design.pickers.get(&id) {
+            picker
+                .state
+                .update(cx, |picker, cx| picker.set_open(false, cx));
+        }
+    }
+
+    /// Runs after the Design panel is drawn, or isn't because it is hidden: a colour scrub whose
+    /// picker this frame didn't draw for the layers the scrub began on (other layers are
+    /// selected, the panel is hidden) ends, kept, and its picker closes, once the frame is drawn
+    /// ([`Self::end_colour_scrub`]). Nothing else would end it: every later edit would join its
+    /// undo step, and the picker would show open again with its swatch.
+    pub(in crate::board) fn settle_colour_scrub(&mut self, cx: &mut Context<Self>) {
+        let drawn = std::mem::take(&mut self.design.colour_drawn);
+        let Some(id) = self.design.colour.clone() else {
+            return;
+        };
+        let shown = self.design_selection();
+        let same_layers = match (&self.scrub, shown) {
+            (Some(scrub), Some(shown)) => scrub.sel.ids == shown.ids,
+            _ => false,
+        };
+        if drawn && same_layers {
+            return;
+        }
+        // Not while the frame is drawn: the commit redraws the canvas.
+        let this = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            let _ = this.update(cx, |view, cx| {
+                if view.design.colour.as_ref() == Some(&id) {
+                    view.end_colour_scrub(cx);
+                }
+            });
+        });
     }
 }
 
@@ -527,13 +591,15 @@ pub(super) fn colour_of(hex: &str, opacity: f64) -> Option<Hsla> {
 mod tests {
     use figcraft_doc::NodeId;
     use gpui_kit::component::color_picker::ColorPickerState;
-    use gpui_kit::{Entity, TestAppContext, VisualTestContext};
+    use gpui_kit::{
+        Entity, Modifiers, MouseButton, Pixels, Point, TestAppContext, VisualTestContext, point, px,
+    };
     use serde_json::{Value, json};
 
     // Not `super::*`: gpui-kit's `test` attribute would come with it, in place of the standard one.
     use super::super::tests::{
         Design, Scratch, click, drawn, field_text, focus_canvas, open_in_window, prop, rectangle,
-        undo_steps,
+        select, undo_steps,
     };
     use super::{colour_of, gradient_name, hex_and_opacity, hex_text};
     use crate::board::BoardView;
@@ -585,6 +651,26 @@ mod tests {
     /// The tool the canvas has on.
     fn tool(view: &Entity<BoardView>, cx: &VisualTestContext) -> &'static str {
         view.read_with(cx, |view, _| view.board().unwrap().session.tool.tool.id())
+    }
+
+    /// Where page point `page` is in the window, as the canvas shows it now.
+    fn on_canvas(
+        view: &Entity<BoardView>,
+        page: (f64, f64),
+        cx: &VisualTestContext,
+    ) -> Point<Pixels> {
+        view.read_with(cx, |view, _| {
+            let ds = view.board().unwrap().session.ds().unwrap();
+            let (x, y) = ds.view.page_to_screen(page.0, page.1);
+            view.bounds.origin + point(px(x as f32), px(y as f32))
+        })
+    }
+
+    /// The canvas's zoom.
+    fn zoom(view: &Entity<BoardView>, cx: &VisualTestContext) -> f64 {
+        view.read_with(cx, |view, _| {
+            view.board().unwrap().session.ds().unwrap().view.zoom
+        })
     }
 
     /// Ruling P5-C15: the colours a picker goes through while it is open are one undo step.
@@ -640,6 +726,158 @@ mod tests {
         // The swatch shows the colour that stayed.
         let shown = picker.read_with(&cx, |picker, _| picker.value());
         assert_eq!(shown, colour_of("#D9D9D9", 1.0));
+    }
+
+    /// A press on the canvas while a picker is open ends the colour's scrub first, kept, so that
+    /// the drag the press starts is a gesture of its own: the selected rectangle moves, no toast
+    /// shows, and the colour and the move are two undo steps.
+    #[gpui_kit::test]
+    fn a_drag_on_the_canvas_after_a_colour_pick_moves_the_layer(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("colour-then-drag");
+        let path = tmp.0.join("design.figcraft");
+        let ids = with_fills(&path, &[0.0], &[json!(["#D9D9D9"])]);
+        let (view, mut cx) = open_in_window(cx, &path, &ids);
+        let colour = |cx: &VisualTestContext| prop(&view, ids[0], "fills", cx)[0]["color"].clone();
+        let steps = undo_steps(&view, &cx);
+        click(&mut cx, "design-fills-0-swatch");
+        let picker = picker(&view, "fills-0", &cx);
+        pick(&picker, "#FF0000", &mut cx);
+        assert_eq!(tool(&view, &cx), "move");
+        // The press on the rectangle's middle closes the picker, and drags the rectangle 40 px.
+        let (left, none) = (MouseButton::Left, Modifiers::default());
+        let start = on_canvas(&view, (50.0, 50.0), &cx);
+        let end = start + point(px(40.), px(0.));
+        cx.simulate_mouse_down(start, left, none);
+        cx.simulate_mouse_move(end, left, none);
+        cx.simulate_mouse_up(end, left, none);
+        assert_eq!(view.read_with(&cx, |view, _| view.toast.clone()), None);
+        assert!(!is_open(&picker, &cx));
+        assert!(view.read_with(&cx, |view, _| view.scrub.is_none()));
+        assert_eq!(
+            prop(&view, ids[0], "x", &cx),
+            json!(40.0 / zoom(&view, &cx))
+        );
+        assert_eq!(colour(&cx), json!("#FF0000"));
+        assert_eq!(undo_steps(&view, &cx), steps + 2);
+        // The move is undone first, then the colour.
+        view.update(&mut cx, |view, cx| view.choose("edit.undo", json!({}), cx));
+        assert_eq!(prop(&view, ids[0], "x", &cx), json!(0.0));
+        assert_eq!(colour(&cx), json!("#FF0000"));
+        view.update(&mut cx, |view, cx| view.choose("edit.undo", json!({}), cx));
+        assert_eq!(colour(&cx), json!("#D9D9D9"));
+    }
+
+    /// An agent's op while a picker is open. A read leaves the picker and its scrub as they are.
+    /// An op that changes the canvas ends the colour's scrub first, kept, and closes the picker:
+    /// the op is an undo step of its own, which an Escape after it doesn't take back.
+    #[gpui_kit::test]
+    fn an_op_while_a_colour_is_picked_is_a_step_of_its_own(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("colour-then-op");
+        let path = tmp.0.join("design.figcraft");
+        let ids = with_fills(&path, &[0.0], &[json!(["#D9D9D9"])]);
+        let (view, mut cx) = open_in_window(cx, &path, &ids);
+        let colour = |cx: &VisualTestContext| prop(&view, ids[0], "fills", cx)[0]["color"].clone();
+        let run_op = |op: Value, cx: &mut VisualTestContext| {
+            let reply = view.update(cx, |view, cx| view.run_op(&op, cx));
+            cx.run_until_parked();
+            assert_eq!(reply["ok"], json!(true), "{reply}");
+        };
+        let steps = undo_steps(&view, &cx);
+        // As after a click on the layer: the picker gives the keyboard back to the canvas.
+        focus_canvas(&view, &mut cx);
+        click(&mut cx, "design-fills-0-swatch");
+        let picker = picker(&view, "fills-0", &cx);
+        pick(&picker, "#FF0000", &mut cx);
+        run_op(json!({"op": "get"}), &mut cx);
+        assert!(is_open(&picker, &cx));
+        assert!(view.read_with(&cx, |view, _| view.scrub.is_some()));
+        let x = json!({"ids": ids, "props": {"x": 40}});
+        run_op(
+            json!({"op": "command", "command": "node.set", "params": x}),
+            &mut cx,
+        );
+        assert!(!is_open(&picker, &cx));
+        assert!(view.read_with(&cx, |view, _| view.scrub.is_none()));
+        assert_eq!(undo_steps(&view, &cx), steps + 2);
+        cx.simulate_keystrokes("escape");
+        assert_eq!(prop(&view, ids[0], "x", &cx), json!(40.0));
+        assert_eq!(colour(&cx), json!("#FF0000"));
+        assert_eq!(undo_steps(&view, &cx), steps + 2);
+        assert_eq!(view.read_with(&cx, |view, _| view.toast.clone()), None);
+    }
+
+    /// A value typed in a field and left there, when a swatch is clicked, is applied before the
+    /// picker's scrub begins: it is an undo step of its own, which an Escape in the picker doesn't
+    /// take back.
+    #[gpui_kit::test]
+    fn a_value_typed_before_a_colour_pick_stays(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("typed-then-colour");
+        let path = tmp.0.join("design.figcraft");
+        let ids = with_fills(&path, &[0.0], &[json!(["#D9D9D9"])]);
+        let (view, mut cx) = open_in_window(cx, &path, &ids);
+        let colour = |cx: &VisualTestContext| prop(&view, ids[0], "fills", cx)[0]["color"].clone();
+        let steps = undo_steps(&view, &cx);
+        // 40 typed in X, and no Enter: the click on the swatch takes the keyboard from it.
+        click(&mut cx, "design-field-x");
+        cx.simulate_input("40");
+        click(&mut cx, "design-fills-0-swatch");
+        let picker = picker(&view, "fills-0", &cx);
+        assert!(is_open(&picker, &cx));
+        assert_eq!(prop(&view, ids[0], "x", &cx), json!(40.0));
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+        pick(&picker, "#FF0000", &mut cx);
+        cx.simulate_keystrokes("escape");
+        assert!(!is_open(&picker, &cx));
+        assert_eq!(colour(&cx), json!("#D9D9D9"));
+        assert_eq!(prop(&view, ids[0], "x", &cx), json!(40.0));
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+        assert_eq!(field_text(&view, "x", &cx), "40");
+    }
+
+    /// A picker's scrub lasts while its swatch is drawn for the layers the scrub began on. When
+    /// other layers are selected, by a path that doesn't end it itself, or the panel is hidden,
+    /// it ends, kept, and the picker closes: else no later edit could leave its undo step.
+    #[gpui_kit::test]
+    fn a_colour_pick_ends_once_its_swatch_is_gone(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("colour-out-of-sight");
+        let path = tmp.0.join("design.figcraft");
+        let fills = json!(["#D9D9D9"]);
+        let ids = with_fills(&path, &[0.0, 150.0], &[fills.clone(), fills]);
+        let (view, mut cx) = open_in_window(cx, &path, &ids[..1]);
+        let colour =
+            |id: NodeId, cx: &VisualTestContext| prop(&view, id, "fills", cx)[0]["color"].clone();
+        let show_design = |show: bool, cx: &mut VisualTestContext| {
+            view.update(cx, |view, cx| {
+                view.show_design = show;
+                cx.notify();
+            });
+            cx.run_until_parked();
+        };
+        let steps = undo_steps(&view, &cx);
+        click(&mut cx, "design-fills-0-swatch");
+        let picker = picker(&view, "fills-0", &cx);
+        pick(&picker, "#FF0000", &mut cx);
+        // The other rectangle: its fill's swatch has the same name, but its layer isn't the one
+        // the pick began on.
+        select(&view, &ids[1..], &mut cx);
+        assert!(!is_open(&picker, &cx));
+        assert!(view.read_with(&cx, |view, _| view.scrub.is_none()));
+        assert_eq!(colour(ids[0], &cx), json!("#FF0000"));
+        assert_eq!(colour(ids[1], &cx), json!("#D9D9D9"));
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+        // The panel hidden while the other rectangle's colour is picked.
+        click(&mut cx, "design-fills-0-swatch");
+        pick(&picker, "#00FF00", &mut cx);
+        show_design(false, &mut cx);
+        assert!(!is_open(&picker, &cx));
+        assert!(view.read_with(&cx, |view, _| view.scrub.is_none()));
+        assert_eq!(colour(ids[1], &cx), json!("#00FF00"));
+        assert_eq!(undo_steps(&view, &cx), steps + 2);
+        // Shown again, the swatch is there and its picker stays closed.
+        show_design(true, &mut cx);
+        assert!(drawn(&mut cx, "design-fills-0-swatch"));
+        assert!(!is_open(&picker, &cx));
+        assert_eq!(view.read_with(&cx, |view, _| view.toast.clone()), None);
     }
 
     /// Review Focus 1 and 2 for a paint: a typed hex or opacity goes to the paint of every

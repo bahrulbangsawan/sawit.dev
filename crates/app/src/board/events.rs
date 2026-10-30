@@ -45,6 +45,11 @@ impl BoardView {
     /// it selects the line). With Space held down it starts a pan instead. A drag or a pan whose
     /// release never reached the canvas (the tab was hidden meanwhile) ends first, where this press
     /// is.
+    ///
+    /// A colour picker open in the Design panel closes on this press, but only once the press is
+    /// over, when the tools have had it: the colour's scrub ends first, kept
+    /// ([`BoardView::end_colour_scrub`]), so that what the press starts (a move, a resize, a pen's
+    /// point) is a gesture of its own.
     pub(super) fn on_left_down(
         &mut self,
         event: &MouseDownEvent,
@@ -52,6 +57,7 @@ impl BoardView {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus, cx);
+        self.end_colour_scrub(cx);
         self.end_drag(event.position, event.modifiers, cx);
         self.pan = None;
         if self.space_held {

@@ -75,6 +75,9 @@ pub(super) struct DesignPanel {
     pickers: HashMap<SharedString, paints::Picker>,
     /// The colour picker whose colours make the scrub that is on.
     colour: Option<SharedString>,
+    /// The frame being drawn drew the swatch of that colour picker
+    /// ([`BoardView::settle_colour_scrub`]).
+    colour_drawn: bool,
     /// The effects whose editor is open, by their place in the list, and the layers they are the
     /// effects of: the editors close when other layers are selected.
     effects_open: HashSet<usize>,

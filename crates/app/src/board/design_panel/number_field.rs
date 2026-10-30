@@ -466,12 +466,18 @@ impl BoardView {
         read.ok().map(Rc::new)
     }
 
-    /// Applies what is typed in the field that has the keyboard, if one has.
-    fn commit_focused_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let focused = (self.design.fields.iter())
-            .find(|(_, field)| field.input.focus_handle(cx).is_focused(window))
-            .map(|(id, _)| id.clone());
-        if let Some(id) = focused {
+    /// Applies what is typed in the field being typed in, if one is: the one that has the
+    /// keyboard, or one that had it and hasn't heard yet that it lost it (it hears that after the
+    /// next frame). A scrub applies it before it begins: else it would be applied within the
+    /// scrub, as part of its undo step, and an Escape would take it back with the scrub.
+    pub(super) fn commit_focused_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let typed: Vec<SharedString> = (self.design.fields.iter())
+            .filter(|(_, field)| {
+                field.editing.is_some() || field.input.focus_handle(cx).is_focused(window)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in typed {
             self.commit_field(&id, window, cx);
         }
     }

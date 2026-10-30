@@ -370,9 +370,16 @@ impl BoardView {
     ///
     /// While the Actions palette, the shortcuts sheet or the context menu is open, a `key` op of
     /// Escape closes it, as the key does in the window, and the canvas never gets it ([`menus`]).
+    ///
+    /// An op other than a read first ends the scrub of a colour picker open in the Design panel,
+    /// kept, and closes the picker ([`BoardView::end_colour_scrub`]): the op is then an undo step
+    /// of its own, which an Escape in the picker can't take back. A read leaves the picker open.
     pub fn run_op(&mut self, op: &Value, cx: &mut Context<Self>) -> Value {
         if let Some(reply) = self.close_menus_for_op(op, cx) {
             return reply;
+        }
+        if !reads_only(op) {
+            self.end_colour_scrub(cx);
         }
         let reply = match self.board_mut() {
             Some(board) => ops::run(board, op),
@@ -967,6 +974,8 @@ impl Render for BoardView {
             .then(|| design_panel::render_design_panel(self, window, cx));
         // Over all of it, whether the UI is hidden or not (ruling P6-C6).
         let menus = self.render_menus(window, cx);
+        // A colour picker whose swatch this frame left out ends its scrub.
+        self.settle_colour_scrub(cx);
         div()
             .id("board")
             .key_context(key_context)
@@ -1137,6 +1146,15 @@ fn system_clipboard(cx: &App) -> (Option<String>, Option<Vec<u8>>) {
 /// Whether `kept` is `doc`: the same document, not only an equal one.
 fn same(kept: &Option<Arc<Document>>, doc: &Arc<Document>) -> bool {
     kept.as_ref().is_some_and(|kept| Arc::ptr_eq(kept, doc))
+}
+
+/// Whether control op `op` only reads the canvas, and changes nothing: `get` and `commands`
+/// (`sawit_board::ops::run`).
+fn reads_only(op: &Value) -> bool {
+    matches!(
+        op.get("op").and_then(Value::as_str),
+        Some("get" | "commands")
+    )
 }
 
 /// The render of the page on show in `ds` at `wanted` ([`view::render_view`]), drawn as the View
