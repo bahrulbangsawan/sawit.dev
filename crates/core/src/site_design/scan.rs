@@ -220,6 +220,23 @@ mod tests {
     }
 
     #[test]
+    fn merge_rules_adds_fetched_sheets() {
+        let mut s = Scan {
+            blocked_sheets: vec!["https://cdn.x.dev/site.css".into()],
+            ..Default::default()
+        };
+        s.merge_rules(SheetRules {
+            font_faces: vec![face("SF", "400")],
+            variables: vec![("--x".into(), "1px".into())],
+            breakpoints: vec![734],
+            focus_ring: None,
+        });
+        assert_eq!(s.font_faces, vec![face("SF", "400")]);
+        assert_eq!(s.variables, vec![("--x".into(), "1px".into())]);
+        assert_eq!(s.breakpoints, vec![734]);
+    }
+
+    #[test]
     fn merge_rules_dedupes() {
         let mut s = Scan {
             font_faces: vec![face("SF", "400")],

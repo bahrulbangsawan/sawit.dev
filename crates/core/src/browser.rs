@@ -170,6 +170,28 @@ pub enum BrowserOp {
         #[serde(default)]
         clear: bool,
     },
+    /// An element's computed styles; `format` is `json` (default, with
+    /// contrast), `css`, `tailwind` or `html`.
+    Inspect {
+        #[serde(flatten)]
+        target: Target,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format: Option<String>,
+    },
+    /// The page's design scan and derived tokens; `part` is `summary`
+    /// (default), `colors`, `fonts`, `assets`, `tokens` or `variables`.
+    Design {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        part: Option<String>,
+    },
+    /// Starts writing the design export folder in the background (or joins
+    /// the one running).
+    ExportDesign {
+        #[serde(default)]
+        include_videos: bool,
+    },
+    /// How the last design export is doing.
+    ExportStatus,
 }
 
 impl BrowserOp {
@@ -188,6 +210,10 @@ impl BrowserOp {
                 | Self::Devtools
                 | Self::Resize { .. }
                 | Self::Annotations { .. }
+                | Self::Inspect { .. }
+                | Self::Design { .. }
+                | Self::ExportDesign { .. }
+                | Self::ExportStatus
         )
     }
 
@@ -994,6 +1020,59 @@ mod tests {
         let bare: BrowserOp = serde_json::from_str(r#"{"op":"annotations"}"#).unwrap();
         assert_eq!(bare, BrowserOp::Annotations { clear: false });
         assert!(op.is_native() && !op.shows_tab());
+    }
+
+    #[test]
+    fn design_ops_are_native_and_round_trip() {
+        let target = Target {
+            reference: Some("e3".into()),
+            selector: None,
+        };
+        for (op, wire) in [
+            (
+                BrowserOp::Inspect {
+                    target: target.clone(),
+                    format: Some("css".into()),
+                },
+                json!({"op": "inspect", "ref": "e3", "format": "css"}),
+            ),
+            (
+                BrowserOp::Inspect {
+                    target: Target {
+                        reference: None,
+                        selector: Some("h1".into()),
+                    },
+                    format: None,
+                },
+                json!({"op": "inspect", "selector": "h1"}),
+            ),
+            (
+                BrowserOp::Design {
+                    part: Some("colors".into()),
+                },
+                json!({"op": "design", "part": "colors"}),
+            ),
+            (BrowserOp::Design { part: None }, json!({"op": "design"})),
+            (
+                BrowserOp::ExportDesign {
+                    include_videos: true,
+                },
+                json!({"op": "export_design", "include_videos": true}),
+            ),
+            (BrowserOp::ExportStatus, json!({"op": "export_status"})),
+        ] {
+            assert_eq!(serde_json::to_value(&op).unwrap(), wire);
+            assert_eq!(serde_json::from_value::<BrowserOp>(wire).unwrap(), op);
+            assert!(op.is_native(), "{op:?}");
+            assert!(!op.shows_tab(), "{op:?}");
+        }
+        let bare: BrowserOp = serde_json::from_str(r#"{"op":"export_design"}"#).unwrap();
+        assert_eq!(
+            bare,
+            BrowserOp::ExportDesign {
+                include_videos: false
+            }
+        );
     }
 
     #[test]

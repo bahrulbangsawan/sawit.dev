@@ -8,6 +8,7 @@
 //! every page, through `Engine::eval_with_callback`.
 
 mod annotate;
+mod design;
 mod engine;
 mod panel;
 mod toolbar;
@@ -158,6 +159,8 @@ pub struct BrowserView {
     /// again when the page has loaded.
     pick_waiting: bool,
     to_view: UnboundedSender<FromPage>,
+    /// The design scan (cached per page), inspect and export.
+    design: design::flow::DesignFlow,
     /// Ops sent before the webview exists, in order.
     queued: Vec<(BrowserOp, oneshot::Sender<OpResult>)>,
     _ipc: Task<()>,
@@ -250,6 +253,7 @@ impl BrowserView {
             pick: PickMode::Off,
             pick_waiting: false,
             to_view,
+            design: Default::default(),
             queued: Vec::new(),
             _ipc: ipc,
             _subscriptions: subscriptions,
@@ -662,6 +666,7 @@ impl BrowserView {
             },
             FromPage::Event(PageEvent::Url(url)) => {
                 self.url = url;
+                self.design_url_changed();
                 self.show_address(window, cx);
                 // Route changes without a load still move to another page.
                 let url = self.current_url();
@@ -675,6 +680,9 @@ impl BrowserView {
             }
             FromPage::Engine(EngineEvent::Load { started, url }) => {
                 self.loading = started;
+                if started {
+                    self.design_load_started();
+                }
                 if !started {
                     for op in self.ops_after_load(cx) {
                         if op["op"] == "pick" {
@@ -832,6 +840,19 @@ impl BrowserView {
                     self.annotate.update(cx, |a, cx| a.clear(cx));
                 }
                 json!({ "markdown": markdown, "count": count })
+            }
+            BrowserOp::Inspect { target, format } => {
+                let target = serde_json::to_value(&target).unwrap_or_default();
+                return self.inspect_op(target, format, reply, cx);
+            }
+            BrowserOp::Design { part } => return self.design_op(part, reply, cx),
+            BrowserOp::ExportDesign { include_videos } => {
+                let _ = reply.send(self.export_op(include_videos, cx));
+                return;
+            }
+            BrowserOp::ExportStatus => {
+                let _ = reply.send(self.export_status_op());
+                return;
             }
             BrowserOp::Screenshot { target } if target.is_empty() => {
                 return self.shoot(None, reply, cx);
