@@ -55,7 +55,7 @@ pub const SERVERS: &[Server] = &[
     Server {
         id: crate::mcp_clients::SERVER_NAME,
         name: "Sawit",
-        about: "Instances, read-only queries and DATABASE_URL from this app.",
+        about: "Drive Sawit from your agent: databases (read and write), terminals, git, the canvas, the browser, ports, SSH and more.",
         source: Source::Bundled,
         auth: Auth::None,
         note: None,
@@ -332,6 +332,24 @@ mod tests {
             let spec = s.spec(Path::new("/bin/sawit-mcp"), "eu-west-1", none);
             assert_eq!(spec.name, s.id);
             assert_eq!(spec.is_remote(), s.is_remote());
+        }
+    }
+
+    /// SMOKE-6: the built-in server's row is what a user reads before installing it into every
+    /// client at once, so it says what an agent can do with it: write to databases, run terminals,
+    /// commit, drive the canvas and the browser. "Read-only queries" was never true (`execute_sql`).
+    #[test]
+    fn the_built_in_server_says_what_agents_can_do_with_it() {
+        let about = get(crate::mcp_clients::SERVER_NAME).unwrap().about;
+        assert!(!about.contains("read-only"), "{about}");
+        for what in [
+            "databases (read and write)",
+            "terminals",
+            "git",
+            "canvas",
+            "browser",
+        ] {
+            assert!(about.contains(what), "{what}: {about}");
         }
     }
 
