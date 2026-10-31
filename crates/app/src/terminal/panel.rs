@@ -762,18 +762,20 @@ impl TerminalPanel {
         }
     }
 
-    /// The tab a paste may go to: the active one if its program enabled
-    /// bracketed paste, else the highest-numbered that did.
+    /// The tab a paste may go to: the active one if the program in its
+    /// focused pane enabled bracketed paste, else the highest-numbered tab
+    /// whose focused pane did.
     pub fn paste_target(&self, cx: &App) -> Option<usize> {
         let accepts: Vec<bool> = self
             .tabs
             .iter()
-            .map(|t| t.read(cx).accepts_paste())
+            .map(|t| focused(t, cx).accepts_paste())
             .collect();
         pick_paste_target(self.active, &accepts)
     }
 
-    /// Pastes `text` into tab `ix` (never pressing Enter) and focuses it.
+    /// Pastes `text` into the focused pane of tab `ix` (never pressing
+    /// Enter) and focuses it.
     pub fn paste(
         &mut self,
         ix: usize,
@@ -784,7 +786,7 @@ impl TerminalPanel {
         let view = self
             .tabs
             .get(ix)
-            .cloned()
+            .map(|t| t.read(cx).focused_view().clone())
             .ok_or_else(|| format!("no terminal {}", ix + 1))?;
         if !view.read(cx).accepts_paste() {
             return Err(format!("terminal {} is not ready for a paste", ix + 1));
@@ -1112,10 +1114,60 @@ mod paste_tests {
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::{AppContext as _, TestAppContext};
+    use std::time::{Duration, Instant};
+
+    use gpui_kit::{App, AppContext as _, TestAppContext};
+    use sawit_core::terminal::run_bytes;
 
     use super::super::testing::{focus_terminal, init, open_panel};
     use super::JobTag;
+
+    /// Polls `ok` (the shells run on real threads) for up to five seconds.
+    fn wait_until(cx: &mut TestAppContext, what: &str, ok: impl Fn(&App) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !cx.update(|cx| ok(cx)) {
+            assert!(Instant::now() < deadline, "timed out waiting until {what}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_paste_goes_to_the_focused_pane(cx: &mut TestAppContext) {
+        const MARK: &str = "sawit-paste-marker";
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let (other, focused) = cx.update(|cx| {
+            let tab = panel.read(cx).tab(0).read(cx);
+            let panes = tab.state.layout.panes();
+            assert_eq!(panes.len(), 2);
+            assert_eq!(tab.state.focused, panes[1]);
+            let other = tab.view(panes[0]).expect("the first pane").clone();
+            (other, tab.focused_view().clone())
+        });
+        // A program that turns bracketed paste on, then echoes what it gets.
+        cx.update(|cx| {
+            focused
+                .read(cx)
+                .write(run_bytes("printf '\\033[?2004h'; cat"))
+        });
+        wait_until(cx, "cat waits with bracketed paste on", |cx| {
+            let v = focused.read(cx);
+            v.foreground_job().is_some() && v.accepts_paste()
+        });
+        assert_eq!(cx.update(|cx| panel.read(cx).paste_target(cx)), Some(0));
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.paste(0, MARK, window, cx))
+        })
+        .expect("the test window is open")
+        .expect("the focused pane takes the paste");
+        wait_until(cx, "the paste shows in the focused pane", |cx| {
+            focused.read(cx).text_tail(100).contains(MARK)
+        });
+        cx.update(|cx| assert!(!other.read(cx).text_tail(100).contains(MARK)));
+    }
 
     #[gpui_kit::test]
     fn a_script_in_a_split_is_still_found(cx: &mut TestAppContext) {
