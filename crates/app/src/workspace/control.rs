@@ -135,6 +135,11 @@ impl Workspace {
                 self.leave_welcome(PANEL_AND_TABS, cx);
                 self.layout.sidebar = true;
                 self.sidebar = sidebar_tab(panel);
+                if self.sidebar == SidebarTab::ShellConfig {
+                    let roots = self.roots(cx);
+                    self.shell_config_panel
+                        .update(cx, |p, cx| p.set_projects(roots, cx));
+                }
                 done(json!({ "panel": panel_name(self.sidebar) }))
             }
             Command::Layout {

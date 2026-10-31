@@ -29,6 +29,7 @@ use sawit_core::mcp_clients::{
 };
 use sawit_core::probe::find_in_path;
 
+use crate::catalog::{self, Mark};
 use crate::rt;
 
 /// A server in the catalog and a target, by index.
@@ -57,9 +58,100 @@ pub struct McpPage {
     loading: bool,
     sheet: Option<Sheet>,
     focus: FocusHandle,
+    filter: Filter,
+    kind: Option<Kind>,
+    sort: Sort,
+    /// The page of the list shown, from 0.
+    page: usize,
     /// Made on the first render, which has the window an input needs.
     search: Option<Entity<InputState>>,
     _search: Option<Subscription>,
+}
+
+/// Which servers the filter tabs show.
+#[derive(Clone, Copy, PartialEq)]
+enum Filter {
+    All,
+    Installed,
+    Missing,
+    SignIn,
+}
+
+impl Filter {
+    const ALL: [Filter; 4] = [
+        Filter::All,
+        Filter::Installed,
+        Filter::Missing,
+        Filter::SignIn,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Filter::All => "All",
+            Filter::Installed => "Installed",
+            Filter::Missing => "Not Installed",
+            Filter::SignIn => "Needs Sign-In",
+        }
+    }
+}
+
+/// Where a server runs; also the catalog's order.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Kind {
+    BuiltIn,
+    Remote,
+    Local,
+}
+
+impl Kind {
+    const ALL: [Kind; 3] = [Kind::BuiltIn, Kind::Remote, Kind::Local];
+
+    fn of(s: usize) -> Kind {
+        if SERVERS[s].is_remote() {
+            Kind::Remote
+        } else if s == 0 {
+            Kind::BuiltIn
+        } else {
+            Kind::Local
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Kind::BuiltIn => "Built In",
+            Kind::Remote => "Remote",
+            Kind::Local => "Runs on This Mac",
+        }
+    }
+
+    fn icon(self) -> Lucide {
+        match self {
+            Kind::BuiltIn => Lucide::Package,
+            Kind::Remote => Lucide::Globe,
+            Kind::Local => Lucide::SquareTerminal,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Sort {
+    Catalog,
+    Name,
+    NameDesc,
+    Installed,
+}
+
+impl Sort {
+    const ALL: [Sort; 4] = [Sort::Catalog, Sort::Name, Sort::NameDesc, Sort::Installed];
+
+    fn label(self) -> &'static str {
+        match self {
+            Sort::Catalog => "Type",
+            Sort::Name => "Name (A–Z)",
+            Sort::NameDesc => "Name (Z–A)",
+            Sort::Installed => "Most Installed",
+        }
+    }
 }
 
 enum Sheet {
@@ -100,7 +192,7 @@ struct SignInFlow {
 
 /// The logo of a client: colour logos as images, one-colour ones tinted
 /// with the theme, and a neutral glyph for clients without a free logo.
-fn client_logo(client: Client, cx: &App) -> AnyElement {
+pub(crate) fn client_logo(client: Client, size: f32, cx: &App) -> AnyElement {
     let logo = match client {
         Client::ClaudeCode => Some(("claudecode-color", true)),
         Client::ClaudeDesktop => Some(("claude-color", true)),
@@ -125,7 +217,7 @@ fn client_logo(client: Client, cx: &App) -> AnyElement {
         Client::LmStudio => Some(("lmstudio", false)),
         _ => None,
     };
-    logo_image(logo, Lucide::Bot, 18., cx)
+    logo_image(logo, Lucide::Bot, size, cx)
 }
 
 fn server_logo(server: &Server, cx: &App) -> AnyElement {
@@ -216,6 +308,10 @@ impl McpPage {
             loading: true,
             sheet: None,
             focus: cx.focus_handle(),
+            filter: Filter::All,
+            kind: None,
+            sort: Sort::Catalog,
+            page: 0,
             search: None,
             _search: None,
         };
@@ -746,104 +842,227 @@ impl McpPage {
         let muted = cx.theme().muted_foreground;
         let pending = self.pending_sign_ins(None).len();
         let checking = !self.checking.is_empty();
-        let agents = {
-            let mut counts: Vec<(Client, usize)> = Vec::new();
-            for t in &self.targets {
-                match counts.iter_mut().find(|(c, _)| *c == t.client) {
-                    Some((_, n)) => *n += 1,
-                    None => counts.push((t.client, 1)),
-                }
+        let mut clients: Vec<(Client, usize)> = Vec::new();
+        for t in &self.targets {
+            match clients.iter_mut().find(|(c, _)| *c == t.client) {
+                Some((_, n)) => *n += 1,
+                None => clients.push((t.client, 1)),
             }
-            counts.sort_by_key(|(c, _)| {
-                (
-                    c.category() == Category::Editor,
-                    Client::ALL.iter().position(|x| x == c),
-                )
-            });
-            counts
-                .into_iter()
-                .map(|(c, n)| {
-                    if n > 1 {
-                        format!("{} ×{n}", c.name())
-                    } else {
-                        c.name().to_string()
-                    }
+        }
+        clients.sort_by_key(|(c, _)| {
+            (
+                c.category() == Category::Editor,
+                Client::ALL.iter().position(|x| x == c),
+            )
+        });
+        let chips = clients.into_iter().map(|(client, n)| {
+            h_flex()
+                .h(px(24.))
+                .px_2()
+                .gap_1p5()
+                .rounded_full()
+                .border_1()
+                .border_color(cx.theme().border)
+                .text_xs()
+                .child(client_logo(client, 14., cx))
+                .child(client.name())
+                .when(n > 1, |el| {
+                    el.child(div().text_color(muted).child(format!("×{n}")))
                 })
-                .collect::<Vec<_>>()
-                .join(" · ")
-        };
+        });
         v_flex()
-            .gap_1()
+            .gap_3()
             .child(
                 h_flex()
-                    .gap_2()
-                    .child(div().text_lg().font_semibold().flex_1().child("MCP Servers"))
-                    .when_some(self.search.clone(), |el, search| {
-                        el.child(
-                            div().w(px(220.)).child(
-                                Input::new(&search)
-                                    .small()
-                                    .prefix(Icon::new(Lucide::Search).xsmall().text_color(muted))
-                                    .cleanable(true),
+                    .gap_4()
+                    .items_start()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .child(div().text_xl().font_semibold().child("MCP Servers"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(muted)
+                                    .whitespace_normal()
+                                    .child(
+                                        "Install a server into every agent, editor and profile at once. Servers with an \
+                                         account sign in through the agent's own sign-in; restart the client to pick up changes.",
+                                    ),
                             ),
-                        )
-                    })
-                    .when(checking, |el| {
-                        el.child(
-                            h_flex()
-                                .gap_1p5()
-                                .text_xs()
-                                .text_color(muted)
-                                .child(Spinner::new().xsmall().color(muted))
-                                .child("Checking sign-ins…"),
-                        )
-                    })
-                    .child(
-                        Button::new("mcp-reload")
-                            .ghost()
-                            .xsmall()
-                            .icon(Lucide::RefreshCw)
-                            .tooltip("Detect Again")
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
                     )
-                    .when(pending > 0, |el| {
-                        el.child(
-                            Button::new("mcp-sign-in-all")
-                                .primary()
-                                .small()
-                                .icon(Lucide::KeyRound)
-                                .label(format!("Sign In to All ({pending})"))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    let queue = this.pending_sign_ins(None);
-                                    this.start_sign_in(queue, window, cx)
-                                })),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(muted)
-                    .whitespace_normal()
                     .child(
-                        "Install a server into every agent, editor and profile at once. Servers that need an account \
-                         sign in through the agent's own sign-in; restart the client (or the session) to pick up changes.",
+                        h_flex()
+                            .flex_none()
+                            .gap_2()
+                            .when(checking, |el| {
+                                el.child(catalog::pill(Mark::Spinner, "Checking sign-ins…", muted))
+                            })
+                            .child(
+                                Button::new("mcp-reload")
+                                    .ghost()
+                                    .small()
+                                    .icon(Lucide::RefreshCw)
+                                    .tooltip("Detect Again")
+                                    .loading(self.loading)
+                                    .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
+                            )
+                            .when(pending > 0, |el| {
+                                el.child(
+                                    Button::new("mcp-sign-in-all")
+                                        .primary()
+                                        .small()
+                                        .icon(Lucide::KeyRound)
+                                        .label(format!("Sign In to All ({pending})"))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            let queue = this.pending_sign_ins(None);
+                                            this.start_sign_in(queue, window, cx)
+                                        })),
+                                )
+                            }),
                     ),
             )
             .when(!self.loading, |el| {
                 el.child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .whitespace_normal()
-                        .child(if self.targets.is_empty() {
-                            "No AI clients found.".to_string()
-                        } else {
-                            format!("{} on this Mac: {agents}", plural(self.targets.len(), "target", "targets"))
-                        }),
+                    h_flex()
+                        .gap_1p5()
+                        .flex_wrap()
+                        .child(
+                            div()
+                                .pr_1()
+                                .text_xs()
+                                .font_medium()
+                                .text_color(muted)
+                                .child(if self.targets.is_empty() {
+                                    "No AI clients found on this Mac.".to_string()
+                                } else {
+                                    format!(
+                                        "Installs into {} on this Mac:",
+                                        plural(self.targets.len(), "target", "targets")
+                                    )
+                                }),
+                        )
+                        .children(chips),
                 )
             })
+    }
+
+    /// Clients that have server `s`, counting other versions too.
+    fn installs(&self, s: usize) -> usize {
+        (0..self.targets.len())
+            .filter(|t| self.is_installed((s, *t)))
+            .count()
+    }
+
+    fn matches(s: usize, query: &str) -> bool {
+        let server = &SERVERS[s];
+        let has = |t: &str| t.to_lowercase().contains(query);
+        query.is_empty()
+            || has(server.name)
+            || has(server.id)
+            || has(server.about)
+            || has(Kind::of(s).label())
+    }
+
+    /// Matches the search and the kind: what the filter tabs count.
+    fn in_scope(&self, s: usize, query: &str) -> bool {
+        Self::matches(s, query) && self.kind.is_none_or(|k| Kind::of(s) == k)
+    }
+
+    fn passes(&self, s: usize, filter: Filter) -> bool {
+        match filter {
+            Filter::All => true,
+            Filter::Installed => self.installs(s) > 0,
+            Filter::Missing => self.installs(s) == 0,
+            Filter::SignIn => !self.pending_sign_ins(Some(s)).is_empty(),
+        }
+    }
+
+    /// The servers the search, kind, tab and sort leave.
+    fn shown(&self, query: &str) -> Vec<usize> {
+        let mut rows: Vec<usize> = (0..SERVERS.len())
+            .filter(|s| self.in_scope(*s, query) && self.passes(*s, self.filter))
+            .collect();
+        match self.sort {
+            Sort::Catalog => rows.sort_by_key(|s| (Kind::of(*s), *s)),
+            Sort::Name => rows.sort_by_key(|s| SERVERS[*s].name.to_lowercase()),
+            Sort::NameDesc => {
+                rows.sort_by_key(|s| std::cmp::Reverse(SERVERS[*s].name.to_lowercase()))
+            }
+            Sort::Installed => rows.sort_by_key(|s| (std::cmp::Reverse(self.installs(*s)), *s)),
+        }
+        rows
+    }
+
+    /// Search, the filter tabs with their counts, kind and sort.
+    fn render_toolbar(&self, query: &str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let scope: Vec<usize> = (0..SERVERS.len())
+            .filter(|s| self.in_scope(*s, query))
+            .collect();
+        let choices = Filter::ALL
+            .iter()
+            .map(|f| {
+                (
+                    f.label(),
+                    scope.iter().filter(|s| self.passes(**s, *f)).count(),
+                )
+            })
+            .collect();
+        let current = Filter::ALL
+            .iter()
+            .position(|f| *f == self.filter)
+            .unwrap_or(0);
+        let mut kinds = vec!["All Types"];
+        kinds.extend(Kind::ALL.iter().map(|k| k.label()));
+        let kind = self
+            .kind
+            .and_then(|k| Kind::ALL.iter().position(|x| *x == k))
+            .map_or(0, |ix| ix + 1);
+        let sort = Sort::ALL.iter().position(|s| *s == self.sort).unwrap_or(0);
+        h_flex()
+            .gap_2()
+            .flex_wrap()
+            .when_some(self.search.as_ref(), |el, search| {
+                el.child(catalog::search(search, cx))
+            })
+            .child(catalog::tabs(
+                "mcp-filter",
+                choices,
+                current,
+                cx.listener(|this, ix: &usize, _, cx| {
+                    this.filter = Filter::ALL[*ix];
+                    this.page = 0;
+                    cx.notify();
+                }),
+                cx,
+            ))
+            .child(div().flex_1())
+            .child(catalog::menu(
+                "mcp-kind",
+                Lucide::Funnel,
+                kinds[kind].to_string(),
+                kinds,
+                kind,
+                cx.listener(|this, ix: &usize, _, cx| {
+                    this.kind = ix.checked_sub(1).map(|ix| Kind::ALL[ix]);
+                    this.page = 0;
+                    cx.notify();
+                }),
+            ))
+            .child(catalog::menu(
+                "mcp-sort",
+                Lucide::ArrowUpDown,
+                format!("Sort: {}", self.sort.label()),
+                Sort::ALL.iter().map(|s| s.label()).collect(),
+                sort,
+                cx.listener(|this, ix: &usize, _, cx| {
+                    this.sort = Sort::ALL[*ix];
+                    this.page = 0;
+                    cx.notify();
+                }),
+            ))
     }
 
     fn render_server(&self, s: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -863,16 +1082,28 @@ impl McpPage {
         let missing = server.missing_program(|c| self.programs.get(c).cloned());
         let bundled_missing = s == 0 && !self.server_exists;
         let busy = (0..total).any(|t| self.busy.contains(&(s, t)));
+        let none = installed + other == 0;
 
-        let (summary, summary_color) = if installed + other == 0 {
-            ("Not installed".to_string(), muted)
+        let (mark, summary, summary_color) = if busy {
+            (Mark::Spinner, "Working…".to_string(), theme.warning)
+        } else if none {
+            (
+                Mark::Icon(Lucide::CircleDashed),
+                "Not installed".to_string(),
+                muted,
+            )
         } else if other > 0 {
             (
+                Mark::Icon(Lucide::CircleAlert),
                 format!("{installed} of {total} · {other} to update"),
                 theme.warning,
             )
         } else {
-            (format!("{installed} of {total}"), theme.success)
+            (
+                Mark::Icon(Lucide::CircleCheck),
+                format!("Installed · {installed} of {total}"),
+                theme.success,
+            )
         };
 
         let mut notes: Vec<(Lucide, String, Hsla)> = Vec::new();
@@ -902,15 +1133,17 @@ impl McpPage {
                 muted,
             ));
         }
+        let kind = Kind::of(s);
 
         h_flex()
-            .px_3()
-            .py_2p5()
+            .px_4()
+            .py_3()
             .gap_3()
             .items_start()
             .border_b_1()
             .border_color(theme.border)
-            .child(div().pt_0p5().child(server_logo(server, cx)))
+            .hover(|el| el.bg(theme.list_hover))
+            .child(catalog::tile(server_logo(server, cx), cx))
             .child(
                 v_flex()
                     .flex_1()
@@ -919,17 +1152,14 @@ impl McpPage {
                     .child(
                         h_flex()
                             .gap_2()
+                            .flex_wrap()
                             .child(div().text_sm().font_semibold().child(server.name))
+                            .child(catalog::tag(Some(kind.icon()), kind.label(), cx))
                             .when(server.auth == Auth::Browser, |el| {
-                                el.child(
-                                    div()
-                                        .px_1p5()
-                                        .rounded(theme.radius)
-                                        .bg(theme.secondary)
-                                        .text_xs()
-                                        .text_color(muted)
-                                        .child("Sign-in"),
-                                )
+                                el.child(catalog::tag(Some(Lucide::KeyRound), "Sign-in", cx))
+                            })
+                            .when(matches!(server.auth, Auth::EnvKey(_)), |el| {
+                                el.child(catalog::tag(Some(Lucide::KeyRound), "API key", cx))
                             }),
                     )
                     .child(
@@ -959,79 +1189,65 @@ impl McpPage {
             )
             .child(
                 v_flex()
+                    .w(px(catalog::STATUS_W))
                     .flex_none()
-                    .items_end()
                     .gap_1()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(
-                                h_flex()
-                                    .gap_1()
-                                    .text_xs()
-                                    .text_color(summary_color)
-                                    .when(busy, |el| el.child(Spinner::new().xsmall().color(muted)))
-                                    .when(!busy, |el| {
-                                        el.child(
-                                            div().size(px(6.)).rounded_full().bg(summary_color),
-                                        )
-                                    })
-                                    .child(summary),
-                            )
-                            .when(busy, |el| {
-                                el.child(
-                                    Button::new(("mcp-stop", s))
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(Lucide::CircleStop)
-                                        .label("Stop")
-                                        .tooltip("Stop Installing or Removing")
-                                        .on_click(
-                                            cx.listener(move |this, _, _, cx| this.stop(s, cx)),
-                                        ),
-                                )
-                            })
-                            .when(!busy && !self.removable(s).is_empty(), |el| {
-                                el.child(
-                                    Button::new(("mcp-uninstall", s))
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(Icon::new(Lucide::Trash).text_color(theme.danger))
-                                        .tooltip(format!(
-                                            "Uninstall {} from Every Client",
-                                            server.name
-                                        ))
-                                        .disabled(self.loading)
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.confirm_uninstall(s, window, cx)
-                                        })),
-                                )
-                            })
-                            .child(
-                                Button::new(("mcp-open", s))
-                                    .when(installed + other == 0, |b| b.primary())
-                                    .when(installed + other > 0, |b| b.outline())
-                                    .xsmall()
-                                    .label(if installed + other == 0 {
-                                        "Install…"
-                                    } else {
-                                        "Manage…"
-                                    })
-                                    .disabled(self.loading || self.targets.is_empty())
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.open_install(s, window, cx)
-                                    })),
+                    .items_start()
+                    .child(catalog::pill(mark, summary, summary_color))
+                    .when(to_sign_in > 0, |el| {
+                        el.child(catalog::pill(
+                            Mark::Icon(Lucide::KeyRound),
+                            format!(
+                                "Sign-in needed · {}",
+                                plural(to_sign_in, "profile", "profiles")
                             ),
-                    )
+                            theme.warning,
+                        ))
+                    })
+                    .when(checking && to_sign_in == 0, |el| {
+                        el.child(catalog::pill(Mark::Spinner, "Checking sign-in…", muted))
+                    }),
+            )
+            .child(
+                h_flex()
+                    .w(px(catalog::ACTIONS_W))
+                    .flex_none()
+                    .gap_1()
+                    .justify_end()
+                    .when(busy, |el| {
+                        el.child(
+                            Button::new(("mcp-stop", s))
+                                .outline()
+                                .small()
+                                .icon(Lucide::CircleStop)
+                                .label("Stop")
+                                .tooltip("Stop Installing or Removing")
+                                .on_click(cx.listener(move |this, _, _, cx| this.stop(s, cx))),
+                        )
+                    })
+                    .when(!busy && !self.removable(s).is_empty(), |el| {
+                        el.child(
+                            Button::new(("mcp-uninstall", s))
+                                .ghost()
+                                .small()
+                                .icon(Icon::new(Lucide::Trash).text_color(theme.danger))
+                                .tooltip(format!("Uninstall {} from Every Client", server.name))
+                                .disabled(self.loading)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.confirm_uninstall(s, window, cx)
+                                })),
+                        )
+                    })
                     .when(to_sign_in > 0, |el| {
                         el.child(
                             Button::new(("mcp-sign-in", s))
-                                .ghost()
-                                .xsmall()
-                                .icon(Icon::new(Lucide::KeyRound).text_color(theme.warning))
-                                .label(format!(
-                                    "Sign In ({})",
-                                    plural(to_sign_in, "profile", "profiles")
+                                .outline()
+                                .small()
+                                .icon(Lucide::KeyRound)
+                                .label("Sign In")
+                                .tooltip(format!(
+                                    "Sign In on {}",
+                                    plural(to_sign_in, "Profile", "Profiles")
                                 ))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     let queue = this.pending_sign_ins(Some(s));
@@ -1039,10 +1255,100 @@ impl McpPage {
                                 })),
                         )
                     })
-                    .when(checking && to_sign_in == 0, |el| {
-                        el.child(div().text_xs().text_color(muted).child("Checking sign-in…"))
-                    }),
+                    .child(
+                        Button::new(("mcp-open", s))
+                            .when(none, |b| {
+                                b.primary().icon(Lucide::Download).label("Install")
+                            })
+                            .when(!none, |b| {
+                                b.outline().icon(Lucide::Settings2).label("Manage")
+                            })
+                            .small()
+                            .tooltip(if none {
+                                "Choose the Clients to Install Into"
+                            } else {
+                                "Install, Update or Remove per Client"
+                            })
+                            .disabled(self.loading || self.targets.is_empty())
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_install(s, window, cx)
+                            })),
+                    ),
             )
+    }
+
+    /// The list card: column titles, a page of servers and the pager, or
+    /// the empty state.
+    fn render_list(&self, query: &str, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let muted = theme.muted_foreground;
+        if self.loading {
+            return h_flex()
+                .py_12()
+                .gap_2()
+                .justify_center()
+                .rounded(theme.radius_lg)
+                .border_1()
+                .border_color(theme.border)
+                .text_sm()
+                .text_color(muted)
+                .child(Spinner::new().small().color(muted))
+                .child("Detecting clients…")
+                .into_any_element();
+        }
+        let rows = self.shown(query);
+        let total = rows.len();
+        let card = v_flex()
+            .rounded(theme.radius_lg)
+            .border_1()
+            .border_color(theme.border)
+            .overflow_hidden();
+        if total == 0 {
+            let title = if query.is_empty() {
+                "No servers here".to_string()
+            } else {
+                format!("No servers match “{query}”")
+            };
+            return card
+                .child(catalog::empty(
+                    title,
+                    Button::new("mcp-clear-filters")
+                        .outline()
+                        .small()
+                        .icon(Lucide::FunnelX)
+                        .label("Clear Filters")
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.clear_filters(window, cx)),
+                        ),
+                    cx,
+                ))
+                .into_any_element();
+        }
+        let (rows, page) = catalog::page_of(rows, self.page);
+        card.child(catalog::header(None, "Server", cx))
+            .children(rows.into_iter().map(|s| self.render_server(s, cx)))
+            .child(catalog::pager(
+                "mcp-pages",
+                page,
+                total,
+                if total == 1 { "server" } else { "servers" },
+                cx.listener(|this, page: &usize, _, cx| {
+                    this.page = *page;
+                    cx.notify();
+                }),
+                cx,
+            ))
+            .into_any_element()
+    }
+
+    fn clear_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.filter = Filter::All;
+        self.kind = None;
+        self.page = 0;
+        if let Some(search) = &self.search {
+            search.update(cx, |s, cx| s.set_value("", window, cx));
+        }
+        cx.notify();
     }
 
     fn render_install_sheet(&self, sheet: &InstallSheet, cx: &mut Context<Self>) -> AnyElement {
@@ -1121,7 +1427,7 @@ impl McpPage {
                         .bg(theme.secondary)
                         .border_b_1()
                         .border_color(theme.border)
-                        .child(client_logo(client, cx))
+                        .child(client_logo(client, 18., cx))
                         .child(div().text_xs().font_semibold().child(client.name())),
                 )
                 .children(
@@ -1547,7 +1853,7 @@ impl McpPage {
                 .child(
                     h_flex()
                         .gap_2()
-                        .child(client_logo(target.client, cx))
+                        .child(client_logo(target.client, 18., cx))
                         .child(
                             div()
                                 .text_sm()
@@ -1746,76 +2052,19 @@ impl Render for McpPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.search.is_none() {
             let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search servers"));
-            self._search = Some(cx.subscribe(&search, |_, _, e: &InputEvent, cx| {
+            self._search = Some(cx.subscribe(&search, |this, _, e: &InputEvent, cx| {
                 if matches!(e, InputEvent::Change) {
+                    this.page = 0;
                     cx.notify();
                 }
             }));
             self.search = Some(search);
         }
-        let muted = cx.theme().muted_foreground;
         let query = self
             .search
             .as_ref()
             .map(|s| s.read(cx).value().trim().to_lowercase())
             .unwrap_or_default();
-        let shown = |s: &usize| {
-            let server = &SERVERS[*s];
-            let has = |t: &str| t.to_lowercase().contains(&query);
-            query.is_empty() || has(server.name) || has(server.id) || has(server.about)
-        };
-        let body = if self.loading {
-            h_flex()
-                .gap_2()
-                .text_sm()
-                .text_color(muted)
-                .child(Spinner::new().small().color(muted))
-                .child("Detecting clients…")
-                .into_any_element()
-        } else {
-            let (bundled, local): (Vec<usize>, Vec<usize>) = (0..SERVERS.len())
-                .filter(|s| !SERVERS[*s].is_remote() && shown(s))
-                .partition(|s| *s == 0);
-            let remote: Vec<usize> = (0..SERVERS.len())
-                .filter(|s| SERVERS[*s].is_remote() && shown(s))
-                .collect();
-            let none = bundled.is_empty() && remote.is_empty() && local.is_empty();
-            let section = |title: &'static str, ixs: Vec<usize>, cx: &mut Context<Self>| {
-                (!ixs.is_empty()).then(|| {
-                    v_flex()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_semibold()
-                                .text_color(muted)
-                                .child(title),
-                        )
-                        .child(
-                            v_flex()
-                                .rounded(cx.theme().radius)
-                                .border_1()
-                                .border_color(cx.theme().border)
-                                .overflow_hidden()
-                                .children(ixs.into_iter().map(|s| self.render_server(s, cx))),
-                        )
-                })
-            };
-            v_flex()
-                .gap_4()
-                .children(section("BUILT IN", bundled, cx))
-                .children(section("REMOTE", remote, cx))
-                .children(section("RUNS ON THIS MAC", local, cx))
-                .when(none, |el| {
-                    el.child(
-                        div()
-                            .text_sm()
-                            .text_color(muted)
-                            .child(format!("No servers match “{query}”.")),
-                    )
-                })
-                .into_any_element()
-        };
         let overlay = match &self.sheet {
             Some(Sheet::Install(sheet)) => Some(self.render_install_sheet(sheet, cx)),
             Some(Sheet::SignIn(flow)) => Some(self.render_sign_in_sheet(flow, cx)),
@@ -1829,10 +2078,11 @@ impl Render for McpPage {
                 div().id("mcp-page").size_full().overflow_y_scroll().child(
                     v_flex()
                         .p_6()
-                        .gap_5()
-                        .max_w(px(980.))
+                        .gap_4()
+                        .max_w(px(1180.))
                         .child(self.render_header(cx))
-                        .child(body),
+                        .child(self.render_toolbar(&query, cx))
+                        .child(self.render_list(&query, cx)),
                 ),
             )
             .when_some(overlay, |el, sheet| {

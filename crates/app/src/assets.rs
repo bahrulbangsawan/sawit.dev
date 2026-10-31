@@ -82,7 +82,12 @@ gpui_kit::assets::icon_assets!(
         KeyRound,
         Funnel,
         FunnelX,
-        ArrowUpDown
+        ArrowUpDown,
+        CircleArrowUp,
+        CircleDashed,
+        CircleMinus,
+        Clock,
+        SearchX
     ]
 );
 

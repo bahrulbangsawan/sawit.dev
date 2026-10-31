@@ -306,7 +306,7 @@ impl Workspace {
         let network_panel = cx.new(|cx| NetworkPanel::new(window, cx));
         let ssh_store = cx.new(SshStore::new);
         let ssh_panel = cx.new(|cx| SshPanel::new(ssh_store.clone(), terminal.clone(), window, cx));
-        let shell_config_panel = cx.new(ShellConfigPanel::new);
+        let shell_config_panel = cx.new(|cx| ShellConfigPanel::new(window, cx));
         let cli_status = cli_status(cx);
         let updater = updater(cx);
         let welcome = cx.new(|cx| Welcome::new(servers.clone(), db.clone(), cx));
@@ -1147,7 +1147,7 @@ impl Workspace {
             (
                 "side-shell-config",
                 Lucide::FileTerminal.into(),
-                "Shell Config",
+                "Config Files",
                 SidebarTab::ShellConfig,
                 &ShowShellConfig,
             ),
@@ -1186,7 +1186,9 @@ impl Workspace {
             self.layout.toggle(Area::Sidebar);
         }
         if tab == SidebarTab::ShellConfig {
-            self.shell_config_panel.update(cx, |p, cx| p.refresh(cx));
+            let roots = self.roots(cx);
+            self.shell_config_panel
+                .update(cx, |p, cx| p.set_projects(roots, cx));
         }
         cx.notify();
     }
@@ -1474,6 +1476,8 @@ impl Workspace {
         });
     }
 
+    /// The status bar: instances and the branch on the left; the project's
+    /// folder, the CLI and the version on the right.
     fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let store = self.servers.read(cx);
         let running = store.running_count();
@@ -1496,28 +1500,38 @@ impl Workspace {
             }
             (name, sync, s.files.len())
         });
+        let muted = cx.theme().muted_foreground;
+        let instances = match (running, total) {
+            (_, 0) => "No instances".to_string(),
+            (0, n) => format!("{n} stopped"),
+            (r, n) => format!("{r} of {n} running"),
+        };
         h_flex()
-            .h(px(24.))
-            .px_2()
-            .gap_3()
-            .justify_between()
+            .h(px(26.))
+            .px_1p5()
+            .gap_1()
             .text_xs()
-            .text_color(cx.theme().muted_foreground)
+            .text_color(muted)
             .bg(cx.theme().status_bar)
             .border_t_1()
             .border_color(cx.theme().status_bar_border)
             .child(
-                h_flex()
-                    .gap_1()
-                    .child(div().size(px(6.)).rounded_full().bg(if running > 0 {
+                Button::new("status-instances")
+                    .ghost()
+                    .xsmall()
+                    .icon(Icon::new(Lucide::Database).text_color(if running > 0 {
                         cx.theme().success
                     } else {
-                        cx.theme().muted_foreground
+                        muted
                     }))
-                    .child(format!("{running}/{total} instances running")),
+                    .label(instances)
+                    .tooltip_with_action("Show Instances", &ShowInstances, Some("Workspace"))
+                    .on_click(
+                        cx.listener(|this, _, _, cx| this.show_panel(SidebarTab::Servers, cx)),
+                    ),
             )
             .when_some(branch, |el, (name, sync, changed)| {
-                el.child(
+                el.child(crate::catalog::divider(cx)).child(
                     Button::new("status-git-branch")
                         .ghost()
                         .xsmall()
@@ -1541,12 +1555,14 @@ impl Workspace {
                         })),
                 )
             })
+            .child(div().flex_1())
             .when_some(project, |el, project| {
                 el.child(
                     h_flex()
                         .min_w_0()
                         .gap_1()
-                        .child(div().truncate().child(project.clone()))
+                        .child(Icon::new(Lucide::FolderOpen).xsmall())
+                        .child(div().min_w_0().truncate().child(project.clone()))
                         .child(
                             Button::new("copy-project-path")
                                 .ghost()
@@ -1565,7 +1581,31 @@ impl Workspace {
                                 })),
                         ),
                 )
+                .child(crate::catalog::divider(cx))
             })
+            .when(!self.cli_status.read(cx).installed, |el| {
+                el.child(
+                    Button::new("install-cli")
+                        .ghost()
+                        .xsmall()
+                        .icon(Lucide::SquareTerminal)
+                        .label("Install CLI")
+                        .tooltip_with_action(
+                            "Install the ‘sawit’ Command to Open Folders from a Terminal",
+                            &crate::cli::InstallCli,
+                            Some("Workspace"),
+                        )
+                        .on_click(|_, _, cx| crate::cli::install_cli(cx)),
+                )
+            })
+            .child(
+                Button::new("open-changelog")
+                    .ghost()
+                    .xsmall()
+                    .label(format!("v{}", Version::current()))
+                    .tooltip_with_action("Version & Changelog", &OpenChangelog, Some("Workspace"))
+                    .on_click(cx.listener(|this, _, _, cx| this.open_changelog_page(cx))),
+            )
     }
 }
 
@@ -2367,8 +2407,19 @@ impl Workspace {
             .into_any_element()
     }
 
+    /// The title bar's right side: an update waiting, the pages a click
+    /// opens, then the layout toggles, each set in its own group.
     fn render_layout_toggles(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let l = self.layout;
+        let group = || {
+            h_flex()
+                .flex_none()
+                .p(px(2.))
+                .gap(px(2.))
+                .rounded(cx.theme().radius)
+                .border_1()
+                .border_color(cx.theme().border)
+        };
         let toggle = |id: &'static str,
                       icon: Lucide,
                       tooltip: &'static str,
@@ -2383,7 +2434,8 @@ impl Workspace {
         };
         let pending = self.updater.read(cx).pending().map(|r| r.version);
         h_flex()
-            .gap_0p5()
+            .flex_none()
+            .gap_2()
             .children(pending.map(|v| {
                 Button::new("restart-update")
                     .primary()
@@ -2402,110 +2454,98 @@ impl Workspace {
                     )
             }))
             .child(
-                Button::new("open-changelog")
-                    .ghost()
-                    .xsmall()
-                    .label(format!("v{}", Version::current()))
-                    .tooltip_with_action("Version & Changelog", &OpenChangelog, Some("Workspace"))
-                    .on_click(cx.listener(|this, _, _, cx| this.open_changelog_page(cx))),
-            )
-            .when(!self.cli_status.read(cx).installed, |el| {
-                el.child(
-                    Button::new("install-cli")
-                        .ghost()
-                        .xsmall()
-                        .icon(Lucide::SquareTerminal)
-                        .label("Install CLI")
-                        .tooltip_with_action(
-                            "Install the ‘sawit’ Command to Open Folders from a Terminal",
-                            &crate::cli::InstallCli,
-                            Some("Workspace"),
-                        )
-                        .on_click(|_, _, cx| crate::cli::install_cli(cx)),
-                )
-            })
-            .child(
-                Button::new("open-canvas")
-                    .ghost()
-                    .xsmall()
-                    .icon(crate::canvas::ICON)
-                    .label("Canvas")
-                    .tooltip_with_action(
-                        "Brainstorm on a Whiteboard",
-                        &OpenCanvas,
-                        Some("Workspace"),
+                group()
+                    .child(
+                        Button::new("open-canvas")
+                            .ghost()
+                            .xsmall()
+                            .icon(crate::canvas::ICON)
+                            .label("Canvas")
+                            .tooltip_with_action(
+                                "Brainstorm on a Whiteboard",
+                                &OpenCanvas,
+                                Some("Workspace"),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_canvas(cx);
+                            })),
                     )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.open_canvas(cx);
-                    })),
-            )
-            .child(
-                Button::new("open-browser")
-                    .ghost()
-                    .xsmall()
-                    .icon(crate::browser::ICON)
-                    .label("Browser")
-                    .tooltip("Preview Your App in a Browser an Agent Can Drive")
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.open_browser(None, window, cx)),
+                    .child(
+                        Button::new("open-browser")
+                            .ghost()
+                            .xsmall()
+                            .icon(crate::browser::ICON)
+                            .label("Browser")
+                            .tooltip("Preview Your App in a Browser an Agent Can Drive")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_browser(None, window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("open-tools")
+                            .ghost()
+                            .xsmall()
+                            .icon(Lucide::Package)
+                            .label("Tools")
+                            .tooltip_with_action(
+                                "Install Dev Tools: Claude Code, Node.js, Bun, uv and More",
+                                &OpenDevTools,
+                                Some("Workspace"),
+                            )
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.open_tools_page(window, cx)),
+                            ),
+                    )
+                    .child(
+                        Button::new("open-mcp")
+                            .ghost()
+                            .xsmall()
+                            .icon(Lucide::Plug)
+                            .label("MCP")
+                            .tooltip_with_action(
+                                "Set Up the MCP Server for Claude, Codex and More",
+                                &OpenMcp,
+                                Some("Workspace"),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.open_mcp_page(cx))),
                     ),
             )
             .child(
-                Button::new("open-tools")
-                    .ghost()
-                    .xsmall()
-                    .icon(Lucide::Package)
-                    .label("Tools")
-                    .tooltip_with_action(
-                        "Install Dev Tools: Claude Code, Node.js, Bun, uv and More",
-                        &OpenDevTools,
-                        Some("Workspace"),
+                group()
+                    .child(
+                        toggle(
+                            "toggle-sidebar",
+                            Lucide::PanelLeft,
+                            "Sidebar",
+                            &ToggleSidebar,
+                            l.sidebar,
+                        )
+                        .on_click(
+                            cx.listener(|this, _, _, cx| this.toggle_area(Area::Sidebar, cx)),
+                        ),
                     )
-                    .on_click(cx.listener(|this, _, window, cx| this.open_tools_page(window, cx))),
-            )
-            .child(
-                Button::new("open-mcp")
-                    .ghost()
-                    .xsmall()
-                    .icon(Lucide::Plug)
-                    .label("MCP")
-                    .tooltip_with_action(
-                        "Set Up the MCP Server for Claude, Codex and More",
-                        &OpenMcp,
-                        Some("Workspace"),
+                    .child(
+                        toggle(
+                            "toggle-center",
+                            Lucide::PanelTop,
+                            "Tabs & Tables",
+                            &ToggleCenter,
+                            l.center,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_area(Area::Center, cx))),
                     )
-                    .on_click(cx.listener(|this, _, _, cx| this.open_mcp_page(cx))),
-            )
-            .child(div().w(px(6.)))
-            .child(
-                toggle(
-                    "toggle-sidebar",
-                    Lucide::PanelLeft,
-                    "Sidebar",
-                    &ToggleSidebar,
-                    l.sidebar,
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_area(Area::Sidebar, cx))),
-            )
-            .child(
-                toggle(
-                    "toggle-center",
-                    Lucide::PanelTop,
-                    "Tabs & Tables",
-                    &ToggleCenter,
-                    l.center,
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_area(Area::Center, cx))),
-            )
-            .child(
-                toggle(
-                    "toggle-terminal",
-                    Lucide::PanelBottom,
-                    "Terminal",
-                    &ToggleTerminal,
-                    l.terminal,
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_area(Area::Terminal, cx))),
+                    .child(
+                        toggle(
+                            "toggle-terminal",
+                            Lucide::PanelBottom,
+                            "Terminal",
+                            &ToggleTerminal,
+                            l.terminal,
+                        )
+                        .on_click(
+                            cx.listener(|this, _, _, cx| this.toggle_area(Area::Terminal, cx)),
+                        ),
+                    ),
             )
     }
 
