@@ -682,9 +682,14 @@ impl TerminalPanel {
         cx.notify();
     }
 
+    /// Closes the tab at `ix`. The active tab stays the active one; when it is the one that
+    /// closes, the tab that takes its place is (or the new last one).
     fn close(&mut self, ix: usize, cx: &mut Context<Self>) {
         if ix < self.tabs.len() {
             self.tabs.remove(ix);
+            if ix < self.active {
+                self.active -= 1;
+            }
             self.active = self.active.min(self.tabs.len().saturating_sub(1));
             cx.notify();
         }
@@ -1113,11 +1118,73 @@ mod paste_tests {
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::{AppContext as _, TestAppContext};
+    use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
     use sawit_core::terminal::run_bytes;
 
+    use super::super::tab::TerminalTab;
     use super::super::testing::{focus_terminal, init, open_panel, wait_until};
-    use super::JobTag;
+    use super::{JobTag, TerminalPanel};
+
+    /// The active tab.
+    fn active(cx: &mut TestAppContext, panel: &Entity<TerminalPanel>) -> Entity<TerminalTab> {
+        cx.update(|cx| {
+            let p = panel.read(cx);
+            p.tab(p.active_index()).clone()
+        })
+    }
+
+    /// Opens `n` more shell tabs; the last one opened is the active one.
+    fn open_tabs(cx: &mut TestAppContext, panel: &Entity<TerminalPanel>, n: usize) {
+        for _ in 0..n {
+            cx.update(|cx| panel.update(cx, |p, cx| p.open_shell(None, cx)));
+        }
+        cx.run_until_parked();
+    }
+
+    /// Makes tab `ix` the active one with the keyboard, as a click on it does.
+    fn click_tab(
+        cx: &mut TestAppContext,
+        w: AnyWindowHandle,
+        panel: &Entity<TerminalPanel>,
+        ix: usize,
+    ) {
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.activate(ix, window, cx))
+        })
+        .expect("the test window is open");
+        cx.run_until_parked();
+    }
+
+    /// Whether a pane of `tab` has the keyboard.
+    fn has_keyboard(
+        cx: &mut TestAppContext,
+        w: AnyWindowHandle,
+        tab: &Entity<TerminalTab>,
+    ) -> bool {
+        cx.update_window(w, |_, window, cx| tab.read(cx).has_focus(window, cx))
+            .expect("the test window is open")
+    }
+
+    /// Closing a tab left of the active one keeps the active tab (and the keyboard in it), as
+    /// when an agent's `terminal_close` tidies up while the user types in a later tab.
+    #[gpui_kit::test]
+    fn closing_a_tab_left_of_the_active_one_keeps_it(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        open_tabs(cx, &panel, 3);
+        // [A, B, C*, D], C with the keyboard.
+        click_tab(cx, w, &panel, 2);
+        let c = active(cx, &panel);
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.close_tab(0, None, window, cx))
+        })
+        .expect("the test window is open")
+        .expect("tab 0 closes");
+        cx.run_until_parked();
+        cx.update(|cx| assert_eq!(panel.read(cx).tab_count(), 3));
+        assert!(active(cx, &panel) == c, "the active tab moved off C");
+        assert!(has_keyboard(cx, w, &c));
+    }
 
     #[gpui_kit::test]
     fn a_paste_goes_to_the_focused_pane(cx: &mut TestAppContext) {
