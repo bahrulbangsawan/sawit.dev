@@ -874,7 +874,9 @@ const TRANSPORT_KEYS: [&str; 6] = ["type", "command", "args", "url", "httpUrl", 
 /// transport keys come from `fresh`, and those `fresh` lacks go. Every other
 /// key stays as the user left it, `fresh` filling in only the missing ones;
 /// maps (`env`, `headers`) merge the same way, key by key. When the entry
-/// switches between a program and a URL, the other kind's map goes too.
+/// switches between a program and a URL, the other kind's map goes too. The
+/// `PATH` Sawit worked out for the old `npx` follows `fresh` too
+/// ([`follow_own_path`]).
 fn merge_entry(old: &Value, fresh: Value) -> Value {
     let (Value::Object(old), Value::Object(fresh)) = (old, &fresh) else {
         return fresh;
@@ -884,6 +886,7 @@ fn merge_entry(old: &Value, fresh: Value) -> Value {
     if program(old) != program(fresh) {
         out.shift_remove(if program(fresh) { "headers" } else { "env" });
     }
+    follow_own_path(old, &mut out, fresh);
     for key in TRANSPORT_KEYS {
         if !fresh.contains_key(key) {
             out.shift_remove(key);
@@ -905,6 +908,45 @@ fn merge_entry(old: &Value, fresh: Value) -> Value {
         }
     }
     Value::Object(out)
+}
+
+/// The `PATH` in `old`'s `env` (opencode's and Kilo's `environment`) that
+/// Sawit worked out for its `npx` ([`node_path`]) is Sawit's, not the user's:
+/// in `out` it becomes `fresh`'s, in place, or goes when `fresh` has none
+/// (after nvm moved on, the old folder may have no node left). A map only it
+/// filled goes with it. A `PATH` the user wrote stays theirs.
+fn follow_own_path(
+    old: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    fresh: &Map<String, Value>,
+) {
+    let program = match old.get("command") {
+        Some(Value::String(command)) => command.as_str(),
+        Some(Value::Array(command)) => command.first().and_then(Value::as_str).unwrap_or_default(),
+        _ => return,
+    };
+    let Some(own) = node_path(program) else {
+        return;
+    };
+    for key in ["env", "environment"] {
+        let Some(Value::Object(env)) = out.get_mut(key) else {
+            continue;
+        };
+        if env.get("PATH").and_then(Value::as_str) != Some(own.as_str()) {
+            continue;
+        }
+        match fresh.get(key).and_then(|map| map.get("PATH")) {
+            Some(path) => {
+                env.insert("PATH".into(), path.clone());
+            }
+            None => {
+                env.shift_remove("PATH");
+                if env.is_empty() && !fresh.contains_key(key) {
+                    out.shift_remove(key);
+                }
+            }
+        }
+    }
 }
 
 /// Codex's keys for a program, and for a URL: an entry switching kinds
@@ -2147,6 +2189,81 @@ mod tests {
             ]
         );
         assert_eq!(status(&t, &Spec::sawit(server)), Status::Installed);
+    }
+
+    /// CATALOG M1: the `env.PATH` Sawit writes is worked out from where `npx` is, so it's
+    /// Sawit's, not the user's. An update after nvm moved on (its default v20 → v22, then
+    /// `nvm uninstall 20`) points it at the new `npx`'s folder: it kept v20's, as the user's
+    /// own value, and `#!/usr/bin/env node` found no node, so the server couldn't start. It goes
+    /// when the new entry needs none; a `PATH` the user wrote stays.
+    #[test]
+    fn an_update_moves_the_path_sawit_wrote_for_npx() {
+        let h = home();
+        let t = find(&discover(h.path(), None), Client::ClaudeDesktop, "default").clone();
+        let npx = |version: &str| format!("/Users/me/.nvm/versions/node/{version}/bin/npx");
+        let bridge = |npx: &str| Spec::http("mobbin", "https://api.mobbin.com/mcp").with_npx(npx);
+        let mobbin = || json_at(&t.config)["mcpServers"]["mobbin"].clone();
+        install_file(&t, &bridge(&npx("v20.0.0"))).unwrap();
+        install_file(&t, &bridge(&npx("v22.11.0"))).unwrap();
+        assert_eq!(mobbin()["command"], npx("v22.11.0"));
+        assert_eq!(
+            mobbin()["env"],
+            json!({"PATH": node_path(&npx("v22.11.0")).unwrap()})
+        );
+
+        // An npx where launchd's PATH finds node needs none: Sawit's goes, and with it the
+        // `env` it alone filled.
+        install_file(&t, &bridge("/usr/bin/npx")).unwrap();
+        assert_eq!(mobbin()["command"], "/usr/bin/npx");
+        assert!(mobbin().get("env").is_none(), "{}", mobbin());
+
+        // A PATH the user wrote, and other keys beside it, stay theirs.
+        install_file(&t, &bridge(&npx("v20.0.0"))).unwrap();
+        let mut config = json_at(&t.config);
+        config["mcpServers"]["mobbin"]["env"] =
+            json!({"PATH": "/opt/mine/bin:/usr/bin:/bin", "DEBUG": "1"});
+        fs::write(&t.config, config.to_string()).unwrap();
+        install_file(&t, &bridge(&npx("v22.11.0"))).unwrap();
+        assert_eq!(
+            mobbin()["env"],
+            json!({"PATH": "/opt/mine/bin:/usr/bin:/bin", "DEBUG": "1"})
+        );
+
+        // Editors that have the shell's PATH no longer get one (CATALOG M2): what an earlier
+        // build wrote goes at their next update, in Cursor's `env` and in Kilo's `environment`
+        // (whose `command` holds the arguments too).
+        let args = ["-y", "rea-agents@6.3.0"];
+        let rea = |npx: &str| {
+            Spec::stdio("rea", npx, args.iter().map(|a| a.to_string()).collect()).with_npx(npx)
+        };
+        let old_path = node_path(&npx("v20.0.0")).unwrap();
+        fs::create_dir_all(h.path().join(".cursor")).unwrap();
+        fs::create_dir_all(h.path().join(".config/kilo")).unwrap();
+        let targets = discover(h.path(), None);
+        let cursor = find(&targets, Client::Cursor, "default");
+        fs::write(
+            &cursor.config,
+            json!({"mcpServers": {"rea": {"type": "stdio", "command": npx("v20.0.0"), "args": args, "env": {"PATH": old_path}}}})
+                .to_string(),
+        )
+        .unwrap();
+        install_file(cursor, &rea(&npx("v22.11.0"))).unwrap();
+        assert_eq!(
+            json_at(&cursor.config)["mcpServers"]["rea"],
+            json!({"type": "stdio", "command": npx("v22.11.0"), "args": args})
+        );
+        let kilo = find(&targets, Client::KiloCode, "default");
+        fs::write(
+            &kilo.config,
+            json!({"mcp": {"rea": {"type": "local", "command": [npx("v20.0.0"), args[0], args[1]], "enabled": true, "environment": {"PATH": old_path}}}})
+                .to_string(),
+        )
+        .unwrap();
+        install_file(kilo, &rea(&npx("v22.11.0"))).unwrap();
+        assert_eq!(
+            json_at(&kilo.config)["mcp"]["rea"],
+            json!({"type": "local", "command": [npx("v22.11.0"), args[0], args[1]], "enabled": true})
+        );
     }
 
     #[test]
