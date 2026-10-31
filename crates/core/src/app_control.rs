@@ -120,6 +120,8 @@ pub enum Command {
     ActivateTab {
         tab: String,
     },
+    /// Closes the tab with this index or title; one that would lose something (unsaved changes,
+    /// unsent annotations, a Dev Tools install) asks the user first, and the answer says so.
     CloseTab {
         tab: String,
     },

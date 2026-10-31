@@ -85,6 +85,23 @@ fn script_answer(name: &str, running: bool, at: &[(String, usize, usize)]) -> Va
     answer
 }
 
+/// `app_close_tab`'s answer for the tab at `ix`, with `tabs` open now: closed, or, when the close
+/// asked the user first (`asking`: what about), that the question is up. The tab then closes only
+/// if they agree, as when they close it themselves.
+fn close_answer(ix: usize, tabs: usize, asking: Option<&str>) -> Value {
+    match asking {
+        None => json!({ "closed": ix, "tabs": tabs }),
+        Some(why) => json!({
+            "asking": ix,
+            "tabs": tabs,
+            "note": format!(
+                "Not closed yet: {why}, so Sawit asked the user whether to close it. It closes if \
+                 they agree; app_state shows whether it did."
+            ),
+        }),
+    }
+}
+
 /// The folder a shell an agent starts goes to, `cwd`, if it is one: an absolute path to a folder
 /// that is there. The PTY ignores a `chdir` that fails, so anything else would start the shell in
 /// the app's own folder (`/` for Sawit.app), and the agent's command would run there (MCP-4).
@@ -248,8 +265,8 @@ impl Workspace {
             }
             Command::CloseTab { tab } => {
                 let ix = self.find_tab(&tab, cx)?;
-                self.close(CloseOp::This, ix, window, cx);
-                done(json!({ "closed": ix, "tabs": self.tabs.len() }))
+                let asking = self.close(CloseOp::This, ix, window, cx);
+                done(close_answer(ix, self.tabs.len(), asking))
             }
             Command::TerminalRun {
                 command,
@@ -606,7 +623,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{BrowserRoute, browser_route, script_answer, shell_folder};
+    use super::{BrowserRoute, browser_route, close_answer, script_answer, shell_folder};
 
     /// MCP-4: a shell an agent starts in a folder starts there or not at all. The PTY ignores a
     /// `chdir` that fails, so a relative folder or one that isn't there started the shell in the
@@ -656,6 +673,22 @@ mod tests {
                 ],
             })
         );
+    }
+
+    /// app_close_tab says "closed" only when the tab closed. A tab that would lose something (a
+    /// file's unsaved changes, the browser's notes not yet sent, a Dev Tools install) asks the
+    /// user first and closes only if they agree, so its answer says a question is up: it said
+    /// "closed" before the user had answered.
+    #[test]
+    fn closing_a_tab_says_when_the_user_is_asked_first() {
+        assert_eq!(close_answer(2, 4, None), json!({ "closed": 2, "tabs": 4 }));
+        let asked = close_answer(2, 5, Some("the file has unsaved changes"));
+        assert_eq!(asked.get("closed"), None, "{asked}");
+        assert_eq!(asked["asking"], json!(2), "{asked}");
+        assert_eq!(asked["tabs"], json!(5), "{asked}");
+        let note = asked["note"].as_str().unwrap_or_default();
+        assert!(note.contains("the file has unsaved changes"), "{asked}");
+        assert!(note.contains("app_state"), "{asked}");
     }
 
     /// An agent's `browser_console` or `browser_annotations` with no browser open opened one
