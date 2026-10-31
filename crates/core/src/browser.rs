@@ -367,40 +367,42 @@ pub fn resize_mode(
 
 /// What the address field loads for typed text: URLs as they are, hosts
 /// with a scheme added (`http://` for local ones), anything else searched.
+/// A web URL whose host isn't one (whitespace, a second `:port`) is searched
+/// too: WebKit can't load it.
 pub fn normalize_address(input: &str) -> String {
     let text = input.trim();
     if text.is_empty() {
         return "about:blank".into();
     }
     let lower = text.to_ascii_lowercase();
-    if ["http://", "https://", "file://", "about:", "data:"]
+    if let Some(rest) = ["http://", "https://"]
+        .iter()
+        .find_map(|s| lower.strip_prefix(s))
+    {
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        return match split_host(authority) {
+            Some(_) => text.to_string(),
+            None => search_url(text),
+        };
+    }
+    if ["file://", "about:", "data:", "mailto:", "tel:"]
         .iter()
         .any(|s| lower.starts_with(s))
     {
         return text.to_string();
     }
     if text.contains(char::is_whitespace) {
-        return format!("{SEARCH}{}", encode_query(text));
+        return search_url(text);
     }
-    let host = lower
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default()
-        .rsplit_once('@')
-        .map_or(lower.as_str(), |(_, h)| h)
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default();
-    let (name, port) = match host.rsplit_once(':') {
-        Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
-            (name, true)
-        }
-        _ => (host, false),
+    let authority = lower.split(['/', '?', '#']).next().unwrap_or_default();
+    let Some((name, port)) = split_host(authority) else {
+        return search_url(text);
     };
     let local = name == "localhost"
         || name.ends_with(".localhost")
         || name.ends_with(".local")
         || name.ends_with(".test")
+        || name == "[::1]"
         || is_ipv4(name);
     if local {
         return format!("http://{text}");
@@ -408,7 +410,44 @@ pub fn normalize_address(input: &str) -> String {
     if name.contains('.') || port {
         return format!("https://{text}");
     }
-    format!("{SEARCH}{}", encode_query(text))
+    search_url(text)
+}
+
+/// A URL authority's host and whether it names a port: `None` when it isn't a host
+/// (empty, whitespace, a port that isn't a number, a second `:port`, a bare IPv6 address).
+fn split_host(authority: &str) -> Option<(&str, bool)> {
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    if host.is_empty() || host.contains(char::is_whitespace) {
+        return None;
+    }
+    // `[::1]` and `[::1]:3000`: the brackets hold the colons.
+    let (name, port) = match host.strip_prefix('[') {
+        Some(v6) => {
+            let (inside, after) = v6.split_once(']')?;
+            if inside.is_empty() || after.contains(['[', ']']) {
+                return None;
+            }
+            (&host[..inside.len() + 2], after.strip_prefix(':'))
+        }
+        None => match host.split_once(':') {
+            Some((name, port)) => (name, Some(port)),
+            None => (host, None),
+        },
+    };
+    if name.is_empty() || (!name.starts_with('[') && name.contains([':', '[', ']'])) {
+        return None;
+    }
+    match port {
+        Some(p) if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) => None,
+        Some(_) => Some((name, true)),
+        None if host.len() > name.len() => None,
+        None => Some((name, false)),
+    }
+}
+
+/// The search the address field runs for `text`.
+pub fn search_url(text: &str) -> String {
+    format!("{SEARCH}{}", encode_query(text.trim()))
 }
 
 fn is_ipv4(host: &str) -> bool {
@@ -722,6 +761,51 @@ mod tests {
             normalize_address("c++"),
             "https://duckduckgo.com/?q=c%2B%2B"
         );
+    }
+
+    /// Text that isn't a URL WebKit can read is searched, never loaded: the browser asks
+    /// `NSURL` for what it loads, and `NSURL` has none for these (wry unwraps it, so loading
+    /// one aborted Sawit). A second `:port`, whitespace or a bad port in the host, and a bare
+    /// IPv6 address are typos.
+    #[test]
+    fn hosts_that_arent_urls_are_searched() {
+        for typed in [
+            "localhost:3000:3000",
+            "127.0.0.1:3000:3000",
+            "http://localhost 3000",
+            "http:// localhost:3000",
+            "https://my site.com",
+            "https://localhost:3000:3000",
+            "HTTPS://localhost:3000:3000/x",
+            "http://127.0.0.1:3000:3000",
+            "https://foo:exa%7Cmple.com",
+            "https://::1",
+            "https://user@host:1:2",
+            "https://",
+            "example.com:80a",
+            "a.b:c/x",
+        ] {
+            let url = normalize_address(typed);
+            assert!(url.starts_with(SEARCH), "{typed} → {url}");
+            assert_eq!(url, search_url(typed), "{typed}");
+        }
+        // Spaces after the host are the path's: WebKit encodes them.
+        assert_eq!(
+            normalize_address("https://example.com/a b"),
+            "https://example.com/a b"
+        );
+        assert_eq!(normalize_address("[::1]:3000/x"), "http://[::1]:3000/x");
+        assert_eq!(
+            normalize_address("https://[::1]:3000"),
+            "https://[::1]:3000"
+        );
+        assert_eq!(
+            normalize_address("user@example.com:8443/x"),
+            "https://user@example.com:8443/x"
+        );
+        // Mail and phone links go to their apps, as the page's links do.
+        assert_eq!(normalize_address("mailto:a@b.c"), "mailto:a@b.c");
+        assert_eq!(normalize_address("tel:+15551234"), "tel:+15551234");
     }
 
     #[test]

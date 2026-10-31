@@ -35,7 +35,7 @@ use sawit_core::annotations::{
 };
 use sawit_core::browser::{
     BrowserOp, ConsoleEntry, Logs, PageEvent, Target, ViewportMode, fit, normalize_address,
-    page_script, parse_ipc, resize_mode,
+    page_script, parse_ipc, resize_mode, search_url,
 };
 use sawit_core::probe;
 use serde_json::{Value, json};
@@ -733,12 +733,14 @@ impl BrowserView {
     }
 
     fn navigate(&mut self, typed: &str, cx: &mut Context<Self>) {
-        let url = normalize_address(typed);
+        let url = address_url(typed);
         self.navigated = true;
         self.loading = true;
         self.url = url.clone();
         if let Some(engine) = &self.engine {
-            engine.load_url(&url);
+            if let Err(e) = engine.load_url(&url) {
+                eprintln!("sawit: {e}");
+            }
             if self.visible {
                 engine.focus();
             }
@@ -1221,6 +1223,17 @@ fn shot_width(
     }
 }
 
+/// What the address field (and an agent's navigate) loads for `typed`: its address when
+/// WebKit can read it, else a search for the text (`file://my host/x` isn't a URL).
+fn address_url(typed: &str) -> String {
+    let url = normalize_address(typed);
+    if engine::loadable(&url) {
+        url
+    } else {
+        search_url(typed)
+    }
+}
+
 fn new_token() -> String {
     use std::io::Read as _;
     let mut bytes = [0u8; 16];
@@ -1443,6 +1456,43 @@ mod tests {
             selector: None,
         });
         assert_eq!(op, json!({"ref": "e5", "op": "rect"}));
+    }
+
+    /// Whatever is typed (or an agent asks for) is loaded as a URL WebKit reads, or searched:
+    /// wry unwraps the `NSURL` it makes of the address, so anything else aborted Sawit.
+    #[test]
+    fn every_address_is_one_webkit_reads() {
+        for typed in [
+            "localhost:3000:3000",
+            "http://localhost 3000",
+            "https://my site.com",
+            "https://foo:exa%7Cmple.com",
+            "https://::1",
+            "file://my host/x",
+            "file://a:1:2/x",
+            "about://a:1:2",
+            "localhost:5173",
+            "example.com/a b",
+            "https://example.com/a b",
+            "file:///tmp/a b.html",
+            "mailto:a@b.c",
+            "rust gpui",
+            "",
+        ] {
+            let url = super::address_url(typed);
+            assert!(super::engine::loadable(&url), "{typed} → {url}");
+        }
+        for bad in [
+            "https://localhost:3000:3000",
+            "https://my site.com",
+            "file://my host/x",
+        ] {
+            assert!(!super::engine::loadable(bad), "{bad}");
+        }
+        assert_eq!(
+            super::address_url("file://my host/x"),
+            sawit_core::browser::search_url("file://my host/x")
+        );
     }
 
     #[test]

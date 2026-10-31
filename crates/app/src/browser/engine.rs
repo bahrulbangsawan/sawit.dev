@@ -54,8 +54,14 @@ impl Engine {
         let loads = on_event.clone();
         let titles = on_event.clone();
         let opens = on_event;
+        // wry unwraps the `NSURL` it makes of the address.
+        let url = if loadable(&spec.url) {
+            spec.url.as_str()
+        } else {
+            "about:blank"
+        };
         let mut builder = WebViewBuilder::new()
-            .with_url(&spec.url)
+            .with_url(url)
             .with_initialization_script_for_main_only(spec.init_script, true)
             .with_ipc_handler(move |request| ipc(EngineEvent::Ipc(request.body().clone())))
             .with_on_page_load_handler(move |event, url| {
@@ -89,8 +95,12 @@ impl Engine {
         Ok(Engine { webview })
     }
 
-    pub fn load_url(&self, url: &str) {
-        let _ = self.webview.load_url(url);
+    /// Loads `url`; text that isn't a URL WebKit reads ([`loadable`]) is refused.
+    pub fn load_url(&self, url: &str) -> Result<(), String> {
+        if !loadable(url) {
+            return Err(format!("WebKit can't load “{url}”: it isn't a URL."));
+        }
+        self.webview.load_url(url).map_err(|e| e.to_string())
     }
 
     pub fn reload(&self) {
@@ -210,6 +220,14 @@ impl Engine {
         let wk = self.webview.webview();
         unsafe { wk.takeSnapshotWithConfiguration_completionHandler(Some(&config), &handler) };
     }
+}
+
+/// Whether WebKit can be asked to load `url`: wry makes an `NSURL` of it and unwraps that,
+/// and there is none for text that isn't a URL (`file://my host/x`, a second `:port`), so
+/// loading such text would abort the app.
+pub fn loadable(url: &str) -> bool {
+    use objc2_foundation::{NSString, NSURL};
+    NSURL::URLWithString(&NSString::from_str(url)).is_some()
 }
 
 fn is_web(url: &str) -> bool {
