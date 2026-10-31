@@ -831,14 +831,27 @@ impl FilesPanel {
         }
     }
 
-    /// The selected entry, if it is in the project folder shown. The commands that act on an
-    /// entry (Trash, Delete, Rename, Duplicate, Cut, Copy) never act on anything else: not on
-    /// the project folder, nor on something outside it.
+    /// The selected entry, if its row is shown. The commands that act on an entry (Trash,
+    /// Delete, Rename, Duplicate, Cut, Copy) never act on anything else: not on an entry in a
+    /// folder that isn't open or that went, nor on the project folder or anything outside it.
     fn selection(&self) -> Option<PathBuf> {
-        let root = self.root.as_ref()?;
-        self.selected
-            .clone()
-            .filter(|path| path.starts_with(root) && path != root)
+        self.selected.clone().filter(|path| self.shown(path))
+    }
+
+    /// Whether `path` has a row in the tree: it is listed, and its folder and the folders
+    /// above it, up to the project folder, are open.
+    fn shown(&self, path: &Path) -> bool {
+        let (Some(root), Some(dir)) = (&self.root, path.parent()) else {
+            return false;
+        };
+        dir.starts_with(root)
+            && self.root_error.is_none()
+            && (self.children.get(dir))
+                .is_some_and(|entries| entries.iter().any(|e| e.path == path))
+            && dir
+                .ancestors()
+                .take_while(|d| d.starts_with(root))
+                .all(|d| self.expanded.contains(d))
     }
 
     /// The selected entry, else the project folder.
@@ -1062,6 +1075,9 @@ impl FilesPanel {
                         to: to.to_path_buf(),
                     });
                 }
+                if let Op::Trash(gone) = &op {
+                    self.forget_selection(gone);
+                }
                 if let Some(path) = op.result().map(Path::to_path_buf) {
                     if let Some(parent) = path.parent() {
                         self.expand_to(parent, cx);
@@ -1177,6 +1193,13 @@ impl FilesPanel {
         .detach();
     }
 
+    /// Selects nothing if the entry selected was `gone` or in it.
+    fn forget_selection(&mut self, gone: &Path) {
+        if self.selected.as_ref().is_some_and(|s| s.starts_with(gone)) {
+            self.selected = None;
+        }
+    }
+
     /// Shows why something done in folder number `folder` failed.
     fn failed(&mut self, folder: u64, error: String, cx: &mut Context<Self>) {
         if folder == self.folder {
@@ -1201,21 +1224,23 @@ impl FilesPanel {
             &["Delete", "Cancel"],
             cx,
         );
+        let folder = self.folder;
         cx.spawn(async move |this, cx| {
             if !matches!(answer.await, Ok(0)) {
                 return;
             }
-            let Ok((folder, rx)) = this.update(cx, |this, cx| {
-                let rx =
-                    rt::spawn_blocking(cx, move || files::remove(&path).map_err(|e| e.to_string()));
-                (this.folder, rx)
+            let gone = path.clone();
+            let Ok(rx) = this.update(cx, |_, cx| {
+                rt::spawn_blocking(cx, move || files::remove(&gone).map_err(|e| e.to_string()))
             }) else {
                 return;
             };
             let outcome = rx.await;
             let _ = this.update(cx, |this, cx| {
-                if let Ok(Err(e)) = outcome {
-                    this.failed(folder, e, cx);
+                match outcome {
+                    Ok(Err(e)) => this.failed(folder, e, cx),
+                    Ok(Ok(())) if folder == this.folder => this.forget_selection(&path),
+                    _ => {}
                 }
                 this.refresh(cx);
                 cx.notify();
@@ -1262,9 +1287,19 @@ impl FilesPanel {
         cx.notify();
     }
 
+    /// Closes every folder but the project folder. An entry selected in one is given up for
+    /// that folder at the top, which stays shown.
     fn collapse_all(&mut self, cx: &mut Context<Self>) {
-        let root = self.root.clone();
-        self.expanded.retain(|d| Some(d) == root.as_ref());
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        self.expanded.retain(|d| *d == root);
+        if let Some(selected) = &self.selected
+            && let Ok(rel) = selected.strip_prefix(&root)
+            && let Some(top) = rel.components().next()
+        {
+            self.selected = Some(root.join(top));
+        }
         cx.notify();
     }
 }
@@ -1413,6 +1448,26 @@ mod tests {
         focus(cx, window, &tree);
     }
 
+    /// Makes `root` the panel's folder with `src/lib/x.rs` and `notes.txt` in it, every folder
+    /// open, as if it had been read.
+    fn show_tree(p: &mut FilesPanel, root: &Path) {
+        let entry = |path: PathBuf, is_dir| Entry {
+            name: path.file_name().unwrap().to_string_lossy().into_owned(),
+            path,
+            is_dir,
+        };
+        let (src, lib) = (root.join("src"), root.join("src/lib"));
+        let notes = entry(root.join("notes.txt"), false);
+        p.children
+            .insert(root.to_path_buf(), vec![entry(src.clone(), true), notes]);
+        p.children
+            .insert(src.clone(), vec![entry(lib.clone(), true)]);
+        p.children
+            .insert(lib.clone(), vec![entry(lib.join("x.rs"), false)]);
+        p.expanded.extend([root.to_path_buf(), src, lib]);
+        p.root = Some(root.to_path_buf());
+    }
+
     /// The panel's events from now on, as text.
     fn events(
         panel: &Entity<FilesPanel>,
@@ -1504,6 +1559,62 @@ mod tests {
             let other = Path::new(OTHER_ROOT).to_path_buf();
             assert_eq!(p.expanded.iter().collect::<Vec<_>>(), [&other]);
             assert_eq!(p.children.keys().collect::<Vec<_>>(), [&other]);
+        });
+    }
+
+    /// Keys act only on an entry whose row is shown (FILES-6). The selection used to outlive its
+    /// row: after a Trash, ⌫ again tried the same entry ("couldn't be moved to the Trash");
+    /// after Collapse All, ⌫ trashed a file in a folder no longer open, unseen; with the
+    /// project folder unreadable, its entries could still be renamed, F2's name box drawn
+    /// nowhere, with the keyboard.
+    #[gpui_kit::test]
+    fn keys_act_only_on_an_entry_whose_row_is_shown(cx: &mut TestAppContext) {
+        let (window, panel) = open_panel(cx, &[]);
+        let changes = Changes::install(&panel, cx);
+        let root = Path::new(ROOT);
+        let (src, x) = (root.join("src"), root.join("src/lib/x.rs"));
+        cx.update(|cx| {
+            panel.update(cx, |p, cx| {
+                show_tree(p, root);
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+
+        // A Trash of the selected file lands: nothing is selected now.
+        select(cx, window, &panel, &x);
+        cx.update(|cx| panel.update(cx, |p, cx| p.request(Request::Do(Op::Trash(x.clone())), cx)));
+        let back = Op::Restore {
+            from: PathBuf::from("/Trash/x.rs"),
+            to: x.clone(),
+        };
+        changes.land(0, Ok(back), cx);
+        cx.update(|cx| assert_eq!(panel.read(cx).selected, None));
+
+        // Collapse All, with the file selected: the folder it is in, still shown, is selected.
+        select(cx, window, &panel, &x);
+        cx.update(|cx| panel.update(cx, |p, cx| p.collapse_all(cx)));
+        cx.update(|cx| assert_eq!(panel.read(cx).selected.as_ref(), Some(&src)));
+
+        // An entry selected whose row isn't shown: F2 and ⌘D do nothing.
+        select(cx, window, &panel, &x);
+        cx.simulate_keystrokes(window, "f2 cmd-d");
+        cx.update(|cx| {
+            let p = panel.read(cx);
+            assert!(p.edit.is_none(), "a name box nowhere to be seen");
+            assert_eq!((p.selection(), p.trash_target()), (None, None));
+        });
+        assert_eq!(changes.started().len(), 1, "a duplicate ran");
+
+        // The project folder can't be read: none of its entries is shown.
+        cx.update(|cx| {
+            panel.update(cx, |p, cx| {
+                p.selected = Some(root.join("notes.txt"));
+                assert!(p.selection().is_some());
+                let unreadable = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+                p.listed(p.folder, root.to_path_buf(), Err(unreadable.into()), cx);
+                assert_eq!(p.selection(), None);
+            })
         });
     }
 
