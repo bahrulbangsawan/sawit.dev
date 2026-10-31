@@ -587,9 +587,11 @@ fn headless(file: &Path, op: &Value) -> Result<Value, String> {
 /// - when something else wrote to the file since it was read ([`Writer::guard`]): another
 ///   `sawit-mcp`, say, whose edit the save would drop though its call answered ok.
 ///
-/// A `replace` of a canvas with layers keeps the file it replaces as `<file>.bak` first. The app
-/// can undo a replace; here every call opens the canvas afresh, so that copy is all that is left
-/// of the board.
+/// A `replace` of a canvas with layers keeps the file it replaces as a backup first, as a save
+/// that empties it does: `<file>.bak`, the backups before it moving along ([`Writer::save`]). The
+/// app can undo a replace; here every call opens the canvas afresh, so the backups are all that is
+/// left of the board, and one was not enough: an agent that started over twice lost the board it
+/// replaced first (CANVAS-CORE-3). A refused save keeps no backup either.
 fn run_and_save(
     board: &mut BoardDoc,
     file: &Path,
@@ -606,42 +608,15 @@ fn run_and_save(
         .refuse_dropping_images(file)
         .map_err(|e| e.to_string())?;
     let bytes = board.to_bytes().map_err(|e| e.to_string())?;
-    if op["op"] == "replace" && !store::is_empty(&before) {
-        keep_replaced_canvas(file)?;
-    }
+    let backup = op["op"] == "replace" || store::is_empty(&after);
     let writer = Writer::spawn();
     writer.guard(file.to_path_buf(), read);
-    writer.save(file.to_path_buf(), bytes, store::is_empty(&after));
+    writer.save(file.to_path_buf(), bytes, backup);
     writer.flush();
     match writer.last_error() {
         Some(error) => Err(error),
         None => Ok(reply),
     }
-}
-
-/// Copies the canvas file at `file`, which a `replace` is about to save over, to `<file>.bak`, in
-/// place of whatever is there: a link there is replaced, never written through
-/// ([`sawit_core::files::replace_file`], CANVAS-CORE-1). With no file there (an old canvas
-/// imported, which stays as it is) there is nothing to keep. When the copy can't be made the error
-/// says why, and the replace must not be saved.
-fn keep_replaced_canvas(file: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt as _;
-    let mut bak = file.as_os_str().to_owned();
-    bak.push(".bak");
-    let bak = PathBuf::from(bak);
-    let failed = |e: &dyn std::fmt::Display| {
-        format!(
-            "The canvas wasn't replaced: it couldn't be copied to {} first: {e}",
-            bak.display()
-        )
-    };
-    let (bytes, meta) = match std::fs::read(file).and_then(|b| Ok((b, std::fs::metadata(file)?))) {
-        Ok(read) => read,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !file.exists() => return Ok(()),
-        Err(e) => return Err(failed(&e)),
-    };
-    let mode = std::fs::Permissions::from_mode(meta.permissions().mode() & 0o777);
-    sawit_core::files::replace_file(&bak, &bytes, mode).map_err(|e| failed(&e))
 }
 
 /// Whether `path` names a `.figcraft` file.
@@ -1007,7 +982,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Clear the whole canvas. In the app the user can undo it; with the app closed the cleared board is kept as canvas.figcraft.bak beside the canvas file"
+        description = "Clear the whole canvas. The board it held is kept beside the canvas file as canvas.figcraft.bak, the 4 kept before it moving to .bak.1 to .bak.4 (the oldest goes); in the app the user can also undo it"
     )]
     async fn canvas_clear(&self, Parameters(a): Parameters<WindowArgs>) -> CallToolResult {
         match self.canvas(a.project, json!({ "op": "clear" })).await {
@@ -1017,7 +992,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Replace the canvas with a .figcraft file, or import an .excalidraw file or scene JSON in its place"
+        description = "Replace the canvas with a .figcraft file, or import an .excalidraw file or scene JSON in its place. The board it replaces is kept as canvas.figcraft.bak, as canvas_clear keeps one"
     )]
     async fn canvas_load(&self, Parameters(a): Parameters<CanvasLoadArgs>) -> CallToolResult {
         let op = match (a.scene, a.path) {
@@ -1888,6 +1863,110 @@ mod tests {
         let loaded = server.canvas_load(Parameters(load(&other))).await;
         assert_eq!(answer(&loaded)["elements"].as_array().unwrap().len(), 1);
         assert!(!bak.exists());
+    }
+
+    /// The bytes of the backups beside the canvas file `file`: `<name>.bak` and the older ones.
+    fn backups_of(file: &Path) -> Vec<Vec<u8>> {
+        let dir = file.parent().unwrap();
+        let name = format!("{}.bak", file.file_name().unwrap().to_string_lossy());
+        let mut kept: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(&name)
+            })
+            .collect();
+        kept.sort();
+        kept.iter()
+            .map(|path| std::fs::read(path).unwrap())
+            .collect()
+    }
+
+    /// CANVAS-CORE-3: with Sawit closed every call opens the canvas afresh, so its backups are all
+    /// that is left of a board an agent clears or loads over. Starting over twice (a clear, a
+    /// drawing and a clear; or a load, then another) kept one `.bak`, of the step between, and
+    /// the user's board was in no file. It is still kept.
+    #[tokio::test]
+    async fn starting_over_twice_with_sawit_closed_keeps_the_users_board() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let file = board_file(&project);
+        let window = || WindowArgs {
+            project: project_arg(&project),
+        };
+        write_board(&file, 3);
+        let users = std::fs::read(&file).unwrap();
+
+        // A clear, a drawing and a clear.
+        let cleared = server.canvas_clear(Parameters(window())).await;
+        assert_ne!(cleared.is_error, Some(true), "{}", said(&cleared));
+        let drawn = server
+            .canvas_add_elements(Parameters(CanvasElementsArgs {
+                elements: vec![json!({"type": "rectangle", "x": 0, "y": 0})],
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_ne!(drawn.is_error, Some(true), "{}", said(&drawn));
+        let cleared = server.canvas_clear(Parameters(window())).await;
+        assert_ne!(cleared.is_error, Some(true), "{}", said(&cleared));
+        assert!(layers_in(&file).is_empty());
+        assert!(
+            backups_of(&file).contains(&users),
+            "the user's board is gone"
+        );
+
+        // A load, then another.
+        write_board(&file, 3);
+        let users = std::fs::read(&file).unwrap();
+        let (one, two) = (
+            dir.path().join("one.figcraft"),
+            dir.path().join("two.figcraft"),
+        );
+        write_board(&one, 1);
+        write_board(&two, 2);
+        for other in [&one, &two] {
+            let loaded = server
+                .canvas_load(Parameters(CanvasLoadArgs {
+                    path: Some(other.display().to_string()),
+                    scene: None,
+                    project: project_arg(&project),
+                }))
+                .await;
+            assert_ne!(loaded.is_error, Some(true), "{}", said(&loaded));
+        }
+        assert_eq!(layers_in(&file).len(), 2);
+        assert!(
+            backups_of(&file).contains(&users),
+            "the user's board is gone"
+        );
+    }
+
+    /// CANVAS-CORE-3: a load the changed-on-disk guard refuses changes nothing, the backups
+    /// included. Its `.bak` used to be made first, from the other process's file.
+    #[test]
+    fn a_refused_load_leaves_the_backups_as_they_were() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = board_file(&project_in(dir.path()));
+        write_board(&file, 1);
+        let bak = file.with_extension("figcraft.bak");
+        write_board(&bak, 4);
+        let before = backups_of(&file);
+        let read = Stamp::of(&file);
+        let mut board = store::open(&file).unwrap();
+        write_board(&file, 2);
+        let theirs = std::fs::read(&file).unwrap();
+
+        let other = dir.path().join("other.figcraft");
+        write_board(&other, 3);
+        let load = json!({"op": "replace", "path": other});
+        let refused = run_and_save(&mut board, &file, read, &load).unwrap_err();
+        assert!(refused.contains("changed on disk"), "{refused}");
+        assert_eq!(std::fs::read(&file).unwrap(), theirs);
+        assert!(backups_of(&file) == before, "the backup was replaced");
     }
 
     /// CANVAS-CORE-1: a cloned project can hold a link at `canvas.figcraft.bak` to any file of

@@ -314,6 +314,10 @@ pub struct BoardView {
     saved: Option<Arc<Document>>,
     /// The document the autosave waits to save, or saved last.
     pending: Option<Arc<Document>>,
+    /// An agent's `replace` op loaded another canvas in place of this one's since the last save
+    /// was handed over: the next keeps the board the file holds as a backup first, as a save that
+    /// empties the canvas does ([`Writer::save`], CANVAS-CORE-3).
+    replaced: bool,
     /// Saves the document once the canvas has been still for [`SAVE_DELAY`].
     save_later: Option<Task<()>>,
     /// A message at the bottom of the canvas (a failed save, what opening the file dropped), up
@@ -490,6 +494,7 @@ impl BoardView {
             writer: Arc::new(writer),
             saved,
             pending: None,
+            replaced: false,
             save_later: None,
             toast_timer: toast.is_some().then(|| hide_toast_later(cx)),
             toast: toast.map(SharedString::from),
@@ -661,6 +666,13 @@ impl BoardView {
     /// the drag on the canvas first", and changes nothing: the drag's next move would take it
     /// back. No scrub is on then for it to end: the press that began the drag closed a colour
     /// picker's, and a label's holds the same button.
+    ///
+    /// A `clear` or a `replace` takes the board off the canvas, and its save keeps what the file
+    /// holds as a backup first, the ones before it too (CANVAS-CORE-3): undo isn't saved, so after
+    /// the tab closes that is all that is left of the board. So the board as the canvas has it is
+    /// handed to the writer before the op, an edit made a moment before included, which the
+    /// autosave would have saved [`SAVE_DELAY`] later: the backup is of it, not of the file as it
+    /// was before that edit.
     pub fn run_op(&mut self, op: &Value, cx: &mut Context<Self>) -> Value {
         if let Some(reply) = self.close_menus_for_op(op, cx) {
             return reply;
@@ -668,10 +680,21 @@ impl BoardView {
         if !reads_only(op) {
             self.end_scrub(cx);
         }
+        let takes_the_board_off = matches!(
+            op.get("op").and_then(Value::as_str),
+            Some("clear" | "replace")
+        );
+        if takes_the_board_off {
+            // A refusal (images the file holds) is the autosave's to show.
+            let _ = self.queue_save();
+        }
         let reply = match self.board_mut() {
             Some(board) => ops::run(board, op),
             None => self.not_opened(),
         };
+        if op.get("op").and_then(Value::as_str) == Some("replace") && reply["ok"] == json!(true) {
+            self.replaced = true;
+        }
         self.handle_ui_requests(Vec::new(), cx);
         self.autosave(cx);
         cx.notify();
@@ -1103,6 +1126,9 @@ impl BoardView {
     /// A save over a file that holds images the loader left out (past what it reads from one
     /// file) would delete them, so it is refused, as FigCraft's own save refuses it: the refusal
     /// is the error, and the file stays as it is.
+    ///
+    /// A save of a canvas without layers, or of one an agent loaded in place of the board
+    /// ([`Self::run_op`]), keeps the board the file holds as a backup first ([`Writer::save`]).
     fn queue_save(&mut self) -> Result<Option<Arc<Document>>, BoardError> {
         let Ok(board) = &self.board else {
             return Ok(None);
@@ -1113,8 +1139,8 @@ impl BoardView {
         }
         board.refuse_dropping_images(&self.path)?;
         let bytes = board.to_bytes()?;
-        self.writer
-            .save(self.path.clone(), bytes, store::is_empty(&doc));
+        let backup = store::is_empty(&doc) || std::mem::take(&mut self.replaced);
+        self.writer.save(self.path.clone(), bytes, backup);
         self.saved = Some(doc.clone());
         self.pending = Some(doc.clone());
         Ok(Some(doc))
@@ -2334,6 +2360,77 @@ mod tests {
                 "{file:?} was saved over"
             );
         }
+    }
+
+    /// The bytes of the backups beside the canvas file `path`: `<name>.bak` and the older ones.
+    fn backups(path: &Path) -> Vec<Vec<u8>> {
+        let dir = path.parent().unwrap();
+        let name = format!("{}.bak", path.file_name().unwrap().to_string_lossy());
+        names(dir)
+            .into_iter()
+            .filter(|n| n.starts_with(&name))
+            .map(|n| std::fs::read(dir.join(n)).unwrap())
+            .collect()
+    }
+
+    /// The layers of the canvases in `backups`, as `get` lists them: each one's texts.
+    fn backed_up_texts(backups: &[Vec<u8>]) -> Vec<Vec<String>> {
+        backups
+            .iter()
+            .map(|bytes| {
+                let mut board = BoardDoc::from_bytes(bytes).unwrap();
+                let reply = sawit_board::ops::run(&mut board, &json!({"op": "get"}));
+                let elements = reply["elements"].as_array().unwrap();
+                let texts = elements.iter().filter_map(|e| e["text"].as_str());
+                texts.map(str::to_string).collect()
+            })
+            .collect()
+    }
+
+    /// CANVAS-CORE-3: an agent's clear or load in the app is undone by ⌘Z, but only while the tab
+    /// is open: undo isn't saved. Each keeps the board it took off the canvas as a backup, the
+    /// ones before it too (a clear, a drawing and a clear left only the drawing; a load kept
+    /// nothing), and that is the board as the canvas showed it, an edit made a moment before
+    /// included (the clear's backup was of the file, which the autosave hadn't written yet).
+    #[gpui_kit::test]
+    fn a_clear_or_a_load_keeps_the_board_it_took_off(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("backups");
+        let path = tmp.0.join("canvas.figcraft");
+        write_board(&path, &board_with(&["the user's"]));
+        let view = open(cx, &path);
+        let ask = |op: Value, cx: &mut TestAppContext| {
+            let reply = run_op(&view, op, cx);
+            assert_eq!(reply["ok"], json!(true), "{reply}");
+        };
+        let flush = |cx: &mut TestAppContext| view.update(cx, |view, _| view.flush());
+        let sticky = |text: &str| json!({"op": "add", "elements": [{"type": "sticky", "x": 400, "y": 0, "text": text}]});
+        // An edit, then at once a clear.
+        ask(sticky("added"), cx);
+        ask(json!({"op": "clear"}), cx);
+        flush(cx);
+        let kept = backed_up_texts(&backups(&path));
+        let with_the_edit = vec!["the user's".to_string(), "added".to_string()];
+        assert!(kept.contains(&with_the_edit), "{kept:?}");
+        // A drawing, then a clear again: the first board is still kept.
+        ask(sticky("drawn"), cx);
+        flush(cx);
+        ask(json!({"op": "clear"}), cx);
+        flush(cx);
+        let kept = backed_up_texts(&backups(&path));
+        assert!(kept.contains(&with_the_edit), "{kept:?}");
+        assert!(kept.contains(&vec!["drawn".to_string()]), "{kept:?}");
+        // A load in its place keeps what it replaced.
+        ask(sticky("before the load"), cx);
+        flush(cx);
+        let scene = json!({"type": "excalidraw", "elements": [
+            {"id": "a", "type": "rectangle", "x": 0, "y": 0, "width": 10, "height": 10}]});
+        ask(json!({"op": "replace", "scene": scene}), cx);
+        flush(cx);
+        let kept = backed_up_texts(&backups(&path));
+        assert!(
+            kept.contains(&vec!["before the load".to_string()]),
+            "{kept:?}"
+        );
     }
 
     /// The path of the canvas's file.

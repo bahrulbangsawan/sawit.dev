@@ -114,13 +114,18 @@ const WRITES_TO_PATH: &[&str] = &[
 const CANVAS_EXTENSIONS: [&str; 2] = [".figcraft", ".excalidraw"];
 
 /// What goes after that to name a copy Sawit keeps of a canvas file, or a file it writes one
-/// through: the backups of the store (`.bak` and `.lossy.bak`), and the files a save is staged in
+/// through: the backups of the store (`.bak`, the newest, and `.lossy.bak`; the older ones are
+/// [`OLDER_BACKUP`]'s), and the files a save is staged in
 /// (`.tmp`, and `.<name>.sawit-tmp`, the name Sawit's saves were staged at before CANVAS-CORE-1).
 const CANVAS_COMPANIONS: [&str; 5] = ["", ".bak", ".lossy.bak", ".tmp", ".sawit-tmp"];
 
 /// What follows a canvas file's name in the names its saves are staged at now,
 /// `.<name>.sawit-tmp-<process>-<n>` ([`sawit_core::files::staging_file`]).
 const STAGED: &str = ".sawit-tmp-";
+
+/// What follows a canvas file's name in the names of its older backups, `<name>.bak.<n>`
+/// ([`crate::store::backup_file`]), before the number.
+const OLDER_BACKUP: &str = ".bak.";
 
 /// Whether `path` names a canvas file: a `.figcraft` or an `.excalidraw` file, or one of the
 /// copies and staging files that Sawit keeps beside one.
@@ -134,10 +139,15 @@ pub fn is_canvas_file(path: &Path) -> bool {
         return false;
     };
     let name = name.to_string_lossy().to_lowercase();
+    let older_backup = |extension: &str| {
+        let numbered = name.trim_end_matches(|c: char| c.is_ascii_digit());
+        numbered.len() < name.len() && numbered.ends_with(&format!("{extension}{OLDER_BACKUP}"))
+    };
     CANVAS_EXTENSIONS.iter().any(|extension| {
         (CANVAS_COMPANIONS.iter())
             .any(|companion| name.ends_with(&format!("{extension}{companion}")))
             || name.contains(&format!("{extension}{STAGED}"))
+            || older_backup(extension)
     })
 }
 
@@ -1679,6 +1689,9 @@ mod tests {
             ".canvas.figcraft.sawit-tmp",
             ".canvas.figcraft.sawit-tmp-412-3",
             ".Design.FigCraft.sawit-tmp-1-0",
+            "canvas.figcraft.bak.1",
+            "canvas.figcraft.bak.4",
+            "Design.FIGCRAFT.BAK.12",
             "canvas.excalidraw.bak",
             "canvas.excalidraw.lossy.bak",
             "canvas.excalidraw.tmp",
@@ -1695,6 +1708,9 @@ mod tests {
             "notes.figcraftx",
             "canvas.bak",
             "canvas.tmp",
+            "canvas.figcraft.bak.",
+            "canvas.figcraft.bak.png",
+            "canvas.figcraft.bak.1.svg",
             "/project/.figcraft/page.png",
             "",
             "/",

@@ -66,7 +66,7 @@ pub fn open(path: &Path) -> Result<BoardDoc, BoardError> {
 /// - With notes, the original is first copied to `<path>.lossy.bak`, so the first save can't
 ///   silently drop what the loader left out. When that copy can't be made the file is not opened
 ///   either: it stays as it is rather than get saved over unprotected. The copy has a name of its
-///   own: the `<path>.bak` that an emptying save keeps ([`Writer::save`]) would replace it.
+///   own: the backups that an emptying save keeps ([`Writer::save`]) move along, and go.
 pub fn open_with_issues(path: &Path) -> Result<(BoardDoc, Vec<String>), BoardError> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
@@ -227,8 +227,8 @@ enum Msg {
 struct Save {
     path: PathBuf,
     bytes: Vec<u8>,
-    /// `bytes` is a canvas without layers.
-    empty: bool,
+    /// The canvas the file holds is kept as a backup first ([`keep_backup`]).
+    backup: bool,
 }
 
 impl Writer {
@@ -263,14 +263,22 @@ impl Writer {
 
     /// Queues `bytes` to be written to `path`, and returns at once.
     ///
-    /// `empty` says the bytes are a canvas without layers ([`is_empty`]). Then a file already
-    /// there that has layers, or that doesn't load, is first copied to `<path>.bak`, so clearing
-    /// the canvas can be undone after a restart; if that copy can't be made, the save is not done
-    /// and the error is reported. A `.nyawit` folder that is missing is made with its `.gitignore`, any other
+    /// `backup` says the save takes the board off the canvas: the bytes are a canvas without
+    /// layers ([`is_empty`]), or another canvas loaded in its place. Then a file already there
+    /// that has layers, or that doesn't load, is first kept as a backup beside it, `<path>.bak`,
+    /// the backups before it moving along ([`BACKUPS`] are kept), so clearing or replacing the
+    /// canvas can be undone after a restart; if that copy can't be made, the save is not done and
+    /// the error is reported. Such a save is never folded into a newer save of the file, nor the
+    /// save before it into it ([`Batch::add`]), so the backup is of the board as it was last
+    /// handed over. A `.nyawit` folder that is missing is made with its `.gitignore`, any other
     /// missing folder without. A save over a guarded file that something else wrote to since is
-    /// refused ([`Writer::guard`]).
-    pub fn save(&self, path: PathBuf, bytes: Vec<u8>, empty: bool) {
-        let save = Msg::Save(Save { path, bytes, empty });
+    /// refused ([`Writer::guard`]), its backup included.
+    pub fn save(&self, path: PathBuf, bytes: Vec<u8>, backup: bool) {
+        let save = Msg::Save(Save {
+            path,
+            bytes,
+            backup,
+        });
         if let Err(mpsc::SendError(Msg::Save(lost))) = self.tx.send(save) {
             *lock(&self.error) = Some(format!(
                 "The canvas couldn't be saved to {}: its writer has stopped",
@@ -344,7 +352,8 @@ impl Drop for Writer {
 /// What the writer thread took off its queue in one go.
 #[derive(Default)]
 struct Batch {
-    /// The newest save of each path.
+    /// The saves to write, in order: the newest of each path, and those a save that keeps a
+    /// backup keeps from being folded away ([`Batch::add`]).
     saves: Vec<Save>,
     /// Who waits for these saves to be on disk.
     flushes: Vec<Sender<()>>,
@@ -352,10 +361,21 @@ struct Batch {
 }
 
 impl Batch {
+    /// Takes `msg` into the batch. A save replaces the save of its path queued last, so that only
+    /// the newest is written, unless either of them keeps a backup ([`Writer::save`]): then both
+    /// are written, in order. The backup of a save that takes the board off the canvas is of
+    /// the file the save before it wrote, the board as the canvas last had it (CANVAS-CORE-3);
+    /// and a save that keeps a backup is always written, so its backup is always made.
     fn add(&mut self, msg: Msg) {
         match msg {
             Msg::Save(save) => {
-                self.saves.retain(|older| older.path != save.path);
+                let last = self.saves.iter().rposition(|older| older.path == save.path);
+                if let Some(last) = last
+                    && !self.saves[last].backup
+                    && !save.backup
+                {
+                    self.saves.remove(last);
+                }
                 self.saves.push(save);
             }
             Msg::Flush(ack) => self.flushes.push(ack),
@@ -403,20 +423,21 @@ fn run(
 /// Writes one save. On failure the error is a sentence for the user.
 ///
 /// A save of a guarded file ([`Writer::guard`]) is refused right before its write when the file
-/// changed since the stamp held of it. Once written, the file's new stamp is the one held. When
-/// it had gone (the writer held a stamp of it, and nothing is there now), the save makes it
-/// again, and gives a note that says so ([`Writer::take_notice`]).
+/// changed since the stamp held of it, before anything else is done: its backup isn't made
+/// either. Once written, the file's new stamp is the one held. When it had gone (the writer held
+/// a stamp of it, and nothing is there now), the save makes it again, and gives a note that says
+/// so ([`Writer::take_notice`]).
 fn write(save: &Save, stamps: &Stamps) -> Result<Option<String>, String> {
     let path = &save.path;
     let failed = |why: String| format!("The canvas couldn't be saved to {}: {why}", path.display());
     let guarded = lock(stamps).get(path).copied();
     let gone = matches!(guarded, Some(Some(_))) && Stamp::of(path).is_none();
-    make_folder(path).map_err(|e| failed(e.to_string()))?;
-    if save.empty {
-        keep_backup_before_emptying(path).map_err(failed)?;
-    }
     if let Some(Some(held)) = guarded {
         refuse_overwriting_changes(path, held)?;
+    }
+    make_folder(path).map_err(|e| failed(e.to_string()))?;
+    if save.backup {
+        keep_backup(path).map_err(failed)?;
     }
     files::write_atomic(path, &save.bytes).map_err(|e| failed(e.to_string()))?;
     if guarded.is_some() {
@@ -476,12 +497,33 @@ fn make_folder(path: &Path) -> io::Result<()> {
     }
 }
 
-/// Before a canvas without layers replaces the file at `path`: when that file loads as a canvas
-/// with layers, keeps it as `<path>.bak`, so "clear canvas" (or an agent's clear) can be undone
-/// even after the app restarts. So is a file that doesn't load at all (cut short, or written by a
-/// newer FigCraft), which may hold layers too, as the old canvas kept a scene it couldn't read; an
-/// empty file has nothing to keep. On failure the error says why, and the save must not go on.
-fn keep_backup_before_emptying(path: &Path) -> Result<(), String> {
+/// How many backups of a canvas file are kept beside it ([`keep_backup`]): `<name>.bak`, the
+/// newest, then `<name>.bak.1` to `<name>.bak.4`, each older than the one before.
+pub const BACKUPS: usize = 5;
+
+/// The backup of the canvas file `path` that `n` newer ones came after ([`keep_backup`]):
+/// `<path>.bak`, the newest, for 0, else `<path>.bak.<n>`.
+pub fn backup_file(path: &Path, n: usize) -> PathBuf {
+    match n {
+        0 => sibling(path, ".bak"),
+        n => sibling(path, &format!(".bak.{n}")),
+    }
+}
+
+/// Before a save that takes the board off the canvas replaces the file at `path` (a canvas
+/// without layers, or another canvas loaded in its place): when that file loads as a canvas
+/// with layers, keeps it as the newest backup, `<path>.bak`, so "clear canvas" (or an agent's
+/// clear or load) can be undone even after the app restarts. So is a file that doesn't load at
+/// all (cut short, or written by a newer FigCraft), which may hold layers too, as the old canvas
+/// kept a scene it couldn't read; an empty file has nothing to keep. On failure the error says
+/// why, and the save must not go on.
+///
+/// The backups before it move along one name each, `.bak` to `.bak.1` and so on, and the oldest
+/// of [`BACKUPS`] goes (CANVAS-CORE-3): one `.bak`, replaced by the next clear, lost the board an
+/// agent cleared first when it started over twice. A board the newest backup holds already isn't
+/// kept again, so that a clear of a board cleared before moves none along. A folder at one of
+/// their names stops it, and the save: it is moved nowhere.
+fn keep_backup(path: &Path) -> Result<(), String> {
     let old = match std::fs::read(path) {
         Ok(old) => old,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -496,18 +538,44 @@ fn keep_backup_before_emptying(path: &Path) -> Result<(), String> {
     if !may_have_layers {
         return Ok(());
     }
-    let bak = sibling(path, ".bak");
-    keep_copy(&bak, &old, path).map_err(|e| {
+    let newest = backup_file(path, 0);
+    if holds(&newest, &old) {
+        return Ok(());
+    }
+    for n in (1..BACKUPS).rev() {
+        let (from, to) = (backup_file(path, n - 1), backup_file(path, n));
+        let moved = match std::fs::symlink_metadata(&from) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Ok(meta) if meta.is_dir() => Err(io::Error::other("a folder is in its place")),
+            // A file, or a link, which is moved and never followed.
+            Ok(_) => std::fs::rename(&from, &to),
+            Err(e) => Err(e),
+        };
+        moved.map_err(|e| {
+            format!(
+                "the backups beside it couldn't be moved along to keep a new one ({}: {e})",
+                from.display()
+            )
+        })?;
+    }
+    keep_copy(&newest, &old, path).map_err(|e| {
         format!(
             "the canvas already there couldn't be copied to {}: {e}",
-            bak.display()
+            newest.display()
         )
     })
 }
 
+/// Whether `file` is a file (not a link) that holds `bytes`.
+fn holds(file: &Path, bytes: &[u8]) -> bool {
+    let is_like = std::fs::symlink_metadata(file)
+        .is_ok_and(|meta| meta.is_file() && meta.len() == bytes.len() as u64);
+    is_like && std::fs::read(file).is_ok_and(|held| held == bytes)
+}
+
 /// Where [`open_with_issues`] keeps the original of a file it opens with notes:
-/// `<path>.lossy.bak`. That is apart from the copy an emptying save keeps (`<path>.bak`), so that
-/// clearing the canvas after edits can't put the edited canvas over the original.
+/// `<path>.lossy.bak`. That is apart from the backups an emptying save keeps ([`backup_file`]),
+/// so that clearing the canvas after edits can't put the edited canvas over the original.
 fn lossy_backup(path: &Path) -> PathBuf {
     sibling(path, ".lossy.bak")
 }
@@ -1114,7 +1182,7 @@ mod tests {
             Msg::Save(Save {
                 path: path.into(),
                 bytes: vec![byte],
-                empty: false,
+                backup: false,
             })
         };
         let mut batch = Batch::default();
@@ -1198,6 +1266,145 @@ mod tests {
         assert_eq!(writer.last_error(), None);
         assert_eq!(std::fs::read(sibling(&path, ".bak")).unwrap(), edited);
         assert_eq!(std::fs::read(lossy_backup(&path)).unwrap(), original);
+    }
+
+    /// What the backups beside the canvas file `path` hold: `<name>.bak`, then any older one, in
+    /// the order of their names.
+    fn backups(path: &Path) -> Vec<Vec<u8>> {
+        let dir = path.parent().unwrap();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        names(dir)
+            .into_iter()
+            .filter(|n| n.starts_with(&format!("{name}.bak")))
+            .map(|n| std::fs::read(dir.join(n)).unwrap())
+            .collect()
+    }
+
+    /// CANVAS-CORE-3: an agent that starts over twice, a clear, a drawing and a clear again, left
+    /// one `.bak`, of its own drawing: the board that was there first, which the first clear kept,
+    /// was in no file any more. Each backup now moves the ones before it along, so it is still
+    /// there.
+    #[test]
+    fn clearing_twice_keeps_the_board_cleared_first() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("canvas.figcraft");
+        let first = bytes_with(&["the user's board"]);
+        std::fs::write(&path, &first).unwrap();
+        let writer = Writer::spawn();
+        let save = |bytes: Vec<u8>, empty: bool| {
+            writer.save(path.clone(), bytes, empty);
+            writer.flush();
+            assert_eq!(writer.last_error(), None);
+        };
+        save(blank(), true);
+        let drawn = bytes_with(&["the agent's drawing"]);
+        save(drawn.clone(), false);
+        save(blank(), true);
+        let kept = backups(&path);
+        assert!(kept.contains(&first), "the first board is in no backup");
+        assert!(kept.contains(&drawn), "the drawing is in no backup");
+    }
+
+    /// CANVAS-CORE-3: a save that keeps a backup is never folded into another save of its file,
+    /// nor the one before it into it: that one is what the backup is of, the board as the canvas
+    /// last handed it over. Saves between two such saves still fold, the newest written.
+    #[test]
+    fn a_batch_writes_a_save_that_keeps_a_backup_and_the_one_before_it() {
+        let save = |byte: u8, backup: bool| {
+            Msg::Save(Save {
+                path: "a".into(),
+                bytes: vec![byte],
+                backup,
+            })
+        };
+        let mut batch = Batch::default();
+        for msg in [
+            save(1, false),
+            save(2, false),
+            save(3, true),
+            save(4, false),
+            save(5, false),
+            save(6, true),
+            save(7, true),
+        ] {
+            batch.add(msg);
+        }
+        let written: Vec<u8> = batch.saves.iter().map(|s| s.bytes[0]).collect();
+        assert_eq!(written, [2, 3, 5, 6, 7]);
+    }
+
+    /// CANVAS-CORE-3: the newest backup is `.bak`; each one before it moves one name along, and
+    /// the oldest of [`BACKUPS`] goes. A board the newest backup holds already moves none along.
+    #[test]
+    fn backups_move_along_and_the_oldest_goes() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("canvas.figcraft");
+        let writer = Writer::spawn();
+        let boards: Vec<Vec<u8>> = (0..7)
+            .map(|n| bytes_with(&[&format!("board {n}")]))
+            .collect();
+        for board in &boards {
+            writer.save(path.clone(), board.clone(), false);
+            writer.save(path.clone(), blank(), true);
+            writer.flush();
+            assert_eq!(writer.last_error(), None);
+        }
+        let newest_first: Vec<Vec<u8>> = boards.iter().rev().take(BACKUPS).cloned().collect();
+        let kept: Vec<Vec<u8>> = (0..BACKUPS)
+            .map(|n| std::fs::read(backup_file(&path, n)).unwrap())
+            .collect();
+        assert!(
+            kept == newest_first,
+            "the backups aren't the newest, in order"
+        );
+        assert!(!backup_file(&path, BACKUPS).exists());
+        assert_eq!(
+            backup_file(&path, 0).file_name().unwrap(),
+            "canvas.figcraft.bak"
+        );
+        assert_eq!(
+            backup_file(&path, 4).file_name().unwrap(),
+            "canvas.figcraft.bak.4"
+        );
+
+        // The same board cleared again, saved by another app's undo, say.
+        std::fs::write(&path, &boards[6]).unwrap();
+        writer.save(path.clone(), blank(), true);
+        writer.flush();
+        let again: Vec<Vec<u8>> = (0..BACKUPS)
+            .map(|n| std::fs::read(backup_file(&path, n)).unwrap())
+            .collect();
+        assert!(
+            again == kept,
+            "the backups moved along for a board kept already"
+        );
+    }
+
+    /// CANVAS-CORE-3: a save the changed-on-disk guard refuses changes nothing: not the file, and
+    /// not the backups either. The backup used to be made before the check, and replaced the one
+    /// there with the other app's file.
+    #[test]
+    fn a_refused_save_leaves_the_backups_as_they_were() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("design.figcraft");
+        let writer = Writer::spawn();
+        writer.save(path.clone(), bytes_with(&["kept"]), false);
+        writer.flush();
+        writer.save(path.clone(), blank(), true);
+        writer.flush();
+        let before = backups(&path);
+        assert_eq!(before.len(), 1);
+        std::fs::write(&path, bytes_with(&["read"])).unwrap();
+        writer.guard(path.clone(), Stamp::of(&path));
+        let theirs = bytes_with(&["theirs", "and more"]);
+        std::fs::write(&path, &theirs).unwrap();
+
+        writer.save(path.clone(), blank(), true);
+        writer.flush();
+        let error = writer.last_error().unwrap();
+        assert!(error.contains("changed on disk"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), theirs);
+        assert!(backups(&path) == before, "the backup was replaced");
     }
 
     #[test]
