@@ -2481,11 +2481,11 @@ mod tests {
     /// I3: the browser's tab often goes off screen without a click, after a press in the page
     /// gave its view GPUI's keyboard (KEYMAP-4): ⇧⌘J hides the tab area, a page comes in front
     /// without taking the keyboard (an agent's `app_open_page`), ⌃Tab, an agent's
-    /// `app_activate_tab`. A view that
-    /// isn't drawn and still has the keyboard makes GPUI send the keys from the window's root,
-    /// gpui-kit's `Root`, past every workspace shortcut, until a click: ⇧⌘J didn't bring the tab
-    /// area back, ⌘W didn't close the page in front. The workspace takes the keyboard back
-    /// ([`crate::workspace::KeyboardHome`]), from the page and the address field alike.
+    /// `app_activate_tab`. A view that isn't drawn and still has the keyboard makes GPUI send
+    /// the keys from the window's root, gpui-kit's `Root`, past every workspace shortcut, until a
+    /// click: ⇧⌘J didn't bring the tab area back, ⌘W didn't close the page in front. The
+    /// workspace takes the keyboard back ([`crate::workspace::KeyboardHome`]), from the page and
+    /// the address field alike.
     ///
     /// The workspace here is a stand-in, in a window as `cli::open_window` makes one (under
     /// gpui-kit's `Root`): the workspace's keys and key context, its keyboard, `render`'s refocus
@@ -2509,7 +2509,8 @@ mod tests {
             browser: Entity<BrowserView>,
             /// The tab area shows: ⇧⌘J toggles it.
             area: bool,
-            /// Another tab is in front of the browser's: ⌃⌘M opens it, ⌘W closes it.
+            /// Another tab is in front of the browser's, and takes no keyboard, as a page an agent
+            /// opens: ⌃⌘M opens it here, ⌘W closes it.
             other_tab: bool,
             toggles: usize,
             closes: usize,
@@ -2650,7 +2651,8 @@ mod tests {
                 ));
             }
 
-            // ⌃⌘M puts the MCP page in front of the browser, and ⌘W closes it.
+            // A page that takes no keyboard comes in front of the browser (⌃⌘M here, as an agent's
+            // `app_open_page`), and ⌘W closes it.
             let (window, workspace) = open(keyboard, cx);
             press("ctrl-cmd-m", window, cx);
             press("cmd-w", window, cx);

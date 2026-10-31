@@ -1347,8 +1347,9 @@ which is git-ignored.
     keyboard, and press ⌘⇧.. The review expects this binding not to fire on a real Mac, because macOS reports ⇧⌘.
     as `cmd->`. The page's own key, used while the page has the keyboard, is not affected. Say what happens.
   - Added from the keymap-editor consolidation report (§6): rebind "browser: toggle annotate" in the Keymap
-    Editor. The page's script no longer answers ⌘⇧. (KEYMAP-5, the hunt's keymap round 3): with the page
-    keyboard, the old key does nothing and the new one toggles Annotate. Say what happens.
+    Editor. The page's script no longer answers ⌘⇧. (since the hunt's keymap round 3 merged KEYMAP-5 with the
+    browser fixes): while the page has the keyboard, the old key does nothing and the new one toggles Annotate.
+    Say what happens.
 - (b) Send to terminal.
   - Run `claude` in a terminal tab, or leave zsh at its prompt. In the Annotate panel, click Send to terminal. The
     notes paste into that terminal as Markdown, without Enter. The terminal shows and takes the keyboard, and the

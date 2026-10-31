@@ -158,7 +158,7 @@ pub fn init(cx: &mut App) {
 /// Keeps GPUI's keyboard on screen. Whatever had it and is no longer drawn gives it to `home`
 /// (the workspace): the browser's page after a click in it, a file editor, a terminal pane or a
 /// sidebar panel's field, once their tab, the tab area, the dock or the panel is off screen
-/// (⌃Tab, ⇧⌘J, ⌘J, ⌘1 to ⌘0, a page put in front such as ⌃⌘M's, an agent's `app_activate_tab`).
+/// (⌃Tab, ⇧⌘J, ⌘J, ⌘1 to ⌘0, a page an agent puts in front, an agent's `app_activate_tab`).
 /// Otherwise the keyboard stays on what isn't drawn: GPUI then sends the keys from the window's
 /// root, gpui-kit's `Root`, past every workspace shortcut (⇧⌘J, ⌘W, ⌘T, ⌘1), and typing goes
 /// nowhere, until a click. Zed's workspace does the same.
@@ -3544,11 +3544,15 @@ mod tests {
             pub presses: usize,
             /// What reached the terminal pane.
             pub typed: Vec<String>,
+            renders: usize,
             keyboard: KeyboardHome<(bool, usize)>,
         }
 
         impl Render for StandIn {
             fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                // A give-back that asked for frames without end would hang the test instead.
+                self.renders += 1;
+                assert!(self.renders < 500, "the stand-in redraws without end");
                 if window.focused(cx).is_none() {
                     self.focus.focus(window, cx);
                 }
@@ -3612,6 +3616,7 @@ mod tests {
                             tab: 0,
                             presses: 0,
                             typed: Vec::new(),
+                            renders: 0,
                         }
                     })
                 })
