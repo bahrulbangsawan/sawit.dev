@@ -170,6 +170,21 @@ pub(crate) fn existing_dir(dir: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Refuses `path`, a file an agent asked `tool` to write, when it is a canvas file: a `.figcraft`
+/// or `.excalidraw` file, or a copy Sawit keeps of one ([`sawit_board::ops::is_canvas_file`]).
+/// While the app is closed nothing else holds the board, so one mistaken path would replace it
+/// with a screenshot, a table or a dump (ruling P7-X3, which the canvas's own export commands
+/// keep too). Only the name counts: `canvas.figcraft.png` is an image, and is written.
+pub(crate) fn refuse_canvas_file(tool: &str, path: &Path) -> Result<(), String> {
+    if sawit_board::ops::is_canvas_file(path) {
+        return Err(format!(
+            "{tool} would overwrite a canvas file: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn expand_home(path: &str) -> PathBuf {
     match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
         (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
@@ -565,6 +580,31 @@ mod tests {
                 text.contains("filter"),
                 "{what} doesn't mention the filter: {text}"
             );
+        }
+    }
+
+    #[test]
+    fn no_tool_may_write_a_canvas_file() {
+        for name in [
+            "/p/.nyawit/canvas.figcraft",
+            "/p/Board.FigCraft",
+            "/p/.nyawit/canvas.excalidraw",
+            "/p/.nyawit/canvas.figcraft.bak",
+            "/p/.nyawit/canvas.figcraft.tmp",
+        ] {
+            assert_eq!(
+                refuse_canvas_file("render_mermaid", Path::new(name)),
+                Err(format!(
+                    "render_mermaid would overwrite a canvas file: {name}"
+                ))
+            );
+        }
+        for name in [
+            "/p/page.png",
+            "/p/canvas.figcraft.svg",
+            "/p/.nyawit/rows.csv",
+        ] {
+            assert_eq!(refuse_canvas_file("export_query", Path::new(name)), Ok(()));
         }
     }
 

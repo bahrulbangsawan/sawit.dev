@@ -88,21 +88,26 @@ pub(crate) fn palette(theme: Theme) -> Palette {
     }
 }
 
+/// The file `output_path` names for `tool` to write, if it names one: absolute (`~` expanded), and
+/// never a canvas file ([`crate::refuse_canvas_file`]). It is checked before anything is drawn.
+fn named_output(tool: &str, output_path: Option<&str>) -> Result<Option<PathBuf>, String> {
+    let Some(p) = output_path.map(str::trim).filter(|p| !p.is_empty()) else {
+        return Ok(None);
+    };
+    let path = expand_home(p);
+    if !path.is_absolute() {
+        return Err(format!("output_path “{p}” must be absolute."));
+    }
+    crate::refuse_canvas_file(tool, &path)?;
+    Ok(Some(path))
+}
+
 impl Sawit {
-    /// `output_path`, or a fresh file in the project's `.nyawit/diagrams/`
+    /// The file `named` ([`named_output`]), or a fresh one in the project's `.nyawit/diagrams/`
     /// (else `<cache>/diagrams`).
-    fn output_file(
-        &self,
-        output_path: Option<&str>,
-        stem: &str,
-        ext: &str,
-    ) -> Result<PathBuf, String> {
-        if let Some(p) = output_path.map(str::trim).filter(|p| !p.is_empty()) {
-            let path = expand_home(p);
-            if !path.is_absolute() {
-                return Err(format!("output_path “{p}” must be absolute."));
-            }
-            return Ok(path);
+    fn output_file(&self, named: Option<PathBuf>, stem: &str, ext: &str) -> PathBuf {
+        if let Some(path) = named {
+            return path;
         }
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -112,10 +117,10 @@ impl Sawit {
         if let Some(project) = crate::project_dir(None) {
             let dir = sawit_core::nyawit::diagrams_dir(&project);
             if sawit_core::nyawit::ensure(&project, &dir).is_ok() {
-                return Ok(dir.join(name));
+                return dir.join(name);
             }
         }
-        Ok(self.paths.cache_dir().join("diagrams").join(name))
+        self.paths.cache_dir().join("diagrams").join(name)
     }
 
     async fn write_file(path: PathBuf, text: String) -> Result<(), String> {
@@ -138,13 +143,15 @@ impl Sawit {
         if a.source.trim().is_empty() {
             return fail("The Mermaid source is empty.");
         }
-        let path = tri!(self.output_file(a.output_path.as_deref(), "diagram", "svg"));
+        let named = tri!(named_output("render_mermaid", a.output_path.as_deref()));
+        let path = self.output_file(named, "diagram", "svg");
         let diagram = tri!(Self::render(a.source, a.theme).await);
         tri!(Self::write_file(path.clone(), diagram.svg.clone()).await);
         ok(describe_svg(&diagram, &path, a.inline))
     }
 
     pub async fn schema_diagram_tool(&self, a: SchemaDiagramArgs) -> CallToolResult {
+        let named = tri!(named_output("schema_diagram", a.output_path.as_deref()));
         let client = tri!(self.connect_target(&a.target, a.database.as_deref()).await);
         let schemas = tri!(db::load_schema(&client).await.map_err(|e| e.to_string()));
         let only = a.schema.as_deref().filter(|s| !s.trim().is_empty());
@@ -161,7 +168,7 @@ impl Sawit {
         };
         match a.format {
             SchemaFormat::Svg => {
-                let path = tri!(self.output_file(a.output_path.as_deref(), "schema", "svg"));
+                let path = self.output_file(named, "schema", "svg");
                 let diagram = tri!(Self::render(text, a.theme).await);
                 tri!(Self::write_file(path.clone(), diagram.svg.clone()).await);
                 ok(format!(
@@ -170,15 +177,9 @@ impl Sawit {
                 ))
             }
             SchemaFormat::Mermaid | SchemaFormat::Dbml => {
-                let Some(out) = a.output_path.as_deref().filter(|p| !p.trim().is_empty()) else {
+                let Some(path) = named else {
                     return ok(text);
                 };
-                let ext = if matches!(a.format, SchemaFormat::Dbml) {
-                    "dbml"
-                } else {
-                    "mmd"
-                };
-                let path = tri!(self.output_file(Some(out), "schema", ext));
                 tri!(Self::write_file(path.clone(), text.clone()).await);
                 ok(format!(
                     "{tables} tables written to {}\n\n{text}",
@@ -256,5 +257,50 @@ mod tests {
     fn renders_mermaid() {
         let d = mermaid::render("flowchart LR\n  a --> b", &palette(Theme::Dark)).unwrap();
         assert!(d.svg.contains("<svg"));
+    }
+
+    /// Neither diagram tool writes over a canvas file: each says so before it draws or reads a
+    /// database, and the board is as it was. An SVG path still gets the drawing.
+    #[tokio::test]
+    async fn no_diagram_is_written_over_a_canvas_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = Sawit::new(sawit_core::instances::AppPaths {
+            root: dir.path().join("home"),
+        });
+        let board = dir.path().join(".nyawit").join("canvas.figcraft");
+        std::fs::create_dir_all(board.parent().unwrap()).unwrap();
+        std::fs::write(&board, b"the board").unwrap();
+        let said = |result: &CallToolResult| result.content[0].as_text().unwrap().text.clone();
+        let refused = format!("would overwrite a canvas file: {}", board.display());
+        let source = "flowchart LR\n  a --> b".to_string();
+
+        let render = |output: &std::path::Path| RenderArgs {
+            source: source.clone(),
+            output_path: Some(output.display().to_string()),
+            theme: Theme::Light,
+            inline: false,
+        };
+        let drawn = server.render_mermaid_tool(render(&board)).await;
+        assert_eq!(drawn.is_error, Some(true));
+        assert_eq!(said(&drawn), format!("render_mermaid {refused}"));
+        for format in [SchemaFormat::Svg, SchemaFormat::Mermaid, SchemaFormat::Dbml] {
+            let schema = SchemaDiagramArgs {
+                target: "nowhere".into(),
+                schema: None,
+                database: None,
+                format,
+                output_path: Some(board.display().to_string()),
+                theme: Theme::Light,
+            };
+            let drawn = server.schema_diagram_tool(schema).await;
+            assert_eq!(drawn.is_error, Some(true));
+            assert_eq!(said(&drawn), format!("schema_diagram {refused}"));
+        }
+        assert_eq!(std::fs::read(&board).unwrap(), b"the board");
+
+        let svg = dir.path().join(".nyawit").join("flow.svg");
+        let drawn = server.render_mermaid_tool(render(&svg)).await;
+        assert_ne!(drawn.is_error, Some(true), "{}", said(&drawn));
+        assert!(std::fs::read_to_string(&svg).unwrap().contains("<svg"));
     }
 }

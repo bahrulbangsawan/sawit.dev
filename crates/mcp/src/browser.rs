@@ -517,6 +517,11 @@ impl Sawit {
         &self,
         Parameters(a): Parameters<ScreenshotArgs>,
     ) -> CallToolResult {
+        let path = a
+            .output_path
+            .map(|p| crate::expand_home(&p))
+            .unwrap_or_else(|| screenshot_path(&self.paths.cache_dir()));
+        tri!(crate::refuse_canvas_file("browser_screenshot", &path));
         let op = BrowserOp::Screenshot {
             target: target(a.reference, a.selector),
         };
@@ -526,10 +531,6 @@ impl Sawit {
         if bytes.is_empty() {
             return fail("The browser sent an empty screenshot.");
         }
-        let path = a
-            .output_path
-            .map(|p| crate::expand_home(&p))
-            .unwrap_or_else(|| screenshot_path(&self.paths.cache_dir()));
         if let Some(dir) = path.parent()
             && let Err(e) = std::fs::create_dir_all(dir)
         {
@@ -693,5 +694,72 @@ mod tests {
     fn timeouts_are_capped() {
         assert_eq!(timeout(Some(90_000), DEFAULT_LOAD_TIMEOUT), MAX_TIMEOUT);
         assert_eq!(timeout(None, DEFAULT_LOAD_TIMEOUT), DEFAULT_LOAD_TIMEOUT);
+    }
+
+    /// A stand-in for the running app, listening where the app does: it answers every request
+    /// with `answer`.
+    fn fake_app(paths: &sawit_core::instances::AppPaths, answer: Value) {
+        use std::io::{Read as _, Write as _};
+        std::fs::create_dir_all(&paths.root).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(paths.cli_socket()).unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut bytes = Vec::new();
+                // `is_running` only connects, and sends nothing.
+                if stream.read_to_end(&mut bytes).is_err() || bytes.is_empty() {
+                    continue;
+                }
+                let line = format!("{}\n", sawit_core::app_control::reply_ok(&answer));
+                let _ = stream.write_all(line.as_bytes());
+            }
+        });
+    }
+
+    /// A screenshot never replaces a canvas file: the tool says so before it asks the app (none
+    /// runs here), and the board is as it was. Another path gets the picture.
+    #[tokio::test]
+    async fn a_screenshot_never_replaces_a_canvas_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = sawit_core::instances::AppPaths {
+            root: dir.path().join("home"),
+        };
+        let server = Sawit::new(paths.clone());
+        let board = dir.path().join(".nyawit").join("canvas.figcraft");
+        std::fs::create_dir_all(board.parent().unwrap()).unwrap();
+        std::fs::write(&board, b"the board").unwrap();
+        let shot = |output: &std::path::Path| {
+            Parameters(ScreenshotArgs {
+                reference: None,
+                selector: None,
+                output_path: Some(output.display().to_string()),
+                project: None,
+            })
+        };
+        let said = |result: &CallToolResult| {
+            let texts = result.content.iter().filter_map(|c| c.as_text());
+            texts.map(|t| t.text.clone()).collect::<Vec<_>>().join("\n")
+        };
+
+        let refused = server.browser_screenshot(shot(&board)).await;
+        assert_eq!(refused.is_error, Some(true));
+        assert_eq!(
+            said(&refused),
+            format!(
+                "browser_screenshot would overwrite a canvas file: {}",
+                board.display()
+            )
+        );
+        assert_eq!(std::fs::read(&board).unwrap(), b"the board");
+
+        // The first bytes of every PNG.
+        fake_app(
+            &paths,
+            json!({"png_base64": "iVBORw0KGgo=", "width": 1, "height": 1}),
+        );
+        let png = dir.path().join("page.png");
+        let taken = server.browser_screenshot(shot(&png)).await;
+        assert_ne!(taken.is_error, Some(true), "{}", said(&taken));
+        assert_eq!(std::fs::read(&png).unwrap(), b"\x89PNG\r\n\x1a\n");
     }
 }

@@ -123,13 +123,14 @@ pub struct RefreshArgs {
     pub name: String,
 }
 
-/// A file to write, given by an agent: absolute (`~` expanded), in an
-/// existing folder, and new unless `overwrite`.
-pub(crate) fn output_file(path: &str, overwrite: bool) -> Result<PathBuf, String> {
+/// A file an agent asked `tool` to write: absolute (`~` expanded), in an existing folder, new
+/// unless `overwrite`, and never a canvas file, `overwrite` or not ([`crate::refuse_canvas_file`]).
+pub(crate) fn output_file(tool: &str, path: &str, overwrite: bool) -> Result<PathBuf, String> {
     let file = expand_home(path.trim());
     if !file.is_absolute() {
         return Err(format!("“{path}” must be an absolute path."));
     }
+    crate::refuse_canvas_file(tool, &file)?;
     if !file.parent().is_some_and(|d| d.is_dir()) {
         return Err(format!("The folder of {} does not exist.", file.display()));
     }
@@ -173,7 +174,11 @@ impl Sawit {
     }
 
     pub async fn export_table_tool(&self, a: ExportTableArgs) -> CallToolResult {
-        let path = tri!(output_file(&a.path, a.overwrite.unwrap_or(false)));
+        let path = tri!(output_file(
+            "export_table",
+            &a.path,
+            a.overwrite.unwrap_or(false)
+        ));
         let client = tri!(self.connect_target(&a.target, a.database.as_deref()).await);
         match db::export_table(&client, a.schema.as_deref(), &a.table, &path).await {
             Ok(summary) => ok(exported(summary, &path)),
@@ -182,7 +187,11 @@ impl Sawit {
     }
 
     pub async fn export_query_tool(&self, a: ExportQueryArgs) -> CallToolResult {
-        let path = tri!(output_file(&a.path, a.overwrite.unwrap_or(false)));
+        let path = tri!(output_file(
+            "export_query",
+            &a.path,
+            a.overwrite.unwrap_or(false)
+        ));
         let client = tri!(self.connect_target(&a.target, a.database.as_deref()).await);
         match db::export_query(&client, &a.sql, &path).await {
             Ok(summary) => ok(exported(summary, &path)),
@@ -191,7 +200,11 @@ impl Sawit {
     }
 
     pub async fn backup_tool(&self, a: BackupArgs) -> CallToolResult {
-        let path = tri!(output_file(&a.path, a.overwrite.unwrap_or(false)));
+        let path = tri!(output_file(
+            "backup_database",
+            &a.path,
+            a.overwrite.unwrap_or(false)
+        ));
         let (profile, password) = tri!(self.admin_login(&a.target, a.database.as_deref()).await);
         let client = tri!(
             db::connect(&profile, password.as_deref())
@@ -362,29 +375,98 @@ mod tests {
     fn output_file_must_be_absolute_new_and_in_a_folder() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("a.csv");
-        assert_eq!(output_file(file.to_str().unwrap(), false).unwrap(), file);
+        assert_eq!(
+            output_file("export_table", file.to_str().unwrap(), false).unwrap(),
+            file
+        );
         assert!(
-            output_file("a.csv", false)
+            output_file("export_table", "a.csv", false)
                 .unwrap_err()
                 .contains("absolute")
         );
         let missing = dir.path().join("nope/a.csv");
         assert!(
-            output_file(missing.to_str().unwrap(), false)
+            output_file("export_table", missing.to_str().unwrap(), false)
                 .unwrap_err()
                 .contains("does not exist")
         );
         std::fs::write(&file, "x").unwrap();
         assert!(
-            output_file(file.to_str().unwrap(), false)
+            output_file("export_table", file.to_str().unwrap(), false)
                 .unwrap_err()
                 .contains("overwrite=true")
         );
-        assert!(output_file(file.to_str().unwrap(), true).is_ok());
+        assert!(output_file("export_table", file.to_str().unwrap(), true).is_ok());
         assert!(
-            output_file(dir.path().to_str().unwrap(), true)
+            output_file("export_table", dir.path().to_str().unwrap(), true)
                 .unwrap_err()
                 .contains("folder")
+        );
+    }
+
+    /// A canvas file is never a table's, a query's or a backup's file, overwrite or not, and the
+    /// tool says so before it connects to anything: the board is as it was. Another file in the
+    /// same folder is still one to write (writing it takes a database).
+    #[tokio::test]
+    async fn no_export_or_backup_writes_over_a_canvas_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let board = dir.path().join(".nyawit").join("canvas.figcraft");
+        std::fs::create_dir_all(board.parent().unwrap()).unwrap();
+        std::fs::write(&board, b"the board").unwrap();
+        let target = board.display().to_string();
+        let refused = format!("would overwrite a canvas file: {target}");
+        for overwrite in [false, true] {
+            let said = output_file("backup_database", &target, overwrite).unwrap_err();
+            assert_eq!(said, format!("backup_database {refused}"));
+        }
+        let server = Sawit::new(sawit_core::instances::AppPaths {
+            root: dir.path().join("home"),
+        });
+        let results = [
+            server
+                .export_table_tool(ExportTableArgs {
+                    target: "nowhere".into(),
+                    database: None,
+                    schema: None,
+                    table: "users".into(),
+                    path: target.clone(),
+                    overwrite: Some(true),
+                })
+                .await,
+            server
+                .export_query_tool(ExportQueryArgs {
+                    target: "nowhere".into(),
+                    database: None,
+                    sql: "select 1".into(),
+                    path: target.clone(),
+                    overwrite: Some(true),
+                })
+                .await,
+            server
+                .backup_tool(BackupArgs {
+                    target: "nowhere".into(),
+                    database: None,
+                    schema: None,
+                    table: None,
+                    path: target.clone(),
+                    overwrite: Some(true),
+                })
+                .await,
+        ];
+        for (result, tool) in
+            results
+                .iter()
+                .zip(["export_table", "export_query", "backup_database"])
+        {
+            assert_eq!(result.is_error, Some(true));
+            let text = &result.content[0].as_text().unwrap().text;
+            assert_eq!(text, &format!("{tool} {refused}"));
+        }
+        assert_eq!(std::fs::read(&board).unwrap(), b"the board");
+        let rows = dir.path().join(".nyawit").join("canvas.csv");
+        assert_eq!(
+            output_file("export_query", rows.to_str().unwrap(), false),
+            Ok(rows)
         );
     }
 

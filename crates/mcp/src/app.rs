@@ -1001,12 +1001,10 @@ impl Sawit {
         };
         // Nothing else holds the board when the app is closed: an export must never replace it.
         if let Some(out) = a.output_path.as_deref()
-            && ops::is_canvas_file(&crate::expand_home(out.trim()))
+            && let Err(e) =
+                crate::refuse_canvas_file("canvas_export", &crate::expand_home(out.trim()))
         {
-            return fail(format!(
-                "canvas_export would overwrite a canvas file: {}",
-                out.trim()
-            ));
+            return fail(e);
         }
         let op = json!({ "op": if png { "export_png" } else { "export_svg" } });
         let project = crate::project_dir(a.project.as_deref());
