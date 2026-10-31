@@ -10,6 +10,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use futures::StreamExt as _;
+use futures::channel::oneshot;
 use futures::future::{AbortHandle, abortable};
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
@@ -124,6 +125,27 @@ pub enum ToolsEvent {
 
 impl EventEmitter<ToolsEvent> for ToolsPage {}
 
+/// Every Dev Tools page, with the window it is in: what quitting, Restart to
+/// Update and closing a window ask about ([`at_work`]).
+#[derive(Default)]
+struct Pages(Vec<(AnyWindowHandle, WeakEntity<ToolsPage>)>);
+
+impl Global for Pages {}
+
+/// What each Dev Tools page runs and has queued, with its window ("Installing
+/// Bun, 2 more queued"): closing the window, quitting and Restart to Update
+/// stop it ([`crate::terminal::end_all`]).
+pub fn at_work(cx: &App) -> Vec<(AnyWindowHandle, String)> {
+    let Some(pages) = cx.try_global::<Pages>() else {
+        return Vec::new();
+    };
+    pages
+        .0
+        .iter()
+        .filter_map(|(window, page)| Some((*window, page.upgrade()?.read(cx).work()?)))
+        .collect()
+}
+
 pub struct ToolsPage {
     found: HashMap<&'static str, Found>,
     /// Why the login shell couldn't say which tools it finds, when it
@@ -142,6 +164,11 @@ pub struct ToolsPage {
     running: Option<(&'static str, Job)>,
     /// Stops the running job.
     stop: Option<AbortHandle>,
+    /// Ends once the running job is over, or stopped and its process group
+    /// told to end: what quitting waits for.
+    ended: Option<oneshot::Receiver<()>>,
+    /// Quitting stops the running job ([`Self::stop_for_quit`]).
+    _quit: Subscription,
     /// Progress through the current run of the queue.
     batch: (usize, usize),
     filter: Filter,
@@ -212,7 +239,16 @@ impl ToolsPage {
         let mut this = Self::blank(cx);
         this.make_search(window, cx);
         this.refresh(cx);
+        Self::register(window, cx);
         this
+    }
+
+    /// Lists the page being made in `window`'s ([`at_work`]).
+    fn register(window: &Window, cx: &mut Context<Self>) {
+        let (me, here) = (cx.weak_entity(), window.window_handle());
+        let pages = cx.default_global::<Pages>();
+        pages.0.retain(|(_, page)| page.upgrade().is_some());
+        pages.0.push((here, me));
     }
 
     /// The search field: typing filters, ↩ moves the keyboard to the first row.
@@ -300,6 +336,8 @@ impl ToolsPage {
             queue: VecDeque::new(),
             running: None,
             stop: None,
+            ended: None,
+            _quit: cx.on_app_quit(|this, _| this.stop_for_quit()),
             batch: (0, 0),
             filter: Filter::All,
             category: None,
@@ -321,8 +359,16 @@ impl ToolsPage {
         page
     }
 
+    /// [`Self::installing`], in `window` as a page the user opened is.
+    #[cfg(test)]
+    pub(crate) fn installing_in(id: &'static str, window: &Window, cx: &mut Context<Self>) -> Self {
+        let page = Self::installing(id, cx);
+        Self::register(window, cx);
+        page
+    }
+
     /// What is running and waiting, when anything is: "Installing Bun, 2
-    /// more queued". Closing the tab stops it.
+    /// more queued". Closing the tab or its window, and quitting, stop it.
     pub fn work(&self) -> Option<String> {
         let running = self.running.as_ref().and_then(|(id, job)| {
             let tool = find(id)?;
@@ -627,8 +673,15 @@ impl ToolsPage {
             .map_err(|e| e.to_string())
         });
         self.stop = Some(stop);
+        let (ended, ended_rx) = oneshot::channel::<()>();
+        self.ended = Some(ended_rx);
         // `None` when it was stopped.
-        let done = rt::spawn(cx, async move { run.await.ok() });
+        let done = rt::spawn(cx, async move {
+            let result = run.await.ok();
+            // Only now: the run, and the process group it ends when dropped, are gone.
+            drop(ended);
+            result
+        });
         cx.spawn(async move |this, cx| {
             // Ends when the installer exits and drops the sender.
             while let Some(line) = lines.next().await {
@@ -661,6 +714,7 @@ impl ToolsPage {
     ) {
         self.running = None;
         self.stop = None;
+        self.ended = None;
         self.batch.0 += 1;
         match result {
             None => {
@@ -691,6 +745,25 @@ impl ToolsPage {
             stop.abort();
         }
         cx.notify();
+    }
+
+    /// Quitting: stops the running job and what's queued, as closing the page
+    /// does, and has the app wait (as long as it waits for quit handlers) until
+    /// the job's process group was told to end. The page's drop, which also
+    /// stops it, comes as the app lets go of its windows, and the app could
+    /// exit before the stop got through: the installer, in a session of its
+    /// own, then ran on with nobody to show its end.
+    fn stop_for_quit(&mut self) -> impl Future<Output = ()> + use<> {
+        self.queue.clear();
+        if let Some(stop) = self.stop.take() {
+            stop.abort();
+        }
+        let ended = self.ended.take();
+        async move {
+            if let Some(ended) = ended {
+                let _ = ended.await;
+            }
+        }
     }
 
     /// Drops everything still waiting; the running installer finishes.
@@ -1780,6 +1853,43 @@ mod tests {
         cx.update(|_| {});
         cx.run_until_parked();
         assert_eq!(run.now_or_never(), Some(Err(Aborted)), "still running");
+    }
+
+    /// Final seams m4: quitting stops the installer the page runs, as closing it does. Only the
+    /// page's drop stopped it, and quitting dropped it (with the windows) too late or not at all:
+    /// the installer, in a session of its own, ran on with nobody to show its end.
+    #[gpui_kit::test]
+    fn quitting_stops_the_installer(cx: &mut TestAppContext) {
+        let (run, stop) = abortable(futures::future::pending::<()>());
+        // Held here, so only quitting can stop it.
+        let page = cx.new(|cx| {
+            let mut page = ToolsPage::blank(cx);
+            page.running = Some(("bun", Job::Install));
+            page.stop = Some(stop);
+            page
+        });
+        cx.quit();
+        assert_eq!(run.now_or_never(), Some(Err(Aborted)), "still running");
+        drop(page);
+    }
+
+    /// The app's quit waits (as long as it waits for quit handlers) until the stopped run is
+    /// over, its process group told to end, so the installer can't outlive the app.
+    #[gpui_kit::test]
+    fn quitting_waits_until_the_installer_was_told_to_stop(cx: &mut TestAppContext) {
+        let (ended, ended_rx) = futures::channel::oneshot::channel::<()>();
+        let page = cx.new(|cx| {
+            let mut page = ToolsPage::blank(cx);
+            page.running = Some(("bun", Job::Install));
+            page.ended = Some(ended_rx);
+            page
+        });
+        let mut quit = page
+            .update(cx, |page, _| page.stop_for_quit())
+            .boxed_local();
+        assert_eq!((&mut quit).now_or_never(), None, "it didn't wait");
+        drop(ended);
+        assert_eq!(quit.now_or_never(), Some(()));
     }
 
     /// The list works from the keyboard: the search has it when the page opens, ↩ there moves

@@ -242,8 +242,8 @@ explained. A conflict on the same address can't be forced.
   installed, the page says so instead of showing them as not installed.
 - Homebrew asks for your password, so it runs in the terminal. Open a new terminal tab afterwards so it sees the
   new `PATH`.
-- Closing the tab while something installs asks first, and stops it. One tool is installed, upgraded or removed at a
-  time, whether from this page, an agent or `sawit pasang`.
+- Closing the tab or its window, quitting and **Restart to Update** ask first while something installs, and stop it.
+  One tool is installed, upgraded or removed at a time, whether from this page, an agent or `sawit pasang`.
 - From the terminal: `sawit list tools`, `sawit pasang bun uv` and `sawit pupuk`.
 
 ### Browser
@@ -399,9 +399,9 @@ explained. A conflict on the same address can't be forced.
   notes of a newer release, and the full history.
 - Sawit checks [GitHub Releases](https://github.com/bahrulbangsawan/sawit.dev/releases) on launch and
   every hour. New versions download in the background. Once ready, a **Restart to Update** button appears in the
-  title bar: the app quits, `Sawit.app` is replaced, and it reopens. It asks first while a terminal runs something
-  or a file has unsaved changes, since quitting ends or closes them. A downloaded update also installs when you
-  quit. Builds from `cargo` only open the releases page.
+  title bar: the app quits, `Sawit.app` is replaced, and it reopens. It asks first while a terminal runs something,
+  a file has unsaved changes or Dev Tools installs something, since quitting ends, closes or stops them. A downloaded
+  update also installs when you quit. Builds from `cargo` only open the releases page.
 
 ## Keyboard shortcuts
 
