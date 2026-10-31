@@ -237,10 +237,26 @@ pub fn resolve(path: &Path) -> PathBuf {
     }
 }
 
-/// Only the case of the name differs (macOS volumes ignore case).
+/// Whether `a` and `b` name one entry in two cases: names that differ only in case, in one
+/// folder, for one file on disk. On a volume that ignores case (macOS's default) a rename between
+/// them changes the case of the name. On one that tells case apart (a case-sensitive APFS volume,
+/// a share), `README.md` and `readme.md` can be two files, and renaming one to the other would
+/// replace it; then they aren't one entry.
 fn same_entry(a: &Path, b: &Path) -> bool {
     a.parent() == b.parent()
         && a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+        && same_file(a, b)
+}
+
+/// Whether `a` and `b` lead to one file, folder or link on disk (one device and inode; links
+/// aren't followed). False when either can't be looked up.
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    match (std::fs::symlink_metadata(a), std::fs::symlink_metadata(b)) {
+        (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),
+        _ => false,
+    }
 }
 
 fn already_exists(path: &Path) -> crate::CoreError {
@@ -559,6 +575,109 @@ mod tests {
         assert!(p.join("moved/inner/x.txt").exists() && !p.join("dup").exists());
         remove(&p.join("moved")).unwrap();
         assert!(!p.join("moved").exists());
+    }
+
+    /// A rename that changes only the case of a name goes ahead (the volume holding the temp
+    /// folder ignores case, as macOS's does by default: one file has both names).
+    #[test]
+    fn a_rename_that_changes_only_the_case_goes_ahead() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path();
+        fs::write(p.join("README.md"), "text").unwrap();
+        move_entry(&p.join("README.md"), &p.join("readme.md")).unwrap();
+        let names: Vec<_> = list_dir(p).unwrap().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, ["readme.md"]);
+        assert_eq!(fs::read_to_string(p.join("readme.md")).unwrap(), "text");
+    }
+
+    /// Two names are one file on disk only when they lead to one inode: two files never are, two
+    /// hard links to one file are, and a name with nothing there is no file.
+    #[test]
+    fn same_file_is_one_inode() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path();
+        fs::write(p.join("a.txt"), "a").unwrap();
+        fs::write(p.join("b.txt"), "b").unwrap();
+        fs::hard_link(p.join("a.txt"), p.join("link.txt")).unwrap();
+        assert!(same_file(&p.join("a.txt"), &p.join("a.txt")));
+        assert!(!same_file(&p.join("a.txt"), &p.join("b.txt")));
+        assert!(same_file(&p.join("a.txt"), &p.join("link.txt")));
+        assert!(!same_file(&p.join("a.txt"), &p.join("missing.txt")));
+        // Two names of one file that differ in more than case are still two entries: the
+        // rename is refused rather than leaving both names as they were.
+        assert!(move_entry(&p.join("a.txt"), &p.join("link.txt")).is_err());
+        assert!(p.join("a.txt").exists() && p.join("link.txt").exists());
+    }
+
+    /// On a volume that tells case apart, `README.md` and `readme.md` are two files, and renaming
+    /// one to the other's name replaced it for good (FILES-4): the names matched but for case,
+    /// and that was taken for a rename of the case alone. Now it is refused, and both are kept;
+    /// a rename to a case of the name that nothing has still goes ahead.
+    ///
+    /// Makes a sparse case-sensitive APFS disk image (about 8 MB) in a temp folder and mounts it
+    /// there (`hdiutil`, no admin password):
+    /// `cargo test -p sawit-core -- --ignored case_sensitive`.
+    #[test]
+    #[ignore = "makes and mounts a disk image"]
+    fn renaming_to_another_files_name_in_other_case_replaces_nothing_on_a_case_sensitive_volume() {
+        struct Mounted(PathBuf);
+        impl Drop for Mounted {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("hdiutil")
+                    .args(["detach", "-force", "-quiet"])
+                    .arg(&self.0)
+                    .status();
+            }
+        }
+        let hdiutil = |args: &[&std::ffi::OsStr]| {
+            let status = std::process::Command::new("hdiutil")
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success(), "hdiutil {args:?}");
+        };
+        let d = tempfile::tempdir().unwrap();
+        let image = d.path().join("case.sparseimage");
+        let mount = d.path().join("volume");
+        fs::create_dir(&mount).unwrap();
+        hdiutil(&[
+            "create".as_ref(),
+            "-size".as_ref(),
+            "40m".as_ref(),
+            "-fs".as_ref(),
+            "Case-sensitive APFS".as_ref(),
+            "-volname".as_ref(),
+            "sawit-case".as_ref(),
+            "-type".as_ref(),
+            "SPARSE".as_ref(),
+            "-quiet".as_ref(),
+            d.path().join("case").as_os_str(),
+        ]);
+        hdiutil(&[
+            "attach".as_ref(),
+            "-nobrowse".as_ref(),
+            "-noverify".as_ref(),
+            "-noautoopen".as_ref(),
+            "-quiet".as_ref(),
+            "-mountpoint".as_ref(),
+            mount.as_os_str(),
+            image.as_os_str(),
+        ]);
+        let _mounted = Mounted(mount.clone());
+        let p = mount.join("project");
+        fs::create_dir(&p).unwrap();
+        fs::write(p.join("README.md"), "upper").unwrap();
+        fs::write(p.join("readme.md"), "lower").unwrap();
+
+        let refused = move_entry(&p.join("README.md"), &p.join("readme.md"));
+        assert_eq!(fs::read_to_string(p.join("readme.md")).unwrap(), "lower");
+        assert_eq!(fs::read_to_string(p.join("README.md")).unwrap(), "upper");
+        assert!(refused.unwrap_err().to_string().contains("already exists"));
+
+        move_entry(&p.join("README.md"), &p.join("Readme.md")).unwrap();
+        let mut names: Vec<_> = list_dir(&p).unwrap().into_iter().map(|e| e.name).collect();
+        names.sort();
+        assert_eq!(names, ["Readme.md", "readme.md"]);
     }
 
     #[test]
