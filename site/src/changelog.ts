@@ -7,6 +7,23 @@ export type Section = { title: string; entries: Entry[] }
 export type Release = { version: string; date?: string; sections: Section[] }
 export type Changelog = { releases: Release[] }
 
+// Reads CHANGELOG.md from `source`: its releases, or why it couldn't. Cloudflare keeps the file for
+// five minutes. A GitHub that doesn't answer within `timeoutMs` is an error too, so the page shows
+// its link instead of hanging.
+export async function fetchChangelog(source: string, timeoutMs = 5000): Promise<Changelog | { error: string }> {
+  try {
+    const res = await fetch(source, {
+      cf: { cacheTtl: 300, cacheEverything: true },
+      signal: AbortSignal.timeout(timeoutMs),
+    } as RequestInit)
+    if (!res.ok) return { error: `GitHub answered ${res.status}` }
+    return parseChangelog(await res.text())
+  } catch (e) {
+    const late = e instanceof DOMException && e.name === 'TimeoutError'
+    return { error: late ? 'GitHub took too long to answer' : 'GitHub could not be reached' }
+  }
+}
+
 export function parseChangelog(md: string): Changelog {
   const releases: Release[] = []
   let release: Release | undefined

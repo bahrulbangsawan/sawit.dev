@@ -2,23 +2,13 @@ import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { Page } from '../components/chrome'
 import { DMG, REPO, SITE } from '../content'
-import { type Changelog, parseChangelog } from '../changelog'
+import { fetchChangelog } from '../changelog'
 
 const SOURCE = 'https://raw.githubusercontent.com/bahrulbangsawan/sawit.dev/main/CHANGELOG.md'
 
 // Read from GitHub on the server, so a release shows up here without redeploying the site.
-// Cloudflare keeps the file for five minutes; a failed fetch renders a link instead of the list.
-const getChangelog = createServerFn({ method: 'GET' }).handler(
-  async (): Promise<Changelog | { error: string }> => {
-    try {
-      const res = await fetch(SOURCE, { cf: { cacheTtl: 300, cacheEverything: true } } as RequestInit)
-      if (!res.ok) return { error: `GitHub answered ${res.status}` }
-      return parseChangelog(await res.text())
-    } catch {
-      return { error: 'GitHub could not be reached' }
-    }
-  },
-)
+// A failed fetch renders a link instead of the list.
+const getChangelog = createServerFn({ method: 'GET' }).handler(() => fetchChangelog(SOURCE))
 
 export const Route = createFileRoute('/changelog')({
   loader: () => getChangelog(),
@@ -48,7 +38,6 @@ function Inline({ text }: { text: string }) {
 
 function ChangelogPage() {
   const data = Route.useLoaderData()
-  const latest = 'releases' in data ? data.releases[0] : undefined
   return (
     <Page>
       <header className="sec hero log-hero" id="top">
@@ -60,7 +49,9 @@ function ChangelogPage() {
               <svg aria-hidden="true">
                 <use href="#i-down" />
               </svg>
-              Download {latest ? `v${latest.version}` : 'the latest'}
+              {/* releases/latest, which isn't CHANGELOG.md's newest section while that one builds,
+                  or if its build failed (v0.0.4): so no version here */}
+              Download the latest
             </a>
             <a className="btn" href={`${REPO}/blob/main/CHANGELOG.md`}>
               CHANGELOG.md on GitHub ↗
@@ -102,7 +93,8 @@ function ChangelogPage() {
                         <li key={k}>
                           <span>
                             {e.scope && <span className="scope">{e.scope}</span>}
-                            <Inline text={e.text.charAt(0).toUpperCase() + e.text.slice(1)} />
+                            {/* as written: a capital would make pg_ctl "Pg_ctl" and mcp "Mcp" */}
+                            <Inline text={e.text} />
                           </span>
                         </li>
                       ))}
