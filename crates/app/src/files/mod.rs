@@ -120,6 +120,8 @@ pub enum FilesEvent {
     OpenTerminal(PathBuf),
     FindInFolder(PathBuf),
     ViewHistory(PathBuf),
+    /// A folder picked to open as the project (the tab's Open Project Folder).
+    OpenFolder(PathBuf),
 }
 
 impl EventEmitter<FilesEvent> for FilesPanel {}
@@ -339,6 +341,8 @@ impl FilesPanel {
         }
     }
 
+    /// Asks for a folder to open as the project, for the workspace to open
+    /// ([`FilesEvent::OpenFolder`]).
     pub fn prompt_open(&mut self, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -353,7 +357,7 @@ impl FilesPanel {
             let Some(dir) = paths.into_iter().next() else {
                 return;
             };
-            let _ = this.update(cx, |this, cx| this.set_root(dir, cx));
+            let _ = this.update(cx, |_, cx| cx.emit(FilesEvent::OpenFolder(dir)));
         })
         .detach();
     }
@@ -1661,10 +1665,30 @@ mod tests {
                     FilesEvent::OpenTerminal(path) => format!("terminal {}", name(path)),
                     FilesEvent::FindInFolder(path) => format!("find {}", name(path)),
                     FilesEvent::ViewHistory(path) => format!("history {}", name(path)),
+                    FilesEvent::OpenFolder(path) => format!("open folder {}", name(path)),
                 })
             })
         });
         (seen, subscription)
+    }
+
+    /// The folder picked with the tab's Open Project Folder button goes to the workspace, which
+    /// shows it where it is open already, or puts it in this project's place (FILES-9). The tab
+    /// used to take it itself, past the workspace's checks: a folder another project of the
+    /// window had became a second project of it, and the old project's tabs kept its group.
+    #[gpui_kit::test]
+    fn open_project_folder_asks_the_workspace(cx: &mut TestAppContext) {
+        let (_window, panel) = open_panel(cx, &["notes.txt"]);
+        Changes::install(&panel, cx);
+        let (seen, _events) = events(&panel, cx);
+        cx.update(|cx| panel.update(cx, |p, cx| p.prompt_open(cx)));
+        cx.run_until_parked();
+        assert!(cx.did_prompt_for_paths());
+        cx.simulate_path_prompt_response(|_| Some(vec![PathBuf::from(OTHER_ROOT)]));
+        cx.run_until_parked();
+        let other = Path::new(OTHER_ROOT).file_name().unwrap().to_string_lossy();
+        assert_eq!(*seen.borrow(), [format!("open folder {other}")]);
+        cx.update(|cx| assert_eq!(panel.read(cx).root.as_deref(), Some(Path::new(ROOT))));
     }
 
     /// The tree's Git items follow the project's repository as the Git store has it (FILES-15):

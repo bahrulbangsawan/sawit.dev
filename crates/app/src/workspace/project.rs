@@ -109,6 +109,12 @@ impl Workspace {
             FilesEvent::OpenTerminal(dir) => self.open_terminal_in(dir.clone(), window, cx),
             FilesEvent::FindInFolder(dir) => self.open_folder_search(dir.clone(), window, cx),
             FilesEvent::ViewHistory(path) => self.open_git_history(path.clone(), cx),
+            FilesEvent::OpenFolder(dir) => {
+                let (dir, handle) = (dir.clone(), window.window_handle());
+                let workspace = cx.entity().downgrade();
+                // Once this update is over: it looks at every window's projects.
+                cx.defer(move |cx| crate::cli::open_folder_from_files(dir, handle, workspace, cx));
+            }
         }
     }
 
