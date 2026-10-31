@@ -86,9 +86,10 @@ clicking Export leaves a folder Claude can build a matching UI from.
   panel in that mode. They show as active while open. Opening Annotate turns on pick mode.
 - **↗** (Lucide `ExternalLink`): opens the current URL in the default browser.
 - **</>** (Lucide `Code`): Web Inspector, unchanged.
-- **⌘⇧.** toggles Annotate, whether the page or Sawit has the keyboard. On the page only the user's
-  own key counts (a page can dispatch keys too); Sawit answers an agent's `browser_press_key
-  "Meta+Shift+."` itself, and its `Escape` while picking.
+- **⌘⇧.** toggles Annotate, whether the page or Sawit has the keyboard. The user's own key is the
+  keymap's (it sees ⌘ keys before the page, so the binding can move); the page answers no one's,
+  as a page can dispatch keys too. Sawit answers an agent's `browser_press_key "Meta+Shift+."`
+  itself, and its `Escape` while picking.
 
 ### Picking (shared by Annotate and Design → Inspect)
 
@@ -346,7 +347,7 @@ GPUI BrowserView (browser/mod.rs) ── toolbar.rs ── device menu, panel to
   the app orchestrates page ops, fetches and files). The page-side ops are internal, not
   `BrowserOp` variants, so agents use the tool-level API.
 - `PageEvent` gains `Picked(Value)`, `Hovered(Value)` (throttled to 10 per second) and
-  `Key(String)` (`toggle-annotate`, `escape`). `Picked` carries the element's full annotation
+  `Key(String)` (`escape`, while picking). `Picked` carries the element's full annotation
   details (selector, label, text, box, key styles, source hint, outerHTML ≤ 20 000 characters),
   so a pick needs no second round trip. `Hovered` carries only selector, label and box.
 - `BrowserView` emits `BrowserEvent::SendToTerminal(String)`. The workspace subscribes, shows the

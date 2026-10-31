@@ -1,5 +1,5 @@
-// Sawit's page overlay module: picking, highlights, markers, flash and the
-// annotate shortcut. Spliced into the page agent (see browser_agent.js), so
+// Sawit's page overlay module: picking, highlights, markers and flash.
+// Spliced into the page agent (see browser_agent.js), so
 // `send`, `resolve`, `describe`, `clip`, `oneLine`, `modules` and `helpers`
 // are in scope.
 //
@@ -459,19 +459,11 @@
     render();
   };
 
-  // The annotate shortcut works on every page, picking or not, but only as the user's own
-  // key: it opens Annotate and arms the picker, and a page can dispatch keys too. Sawit
-  // answers an agent's browser_press_key "Meta+Shift+." itself. The key counts by its
-  // `code`: its `key` would also match ⌘⇧< on layouts where Shift-< is ">" (a key with no
-  // `code`, a virtual keyboard's, counts by its `key`).
-  listen("keydown", (e) => {
-    if (!e.isTrusted) return;
-    const period = e.code ? e.code === "Period" : e.key === "." || e.key === ">";
-    if (e.metaKey && e.shiftKey && period) {
-      e.preventDefault();
-      send("key", "toggle-annotate");
-    }
-  }, CAPTURE);
+  // Annotate's key (⇧⌘. unless the keymap moves it) is never the page's to answer. The
+  // user's own reaches Sawit's keymap first, wherever it is bound (GPUI sees ⌘ keys before
+  // the page does), so a key the keymap doesn't bind to Annotate doesn't toggle it. A key
+  // the page dispatches mustn't open Annotate and arm the picker, and Sawit answers an
+  // agent's browser_press_key "Meta+Shift+." itself.
 
   // ---- Ops ----
 

@@ -38,3 +38,28 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-enter", SendComment, Some("GitComment > Input")),
     ]);
 }
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::TestAppContext;
+
+    /// The commit and comment boxes say which keys send them, as the keymap binds them: ⌘↩ in
+    /// the box (`GitCommitMessage > Input`), which takes the box's own ⌘↩.
+    #[gpui_kit::test]
+    fn the_boxes_say_their_keys(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::init(cx);
+        });
+        cx.update(|cx| {
+            assert_eq!(
+                super::panel::commit_placeholder(cx),
+                "Commit message (⌘↩ to commit)"
+            );
+            assert_eq!(
+                super::thread::comment_placeholder(cx),
+                "Leave a comment (Markdown, ⌘↩ to send)"
+            );
+        });
+    }
+}

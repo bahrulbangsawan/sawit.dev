@@ -32,8 +32,9 @@ pub enum MenuNode {
     Item {
         id: &'static str,
         label: String,
-        /// The Mac keys of the command, as a menu writes them (`⇧⌘K`). `None` when it has none, or
-        /// when Sawit keeps them (see [`shortcut_label`]).
+        /// The Mac keys of the command in FigCraft's keymap, as a menu writes them (`⇧⌘K`).
+        /// `None` when it has none, or when Sawit keeps them (see [`shortcut_label`]). The app's
+        /// menus show the keys the keymap binds now instead.
         shortcut: Option<String>,
         /// Whether the item shows a check mark, and if so whether it is on. `None` for a command
         /// that is not a toggle.

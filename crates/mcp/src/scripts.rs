@@ -52,9 +52,11 @@ pub struct RemoveCommandArgs {
     pub id: String,
 }
 
-/// The project key `run-commands.json` uses: the folder without a trailing slash.
+/// The project key `run-commands.json` uses: the folder as it is on disk (through the links on its
+/// way, in its letter case, without `..`), which is how the app names a project it opened, so the
+/// app's Run panel lists what is saved here (MCP-3); and without a trailing slash.
 fn project_root(dir: &str) -> Result<PathBuf, String> {
-    let path = existing_dir(dir)?;
+    let path = sawit_core::files::resolve(&existing_dir(dir)?);
     let text = path.to_string_lossy();
     Ok(PathBuf::from(text.trim_end_matches('/'))
         .components()
@@ -228,7 +230,31 @@ mod tests {
     fn project_key_has_no_trailing_slash() {
         let dir = tempfile::tempdir().unwrap();
         let with_slash = format!("{}/", dir.path().display());
-        assert_eq!(project_root(&with_slash).unwrap(), dir.path());
+        let real = dir.path().canonicalize().unwrap();
+        assert_eq!(project_root(&with_slash).unwrap(), real);
         assert!(project_root("relative/path").is_err());
+    }
+
+    /// MCP-3: a project's saved commands are kept under its folder as it is on disk, which is how
+    /// the app names a project it opened. A link to it, another letter case or `..` in the name
+    /// are the same key. Kept under the agent's spelling (`/tmp/p` for `/private/tmp/p`), they
+    /// were in no project of the app's Run panel, and one folder had two lists.
+    #[test]
+    fn a_project_key_is_its_folder_as_it_is_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("shop");
+        std::fs::create_dir_all(real.join("web")).unwrap();
+        let real = real.canonicalize().unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        for named in [
+            real.clone(),
+            link,
+            dir.path().join("SHOP"),
+            real.join("web").join(".."),
+        ] {
+            let key = project_root(&named.display().to_string()).unwrap();
+            assert_eq!(key, real, "{}", named.display());
+        }
     }
 }

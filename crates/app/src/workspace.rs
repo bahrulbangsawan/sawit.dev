@@ -4,8 +4,10 @@
 //! One window holds several projects (see `project`): the title bar switches
 //! between them and tabs are grouped by the project they belong to.
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
@@ -91,7 +93,7 @@ actions!(
         ShowPorts,
         ShowNetwork,
         ShowSsh,
-        ShowShellConfig,
+        ShowConfigFiles,
         ShowPrompts,
         OpenCanvas,
         OpenDevTools,
@@ -129,7 +131,7 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-6", ShowPorts, ctx),
         KeyBinding::new("cmd-7", ShowNetwork, ctx),
         KeyBinding::new("cmd-8", ShowSsh, ctx),
-        KeyBinding::new("cmd-9", ShowShellConfig, ctx),
+        KeyBinding::new("cmd-9", ShowConfigFiles, ctx),
         KeyBinding::new("cmd-0", ShowPrompts, ctx),
         KeyBinding::new("ctrl-cmd-]", NextProject, ctx),
         KeyBinding::new("ctrl-cmd-[", PreviousProject, ctx),
@@ -151,6 +153,96 @@ pub fn init(cx: &mut App) {
     cx.bind_keys(bindings());
     crate::browser::init(cx);
     crate::board::init(cx);
+}
+
+/// Keeps GPUI's keyboard on screen. Whatever had it and is no longer drawn gives it to `home`
+/// (the workspace): the browser's page after a click in it, a file editor, a terminal pane or a
+/// sidebar panel's field, once their tab, the tab area, the dock or the panel is off screen
+/// (⌃Tab, ⇧⌘J, ⌘J, ⌘1 to ⌘0, a page an agent puts in front, an agent's `app_activate_tab`).
+/// Otherwise the keyboard stays on what isn't drawn: GPUI then sends the keys from the window's
+/// root, gpui-kit's `Root`, past every workspace shortcut (⇧⌘J, ⌘W, ⌘T, ⌘1), and typing goes
+/// nowhere, until a click. Zed's workspace does the same.
+///
+/// What it took is given back ([`Self::give_back`]) once what the workspace shows changes while
+/// the workspace still has the keyboard: a terminal pane hidden and shown again (⌘J twice, the
+/// title bar's button twice) or a file's text whose tab is left and come back to has it again,
+/// and typing goes on. It is forgotten as soon as anything else has the keyboard. Given back
+/// while still off screen (⌃Tab on to a third tab, ⌘J then ⌃Tab), it is parked again and the
+/// keyboard comes back here once the frame is drawn.
+pub(crate) struct KeyboardHome<S> {
+    home: FocusHandle,
+    /// What the keyboard was last taken from.
+    parked: Rc<RefCell<Option<WeakFocusHandle>>>,
+    /// What the workspace showed at its last render.
+    shown: Option<S>,
+    _lost: Subscription,
+}
+
+impl<S: PartialEq> KeyboardHome<S> {
+    pub(crate) fn new<V: 'static>(
+        home: FocusHandle,
+        window: &mut Window,
+        cx: &mut Context<V>,
+    ) -> Self {
+        let parked = Rc::new(RefCell::new(None));
+        let _lost = cx.on_focus_lost(window, {
+            let (home, parked) = (home.clone(), parked.clone());
+            move |_, window, cx| {
+                // Still the handle that is no longer drawn.
+                *parked.borrow_mut() = window.focused(cx).map(|h| h.downgrade());
+                window.focus(&home, cx);
+            }
+        });
+        Self {
+            home,
+            parked,
+            shown: None,
+            _lost,
+        }
+    }
+
+    /// From the workspace's render, once the canvases have taken or given their keyboard:
+    /// `shown` is what the workspace shows now. `keep` says what may have the keyboard given
+    /// back: not the browser's page, which gave AppKit's keyboard back when hidden, so that
+    /// GPUI's alone would type nowhere, nor a keystroke recorder, which takes every key; they
+    /// wait for a click, as before.
+    pub(crate) fn give_back(
+        &mut self,
+        shown: S,
+        keep: impl Fn(&FocusHandle, &App) -> bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let changed = self.shown.as_ref() != Some(&shown);
+        self.shown = Some(shown);
+        if !self.home.is_focused(window) {
+            // Something else has the keyboard: the user went on from what was hidden.
+            self.parked.borrow_mut().take();
+            return;
+        }
+        if !changed {
+            // Nothing changed on screen (a store's redraw, a chord's first key): it waits.
+            return;
+        }
+        let back = self.parked.borrow_mut().take().and_then(|h| h.upgrade());
+        let Some(back) = back.filter(|back| keep(back, cx)) else {
+            return;
+        };
+        window.focus(&back, cx);
+        // GPUI's focus-lost fallback runs only for a frame after one with a keyboard path, and
+        // the frame that hid `back` had none: if `back` isn't drawn in this one either, nothing
+        // would take the keyboard from it. Check once the frame is drawn (review I5).
+        let (home, parked) = (self.home.clone(), self.parked.clone());
+        let handle = window.window_handle();
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, cx| {
+                if back.is_focused(window) && !home.contains_focused(window, cx) {
+                    *parked.borrow_mut() = Some(back.downgrade());
+                    window.focus(&home, cx);
+                }
+            });
+        });
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -241,8 +333,14 @@ pub struct Workspace {
     cli_status: Entity<CliStatus>,
     updater: Entity<Updater>,
     focus: FocusHandle,
+    /// Takes the keyboard from what goes off screen, and gives it back when it is shown again.
+    keyboard: KeyboardHome<Shown>,
     _subscriptions: Vec<Subscription>,
 }
+
+/// What the workspace shows, as far as the keyboard goes: the welcome screen, the layout, the
+/// filled canvas, the project, the sidebar's panel and the view of the tab in front.
+type Shown = (bool, Layout, bool, usize, SidebarTab, Option<EntityId>);
 
 impl Workspace {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -272,6 +370,8 @@ impl Workspace {
         let cli_status = cli_status(cx);
         let updater = updater(cx);
         let welcome = cx.new(|cx| Welcome::new(servers.clone(), db.clone(), cx));
+        let focus = cx.focus_handle();
+        let keyboard = KeyboardHome::new(focus.clone(), window, cx);
         let subscriptions = vec![
             cx.observe(&servers, |_, _, cx| cx.notify()),
             cx.observe(&cli_status, |_, _, cx| cx.notify()),
@@ -449,7 +549,8 @@ impl Workspace {
             tab_scroll: ScrollHandle::new(),
             scrolled_to: None,
             pending_db: None,
-            focus: cx.focus_handle(),
+            focus,
+            keyboard,
             cli_status,
             updater,
             _subscriptions: subscriptions,
@@ -1253,7 +1354,7 @@ impl Workspace {
                 Lucide::FileTerminal.into(),
                 "Config Files",
                 SidebarTab::ShellConfig,
-                &ShowShellConfig,
+                &ShowConfigFiles,
             ),
             (
                 "side-prompts",
@@ -2508,7 +2609,25 @@ impl Workspace {
         }
     }
 
-    /// Shows the MCP install page (one tab), with the keyboard in its search.
+    /// What the workspace shows now ([`Shown`]).
+    fn shown(&self) -> Shown {
+        let front = self.tabs.get(self.active).map(|tab| match &tab.item {
+            PaneItem::Server => self.server_detail.entity_id(),
+            PaneItem::File(editor) => editor.entity_id(),
+            PaneItem::Other { view, .. } => view.entity_id(),
+        });
+        (
+            self.welcome.is_some(),
+            self.layout,
+            self.canvas_maximized,
+            self.project,
+            self.sidebar,
+            front,
+        )
+    }
+
+    /// Shows the MCP install page (one tab), with the tab area, which may be hidden, and the
+    /// keyboard in its search.
     fn open_mcp_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_mcp_page(true, window, cx);
     }
@@ -2517,6 +2636,7 @@ impl Workspace {
     /// agent opens it: the keyboard stays where the user has it).
     fn show_mcp_page(&mut self, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_welcome(CENTER_ONLY, cx);
+        self.show_center(cx);
         let key: SharedString = "mcp".into();
         if let Some(ix) = self
             .tabs
@@ -2550,9 +2670,11 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Shows the keymap editor (one tab), with the keyboard.
+    /// Shows the keymap editor (one tab), with the tab area, which may be hidden, and the
+    /// keyboard.
     fn open_keymap_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_welcome(CENTER_ONLY, cx);
+        self.show_center(cx);
         let key: SharedString = "keymap".into();
         if let Some(ix) = self
             .tabs
@@ -2596,7 +2718,8 @@ impl Workspace {
         self.open_file(path, window, cx);
     }
 
-    /// Shows the Dev Tools install page (one tab), with the keyboard in its search.
+    /// Shows the Dev Tools install page (one tab), with the tab area, which may be hidden, and
+    /// the keyboard in its search.
     fn open_tools_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_tools_page(true, window, cx);
     }
@@ -2605,6 +2728,7 @@ impl Workspace {
     /// when an agent opens it: the keyboard stays where the user has it).
     fn show_tools_page(&mut self, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_welcome(CENTER_ONLY, cx);
+        self.show_center(cx);
         let key: SharedString = "tools".into();
         if let Some(ix) = self
             .tabs
@@ -2949,6 +3073,20 @@ impl Render for Workspace {
         self.sync_canvas_maximized();
         self.sync_boards(window, cx);
         self.sync_browser(cx);
+        // After the canvases: one shown again takes its keyboard back itself, later in the frame.
+        let pages: Vec<FocusHandle> = self
+            .browsers
+            .iter()
+            .filter_map(|b| b.upgrade())
+            .map(|b| b.read(cx).focus_handle(cx))
+            .collect();
+        let shown = self.shown();
+        self.keyboard.give_back(
+            shown,
+            |back, cx| !pages.contains(back) && !crate::keymap::is_recorder(back, cx),
+            window,
+            cx,
+        );
         v_flex()
             .key_context("Workspace")
             .track_focus(&self.focus)
@@ -3023,7 +3161,7 @@ impl Render for Workspace {
                 }),
             )
             .on_action(cx.listener(|this, _: &ShowSsh, _, cx| this.show_panel(SidebarTab::Ssh, cx)))
-            .on_action(cx.listener(|this, _: &ShowShellConfig, _, cx| {
+            .on_action(cx.listener(|this, _: &ShowConfigFiles, _, cx| {
                 this.show_panel(SidebarTab::ShellConfig, cx)
             }))
             .on_action(
@@ -3417,5 +3555,377 @@ mod tests {
         toggle_canvas_fill(&mut maximized, &mut layout, &mut unmaximized);
         assert!(maximized);
         assert_eq!(unmaximized, Some(CENTER_ONLY));
+    }
+
+    /// A stand-in for the workspace in a window as `cli::open_window` makes one (under gpui-kit's
+    /// `Root`): the workspace's keys, key context and keyboard, `render`'s refocus when nothing
+    /// has the keyboard, and its [`super::KeyboardHome`], given back to as `render` does. It shows
+    /// a terminal pane while the dock shows (⌘J), which records what is typed into it, and a
+    /// file's text while its tab is in front (⌃Tab goes round three tabs), drawn with a page,
+    /// which, as the browser's, never has the keyboard given back.
+    mod keyboard {
+        use super::super::{KeyboardHome, NextTab, ToggleTerminal};
+        use gpui_kit::component::input::{Input, InputState};
+        use gpui_kit::prelude::*;
+        use gpui_kit::{
+            AnyWindowHandle, App, Entity, FocusHandle, KeyDownEvent, TestAppContext, Window, div,
+        };
+
+        pub(super) struct StandIn {
+            pub focus: FocusHandle,
+            /// A terminal pane's keyboard, drawn while the dock shows (⌘J).
+            pub pane: FocusHandle,
+            pub dock: bool,
+            /// A file editor's text, drawn while its tab is the one in front (⌃Tab).
+            pub text: Entity<InputState>,
+            /// A web page's keyboard, drawn with the text.
+            pub page: FocusHandle,
+            pub tab: usize,
+            pub presses: usize,
+            /// What reached the terminal pane.
+            pub typed: Vec<String>,
+            renders: usize,
+            keyboard: KeyboardHome<(bool, usize)>,
+        }
+
+        impl Render for StandIn {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                // A give-back that asked for frames without end would hang the test instead.
+                self.renders += 1;
+                assert!(self.renders < 500, "the stand-in redraws without end");
+                if window.focused(cx).is_none() {
+                    self.focus.focus(window, cx);
+                }
+                let page = self.page.clone();
+                self.keyboard
+                    .give_back((self.dock, self.tab), |back, _| *back != page, window, cx);
+                div()
+                    .key_context("Workspace")
+                    .track_focus(&self.focus)
+                    .size_full()
+                    .on_action(cx.listener(|this, _: &ToggleTerminal, _, cx| {
+                        this.dock = !this.dock;
+                        this.presses += 1;
+                        cx.notify();
+                    }))
+                    .on_action(cx.listener(|this, _: &NextTab, _, cx| {
+                        this.tab = (this.tab + 1) % 3;
+                        this.presses += 1;
+                        cx.notify();
+                    }))
+                    .when(self.tab == 0, |el| {
+                        el.child(Input::new(&self.text))
+                            .child(div().track_focus(&self.page))
+                    })
+                    .when(self.dock, |el| {
+                        el.child(
+                            div()
+                                .key_context("Terminal")
+                                .track_focus(&self.pane)
+                                .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                                    if !e.keystroke.modifiers.modified() {
+                                        this.typed.push(e.keystroke.key.clone());
+                                        cx.stop_propagation();
+                                    }
+                                })),
+                        )
+                    })
+            }
+        }
+
+        /// What has the keyboard to start with.
+        pub(super) type Keyboard = fn(&StandIn, &App) -> FocusHandle;
+
+        /// The stand-in, with the keyboard given to what `keyboard` picks.
+        pub(super) fn open(
+            keyboard: Keyboard,
+            cx: &mut TestAppContext,
+        ) -> (AnyWindowHandle, Entity<StandIn>) {
+            let (window, workspace) = cx.update(|cx| {
+                gpui_kit::open_window(Default::default(), cx, |window, cx| {
+                    let text = cx.new(|cx| InputState::new(window, cx));
+                    cx.new(|cx| {
+                        let focus = cx.focus_handle();
+                        StandIn {
+                            keyboard: KeyboardHome::new(focus.clone(), window, cx),
+                            focus,
+                            pane: cx.focus_handle(),
+                            dock: true,
+                            text,
+                            page: cx.focus_handle(),
+                            tab: 0,
+                            presses: 0,
+                            typed: Vec::new(),
+                            renders: 0,
+                        }
+                    })
+                })
+                .unwrap()
+            });
+            let to = cx.update(|cx| keyboard(workspace.read(cx), cx));
+            cx.update_window(window, |_, window, cx| {
+                window.activate_window();
+                window.focus(&to, cx);
+            })
+            .unwrap();
+            cx.run_until_parked();
+            let placed = cx
+                .update_window(window, |_, window, _| to.is_focused(window))
+                .unwrap();
+            assert!(placed, "the keyboard isn't where the test put it");
+            (window, workspace)
+        }
+
+        /// Changes what the stand-in shows as a click does: with no key.
+        pub(super) fn show(
+            workspace: &Entity<StandIn>,
+            cx: &mut TestAppContext,
+            change: impl FnOnce(&mut StandIn),
+        ) {
+            workspace.update(cx, |workspace, cx| {
+                change(workspace);
+                cx.notify();
+            });
+            cx.run_until_parked();
+        }
+
+        /// Whether `handle`, picked as `keyboard` picks, has the keyboard.
+        pub(super) fn has(
+            keyboard: Keyboard,
+            window: AnyWindowHandle,
+            workspace: &Entity<StandIn>,
+            cx: &mut TestAppContext,
+        ) -> bool {
+            cx.update_window(window, |_, window, cx| {
+                keyboard(workspace.read(cx), cx).is_focused(window)
+            })
+            .unwrap()
+        }
+    }
+
+    /// What had the keyboard and goes off screen gives it to the workspace
+    /// ([`super::KeyboardHome`]), whatever it is: a terminal pane once ⌘J hides the dock, a file
+    /// editor's text once ⌃Tab shows another tab. Before, it kept the keyboard unseen, GPUI sent
+    /// the keys from the window's root, and the second ⌘J or ⌃Tab did nothing. Each of three
+    /// presses works, and the keyboard ends where it belongs: with the workspace once the dock is
+    /// hidden, with the text once ⌃Tab has gone round to its tab again. (The browser's page and
+    /// address field: `browser::tests`.)
+    #[gpui_kit::test]
+    fn what_goes_off_screen_gives_the_keyboard_to_the_workspace(cx: &mut gpui_kit::TestAppContext) {
+        use self::keyboard::{Keyboard, has, open};
+        use gpui_kit::Focusable as _;
+
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::init(cx);
+        });
+        let mut failed = Vec::new();
+        let home: Keyboard = |this, _| this.focus.clone();
+        let pane: Keyboard = |this, _| this.pane.clone();
+        let text: Keyboard = |this, cx| this.text.read(cx).focus_handle(cx);
+        for (what, keyboard, keys, ends) in [
+            ("a terminal pane", pane, "cmd-j", ("the workspace", home)),
+            ("a file's text", text, "ctrl-tab", ("the text", text)),
+        ] {
+            let (window, workspace) = open(keyboard, cx);
+            for _ in 0..3 {
+                cx.simulate_keystrokes(window, keys);
+                cx.run_until_parked();
+            }
+            let presses = cx.update(|cx| workspace.read(cx).presses);
+            let has_it = has(ends.1, window, &workspace, cx);
+            if presses != 3 || !has_it {
+                failed.push(format!(
+                    "with the keyboard in {what}, {keys} pressed 3 times worked {presses} times; \
+                     {} has the keyboard = {has_it}",
+                    ends.0
+                ));
+            }
+        }
+        assert!(failed.is_empty(), "{}", failed.join("\n"));
+    }
+
+    /// What went off screen with the keyboard has it again once it is shown again
+    /// ([`super::KeyboardHome::give_back`], review I4): a terminal pane hidden and shown by the
+    /// title bar's button (clicks, no key) or by ⌘J twice, and a file's text whose tab is left and
+    /// come back to by clicks, take the typing that follows, as they did before the workspace took
+    /// the keyboard from what is hidden. What has been clicked meanwhile keeps the keyboard, and
+    /// the browser's page (here the stand-in's page) waits for a click, as it always did.
+    #[gpui_kit::test]
+    fn what_is_shown_again_has_the_keyboard_again(cx: &mut gpui_kit::TestAppContext) {
+        use self::keyboard::{Keyboard, has, open, show};
+        use gpui_kit::{AppContext as _, Focusable as _};
+
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::init(cx);
+        });
+        let mut failed = Vec::new();
+        let home: Keyboard = |this, _| this.focus.clone();
+        let pane: Keyboard = |this, _| this.pane.clone();
+        let text: Keyboard = |this, cx| this.text.read(cx).focus_handle(cx);
+        let page: Keyboard = |this, _| this.page.clone();
+
+        let (window, workspace) = open(pane, cx);
+        for dock in [false, true] {
+            show(&workspace, cx, |w| w.dock = dock);
+        }
+        cx.simulate_keystrokes(window, "l s");
+        let typed = cx.update(|cx| workspace.read(cx).typed.clone());
+        if typed != ["l", "s"] {
+            failed.push(format!(
+                "the terminal pane hidden and shown by clicks got {typed:?} of `l s`"
+            ));
+        }
+
+        let (window, workspace) = open(pane, cx);
+        for _ in 0..2 {
+            cx.simulate_keystrokes(window, "cmd-j");
+            cx.run_until_parked();
+        }
+        cx.simulate_keystrokes(window, "l s");
+        let (dock, typed) = cx.update(|cx| {
+            let workspace = workspace.read(cx);
+            (workspace.dock, workspace.typed.clone())
+        });
+        if !dock || typed != ["l", "s"] {
+            failed.push(format!(
+                "after cmd-j twice the dock shows = {dock}, and the pane got {typed:?} of `l s`"
+            ));
+        }
+
+        let (window, workspace) = open(text, cx);
+        for tab in [1, 0] {
+            show(&workspace, cx, |w| w.tab = tab);
+        }
+        cx.simulate_input(window, "hi");
+        let value = cx.update(|cx| workspace.read(cx).text.read(cx).value().to_string());
+        if value != "hi" {
+            failed.push(format!(
+                "the file's text, its tab left and come back to, got {value:?} of \"hi\""
+            ));
+        }
+
+        let (window, workspace) = open(text, cx);
+        show(&workspace, cx, |w| w.tab = 1);
+        let to = cx.update(|cx| pane(workspace.read(cx), cx));
+        cx.update_window(window, |_, window, cx| window.focus(&to, cx))
+            .unwrap();
+        cx.run_until_parked();
+        show(&workspace, cx, |w| w.tab = 0);
+        if !has(pane, window, &workspace, cx) {
+            failed.push(
+                "the terminal pane clicked while the text was hidden lost the keyboard when \
+                 the text was shown again"
+                    .into(),
+            );
+        }
+
+        let (window, workspace) = open(page, cx);
+        for tab in [1, 0] {
+            show(&workspace, cx, |w| w.tab = tab);
+        }
+        if !has(home, window, &workspace, cx) {
+            failed.push("the page, hidden and shown, took the keyboard back".into());
+        }
+        assert!(failed.is_empty(), "{}", failed.join("\n"));
+    }
+
+    /// Given back while it is still off screen, the keyboard comes home ([`super::KeyboardHome`],
+    /// review I5): GPUI takes it from what isn't drawn only in a frame after one with a keyboard
+    /// path, and the frame that hid it had none. So two changes on screen in a row, the second
+    /// showing something else again, left the keyboard on the hidden view, past every workspace
+    /// shortcut, until a click: ⌘J, ⌃Tab, ⌘J from a terminal pane left the dock hidden; ⌃Tab,
+    /// ⌘J, ⌃Tab from a file's text lost the last ⌃Tab. Also: what is clicked meanwhile makes the
+    /// workspace forget what it took, and a redraw that changes nothing gives nothing back (one
+    /// would, given back to what is hidden, come home and ask for the next frame, without end).
+    #[gpui_kit::test]
+    fn the_keyboard_never_stays_on_what_is_hidden(cx: &mut gpui_kit::TestAppContext) {
+        use self::keyboard::{Keyboard, has, open, show};
+        use gpui_kit::{AppContext as _, Focusable as _};
+
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::init(cx);
+        });
+        let mut failed = Vec::new();
+        let home: Keyboard = |this, _| this.focus.clone();
+        let pane: Keyboard = |this, _| this.pane.clone();
+        let text: Keyboard = |this, cx| this.text.read(cx).focus_handle(cx);
+
+        for (what, from, keys, presses, ends) in [
+            (
+                "⌘J, ⌃Tab, ⌘J",
+                pane,
+                "cmd-j ctrl-tab cmd-j",
+                3,
+                ("the pane", pane),
+            ),
+            (
+                "⌃Tab, ⌘J, ⌃Tab, ⌃Tab",
+                text,
+                "ctrl-tab cmd-j ctrl-tab ctrl-tab",
+                4,
+                ("the text", text),
+            ),
+        ] {
+            let (window, workspace) = open(from, cx);
+            for key in keys.split(' ') {
+                cx.simulate_keystrokes(window, key);
+                cx.run_until_parked();
+            }
+            let worked = cx.update(|cx| workspace.read(cx).presses);
+            let has_it = has(ends.1, window, &workspace, cx);
+            if worked != presses || !has_it {
+                failed.push(format!(
+                    "{what}: {worked} of {presses} presses worked; {} has the keyboard = {has_it}",
+                    ends.0
+                ));
+            }
+        }
+
+        // The text's tab left, then the dock hidden, both by clicks: ⌘J still works.
+        let (window, workspace) = open(text, cx);
+        show(&workspace, cx, |w| w.tab = 1);
+        show(&workspace, cx, |w| w.dock = false);
+        cx.simulate_keystrokes(window, "cmd-j");
+        cx.run_until_parked();
+        let (worked, dock) = cx.update(|cx| (workspace.read(cx).presses, workspace.read(cx).dock));
+        if worked != 1 || !dock || !has(home, window, &workspace, cx) {
+            failed.push(format!(
+                "after the text's tab and the dock were hidden by clicks, cmd-j worked {worked} \
+                 times and the dock shows = {dock}"
+            ));
+        }
+
+        // What is clicked meanwhile makes the workspace forget the text: the workspace gets the
+        // keyboard back another way (as a canvas going off screen gives it), and the text's tab
+        // shown again doesn't take it.
+        let (window, workspace) = open(text, cx);
+        show(&workspace, cx, |w| w.tab = 1);
+        for to in [pane, home] {
+            let to = cx.update(|cx| to(workspace.read(cx), cx));
+            cx.update_window(window, |_, window, cx| window.focus(&to, cx))
+                .unwrap();
+            cx.run_until_parked();
+        }
+        show(&workspace, cx, |w| w.tab = 0);
+        if !has(home, window, &workspace, cx) {
+            failed.push("the text took the keyboard back after the pane had it meanwhile".into());
+        }
+
+        // A redraw that changes nothing gives nothing back; the text's tab shown again does.
+        let (window, workspace) = open(text, cx);
+        show(&workspace, cx, |w| w.tab = 1);
+        show(&workspace, cx, |_| {});
+        let home_had_it = has(home, window, &workspace, cx);
+        show(&workspace, cx, |w| w.tab = 0);
+        if !home_had_it || !has(text, window, &workspace, cx) {
+            failed.push(format!(
+                "after a redraw with the text's tab hidden the workspace had the keyboard = \
+                 {home_had_it}, and the text didn't get it back when shown"
+            ));
+        }
+        assert!(failed.is_empty(), "{}", failed.join("\n"));
     }
 }

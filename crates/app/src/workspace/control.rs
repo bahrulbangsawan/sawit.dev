@@ -85,6 +85,23 @@ fn script_answer(name: &str, running: bool, at: &[(String, usize, usize)]) -> Va
     answer
 }
 
+/// The folder a shell an agent starts goes to, `cwd`, if it is one: an absolute path to a folder
+/// that is there. The PTY ignores a `chdir` that fails, so anything else would start the shell in
+/// the app's own folder (`/` for Sawit.app), and the agent's command would run there (MCP-4).
+fn shell_folder(cwd: Option<PathBuf>) -> Result<Option<PathBuf>, String> {
+    match cwd {
+        Some(dir) if !dir.is_absolute() => Err(format!(
+            "{} isn't an absolute path: give the folder to run in as one.",
+            dir.display()
+        )),
+        Some(dir) if !dir.is_dir() => Err(format!(
+            "{} isn't a folder: nothing was run.",
+            dir.display()
+        )),
+        cwd => Ok(cwd),
+    }
+}
+
 fn sidebar_tab(panel: Panel) -> SidebarTab {
     match panel {
         Panel::Instances => SidebarTab::Servers,
@@ -239,6 +256,7 @@ impl Workspace {
                 cwd,
                 new_tab,
             } => {
+                let cwd = shell_folder(cwd)?;
                 let (tab, pane) = if cwd.is_some() || new_tab {
                     self.leave_welcome(TERMINAL_ONLY, cx);
                     self.layout.terminal = true;
@@ -584,9 +602,30 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use serde_json::json;
 
-    use super::{BrowserRoute, browser_route, script_answer};
+    use super::{BrowserRoute, browser_route, script_answer, shell_folder};
+
+    /// MCP-4: a shell an agent starts in a folder starts there or not at all. The PTY ignores a
+    /// `chdir` that fails, so a relative folder or one that isn't there started the shell in the
+    /// app's own folder (`/` for Sawit.app), and the agent's command ran there.
+    #[test]
+    fn a_shell_starts_in_a_folder_that_is_there_or_not_at_all() {
+        let here = std::env::temp_dir().canonicalize().unwrap();
+        assert_eq!(shell_folder(None), Ok(None));
+        assert_eq!(shell_folder(Some(here.clone())), Ok(Some(here)));
+        for (dir, why) in [
+            ("web", "isn't an absolute path"),
+            ("/no/such/folder", "isn't a folder"),
+        ] {
+            let refused = shell_folder(Some(PathBuf::from(dir))).unwrap_err();
+            assert!(refused.contains(why), "{dir}: {refused}");
+        }
+        let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        assert!(shell_folder(Some(file)).is_err());
+    }
 
     /// app_run_script names the terminal its script runs in, or each terminal of a saved command
     /// that runs several: the agent's terminal_read and terminal_input need it, as the terminal in
