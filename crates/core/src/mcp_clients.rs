@@ -542,7 +542,16 @@ pub fn entry(client: Client, spec: &Spec) -> (&'static str, Value) {
     {
         return (key, v);
     }
-    let (cmd, args, env) = spec.as_stdio();
+    let (cmd, args, mut env) = spec.as_stdio();
+    // A GUI client starts with launchd's PATH: npx's `#!/usr/bin/env node`
+    // needs to be told where node is.
+    if client.category() == Category::Editor
+        && cmd == spec.npx
+        && let Some(path) = node_path(&cmd)
+        && !env.iter().any(|(k, _)| k == "PATH")
+    {
+        env.push(("PATH".into(), path));
+    }
     let env = object(&env);
     let v = match client {
         Client::ClaudeCode => json!({"type": "stdio", "command": cmd, "args": args, "env": env}),
@@ -575,11 +584,39 @@ pub fn entry(client: Client, spec: &Spec) -> (&'static str, Value) {
     if let (Some(obj), Value::Object(env)) = (v.as_object_mut(), &env)
         && !env.is_empty()
         && !obj.contains_key("env")
-        && obj.contains_key("args")
     {
-        obj.insert("env".into(), Value::Object(env.clone()));
+        // opencode's and Kilo's local servers take theirs as `environment`.
+        let name = if obj.contains_key("args") {
+            "env"
+        } else {
+            "environment"
+        };
+        obj.insert(name.into(), Value::Object(env.clone()));
     }
     (key, v)
+}
+
+/// The `PATH` a GUI client must give `npx` at `program`, so that its
+/// `#!/usr/bin/env node` finds the node beside it (nvm's, Homebrew's):
+/// that folder, then the usual ones. `None` for a bare `npx`, or one in a
+/// folder launchd's PATH has.
+fn node_path(program: &str) -> Option<String> {
+    const USUAL: [&str; 6] = [
+        "/usr/local/bin",
+        "/opt/homebrew/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+    ];
+    let dir = Path::new(program).parent().filter(|d| d.is_absolute())?;
+    let dir = dir.to_str()?;
+    if matches!(dir, "/usr/bin" | "/bin") {
+        return None;
+    }
+    let mut parts = vec![dir];
+    parts.extend(USUAL.iter().filter(|d| **d != dir));
+    Some(parts.join(":"))
 }
 
 /// Every command, argument and URL in a JSON entry, space-separated.
@@ -1087,11 +1124,27 @@ pub struct CliCall {
 
 pub(crate) fn cli_call(target: &Target, cli: &Path, args: Vec<String>) -> Option<CliCall> {
     let var = target.client.profile_var()?;
+    let mut env = vec![(var.to_string(), target.profile_dir.clone())];
+    if let Some(path) = path_with(cli.parent()) {
+        env.push(("PATH".into(), Some(path)));
+    }
     Some(CliCall {
         program: cli.to_path_buf(),
         args,
-        env: vec![(var.to_string(), target.profile_dir.clone())],
+        env,
     })
+}
+
+/// `PATH` with `dir` in front, when it isn't on it: a CLI installed with
+/// npm (`#!/usr/bin/env node`) then finds the node nvm keeps beside it.
+fn path_with(dir: Option<&Path>) -> Option<PathBuf> {
+    let dir = dir.filter(|d| d.is_absolute())?;
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    if std::env::split_paths(&path).any(|p| p == dir) {
+        return None;
+    }
+    let dirs = std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(&path));
+    std::env::join_paths(dirs).ok().map(PathBuf::from)
 }
 
 pub fn cli_add(target: &Target, spec: &Spec, cli: &Path) -> Option<CliCall> {
@@ -1891,10 +1944,15 @@ mod tests {
             entry(Client::Zed, &spec),
             ("context_servers", json!({"url": url}))
         );
-        // Claude Desktop only runs programs: the mcp-remote bridge.
+        // Claude Desktop only runs programs: the mcp-remote bridge, told
+        // where node is.
         assert_eq!(
             entry(Client::ClaudeDesktop, &spec).1,
-            json!({"command": "/opt/bin/npx", "args": ["-y", "mcp-remote", url]})
+            json!({
+                "command": "/opt/bin/npx",
+                "args": ["-y", "mcp-remote", url],
+                "env": {"PATH": "/opt/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"}
+            })
         );
         let keyed =
             Spec::http("es", "https://es.dev/mcp").header("Authorization", "Bearer ${ES_KEY}");
@@ -2221,6 +2279,55 @@ mod tests {
         let v = json_at(&t.config);
         assert_eq!(v["mcpServers"]["one"]["command"], "/bin/one-149");
         assert_eq!(v["mcpServers"]["two"]["command"], "/bin/two-149");
+    }
+
+    /// GUI clients start with launchd's `PATH` (no Homebrew, no nvm), and
+    /// `npx` starts with `#!/usr/bin/env node`: their entries say where
+    /// `node` is. Agents run from a terminal keep its `PATH`.
+    #[test]
+    fn gui_clients_are_told_where_node_is() {
+        let npx = "/Users/me/.nvm/versions/node/v22.11.0/bin/npx";
+        let bridge = Spec::http("mobbin", "https://api.mobbin.com/mcp").with_npx(npx);
+        let path = "/Users/me/.nvm/versions/node/v22.11.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+        assert_eq!(
+            entry(Client::ClaudeDesktop, &bridge).1["env"],
+            json!({ "PATH": path })
+        );
+        let rea =
+            Spec::stdio("rea", npx, vec!["-y".into(), "rea-agents@6.3.0".into()]).with_npx(npx);
+        assert_eq!(entry(Client::Cursor, &rea).1["env"]["PATH"], path);
+        // An agent run from a terminal: its own PATH.
+        assert_eq!(entry(Client::ClaudeCode, &rea).1["env"], json!({}));
+        // Not npx: nothing to add.
+        let sawit = Spec::sawit(Path::new(
+            "/Applications/Sawit.app/Contents/MacOS/sawit-mcp",
+        ));
+        assert!(entry(Client::Cursor, &sawit).1.get("env").is_none());
+        // npx in /usr/bin finds a node there.
+        let system = Spec::http("x", "https://x.dev/mcp").with_npx("/usr/bin/npx");
+        assert!(entry(Client::ClaudeDesktop, &system).1.get("env").is_none());
+    }
+
+    /// A client CLI installed with npm (`#!/usr/bin/env node`) runs with
+    /// its own folder on `PATH`, where nvm keeps the `node` it needs.
+    #[test]
+    fn a_cli_runs_with_its_own_folder_on_path() {
+        let h = home();
+        let t = find(&discover(h.path(), None), Client::ClaudeCode, "default").clone();
+        let cli = h.path().join(".nvm/versions/node/v22.11.0/bin/claude");
+        let call = cli_add(&t, &Spec::sawit(Path::new("/bin/sawit-mcp")), &cli).unwrap();
+        let path = call
+            .env
+            .iter()
+            .find(|(k, _)| k == "PATH")
+            .and_then(|(_, v)| v.clone())
+            .expect("no PATH");
+        assert!(
+            path.to_string_lossy()
+                .starts_with(&format!("{}:", cli.parent().unwrap().display())),
+            "{}",
+            path.display()
+        );
     }
 
     #[test]

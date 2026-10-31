@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
+use sawit_core::dev_tools::find_program;
 use sawit_core::mcp_catalog::{self, Auth, DEFAULT_AWS_REGION, SERVERS, Server};
 use sawit_core::mcp_clients::{self, Spec, Status, Target};
-use sawit_core::probe::find_in_path;
 
 use crate::{Sawit, blocking, fail, ok, tri};
 
@@ -92,7 +92,7 @@ fn targets() -> Vec<Target> {
 }
 
 fn spec(server: &Server, region: &str) -> Spec {
-    server.spec(&own_server(), region, find_in_path)
+    server.spec(&own_server(), region, find_program)
 }
 
 fn pick(
@@ -140,7 +140,7 @@ impl Sawit {
                     if let Some(note) = server.note {
                         out.push(format!("  note: {note}"));
                     }
-                    if let Some(program) = server.missing_program(find_in_path) {
+                    if let Some(program) = server.missing_program(find_program) {
                         out.push(format!("  missing program: {program} is not installed"));
                     }
                     let spec = spec(server, DEFAULT_AWS_REGION);
@@ -179,7 +179,7 @@ impl Sawit {
                 mcp_clients::snippet(&target, &spec)
             ));
         }
-        let cli = target.client.cli().and_then(find_in_path);
+        let cli = target.client.cli().and_then(find_program);
         if let Err(e) = mcp_clients::install(&target, &spec, cli.as_deref()).await {
             return fail(e.to_string());
         }
@@ -212,7 +212,7 @@ impl Sawit {
                 target_label(&target)
             ));
         }
-        let cli = target.client.cli().and_then(find_in_path);
+        let cli = target.client.cli().and_then(find_program);
         match mcp_clients::uninstall(&target, server.id, cli.as_deref()).await {
             Ok(()) => ok(format!(
                 "Removed {} from {}.",

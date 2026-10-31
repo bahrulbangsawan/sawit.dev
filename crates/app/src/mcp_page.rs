@@ -20,6 +20,7 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use sawit_core::dev_tools::find_program;
 use sawit_core::mcp_auth::{
     self, Login, LoginEvent, SignIn, is_callback_url, login_call, sign_in_states,
 };
@@ -27,7 +28,6 @@ use sawit_core::mcp_catalog::{Auth, DEFAULT_AWS_REGION, SERVERS, Server};
 use sawit_core::mcp_clients::{
     Category, Client, Spec, Status, Target, discover, install, snippet, status, uninstall,
 };
-use sawit_core::probe::find_in_path;
 
 use crate::catalog::{self, Mark};
 use crate::rt;
@@ -345,9 +345,11 @@ impl McpPage {
             let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
             let claude_dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from);
             let targets = discover(&home, claude_dir);
+            // Where the Dev Tools page finds them, not only on the app's
+            // PATH: that misses what `~/.zshrc` adds (nvm, ~/.local/bin).
             let programs: HashMap<&'static str, PathBuf> = PROGRAMS
                 .into_iter()
-                .filter_map(|n| find_in_path(n).map(|p| (n, p)))
+                .filter_map(|n| find_program(n).map(|p| (n, p)))
                 .collect();
             let mut statuses = HashMap::new();
             for (s, server_entry) in SERVERS.iter().enumerate() {
@@ -358,7 +360,7 @@ impl McpPage {
             }
             let clis: HashMap<&'static str, PathBuf> = ["claude", "codex"]
                 .into_iter()
-                .filter_map(|n| find_in_path(n).map(|p| (n, p)))
+                .filter_map(|n| find_program(n).map(|p| (n, p)))
                 .collect();
             (targets, statuses, clis, programs, server.is_file())
         });

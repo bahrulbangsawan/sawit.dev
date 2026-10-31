@@ -539,7 +539,9 @@ account sign in through the client's own sign-in, which the page can start for C
 finds the AI clients on this Mac: Claude Code (every
 profile, including `CLAUDE_CONFIG_DIR` folders), Codex (and `CODEX_HOME` profiles), Claude Desktop, Cursor,
 Windsurf, Gemini CLI, Zed, opencode and VS Code. It installs into each with one click and shows where each config
-lives. Claude Code and Codex are changed through their own CLI when it's installed. Other configs are edited in
+lives. It finds `claude`, `codex` and `npx` where the Dev Tools page finds them (`~/.local/bin`, nvm's Node.js, …),
+not only on the PATH apps get. Claude Code and Codex are changed through their own CLI when it's installed. Apps
+such as Claude Desktop start without your shell's PATH, so their `npx` entries say which folder has `node`. Other configs are edited in
 place, keeping other settings, their order and the file's indentation (a TOML file keeps its comments too; a JSON
 file with comments is left for you to edit, with the entry to paste), and each file is copied next to it
 (`.sawit-backup`) before every change. Updating an entry changes only where it points: what you added to it (Cline's auto-approved tools,

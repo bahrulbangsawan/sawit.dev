@@ -487,13 +487,123 @@ pub fn plan(wanted: &[&str], installed: &dyn Fn(&str) -> bool) -> Vec<&'static T
     out
 }
 
-/// Put in front of every command: the folders installers use, and nvm, so a
-/// tool installed a moment ago is found even before the shell profile
-/// picks it up.
-const PRELUDE: &str = r#"export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.bun/bin:$HOME/.deno/bin:$HOME/.fly/bin:$HOME/.opencode/bin:$HOME/.amp/bin:$HOME/Library/pnpm:/opt/homebrew/bin:/usr/local/bin:$PATH"
+/// Put in front of every command: the folders installers use
+/// ([`INSTALL_DIRS`]), and nvm, so a tool installed a moment ago is found
+/// even before the shell profile picks it up.
+const PRELUDE: &str = r#"export PATH="$HOME/.local/bin:$HOME/.claude/local:$HOME/.npm-global/bin:$HOME/.cargo/bin:$HOME/.bun/bin:$HOME/.deno/bin:$HOME/.fly/bin:$HOME/.opencode/bin:$HOME/.amp/bin:$HOME/Library/pnpm:/opt/homebrew/bin:/usr/local/bin:$PATH"
 export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
 "#;
+
+/// The folders installers put programs in. A login shell's `PATH`, which
+/// the app adopts, often misses them: their installers add them in
+/// `~/.zshrc`, which only interactive shells read.
+const INSTALL_DIRS: [&str; 10] = [
+    "~/.local/bin",
+    "~/.claude/local",
+    "~/.npm-global/bin",
+    "~/.cargo/bin",
+    "~/.bun/bin",
+    "~/.deno/bin",
+    "~/.fly/bin",
+    "~/.opencode/bin",
+    "~/.amp/bin",
+    "~/Library/pnpm",
+];
+
+/// Homebrew's folders, searched after nvm's Node.js: a terminal with nvm
+/// set up runs nvm's `npx` before Homebrew's.
+const SYSTEM_DIRS: [&str; 2] = ["/opt/homebrew/bin", "/usr/local/bin"];
+
+/// Finds the program `name` where the Dev Tools page finds tools: on
+/// `PATH`, then in the folders installers use, nvm's default Node.js
+/// (`npx`, and CLIs installed with npm) and Homebrew's. `cap` is only Cap's
+/// CLI.
+pub fn find_program(name: &str) -> Option<PathBuf> {
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    let nvm = std::env::var_os("NVM_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".nvm"));
+    let system = SYSTEM_DIRS.map(PathBuf::from);
+    find_program_in(
+        name,
+        std::env::var_os("PATH").as_deref(),
+        &home,
+        &nvm,
+        &system,
+    )
+}
+
+fn find_program_in(
+    name: &str,
+    path: Option<&std::ffi::OsStr>,
+    home: &Path,
+    nvm: &Path,
+    system: &[PathBuf],
+) -> Option<PathBuf> {
+    let on_path = path.map(std::env::split_paths).into_iter().flatten();
+    on_path
+        .chain(INSTALL_DIRS.iter().map(|d| expand_in(d, home)))
+        .chain(nvm_default_bin(nvm))
+        .chain(system.iter().cloned())
+        .map(|dir| dir.join(name))
+        .find(|p| is_program(p) && (name != "cap" || is_cap_cli(p)))
+}
+
+fn is_program(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+/// The `bin` folder of the Node.js nvm's `default` alias names, or of the
+/// newest one installed when it names none that is.
+fn nvm_default_bin(nvm: &Path) -> Option<PathBuf> {
+    let versions = nvm.join("versions/node");
+    let mut installed: Vec<(Vec<u64>, std::ffi::OsString)> = std::fs::read_dir(&versions)
+        .ok()?
+        .filter_map(|e| {
+            let name = e.ok()?.file_name();
+            Some((node_version(name.to_str()?)?, name))
+        })
+        .collect();
+    installed.sort();
+    let wanted = nvm_alias(nvm, "default", 0);
+    let (_, name) = wanted
+        .and_then(|w| installed.iter().rev().find(|(v, _)| v.starts_with(&w)))
+        .or(installed.last())?;
+    Some(versions.join(name).join("bin"))
+}
+
+/// The version nvm's alias `name` points at, as far as it says
+/// (`22` → `[22]`), following aliases of aliases (`lts/*` → `lts/jod` →
+/// `v22.11.0`); `None` for the newest (`node`, `stable`, unknown).
+fn nvm_alias(nvm: &Path, name: &str, depth: u8) -> Option<Vec<u64>> {
+    if depth > 8 {
+        return None;
+    }
+    let text = std::fs::read_to_string(nvm.join("alias").join(name)).ok();
+    let target = match (text, name) {
+        (Some(text), _) => text.trim().to_string(),
+        // An nvm without the `lts/*` file: its newest LTS.
+        (None, "lts/*") => {
+            return std::fs::read_dir(nvm.join("alias/lts"))
+                .ok()?
+                .filter_map(|e| {
+                    let lts = format!("lts/{}", e.ok()?.file_name().to_str()?);
+                    nvm_alias(nvm, &lts, depth + 1)
+                })
+                .max();
+        }
+        (None, _) => return None,
+    };
+    node_version(&target).or_else(|| nvm_alias(nvm, &target, depth + 1))
+}
+
+/// `v22.11.0`, `22.11` or `22` as numbers.
+fn node_version(text: &str) -> Option<Vec<u64>> {
+    let digits = text.strip_prefix('v').unwrap_or(text);
+    digits.split('.').map(|p| p.parse().ok()).collect()
+}
 
 /// A login shell to run a script in: the user's own when it runs POSIX
 /// scripts, so the profile's `PATH` and variables apply, else zsh
@@ -1217,6 +1327,60 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(*lines.lock().unwrap(), ["caf\u{FFFD}", "after"]);
+    }
+
+    /// The MCP page looks programs up where the Dev Tools page finds tools,
+    /// not only on the app's `PATH`, which misses what `~/.zshrc` adds.
+    #[test]
+    fn programs_are_found_where_installers_put_them() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let program = |path: &Path, text: &str| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        program(&home.join(".local/bin/claude"), "");
+        let nvm = home.join(".nvm");
+        for v in ["v18.20.4", "v22.11.0", "v23.1.0"] {
+            program(&nvm.join(format!("versions/node/{v}/bin/npx")), "");
+        }
+        std::fs::create_dir_all(nvm.join("alias/lts")).unwrap();
+        std::fs::write(nvm.join("alias/default"), "lts/*\n").unwrap();
+        std::fs::write(nvm.join("alias/lts/*"), "lts/jod\n").unwrap();
+        std::fs::write(nvm.join("alias/lts/jod"), "v22.11.0\n").unwrap();
+        // Capistrano's `cap`, a Ruby script: not Cap's.
+        program(&home.join(".local/bin/cap"), "#!/usr/bin/env ruby\n");
+        let empty = std::ffi::OsString::new();
+        let find = |name| find_program_in(name, Some(&empty), home, &nvm, &[]);
+        assert_eq!(find("claude"), Some(home.join(".local/bin/claude")));
+        assert_eq!(
+            find("npx"),
+            Some(nvm.join("versions/node/v22.11.0/bin/npx"))
+        );
+        assert_eq!(find("cap"), None);
+        assert_eq!(find("codex"), None);
+        // The default named by number, and an nvm with no default: the newest.
+        std::fs::write(nvm.join("alias/default"), "18").unwrap();
+        assert_eq!(
+            find("npx"),
+            Some(nvm.join("versions/node/v18.20.4/bin/npx"))
+        );
+        std::fs::remove_file(nvm.join("alias/default")).unwrap();
+        assert_eq!(find("npx"), Some(nvm.join("versions/node/v23.1.0/bin/npx")));
+        // PATH comes first.
+        program(&home.join("bin/claude"), "");
+        let path = std::env::join_paths([home.join("bin")]).unwrap();
+        assert_eq!(
+            find_program_in("claude", Some(&path), home, &nvm, &[]),
+            Some(home.join("bin/claude"))
+        );
+        // Every folder searched is one detection searches too.
+        for d in INSTALL_DIRS.iter().chain(&SYSTEM_DIRS) {
+            let d = d.replace("~/", "$HOME/");
+            assert!(PRELUDE.contains(&format!("{d}:")), "{d}");
+        }
     }
 
     #[test]
