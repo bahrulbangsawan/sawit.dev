@@ -53,30 +53,30 @@ actions!(
     ]
 );
 
-/// Zed's project panel bindings for the same commands. ⌫ acts on the tree only while no name is
-/// being typed, like Config Files' list keys and the keymap editor's table keys: the name box
-/// passes on ⌫ with nothing before the cursor (a new name starts empty), and Trash would move the
-/// selected entry to the Trash without asking.
+/// Zed's project panel bindings for the same commands. They act on the tree only while no name
+/// is being typed, like Config Files' list keys and the keymap editor's table keys: the name box
+/// passes on the keys it has no use for (F2, ⌘N, ⌘D, …), and ⌫ with nothing before the cursor (a
+/// new name starts empty). F2 would start a rename over the name typed, ⌘D duplicate the
+/// selected entry and ⌫ move it to the Trash.
 pub fn init(cx: &mut App) {
-    let ctx = Some("FilesPanel");
     let tree = Some("FilesPanel && !Input");
     cx.bind_keys([
-        KeyBinding::new("cmd-n", NewFile, ctx),
-        KeyBinding::new("alt-cmd-n", NewFolder, ctx),
-        KeyBinding::new("alt-cmd-r", RevealInFinder, ctx),
-        KeyBinding::new("ctrl-shift-enter", OpenInDefaultApp, ctx),
-        KeyBinding::new("alt-cmd-shift-f", FindInFolder, ctx),
-        KeyBinding::new("cmd-x", Cut, ctx),
-        KeyBinding::new("cmd-c", CopyEntry, ctx),
-        KeyBinding::new("cmd-d", Duplicate, ctx),
-        KeyBinding::new("cmd-v", Paste, ctx),
-        KeyBinding::new("cmd-z", Undo, ctx),
-        KeyBinding::new("cmd-shift-z", Redo, ctx),
-        KeyBinding::new("alt-cmd-c", CopyPath, ctx),
-        KeyBinding::new("alt-cmd-shift-c", CopyRelativePath, ctx),
-        KeyBinding::new("f2", Rename, ctx),
+        KeyBinding::new("cmd-n", NewFile, tree),
+        KeyBinding::new("alt-cmd-n", NewFolder, tree),
+        KeyBinding::new("alt-cmd-r", RevealInFinder, tree),
+        KeyBinding::new("ctrl-shift-enter", OpenInDefaultApp, tree),
+        KeyBinding::new("alt-cmd-shift-f", FindInFolder, tree),
+        KeyBinding::new("cmd-x", Cut, tree),
+        KeyBinding::new("cmd-c", CopyEntry, tree),
+        KeyBinding::new("cmd-d", Duplicate, tree),
+        KeyBinding::new("cmd-v", Paste, tree),
+        KeyBinding::new("cmd-z", Undo, tree),
+        KeyBinding::new("cmd-shift-z", Redo, tree),
+        KeyBinding::new("alt-cmd-c", CopyPath, tree),
+        KeyBinding::new("alt-cmd-shift-c", CopyRelativePath, tree),
+        KeyBinding::new("f2", Rename, tree),
         KeyBinding::new("backspace", Trash, tree),
-        KeyBinding::new("alt-cmd-backspace", Delete, ctx),
+        KeyBinding::new("alt-cmd-backspace", Delete, tree),
     ]);
 }
 
@@ -2011,6 +2011,37 @@ mod tests {
             })
             .unwrap();
         assert_eq!(key.as_deref(), Some("backspace"));
+    }
+
+    /// While a name is typed, the tree's keys leave it alone (FILES-13). F2 started a rename
+    /// over it, which dropped the name typed; ⌘N and ⌥⌘N started the name again; ⌘D duplicated
+    /// the selected entry and ⌃⇧↩ opened it, the name box still open.
+    #[gpui_kit::test]
+    fn keys_while_a_name_is_typed_run_no_tree_command(cx: &mut TestAppContext) {
+        let (window, panel) = open_panel(cx, &["notes.txt"]);
+        let changes = Changes::install(&panel, cx);
+        select(cx, window, &panel, &Path::new(ROOT).join("notes.txt"));
+        let (ran, _observer) = file_actions(cx);
+        cx.simulate_keystrokes(window, "cmd-n");
+        cx.update_window(window, |_, window, cx| {
+            let input = panel.read(cx).edit.as_ref().unwrap().input.clone();
+            input.update(cx, |s, cx| s.set_value("draft", window, cx));
+        })
+        .unwrap();
+        cx.simulate_keystrokes(window, "f2 cmd-n alt-cmd-n cmd-d");
+        assert_eq!(*ran.borrow(), ["files::NewFile"]);
+        // ⌃⇧↩ would open the file in another app, which a test can't.
+        cx.simulate_keystrokes(
+            window,
+            "ctrl-shift-enter alt-cmd-r alt-cmd-c alt-cmd-shift-f",
+        );
+        assert_eq!(*ran.borrow(), ["files::NewFile"]);
+        assert_eq!(changes.started(), []);
+        assert_eq!(typed(&panel, cx).as_deref(), Some("draft"));
+        cx.update(|cx| {
+            let edit = panel.read(cx).edit.as_ref().map(|e| e.kind.clone());
+            assert!(matches!(edit, Some(super::EditKind::New { dir: false })));
+        });
     }
 
     /// ⌫ in the tree with nothing selected moves nothing to the Trash. Trash used to fall back
