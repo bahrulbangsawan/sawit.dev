@@ -26,8 +26,8 @@ use sawit_core::mcp_auth::{
 };
 use sawit_core::mcp_catalog::{Auth, DEFAULT_AWS_REGION, SERVERS, Server, valid_region};
 use sawit_core::mcp_clients::{
-    Category, Client, Entries, Spec, Status, Target, discover, install, read_entries, snippet,
-    status_in, uninstall,
+    Category, Client, Entries, Spec, Status, Target, discover, install, needs_bridge, read_entries,
+    snippet, status_in, uninstall,
 };
 
 use crate::catalog::{self, Mark};
@@ -445,6 +445,14 @@ impl McpPage {
         }
     }
 
+    /// A remote server can't go into a client that only runs programs: it
+    /// would get the `mcp-remote` bridge, and `npx` to run it isn't found.
+    fn bridge_blocked(&self, (s, t): Pair) -> bool {
+        SERVERS[s].is_remote()
+            && !self.programs.contains_key("npx")
+            && self.targets.get(t).is_some_and(|x| needs_bridge(x.client))
+    }
+
     /// Every status, from the configs as read.
     fn recompute(&mut self) {
         self.status.clear();
@@ -763,9 +771,17 @@ impl McpPage {
             .copied()
             .filter(|&t| {
                 let editable = self.targets.get(t).is_some_and(|x| x.client.editable());
+                // Without npx, there's nothing to install there.
+                let installable = editable && !self.bridge_blocked((s, t));
                 match self.status.get(&(s, t)) {
-                    Some(Status::NotInstalled) => !remove && editable,
-                    Some(Status::Outdated(_)) => editable,
+                    Some(Status::NotInstalled) => !remove && installable,
+                    Some(Status::Outdated(_)) => {
+                        if remove {
+                            editable
+                        } else {
+                            installable
+                        }
+                    }
                     Some(Status::Installed) => remove && editable,
                     _ => false,
                 }
@@ -1296,6 +1312,25 @@ impl McpPage {
         } else if let Some(note) = server.note {
             notes.push((Lucide::Info, note.to_string(), muted));
         }
+        let bridge_only: Vec<&str> = (0..total)
+            .filter(|&t| self.bridge_blocked((s, t)))
+            .map(|t| self.targets[t].client.name())
+            .fold(Vec::new(), |mut names, name| {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+                names
+            });
+        if !bridge_only.is_empty() {
+            notes.push((
+                Lucide::TriangleAlert,
+                format!(
+                    "{} reach remote servers through npx, and `npx` isn't installed: install Node.js.",
+                    bridge_only.join(", ")
+                ),
+                theme.warning,
+            ));
+        }
         if !elsewhere.is_empty() {
             notes.push((
                 Lucide::Globe,
@@ -1528,15 +1563,9 @@ impl McpPage {
         let server = &SERVERS[s];
         let spec = self.spec(s);
         let selected = &sheet.selected;
-        let count = |pred: &dyn Fn(&Status) -> bool| {
-            selected
-                .iter()
-                .filter(|t| self.targets[**t].client.editable())
-                .filter(|t| self.status.get(&(s, **t)).is_some_and(pred))
-                .count()
-        };
-        let to_install = count(&|st| matches!(st, Status::NotInstalled | Status::Outdated(_)));
-        let to_remove = count(&|st| matches!(st, Status::Installed | Status::Outdated(_)));
+        // What Install and Remove act on.
+        let to_install = self.selected_for(false).len();
+        let to_remove = self.selected_for(true).len();
         let to_sign_in: Vec<Pair> = self
             .pending_sign_ins(Some(s))
             .into_iter()
@@ -1773,6 +1802,9 @@ impl McpPage {
                 (format!("In {region}"), theme.info)
             }
             Status::Outdated(_) => ("Other version".into(), theme.warning),
+            Status::NotInstalled if self.bridge_blocked(pair) => {
+                ("Needs Node.js".into(), theme.warning)
+            }
             Status::NotInstalled => ("Not installed".into(), muted),
             Status::Unreadable(_) => ("Edit manually".into(), theme.danger),
             Status::Manual => ("Paste by hand".into(), muted),
@@ -2321,6 +2353,8 @@ mod tests {
             gpui_kit::init(cx);
             cx.set_global(crate::rt::Rt(sawit_core::rt::Runtime::start()));
         });
+        // Installs and removals finish on the Tokio runtime's threads.
+        cx.executor().allow_parking();
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds {
                 origin: point(px(0.), px(0.)),
@@ -2427,6 +2461,32 @@ mod tests {
         });
     }
 
+    /// A client that only runs programs (Claude Desktop, …) reaches a remote server through
+    /// `npx mcp-remote`: without npx it isn't installed there, and Install leaves it out.
+    #[gpui_kit::test]
+    fn remote_servers_skip_bridge_only_clients_without_npx(cx: &mut TestAppContext) {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join("claude_desktop_config.json");
+        std::fs::write(&config, "{}").unwrap();
+        let desktop = target(Client::ClaudeDesktop, &config);
+        let read = sawit_core::mcp_clients::read_entries(&desktop);
+        let neon = super::SERVERS.iter().position(|s| s.id == "neon").unwrap();
+        let (page, cx) = open(cx, vec![desktop], |page| {
+            page.entries = vec![read];
+            page.recompute();
+        });
+        page.update_in(cx, |page, window, cx| {
+            page.open_install(neon, window, cx);
+            if let Some(super::Sheet::Install(sheet)) = &mut page.sheet {
+                sheet.selected.insert(0);
+            }
+            page.install_selected(cx);
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        cx.run_until_parked();
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), "{}");
+    }
+
     /// The sheet opens with every installed client ticked, so its Remove asks first, as the
     /// row's trash does: one click must not take a server out of every client.
     #[gpui_kit::test]
@@ -2451,6 +2511,7 @@ mod tests {
             cx.run_until_parked();
             std::fs::read_to_string(&config).unwrap().contains("sawit")
         };
+        let removed = |cx: &mut VisualTestContext| (0..50).any(|_| !has_sawit(cx));
         click(cx, "mcp-sheet-remove");
         assert!(has_sawit(cx), "removed without asking");
         assert_eq!(
@@ -2465,6 +2526,6 @@ mod tests {
 
         click(cx, "mcp-sheet-remove");
         cx.simulate_prompt_answer("Remove");
-        assert!(!has_sawit(cx), "Remove didn't remove it");
+        assert!(removed(cx), "Remove didn't remove it");
     }
 }

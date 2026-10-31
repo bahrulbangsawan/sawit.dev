@@ -194,6 +194,15 @@ impl Sawit {
     pub async fn install_mcp_server_tool(&self, a: ServerArgs) -> CallToolResult {
         let (server, target) = tri!(pick(&a.server, &a.client, a.profile.as_deref()));
         let region = tri!(region_for(server, &target, a.region.as_deref()));
+        if server.is_remote()
+            && mcp_clients::needs_bridge(target.client)
+            && find_program("npx").is_none()
+        {
+            return fail(format!(
+                "{} reaches remote servers only through npx (mcp-remote), and `npx` isn't installed. Install Node.js first (install_dev_tools with \"node\").",
+                target.client.name()
+            ));
+        }
         let spec = spec(server, &region);
         if !target.client.editable() {
             return ok(format!(

@@ -534,6 +534,12 @@ fn http_entry(client: Client, url: &str, headers: &[(String, String)]) -> Option
     Some(v)
 }
 
+/// Whether `client` reaches a remote server only through the `mcp-remote`
+/// bridge, which `npx` runs: it only runs programs.
+pub fn needs_bridge(client: Client) -> bool {
+    client != Client::Codex && http_entry(client, "", &[]).is_none()
+}
+
 /// Where the server entry lives in a JSON client config, and its value.
 pub fn entry(client: Client, spec: &Spec) -> (&'static str, Value) {
     let key = servers_key(client);
@@ -2009,6 +2015,26 @@ mod tests {
                 "Authorization:Bearer ${ES_KEY}"
             ])
         );
+    }
+
+    #[test]
+    fn clients_that_only_run_programs_need_the_bridge() {
+        for c in [
+            Client::ClaudeDesktop,
+            Client::LmStudio,
+            Client::Warp,
+            Client::Junie,
+        ] {
+            assert!(needs_bridge(c), "{c:?}");
+        }
+        for c in [
+            Client::ClaudeCode,
+            Client::Codex,
+            Client::Cursor,
+            Client::Zed,
+        ] {
+            assert!(!needs_bridge(c), "{c:?}");
+        }
     }
 
     #[test]
