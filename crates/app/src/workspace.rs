@@ -1803,29 +1803,17 @@ impl Workspace {
             })
             .child(div().flex_1())
             .when_some(project, |el, project| {
+                // The full path lives in the tooltip; the bar only offers the copy.
                 el.child(
-                    h_flex()
-                        .min_w_0()
-                        .gap_1()
-                        .child(Icon::new(Lucide::FolderOpen).xsmall())
-                        .child(div().min_w_0().truncate().child(project.clone()))
-                        .child(
-                            Button::new("copy-project-path")
-                                .ghost()
-                                .xsmall()
-                                .icon(if copied { Lucide::Check } else { Lucide::Copy })
-                                .when(copied, |b| b.tooltip("Copied"))
-                                .when(!copied, |b| {
-                                    b.tooltip_with_action(
-                                        "Copy Path",
-                                        &CopyProjectPath,
-                                        Some("Workspace"),
-                                    )
-                                })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.copy_project_path(project.clone(), cx)
-                                })),
-                        ),
+                    Button::new("copy-project-path")
+                        .ghost()
+                        .xsmall()
+                        .icon(if copied { Lucide::Check } else { Lucide::Copy })
+                        .label(if copied { "Copied" } else { "Copy Path" })
+                        .tooltip_with_action(project.clone(), &CopyProjectPath, Some("Workspace"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.copy_project_path(project.clone(), cx)
+                        })),
                 )
                 .child(crate::catalog::divider(cx))
             })
