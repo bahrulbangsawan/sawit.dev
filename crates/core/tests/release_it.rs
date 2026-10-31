@@ -7,7 +7,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -189,6 +189,44 @@ impl Repo {
         self.run("git", &["push", "origin", "main"], env)
     }
 
+    /// `git push origin main`, with `meanwhile` run once origin has taken main but before the
+    /// push has finished: origin's post-receive hook holds the push until `meanwhile` is done.
+    /// So whatever `meanwhile` does in the clone is done before the release push the hook leaves
+    /// in the background starts, which waits for this push to finish.
+    fn push_main_meanwhile(&self, meanwhile: impl FnOnce()) -> Output {
+        let root = self.work.parent().unwrap();
+        let (taken, done) = (root.join("main-taken"), root.join("meanwhile-done"));
+        let hook = self.remote.join("hooks/post-receive");
+        script(
+            &hook,
+            &format!(
+                "touch '{taken}'\ni=0\nwhile [ ! -e '{done}' ] && [ \"$i\" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done\n",
+                taken = taken.display(),
+                done = done.display(),
+            ),
+        );
+        let mut push = self
+            .command(&self.work, "git", &["push", "origin", "main"], None)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let start = Instant::now();
+        while !taken.exists() {
+            if push.try_wait().unwrap().is_some() {
+                let out = push.wait_with_output().unwrap();
+                panic!("the push ended before origin took main: {}", stderr(&out));
+            }
+            assert!(start.elapsed() < LANDS_WITHIN, "origin never took main");
+            thread::sleep(Duration::from_millis(50));
+        }
+        meanwhile();
+        // Only this push is held: the release push after it goes straight through.
+        fs::remove_file(&hook).unwrap();
+        fs::write(&done, "").unwrap();
+        push.wait_with_output().unwrap()
+    }
+
     /// `scripts/release.sh`, with `env`.
     fn release(&self, env: Option<(&str, &str)>) -> Output {
         self.run("sh", &["scripts/release.sh"], env)
@@ -239,6 +277,24 @@ impl Repo {
             assert!(
                 start.elapsed() < LANDS_WITHIN,
                 "{rev} never reached origin at {commit}; the release log says: {}",
+                self.release_log()
+            );
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// Waits for the background release push to move `rev` on `origin` off `commit`; where it
+    /// moved it.
+    fn wait_for_remote_off(&self, rev: &str, commit: &str) -> String {
+        let start = Instant::now();
+        loop {
+            match self.remote(rev) {
+                Some(moved) if moved != commit => return moved,
+                _ => {}
+            }
+            assert!(
+                start.elapsed() < LANDS_WITHIN,
+                "{rev} never moved off {commit} on origin; the release log says: {}",
                 self.release_log()
             );
             thread::sleep(Duration::from_millis(100));
@@ -655,6 +711,71 @@ fn a_release_left_behind_goes_out_when_main_is_pushed_again_to_the_remotes_url()
     ok(out);
     repo.wait_for_remote_at("refs/tags/v0.0.8", &released);
     assert_eq!(repo.remote("refs/heads/main"), Some(released));
+}
+
+/// The release push the hook leaves in the background pushed `main` as it was when that push
+/// ran, not the release: a commit made on main while main was pushed, or as soon as the push
+/// returned, went out with the release commit, in no release. Now it sends the release commit.
+#[test]
+fn the_release_push_sends_the_release_commit_not_main_as_it_is_by_then() {
+    let repo = Repo::new();
+    repo.commit("feat(app): a new thing");
+    let pushed = repo.local("main").unwrap();
+    let out = repo.push_main_meanwhile(|| repo.commit("feat(app): made while main was pushed"));
+    let said = stderr(&out);
+    assert!(said.contains("release v0.0.8 created"), "{said}");
+    ok(out);
+    let tagged = repo.wait_for_remote("refs/tags/v0.0.8");
+    let main = repo.wait_for_remote_off("refs/heads/main", &pushed);
+    assert_eq!(
+        main,
+        tagged,
+        "origin's main isn't the release commit; the release log says: {}",
+        repo.release_log()
+    );
+    assert_eq!(
+        repo.subject("main"),
+        "feat(app): made while main was pushed"
+    );
+}
+
+/// With nothing new to release, the push that takes a tag left behind along pushed `main` as it
+/// was by then: a lane landing on main as soon as main was pushed (`git fetch . <lane>:main`)
+/// went out with that tag, in no release. Now it sends the commit that went out as main.
+#[test]
+fn a_tag_left_behind_follows_the_commit_pushed_not_main_as_it_is_by_then() {
+    let repo = Repo::new();
+    repo.commit("feat(app): a new thing");
+    ok(repo.push_main(Some(("SAWIT_SKIP_RELEASE", "1"))));
+    assert_eq!(ok(repo.release(None)), "v0.0.8");
+    let released = repo.local("main").unwrap();
+    let out = repo.push_main_meanwhile(|| repo.commit("feat(app): a lane landed"));
+    let said = stderr(&out);
+    assert!(
+        said.contains("nothing new since the last release"),
+        "{said}"
+    );
+    ok(out);
+    repo.wait_for_remote_at("refs/tags/v0.0.8", &released);
+    // Until the release push has finished, or has moved origin's main.
+    let start = Instant::now();
+    while !repo.release_log().contains("is out")
+        && repo.remote("refs/heads/main").as_deref() == Some(released.as_str())
+    {
+        assert!(
+            start.elapsed() < LANDS_WITHIN,
+            "the release push never finished: {}",
+            repo.release_log()
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(
+        repo.remote("refs/heads/main"),
+        Some(released),
+        "the release log says: {}",
+        repo.release_log()
+    );
+    assert_eq!(repo.subject("main"), "feat(app): a lane landed");
 }
 
 /// The refusal's steps get run as printed, by agents too, from wherever `git push` was typed.
