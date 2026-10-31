@@ -1447,8 +1447,23 @@ mod tests {
         first.unwrap();
         let err = second.expect_err("ran alongside the first");
         assert!(err.to_string().contains("already"), "{err}");
-        // Once the first is done, the next runs.
-        run_locked(&id, "Test", "true", |_| {}).await.unwrap();
+        // Once the first is done, the next runs. A process another test forked while the lock
+        // was held has the lock's file too until it execs, and so holds the lock until then;
+        // under load that can outlast the first run by a moment. So the next run may say
+        // "already" for a few seconds, but no longer.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match run_locked(&id, "Test", "true", |_| {}).await {
+                Ok(()) => break,
+                Err(e)
+                    if e.to_string().contains("already")
+                        && std::time::Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(e) => panic!("the next run didn't run once the first was done: {e}"),
+            }
+        }
     }
 
     #[test]
