@@ -151,10 +151,14 @@ For each user-facing change:
 ## Phase 4: Commit the work
 
 Group the changes into a few logical commits (one feature or fix each) rather than one huge commit. The
-subject of every commit becomes a changelog line through `scripts/release.sh`, so:
+subject of every `feat`, `fix` and `perf` commit (and of any without a type) becomes a changelog line through
+`scripts/release.sh`, which the GitHub release, the updater and the in-app Changelog show; `docs`, `test`,
+`chore`, `ci`, `build`, `style` and `refactor` subjects, and a `docs` scope, are left out unless they are all
+there is. So:
 
 - Use Conventional Commits: `feat:`, `fix:`, `perf:`, `docs:`, `refactor:`, `chore:` (optionally with a scope:
-  `feat(db): …`).
+  `feat(db): …`). Give internal work (plans, records, tests, merge reconciliations) a type that stays out of the
+  notes.
 - Write the subject as a short, lowercase, user-facing sentence, like the existing CHANGELOG.md entries.
 - Never write a `chore(release):` commit by hand, and leave the `version` in `Cargo.toml` and the
   `CHANGELOG.md` sections alone. The release step owns them, and `release.sh` refuses to run while those
@@ -209,7 +213,13 @@ Commit this as `docs: update README, screenshots and demo for <short summary>`.
 1. Final check: `git status --short` is empty, `git stash list` holds only what the user chose to keep,
    `git worktree list` and `git branch` show only what the user chose to keep, and the Phase 2 gates
    passed on this exact HEAD.
-2. Note the version you expect: the patch after the one in `Cargo.toml` (for example `0.0.5` → `0.0.6`).
+2. Note the version you expect: the patch after the one in `Cargo.toml` (for example `0.0.5` → `0.0.6`), and
+   read the notes the push will publish: `scripts/release.sh --dry-run` in a checkout of `main` (see step 3)
+   prints the section and changes nothing. An entry that is internal or reads badly comes from its commit
+   subject: tell the user before pushing. To change the notes of this release only, cut it by hand in the
+   checkout of `main` (`tag=$(scripts/release.sh)`), edit the new `CHANGELOG.md` section, run
+   `git commit --amend --no-verify --no-edit -- CHANGELOG.md` and `git tag -fa --cleanup=whitespace "$tag" -F
+   <the edited section>`, then push with `SAWIT_RELEASE_PUSH=1 git push origin main "$tag"` instead of step 3.
 3. Push from a checkout of `main`: `git push origin main`.
    - The release is cut on `HEAD`, so the hook refuses a push of `main` from any other checkout (another
      branch, a detached `HEAD`): it would release nothing. When `main` is checked out nowhere (lanes move it

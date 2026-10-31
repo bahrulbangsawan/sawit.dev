@@ -423,6 +423,15 @@ fn a_release_tag_left_behind_goes_out_with_the_next_release() {
     );
 }
 
+/// The section release.sh wrote for `version` in CHANGELOG.md, without its heading line.
+fn section(changelog: &str, version: &str) -> String {
+    let heading = format!("## [{version}]");
+    let start = changelog.find(&heading).expect("no section");
+    let rest = &changelog[start + heading.len()..];
+    let end = rest.find("\n## [").unwrap_or(rest.len());
+    rest[..end].to_string()
+}
+
 /// RELEASE-10: `git tag` strips `#` lines from a message by default, so the tag's notes lost
 /// their Features and Fixes headings. Now the tag keeps the notes as CHANGELOG.md has them.
 #[test]
@@ -439,4 +448,85 @@ fn the_release_tag_keeps_the_notes_headings() {
     );
     assert!(notes.contains("### Fixes\n\n- **db**: an old bug"), "{tag}");
     assert!(!notes.ends_with("\n\n"), "{tag:?}");
+}
+
+/// RELEASE-5: the notes go to the GitHub release, the updater and the in-app Changelog, so they
+/// list what users get. Docs, tests, refactors and build, CI and chore work (by type, or a docs
+/// scope) are left out; before, every subject was listed, plan records and test fixes included.
+#[test]
+fn the_notes_list_what_users_get_and_leave_out_internal_work() {
+    let repo = Repo::new();
+    for subject in [
+        "feat(app): a new thing",
+        "fix(db): an old bug",
+        "perf: a faster start",
+        "a subject with no type",
+        "docs: record the live check",
+        "docs(readme): new screenshots",
+        "test(core): cover the parser",
+        "chore: ignore the worktrees",
+        "refactor(mcp): one decoder",
+        "build: ship the notice",
+        "ci: pin the actions",
+        "style: rustfmt",
+        "fix(docs): readme wording",
+    ] {
+        repo.commit(subject);
+    }
+    assert_eq!(ok(repo.release(None)), "v0.0.8");
+    let notes = section(&repo.read("CHANGELOG.md"), "0.0.8");
+    for listed in [
+        "### Features\n\n- **app**: a new thing\n",
+        "### Fixes\n\n- **db**: an old bug\n",
+        "### Performance\n\n- a faster start\n",
+        "### Other\n\n- a subject with no type\n",
+    ] {
+        assert!(notes.contains(listed), "{listed:?} isn't in {notes}");
+    }
+    for left_out in [
+        "live check",
+        "screenshots",
+        "parser",
+        "worktrees",
+        "decoder",
+        "notice",
+        "actions",
+        "rustfmt",
+        "wording",
+    ] {
+        assert!(!notes.contains(left_out), "{left_out:?} is in {notes}");
+    }
+}
+
+/// RELEASE-5: a push of nothing but internal work is still a release (every push of main is),
+/// and its notes list that work rather than nothing.
+#[test]
+fn the_notes_list_internal_work_when_that_is_all_there_is() {
+    let repo = Repo::new();
+    repo.commit("docs: a typo");
+    repo.commit("test(core): a flaky test");
+    assert_eq!(ok(repo.release(None)), "v0.0.8");
+    let notes = section(&repo.read("CHANGELOG.md"), "0.0.8");
+    assert!(
+        notes.contains("### Other\n\n- **core**: a flaky test\n- a typo\n"),
+        "{notes}"
+    );
+}
+
+/// RELEASE-5: `release.sh --dry-run` prints the section it would write, so the notes can be read
+/// before a push publishes them, and changes nothing.
+#[test]
+fn release_sh_dry_run_prints_the_notes_and_changes_nothing() {
+    let repo = Repo::new();
+    repo.commit("feat(app): a new thing");
+    let head = repo.local("HEAD");
+    let printed = ok(repo.run("sh", &["scripts/release.sh", "--dry-run"], None));
+    assert!(printed.starts_with("## [0.0.8] - "), "{printed}");
+    assert!(
+        printed.contains("### Features\n\n- **app**: a new thing"),
+        "{printed}"
+    );
+    assert_eq!(repo.local("HEAD"), head);
+    assert_eq!(repo.local("refs/tags/v0.0.8"), None);
+    assert_eq!(repo.git(&["status", "--porcelain"]), "");
 }
