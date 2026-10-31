@@ -369,6 +369,21 @@ impl FileEditor {
         self.watch_disk(window, cx);
     }
 
+    /// Gives this file the keyboard: its text once read, until then the editor itself, whose
+    /// text takes it when the read lands (as on any first open).
+    pub fn take_keyboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.state.clone() {
+            Some(state) => state.update(cx, |s, cx| s.focus(window, cx)),
+            None => window.focus(&self.focus, cx),
+        }
+    }
+
+    /// The keyboard of its text, once read.
+    #[cfg(test)]
+    pub(crate) fn text_focus(&self, cx: &App) -> Option<FocusHandle> {
+        self.state.as_ref().map(|s| s.focus_handle(cx))
+    }
+
     /// Puts the cursor on a 1-based line and column (clamped), now or once
     /// the file has loaded.
     pub fn go_to(&mut self, line: u32, column: u32, window: &mut Window, cx: &mut Context<Self>) {

@@ -27,7 +27,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Project {
-        let files = cx.new(FilesPanel::new);
+        let files = cx.new(|cx| FilesPanel::new(window, cx));
         let git = cx.new(GitStore::new);
         let git_panel = cx.new(|cx| GitPanel::new(git.clone(), window, cx));
         let run_panel = cx.new(|cx| {
@@ -82,7 +82,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         match event {
-            FilesEvent::OpenFile(path) => self.open_file(path.clone(), window, cx),
+            FilesEvent::OpenFile(path) => {
+                self.open_file(path.clone(), window, cx);
+                let shown = self.tabs.get(self.active).map(|tab| tab.item.clone());
+                give_keyboard(shown.as_ref(), &self.focus, window, cx);
+            }
             FilesEvent::RootChanged(root) => {
                 remember_recent(root.clone());
                 if let Some(p) = self.projects.iter().find(|p| p.files == *files) {
@@ -321,5 +325,161 @@ impl Workspace {
         }
         self.project = self.project.min(self.projects.len() - 1);
         self.sync_projects(cx);
+    }
+}
+
+/// Gives the keyboard to the tab of the file the Files tab just opened or showed, `item`: its
+/// editor (its text once read), or a video's player. An image or a PDF takes no keys, so the
+/// workspace (`home`) has them then; a canvas took them as it opened. Left in the tree, where the
+/// click on the file put them, the keys meant for the file went to the tree (FILES-1): ⌘Z undid
+/// a file change, ⌘D duplicated the file, ⌘V pasted one. A file opened the first time already
+/// had them once read; one whose tab was open, or that couldn't be read as text, didn't.
+fn give_keyboard(item: Option<&PaneItem>, home: &FocusHandle, window: &mut Window, cx: &mut App) {
+    match item {
+        Some(PaneItem::File(editor)) => editor.update(cx, |e, cx| e.take_keyboard(window, cx)),
+        Some(PaneItem::Other { view, .. }) => {
+            if view.clone().downcast::<BoardView>().is_ok() {
+                return;
+            }
+            match view.clone().downcast::<VideoView>() {
+                Ok(video) => {
+                    let player = video.read(cx).focus_handle(cx);
+                    window.focus(&player, cx);
+                }
+                Err(_) => window.focus(home, cx),
+            }
+        }
+        Some(PaneItem::Server) | None => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use gpui_kit::{
+        AnyWindowHandle, AppContext as _, Context, Entity, FocusHandle, Focusable as _,
+        IntoElement, ParentElement as _, Render, Styled as _, TestAppContext, Window, div,
+        prelude::InteractiveElement as _,
+    };
+
+    use super::{FileEditor, ImageView, PaneItem, give_keyboard};
+    use crate::files::Scratch;
+
+    /// A window with the Files tree's keyboard, the workspace's, and a text file's and an
+    /// image's tab.
+    struct Window2 {
+        tree: FocusHandle,
+        home: FocusHandle,
+        editor: Entity<FileEditor>,
+        image: Entity<ImageView>,
+    }
+
+    impl Render for Window2 {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .track_focus(&self.home)
+                .child(div().track_focus(&self.tree))
+                .child(self.editor.clone())
+                .child(self.image.clone())
+        }
+    }
+
+    /// Whether `handle`, picked from the window's view, has the keyboard.
+    fn has(
+        window: AnyWindowHandle,
+        view: &Entity<Window2>,
+        cx: &mut TestAppContext,
+        handle: impl Fn(&Window2, &gpui_kit::App) -> FocusHandle,
+    ) -> bool {
+        cx.update_window(window, |_, window, cx| {
+            handle(view.read(cx), cx).is_focused(window)
+        })
+        .unwrap()
+    }
+
+    /// Gives the keyboard to the tree, then hands it on as the Files tab's OpenFile does.
+    fn open_from_tree(
+        window: AnyWindowHandle,
+        view: &Entity<Window2>,
+        cx: &mut TestAppContext,
+        item: impl Fn(&Window2) -> PaneItem,
+    ) {
+        cx.update_window(window, |_, window, cx| {
+            let (tree, home, item) = {
+                let v = view.read(cx);
+                (v.tree.clone(), v.home.clone(), item(v))
+            };
+            window.focus(&tree, cx);
+            give_keyboard(Some(&item), &home, window, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+
+    /// The file the Files tab opens or shows takes the keyboard from the tree (FILES-1): a text
+    /// file's editor, its text once read; an image, which takes no keys, leaves them with the
+    /// workspace. Reopening a file whose tab was open left them in the tree, unseen, where ⌫,
+    /// ⌘Z, ⌘D and ⌘V meant for the file acted on files.
+    #[gpui_kit::test]
+    fn a_file_shown_from_the_files_tab_takes_the_keyboard(cx: &mut TestAppContext) {
+        // The files are read on the runtime's real threads.
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(crate::rt::Rt(sawit_core::rt::Runtime::start()));
+        });
+        let dir = Scratch::new("give-keyboard");
+        let (notes, picture) = (dir.0.join("notes.md"), dir.0.join("picture.png"));
+        std::fs::write(&notes, "notes\n").unwrap();
+        std::fs::write(&picture, b"not a picture").unwrap();
+        let (window, view) = cx.update(|cx| {
+            gpui_kit::open_window(Default::default(), cx, |window, cx| {
+                let editor = cx.new(|cx| FileEditor::open(notes, None, window, cx));
+                let image = cx.new(|cx| ImageView::new(picture, cx));
+                cx.new(|cx| Window2 {
+                    tree: cx.focus_handle(),
+                    home: cx.focus_handle(),
+                    editor,
+                    image,
+                })
+            })
+            .unwrap()
+        });
+        let editor = |v: &Window2| PaneItem::File(v.editor.clone());
+        let text = |v: &Window2, cx: &gpui_kit::App| {
+            let editor = v.editor.read(cx);
+            editor
+                .text_focus(cx)
+                .unwrap_or_else(|| v.editor.focus_handle(cx))
+        };
+
+        // Before the file is read, the editor has the keyboard; its text takes it once read.
+        open_from_tree(window, &view, cx, editor);
+        assert!(has(window, &view, cx, text), "the tree kept the keyboard");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while cx.update(|cx| view.read(cx).editor.read(cx).text_focus(cx).is_none()) {
+            assert!(Instant::now() < deadline, "the file was never read");
+            std::thread::sleep(Duration::from_millis(10));
+            cx.run_until_parked();
+        }
+        // Shown again from the tree, as a file whose tab is open is.
+        open_from_tree(window, &view, cx, editor);
+        assert!(
+            has(window, &view, cx, text),
+            "the text doesn't have the keyboard"
+        );
+
+        let image = |v: &Window2| PaneItem::Other {
+            view: v.image.clone().into(),
+            key: "file\u{0}picture.png".into(),
+            title: "picture.png".into(),
+            icon: gpui_kit::assets::IconName::Image,
+            file: None,
+        };
+        open_from_tree(window, &view, cx, image);
+        assert!(has(window, &view, cx, |v, _| v.home.clone()));
+        assert!(!has(window, &view, cx, |v, _| v.tree.clone()));
     }
 }

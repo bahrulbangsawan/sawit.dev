@@ -282,10 +282,17 @@ pub struct FilesPanel {
     focus: FocusHandle,
     scroll: UniformListScrollHandle,
     _refresh: Task<()>,
+    _shown_focus: Vec<Subscription>,
 }
 
 impl FilesPanel {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let focus = cx.focus_handle();
+        // The selected row is drawn brighter while the tree has the keyboard.
+        let shown_focus = vec![
+            cx.on_focus_in(&focus, window, |_, _, cx| cx.notify()),
+            cx.on_focus_out(&focus, window, |_, _, _, cx| cx.notify()),
+        ];
         let refresh = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(REFRESH).await;
@@ -311,9 +318,10 @@ impl FilesPanel {
             folder: 0,
             edit: None,
             error: None,
-            focus: cx.focus_handle(),
+            focus,
             scroll: UniformListScrollHandle::new(),
             _refresh: refresh,
+            _shown_focus: shown_focus,
         }
     }
 
@@ -489,11 +497,14 @@ impl FilesPanel {
         flat
     }
 
+    /// The row of `entry`. The selected one is outlined while the tree has the keyboard (`keys`),
+    /// as in Zed, so that the user can tell whether keys go to it.
     fn render_row(
         &self,
         ix: usize,
         entry: Entry,
         depth: usize,
+        keys: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let selected = self.selected.as_ref() == Some(&entry.path);
@@ -539,7 +550,12 @@ impl FilesPanel {
             .gap_1()
             .text_sm()
             .cursor_pointer()
+            .border_1()
+            .border_color(transparent_black())
             .when(selected, |el| el.bg(cx.theme().list_active))
+            .when(selected && keys, |el| {
+                el.border_color(cx.theme().list_active_border)
+            })
             .when(!selected, |el| el.hover(|el| el.bg(cx.theme().list_hover)))
             .when(cut, |el| el.opacity(0.5))
             .child(
@@ -736,13 +752,14 @@ impl Render for FilesPanel {
                             uniform_list(
                                 "file-rows",
                                 count,
-                                cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                                cx.processor(|this, range: std::ops::Range<usize>, window, cx| {
                                     let rows = this.rows.clone();
+                                    let keys = this.focus.contains_focused(window, cx);
                                     range
                                         .filter_map(|ix| {
                                             Some(match rows.get(ix)?.clone() {
                                                 Row::Entry(entry, depth) => {
-                                                    this.render_row(ix, entry, depth, cx)
+                                                    this.render_row(ix, entry, depth, keys, cx)
                                                 }
                                                 Row::Edit(depth) => this.render_edit(ix, depth, cx),
                                             })
@@ -1483,7 +1500,10 @@ mod tests {
             super::init(cx);
         });
         let (window, panel) = cx.update(|cx| {
-            gpui_kit::open_window(Default::default(), cx, |_, cx| cx.new(FilesPanel::new)).unwrap()
+            gpui_kit::open_window(Default::default(), cx, |window, cx| {
+                cx.new(|cx| FilesPanel::new(window, cx))
+            })
+            .unwrap()
         });
         cx.update_window(window, |_, window, _| window.activate_window())
             .unwrap();
