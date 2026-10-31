@@ -24,7 +24,7 @@ use sawit_core::dev_tools::find_program;
 use sawit_core::mcp_auth::{
     self, Login, LoginEvent, SignIn, is_callback_url, login_call, sign_in_states,
 };
-use sawit_core::mcp_catalog::{Auth, DEFAULT_AWS_REGION, SERVERS, Server};
+use sawit_core::mcp_catalog::{Auth, DEFAULT_AWS_REGION, SERVERS, Server, valid_region};
 use sawit_core::mcp_clients::{
     Category, Client, Entries, Spec, Status, Target, discover, install, read_entries, snippet,
     status_in, uninstall,
@@ -35,6 +35,16 @@ use crate::rt;
 
 /// A server in the catalog and a target, by index.
 type Pair = (usize, usize);
+
+/// What a detection finds, off the UI thread.
+struct Detected {
+    targets: Vec<Target>,
+    /// Each target's config, read once.
+    entries: Vec<Entries>,
+    clis: HashMap<&'static str, PathBuf>,
+    programs: HashMap<&'static str, PathBuf>,
+    server_exists: bool,
+}
 
 /// Programs local servers and the remote bridge run.
 const PROGRAMS: [&str; 2] = ["npx", "cap"];
@@ -54,6 +64,9 @@ pub struct McpPage {
     clis: HashMap<&'static str, PathBuf>,
     programs: HashMap<&'static str, PathBuf>,
     region: String,
+    /// The Region was typed here: a detection no longer takes it from the
+    /// installed entries.
+    region_chosen: bool,
     busy: HashSet<Pair>,
     /// Stops the install or removal running for a pair.
     stops: HashMap<Pair, AbortHandle>,
@@ -166,6 +179,8 @@ struct InstallSheet {
     server: usize,
     selected: HashSet<usize>,
     region: Option<Entity<InputState>>,
+    /// What's typed as the Region isn't one.
+    region_invalid: bool,
     _subscription: Option<Subscription>,
 }
 
@@ -313,6 +328,7 @@ impl McpPage {
             clis: HashMap::new(),
             programs: HashMap::new(),
             region: DEFAULT_AWS_REGION.into(),
+            region_chosen: false,
             busy: HashSet::new(),
             stops: HashMap::new(),
             errors: HashMap::new(),
@@ -345,50 +361,99 @@ impl McpPage {
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.loading = true;
         let server = self.server.clone();
-        let region = self.region.clone();
         let rx = rt::spawn_blocking(cx, move || {
             let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
             let claude_dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from);
             let targets = discover(&home, claude_dir);
-            // Where the Dev Tools page finds them, not only on the app's
-            // PATH: that misses what `~/.zshrc` adds (nvm, ~/.local/bin).
-            let programs: HashMap<&'static str, PathBuf> = PROGRAMS
-                .into_iter()
-                .filter_map(|n| find_program(n).map(|p| (n, p)))
-                .collect();
-            let entries: Vec<Entries> = targets.iter().map(read_entries).collect();
-            let mut statuses = HashMap::new();
-            for (s, server_entry) in SERVERS.iter().enumerate() {
-                let spec = server_entry.spec(&server, &region, |c| programs.get(c).cloned());
-                for (t, read) in entries.iter().enumerate() {
-                    statuses.insert((s, t), status_in(read, &spec));
-                }
+            Detected {
+                entries: targets.iter().map(read_entries).collect(),
+                targets,
+                // Where the Dev Tools page finds them, not only on the app's
+                // PATH: that misses what `~/.zshrc` adds (nvm, ~/.local/bin).
+                programs: PROGRAMS
+                    .into_iter()
+                    .filter_map(|n| find_program(n).map(|p| (n, p)))
+                    .collect(),
+                clis: ["claude", "codex"]
+                    .into_iter()
+                    .filter_map(|n| find_program(n).map(|p| (n, p)))
+                    .collect(),
+                server_exists: server.is_file(),
             }
-            let clis: HashMap<&'static str, PathBuf> = ["claude", "codex"]
-                .into_iter()
-                .filter_map(|n| find_program(n).map(|p| (n, p)))
-                .collect();
-            (targets, entries, statuses, clis, programs, server.is_file())
         });
         cx.spawn(async move |this, cx| {
-            if let Ok((targets, entries, statuses, clis, programs, exists)) = rx.await {
-                let _ = this.update(cx, |this, cx| {
-                    this.targets = targets;
-                    this.entries = entries;
-                    this.status = statuses;
-                    this.clis = clis;
-                    this.programs = programs;
-                    this.server_exists = exists;
-                    this.sign_ins.clear();
-                    this.errors.clear();
-                    this.loading = false;
-                    let all: Vec<usize> = (0..this.targets.len()).collect();
-                    this.check_sign_ins(all, cx);
-                    cx.notify();
-                });
+            if let Ok(detected) = rx.await {
+                let _ = this.update(cx, |this, cx| this.apply(detected, cx));
             }
         })
         .detach();
+    }
+
+    /// Takes in what a detection found.
+    fn apply(&mut self, detected: Detected, cx: &mut Context<Self>) {
+        self.targets = detected.targets;
+        self.entries = detected.entries;
+        self.clis = detected.clis;
+        self.programs = detected.programs;
+        self.server_exists = detected.server_exists;
+        if !self.region_chosen
+            && let Some(region) = self.installed_region()
+        {
+            self.region = region;
+        }
+        self.recompute();
+        self.sign_ins.clear();
+        self.errors.clear();
+        self.loading = false;
+        let all: Vec<usize> = (0..self.targets.len()).collect();
+        self.check_sign_ins(all, cx);
+        cx.notify();
+    }
+
+    /// The AWS Region most clients have the server in, if any has it: the
+    /// page shows that one, so an install there reads as installed, not as
+    /// out of date. A tie keeps the page's.
+    fn installed_region(&self) -> Option<String> {
+        let mut counts: Vec<(String, usize)> = Vec::new();
+        for server in SERVERS.iter().filter(|s| s.has_region()) {
+            for read in &self.entries {
+                if let Entries::Servers(map) = read
+                    && let Some(region) = map.get(server.id).and_then(|sig| server.region_in(sig))
+                {
+                    match counts.iter_mut().find(|(r, _)| *r == region) {
+                        Some((_, n)) => *n += 1,
+                        None => counts.push((region, 1)),
+                    }
+                }
+            }
+        }
+        let most = counts.iter().map(|(_, n)| *n).max()?;
+        counts
+            .iter()
+            .find(|(r, n)| *n == most && *r == self.region)
+            .or_else(|| counts.iter().find(|(_, n)| *n == most))
+            .map(|(r, _)| r.clone())
+    }
+
+    /// The Region a client has a regional server in, when it's another one
+    /// than the page's: installed there, not out of date.
+    fn other_region(&self, (s, t): Pair) -> Option<String> {
+        let server = &SERVERS[s];
+        match self.status.get(&(s, t)) {
+            Some(Status::Outdated(sig)) if server.has_region() => server.region_in(sig),
+            _ => None,
+        }
+    }
+
+    /// Every status, from the configs as read.
+    fn recompute(&mut self) {
+        self.status.clear();
+        for s in 0..SERVERS.len() {
+            let spec = self.spec(s);
+            for (t, read) in self.entries.iter().enumerate() {
+                self.status.insert((s, t), status_in(read, &spec));
+            }
+        }
     }
 
     /// Asks each Claude Code / Codex profile in `targets` that has a remote
@@ -521,8 +586,10 @@ impl McpPage {
     // Install sheet
 
     fn open_install(&mut self, s: usize, window: &mut Window, cx: &mut Context<Self>) {
+        // What's installed, to update or remove; not an install in another
+        // Region, which Install would move.
         let selected = (0..self.targets.len())
-            .filter(|t| self.is_installed((s, *t)))
+            .filter(|t| self.is_installed((s, *t)) && self.other_region((s, *t)).is_none())
             .collect();
         let (region, subscription) = if SERVERS[s].has_region() {
             let region = self.region.clone();
@@ -534,14 +601,21 @@ impl McpPage {
             let sub = cx.subscribe_in(&input, window, |this, input, e: &InputEvent, _, cx| {
                 if matches!(e, InputEvent::Change) {
                     let value = input.read(cx).value().trim().to_string();
-                    this.set_region(
-                        if value.is_empty() {
-                            DEFAULT_AWS_REGION.into()
-                        } else {
-                            value
-                        },
-                        cx,
-                    );
+                    let region = if value.is_empty() {
+                        DEFAULT_AWS_REGION.to_string()
+                    } else {
+                        value
+                    };
+                    // It goes into the server's host name.
+                    let valid = valid_region(&region);
+                    if let Some(Sheet::Install(sheet)) = &mut this.sheet {
+                        sheet.region_invalid = !valid;
+                    }
+                    if valid {
+                        this.region_chosen = true;
+                        this.set_region(region, cx);
+                    }
+                    cx.notify();
                 }
             });
             (Some(input), Some(sub))
@@ -552,6 +626,7 @@ impl McpPage {
             server: s,
             selected,
             region,
+            region_invalid: false,
             _subscription: subscription,
         }));
         self.focus.focus(window, cx);
@@ -1156,15 +1231,25 @@ impl McpPage {
             .filter(|t| self.status.get(&(s, *t)) == Some(&Status::Installed))
             .count();
         let other = (0..total)
-            .filter(|t| matches!(self.status.get(&(s, *t)), Some(Status::Outdated(_))))
+            .filter(|t| {
+                matches!(self.status.get(&(s, *t)), Some(Status::Outdated(_)))
+                    && self.other_region((s, *t)).is_none()
+            })
             .count();
+        // Installed in another Region: installed, not out of date.
+        let mut elsewhere: Vec<String> = (0..total)
+            .filter_map(|t| self.other_region((s, t)))
+            .collect();
+        let in_other_regions = elsewhere.len();
+        elsewhere.sort();
+        elsewhere.dedup();
         let to_sign_in = self.pending_sign_ins(Some(s)).len();
         let checking = server.auth == Auth::Browser
             && (0..total).any(|t| self.checking.contains(&t) && self.is_installed((s, t)));
         let missing = server.missing_program(|c| self.programs.get(c).cloned());
         let bundled_missing = s == 0 && !self.server_exists;
         let busy = (0..total).any(|t| self.busy.contains(&(s, t)));
-        let none = installed + other == 0;
+        let none = installed + other + in_other_regions == 0;
 
         let (mark, summary, summary_color) = if busy {
             (Mark::Spinner, "Working…".to_string(), theme.warning)
@@ -1177,13 +1262,16 @@ impl McpPage {
         } else if other > 0 {
             (
                 Mark::Icon(Lucide::CircleAlert),
-                format!("{installed} of {total} · {other} to update"),
+                format!(
+                    "{} of {total} · {other} to update",
+                    installed + in_other_regions
+                ),
                 theme.warning,
             )
         } else {
             (
                 Mark::Icon(Lucide::CircleCheck),
-                format!("Installed · {installed} of {total}"),
+                format!("Installed · {} of {total}", installed + in_other_regions),
                 theme.success,
             )
         };
@@ -1207,6 +1295,17 @@ impl McpPage {
             ));
         } else if let Some(note) = server.note {
             notes.push((Lucide::Info, note.to_string(), muted));
+        }
+        if !elsewhere.is_empty() {
+            notes.push((
+                Lucide::Globe,
+                format!(
+                    "{} in another Region: {}.",
+                    plural(in_other_regions, "client has it", "clients have it"),
+                    elsewhere.join(", ")
+                ),
+                muted,
+            ));
         }
         if let Auth::EnvKey(var) = server.auth {
             notes.push((
@@ -1445,6 +1544,7 @@ impl McpPage {
             .collect();
         let busy = (0..self.targets.len()).any(|t| self.busy.contains(&(s, t)));
         let blocked = (s == 0 && !self.server_exists)
+            || sheet.region_invalid
             || server
                 .missing_program(|c| self.programs.get(c).cloned())
                 .is_some();
@@ -1552,12 +1652,17 @@ impl McpPage {
                                 .gap_2()
                                 .child(div().text_sm().child("Region"))
                                 .child(div().w(px(180.)).child(Input::new(region).small()))
-                                .child(
+                                .child(if sheet.region_invalid {
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.danger)
+                                        .child("Not an AWS Region (like eu-west-1).")
+                                } else {
                                     div()
                                         .text_xs()
                                         .text_color(muted)
-                                        .child("The AWS Region the server works in."),
-                                ),
+                                        .child("The AWS Region the server works in.")
+                                }),
                         )
                     }),
             )
@@ -1653,19 +1758,24 @@ impl McpPage {
             .get(&t)
             .and_then(|m| m.get(SERVERS[s].id))
             .copied();
-        let (badge, color): (&str, Hsla) = match &state {
-            Status::Installed if self.needs_sign_in(pair) => ("Needs sign-in", theme.warning),
+        let elsewhere = self.other_region(pair);
+        let (badge, color): (String, Hsla) = match &state {
+            Status::Installed if self.needs_sign_in(pair) => {
+                ("Needs sign-in".into(), theme.warning)
+            }
             Status::Installed
                 if signed == Some(SignIn::SignedIn) && SERVERS[s].auth == Auth::Browser =>
             {
-                ("Signed in", theme.success)
+                ("Signed in".into(), theme.success)
             }
-            Status::Installed => ("Installed", theme.success),
-            Status::Outdated(_) if SERVERS[s].has_region() => ("Other region", theme.warning),
-            Status::Outdated(_) => ("Other version", theme.warning),
-            Status::NotInstalled => ("Not installed", muted),
-            Status::Unreadable(_) => ("Edit manually", theme.danger),
-            Status::Manual => ("Paste by hand", muted),
+            Status::Installed => ("Installed".into(), theme.success),
+            Status::Outdated(_) if let Some(region) = &elsewhere => {
+                (format!("In {region}"), theme.info)
+            }
+            Status::Outdated(_) => ("Other version".into(), theme.warning),
+            Status::NotInstalled => ("Not installed".into(), muted),
+            Status::Unreadable(_) => ("Edit manually".into(), theme.danger),
+            Status::Manual => ("Paste by hand".into(), muted),
         };
         let detail = match &state {
             Status::Outdated(other) => Some(format!("Points to {other}")),
@@ -2267,6 +2377,54 @@ mod tests {
             page.read_with(cx, |page, _| page.status.get(&(aws, 0)).cloned()),
             Some(Status::Installed)
         );
+    }
+
+    /// The AWS server installed in another Region than the page's default is installed there:
+    /// the page takes that Region, and the sheet doesn't offer to move it.
+    #[gpui_kit::test]
+    fn aws_in_another_region_is_installed_there(cx: &mut TestAppContext) {
+        let home = tempfile::tempdir().unwrap();
+        let codex = home.path().join(".codex/config.toml");
+        std::fs::create_dir_all(codex.parent().unwrap()).unwrap();
+        std::fs::write(
+            &codex,
+            "[mcp_servers.aws]\nurl = \"https://aws-mcp.eu-west-1.api.aws/mcp\"\n",
+        )
+        .unwrap();
+        let cursor = home.path().join(".cursor/mcp.json");
+        std::fs::create_dir_all(cursor.parent().unwrap()).unwrap();
+        let targets = vec![
+            target(Client::Codex, &codex),
+            target(Client::Cursor, &cursor),
+        ];
+        let (page, cx) = open(cx, Vec::new(), |_| {});
+        page.update(cx, |page, cx| {
+            let detected = super::Detected {
+                entries: targets
+                    .iter()
+                    .map(sawit_core::mcp_clients::read_entries)
+                    .collect(),
+                targets,
+                clis: Default::default(),
+                programs: Default::default(),
+                server_exists: true,
+            };
+            page.apply(detected, cx)
+        });
+        let aws = super::SERVERS.iter().position(|s| s.id == "aws").unwrap();
+        page.read_with(cx, |page, _| {
+            assert_eq!(page.region, "eu-west-1");
+            assert_eq!(page.status.get(&(aws, 0)), Some(&Status::Installed));
+        });
+        // Typed back to us-east-1, it's in another Region: not ticked for Install.
+        page.update(cx, |page, cx| page.set_region("us-east-1".into(), cx));
+        page.update_in(cx, |page, window, cx| page.open_install(aws, window, cx));
+        page.read_with(cx, |page, _| {
+            let Some(super::Sheet::Install(sheet)) = &page.sheet else {
+                panic!("no sheet")
+            };
+            assert!(sheet.selected.is_empty(), "{:?}", sheet.selected);
+        });
     }
 
     /// The sheet opens with every installed client ticked, so its Remove asks first, as the
