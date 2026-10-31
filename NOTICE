@@ -113,5 +113,5 @@ Sawit embeds the Inter typeface for the canvas's text.
 Copyright 2020 The Inter Project Authors (https://github.com/rsms/inter)
 
 Inter is licensed under the SIL Open Font License, Version 1.1. The full text of the licence is in
-crates/board/fonts/OFL-Inter.txt in Sawit's source, and is also available, with a FAQ, at
-https://openfontlicense.org
+OFL-Inter.txt, beside this file in Sawit.app (Contents/Resources) and at crates/board/fonts/ in
+Sawit's source, and is also available, with a FAQ, at https://openfontlicense.org
