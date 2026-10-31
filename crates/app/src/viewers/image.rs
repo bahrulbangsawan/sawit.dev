@@ -66,6 +66,16 @@ impl ImageView {
     pub fn title(&self) -> String {
         file_name(&self.path)
     }
+
+    /// Shows the file at `path`, where it was renamed or moved to.
+    pub fn follow(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        // Drawn from the file itself, not a PNG copy of it.
+        if self.shown.as_ref() == Some(&self.path) {
+            self.shown = Some(path.clone());
+        }
+        self.path = path;
+        cx.notify();
+    }
 }
 
 pub(super) fn file_name(path: &std::path::Path) -> String {

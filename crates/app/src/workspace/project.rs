@@ -377,7 +377,7 @@ mod tests {
         prelude::InteractiveElement as _,
     };
 
-    use super::{FileEditor, ImageView, PaneItem, give_keyboard};
+    use super::{FileEditor, FolderSearch, ImageView, PaneItem, follow_tab, give_keyboard};
     use crate::files::Scratch;
 
     /// A window with the Files tree's keyboard, the workspace's, and a text file's and an
@@ -495,5 +495,81 @@ mod tests {
         open_from_tree(window, &view, cx, image);
         assert!(has(window, &view, cx, |v, _| v.home.clone()));
         assert!(!has(window, &view, cx, |v, _| v.tree.clone()));
+    }
+
+    /// The tabs of a renamed or moved file follow it (FILES-14): an image's, a PDF's or a
+    /// video's, as a text file's and a canvas file's did, and a Find in Folder tab its folder
+    /// and the files it found. They kept the old path: the file renamed opened in a second tab,
+    /// `sawit --wait` waited on a path that was gone, and a search ran where its folder was.
+    #[gpui_kit::test]
+    fn viewer_and_search_tabs_follow_a_move(cx: &mut TestAppContext) {
+        // The image is looked at on the runtime's real threads.
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(crate::rt::Rt(sawit_core::rt::Runtime::start()));
+        });
+        let dir = Scratch::new("tabs-follow-a-move");
+        let (a, b) = (dir.0.join("a.png"), dir.0.join("b.png"));
+        let (docs, notes) = (dir.0.join("docs"), dir.0.join("notes"));
+        std::fs::write(&a, b"not a picture").unwrap();
+        std::fs::create_dir(&docs).unwrap();
+        let (image, search) = (a.clone(), docs.clone());
+        let (image, search) = cx.update(|cx| {
+            let (_, pair) = gpui_kit::open_window(Default::default(), cx, |window, cx| {
+                let image = cx.new(|cx| ImageView::new(image, cx));
+                let search = cx.new(|cx| FolderSearch::new(search, window, cx));
+                cx.new(|_| Pair(image, search))
+            })
+            .unwrap();
+            let pair = pair.read(cx);
+            (pair.0.clone(), pair.1.clone())
+        });
+        let mut image_tab = PaneItem::Other {
+            view: image.clone().into(),
+            key: format!("file\u{0}{}", a.display()).into(),
+            title: "a.png".into(),
+            icon: gpui_kit::assets::IconName::Image,
+            file: Some(a.clone()),
+        };
+        let mut search_tab = PaneItem::Other {
+            view: search.clone().into(),
+            key: FolderSearch::key(&docs).into(),
+            title: "Search: docs".into(),
+            icon: gpui_kit::assets::IconName::Search,
+            file: None,
+        };
+
+        cx.update(|cx| {
+            follow_tab(&mut image_tab, &a, &b, cx);
+            follow_tab(&mut search_tab, &docs, &notes, cx);
+            let PaneItem::Other {
+                key, title, file, ..
+            } = &image_tab
+            else {
+                unreachable!()
+            };
+            assert_eq!(key.as_ref(), format!("file\u{0}{}", b.display()));
+            assert_eq!((title.as_ref(), file.as_ref()), ("b.png", Some(&b)));
+            assert_eq!(image.read(cx).path, b);
+            let PaneItem::Other { key, title, .. } = &search_tab else {
+                unreachable!()
+            };
+            assert_eq!(key.as_ref(), FolderSearch::key(&notes));
+            assert_eq!(title.as_ref(), "Search: notes");
+            assert_eq!(search.read(cx).dir, notes);
+        });
+    }
+
+    /// A window's view holding an image's and a search's tab.
+    struct Pair(Entity<ImageView>, Entity<FolderSearch>);
+
+    impl Render for Pair {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(self.0.clone())
+                .child(self.1.clone())
+        }
     }
 }

@@ -79,6 +79,35 @@ impl FolderSearch {
         .detach();
     }
 
+    /// Follows its folder, or files it found, renamed or moved from `from` to `to`; the folder
+    /// where it is now, if it moved.
+    pub fn follow_move(
+        &mut self,
+        from: &Path,
+        to: &Path,
+        cx: &mut Context<Self>,
+    ) -> Option<PathBuf> {
+        let moved = |path: &Path| {
+            let rest = path.strip_prefix(from).ok()?;
+            Some(if rest.as_os_str().is_empty() {
+                to.to_path_buf()
+            } else {
+                to.join(rest)
+            })
+        };
+        for hit in &mut self.hits {
+            if let Some(path) = moved(&hit.path) {
+                hit.path = path;
+            }
+        }
+        let dir = moved(&self.dir);
+        if let Some(dir) = &dir {
+            self.dir = dir.clone();
+        }
+        cx.notify();
+        dir
+    }
+
     /// Starts a search for the text typed: its number, and the text.
     fn start(&mut self, cx: &mut Context<Self>) -> Option<(u64, String)> {
         let text = self.query.read(cx).value().to_string();
