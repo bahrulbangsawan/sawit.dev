@@ -503,17 +503,17 @@ mod tests {
     gpui_kit::actions!(keymap_test, [Close, CloseAll, Other]);
 
     /// A keymap file of the test's own, removed when the test ends.
-    struct Scratch(PathBuf);
+    pub(super) struct Scratch(pub(super) PathBuf);
 
     impl Scratch {
-        fn new(test: &str) -> Self {
+        pub(super) fn new(test: &str) -> Self {
             let dir =
                 std::env::temp_dir().join(format!("sawit-keymap-{}-{test}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             Self(dir)
         }
 
-        fn file(&self) -> PathBuf {
+        pub(super) fn file(&self) -> PathBuf {
             self.0.join("keymap.json")
         }
     }
@@ -537,7 +537,7 @@ mod tests {
     }
 
     /// What `keystroke` runs in the workspace, by action name.
-    fn runs(cx: &App, keystroke: &str) -> Vec<&'static str> {
+    pub(super) fn runs(cx: &App, keystroke: &str) -> Vec<&'static str> {
         let typed: Vec<Keystroke> = keystroke
             .split(' ')
             .map(|k| Keystroke::parse_with_os(k, OperatingSystem::Mac).unwrap())

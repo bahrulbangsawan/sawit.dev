@@ -85,7 +85,7 @@ impl KeymapEditor {
         let store = store(cx);
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter action names…"));
         let keys_filter =
-            cx.new(|cx| KeystrokeRecorder::new("Press keys to find their bindings", cx));
+            cx.new(|cx| KeystrokeRecorder::new("Press keys to find their bindings", window, cx));
         let subscriptions = vec![
             cx.observe(&store, |this, _, cx| this.refresh(cx)),
             cx.subscribe(&filter, |this, _, event: &InputEvent, cx| {
@@ -739,7 +739,7 @@ impl BindingForm {
             }
         });
         let keys = cx.new(|cx| {
-            let mut recorder = KeystrokeRecorder::new("Click, then press the keys", cx);
+            let mut recorder = KeystrokeRecorder::new("Click, then press the keys", window, cx);
             if let Some(row) = &row {
                 recorder.set_keystrokes(&row.keystrokes, cx);
             }
@@ -1152,5 +1152,127 @@ mod tests {
         assert!(starts_with_keys("cmd-k e", "cmd-k e"));
         assert!(!starts_with_keys("cmd-k", "cmd-k e"));
         assert!(!starts_with_keys("cmd-e", "cmd-k"));
+    }
+}
+
+/// The editor in a window, driven as a person does: the form opened on a row, keys pressed into
+/// its recorder, then Save.
+#[cfg(test)]
+mod form_tests {
+    use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, KeyBinding, TestAppContext};
+
+    use super::super::tests::{Scratch, runs};
+    use super::KeymapEditor;
+
+    gpui_kit::actions!(keymap_editor_test, [ToggleDock, CloseAll, Other]);
+
+    /// A keymap editor in an active window, over the defaults ⌘J (toggle the dock) and ⌘K W
+    /// (close all) in `Workspace`, with its keymap file in `scratch`.
+    fn open(cx: &mut TestAppContext, scratch: &Scratch) -> (AnyWindowHandle, Entity<KeymapEditor>) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.bind_keys([
+                KeyBinding::new("cmd-j", ToggleDock, Some("Workspace")),
+                KeyBinding::new("cmd-k w", CloseAll, Some("Workspace")),
+            ]);
+            crate::keymap::init_at(scratch.file(), cx);
+        });
+        let (window, editor) = cx.update(|cx| {
+            gpui_kit::open_window(Default::default(), cx, |window, cx| {
+                cx.new(|cx| KeymapEditor::new(window, cx))
+            })
+            .unwrap()
+        });
+        cx.update_window(window, |_, window, _| window.activate_window())
+            .unwrap();
+        cx.run_until_parked();
+        (window, editor)
+    }
+
+    /// Opens the form on the first row of `action`, as its Edit button does.
+    fn edit(
+        cx: &mut TestAppContext,
+        window: AnyWindowHandle,
+        editor: &Entity<KeymapEditor>,
+        action: &str,
+    ) {
+        cx.update_window(window, |_, window, cx| {
+            editor.update(cx, |editor, cx| {
+                let ix = editor
+                    .rows
+                    .iter()
+                    .position(|r| r.action.as_ref() == action)
+                    .unwrap_or_else(|| panic!("a row for {action}"));
+                editor.edit(ix, window, cx);
+            })
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+
+    /// The keys the open form's recorder holds, as the keymap file writes them.
+    fn recorded(cx: &mut TestAppContext, editor: &Entity<KeymapEditor>) -> String {
+        cx.update(|cx| {
+            let form = editor.read(cx).form.clone().expect("the form is open");
+            form.read(cx).keys.read(cx).keystrokes()
+        })
+    }
+
+    /// Clicks the open form's Save.
+    fn save(cx: &mut TestAppContext, window: AnyWindowHandle, editor: &Entity<KeymapEditor>) {
+        cx.update_window(window, |_, window, cx| {
+            let form = editor.read(cx).form.clone().expect("the form is open");
+            form.update(cx, |form, cx| form.save(window, cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+
+    /// Hand check PR2-1: Edit a default (⌘J), press ⌃⌥J, Save. The new keys replace the row's,
+    /// which the form shows until the first key: ⌃⌥J alone toggles the dock, and ⌘J is unbound.
+    #[gpui_kit::test]
+    fn editing_a_binding_records_only_the_new_keys(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("form-new-keys");
+        let (window, editor) = open(cx, &scratch);
+        edit(cx, window, &editor, "keymap_editor_test::ToggleDock");
+        assert_eq!(
+            recorded(cx, &editor),
+            "cmd-j",
+            "the form starts with the row's keys"
+        );
+        cx.simulate_keystrokes(window, "ctrl-alt-j");
+        assert_eq!(recorded(cx, &editor), "ctrl-alt-j");
+        // The next key makes a chord of them.
+        cx.simulate_keystrokes(window, "ctrl-alt-k");
+        assert_eq!(recorded(cx, &editor), "ctrl-alt-j ctrl-alt-k");
+        // Back to the field (a click gives it the keyboard), the next key starts again.
+        cx.update_window(window, |_, window, cx| {
+            let form = editor.read(cx).form.clone().unwrap();
+            let context = form.read(cx).context.clone();
+            context.update(cx, |context, cx| context.focus(window, cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(window, |_, window, cx| {
+            let form = editor.read(cx).form.clone().unwrap();
+            let keys = form.read(cx).keys.read(cx).focus_handle().clone();
+            window.focus(&keys, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, "ctrl-alt-j");
+        assert_eq!(recorded(cx, &editor), "ctrl-alt-j");
+        save(cx, window, &editor);
+        cx.update(|cx| {
+            assert!(
+                editor.read(cx).form.is_none(),
+                "{:?}",
+                editor.read(cx).error
+            );
+            assert_eq!(runs(cx, "ctrl-alt-j"), ["keymap_editor_test::ToggleDock"]);
+            assert!(runs(cx, "cmd-j").is_empty(), "{:?}", runs(cx, "cmd-j"));
+        });
+        let text = std::fs::read_to_string(scratch.file()).unwrap();
+        assert!(!text.contains("cmd-j ctrl-alt-j"), "{text}");
     }
 }
