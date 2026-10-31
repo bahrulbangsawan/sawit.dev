@@ -111,6 +111,9 @@ clicking Export leaves a folder Claude can build a matching UI from.
 - Footer: **Include console errors** (on by default; adds nothing when there are none), **Copy**
   (Lucide `Copy`), **Send to terminal** (Lucide `SquareTerminal`) and **Clear**. Copy and Send
   show a note in the footer for 3 seconds: "Copied" or "Sent to Terminal 2".
+- The notes live only in the tab, so Clear, closing the Browser tab and closing its project ask
+  first while a comment hasn't been copied, sent or read by an agent as it is now; Close Others
+  and Close All leave such a tab open, as they do an unsaved file.
 - Send to terminal only pastes into a tab whose program accepts bracketed paste: Claude Code,
   zsh, bash ≥ 5.1. It uses the active tab if it accepts one, else the highest-numbered tab that
   does. Otherwise it copies instead and says "No terminal is ready for a paste, so it was copied."

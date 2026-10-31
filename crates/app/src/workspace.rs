@@ -846,13 +846,22 @@ impl Workspace {
             .iter()
             .map(|t| TabFlags {
                 pinned: t.pinned,
-                dirty: matches!(&t.item, PaneItem::File(e) if e.read(cx).dirty),
+                dirty: match &t.item {
+                    PaneItem::File(e) => e.read(cx).dirty,
+                    // Annotation notes not yet copied or sent.
+                    PaneItem::Other { view, .. } => view
+                        .clone()
+                        .downcast::<BrowserView>()
+                        .is_ok_and(|b| b.read(cx).unsent_notes(cx) > 0),
+                    PaneItem::Server => false,
+                },
             })
             .collect()
     }
 
     /// Closes tabs per `op` relative to `target`. Closing a single tab with
-    /// unsaved changes asks first; bulk closes leave such tabs open.
+    /// unsaved changes (or a browser with notes not yet sent) asks first; bulk
+    /// closes leave such tabs open.
     fn close(&mut self, op: CloseOp, target: usize, window: &mut Window, cx: &mut Context<Self>) {
         let closing = to_close(op, target, &self.flags(cx));
         if let [ix] = closing[..]
@@ -862,7 +871,46 @@ impl Workspace {
             self.confirm_close_dirty(editor, window, cx);
             return;
         }
+        if let [ix] = closing[..]
+            && let Some(PaneItem::Other { view, .. }) = self.tabs.get(ix).map(|t| t.item.clone())
+            && let Ok(browser) = view.downcast::<BrowserView>()
+            && browser.read(cx).unsent_notes(cx) > 0
+        {
+            self.confirm_close_browser(browser, window, cx);
+            return;
+        }
         self.remove_tabs(&closing, cx);
+    }
+
+    /// Asks before closing a browser whose annotation notes weren't copied or sent: they
+    /// live only in the tab.
+    fn confirm_close_browser(
+        &mut self,
+        browser: Entity<BrowserView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let notes = browser.read(cx).unsent_notes(cx);
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            "Close the browser with its annotations?",
+            Some(&crate::browser::notes_lost(notes)),
+            &["Close Anyway", "Cancel"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if let Ok(0) = answer.await {
+                let _ = this.update(cx, |this, cx| {
+                    if let Some(ix) = this.tabs.iter().position(|t| {
+                        matches!(&t.item, PaneItem::Other { view, .. }
+                            if view.clone().downcast::<BrowserView>().ok().as_ref() == Some(&browser))
+                    }) {
+                        this.remove_tabs(&[ix], cx);
+                    }
+                });
+            }
+        })
+        .detach();
     }
 
     fn remove_tabs(&mut self, closing: &[usize], cx: &mut Context<Self>) {

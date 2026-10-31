@@ -40,6 +40,7 @@ use sawit_core::browser::{
 use sawit_core::probe;
 use serde_json::{Value, json};
 
+pub use annotate::notes_lost;
 use annotate::{AnnotateEvent, AnnotatePanel, group_order, padded_rect};
 use design::{DesignEvent, DesignPanel, Segment};
 use engine::{Engine, EngineEvent, EngineSpec, Frame};
@@ -398,6 +399,11 @@ impl BrowserView {
         drop(self.page_op(markers_op(&markers)));
     }
 
+    /// Annotation notes that would be lost with the tab: not copied, sent or read by an agent.
+    pub fn unsent_notes(&self, cx: &App) -> usize {
+        self.annotate.read(cx).unsent(cx)
+    }
+
     /// Shows `text` in the Annotate footer for a moment.
     pub fn set_annotate_note(&mut self, text: &str, cx: &mut Context<Self>) {
         let text = text.to_string();
@@ -472,11 +478,16 @@ impl BrowserView {
             AnnotateEvent::Copy => {
                 if let Some(md) = self.annotations_markdown(cx) {
                     cx.write_to_clipboard(ClipboardItem::new_string(md));
-                    self.annotate.update(cx, |a, cx| a.set_note("Copied", cx));
+                    self.annotate.update(cx, |a, cx| {
+                        a.mark_sent(cx);
+                        a.set_note("Copied", cx);
+                    });
                 }
             }
             AnnotateEvent::Send => {
                 if let Some(md) = self.annotations_markdown(cx) {
+                    // Pasted, or copied when no terminal takes it: either way the user has them.
+                    self.annotate.update(cx, |a, cx| a.mark_sent(cx));
                     cx.emit(BrowserEvent::SendToTerminal(md));
                 }
             }
@@ -1030,9 +1041,13 @@ impl BrowserView {
             BrowserOp::Annotations { clear } => {
                 let markdown = self.annotations_markdown(cx);
                 let count = self.annotate.read(cx).annotations(cx).len();
-                if clear {
-                    self.annotate.update(cx, |a, cx| a.clear(cx));
-                }
+                self.annotate.update(cx, |a, cx| {
+                    if clear {
+                        a.clear(cx);
+                    } else {
+                        a.mark_sent(cx);
+                    }
+                });
                 json!({ "markdown": markdown, "count": count })
             }
             BrowserOp::Inspect { target, format } => {
@@ -1584,9 +1599,9 @@ fn agent_answer(text: &str) -> OpResult {
 #[cfg(test)]
 mod tests {
     use super::{
-        Frame, Panel, PickMode, Segment, Target, ViewportMode, agent_call, agent_result, caption,
-        markers_op, new_token, overlay_op, page_frame, pick_mode, rearm_ops, rect_op, rotated,
-        shoot_ops, within,
+        AnnotateEvent, Frame, Panel, PickMode, Segment, Target, ViewportMode, agent_call,
+        agent_result, caption, markers_op, new_token, overlay_op, page_frame, pick_mode, rearm_ops,
+        rect_op, rotated, shoot_ops, within,
     };
     use serde_json::json;
 
@@ -1850,6 +1865,46 @@ mod tests {
         });
         picked(cx);
         assert_eq!(rows(cx), 1, "Design is open");
+    }
+
+    /// A note typed on an annotation holds the tab open (closing it asks) until it is copied
+    /// or sent; a note typed after that holds it again.
+    #[gpui_kit::test]
+    fn unsent_notes_hold_the_tab(cx: &mut gpui_kit::TestAppContext) {
+        use sawit_core::browser::PageEvent;
+        let (view, cx) = test_browser(cx);
+        cx.update(|window, cx| {
+            view.update(cx, |b, cx| {
+                b.toggle_panel(super::Panel::Annotate, window, cx)
+            })
+        });
+        let pick = serde_json::json!({"mode": "annotate", "element": {
+            "selector": "#buy", "label": "button#buy", "tag": "button",
+            "rect": {"x": 1, "y": 1, "width": 40, "height": 20}}});
+        cx.update(|window, cx| {
+            view.update(cx, |b, cx| {
+                b.receive(super::FromPage::Event(PageEvent::Picked(pick)), window, cx)
+            })
+        });
+        cx.run_until_parked();
+        let unsent = |cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|_, cx| view.read(cx).unsent_notes(cx))
+        };
+        assert_eq!(unsent(cx), 0, "a row with no note");
+        let note = |text: &str, cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|window, cx| {
+                let panel = view.read(cx).annotate.clone();
+                panel.update(cx, |p, cx| p.type_note(0, text, window, cx));
+            })
+        };
+        note("Make it blue", cx);
+        assert_eq!(unsent(cx), 1);
+        cx.update(|_, cx| view.update(cx, |b, cx| b.on_annotate(&AnnotateEvent::Copy, cx)));
+        assert_eq!(unsent(cx), 0, "copied");
+        note("Make it blue, and bigger", cx);
+        assert_eq!(unsent(cx), 1, "changed since");
+        cx.update(|_, cx| view.update(cx, |b, cx| b.on_annotate(&AnnotateEvent::Send, cx)));
+        assert_eq!(unsent(cx), 0, "sent");
     }
 
     /// A page's link to another app (a `mailto:`, or an iframe's `slack://` with no click)
