@@ -103,6 +103,16 @@ async fn curl(
     Ok((code.trim().parse().unwrap_or(0), body.to_string()))
 }
 
+/// What a call says when GitHub no longer accepts the token it was made with (401: revoked or
+/// expired). Said where the user is signed in, so Sign Out is at hand.
+pub const REVOKED: &str = "GitHub no longer accepts this sign-in. Sign out, then sign in again.";
+
+/// Whether `error` is GitHub refusing the token itself ([`REVOKED`]), not a call that couldn't
+/// reach GitHub or that GitHub refused for another reason.
+pub fn is_revoked(error: &CoreError) -> bool {
+    matches!(error, CoreError::GitHub(message) if message == REVOKED)
+}
+
 /// A REST API call as the signed-in user.
 async fn api(method: &str, path: &str, token: &str, body: Option<Value>) -> Result<Value> {
     let text = api_raw(method, path, token, body, "application/vnd.github+json").await?;
@@ -128,9 +138,7 @@ async fn api_raw(
     let (code, text) = curl(method, &format!("{API}{path}"), &headers, body.as_deref()).await?;
     match code {
         200..=299 => Ok(text),
-        401 => Err(CoreError::GitHub(
-            "GitHub no longer accepts this sign-in. Sign out, then sign in again.".into(),
-        )),
+        401 => Err(CoreError::GitHub(REVOKED.into())),
         _ => {
             let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
             let message = value["message"].as_str().unwrap_or("Unknown error");

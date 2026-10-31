@@ -274,13 +274,12 @@ impl GitStore {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
-                match account {
-                    Ok(account) => this.account = Some(account),
-                    // Keep the token through a network failure; a revoked
-                    // token is reported where it's used.
-                    Err(e) => this.sign_in = SignIn::Failed(e.to_string()),
+                let (token, account, said) = saved_sign_in(token, account);
+                this.token = token;
+                this.account = account;
+                if let Some(said) = said {
+                    this.sign_in = said;
                 }
-                this.token = Some(token);
                 cx.notify();
             });
         })
@@ -349,6 +348,34 @@ impl GitStore {
     }
 }
 
+/// What the sign-in card says when GitHub no longer accepts the sign-in kept in the Keychain. The
+/// card has no Sign Out, and needs none: a new sign-in replaces the old one.
+const SAVED_SIGN_IN_REFUSED: &str =
+    "GitHub no longer accepts the sign-in Sawit saved. Sign in again to replace it.";
+
+/// What the store keeps of the sign-in the Keychain holds (`token`), once GitHub was asked whose
+/// it is (`account`): the token, the account, and what the sign-in card says, if anything.
+///
+/// - GitHub knows it: the token and its account.
+/// - GitHub couldn't be reached: the token, which may well still work for git, and why.
+/// - GitHub no longer accepts it (revoked, expired): neither, so git goes back to the user's own
+///   credentials instead of sending a token GitHub refuses (which read as an account without
+///   access to the remote), and the card asks for a new sign-in (SMOKE-5).
+fn saved_sign_in(
+    token: String,
+    account: Result<Account>,
+) -> (Option<String>, Option<Account>, Option<SignIn>) {
+    match account {
+        Ok(account) => (Some(token), Some(account), None),
+        Err(e) if github::is_revoked(&e) => (
+            None,
+            None,
+            Some(SignIn::Failed(SAVED_SIGN_IN_REFUSED.into())),
+        ),
+        Err(e) => (Some(token), None, Some(SignIn::Failed(e.to_string()))),
+    }
+}
+
 /// Adds what to do to git's most common refusals.
 fn friendly(message: &str, signed_in: bool) -> String {
     let lower = message.to_lowercase();
@@ -379,5 +406,47 @@ fn friendly(message: &str, signed_in: bool) -> String {
         message.to_string()
     } else {
         format!("{hint}\n\n{message}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// SMOKE-5: a saved sign-in that GitHub no longer accepts (401: revoked, expired) is let go,
+    /// so git stops sending it, and the sign-in card, which has no Sign Out, asks for a new
+    /// sign-in, which replaces it in the Keychain, instead of telling the user to sign out first.
+    #[test]
+    fn a_saved_sign_in_github_refuses_is_let_go() {
+        let refused = Err(CoreError::GitHub(github::REVOKED.into()));
+        let (token, account, said) = saved_sign_in("revoked".into(), refused);
+        assert_eq!(token, None, "git still gets the token GitHub refuses");
+        assert_eq!(account, None);
+        let Some(SignIn::Failed(said)) = said else {
+            panic!("the sign-in card says nothing");
+        };
+        assert_eq!(
+            said,
+            "GitHub no longer accepts the sign-in Sawit saved. Sign in again to replace it."
+        );
+    }
+
+    /// A saved sign-in that couldn't be checked (no connection) is kept: it may well still work
+    /// for git. One GitHub accepts signs in.
+    #[test]
+    fn a_saved_sign_in_that_couldnt_be_checked_is_kept() {
+        let offline = "Unable to reach GitHub. Check your connection and try again.";
+        let (token, account, said) =
+            saved_sign_in("saved".into(), Err(CoreError::GitHub(offline.into())));
+        assert_eq!((token.as_deref(), account), (Some("saved"), None));
+        assert!(matches!(said, Some(SignIn::Failed(said)) if said == offline));
+
+        let me = Account {
+            login: "me".into(),
+            name: None,
+        };
+        let (token, account, said) = saved_sign_in("saved".into(), Ok(me.clone()));
+        assert_eq!((token.as_deref(), account), (Some("saved"), Some(me)));
+        assert!(said.is_none(), "a sign-in under way would be cut short");
     }
 }
