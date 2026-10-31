@@ -1265,6 +1265,85 @@ mod tests {
         assert_eq!(toast(&view, &cx), None);
     }
 
+    /// The page on show.
+    fn page(view: &Entity<BoardView>, cx: &TestAppContext) -> NodeId {
+        view.read_with(cx, |view, _| view.board().unwrap().session.page().unwrap())
+    }
+
+    /// Plan 7 final review I-2 (ruling R-TEXTEDIT, the command op): an agent's `page.select`
+    /// while a sticky is typed in ends the typing first, as one undo step. Alone, it dropped the
+    /// text edit and left the engine's "Edit text" gesture open: the user's next click on a layer
+    /// of the page it opened cancelled the gesture, and the typing was gone, with no undo step to
+    /// bring it back.
+    #[gpui_kit::test]
+    fn an_agents_page_switch_while_typing_keeps_what_was_typed(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("agent-page-typing");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        // A sticky reading "old" on the first page, a second page with a sticky on it, then the
+        // first page again (which fits its sticky in the view).
+        let first = page(&view, &cx);
+        let note = sticky_reading(&view, (-100.0, -100.0), "old", &mut cx);
+        run_op(&view, command("page.add"), &mut cx);
+        let second = page(&view, &cx);
+        let there = sticky_reading(&view, (-100.0, -100.0), "there", &mut cx);
+        let back = json!({"op": "command", "command": "page.select", "params": {"id": first}});
+        run_op(&view, back, &mut cx);
+        let steps = undo_steps(&view, &cx);
+        // Typing in it, as a person does.
+        let at = middle_of(&view, note, &cx);
+        double_click(&mut cx, at);
+        assert!(typing(&view, &cx), "the double-click started no typing");
+        cx.simulate_input("new");
+        assert_eq!(reads(&view, note, &cx), "new");
+
+        let switch = json!({"op": "command", "command": "page.select", "params": {"id": second}});
+        let reply = run_op(&view, switch, &mut cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        assert_eq!(page(&view, &cx), second);
+        assert!(!typing(&view, &cx));
+        assert_eq!(gesture(&view, &cx), None);
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+
+        // The user's click on the sticky there, with the Move tool, selects it, and what was typed
+        // stays.
+        cx.simulate_click(middle_of(&view, there, &cx), Modifiers::default());
+        assert_eq!(selection(&view, &cx), [there]);
+        assert_eq!(gesture(&view, &cx), None);
+        assert_eq!(reads(&view, note, &cx), "new");
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+        assert_eq!(toast(&view, &cx), None);
+    }
+
+    /// Plan 7 final review I-2: an agent's `delete` of the sticky being typed in ends the typing
+    /// first, as one undo step, so the delete is a step of its own and stays after the next click.
+    /// Inside the open edit the sticky went, but the engine's "Edit text" gesture stayed open, and
+    /// the user's next click on a layer cancelled it, which brought the sticky back as it read
+    /// before the typing.
+    #[gpui_kit::test]
+    fn an_agents_delete_of_the_sticky_typed_in_keeps_it_deleted(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("agent-delete-typing");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        let (note, other, steps) = typing_in_the_first_of_two(&view, &mut cx);
+
+        let reply = run_op(&view, json!({"op": "delete", "ids": [note]}), &mut cx);
+        assert_eq!(reply["deleted"], json!(1), "{reply}");
+        assert!(!typing(&view, &cx));
+        assert_eq!(gesture(&view, &cx), None);
+        assert_eq!(layers(&view, &cx), [other]);
+        assert_eq!(undo_steps(&view, &cx), steps + 2);
+
+        cx.simulate_click(middle_of(&view, other, &cx), Modifiers::default());
+        assert_eq!(selection(&view, &cx), [other]);
+        assert_eq!(layers(&view, &cx), [other]);
+        assert_eq!(gesture(&view, &cx), None);
+        assert_eq!(toast(&view, &cx), None);
+        // Undone a step at a time: the sticky comes back as it was typed in, then as it read.
+        cx.simulate_keystrokes("cmd-z");
+        assert_eq!(reads(&view, note, &cx), "new");
+        cx.simulate_keystrokes("cmd-z");
+        assert_eq!(reads(&view, note, &cx), "old");
+    }
+
     /// Ruling P6-C6: while the UI is hidden, the context menu and the palette still show, and the
     /// empty canvas's menu brings the UI back.
     #[gpui_kit::test]

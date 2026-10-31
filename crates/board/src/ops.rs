@@ -19,6 +19,11 @@
 //! What they ask of the view is left in `session.ui_requests`, as after the same input in the
 //! window, for the view to carry out.
 //!
+//! Every other op that changes the document first ends the text the user is typing in on the
+//! canvas, as a click elsewhere does, unless it is a command that acts on that text
+//! ([`end_text_edit_before_op`], ruling R-TEXTEDIT): what was typed is an undo step of its own,
+//! and the op is one after it.
+//!
 //! A canvas holds one document, and the view saves the one on show over the canvas's file, so no
 //! `command` op may leave another document open or on show. The ones that do that by name are
 //! refused up front ([`HANDLED_BY_SAWIT`], as the steps of a `command.batch` too); any other
@@ -196,7 +201,13 @@ const MERMAID_GAP: f64 = 100.0;
 ///   error "not editing text". A sticky or a text layer is edited once the pointer or a key
 ///   starts it, as with a mouse and a keyboard: the sticky tool's click, a double-click, Enter.
 pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
-    match op.get("op").and_then(Value::as_str) {
+    let name = op.get("op").and_then(Value::as_str);
+    if let Some(name) = name
+        && let Err(error) = end_text_edit_before_op(board, name, op)
+    {
+        return failure(format!("{name}: {error}"));
+    }
+    match name {
         Some("get") => get(board),
         Some("add") => add(board, op),
         Some("update") => update(board, op),
@@ -219,6 +230,61 @@ pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
 /// `{ok: false, error}`.
 fn failure(error: impl Display) -> Value {
     json!({"ok": false, "error": error.to_string()})
+}
+
+/// Ends the text being typed in on the canvas before op `name` (`op`) changes the document, as the
+/// canvas's chrome and menus end it before their commands (ruling R-TEXTEDIT): what was typed
+/// becomes an undo step of its own ("Edit text"), and the op one after it.
+///
+/// The engine types inside one gesture, which only the end of the edit commits, and while it is
+/// open no command is an undo step of its own. An agent's op inside it joined the typing's step,
+/// so the user's ⌘Z took both. An op that drops the edit without ending it (`select.none`,
+/// `page.select`, deleting the text being typed in, a `replace`, whose old pages go) left the
+/// gesture open, and the user's next click on a layer cancelled it: the typing and every op since
+/// were gone, though each answered ok, and the autosave wrote that (Plan 7 final review I-2).
+///
+/// - `add`, `update`, `delete`, `clear`, `replace` and `mermaid` end the edit.
+/// - `command` ends it unless the command acts on the text being typed in
+///   ([`policy::keeps_text_edit`]: the Text menu's commands, copy and paste), or is a
+///   `command.batch` whose every step does. A command refused up front runs nothing, and ends
+///   nothing either ([`refused`]).
+/// - The reads (`get`, `commands`, the exports) leave the edit alone, and so does the input of
+///   `pointer`, `key` and `type`, which meets the edit as the mouse and the keyboard do.
+///
+/// With no text being typed in, it does nothing.
+fn end_text_edit_before_op(board: &mut BoardDoc, name: &str, op: &Value) -> Result<(), BoardError> {
+    let ends = match name {
+        "add" | "update" | "delete" | "clear" | "replace" | "mermaid" => true,
+        "command" => op.get("command").and_then(Value::as_str).is_some_and(|id| {
+            let params = op.get("params").unwrap_or(&Value::Null);
+            refused(id, params).is_none() && !command_keeps_text_edit(id, params)
+        }),
+        _ => false,
+    };
+    if ends {
+        input::end_text_edit(board)
+    } else {
+        Ok(())
+    }
+}
+
+/// Whether command `id`, with `params`, runs with the text being typed in still open: it acts on
+/// that text ([`policy::keeps_text_edit`]), or it is a `command.batch` whose every step does,
+/// however deeply batches are nested.
+fn command_keeps_text_edit(id: &str, params: &Value) -> bool {
+    if id != BATCH {
+        return policy::keeps_text_edit(id);
+    }
+    let steps = params.get("commands").and_then(Value::as_array);
+    steps.is_some_and(|steps| {
+        steps.iter().all(|step| {
+            let id = step
+                .get("command")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            command_keeps_text_edit(id, step.get("params").unwrap_or(&Value::Null))
+        })
+    })
 }
 
 fn get(board: &BoardDoc) -> Value {
@@ -3570,6 +3636,94 @@ mod tests {
         // Nothing was typed, and the edit goes on.
         assert_eq!(sticky_text(&board, note), "");
         assert!(editing(&board));
+    }
+
+    /// Whether the engine's gesture is open: typing holds one, "Edit text", until the edit ends.
+    fn gesture_open(board: &BoardDoc) -> bool {
+        board.session.ds().unwrap().interaction.is_some()
+    }
+
+    /// A new board with a sticky typed in, as a person types: "hi", the edit still open. The board
+    /// and the sticky.
+    fn typing_hi() -> (BoardDoc, NodeId) {
+        let mut board = board();
+        let note = typing_in_a_new_sticky(&mut board);
+        textedit::insert(&mut board.session, "hi").unwrap();
+        (board, note)
+    }
+
+    /// Plan 7 final review I-2 (ruling R-TEXTEDIT): an op that changes the document ends the text
+    /// the user is typing in first, as a click elsewhere does. What was typed is an undo step of
+    /// its own, and the op is one after it, which undo takes back alone. Inside the open edit an
+    /// op joined the typing's step, so the user's ⌘Z took both; and an op that dropped the edit
+    /// (Select none, deleting the text being typed, a replace) left its gesture open, so the
+    /// user's next click on a layer cancelled it, and the typing and every op since were gone.
+    #[test]
+    fn an_op_that_changes_the_document_ends_the_typing_first() {
+        let (mut typed, note) = typing_hi();
+        let steps = typed.session.undo_depth().0;
+        let rectangle = json!([{"type": "rectangle", "x": 400, "y": 0}]);
+        ask(&mut typed, json!({"op": "add", "elements": rectangle}));
+        assert!(!editing(&typed) && !gesture_open(&typed));
+        assert_eq!(typed.session.undo_depth().0, steps + 2);
+        send(&mut typed, "edit.undo", json!({}));
+        assert_eq!(elements(&mut typed).len(), 1);
+        assert_eq!(sticky_text(&typed, note), "hi");
+
+        // Each of the others: then undo takes back the op, and what was typed is there.
+        let ops: [fn(NodeId) -> Value; 6] = [
+            |note| json!({"op": "update", "elements": [{"id": note, "x": 50}]}),
+            |note| json!({"op": "delete", "ids": [note]}),
+            |_| json!({"op": "clear"}),
+            |_| json!({"op": "replace", "scene": scene()}),
+            |_| json!({"op": "mermaid", "source": "graph TD; A-->B"}),
+            |_| json!({"op": "command", "command": "page.add"}),
+        ];
+        for op in ops {
+            let (mut typed, note) = typing_hi();
+            let op = op(note);
+            ask(&mut typed, op.clone());
+            assert!(!editing(&typed) && !gesture_open(&typed), "{op}");
+            send(&mut typed, "edit.undo", json!({}));
+            assert_eq!(sticky_text(&typed, note), "hi", "{op}");
+        }
+
+        // A selection change too, which is no undo step.
+        let (mut typed, note) = typing_hi();
+        send(&mut typed, "select.none", json!({}));
+        assert!(!editing(&typed) && !gesture_open(&typed));
+        assert_eq!(sticky_text(&typed, note), "hi");
+    }
+
+    /// Ruling R-TEXTEDIT for the command op: a command that acts on the text being typed in (the
+    /// Text menu's, copy and paste) runs inside the edit, which goes on, and so does a
+    /// `command.batch` of only such steps; a batch with any other step ends the edit first. A
+    /// command refused up front runs nothing and ends nothing, and the reads and the input ops
+    /// leave the edit as it is.
+    #[test]
+    fn a_command_ends_the_typing_unless_it_acts_on_the_text() {
+        let (mut board, note) = typing_hi();
+        let center = json!({"command": "text.alignCenter"});
+        for op in [
+            json!({"op": "command", "command": "text.alignLeft"}),
+            json!({"op": "command", "command": "edit.copy"}),
+            json!({"op": "command", "command": "command.batch", "params": {"commands": [center]}}),
+            json!({"op": "command", "command": "file.save"}),
+            json!({"op": "get"}),
+            json!({"op": "commands"}),
+            json!({"op": "type", "text": "!"}),
+        ] {
+            run(&mut board, &op);
+            assert!(editing(&board) && gesture_open(&board), "{op}");
+        }
+        assert_eq!(sticky_text(&board, note), "hi!");
+
+        let steps = [center, json!({"command": "select.none"})];
+        let batch =
+            json!({"op": "command", "command": "command.batch", "params": {"commands": steps}});
+        ask(&mut board, batch);
+        assert!(!editing(&board) && !gesture_open(&board));
+        assert_eq!(sticky_text(&board, note), "hi!");
     }
 
     /// A 100 × 100 rectangle on the board with its top left corner at (`x`, 0).

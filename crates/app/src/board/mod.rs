@@ -421,6 +421,10 @@ impl BoardView {
     /// scrubs nothing more until its release. The op is then an undo step of its own, which an
     /// Escape in the picker or during the drag can't take back, and an undo op finds no scrub
     /// over the document it puts back. A read leaves the scrub on.
+    ///
+    /// An op that changes the document also ends the text being typed in on the canvas first,
+    /// unless it is a command that acts on that text (`sawit_board::ops::run`, ruling
+    /// R-TEXTEDIT): what was typed is an undo step of its own, and the next click keeps it.
     pub fn run_op(&mut self, op: &Value, cx: &mut Context<Self>) -> Value {
         if let Some(reply) = self.close_menus_for_op(op, cx) {
             return reply;
@@ -733,10 +737,12 @@ impl BoardView {
     /// next, as a right-click does ([`events`]).
     ///
     /// It is ruling R-TEXTEDIT's one helper: the canvas ends typing through it before a command of
-    /// its chrome and its menus ([`Self::choose`], [`Self::run_menu`]) and before a right-click's
-    /// selection. A command that drops the edit without ending it (Select none, a page or a tool
-    /// switch, deleting the text) left the engine's "Edit text" gesture open. The next click on a
-    /// layer then cancelled the gesture, which took the typing back (Plan 6 final review C1).
+    /// its chrome, its menus and its layers panel ([`Self::choose`], [`Self::run_menu`], a row's
+    /// selection) and before a right-click's selection. An agent's op ends it in the session, by
+    /// the same rule (`sawit_board::ops::run`). A command that drops the edit without ending it
+    /// (Select none, a page or a tool switch, deleting the text) left the engine's "Edit text"
+    /// gesture open. The next click on a layer then cancelled the gesture, which took the typing
+    /// back (Plan 6 final review C1).
     ///
     /// Whether the caller may go on: false when the edit couldn't end, which a toast then says.
     /// The caller then runs nothing, since its command could drop the edit without ending it.
