@@ -619,6 +619,13 @@ fn absolute_path(path: &str) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// The file `output_path` names for canvas_export, read as every tool that writes a file reads
+/// one: trimmed, with `~` expanded. The canvas-file guard checks this path, and it is the one
+/// written.
+fn named_export(output_path: &str) -> PathBuf {
+    crate::expand_home(output_path.trim())
+}
+
 /// Where an export goes when no path is given: the project's
 /// `.nyawit/exports/`, else `<cache>/canvas`.
 fn export_path(project: Option<&Path>, cache: &Path, ext: &str) -> PathBuf {
@@ -999,10 +1006,10 @@ impl Sawit {
             "png" => true,
             other => return fail(format!("Unknown format “{other}”: use svg or png.")),
         };
+        let named = a.output_path.as_deref().map(named_export);
         // Nothing else holds the board when the app is closed: an export must never replace it.
-        if let Some(out) = a.output_path.as_deref()
-            && let Err(e) =
-                crate::refuse_canvas_file("canvas_export", &crate::expand_home(out.trim()))
+        if let Some(path) = &named
+            && let Err(e) = crate::refuse_canvas_file("canvas_export", path)
         {
             return fail(e);
         }
@@ -1027,7 +1034,7 @@ impl Sawit {
                 .as_bytes()
                 .to_vec()
         };
-        let path = a.output_path.map(PathBuf::from).unwrap_or_else(|| {
+        let path = named.unwrap_or_else(|| {
             export_path(
                 project.as_deref(),
                 &self.paths.cache_dir(),
@@ -1840,6 +1847,45 @@ mod tests {
         assert!(
             with > without,
             "{with} bytes, no more than the {without} of a sticky with no text: {with_text}"
+        );
+    }
+
+    /// canvas_export reads `output_path` as every other tool that writes a file does: trimmed,
+    /// with `~` for the home folder. It used to write the path as given, so `~/Desktop/board.svg`
+    /// made a folder named `~` in the folder the agent runs in, and a stray space at the end
+    /// became part of the file's name.
+    #[tokio::test]
+    async fn an_export_path_is_read_as_every_tool_reads_one() {
+        // `~`, without writing to the home folder: the path that is written is this one.
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = Path::new(&home);
+            let named = named_export("~/Desktop/board.svg");
+            assert_eq!(named, home.join("Desktop").join("board.svg"));
+            assert_eq!(named_export(" ~/board.png \n"), home.join("board.png"));
+        }
+        assert_eq!(named_export(" /a/board.svg "), Path::new("/a/board.svg"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = dir.path().join("project");
+        write_board(&board_file(&project), 1);
+        let out = dir.path().join("page.svg");
+        let done = server
+            .canvas_export(Parameters(CanvasExportArgs {
+                format: Some("svg".into()),
+                output_path: Some(format!("{}  ", out.display())),
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_ne!(done.is_error, Some(true), "{}", said(&done));
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(
+            said(&done),
+            format!(
+                "Canvas exported to {} ({} bytes)",
+                out.display(),
+                written.len()
+            )
         );
     }
 }
