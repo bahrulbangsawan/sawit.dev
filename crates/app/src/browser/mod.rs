@@ -88,6 +88,16 @@ fn pick_mode(panel: Panel, segment: Segment) -> PickMode {
     }
 }
 
+/// Whether a pick the page reports (`mode` as it says) is one Sawit armed: the page can arm
+/// the picker itself, so a pick counts only in the mode armed, with its panel open.
+fn pick_wanted(panel: Option<Panel>, pick: PickMode, mode: &str) -> bool {
+    match mode {
+        "annotate" => panel == Some(Panel::Annotate) && pick == PickMode::Annotate,
+        "inspect" => panel == Some(Panel::Design) && pick == PickMode::Inspect,
+        _ => false,
+    }
+}
+
 /// What a click on the page does.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PickMode {
@@ -763,6 +773,10 @@ impl BrowserView {
             FromPage::Event(PageEvent::Console(entry)) => self.logs.push_console(entry),
             FromPage::Event(PageEvent::Network(entry)) => self.logs.push_network(entry),
             FromPage::Event(PageEvent::Picked(pick)) => {
+                // A page can arm the picker itself: only picks Sawit asked for count.
+                if !pick_wanted(self.panel, self.pick, pick["mode"].as_str().unwrap_or("")) {
+                    return;
+                }
                 self.last_pick = pick["element"]["selector"].as_str().map(str::to_string);
                 if pick["mode"] == "annotate" {
                     match serde_json::from_value(pick["element"].clone()) {
@@ -786,7 +800,13 @@ impl BrowserView {
                 _ => {}
             },
             FromPage::Event(PageEvent::Url(url)) => {
-                self.url = url;
+                // The page says the address changed; WebKit says what it is.
+                self.url = self
+                    .engine
+                    .as_ref()
+                    .and_then(|e| e.url())
+                    .filter(|u| !u.is_empty())
+                    .unwrap_or(url);
                 self.design_url_changed();
                 self.scan_if_design_open(cx);
                 self.show_address(window, cx);
@@ -1732,6 +1752,54 @@ mod tests {
             })
         });
         cx.run_until_parked();
+    }
+
+    /// A page script can arm the picker and click for itself (`__sawitAgent` is the page's to
+    /// call): a pick adds an annotation only while the user has Annotate open and picking.
+    #[gpui_kit::test]
+    fn picks_count_only_while_annotating(cx: &mut gpui_kit::TestAppContext) {
+        use sawit_core::browser::PageEvent;
+        let (view, cx) = test_browser(cx);
+        let pick = serde_json::json!({"mode": "annotate", "element": {
+            "selector": "#buy", "label": "button#buy", "tag": "button",
+            "rect": {"x": 1, "y": 1, "width": 40, "height": 20}}});
+        let picked = |cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|window, cx| {
+                view.update(cx, |b, cx| {
+                    b.receive(
+                        super::FromPage::Event(PageEvent::Picked(pick.clone())),
+                        window,
+                        cx,
+                    )
+                })
+            });
+            cx.run_until_parked();
+        };
+        let rows = |cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|_, cx| view.read(cx).annotate.read(cx).annotations(cx).len())
+        };
+        picked(cx);
+        assert_eq!(rows(cx), 0, "Annotate is closed");
+
+        cx.update(|window, cx| {
+            view.update(cx, |b, cx| {
+                b.toggle_panel(super::Panel::Annotate, window, cx)
+            })
+        });
+        picked(cx);
+        assert_eq!(rows(cx), 1, "the user's pick");
+
+        // Esc stopped picking; the panel is still open.
+        cx.update(|_, cx| view.update(cx, |b, cx| b.set_pick(super::PickMode::Off, cx)));
+        picked(cx);
+        assert_eq!(rows(cx), 1, "picking is off");
+
+        // Design's Inspect picks are no annotations either.
+        cx.update(|window, cx| {
+            view.update(cx, |b, cx| b.toggle_panel(super::Panel::Design, window, cx))
+        });
+        picked(cx);
+        assert_eq!(rows(cx), 1, "Design is open");
     }
 
     /// A page's link to another app (a `mailto:`, or an iframe's `slack://` with no click)

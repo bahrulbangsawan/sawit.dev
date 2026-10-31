@@ -3,14 +3,21 @@
 //
 // - Reports console messages, page errors, requests and URL changes to the
 //   app over IPC, each message signed with the webview's token (held in this
-//   closure, out of the page's reach).
+//   closure, out of the page's reach: see `post`).
 // - Answers the agent's ops through `window.__sawitAgent.run(op)`, which
 //   returns a JSON string synchronously: `{"ok":true,…}` or
 //   `{"ok":false,"error":…}`.
 (() => {
-  if (window.__sawitAgent || !window.ipc || !window.ipc.postMessage) return;
+  const handlers = window.webkit && window.webkit.messageHandlers;
+  const ipc = handlers && handlers.ipc;
+  if (window.__sawitAgent || !ipc || typeof ipc.postMessage !== "function") return;
   const TOKEN = "__SAWIT_TOKEN__";
-  const post = window.ipc.postMessage.bind(window.ipc);
+  // The handler's own `postMessage` and `Reflect.apply`, as they are before any page script
+  // runs. wry's `window.ipc` shim looks the handler's method up on every call, so a page
+  // that patched it (on the handler's prototype) would read every signed message.
+  const postMessage = ipc.postMessage;
+  const apply = Reflect.apply;
+  const post = (message) => apply(postMessage, ipc, [message]);
   const send = (kind, data) => {
     try {
       post(TOKEN + "\n" + kind + "\n" + JSON.stringify(data));

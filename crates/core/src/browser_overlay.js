@@ -410,6 +410,11 @@
     else if (e.deltaY > 0) back();
   };
   const SWALLOWED = ["pointerdown", "pointerup", "mousedown", "mouseup", "auxclick", "contextmenu"];
+  // Only the user's own input picks: a page can arm the picker (`__sawitAgent` is on the
+  // page) and dispatch events, and those, like an agent's clicks, go to the page untouched.
+  const user = (fn) => (e) => {
+    if (e.isTrusted) fn(e);
+  };
   const LISTENERS = [
     ["pointermove", move],
     ["mousemove", move],
@@ -418,7 +423,7 @@
     ["keydown", keydown],
     ["keyup", altKey],
     ["wheel", wheel],
-  ];
+  ].map(([type, fn]) => [type, user(fn)]);
   const stopPicking = () => {
     if (mode === "off") return;
     for (const [type, fn] of LISTENERS) window.removeEventListener(type, fn, { capture: true });
