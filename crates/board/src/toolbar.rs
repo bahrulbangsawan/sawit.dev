@@ -60,7 +60,8 @@ pub struct ToolButton {
     pub tool: ToolId,
     /// What the tooltip calls the tool: FigCraft's own label for it.
     pub label: &'static str,
-    /// The tool's key as a Mac menu writes it (`V`, `⇧S`). `None` for a tool without a key.
+    /// The tool's key in FigCraft's keymap, as a Mac menu writes it (`V`, `⇧S`). `None` for a
+    /// tool without a key. The app's tooltip shows the key the keymap binds now instead.
     pub shortcut: Option<String>,
     pub icon: ToolIcon,
 }

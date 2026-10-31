@@ -181,6 +181,102 @@ pub fn command_label(action: &dyn Action) -> Option<String> {
     ))
 }
 
+/// The canvas commands' keys as the hints show them, kept until the keymap changes: each lookup
+/// resolves a command's bindings against the whole keymap, and the chrome asks for a dozen or so
+/// on every frame.
+#[derive(Default)]
+struct HintKeys {
+    version: Option<KeymapVersion>,
+    keys: std::collections::HashMap<String, Vec<String>>,
+}
+impl Global for HintKeys {}
+
+/// The keys that run canvas command `id` on the canvas as the keymap binds them now, as the
+/// canvas's hints show them: the tooltips, the menus, the Actions palette and the shortcuts
+/// sheet. A key that is one of FigCraft's for the command reads as FigCraft writes it (`⌃⇧?`,
+/// `⌘+`), so the defaults read as FigCraft's own app shows them; the defaults come first, in
+/// FigCraft's order, then the keys the user gave the command, the last bound first. A key Sawit
+/// keeps, or that the user took out, isn't among them. Empty when no key runs the command: on the
+/// canvas, or else while it edits text (the text commands' keys).
+pub fn command_keys_all(id: &str, cx: &mut App) -> Vec<String> {
+    let version = cx.key_bindings().borrow().version();
+    let cache = cx.default_global::<HintKeys>();
+    if cache.version != Some(version) {
+        cache.version = Some(version);
+        cache.keys.clear();
+    }
+    if let Some(keys) = cache.keys.get(id) {
+        return keys.clone();
+    }
+    let keys = live_command_keys(id, cx);
+    cx.global_mut::<HintKeys>()
+        .keys
+        .insert(id.to_string(), keys.clone());
+    keys
+}
+
+/// [`command_keys_all`], looked up.
+fn live_command_keys(id: &str, cx: &App) -> Vec<String> {
+    use figcraft_engine::keymap::{self as figcraft_keys, Platform};
+    let names = crate::keymap::names::normalize_keystrokes;
+    // FigCraft's own keys for the command, each as it is bound and as FigCraft writes it.
+    let figcraft: Vec<(String, String)> = figcraft_keys::KEYS
+        .iter()
+        .filter(|binding| binding.id == id)
+        .flat_map(|binding| binding.keys(Platform::Mac))
+        .filter_map(|spec| {
+            let bound = names(&shortcuts::binding_keystroke(spec)?)?;
+            Some((bound, figcraft_keys::display(spec, Platform::Mac)))
+        })
+        .collect();
+    let command = Command { id: id.to_string() };
+    let keymap = cx.key_bindings();
+    let keymap = keymap.borrow();
+    let stack = |canvas: &str| -> Vec<KeyContext> {
+        ["Root", "Workspace", canvas]
+            .into_iter()
+            .map(|context| KeyContext::parse(context).unwrap_or_default())
+            .collect()
+    };
+    for stack in [stack("Board"), stack("Board BoardText")] {
+        // As GPUI's own lookup: a binding counts where it matches and no other of its keys runs
+        // first.
+        let live: Vec<&KeyBinding> = keymap
+            .bindings_for_action(&command)
+            .filter(|binding| {
+                let (found, _) = keymap.bindings_for_input(binding.keystrokes(), &stack);
+                found
+                    .first()
+                    .is_some_and(|first| first.action().partial_eq(binding.action()))
+            })
+            .collect();
+        if live.is_empty() {
+            continue;
+        }
+        let (users, defaults): (Vec<&KeyBinding>, Vec<&KeyBinding>) = live
+            .into_iter()
+            .partition(|binding| binding.meta() == Some(crate::keymap::USER));
+        let mut keys: Vec<String> = Vec::new();
+        for binding in defaults.into_iter().chain(users.into_iter().rev()) {
+            let typed = crate::keymap::names::unparse(binding.keystrokes());
+            let shown = names(&typed)
+                .and_then(|typed| figcraft.iter().find(|(bound, _)| *bound == typed))
+                .map(|(_, label)| label.clone())
+                .unwrap_or_else(|| crate::keymap::names::display(binding.keystrokes()));
+            if !keys.contains(&shown) {
+                keys.push(shown);
+            }
+        }
+        return keys;
+    }
+    Vec::new()
+}
+
+/// The first of [`command_keys_all`]: what a tooltip or a menu item shows.
+pub fn command_keys(id: &str, cx: &mut App) -> Option<String> {
+    command_keys_all(id, cx).into_iter().next()
+}
+
 /// The title of FigCraft's command `id`: its shortcut's, else its menu item's, else its own.
 fn command_title(id: &str) -> &str {
     figcraft_engine::keymap::KEYS
@@ -224,6 +320,53 @@ pub fn unbound_rows(rows: &[crate::keymap::Row]) -> Vec<crate::keymap::Row> {
             keystrokes: SharedString::default(),
             display: SharedString::default(),
             context: Some(shortcuts::CANVAS_CONTEXT.into()),
+        })
+        .collect()
+}
+
+/// `NoAction` on the canvas for each chord of `user` (the keymap file's bindings, bound after
+/// `defaults`) that starts with a key the canvas binds alone in `defaults`: bound after them, it
+/// keeps that key from waiting for the chord's next key (GPUI waits up to a second when a chord
+/// bound after a key's own binding goes on from it), as [`let_through`] does for the
+/// workspace's ⌘K chords. Such a chord then works everywhere but on the canvas, unless the user
+/// bound it on the canvas itself.
+pub fn let_through_chords<'a>(
+    defaults: &[KeyBinding],
+    user: impl IntoIterator<Item = &'a KeyBinding>,
+    cx: &App,
+) -> Vec<KeyBinding> {
+    let canvas = [
+        KeyContext::parse("Workspace").unwrap_or_default(),
+        KeyContext::parse("Board").unwrap_or_default(),
+    ];
+    let editing = [
+        KeyContext::parse("Workspace").unwrap_or_default(),
+        KeyContext::parse("Board BoardText").unwrap_or_default(),
+    ];
+    let on_canvas = |binding: &KeyBinding| {
+        binding
+            .predicate()
+            .is_some_and(|p| p.eval(&canvas) || p.eval(&editing))
+    };
+    let alone: Vec<&KeybindingKeystroke> = defaults
+        .iter()
+        .filter(|binding| binding.keystrokes().len() == 1 && on_canvas(binding))
+        .map(|binding| &binding.keystrokes()[0])
+        .collect();
+    let board = KeyBindingContextPredicate::parse("Board")
+        .ok()
+        .map(std::rc::Rc::new);
+    user.into_iter()
+        .filter(|chord| {
+            chord.keystrokes().len() > 1
+                && !is_no_action(chord.action())
+                && !is_unbind(chord.action())
+                && !on_canvas(chord)
+                && alone.contains(&&chord.keystrokes()[0])
+        })
+        .filter_map(|chord| {
+            let keys = crate::keymap::names::unparse(chord.keystrokes());
+            KeyBinding::load(&keys, Box::new(NoAction), board.clone(), false, None, cx).ok()
         })
         .collect()
 }
@@ -5375,6 +5518,115 @@ mod tests {
         });
         assert_eq!(removed, Ok(()));
         assert_eq!(tooltip(cx), "Maximize");
+    }
+
+    /// The canvas's hints read the keymap: a command's keys as FigCraft writes them while they
+    /// still run it, the key the user gives it instead, and none once that is taken out too.
+    #[gpui_kit::test]
+    fn the_canvas_hints_follow_the_keymap(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("canvas-hints");
+        cx.update(bind_app_keys);
+        cx.update(|cx| crate::keymap::init_at(tmp.0.join("keymap.json"), cx));
+        let default_of = |id: &str, keys: &str, cx: &App| {
+            let rows = crate::keymap::store(cx).read(cx).rows(false, cx);
+            rows.into_iter()
+                .find(|row| {
+                    row.args
+                        .as_deref()
+                        .is_some_and(|a| a.contains(&format!("\"{id}\"")))
+                        && row.keystrokes.as_ref() == keys
+                        && matches!(row.source, crate::keymap::Source::Default(_))
+                })
+                .unwrap_or_else(|| panic!("the default {keys} of {id}"))
+                .source
+        };
+        cx.update(|cx| {
+            // The defaults read as FigCraft writes them, as they did before any rebinding.
+            for id in [
+                "tool.rectangle",
+                "app.actions",
+                "view.zoomIn",
+                "view.zoomOut",
+                "view.zoomFit",
+                "help.shortcuts",
+                "view.toggleUi",
+                "view.layers",
+                "view.design",
+                "align.left",
+                "text.bold",
+            ] {
+                assert_eq!(
+                    super::command_keys(id, cx),
+                    sawit_board::menu::shortcut_label(id),
+                    "{id}"
+                );
+            }
+            let store = crate::keymap::store(cx);
+            // R moves to ⌃⌥R.
+            let rectangle = default_of("tool.rectangle", "r", cx);
+            store
+                .update(cx, |store, cx| {
+                    store.change(
+                        rectangle,
+                        Some(shortcuts::CANVAS_CONTEXT),
+                        "ctrl-alt-r",
+                        "board::Command",
+                        Some(json!({ "id": "tool.rectangle" })),
+                        cx,
+                    )
+                })
+                .unwrap();
+            assert_eq!(
+                super::command_keys("tool.rectangle", cx).as_deref(),
+                Some("⌃⌥R")
+            );
+            // ⌘K is taken out of the palette's keys: its other key, ⌘/, still opens it.
+            let palette = default_of("app.actions", "cmd-k", cx);
+            store
+                .update(cx, |store, cx| store.remove(palette, cx))
+                .unwrap();
+            assert_eq!(
+                super::command_keys("app.actions", cx).as_deref(),
+                Some("⌘/")
+            );
+            // The sheet and the palette say the same.
+            let sheet = menus::live_sheet(shortcuts::sheet(), cx);
+            let sheet_keys = |id: &str| {
+                sheet
+                    .iter()
+                    .flat_map(|group| &group.rows)
+                    .find(|row| row.id == id)
+                    .map(|row| row.keys.clone())
+            };
+            assert_eq!(sheet_keys("tool.rectangle").as_deref(), Some("⌃⌥R"));
+            assert_eq!(sheet_keys("app.actions").as_deref(), Some("⌘/"));
+            let mut items = vec![sawit_board::actions::ActionItem {
+                id: "tool.rectangle",
+                label: "Rectangle".into(),
+                path: "Rectangle".into(),
+                shortcut: Some("R".into()),
+            }];
+            menus::live_actions(&mut items, cx);
+            assert_eq!(items[0].shortcut.as_deref(), Some("⌃⌥R"));
+            // Taken out too, the rectangle has no key, and leaves the sheet.
+            let rows = store.read(cx).rows(false, cx);
+            let users = rows
+                .iter()
+                .find(|row| row.keystrokes.as_ref() == "ctrl-alt-r")
+                .unwrap()
+                .source;
+            store
+                .update(cx, |store, cx| store.remove(users, cx))
+                .unwrap();
+            assert_eq!(super::command_keys("tool.rectangle", cx), None);
+            let sheet = menus::live_sheet(shortcuts::sheet(), cx);
+            assert!(
+                !sheet
+                    .iter()
+                    .flat_map(|group| &group.rows)
+                    .any(|row| row.id == "tool.rectangle")
+            );
+        });
     }
 
     #[test]

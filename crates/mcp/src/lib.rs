@@ -86,7 +86,7 @@ These control the running Sawit app (start it with launch_app; app_state shows w
 - app_*: open files/folders, show panels, layout, tabs, pages (canvas, MCP, tools, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
 - terminal_*: run commands in Sawit's terminal and read their output, type keys (ctrl-c), close tabs or panes. terminal_run, app_run_script and app_ssh_connect return the terminal (tab) and `pane` they used: pass both to terminal_read, terminal_input and terminal_close, since the user may be typing in another terminal, which stays in front (app_state lists tabs and panes). terminal_input needs the tab, and a split tab needs its pane; terminal_read without a tab reads the pane the user has in front, and terminal_close without a pane closes the whole tab.
 - canvas_*: the canvas (FigCraft engine): list, add shapes/stickies/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG. They also work on the saved file when the app is closed.
-- canvas_command: run any command of the canvas engine by id with its parameters (board.sticky, node.set, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes.
+- canvas_command: run any command of the canvas engine by id with its parameters (board.sticky, node.set, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes. With the app closed each call starts from the saved file, so nothing carries over between calls (no undo, no selection, no view): pass ids, or run the steps in one command.batch.
 - browser_*: a browser tab (WebKit) to check the app being built: navigate (default the project's dev server), snapshot the page as an outline with element refs, click/hover/type/press keys/select/scroll by ref or CSS selector, wait for text, screenshot, read console errors and network requests, evaluate JS, resize to a device, read the user's annotations, inspect an element's design, read the page's design system, export it as DESIGN.md + tokens + assets. Take a new browser_snapshot after the page changes; refs reset.
 Most app tools take `project` to pick the window that has that folder open; without it, the window that has the folder sawit-mcp runs in open is used, else the frontmost window.
 Targets: database tools take a Sawit instance name or a saved connection name (see list_connections).";
@@ -170,6 +170,25 @@ pub(crate) fn existing_dir(dir: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// The file `output_path` names for `tool` to write, if it names one, read as every tool that
+/// writes a file reads it: trimmed (a blank one names none, and the tool picks its own file), `~`
+/// for the home folder, absolute, and never a canvas file ([`refuse_canvas_file`]). It is checked
+/// before anything is made, and it is the path written.
+pub(crate) fn output_path(
+    tool: &str,
+    output_path: Option<&str>,
+) -> Result<Option<PathBuf>, String> {
+    let Some(p) = output_path.map(str::trim).filter(|p| !p.is_empty()) else {
+        return Ok(None);
+    };
+    let path = expand_home(p);
+    if !path.is_absolute() {
+        return Err(format!("output_path “{p}” must be absolute."));
+    }
+    refuse_canvas_file(tool, &path)?;
+    Ok(Some(path))
+}
+
 /// Refuses `path`, a file an agent asked `tool` to write, when it is a canvas file: a `.figcraft`
 /// or `.excalidraw` file, or a copy Sawit keeps of one ([`sawit_board::ops::is_canvas_file`]).
 /// While the app is closed nothing else holds the board, so one mistaken path would replace it
@@ -183,6 +202,16 @@ pub(crate) fn refuse_canvas_file(tool: &str, path: &Path) -> Result<(), String> 
         ));
     }
     Ok(())
+}
+
+/// `path` as an agent means it: trimmed, with `~` for the home folder, and a relative path taken
+/// from the folder the agent runs in (sawit-mcp's), not from the app's, whose folder is another.
+pub(crate) fn agent_path(path: &str) -> PathBuf {
+    let path = expand_home(path.trim());
+    match std::env::current_dir() {
+        Ok(cwd) if path.is_relative() => cwd.join(path),
+        _ => path,
+    }
 }
 
 pub(crate) fn expand_home(path: &str) -> PathBuf {
@@ -229,6 +258,214 @@ pub(crate) fn utc_time(secs: i64) -> String {
     )
 }
 
+/// The tools that change nothing: they read files, databases, the app or the network, or change
+/// only what the Sawit window shows (a panel, a tab, the layout, the browser page's scroll or
+/// size). MCP's `readOnlyHint`, which a client may act on by letting them through ([`hints`]).
+const READ_ONLY: &[&str] = &[
+    "list_instances",
+    "instance_logs",
+    "check_port",
+    "list_postgres_binaries",
+    "list_connections",
+    "detect_databases",
+    "list_databases",
+    "describe_schema",
+    "describe_table",
+    "query",
+    "list_ports",
+    "diagnose_network",
+    "ping",
+    "list_ssh_hosts",
+    "probe_ssh_host",
+    "list_scripts",
+    "git_status",
+    "git_log",
+    "git_diff",
+    "git_show",
+    "git_branches",
+    "list_prompts",
+    "get_prompt",
+    "search_files",
+    "list_dev_tools",
+    "list_mcp_servers",
+    "app_state",
+    "app_open",
+    "app_focus",
+    "app_show_panel",
+    "app_layout",
+    "app_maximize_terminal",
+    "app_open_page",
+    "app_activate_tab",
+    "app_run_list",
+    "app_open_table",
+    "app_network_diagnose",
+    "app_open_diagram",
+    "app_open_prompt",
+    "terminal_read",
+    "canvas_get",
+    "canvas_commands",
+    "browser_snapshot",
+    "browser_hover",
+    "browser_scroll",
+    "browser_wait_for",
+    "browser_console",
+    "browser_network",
+    "browser_resize",
+    "browser_inspect",
+    "browser_design",
+];
+
+/// The tools that can delete or replace what was there before the call (a database, rows, a file
+/// at a path given, a setting, the canvas, a running process), or run what they can't bound: SQL,
+/// a shell command, a script, JavaScript, an install script. MCP's `destructiveHint`, which a
+/// client may act on by asking first. Every other tool that isn't [`READ_ONLY`] only adds.
+const DESTRUCTIVE: &[&str] = &[
+    "stop_instance",
+    "restart_instance",
+    "remove_instance",
+    "drop_database",
+    "execute_sql",
+    "save_connection",
+    "remove_connection",
+    "write_env",
+    "export_table",
+    "export_query",
+    "backup_database",
+    "drop_relation",
+    "truncate_table",
+    "render_mermaid",
+    "schema_diagram",
+    "stop_processes",
+    "update_ssh_host",
+    "remove_ssh_host",
+    "ssh_exec",
+    "save_command",
+    "remove_command",
+    "git_commit",
+    "update_prompt",
+    "delete_prompt",
+    "install_dev_tools",
+    "upgrade_dev_tools",
+    "install_mcp_server",
+    "uninstall_mcp_server",
+    "app_close_tab",
+    "app_run_script",
+    "app_stop_script",
+    "app_open_sql",
+    "app_instance",
+    "terminal_run",
+    "terminal_input",
+    "terminal_close",
+    "canvas_update",
+    "canvas_delete",
+    "canvas_clear",
+    "canvas_load",
+    "canvas_export",
+    "canvas_command",
+    "browser_click",
+    "browser_type",
+    "browser_press_key",
+    "browser_select_option",
+    "browser_screenshot",
+    "browser_evaluate",
+    "browser_annotations",
+    "browser_export_design",
+];
+
+/// The tools that change things but only add: a database, an instance, a prompt, rows, shapes on
+/// the canvas, a saved SSH host; or start something (the app, an instance, a session, a page). Not
+/// read-only, and not destructive ([`hints`]). Every tool is in one of [`READ_ONLY`],
+/// [`DESTRUCTIVE`] and this list, so a new one has to be placed.
+const ADDS: &[&str] = &[
+    "create_instance",
+    "start_instance",
+    "create_database",
+    "import_csv",
+    "refresh_materialized_view",
+    "add_ssh_host",
+    "git_stage",
+    "git_unstage",
+    "git_switch",
+    "create_prompt",
+    "fill_prompt",
+    "launch_app",
+    "app_ssh_connect",
+    "canvas_add_elements",
+    "canvas_add_mermaid",
+    "browser_navigate",
+];
+
+/// The tools that reach past this Mac's own state: the internet, a remote host, a database that
+/// may be a server elsewhere (a saved connection), a web page, or whatever a command they run
+/// reaches. MCP's `openWorldHint`; the others stay on this Mac.
+const OPEN_WORLD: &[&str] = &[
+    "create_instance",
+    "detect_databases",
+    "list_databases",
+    "create_database",
+    "drop_database",
+    "describe_schema",
+    "describe_table",
+    "query",
+    "execute_sql",
+    "export_table",
+    "export_query",
+    "backup_database",
+    "import_csv",
+    "drop_relation",
+    "truncate_table",
+    "refresh_materialized_view",
+    "schema_diagram",
+    "diagnose_network",
+    "ping",
+    "probe_ssh_host",
+    "ssh_exec",
+    "list_dev_tools",
+    "install_dev_tools",
+    "upgrade_dev_tools",
+    "app_run_script",
+    "app_ssh_connect",
+    "app_open_table",
+    "app_open_sql",
+    "app_network_diagnose",
+    "app_open_diagram",
+    "terminal_run",
+    "terminal_input",
+    "canvas_command",
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_click",
+    "browser_hover",
+    "browser_type",
+    "browser_press_key",
+    "browser_select_option",
+    "browser_scroll",
+    "browser_wait_for",
+    "browser_screenshot",
+    "browser_console",
+    "browser_network",
+    "browser_evaluate",
+    "browser_resize",
+    "browser_inspect",
+    "browser_design",
+    "browser_export_design",
+];
+
+/// MCP's hints for the tool `name`, from [`READ_ONLY`], [`DESTRUCTIVE`], [`ADDS`] and
+/// [`OPEN_WORLD`] (MCP-15). A tool that only reads says nothing of destroying, which MCP reads only
+/// of one that doesn't; one in no list counts as destructive, as MCP's own default has it.
+fn hints(name: &str) -> rmcp::model::ToolAnnotations {
+    let read_only = READ_ONLY.contains(&name);
+    let destructive = DESTRUCTIVE.contains(&name) || !ADDS.contains(&name);
+    rmcp::model::ToolAnnotations::from_raw(
+        None,
+        Some(read_only),
+        (!read_only).then_some(destructive),
+        None,
+        Some(OPEN_WORLD.contains(&name)),
+    )
+}
+
 impl Sawit {
     /// A server for the Sawit data folder `paths`.
     pub fn new(paths: AppPaths) -> Self {
@@ -238,8 +475,17 @@ impl Sawit {
         }
     }
 
-    /// Every tool, from each area's router.
+    /// Every tool, from each area's router, each with the hints that say what it does to the
+    /// world ([`hints`]).
     pub fn router() -> ToolRouter<Sawit> {
+        let mut router = Self::area_routers();
+        for (name, route) in &mut router.map {
+            route.attr.annotations = Some(hints(name));
+        }
+        router
+    }
+
+    fn area_routers() -> ToolRouter<Sawit> {
         Self::instances_router()
             + Self::db_router()
             + Self::db_admin_router()
@@ -474,6 +720,115 @@ mod tests {
         }
     }
 
+    /// MCP-15: every tool carries MCP's hints for the clients that act on them (letting a
+    /// read-only tool through, asking before a destructive one): whether it only reads, whether
+    /// it can destroy what was there, and whether it reaches past this Mac. No tool had any, so a
+    /// client told `query` from `execute_sql`, or `canvas_get` from `canvas_clear`, only by prose.
+    #[test]
+    fn every_tool_says_what_it_does_to_the_world() {
+        let tools = Sawit::router().list_all();
+        let unsaid: Vec<&str> = tools
+            .iter()
+            .filter(|tool| {
+                tool.annotations.as_ref().is_none_or(|hints| {
+                    hints.read_only_hint.is_none()
+                        || hints.open_world_hint.is_none()
+                        || (hints.read_only_hint == Some(false) && hints.destructive_hint.is_none())
+                })
+            })
+            .map(|tool| tool.name.as_ref())
+            .collect();
+        assert!(unsaid.is_empty(), "these tools say nothing: {unsaid:?}");
+
+        let hints = |name: &str| {
+            let tool = tools.iter().find(|tool| tool.name == name);
+            let tool = tool.unwrap_or_else(|| panic!("no tool {name}"));
+            let sent = serde_json::to_value(tool).unwrap()["annotations"].clone();
+            (
+                sent["readOnlyHint"].as_bool(),
+                sent["destructiveHint"].as_bool(),
+                sent["openWorldHint"].as_bool(),
+            )
+        };
+        for name in [
+            "query",
+            "describe_table",
+            "canvas_get",
+            "git_status",
+            "list_dev_tools",
+            "app_state",
+            "browser_snapshot",
+        ] {
+            assert_eq!(hints(name).0, Some(true), "{name} only reads");
+        }
+        for name in [
+            "execute_sql",
+            "drop_database",
+            "truncate_table",
+            "remove_instance",
+            "canvas_clear",
+            "canvas_delete",
+            "stop_processes",
+            "git_commit",
+            "uninstall_mcp_server",
+            "install_dev_tools",
+            "terminal_run",
+            "browser_evaluate",
+        ] {
+            assert_eq!(hints(name).0, Some(false), "{name} changes things");
+            assert_eq!(hints(name).1, Some(true), "{name} can destroy");
+        }
+        for name in [
+            "canvas_add_elements",
+            "create_prompt",
+            "create_database",
+            "git_stage",
+            "launch_app",
+        ] {
+            assert_eq!(hints(name).0, Some(false), "{name} changes things");
+            assert_eq!(hints(name).1, Some(false), "{name} only adds");
+        }
+        for name in [
+            "query",
+            "ping",
+            "ssh_exec",
+            "install_dev_tools",
+            "browser_navigate",
+        ] {
+            assert_eq!(hints(name).2, Some(true), "{name} reaches past this Mac");
+        }
+        for name in ["canvas_get", "git_status", "list_prompts", "search_files"] {
+            assert_eq!(hints(name).2, Some(false), "{name} stays on this Mac");
+        }
+    }
+
+    /// Every tool is placed in exactly one of [`READ_ONLY`], [`DESTRUCTIVE`] and [`ADDS`], so a
+    /// tool added without its hints fails here; and every name in the lists, [`OPEN_WORLD`]'s
+    /// too, is a tool there is.
+    #[test]
+    fn the_hint_lists_place_every_tool_once() {
+        let names: Vec<String> = Sawit::router()
+            .list_all()
+            .iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+        for name in &names {
+            let placed = [READ_ONLY, DESTRUCTIVE, ADDS]
+                .iter()
+                .filter(|list| list.contains(&name.as_str()))
+                .count();
+            assert_eq!(placed, 1, "{name} is in {placed} of the lists");
+        }
+        for name in READ_ONLY
+            .iter()
+            .chain(DESTRUCTIVE)
+            .chain(ADDS)
+            .chain(OPEN_WORLD)
+        {
+            assert!(names.iter().any(|n| n == name), "no tool {name}");
+        }
+    }
+
     #[test]
     fn server_info_has_instructions() {
         let sawit = Sawit::new(AppPaths {
@@ -625,6 +980,52 @@ mod tests {
                 "{what} doesn't mention the filter: {text}"
             );
         }
+    }
+
+    /// What an agent is told matches what the tools do:
+    /// - MCP-12: with the app closed every canvas_command opens the saved file afresh, so nothing
+    ///   carries over from one call to the next: edit.undo has nothing to undo, and a command that
+    ///   acts on the selection has none unless it is given ids or runs in one command.batch.
+    /// - MCP-13: the browser_* tools need the app, as the app_* and terminal_* tools do.
+    /// - MCP-14: app_show_panel's `shell_config` is the panel the app calls Config Files.
+    #[test]
+    fn agents_are_told_what_needs_the_app_and_what_a_closed_one_keeps() {
+        let sent: Vec<(String, String)> = Sawit::router()
+            .list_all()
+            .iter()
+            .map(|tool| (tool.name.to_string(), serde_json::to_string(tool).unwrap()))
+            .collect();
+        let tool = |name: &str| {
+            let found = sent.iter().find(|(candidate, _)| candidate == name);
+            found.map_or_else(|| panic!("no tool {name}"), |(_, text)| text.clone())
+        };
+        let line = INSTRUCTIONS
+            .lines()
+            .find(|line| line.starts_with("- canvas_command:"))
+            .expect("a canvas_command line");
+        for (what, text) in [
+            ("canvas_command", tool("canvas_command")),
+            ("the canvas_command line", line.to_string()),
+        ] {
+            for said in [
+                "With the app closed each call starts from the saved file",
+                "no undo",
+                "pass ids",
+                "command.batch",
+            ] {
+                assert!(text.contains(said), "{what} doesn't say {said:?}: {text}");
+            }
+        }
+        let launch = tool("launch_app");
+        assert!(
+            launch.contains("The app_*, terminal_* and browser_* tools need it running"),
+            "{launch}"
+        );
+        let panel = tool("app_show_panel");
+        assert!(
+            panel.contains("shell_config (the Config Files panel)"),
+            "{panel}"
+        );
     }
 
     /// The terminal_* line says what the tools do now that a terminal tab can hold split panes

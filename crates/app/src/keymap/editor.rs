@@ -4,7 +4,8 @@
 //!
 //! The filter finds an action by its name, its context or its keys; with keystroke search on it
 //! records keys instead, and finds the bindings that start with them. Bindings of the same keys in
-//! the same context are marked: only one of them runs.
+//! the same context are marked: only one of them runs. A change never removes another binding: a
+//! binding saved with keys another one has in its context goes after it, and runs first.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -18,7 +19,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use serde_json::Value;
 
-use super::recorder::{Changed, KeystrokeRecorder};
+use super::recorder::{Changed, Done, KeystrokeRecorder};
 use super::{KeymapStore, OpenKeymapFile, Row, Source, names, store};
 use crate::states::{Banner, Placeholder};
 
@@ -38,7 +39,11 @@ actions!(
         /// Finds bindings by their keys instead of their names.
         ToggleKeystrokeSearch,
         /// Moves the keyboard to the filter.
-        FocusFilter
+        FocusFilter,
+        /// Opens the keymap file in an editor tab, from the keymap editor. Its own action, so
+        /// that its key (⌘E) stays the editor's: the Sawit menu's Open Keymap File, which runs
+        /// `keymap::OpenKeymapFile`, would take a key bound to that as an app-wide shortcut.
+        EditInJson
     ]
 );
 
@@ -56,7 +61,7 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-n", CreateBinding, ctx),
         KeyBinding::new("alt-cmd-k", ToggleKeystrokeSearch, ctx),
         KeyBinding::new("cmd-f", FocusFilter, ctx),
-        KeyBinding::new("cmd-e", OpenKeymapFile, ctx),
+        KeyBinding::new("cmd-e", EditInJson, ctx),
     ]
 }
 
@@ -85,7 +90,7 @@ impl KeymapEditor {
         let store = store(cx);
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter action names…"));
         let keys_filter =
-            cx.new(|cx| KeystrokeRecorder::new("Press keys to find their bindings", cx));
+            cx.new(|cx| KeystrokeRecorder::new("Press keys to find their bindings", window, cx));
         let subscriptions = vec![
             cx.observe(&store, |this, _, cx| this.refresh(cx)),
             cx.subscribe(&filter, |this, _, event: &InputEvent, cx| {
@@ -94,6 +99,10 @@ impl KeymapEditor {
                 }
             }),
             cx.subscribe(&keys_filter, |this, _, _: &Changed, cx| this.refresh(cx)),
+            // ⎋ or ↩ in the search field: the list takes the keyboard, for ↑, ↓ and ↩.
+            cx.subscribe_in(&keys_filter, window, |this, _, _: &Done, window, cx| {
+                window.focus(&this.focus, cx)
+            }),
         ];
         let mut this = Self {
             store,
@@ -307,7 +316,7 @@ impl KeymapEditor {
                     .ghost()
                     .small()
                     .label("Edit in JSON")
-                    .tooltip_with_action("Open keymap.json", &OpenKeymapFile, Some(CONTEXT))
+                    .tooltip_with_action("Open keymap.json", &EditInJson, Some(CONTEXT))
                     .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenKeymapFile), cx)),
             )
             .child(
@@ -509,6 +518,9 @@ impl Render for KeymapEditor {
             .on_action(cx.listener(Self::create))
             .on_action(cx.listener(Self::toggle_keystroke_search))
             .on_action(cx.listener(Self::focus_filter))
+            .on_action(|_: &EditInJson, window, cx| {
+                window.dispatch_action(Box::new(OpenKeymapFile), cx)
+            })
             .child(self.render_toolbar(cx))
             .children(errors.into_iter().enumerate().map(|(ix, error)| {
                 div()
@@ -693,6 +705,9 @@ enum FormTarget {
 struct BindingForm {
     target: FormTarget,
     editor: WeakEntity<KeymapEditor>,
+    /// The form's own: it takes the keyboard when the keys field stops recording (⎋), so that a
+    /// second ⎋ cancels.
+    focus: FocusHandle,
     action: Entity<InputState>,
     args: Entity<InputState>,
     context: Entity<InputState>,
@@ -739,7 +754,7 @@ impl BindingForm {
             }
         });
         let keys = cx.new(|cx| {
-            let mut recorder = KeystrokeRecorder::new("Click, then press the keys", cx);
+            let mut recorder = KeystrokeRecorder::new("Click, then press the keys", window, cx);
             if let Some(row) = &row {
                 recorder.set_keystrokes(&row.keystrokes, cx);
             }
@@ -756,10 +771,22 @@ impl BindingForm {
                 this.error = None;
                 cx.notify();
             }),
+            cx.subscribe_in(
+                &keys,
+                window,
+                |this, _, done: &Done, window, cx| match done {
+                    Done::Stopped => {
+                        window.focus(&this.focus, cx);
+                        cx.notify();
+                    }
+                    Done::Confirmed => this.save(window, cx),
+                },
+            ),
         ];
         Self {
             target,
             editor,
+            focus: cx.focus_handle(),
             action,
             args,
             context,
@@ -858,6 +885,41 @@ impl BindingForm {
         (same, elsewhere)
     }
 
+    /// The active bindings, in this context or anywhere, that the keys being recorded start
+    /// (`⌘K W (workspace: close all tabs)`), then those that start them: a key bound alone and a
+    /// chord on it either keep the key waiting for the chord's next key, or leave the chord out
+    /// of reach.
+    fn chord_clashes(&self, cx: &App) -> (Vec<String>, Vec<String>) {
+        let keys = self.keys.read(cx).keystrokes();
+        if keys.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+        let context = self.context.read(cx).value().trim().to_string();
+        let own = match &self.target {
+            FormTarget::Row(row) => Some(row.source),
+            FormTarget::New => None,
+        };
+        let rows = store(cx).read(cx).rows(false, cx);
+        let (mut longer, mut shorter) = (Vec::new(), Vec::new());
+        for row in rows
+            .iter()
+            .filter(|r| is_active(r) && Some(r.source) != own)
+        {
+            let row_context = row.context.as_deref().unwrap_or_default();
+            if !(row_context == context || row_context.is_empty() || context.is_empty()) {
+                continue;
+            }
+            let named = || format!("{} ({})", row.display, row.label);
+            if row.keystrokes.len() > keys.len() && starts_with_keys(&row.keystrokes, &keys) {
+                longer.push(named());
+            } else if keys.len() > row.keystrokes.len() && starts_with_keys(&keys, &row.keystrokes)
+            {
+                shorter.push(named());
+            }
+        }
+        (longer, shorter)
+    }
+
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.try_save(cx) {
             Ok(()) => {
@@ -905,9 +967,15 @@ impl BindingForm {
                 store.add(context, &keystrokes, &action, args, cx)
             }),
             FormTarget::Row(row) => {
-                if let Source::Default(ix) = row.source {
+                if !store.read(cx).is_current(row, cx) {
+                    return Err("keymap.json has changed since this form opened. Cancel, then edit the binding again.".into());
+                }
+                if let Source::Default(ix) = row.source
+                    && row.args.is_none()
+                {
                     // A default built in code with arguments the keymap can't show: writing it
-                    // back would bind another action.
+                    // back would bind another action. (A default that shows its arguments, as
+                    // the canvas's do, may be given others.)
                     let default = store.read(cx).defaults()[ix].action().boxed_clone();
                     if action == row.action.as_ref() && !default.partial_eq(built.as_ref()) {
                         return Err("This default's action has arguments the keymap can't show. Remove it, then create a binding with the arguments.".into());
@@ -945,6 +1013,7 @@ impl Render for BindingForm {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let (same, elsewhere) = self.clashes(cx);
+        let (longer, shorter) = self.chord_clashes(cx);
         let keys = self.keys.read(cx).keystrokes();
         let label = |text: &'static str| {
             div()
@@ -957,6 +1026,7 @@ impl Render for BindingForm {
         let new = self.is_new();
         v_flex()
             .id("binding-form")
+            .track_focus(&self.focus)
             .w(px(560.))
             .max_w_full()
             .gap_3()
@@ -1024,7 +1094,7 @@ impl Render for BindingForm {
                         div()
                             .text_xs()
                             .text_color(muted)
-                            .child("Every key is recorded while the field is focused, up to 3 for a chord (⌘K ⌘S)."),
+                            .child("Every key is recorded while the field is focused, up to 3 for a chord (⌘K ⌘S). ↩ saves; ⎋ stops recording, and a second ⎋ cancels."),
                     ),
             )
             .child(
@@ -1062,9 +1132,28 @@ impl Render for BindingForm {
                 el.child(Banner::info(
                     "binding-clash",
                     format!(
-                        "{} is also bound to {} in this context: only one of them runs.",
+                        "{} is also bound to {} in this context. Both bindings stay, and this one runs: the binding saved last goes first.",
                         names::display_typed(&parse_keys(&keys)),
                         same.join(", ")
+                    ),
+                ))
+            })
+            .when(!longer.is_empty(), |el| {
+                el.child(Banner::info(
+                    "binding-starts-chords",
+                    format!(
+                        "{} also starts {} here. Bound alone, it runs at once, and those chords can no longer be typed here.",
+                        names::display_typed(&parse_keys(&keys)),
+                        longer.join(", ")
+                    ),
+                ))
+            })
+            .when(!shorter.is_empty(), |el| {
+                el.child(Banner::info(
+                    "binding-extends-keys",
+                    format!(
+                        "These keys start with {}, bound alone here: with this chord, those keys wait up to a second for the next key before they run.",
+                        shorter.join(", ")
                     ),
                 ))
             })
@@ -1152,5 +1241,555 @@ mod tests {
         assert!(starts_with_keys("cmd-k e", "cmd-k e"));
         assert!(!starts_with_keys("cmd-k", "cmd-k e"));
         assert!(!starts_with_keys("cmd-e", "cmd-k"));
+    }
+}
+
+/// The editor in a window, driven as a person does: the form opened on a row, keys pressed into
+/// its recorder, then Save.
+#[cfg(test)]
+mod form_tests {
+    use gpui_kit::{
+        AnyWindowHandle, App, AppContext as _, Entity, KeyBinding, KeyBindingContextPredicate,
+        KeyContext, Keystroke, OperatingSystem, TestAppContext,
+    };
+    use sawit_board::shortcuts::CANVAS_CONTEXT;
+
+    use super::super::tests::{Scratch, runs};
+    use super::KeymapEditor;
+
+    gpui_kit::actions!(keymap_editor_test, [ToggleDock, CloseAll, Other]);
+
+    /// A keymap editor in an active window, over the defaults ⌘J (toggle the dock) and ⌘K W
+    /// (close all) in `Workspace`, and the canvas's R (the rectangle tool), with its keymap file
+    /// in `scratch`.
+    fn open(cx: &mut TestAppContext, scratch: &Scratch) -> (AnyWindowHandle, Entity<KeymapEditor>) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.bind_keys([
+                KeyBinding::new("cmd-j", ToggleDock, Some("Workspace")),
+                KeyBinding::new("cmd-k w", CloseAll, Some("Workspace")),
+            ]);
+            cx.bind_keys([canvas_key("r", "tool.rectangle", cx)]);
+            crate::keymap::init_at(scratch.file(), cx);
+        });
+        let (window, editor) = cx.update(|cx| {
+            gpui_kit::open_window(Default::default(), cx, |window, cx| {
+                cx.new(|cx| KeymapEditor::new(window, cx))
+            })
+            .unwrap()
+        });
+        cx.update_window(window, |_, window, _| window.activate_window())
+            .unwrap();
+        cx.run_until_parked();
+        (window, editor)
+    }
+
+    /// The canvas's binding of `keys` to its command `id`, as `board::bindings` makes it.
+    fn canvas_key(keys: &str, id: &str, cx: &App) -> KeyBinding {
+        let context = KeyBindingContextPredicate::parse(CANVAS_CONTEXT).unwrap();
+        KeyBinding::load(
+            keys,
+            Box::new(crate::board::Command { id: id.into() }),
+            Some(std::rc::Rc::new(context)),
+            false,
+            Some(serde_json::json!({ "id": id }).to_string().into()),
+            cx,
+        )
+        .unwrap()
+    }
+
+    /// The canvas commands `keys` runs on the canvas, by id.
+    fn canvas_runs(cx: &App, keys: &str) -> Vec<String> {
+        let typed = [Keystroke::parse_with_os(keys, OperatingSystem::Mac).unwrap()];
+        let contexts = ["Workspace", "Board"].map(|c| KeyContext::parse(c).unwrap());
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let (bindings, _) = keymap.bindings_for_input(&typed, &contexts);
+        bindings
+            .iter()
+            .filter_map(|b| b.action().as_any().downcast_ref::<crate::board::Command>())
+            .map(|command| command.id.clone())
+            .collect()
+    }
+
+    /// Opens the form on the first row of `action`, as its Edit button does.
+    fn edit(
+        cx: &mut TestAppContext,
+        window: AnyWindowHandle,
+        editor: &Entity<KeymapEditor>,
+        action: &str,
+    ) {
+        cx.update_window(window, |_, window, cx| {
+            editor.update(cx, |editor, cx| {
+                let ix = editor
+                    .rows
+                    .iter()
+                    .position(|r| r.action.as_ref() == action)
+                    .unwrap_or_else(|| panic!("a row for {action}"));
+                editor.edit(ix, window, cx);
+            })
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+
+    /// The keys the open form's recorder holds, as the keymap file writes them.
+    fn recorded(cx: &mut TestAppContext, editor: &Entity<KeymapEditor>) -> String {
+        cx.update(|cx| {
+            let form = editor.read(cx).form.clone().expect("the form is open");
+            form.read(cx).keys.read(cx).keystrokes()
+        })
+    }
+
+    /// Clicks the open form's Save.
+    fn save(cx: &mut TestAppContext, window: AnyWindowHandle, editor: &Entity<KeymapEditor>) {
+        cx.update_window(window, |_, window, cx| {
+            let form = editor.read(cx).form.clone().expect("the form is open");
+            form.update(cx, |form, cx| form.save(window, cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+
+    /// Hand check PR2-1: Edit a default (⌘J), press ⌃⌥J, Save. The new keys replace the row's,
+    /// which the form shows until the first key: ⌃⌥J alone toggles the dock, and ⌘J is unbound.
+    #[gpui_kit::test]
+    fn editing_a_binding_records_only_the_new_keys(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("form-new-keys");
+        let (window, editor) = open(cx, &scratch);
+        edit(cx, window, &editor, "keymap_editor_test::ToggleDock");
+        assert_eq!(
+            recorded(cx, &editor),
+            "cmd-j",
+            "the form starts with the row's keys"
+        );
+        cx.simulate_keystrokes(window, "ctrl-alt-j");
+        assert_eq!(recorded(cx, &editor), "ctrl-alt-j");
+        // The next key makes a chord of them.
+        cx.simulate_keystrokes(window, "ctrl-alt-k");
+        assert_eq!(recorded(cx, &editor), "ctrl-alt-j ctrl-alt-k");
+        // Back to the field (a click gives it the keyboard), the next key starts again.
+        cx.update_window(window, |_, window, cx| {
+            let form = editor.read(cx).form.clone().unwrap();
+            let context = form.read(cx).context.clone();
+            context.update(cx, |context, cx| context.focus(window, cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(window, |_, window, cx| {
+            let form = editor.read(cx).form.clone().unwrap();
+            let keys = form.read(cx).keys.read(cx).focus_handle().clone();
+            window.focus(&keys, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, "ctrl-alt-j");
+        assert_eq!(recorded(cx, &editor), "ctrl-alt-j");
+        save(cx, window, &editor);
+        cx.update(|cx| {
+            assert!(
+                editor.read(cx).form.is_none(),
+                "{:?}",
+                editor.read(cx).error
+            );
+            assert_eq!(runs(cx, "ctrl-alt-j"), ["keymap_editor_test::ToggleDock"]);
+            assert!(runs(cx, "cmd-j").is_empty(), "{:?}", runs(cx, "cmd-j"));
+        });
+        let text = std::fs::read_to_string(scratch.file()).unwrap();
+        assert!(!text.contains("cmd-j ctrl-alt-j"), "{text}");
+    }
+
+    /// Creates a binding through the form, as Create Keybinding does: the action typed, the keys
+    /// recorded, the context written.
+    fn create(
+        cx: &mut TestAppContext,
+        window: AnyWindowHandle,
+        editor: &Entity<KeymapEditor>,
+        action: &str,
+        keys: &str,
+        context: &str,
+    ) {
+        cx.update_window(window, |_, window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.create(&super::CreateBinding, window, cx)
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(window, |_, window, cx| {
+            let form = editor.read(cx).form.clone().expect("the form is open");
+            let (action_field, context_field, recorder) = {
+                let form = form.read(cx);
+                (form.action.clone(), form.context.clone(), form.keys.clone())
+            };
+            action_field.update(cx, |a, cx| a.set_value(action.to_string(), window, cx));
+            context_field.update(cx, |c, cx| c.set_value(context.to_string(), window, cx));
+            let focus = recorder.read(cx).focus_handle().clone();
+            window.focus(&focus, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, keys);
+        save(cx, window, editor);
+    }
+
+    /// Hand check PR2-1: a second binding on ⌃⌥W in the same context, for another action. The
+    /// form warns of the clash, saving keeps both, and both rows show ⚠.
+    #[gpui_kit::test]
+    fn a_second_binding_of_the_same_keys_keeps_the_first(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("form-same-keys");
+        let (window, editor) = open(cx, &scratch);
+        create(
+            cx,
+            window,
+            &editor,
+            "keymap_editor_test::CloseAll",
+            "ctrl-alt-w",
+            "Workspace",
+        );
+        cx.update_window(window, |_, window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.create(&super::CreateBinding, window, cx)
+            });
+            let form = editor.read(cx).form.clone().unwrap();
+            let (context_field, recorder) = {
+                let form = form.read(cx);
+                (form.context.clone(), form.keys.clone())
+            };
+            context_field.update(cx, |c, cx| c.set_value("Workspace", window, cx));
+            recorder.update(cx, |r, cx| r.set_keystrokes("ctrl-alt-w", cx));
+            let (same, _) = form.read(cx).clashes(cx);
+            assert_eq!(same, ["keymap editor test: close all"]);
+            editor.update(cx, |editor, cx| editor.close_form(window, cx));
+        })
+        .unwrap();
+        create(
+            cx,
+            window,
+            &editor,
+            "keymap_editor_test::Other",
+            "ctrl-alt-w",
+            "Workspace",
+        );
+        cx.update(|cx| {
+            let editor = editor.read(cx);
+            let rows: Vec<_> = editor
+                .rows
+                .iter()
+                .filter(|row| row.keystrokes.as_ref() == "ctrl-alt-w")
+                .collect();
+            assert_eq!(rows.len(), 2, "{rows:?}");
+            assert!(rows.iter().all(|row| editor.row_conflicts(row)));
+            assert_eq!(
+                runs(cx, "ctrl-alt-w"),
+                ["keymap_editor_test::Other", "keymap_editor_test::CloseAll"]
+            );
+        });
+    }
+
+    /// A canvas key can be pointed at another command: its row shows the command's id as its
+    /// arguments, and a new id is saved as the user's binding of the key in place of the default.
+    #[gpui_kit::test]
+    fn a_canvas_key_can_run_another_command(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("form-canvas-id");
+        let (window, editor) = open(cx, &scratch);
+        edit(cx, window, &editor, "board::Command");
+        cx.update_window(window, |_, window, cx| {
+            let form = editor.read(cx).form.clone().unwrap();
+            let args = form.read(cx).args.clone();
+            assert_eq!(args.read(cx).value().as_ref(), r#"{"id":"tool.rectangle"}"#);
+            args.update(cx, |a, cx| {
+                a.set_value(r#"{"id": "tool.ellipse"}"#, window, cx)
+            });
+        })
+        .unwrap();
+        save(cx, window, &editor);
+        cx.update(|cx| {
+            let editor = editor.read(cx);
+            let refused = editor.form.as_ref().map(|form| form.read(cx).error.clone());
+            assert_eq!(refused, None, "the form refused");
+            assert_eq!(canvas_runs(cx, "r"), ["tool.ellipse"]);
+            let sources: Vec<_> = editor
+                .rows
+                .iter()
+                .filter(|row| row.keystrokes.as_ref() == "r")
+                .map(|row| (row.args.clone().unwrap_or_default(), row.source))
+                .collect();
+            assert!(
+                sources
+                    .iter()
+                    .any(|(args, source)| args.contains("tool.rectangle")
+                        && matches!(source, super::Source::Removed { .. })),
+                "{sources:?}"
+            );
+            assert!(
+                !sources
+                    .iter()
+                    .any(|(_, source)| matches!(source, super::Source::Default(_)))
+            );
+        });
+    }
+
+    /// A form opened before keymap.json changed on disk never changes another binding: the
+    /// place in the file its row came from may hold another binding now.
+    #[gpui_kit::test]
+    fn a_form_opened_before_the_file_changed_changes_nothing_else(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("form-stale");
+        std::fs::create_dir_all(&scratch.0).unwrap();
+        std::fs::write(
+            scratch.file(),
+            r#"[{"context": "Workspace", "bindings": {"ctrl-alt-a": "keymap_editor_test::Other"}}]"#,
+        )
+        .unwrap();
+        let (window, editor) = open(cx, &scratch);
+        edit(cx, window, &editor, "keymap_editor_test::Other");
+        // Another program writes the file, and the editor reads it (its look once a second).
+        let by_hand = r#"[{"context": "Workspace", "bindings": {"ctrl-alt-z": "keymap_editor_test::ToggleDock"}}]"#;
+        std::fs::write(scratch.file(), by_hand).unwrap();
+        cx.update(|cx| crate::keymap::store(cx).update(cx, |s, cx| s.reload(cx)));
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, "ctrl-alt-q");
+        save(cx, window, &editor);
+        cx.update(|cx| {
+            let form = editor.read(cx).form.clone().expect("the form stays open");
+            assert!(form.read(cx).error.is_some());
+            assert_eq!(runs(cx, "ctrl-alt-z"), ["keymap_editor_test::ToggleDock"]);
+            assert!(runs(cx, "ctrl-alt-q").is_empty());
+        });
+        assert_eq!(std::fs::read_to_string(scratch.file()).unwrap(), by_hand);
+    }
+
+    /// An action with no binding gets one from its own row (Show Actions Without a Binding, then
+    /// the row's Edit: "Add a Keybinding for …"): such a row has no place in the file to go stale.
+    /// For a canvas command without a default key, that row is the editor's way to bind it.
+    #[gpui_kit::test]
+    fn an_unbound_row_gets_a_binding(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("form-unbound");
+        let (window, editor) = open(cx, &scratch);
+        cx.update(|cx| editor.update(cx, |e, cx| e.toggle_unbound(cx)));
+        cx.run_until_parked();
+        let source = cx.update(|cx| {
+            editor
+                .read(cx)
+                .rows
+                .iter()
+                .find(|r| r.action.as_ref() == "keymap_editor_test::Other")
+                .map(|r| r.source)
+        });
+        assert_eq!(source, Some(super::Source::Unbound));
+        edit(cx, window, &editor, "keymap_editor_test::Other");
+        cx.simulate_keystrokes(window, "ctrl-alt-o");
+        assert_eq!(recorded(cx, &editor), "ctrl-alt-o");
+        save(cx, window, &editor);
+        cx.update(|cx| {
+            let e = editor.read(cx);
+            let refused = e.form.as_ref().and_then(|f| f.read(cx).error.clone());
+            assert!(e.form.is_none(), "the form refused: {refused:?}");
+            assert_eq!(runs(cx, "ctrl-alt-o"), ["keymap_editor_test::Other"]);
+        });
+
+        // A canvas command with no key: the ellipse tool (only R, the rectangle's, is bound).
+        cx.update_window(window, |_, window, cx| {
+            editor.update(cx, |editor, cx| {
+                let ix = editor
+                    .rows
+                    .iter()
+                    .position(|r| {
+                        r.source == super::Source::Unbound
+                            && r.args.as_deref() == Some(r#"{"id":"tool.ellipse"}"#)
+                    })
+                    .expect("the ellipse tool's row");
+                editor.edit(ix, window, cx);
+            })
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, "ctrl-alt-e");
+        save(cx, window, &editor);
+        cx.update(|cx| {
+            let e = editor.read(cx);
+            let refused = e.form.as_ref().and_then(|f| f.read(cx).error.clone());
+            assert!(e.form.is_none(), "the form refused: {refused:?}");
+            assert_eq!(canvas_runs(cx, "ctrl-alt-e"), ["tool.ellipse"]);
+        });
+    }
+
+    /// The form's keys field records every key but plain ⎋ and ↩: ⎋ stops recording, and a
+    /// second ⎋ cancels the form; ↩ saves it.
+    #[gpui_kit::test]
+    fn escape_and_enter_end_the_recording(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("form-escape-enter");
+        let (window, editor) = open(cx, &scratch);
+        edit(cx, window, &editor, "keymap_editor_test::ToggleDock");
+        cx.simulate_keystrokes(window, "escape");
+        assert_eq!(recorded(cx, &editor), "cmd-j", "⎋ is not recorded");
+        cx.simulate_keystrokes(window, "escape");
+        cx.update(|cx| assert!(editor.read(cx).form.is_none(), "a second ⎋ cancels"));
+        assert!(!scratch.file().exists(), "nothing is written");
+
+        edit(cx, window, &editor, "keymap_editor_test::ToggleDock");
+        cx.simulate_keystrokes(window, "ctrl-alt-j enter");
+        cx.update(|cx| {
+            assert!(editor.read(cx).form.is_none(), "↩ saves");
+            assert_eq!(runs(cx, "ctrl-alt-j"), ["keymap_editor_test::ToggleDock"]);
+        });
+    }
+
+    gpui_kit::actions!(keymap_editor_test, [CloseTab]);
+
+    /// A stand-in for the workspace: the editor in a tab that can be switched away, ⌘W bound in
+    /// `Workspace`, and the keyboard taken back when nothing holds it, as the workspace does.
+    struct Tabs {
+        focus: gpui_kit::FocusHandle,
+        editor: Entity<KeymapEditor>,
+        shown: bool,
+        closed: usize,
+        /// How many times keymap.json was asked for.
+        opened: usize,
+    }
+
+    impl gpui_kit::Render for Tabs {
+        fn render(
+            &mut self,
+            window: &mut gpui_kit::Window,
+            cx: &mut gpui_kit::Context<Self>,
+        ) -> impl gpui_kit::IntoElement {
+            use gpui_kit::{InteractiveElement as _, ParentElement as _, Styled as _};
+            if window.focused(cx).is_none() {
+                self.focus.focus(window, cx);
+            }
+            gpui_kit::div()
+                .key_context("Workspace")
+                .track_focus(&self.focus)
+                .size_full()
+                .on_action(cx.listener(|this, _: &CloseTab, _, _| this.closed += 1))
+                .on_action(
+                    cx.listener(|this, _: &crate::keymap::OpenKeymapFile, _, _| this.opened += 1),
+                )
+                .children(self.shown.then(|| self.editor.clone()))
+        }
+    }
+
+    /// The keymap editor in [`Tabs`], in an active window, with the app's ⌘W.
+    fn open_in_tabs(
+        cx: &mut TestAppContext,
+        scratch: &Scratch,
+    ) -> (AnyWindowHandle, Entity<Tabs>, Entity<KeymapEditor>) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.bind_keys([KeyBinding::new("cmd-w", CloseTab, Some("Workspace"))]);
+            crate::keymap::init_at(scratch.file(), cx);
+        });
+        let (window, tabs) = cx.update(|cx| {
+            gpui_kit::open_window(Default::default(), cx, |window, cx| {
+                let editor = cx.new(|cx| KeymapEditor::new(window, cx));
+                cx.new(|cx| Tabs {
+                    focus: cx.focus_handle(),
+                    editor,
+                    shown: true,
+                    closed: 0,
+                    opened: 0,
+                })
+            })
+            .unwrap()
+        });
+        cx.update_window(window, |_, window, _| window.activate_window())
+            .unwrap();
+        cx.run_until_parked();
+        let editor = cx.update(|cx| tabs.read(cx).editor.clone());
+        (window, tabs, editor)
+    }
+
+    /// ⌘E in the keymap editor opens keymap.json, through the editor's own action: the Sawit
+    /// menu's Open Keymap File has no key.
+    #[gpui_kit::test]
+    fn cmd_e_in_the_editor_opens_the_keymap_file(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("cmd-e");
+        let (window, tabs, editor) = open_in_tabs(cx, &scratch);
+        cx.update_window(window, |_, window, cx| {
+            let focus = editor.read(cx).focus.clone();
+            window.focus(&focus, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, "cmd-e");
+        cx.update(|cx| assert_eq!(tabs.read(cx).opened, 1));
+    }
+
+    /// A recorder whose tab is switched away while it has the keyboard lets go of it: the
+    /// window's keys (⌘W) work again instead of going into the hidden field.
+    #[gpui_kit::test]
+    fn a_hidden_recorder_lets_go_of_the_keyboard(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("hidden-recorder");
+        let (window, tabs, editor) = open_in_tabs(cx, &scratch);
+        cx.update_window(window, |_, window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.toggle_keystroke_search(&super::ToggleKeystrokeSearch, window, cx)
+            })
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, "cmd-k");
+        let searched = |cx: &mut TestAppContext| {
+            cx.update(|cx| editor.read(cx).keys_filter.read(cx).keystrokes())
+        };
+        assert_eq!(searched(cx), "cmd-k");
+        // Another tab shows.
+        cx.update(|cx| {
+            tabs.update(cx, |tabs, cx| {
+                tabs.shown = false;
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, "cmd-w");
+        assert_eq!(searched(cx), "cmd-k", "the hidden field took ⌘W");
+        cx.update(|cx| assert_eq!(tabs.read(cx).closed, 1));
+    }
+
+    /// The keystroke search field is a recorder ([`crate::keymap::is_recorder`]), so the
+    /// workspace never gives it the keyboard back when its tab shows again: it takes every key,
+    /// and a ⌃Tab round would stop there. Only a click arms it again.
+    #[gpui_kit::test]
+    fn the_keystroke_search_is_known_as_a_recorder(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("recorder-known");
+        let (_, _, editor) = open_in_tabs(cx, &scratch);
+        cx.update(|cx| {
+            let editor = editor.read(cx);
+            let field = editor.keys_filter.read(cx).focus_handle().clone();
+            assert!(crate::keymap::is_recorder(&field, cx));
+            assert!(!crate::keymap::is_recorder(&editor.focus, cx));
+        });
+    }
+
+    /// The form warns when the keys and another binding in the context are a chord and its first
+    /// keys: ⌘K bound alone beside ⌘K W, or ⌘J X beside ⌘J.
+    #[gpui_kit::test]
+    fn the_form_warns_of_a_chord_on_bound_keys(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("form-chords");
+        let (window, editor) = open(cx, &scratch);
+        cx.update_window(window, |_, window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.create(&super::CreateBinding, window, cx)
+            });
+            let form = editor.read(cx).form.clone().unwrap();
+            let (context, recorder) = {
+                let form = form.read(cx);
+                (form.context.clone(), form.keys.clone())
+            };
+            context.update(cx, |c, cx| c.set_value("Workspace", window, cx));
+            recorder.update(cx, |r, cx| r.set_keystrokes("cmd-k", cx));
+            let (longer, shorter) = form.read(cx).chord_clashes(cx);
+            assert_eq!(longer, ["⌘K W (keymap editor test: close all)"]);
+            assert!(shorter.is_empty(), "{shorter:?}");
+            recorder.update(cx, |r, cx| r.set_keystrokes("cmd-j x", cx));
+            let (longer, shorter) = form.read(cx).chord_clashes(cx);
+            assert!(longer.is_empty(), "{longer:?}");
+            assert_eq!(shorter, ["⌘J (keymap editor test: toggle dock)"]);
+            // Another context doesn't count.
+            context.update(cx, |c, cx| c.set_value("Editor", window, cx));
+            assert_eq!(form.read(cx).chord_clashes(cx), (Vec::new(), Vec::new()));
+        })
+        .unwrap();
     }
 }

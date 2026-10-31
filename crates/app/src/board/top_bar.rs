@@ -15,11 +15,10 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sawit_board::menu::shortcut_label;
 use sawit_core::nyawit;
 use serde_json::json;
 
-use super::{BoardView, TITLE, ToggleCanvasMaximize, menus};
+use super::{BoardView, TITLE, ToggleCanvasMaximize, command_keys, menus};
 
 /// The bar's height.
 pub(super) const HEIGHT: f32 = 36.;
@@ -56,6 +55,9 @@ pub(super) fn render_top_bar(
     let zoom = (view.board())
         .and_then(|board| board.session.ds().ok())
         .map_or(1.0, |ds| ds.view.zoom);
+    let hide_ui = with_keys("Hide UI", command_keys("view.toggleUi", cx));
+    let layers = with_keys("Layers panel", command_keys("view.layers", cx));
+    let design = with_keys("Design panel", command_keys("view.design", cx));
     let theme = cx.theme();
     h_flex()
         .id("board-top-bar")
@@ -85,8 +87,8 @@ pub(super) fn render_top_bar(
                         .child(document_name(view.path())),
                 )
                 .child(zoom_menu(zoom, this.clone()))
-                .child(layers_toggle(view.show_layers, this.clone()))
-                .child(design_toggle(view.show_design, this.clone())),
+                .child(layers_toggle(view.show_layers, layers, this.clone()))
+                .child(design_toggle(view.show_design, design, this.clone())),
         )
         .child(
             h_flex()
@@ -97,7 +99,7 @@ pub(super) fn render_top_bar(
                         .ghost()
                         .small()
                         .icon(HIDE_UI_ICON)
-                        .tooltip(with_keys("Hide UI", shortcut_label("view.toggleUi")))
+                        .tooltip(hide_ui)
                         .debug_selector(|| "board-hide-ui".into())
                         .on_click({
                             let this = this.clone();
@@ -177,53 +179,57 @@ fn zoom_menu(zoom: f64, view: WeakEntity<BoardView>) -> impl IntoElement + use<>
         .dropdown_caret(true)
         .tooltip("Zoom")
         .debug_selector(|| "board-zoom".into())
-        .dropdown_menu(move |mut menu: PopupMenu, _, _| {
+        .dropdown_menu(move |mut menu: PopupMenu, _, cx| {
             for (i, group) in ZOOMS.iter().enumerate() {
                 if i > 0 {
                     menu = menu.separator();
                 }
                 for &command in group.iter() {
-                    menu = menu.item(zoom_item(command, view.clone()));
+                    let keys = command_keys(command, cx);
+                    menu = menu.item(zoom_item(command, keys, view.clone()));
                 }
             }
             menu
         })
 }
 
-/// The layers panel's toggle, marked while the panel is `shown`. It runs `view.layers`, as ⌥1
-/// does, and the canvas carries out the engine's `panel.layers` request.
-fn layers_toggle(shown: bool, view: WeakEntity<BoardView>) -> Button {
+/// The layers panel's toggle, marked while the panel is `shown`, with `tooltip`. It runs
+/// `view.layers`, as ⌥1 does, and the canvas carries out the engine's `panel.layers` request.
+fn layers_toggle(shown: bool, tooltip: String, view: WeakEntity<BoardView>) -> Button {
     Button::new("board-layers")
         .ghost()
         .small()
         .icon(LAYERS_ICON)
         .selected(shown)
-        .tooltip(with_keys("Layers panel", shortcut_label("view.layers")))
+        .tooltip(tooltip)
         .debug_selector(|| "board-layers".into())
         .on_click(move |_, _, cx| {
             let _ = view.update(cx, |view, cx| view.choose("view.layers", json!({}), cx));
         })
 }
 
-/// The Design panel's toggle, marked while the panel is `shown`. It runs `view.design`, as ⌥8
-/// does, and the canvas carries out the engine's `panel.design` request.
-fn design_toggle(shown: bool, view: WeakEntity<BoardView>) -> Button {
+/// The Design panel's toggle, marked while the panel is `shown`, with `tooltip`. It runs
+/// `view.design`, as ⌥8 does, and the canvas carries out the engine's `panel.design` request.
+fn design_toggle(shown: bool, tooltip: String, view: WeakEntity<BoardView>) -> Button {
     Button::new("board-design")
         .ghost()
         .small()
         .icon(DESIGN_ICON)
         .selected(shown)
-        .tooltip(with_keys("Design panel", shortcut_label("view.design")))
+        .tooltip(tooltip)
         .debug_selector(|| "board-design".into())
         .on_click(move |_, _, cx| {
             let _ = view.update(cx, |view, cx| view.choose("view.design", json!({}), cx));
         })
 }
 
-/// The zoom menu's item for `command`: the engine's label for it, and its keys on the right.
-fn zoom_item(command: &'static str, view: WeakEntity<BoardView>) -> PopupMenuItem {
+/// The zoom menu's item for `command`: the engine's label for it, and its `keys` on the right.
+fn zoom_item(
+    command: &'static str,
+    keys: Option<String>,
+    view: WeakEntity<BoardView>,
+) -> PopupMenuItem {
     let label = find_command(command).map_or(command, |spec| spec.label);
-    let keys = shortcut_label(command);
     PopupMenuItem::element(move |_, cx| {
         h_flex()
             .debug_selector(|| format!("board-zoom-{command}"))
