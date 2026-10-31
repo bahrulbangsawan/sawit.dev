@@ -24,6 +24,14 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(20);
 /// `terminal_run` waits at most this long for output.
 const MAX_WAIT: Duration = Duration::from_secs(120);
 
+/// How long `terminal_run` waits before it reads the output: `wait_secs` (default 2), from 0 to
+/// [`MAX_WAIT`]. The number is bounded before it becomes a `Duration`, which panics on one too
+/// big for it or NaN, and a panic would leave the tool call without an answer.
+fn run_wait(wait_secs: Option<f64>) -> Duration {
+    let secs = wait_secs.filter(|s| !s.is_nan()).unwrap_or(2.0);
+    Duration::from_secs_f64(secs.clamp(0.0, MAX_WAIT.as_secs_f64()))
+}
+
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct WindowArgs {
     #[schemars(
@@ -752,8 +760,7 @@ impl Sawit {
             Err(e) => return fail(e),
         };
         let tab = started["terminal"].as_u64().map(|t| t as usize);
-        let wait = Duration::from_secs_f64(a.wait_secs.unwrap_or(2.0).max(0.0)).min(MAX_WAIT);
-        tokio::time::sleep(wait).await;
+        tokio::time::sleep(run_wait(a.wait_secs)).await;
         let read = Command::TerminalRead {
             tab,
             pane: None,
@@ -1166,6 +1173,19 @@ mod tests {
                 .unwrap_err()
                 .contains("ports")
         );
+    }
+
+    /// `terminal_run` waits as asked, within 0 to 120 s, whatever number the agent sends: a
+    /// huge, infinite or NaN `wait_secs` must not panic the tool call, which would never answer.
+    #[test]
+    fn terminal_run_waits_within_bounds() {
+        assert_eq!(run_wait(None), Duration::from_secs(2));
+        assert_eq!(run_wait(Some(0.5)), Duration::from_millis(500));
+        assert_eq!(run_wait(Some(-3.0)), Duration::ZERO);
+        assert_eq!(run_wait(Some(1e20)), MAX_WAIT);
+        assert_eq!(run_wait(Some(f64::INFINITY)), MAX_WAIT);
+        assert_eq!(run_wait(Some(f64::NEG_INFINITY)), Duration::ZERO);
+        assert_eq!(run_wait(Some(f64::NAN)), Duration::from_secs(2));
     }
 
     #[test]
