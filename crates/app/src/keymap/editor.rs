@@ -19,7 +19,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use serde_json::Value;
 
-use super::recorder::{Changed, KeystrokeRecorder};
+use super::recorder::{Changed, Done, KeystrokeRecorder};
 use super::{KeymapStore, OpenKeymapFile, Row, Source, names, store};
 use crate::states::{Banner, Placeholder};
 
@@ -95,6 +95,10 @@ impl KeymapEditor {
                 }
             }),
             cx.subscribe(&keys_filter, |this, _, _: &Changed, cx| this.refresh(cx)),
+            // ⎋ or ↩ in the search field: the list takes the keyboard, for ↑, ↓ and ↩.
+            cx.subscribe_in(&keys_filter, window, |this, _, _: &Done, window, cx| {
+                window.focus(&this.focus, cx)
+            }),
         ];
         let mut this = Self {
             store,
@@ -694,6 +698,9 @@ enum FormTarget {
 struct BindingForm {
     target: FormTarget,
     editor: WeakEntity<KeymapEditor>,
+    /// The form's own: it takes the keyboard when the keys field stops recording (⎋), so that a
+    /// second ⎋ cancels.
+    focus: FocusHandle,
     action: Entity<InputState>,
     args: Entity<InputState>,
     context: Entity<InputState>,
@@ -757,10 +764,22 @@ impl BindingForm {
                 this.error = None;
                 cx.notify();
             }),
+            cx.subscribe_in(
+                &keys,
+                window,
+                |this, _, done: &Done, window, cx| match done {
+                    Done::Stopped => {
+                        window.focus(&this.focus, cx);
+                        cx.notify();
+                    }
+                    Done::Confirmed => this.save(window, cx),
+                },
+            ),
         ];
         Self {
             target,
             editor,
+            focus: cx.focus_handle(),
             action,
             args,
             context,
@@ -964,6 +983,7 @@ impl Render for BindingForm {
         let new = self.is_new();
         v_flex()
             .id("binding-form")
+            .track_focus(&self.focus)
             .w(px(560.))
             .max_w_full()
             .gap_3()
@@ -1031,7 +1051,7 @@ impl Render for BindingForm {
                         div()
                             .text_xs()
                             .text_color(muted)
-                            .child("Every key is recorded while the field is focused, up to 3 for a chord (⌘K ⌘S)."),
+                            .child("Every key is recorded while the field is focused, up to 3 for a chord (⌘K ⌘S). ↩ saves; ⎋ stops recording, and a second ⎋ cancels."),
                     ),
             )
             .child(
@@ -1475,5 +1495,107 @@ mod form_tests {
             assert!(runs(cx, "ctrl-alt-q").is_empty());
         });
         assert_eq!(std::fs::read_to_string(scratch.file()).unwrap(), by_hand);
+    }
+
+    /// The form's keys field records every key but plain ⎋ and ↩: ⎋ stops recording, and a
+    /// second ⎋ cancels the form; ↩ saves it.
+    #[gpui_kit::test]
+    fn escape_and_enter_end_the_recording(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("form-escape-enter");
+        let (window, editor) = open(cx, &scratch);
+        edit(cx, window, &editor, "keymap_editor_test::ToggleDock");
+        cx.simulate_keystrokes(window, "escape");
+        assert_eq!(recorded(cx, &editor), "cmd-j", "⎋ is not recorded");
+        cx.simulate_keystrokes(window, "escape");
+        cx.update(|cx| assert!(editor.read(cx).form.is_none(), "a second ⎋ cancels"));
+        assert!(!scratch.file().exists(), "nothing is written");
+
+        edit(cx, window, &editor, "keymap_editor_test::ToggleDock");
+        cx.simulate_keystrokes(window, "ctrl-alt-j enter");
+        cx.update(|cx| {
+            assert!(editor.read(cx).form.is_none(), "↩ saves");
+            assert_eq!(runs(cx, "ctrl-alt-j"), ["keymap_editor_test::ToggleDock"]);
+        });
+    }
+
+    gpui_kit::actions!(keymap_editor_test, [CloseTab]);
+
+    /// A stand-in for the workspace: the editor in a tab that can be switched away, ⌘W bound in
+    /// `Workspace`, and the keyboard taken back when nothing holds it, as the workspace does.
+    struct Tabs {
+        focus: gpui_kit::FocusHandle,
+        editor: Entity<KeymapEditor>,
+        shown: bool,
+        closed: usize,
+    }
+
+    impl gpui_kit::Render for Tabs {
+        fn render(
+            &mut self,
+            window: &mut gpui_kit::Window,
+            cx: &mut gpui_kit::Context<Self>,
+        ) -> impl gpui_kit::IntoElement {
+            use gpui_kit::{InteractiveElement as _, ParentElement as _, Styled as _};
+            if window.focused(cx).is_none() {
+                self.focus.focus(window, cx);
+            }
+            gpui_kit::div()
+                .key_context("Workspace")
+                .track_focus(&self.focus)
+                .size_full()
+                .on_action(cx.listener(|this, _: &CloseTab, _, _| this.closed += 1))
+                .children(self.shown.then(|| self.editor.clone()))
+        }
+    }
+
+    /// A recorder whose tab is switched away while it has the keyboard lets go of it: the
+    /// window's keys (⌘W) work again instead of going into the hidden field.
+    #[gpui_kit::test]
+    fn a_hidden_recorder_lets_go_of_the_keyboard(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("hidden-recorder");
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.bind_keys([KeyBinding::new("cmd-w", CloseTab, Some("Workspace"))]);
+            crate::keymap::init_at(scratch.file(), cx);
+        });
+        let (window, tabs) = cx.update(|cx| {
+            gpui_kit::open_window(Default::default(), cx, |window, cx| {
+                let editor = cx.new(|cx| KeymapEditor::new(window, cx));
+                cx.new(|cx| Tabs {
+                    focus: cx.focus_handle(),
+                    editor,
+                    shown: true,
+                    closed: 0,
+                })
+            })
+            .unwrap()
+        });
+        cx.update_window(window, |_, window, _| window.activate_window())
+            .unwrap();
+        cx.run_until_parked();
+        let editor = cx.update(|cx| tabs.read(cx).editor.clone());
+        cx.update_window(window, |_, window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.toggle_keystroke_search(&super::ToggleKeystrokeSearch, window, cx)
+            })
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, "cmd-k");
+        let searched = |cx: &mut TestAppContext| {
+            cx.update(|cx| editor.read(cx).keys_filter.read(cx).keystrokes())
+        };
+        assert_eq!(searched(cx), "cmd-k");
+        // Another tab shows.
+        cx.update(|cx| {
+            tabs.update(cx, |tabs, cx| {
+                tabs.shown = false;
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, "cmd-w");
+        assert_eq!(searched(cx), "cmd-k", "the hidden field took ⌘W");
+        cx.update(|cx| assert_eq!(tabs.read(cx).closed, 1));
     }
 }

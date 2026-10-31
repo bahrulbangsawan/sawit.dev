@@ -2,6 +2,10 @@
 //! instead of doing what it is bound to (⌘W does not close the tab), up to [`MAX_KEYS`] for a
 //! chord. The keys it shows (a binding's, when the form opens on one) stay until the first key
 //! pressed after it gets the keyboard, which starts a new recording; a click starts it again.
+//!
+//! Plain ⎋ and ↩ are the field's own: they end the recording ([`Done`]) and are never recorded.
+//! A field that stops being drawn while it has the keyboard (its tab switched away) lets go of
+//! it, so that the window's keys work again.
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
@@ -22,20 +26,29 @@ const MODIFIER_KEYS: &[&str] = &[
 /// Says the keys changed.
 pub struct Changed;
 
+/// Says the recording is over, by a key of the field's own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Done {
+    /// A plain ⎋: the field's owner takes the keyboard back.
+    Stopped,
+    /// A plain ↩: the keys are the ones wanted.
+    Confirmed,
+}
+
 pub struct KeystrokeRecorder {
     focus: FocusHandle,
     keys: Vec<Keystroke>,
     /// The next key starts a new recording instead of adding to the chord: the keys shown were
     /// set from outside, or the field has just got the keyboard.
     fresh: bool,
-    /// Takes the keys from the bindings while the field has the keyboard.
-    _intercept: Subscription,
-    /// Starts a new recording when the field gets the keyboard.
-    _focus_watch: Subscription,
+    /// Takes the keys from the bindings while the field has the keyboard; starts a new
+    /// recording when it gets the keyboard; lets go of it when the field is no longer drawn.
+    _subscriptions: [Subscription; 3],
     placeholder: SharedString,
 }
 
 impl EventEmitter<Changed> for KeystrokeRecorder {}
+impl EventEmitter<Done> for KeystrokeRecorder {}
 
 impl KeystrokeRecorder {
     pub fn new(
@@ -55,15 +68,32 @@ impl KeystrokeRecorder {
                 return;
             }
             cx.stop_propagation();
-            this.update(cx, |this, cx| this.record(keystroke, cx)).ok();
+            let done = match keystroke.key.as_str() {
+                _ if keystroke.modifiers.modified() => None,
+                "escape" => Some(Done::Stopped),
+                "enter" => Some(Done::Confirmed),
+                _ => None,
+            };
+            this.update(cx, |this, cx| match done {
+                Some(done) => cx.emit(done),
+                None => this.record(keystroke, cx),
+            })
+            .ok();
         });
         let focus_watch = cx.on_focus(&focus, window, |this, _, _| this.fresh = true);
+        // The keyboard is still the field's when it is no longer drawn (its tab was switched
+        // away): it would take every key of the window, unseen. The window's view takes it back
+        // once nothing holds it. (A window that is no longer the active one keeps it.)
+        let blur_watch = cx.on_blur(&focus, window, |this, window, cx| {
+            if this.focus.is_focused(window) && window.is_window_active() {
+                window.blur(cx);
+            }
+        });
         Self {
             focus,
             keys: Vec::new(),
             fresh: true,
-            _intercept: intercept,
-            _focus_watch: focus_watch,
+            _subscriptions: [intercept, focus_watch, blur_watch],
             placeholder: placeholder.into(),
         }
     }
