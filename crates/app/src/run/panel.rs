@@ -404,9 +404,10 @@ impl RunPanel {
         }
     }
 
-    /// Starts the row called `name` for an agent. False when it was
-    /// running already: it isn't started twice, only shown.
-    pub fn start_named(&mut self, name: &str, cx: &mut Context<Self>) -> Result<bool, String> {
+    /// The terminals the row called `name` starts, for an agent (the
+    /// workspace starts them, to say where they run), and whether they all
+    /// run already: they then aren't started twice, only shown.
+    pub fn launches_named(&self, name: &str, cx: &App) -> Result<(Vec<Launch>, bool), String> {
         let item = self.find(name, cx)?;
         let terminal = self.terminal.read(cx);
         let running = item.keys().all(|k| {
@@ -414,8 +415,7 @@ impl RunPanel {
                 .job_status(k, cx)
                 .is_some_and(|s| s.running.is_some())
         });
-        self.start(&item, Origin::Agent, cx);
-        Ok(!running)
+        Ok((item.launches, running))
     }
 
     pub fn stop_named(&mut self, name: &str, cx: &mut Context<Self>) -> Result<(), String> {

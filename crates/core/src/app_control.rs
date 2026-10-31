@@ -137,18 +137,19 @@ pub enum Command {
     TerminalRead {
         #[serde(default)]
         tab: Option<usize>,
-        /// The pane within the tab; default its focused one.
+        /// The pane within the tab. Without one: the active tab's focused
+        /// pane, or a named tab's only pane (a split tab needs it named).
         #[serde(default)]
         pane: Option<usize>,
         #[serde(default)]
         lines: Option<usize>,
     },
     /// Sends raw input to a terminal: text as typed, or a key such as
-    /// `ctrl-c`, `enter`, `up`.
+    /// `ctrl-c`, `enter`, `up`. `sawit-mcp` always names the tab.
     TerminalInput {
         #[serde(default)]
         tab: Option<usize>,
-        /// The pane within the tab; default its focused one.
+        /// The pane within the tab, as for `TerminalRead`.
         #[serde(default)]
         pane: Option<usize>,
         #[serde(default)]

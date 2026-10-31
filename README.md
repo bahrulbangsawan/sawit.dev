@@ -213,7 +213,8 @@ explained. A conflict on the same address can't be forced.
 - New terminals start in the project folder. Shells idle at their prompt move to the first project you open in the
   window.
 - What an agent runs in the terminal (`terminal_run`, `app_run_script`, `app_ssh_connect`) never takes the keyboard:
-  its terminal comes forward unless you're typing in another one, and then it runs in the background.
+  its terminal comes forward unless you're typing in another one, and then it runs in the background. The agent is told
+  which terminal and pane it got, and its keys (`terminal_input`) go only to a terminal it names.
 - Terminals end with the app and with their window. So quitting, closing a window and **Restart to Update** ask
   first while a terminal runs a command or an SSH session, and name them. Shells waiting at their prompt don't count.
 
@@ -521,7 +522,7 @@ the agent's project open (or the one `project` names), else the frontmost window
 | Dev tools | `list_dev_tools` (with newer releases), `install_dev_tools`, `upgrade_dev_tools` |
 | MCP servers | `list_mcp_servers`, `install_mcp_server`, `uninstall_mcp_server` |
 | App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, changelog, git_graph, github, instance, keymap), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
-| Terminal (app running) | `terminal_run`, `terminal_read`, `terminal_input`, `terminal_close` (read, input and close can address one `pane` of a split tab) |
+| Terminal (app running) | `terminal_run`, `terminal_read`, `terminal_input`, `terminal_close` (`terminal_run`, `app_run_script` and `app_ssh_connect` return the tab and `pane` they used; `terminal_input` needs the tab, and a split tab needs its pane) |
 | Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (what the user annotated), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`) |
 | Canvas | `canvas_get`, `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear`, `canvas_load`, `canvas_export`, `canvas_command` (any command of the canvas engine, by id), `canvas_commands` (lists them; pass a `filter` to see what each takes). All of them work on the saved canvas file when the app is closed |
 

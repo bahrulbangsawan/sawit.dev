@@ -236,7 +236,11 @@ master side must stay open in some process.
   focused pane". `app_state`'s terminal list gains each tab's panes (index,
   title, running job, focused) and an optional `pane` argument on
   read/input/close addresses one pane. `terminal_close` without `pane`
-  closes the tab, as today.
+  closes the tab, as today. (Since an agent's command no longer takes the
+  keyboard, a tab's focused pane may be the one the user types in while the
+  agent's command runs in another. So read and input on a split tab need
+  `pane`, `terminal_input` needs `tab`, and `terminal_run`,
+  `app_run_script` and `app_ssh_connect` return the tab and pane they used.)
 - The Run panel's `start_job`/`stop_job`/`job_status`/`show_job` and the
   SSH panel's session count and focus work across all tabs of the window,
   including panes inside splits and tabs reattached from the background.

@@ -125,9 +125,13 @@ pub struct TerminalRunArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct TerminalReadArgs {
-    #[schemars(description = "Terminal tab index (from app_state); default the active one")]
+    #[schemars(
+        description = "Terminal tab index, as terminal_run, app_run_script and app_ssh_connect return it (or from app_state). Without it: the pane the user has in front, which needn't be where your command ran"
+    )]
     pub tab: Option<usize>,
-    #[schemars(description = "Pane within the tab (from app_state); default: the focused pane")]
+    #[schemars(
+        description = "Pane within the tab, as those tools return it (or from app_state); needed when the tab is split"
+    )]
     pub pane: Option<usize>,
     #[schemars(description = "Lines of scrollback + screen to return (default 200, max 5000)")]
     pub lines: Option<usize>,
@@ -136,9 +140,13 @@ pub struct TerminalReadArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct TerminalInputArgs {
-    #[schemars(description = "Terminal tab index; default the active one")]
-    pub tab: Option<usize>,
-    #[schemars(description = "Pane within the tab (from app_state); default: the focused pane")]
+    #[schemars(
+        description = "Terminal tab index, as terminal_run, app_run_script and app_ssh_connect return it (or from app_state)"
+    )]
+    pub tab: usize,
+    #[schemars(
+        description = "Pane within the tab, as those tools return it (or from app_state); needed when the tab is split"
+    )]
     pub pane: Option<usize>,
     #[schemars(description = "Text to type as is (no Enter added)")]
     pub text: Option<String>,
@@ -151,7 +159,9 @@ pub struct TerminalInputArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct TerminalCloseArgs {
-    #[schemars(description = "Terminal tab index (from app_state)")]
+    #[schemars(
+        description = "Terminal tab index, as terminal_run, app_run_script and app_ssh_connect return it (or from app_state)"
+    )]
     pub tab: usize,
     #[schemars(description = "Pane within the tab (from app_state); default: the whole tab")]
     pub pane: Option<usize>,
@@ -764,7 +774,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Run a command in Sawit's terminal (visible to the user), wait, and return the terminal's latest output. Use terminal_read to check long-running commands later, terminal_input with key ctrl-c to stop them"
+        description = "Run a command in Sawit's terminal (visible to the user), wait, and return where it ran (\"Terminal 2, pane 0:\") with the terminal's latest output. Pass that tab and pane to terminal_read to check a long-running command later, and to terminal_input (key ctrl-c) to stop it: the terminal in front may be another, one the user types in"
     )]
     async fn terminal_run(&self, Parameters(a): Parameters<TerminalRunArgs>) -> CallToolResult {
         let command = Command::TerminalRun {
@@ -810,11 +820,11 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Type text and/or press a key in a terminal tab, e.g. answer a prompt, or key ctrl-c to interrupt"
+        description = "Type text and/or press a key in a terminal, e.g. answer a prompt, or key ctrl-c to interrupt. Name its tab, and its pane in a split tab, as terminal_run, app_run_script or app_ssh_connect returned them"
     )]
     async fn terminal_input(&self, Parameters(a): Parameters<TerminalInputArgs>) -> CallToolResult {
         let command = Command::TerminalInput {
-            tab: a.tab,
+            tab: Some(a.tab),
             pane: a.pane,
             text: a.text,
             key: a.key,
@@ -842,7 +852,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Start a script or saved command from the Run panel in its own terminal tab (read its output with terminal_read)"
+        description = "Start a script or saved command from the Run panel in its own terminal tab. Returns the terminal (tab) and pane it runs in, or each one's for a saved command that runs several: pass them to terminal_read for its output and to terminal_input to answer or stop it"
     )]
     async fn app_run_script(&self, Parameters(a): Parameters<ScriptArgs>) -> CallToolResult {
         self.app_tool(a.project, Command::RunScript { name: a.name })
@@ -1209,6 +1219,8 @@ mod tests {
         assert_eq!(run_wait(Some(f64::NAN)), Duration::from_secs(2));
     }
 
+    /// Reading or typing into a split tab names the pane: its focused pane may be the one the user
+    /// types in, while the agent's command runs in the other. Closing without one closes the tab.
     #[test]
     fn only_closing_defaults_to_the_whole_tab() {
         let pane = |schema: schemars::Schema| {
@@ -1221,14 +1233,41 @@ mod tests {
             pane(schemars::schema_for!(TerminalReadArgs)),
             pane(schemars::schema_for!(TerminalInputArgs)),
         ] {
-            assert_eq!(
-                read_or_input,
-                "Pane within the tab (from app_state); default: the focused pane"
+            assert!(
+                read_or_input.contains("needed when the tab is split"),
+                "{read_or_input}"
             );
+            assert!(!read_or_input.contains("whole tab"), "{read_or_input}");
         }
         let close = pane(schemars::schema_for!(TerminalCloseArgs));
         assert!(close.contains("the whole tab"), "{close}");
         assert!(!close.contains("focused pane"), "{close}");
+    }
+
+    /// Keys go only to a terminal the agent names: `terminal_input` needs the tab, as
+    /// `terminal_close` does. Sent to "the active terminal", a ctrl-c meant for the agent's dev
+    /// server would interrupt the program the user types in, Claude Code included. Reading still
+    /// defaults to the terminal the user has in front.
+    #[test]
+    fn terminal_input_needs_the_tab() {
+        let required = |schema: schemars::Schema| {
+            let required = schema.as_value()["required"].as_array().cloned();
+            required.unwrap_or_default().contains(&json!("tab"))
+        };
+        assert!(required(schemars::schema_for!(TerminalInputArgs)));
+        assert!(required(schemars::schema_for!(TerminalCloseArgs)));
+        assert!(!required(schemars::schema_for!(TerminalReadArgs)));
+        let untargeted = serde_json::from_value::<TerminalInputArgs>(json!({ "key": "ctrl-c" }));
+        assert!(untargeted.is_err(), "keys went out with no terminal named");
+        let tab = |schema: schemars::Schema| {
+            schema.as_value()["properties"]["tab"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        };
+        let read = tab(schemars::schema_for!(TerminalReadArgs));
+        assert!(read.contains("the user has in front"), "{read}");
+        assert!(read.contains("terminal_run"), "{read}");
     }
 
     #[test]

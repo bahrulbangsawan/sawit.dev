@@ -34,7 +34,7 @@ use crate::mcp_page::McpPage;
 use crate::network::NetworkPanel;
 use crate::ports::{PortsEvent, PortsPanel};
 use crate::prompts::{PromptStore, PromptStoreEvent, PromptView, PromptsEvent, PromptsPanel};
-use crate::run::{RunEvent, RunPanel, RunStore};
+use crate::run::{Launch, RunEvent, RunPanel, RunStore};
 use crate::servers::{ServerDetail, ServerList, ServerStore, ShowServerTab};
 use crate::shell_config::{ShellConfigEvent, ShellConfigPanel};
 use crate::ssh::{SshEvent, SshHostEvent, SshHostView, SshPanel, SshStore, SshStoreEvent};
@@ -1713,14 +1713,9 @@ impl Workspace {
             self.layout.toggle(Area::Terminal);
         }
         match event {
+            // A terminal that can't start says why in the dock.
             RunEvent::Start(launches, origin) => {
-                let last = launches.len().saturating_sub(1);
-                self.terminal.update(cx, |t, cx| {
-                    for (i, l) in launches.iter().enumerate() {
-                        let show = (i == last).then_some(*origin);
-                        t.start_job(l.tag.clone(), l.dir.clone(), &l.command, show, window, cx);
-                    }
-                });
+                let _ = self.start_scripts(launches, *origin, window, cx);
             }
             RunEvent::Show(key) => {
                 self.terminal
@@ -1728,6 +1723,35 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+
+    /// Starts the terminals of a Run panel row (a running one is only
+    /// shown), showing the dock if hidden; the last one shows as `origin`
+    /// allows. Returns why the first that couldn't start didn't, once the
+    /// others have started.
+    fn start_scripts(
+        &mut self,
+        launches: &[Launch],
+        origin: Origin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if !self.layout.terminal {
+            self.layout.toggle(Area::Terminal);
+        }
+        let last = launches.len().saturating_sub(1);
+        let started: Vec<_> = self.terminal.update(cx, |t, cx| {
+            launches
+                .iter()
+                .enumerate()
+                .map(|(i, l)| {
+                    let show = (i == last).then_some(origin);
+                    t.start_job(l.tag.clone(), l.dir.clone(), &l.command, show, window, cx)
+                })
+                .collect()
+        });
+        cx.notify();
+        started.into_iter().try_for_each(|s| s.map(drop))
     }
 
     /// Types `commands` into this window's terminal, showing the dock if

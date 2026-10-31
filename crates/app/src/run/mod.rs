@@ -4,5 +4,5 @@
 mod panel;
 mod store;
 
-pub use panel::{RunEvent, RunPanel};
+pub use panel::{Launch, RunEvent, RunPanel};
 pub use store::RunStore;

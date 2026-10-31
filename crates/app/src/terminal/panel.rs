@@ -528,8 +528,31 @@ impl TerminalPanel {
         }
     }
 
-    /// The pane's last `lines` lines of output (the active tab's focused
-    /// pane by default).
+    /// The pane an agent reads or types into: the one at position `pane`
+    /// of the tab at `tab`. With no tab, the active tab's, by default its
+    /// focused pane: the one the user has in front. A named tab that is
+    /// split needs its pane named too, as its focused pane may be the one
+    /// the user types in while the agent's command runs in another.
+    fn target(
+        &self,
+        tab: Option<usize>,
+        pane: Option<usize>,
+        cx: &App,
+    ) -> Result<(usize, Entity<TerminalView>), String> {
+        let ix = self.tab_ix(tab)?;
+        let panes = self.tabs[ix].read(cx).views().count();
+        if tab.is_some() && pane.is_none() && panes > 1 {
+            return Err(format!(
+                "Terminal {ix} is split into {panes} panes: name the pane, 0 to {} (app_state \
+                 lists them).",
+                panes - 1
+            ));
+        }
+        let (_, view) = self.pane_of(ix, pane, cx)?;
+        Ok((ix, view))
+    }
+
+    /// The pane's last `lines` lines of output (see [`Self::target`]).
     pub fn text(
         &self,
         tab: Option<usize>,
@@ -537,13 +560,12 @@ impl TerminalPanel {
         lines: usize,
         cx: &App,
     ) -> Result<String, String> {
-        let ix = self.tab_ix(tab)?;
-        let (_, view) = self.pane_of(ix, pane, cx)?;
+        let (_, view) = self.target(tab, pane, cx)?;
         Ok(view.read(cx).text_tail(lines))
     }
 
-    /// Sends raw input to a pane (the active tab's focused one by default).
-    /// The pane counts as used from then on, as when the user types there.
+    /// Sends raw input to a pane (see [`Self::target`]). The pane counts
+    /// as used from then on, as when the user types there.
     pub fn input(
         &mut self,
         tab: Option<usize>,
@@ -551,8 +573,7 @@ impl TerminalPanel {
         bytes: Vec<u8>,
         cx: &mut Context<Self>,
     ) -> Result<usize, String> {
-        let ix = self.tab_ix(tab)?;
-        let (_, view) = self.pane_of(ix, pane, cx)?;
+        let (ix, view) = self.target(tab, pane, cx)?;
         if view.read(cx).exited {
             return Err(format!("Terminal {ix} has exited."));
         }
@@ -639,12 +660,20 @@ impl TerminalPanel {
         })
     }
 
+    /// Where the script with `key` runs, its newest live terminal, as
+    /// `app_state` lists it: the tab's index and the pane's place in it.
+    pub fn job_terminal(&self, key: &str, cx: &App) -> Option<(usize, usize)> {
+        let (ix, pane) = *self.job_panes(key, cx).last()?;
+        Some((ix, self.pane_index(ix, pane, cx)?))
+    }
+
     /// Types `command` into the script's terminal: its idle pane when there
     /// is one (a running one is only shown), else a new shell in `dir`. The
     /// old shell may have moved since, and the command is relative to the
     /// script's folder, so it goes back to `dir` first. With `show`, the
     /// terminal shows as that origin allows (one of several started together
-    /// passes `None`).
+    /// passes `None`). Returns the tab and pane, or why no shell could start
+    /// (the dock shows it too).
     pub fn start_job(
         &mut self,
         tag: JobTag,
@@ -653,7 +682,7 @@ impl TerminalPanel {
         show: Option<Origin>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Result<(usize, PaneId), String> {
         let (ix, pane, command) = match self.job_panes(&tag.key, cx).last().copied() {
             Some((ix, pane)) => {
                 let cwd = self.tabs[ix]
@@ -667,9 +696,12 @@ impl TerminalPanel {
                     cwd: Some(dir),
                     ..Command::default()
                 };
-                let Ok((ix, pane)) = self.open_tab(cmd, &tag.name, None, cx) else {
-                    cx.notify();
-                    return;
+                let (ix, pane) = match self.open_tab(cmd, &tag.name, None, cx) {
+                    Ok(opened) => opened,
+                    Err(e) => {
+                        cx.notify();
+                        return Err(e);
+                    }
                 };
                 (ix, pane, command.to_string())
             }
@@ -687,6 +719,7 @@ impl TerminalPanel {
             self.reveal(ix, pane, origin, window, cx);
         }
         cx.notify();
+        Ok((ix, pane))
     }
 
     /// Interrupts (Ctrl-C) whatever the script's terminals are running.
@@ -1617,7 +1650,8 @@ mod tests {
                 )
             })
         })
-        .expect("the test window is open");
+        .expect("the test window is open")
+        .expect("the script starts");
         let job = cx.update(|cx| {
             let p = panel.read(cx);
             p.tab(p.active_index()).read(cx).focused_view().clone()
@@ -1711,7 +1745,8 @@ mod tests {
                     p.start_job(tag, home.clone(), command, Some(Origin::User), window, cx)
                 })
             })
-            .expect("the test window is open");
+            .expect("the test window is open")
+            .expect("the script starts");
         };
         start(cx, "printf 'sawit-%s\\n' first");
         let job = cx.update(|cx| {
@@ -1863,7 +1898,8 @@ mod tests {
                 )
             })
         })
-        .expect("the test window is open");
+        .expect("the test window is open")
+        .expect("the script starts");
         check(cx, "a script");
         cx.update_window(w, |_, window, cx| {
             panel.update(cx, |p, cx| {
@@ -1946,6 +1982,128 @@ mod tests {
         });
     }
 
+    /// While the user types in one pane of a split tab (into `cat`, standing in for Claude Code)
+    /// and an agent's command runs in the other, the tab's focused pane is the user's. So keys and
+    /// reads for that tab must name their pane: a ctrl-c meant for the agent's command would
+    /// otherwise interrupt the user's program. Named, it stops the agent's command, and `cat`
+    /// keeps running.
+    #[gpui_kit::test]
+    fn a_split_tab_takes_keys_only_for_a_named_pane(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let (agents, users) = cx.update(|cx| {
+            let tab = panel.read(cx).tab(0).read(cx);
+            let panes = tab.state.layout.panes();
+            (
+                tab.view(panes[0]).unwrap().clone(),
+                tab.view(panes[1]).unwrap().clone(),
+            )
+        });
+        ready(cx, &agents);
+        ready(cx, &users);
+        start_cat(cx, &users);
+        let (ix, pane) = cx
+            .update_window(w, |_, window, cx| {
+                panel.update(cx, |p, cx| p.run("sleep 30", Origin::Agent, window, cx))
+            })
+            .expect("the test window is open")
+            .expect("a shell runs it");
+        let pane = cx.update(|cx| panel.read(cx).pane_index(ix, pane, cx));
+        assert_eq!((ix, pane), (0, Some(0)), "the command went elsewhere");
+        wait_until(cx, "the agent's sleep runs", |cx| {
+            agents.read(cx).foreground_name().as_deref() == Some("sleep")
+        });
+
+        let interrupt = |cx: &mut TestAppContext, pane: Option<usize>| {
+            cx.update(|cx| panel.update(cx, |p, cx| p.input(Some(0), pane, vec![0x03], cx)))
+        };
+        let sent = interrupt(cx, None);
+        assert!(
+            sent.as_ref().is_err_and(|e| e.contains("pane")),
+            "keys went to the split tab's focused pane: {sent:?}"
+        );
+        let read = cx.update(|cx| panel.read(cx).text(Some(0), None, 10, cx));
+        assert!(
+            read.as_ref().is_err_and(|e| e.contains("pane")),
+            "the split tab's focused pane was read: {read:?}"
+        );
+
+        interrupt(cx, Some(0)).expect("the agent's pane takes the keys");
+        wait_until(cx, "the agent's sleep stops", |cx| {
+            agents.read(cx).at_prompt()
+        });
+        cx.update(|cx| {
+            assert_eq!(
+                users.read(cx).foreground_name().as_deref(),
+                Some("cat"),
+                "the user's program was interrupted"
+            )
+        });
+    }
+
+    /// A script an agent starts while the user types in a terminal opens behind it, and says where
+    /// it runs: app_run_script names that terminal, which the agent's terminal_read and
+    /// terminal_input need, since the terminal in front is still the user's. A script whose shell
+    /// can't start says why instead.
+    #[gpui_kit::test]
+    fn an_agents_script_says_where_it_runs(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        let user = active(cx, &panel);
+        let typing = cx.update(|cx| user.read(cx).focused_view().clone());
+        ready(cx, &typing);
+        start_cat(cx, &typing);
+        let start = |cx: &mut TestAppContext, key: &str| {
+            let tag = JobTag {
+                key: key.into(),
+                name: key.into(),
+            };
+            cx.update_window(w, |_, window, cx| {
+                panel.update(cx, |p, cx| {
+                    p.start_job(
+                        tag,
+                        std::env::temp_dir(),
+                        "sleep 30",
+                        Some(Origin::Agent),
+                        window,
+                        cx,
+                    )
+                })
+            })
+            .expect("the test window is open")
+        };
+
+        let (ix, pane) = start(cx, "dev").expect("the script starts");
+        assert!(active(cx, &panel) == user, "the script came in front");
+        cx.update(|cx| {
+            let p = panel.read(cx);
+            assert_eq!(p.pane_index(ix, pane, cx), Some(0));
+            assert_eq!(p.job_terminal("dev", cx), Some((ix, 0)));
+        });
+        let script = cx.update(|cx| panel.read(cx).tab(ix).read(cx).focused_view().clone());
+        wait_until(cx, "the script runs", |cx| {
+            script.read(cx).foreground_name().as_deref() == Some("sleep")
+        });
+        cx.update(|cx| panel.update(cx, |p, cx| p.input(Some(ix), Some(0), vec![0x03], cx)))
+            .expect("the script's terminal takes the keys");
+        wait_until(cx, "the script stops", |cx| script.read(cx).at_prompt());
+        cx.update(|cx| {
+            assert_eq!(typing.read(cx).foreground_name().as_deref(), Some("cat"));
+        });
+
+        cx.update(|cx| panel.update(cx, |p, _| p.fail_spawns = true));
+        let failed = start(cx, "build");
+        assert!(
+            failed.is_err(),
+            "a script with no shell started: {failed:?}"
+        );
+        cx.update(|cx| assert_eq!(panel.read(cx).job_terminal("build", cx), None));
+    }
+
     /// What quitting or closing the window would end: commands in the foreground and live SSH
     /// sessions. Shells at their prompt and a script's terminal between runs don't count.
     #[gpui_kit::test]
@@ -1970,7 +2128,8 @@ mod tests {
                 )
             })
         })
-        .expect("the test window is open");
+        .expect("the test window is open")
+        .expect("the script starts");
         let job = active(cx, &panel);
         let job = cx.update(|cx| job.read(cx).focused_view().clone());
         wait_until(cx, "the script ran", |cx| {
@@ -2064,7 +2223,8 @@ mod tests {
                 )
             })
         })
-        .expect("the test window is open");
+        .expect("the test window is open")
+        .expect("the script starts");
         cx.run_until_parked();
         focus_terminal(cx, w, &panel);
         cx.simulate_keystrokes(w, "cmd-d");
