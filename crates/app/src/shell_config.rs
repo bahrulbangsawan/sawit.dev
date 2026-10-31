@@ -32,16 +32,20 @@ use crate::states::{Banner, Placeholder};
 
 actions!(shell_config, [OpenConfig]);
 
-/// The Files panel's shortcuts for the same commands.
+/// The Files panel's shortcuts for the same commands. ↩ and ⌫ act on the list only while the
+/// search box doesn't have the keyboard, like the keymap editor's table keys: the box passes on ↩,
+/// and ⌫ with nothing before the cursor, and they would open the selected file or move it to the
+/// Trash.
 pub fn init(cx: &mut App) {
     let ctx = Some("ShellConfigPanel");
+    let list = Some("ShellConfigPanel && !Input");
     cx.bind_keys([
-        KeyBinding::new("enter", OpenConfig, ctx),
+        KeyBinding::new("enter", OpenConfig, list),
         KeyBinding::new("alt-cmd-r", RevealInFinder, ctx),
         KeyBinding::new("ctrl-shift-enter", OpenInDefaultApp, ctx),
         KeyBinding::new("cmd-d", Duplicate, ctx),
         KeyBinding::new("alt-cmd-c", CopyPath, ctx),
-        KeyBinding::new("backspace", Trash, ctx),
+        KeyBinding::new("backspace", Trash, list),
         KeyBinding::new("alt-cmd-backspace", Delete, ctx),
     ]);
 }
@@ -777,5 +781,78 @@ impl Render for ShellConfigPanel {
                     }),
             )
             .child(self.render_footer(cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use gpui_kit::{Action, AppContext as _, FocusHandle, Focusable as _, TestAppContext};
+
+    use super::{OpenConfig, ShellConfigPanel};
+    use crate::files::Trash;
+
+    /// Typing a search runs none of the list's commands. The search box passes on ↩, and ⌫ with
+    /// nothing before the cursor (an emptied box), to the bindings around it, where the list's
+    /// would open the selected file or move it to the Trash.
+    #[gpui_kit::test]
+    fn typing_in_the_search_box_runs_no_file_command(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::init(cx);
+        });
+        let (window, panel) = cx.update(|cx| {
+            gpui_kit::open_window(Default::default(), cx, |window, cx| {
+                cx.new(|cx| ShellConfigPanel::new(window, cx))
+            })
+            .unwrap()
+        });
+        let ran = Rc::new(RefCell::new(Vec::new()));
+        let _observer = cx.update(|cx| {
+            let ran = ran.clone();
+            cx.observe_keystrokes(move |e, _, _| {
+                if let Some(action) = &e.action {
+                    let name = action.name();
+                    if name.starts_with("files::") || name.starts_with("shell_config::") {
+                        ran.borrow_mut().push(name);
+                    }
+                }
+            })
+        });
+        let focus = |cx: &mut TestAppContext, handle: FocusHandle| {
+            cx.update_window(window, |_, window, cx| window.focus(&handle, cx))
+                .unwrap();
+            cx.run_until_parked();
+        };
+
+        let search = cx.update(|cx| panel.read(cx).filter.focus_handle(cx));
+        focus(cx, search);
+        cx.simulate_keystrokes(
+            window,
+            "z s h backspace backspace backspace backspace enter",
+        );
+        cx.run_until_parked();
+        assert_eq!(*ran.borrow(), Vec::<&str>::new(), "the search box ran them");
+
+        // From the list they are the selected file's (none here, so nothing changes).
+        let list = cx.update(|cx| panel.read(cx).focus.clone());
+        focus(cx, list.clone());
+        cx.simulate_keystrokes(window, "enter backspace");
+        cx.run_until_parked();
+        assert_eq!(*ran.borrow(), ["shell_config::OpenConfig", "files::Trash"]);
+
+        // The right-click menu, which looks its keys up from the list, still shows them.
+        let key = |cx: &mut TestAppContext, action: &dyn Action| {
+            cx.update_window(window, |_, window, _| {
+                window
+                    .highest_precedence_binding_for_action_in(action, &list)
+                    .map(|b| b.keystrokes()[0].key().to_string())
+            })
+            .unwrap()
+        };
+        assert_eq!(key(cx, &OpenConfig).as_deref(), Some("enter"));
+        assert_eq!(key(cx, &Trash).as_deref(), Some("backspace"));
     }
 }
