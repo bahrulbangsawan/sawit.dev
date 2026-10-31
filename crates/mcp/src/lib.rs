@@ -84,7 +84,7 @@ Sawit is a macOS developer workbench. These tools work without the Sawit app run
 - MCP servers: the MCP page catalog and the AI clients on this Mac; install or remove a server in a client's config.
 These control the running Sawit app (start it with launch_app; app_state shows windows, tabs and terminals):
 - app_*: open files/folders, show panels, layout, tabs, pages (canvas, MCP, tools, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
-- terminal_*: run commands in Sawit's terminal and read their output, type keys (ctrl-c), close tabs.
+- terminal_*: run commands in Sawit's terminal and read their output, type keys (ctrl-c), close tabs or panes. terminal_read, terminal_input and terminal_close take `pane` (from app_state) for one pane of a split tab: without it, read and input use the focused pane, and close closes the whole tab.
 - canvas_*: the canvas (FigCraft engine): list, add shapes/stickies/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG. They also work on the saved file when the app is closed.
 - canvas_command: run any command of the canvas engine by id with its parameters (board.sticky, node.set, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes.
 - browser_*: a browser tab (WebKit) to check the app being built: navigate (default the project's dev server), snapshot the page as an outline with element refs, click/hover/type/press keys/select/scroll by ref or CSS selector, wait for text, screenshot, read console errors and network requests, evaluate JS, resize to a device, read the user's annotations, inspect an element's design, read the page's design system, export it as DESIGN.md + tokens + assets. Take a new browser_snapshot after the page changes; refs reset.
@@ -581,6 +581,39 @@ mod tests {
                 "{what} doesn't mention the filter: {text}"
             );
         }
+    }
+
+    /// The terminal_* line says what the tools do now that a terminal tab can hold split panes
+    /// (terminal-panes review m2): it names each terminal tool that takes `pane`, and where the
+    /// pane's number comes from, instead of saying the tools close tabs.
+    #[test]
+    fn the_terminal_line_tells_tabs_from_panes() {
+        let line = INSTRUCTIONS
+            .lines()
+            .find(|line| line.starts_with("- terminal_*:"))
+            .expect("a terminal_* line");
+        let mut take_a_pane: Vec<String> = Sawit::router()
+            .list_all()
+            .iter()
+            .filter(|tool| tool.name.starts_with("terminal_"))
+            .filter(|tool| {
+                let properties = tool.input_schema.get("properties");
+                properties.is_some_and(|p| p.get("pane").is_some())
+            })
+            .map(|tool| tool.name.to_string())
+            .collect();
+        take_a_pane.sort();
+        assert_eq!(
+            take_a_pane,
+            ["terminal_close", "terminal_input", "terminal_read"]
+        );
+        for name in &take_a_pane {
+            assert!(line.contains(name.as_str()), "no {name} in {line}");
+        }
+        assert!(
+            line.contains("`pane`") && line.contains("app_state"),
+            "{line}"
+        );
     }
 
     #[test]
