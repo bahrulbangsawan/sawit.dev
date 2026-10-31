@@ -479,21 +479,9 @@ impl BrowserView {
         Ok(folder)
     }
 
-    /// `.nyawit/design/<host>` (made, with `.nyawit/`'s ignore file) or
-    /// `~/Downloads/sawit-design/<host>`; never a symbolic link, since an export clears it.
+    /// The export folder of `host` (see [`export_folder_for`]).
     fn export_folder(&self, host: &str) -> Result<PathBuf, String> {
-        let folder = folder_for(self.project.as_deref(), host);
-        if let (Some(project), Some(parent)) = (&self.project, folder.parent()) {
-            sawit_core::nyawit::ensure(project, parent)
-                .map_err(|e| format!("Couldn't make {}: {e}", parent.display()))?;
-        }
-        if std::fs::symlink_metadata(&folder).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err(format!(
-                "{} is a symbolic link; Sawit won't replace it.",
-                folder.display()
-            ));
-        }
-        Ok(folder)
+        export_folder_for(self.project.as_deref(), host)
     }
 
     /// `ExportDesign`: `{"export": "started"|"running", "folder"}`.
@@ -1032,7 +1020,33 @@ fn export_host(url: &str) -> String {
     }
 }
 
-/// Where an export of `host` goes (see [`BrowserView::export_folder`]).
+/// `.nyawit/design/<host>` (made, with `.nyawit/`'s ignore file) or
+/// `~/Downloads/sawit-design/<host>`. An export clears that folder and writes into its
+/// `assets/`, so none of them is reached through a symbolic link: not `.nyawit`, `design`,
+/// the host's folder nor `assets/` (a repository can commit one, pointing anywhere).
+fn export_folder_for(project: Option<&Path>, host: &str) -> Result<PathBuf, String> {
+    let folder = folder_for(project, host);
+    let assets = folder.join("assets");
+    // From the project down; without one, the host's folder and its `assets/`.
+    let base = project.or(folder.parent()).unwrap_or(&folder);
+    let mut at = base.to_path_buf();
+    for part in assets.strip_prefix(base).unwrap_or(&assets).components() {
+        at.push(part);
+        if std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(format!(
+                "{} is a symbolic link; Sawit won't write through it.",
+                at.display()
+            ));
+        }
+    }
+    if let (Some(project), Some(parent)) = (project, folder.parent()) {
+        sawit_core::nyawit::ensure(project, parent)
+            .map_err(|e| format!("Couldn't make {}: {e}", parent.display()))?;
+    }
+    Ok(folder)
+}
+
+/// Where an export of `host` goes (see [`export_folder_for`]).
 fn folder_for(project: Option<&Path>, host: &str) -> PathBuf {
     match project {
         Some(project) => sawit_core::nyawit::dir(project).join("design").join(host),
@@ -1336,6 +1350,54 @@ mod tests {
         // The scheme's own port says nothing.
         assert_eq!(export_host("http://x.dev:80/"), "x.dev");
         assert_eq!(export_host("http://x.dev:443/"), "x.dev-443");
+    }
+
+    /// An export clears its folder and writes into its `assets/`: a repository that commits a
+    /// link for `.nyawit`, `.nyawit/design`, the host's folder or its `assets/` would have
+    /// Sawit write there, and clear it, somewhere else.
+    #[test]
+    fn exports_never_go_through_a_link() {
+        /// A folder of this test's own, removed when done.
+        struct Scratch(std::path::PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let scratch = |name: &str| {
+            let dir = std::env::temp_dir()
+                .join(format!("sawit-export-links-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Scratch(dir)
+        };
+        for (i, link) in [
+            ".nyawit",
+            ".nyawit/design",
+            ".nyawit/design/x.dev",
+            ".nyawit/design/x.dev/assets",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let project = scratch(&format!("project-{i}"));
+            let elsewhere = scratch(&format!("elsewhere-{i}"));
+            let at = project.0.join(link);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&elsewhere.0, &at).unwrap();
+            assert!(
+                export_folder_for(Some(&project.0), "x.dev").is_err(),
+                "through {link}"
+            );
+            let written = std::fs::read_dir(&elsewhere.0).unwrap().count();
+            assert_eq!(written, 0, "nothing written through {link}");
+        }
+        let project = scratch("plain");
+        assert_eq!(
+            export_folder_for(Some(&project.0), "x.dev").unwrap(),
+            project.0.join(".nyawit/design/x.dev")
+        );
+        assert!(project.0.join(".nyawit/.gitignore").exists());
     }
 
     /// Two dev servers on one host are two apps: an export of one used to replace the
