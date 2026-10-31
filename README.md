@@ -190,7 +190,8 @@ explained. A conflict on the same address can't be forced.
 - **Mermaid**: ` ```mermaid ` blocks in Markdown become diagrams, and `.mmd` files preview as their diagram.
   **Save Diagram as SVG…** exports one. Colors follow the app theme.
 - **Code blocks** in previews get a **Copy** button. Shell blocks (`bash`, `zsh`, `sh`, …) also get **Run**,
-  which types the commands into the terminal of the same window.
+  which types the commands into a shell waiting at its prompt in the same window's terminal, or a new terminal tab
+  when every shell is running something.
 - **Images** in PNG/JPEG/WebP/GIF/HEIC/AVIF and more, with fit-to-screen or 100% mode, pixel size and file size.
 - **PDF** rendered to fit the pane with CoreGraphics, zoom 50–300%. Only visible pages are rendered.
 - **Video** via AVPlayer, with sound. <kbd>Space</kbd> to play/pause, plus seek and mute.

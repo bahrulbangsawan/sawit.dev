@@ -302,20 +302,19 @@ impl TerminalPanel {
     }
 
     /// Types `commands` into a shell and presses Enter: the active tab's
-    /// focused pane if it is a live shell, else the newest live shell pane
-    /// in any tab, else a new one.
+    /// focused pane if its shell is at its prompt, else the newest pane in
+    /// any tab whose shell is, else a new shell tab. A shell running a
+    /// program (an agent, an editor, `cat`) is left alone: the program would
+    /// get the command line and the Enter.
     pub fn run(&mut self, commands: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let live_shell = |v: &Entity<TerminalView>| {
-            let v = v.read(cx);
-            v.shell && !v.exited
-        };
+        let idle = |v: &Entity<TerminalView>| v.read(cx).at_prompt();
         let in_active = self.tabs.get(self.active).and_then(|t| {
             let t = t.read(cx);
-            live_shell(t.focused_view()).then_some((self.active, t.state.focused))
+            idle(t.focused_view()).then_some((self.active, t.state.focused))
         });
         let target = in_active.or_else(|| {
             self.all_panes(cx)
-                .filter(|(_, _, v)| live_shell(v))
+                .filter(|(_, _, v)| idle(v))
                 .map(|(ix, pane, _)| (ix, pane))
                 .last()
         });
@@ -1235,6 +1234,56 @@ mod tests {
                 panel.read(cx).text(Some(0), Some(5), 10, cx),
                 Err("Terminal 0 has no pane 5; panes are 0 to 0.".to_string())
             );
+        });
+    }
+
+    /// `run` (terminal_run without new_tab, the Tools page's Run in Terminal, a preview's Run)
+    /// types into the focused pane while its shell is at its prompt, and never into a program
+    /// running there: with `cat` in the foreground, the command runs in a new shell tab and `cat`
+    /// gets nothing. Each command prints a word that its own line doesn't contain.
+    #[gpui_kit::test]
+    fn run_types_only_into_a_shell_at_its_prompt(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        let run = |cx: &mut TestAppContext, commands: &str| {
+            cx.update_window(w, |_, window, cx| {
+                panel.update(cx, |p, cx| p.run(commands, window, cx))
+            })
+            .expect("the test window is open");
+        };
+        let first = cx.update(|cx| panel.read(cx).tab(0).read(cx).focused_view().clone());
+        wait_until(cx, "the shell is at its prompt", |cx| {
+            first.read(cx).at_prompt()
+        });
+
+        run(cx, "printf 'sawit-%s\\n' idle-ran");
+        cx.update(|cx| assert_eq!(panel.read(cx).tab_count(), 1));
+        wait_until(cx, "the shell at its prompt runs the command", |cx| {
+            first.read(cx).text_tail(50).contains("sawit-idle-ran")
+        });
+
+        run(cx, "cat");
+        wait_until(cx, "cat runs in the foreground", |cx| {
+            let v = first.read(cx);
+            v.foreground_job().is_some() && !v.at_prompt()
+        });
+        run(cx, "printf 'sawit-%s\\n' busy-ran");
+        let fresh = cx.update(|cx| {
+            let p = panel.read(cx);
+            assert_eq!(p.tab_count(), 2, "the command opens a new shell tab");
+            assert_eq!(p.active_index(), 1);
+            p.tab(1).read(cx).focused_view().clone()
+        });
+        wait_until(cx, "the new shell runs the command", |cx| {
+            fresh.read(cx).text_tail(50).contains("sawit-busy-ran")
+        });
+        cx.update(|cx| {
+            let busy = first.read(cx);
+            assert!(
+                !busy.text_tail(50).contains("busy-ran"),
+                "cat got the command"
+            );
+            assert!(busy.foreground_job().is_some(), "cat still runs");
         });
     }
 }
