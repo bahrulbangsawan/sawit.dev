@@ -28,6 +28,7 @@ jobs:
           cache: npm
           cache-dependency-path: site/package-lock.json
       - run: npm ci
+      - run: npx tsc --noEmit
       - run: npx cf build
       - run: npx cf deploy --prebuilt --dry-run
       - if: github.event_name == 'push'
