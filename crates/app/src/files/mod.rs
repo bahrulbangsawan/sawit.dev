@@ -865,10 +865,9 @@ impl FilesPanel {
 
     /// Runs `op` off the UI thread, keeping its inverse for undo (or redo).
     fn run(&mut self, op: Op, step: Step, cx: &mut Context<Self>) {
-        let moved = match &op {
-            Op::Move { from, to } => Some((from.clone(), to.clone())),
-            _ => None,
-        };
+        let moved = op
+            .moved()
+            .map(|(from, to)| (from.to_path_buf(), to.to_path_buf()));
         let open = matches!((&op, step), (Op::Create { dir: false, .. }, Step::Do));
         let result = op.result().map(Path::to_path_buf);
         let rx = rt::spawn_blocking(cx, move || op.run());
@@ -1081,6 +1080,27 @@ impl FilesPanel {
         let root = self.root.clone();
         self.expanded.retain(|d| Some(d) == root.as_ref());
         cx.notify();
+    }
+}
+
+/// A folder of a test's own under the temp folder, by its real path, removed when the test ends.
+#[cfg(test)]
+pub(crate) struct Scratch(pub(crate) PathBuf);
+
+#[cfg(test)]
+impl Scratch {
+    pub(crate) fn new(test: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("sawit-files-{}-{test}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir.canonicalize().unwrap())
+    }
+}
+
+#[cfg(test)]
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
