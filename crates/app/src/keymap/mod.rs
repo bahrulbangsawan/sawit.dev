@@ -337,6 +337,28 @@ impl KeymapStore {
         }
     }
 
+    /// Where the file turns default `ix` off, if it does: a `null`, or an unbind of the default's
+    /// action, on the default's keystrokes, in a context that covers the default's (none, or one
+    /// GPUI reads as a superset), as GPUI decides which bindings a later one turns off.
+    fn turned_off(&self, ix: usize) -> Option<Location> {
+        let default = &self.defaults[ix];
+        self.loaded.iter().find_map(|(at, binding)| {
+            if binding.keystrokes() != default.keystrokes() {
+                return None;
+            }
+            let covers = match (binding.predicate(), default.predicate()) {
+                (None, _) => true,
+                (Some(_), None) => false,
+                (Some(off), Some(on)) => off.is_superset(&on),
+            };
+            let off = is_no_action(binding.action())
+                || (is_unbind(binding.action())
+                    && self.user.binding(*at).and_then(|b| b.entry.unbinds())
+                        == Some(default.action().name()));
+            (covers && off).then_some(*at)
+        })
+    }
+
     /// The context, keystrokes and action name of default `ix`, as the file writes them.
     fn default_parts(&self, ix: usize) -> (Option<String>, String, String) {
         let binding = &self.defaults[ix];
@@ -366,8 +388,7 @@ impl KeymapStore {
             if is_no_action(action) || is_unbind(action) {
                 continue;
             }
-            let (context, keys, name) = self.default_parts(ix);
-            let source = match self.user.find_unbind(context.as_deref(), &keys, &name) {
+            let source = match self.turned_off(ix) {
                 Some(unbind) => Source::Removed {
                     default: ix,
                     unbind,
@@ -807,6 +828,47 @@ mod tests {
                 runs(cx, "ctrl-alt-b"),
                 ["keymap_test::CloseAll", "keymap_test::Other"]
             );
+        });
+    }
+
+    /// A default the file turns off shows as removed however the file does it: with `null` (the
+    /// new file's own example), or with an unbind whose context covers the default's (none at
+    /// all, or the same written another way), as GPUI reads them.
+    #[gpui_kit::test]
+    fn a_default_turned_off_by_hand_shows_as_removed(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("off-by-hand");
+        let store = start(cx, &scratch);
+        std::fs::create_dir_all(&scratch.0).unwrap();
+        for file in [
+            r#"[{"context": "Workspace", "bindings": {"cmd-k w": null}}]"#,
+            r#"[{"bindings": {"cmd-k w": null}}]"#,
+            r#"[{"bindings": {"cmd-k w": ["zed::Unbind", "keymap_test::CloseAll"]}}]"#,
+            r#"[{"context": "Workspace || Editor", "bindings": {"cmd-k w": ["zed::Unbind", "keymap_test::CloseAll"]}}]"#,
+        ] {
+            std::fs::write(scratch.file(), file).unwrap();
+            cx.update(|cx| {
+                store.update(cx, |store, cx| store.reload(cx));
+                assert!(runs(cx, "cmd-k w").is_empty(), "{file}");
+                let source = default_row(&store, cx, "keymap_test::CloseAll");
+                assert!(
+                    matches!(source, Source::Removed { .. }),
+                    "{file}: {source:?}"
+                );
+                // Restore takes the line out.
+                store.update(cx, |s, cx| s.remove(source, cx)).unwrap();
+                assert_eq!(runs(cx, "cmd-k w"), ["keymap_test::CloseAll"], "{file}");
+            });
+        }
+        // A null in another context leaves the default as it is.
+        std::fs::write(
+            scratch.file(),
+            r#"[{"context": "Editor", "bindings": {"cmd-k w": null}}]"#,
+        )
+        .unwrap();
+        cx.update(|cx| {
+            store.update(cx, |store, cx| store.reload(cx));
+            let source = default_row(&store, cx, "keymap_test::CloseAll");
+            assert!(matches!(source, Source::Default(_)), "{source:?}");
         });
     }
 

@@ -273,18 +273,9 @@ impl UserKeymap {
         Some(binding)
     }
 
-    /// Where the `zed::Unbind` of `action` from `keystrokes` in `context` is, if the file has one.
-    pub fn find_unbind(
-        &self,
-        context: Option<&str>,
-        keystrokes: &str,
-        action: &str,
-    ) -> Option<Location> {
-        self.bindings()
-            .find(|(_, ctx, b)| {
-                *ctx == context && b.keystrokes == keystrokes && b.entry.unbinds() == Some(action)
-            })
-            .map(|(at, _, _)| at)
+    /// The binding at `at`, if there is one.
+    pub fn binding(&self, at: Location) -> Option<&Binding> {
+        self.sections.get(at.section)?.bindings.get(at.binding)
     }
 }
 
@@ -579,23 +570,20 @@ mod tests {
     }
 
     #[test]
-    fn finds_an_unbind() {
+    fn finds_a_binding_by_its_place() {
         let mut keymap = UserKeymap::default();
         keymap.add(
             Some("Workspace"),
             "cmd-w",
             Entry::unbind("workspace::CloseActiveTab"),
         );
-        assert_eq!(
-            keymap.find_unbind(Some("Workspace"), "cmd-w", "workspace::CloseActiveTab"),
-            Some(Location {
-                section: 0,
-                binding: 0
-            })
-        );
-        assert_eq!(
-            keymap.find_unbind(None, "cmd-w", "workspace::CloseActiveTab"),
-            None
-        );
+        let at = Location {
+            section: 0,
+            binding: 0,
+        };
+        let binding = keymap.binding(at).unwrap();
+        assert_eq!(binding.entry.unbinds(), Some("workspace::CloseActiveTab"));
+        assert_eq!(keymap.binding(Location { binding: 1, ..at }), None);
+        assert_eq!(keymap.binding(Location { section: 1, ..at }), None);
     }
 }
