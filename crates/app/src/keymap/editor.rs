@@ -1559,6 +1559,61 @@ mod form_tests {
         assert_eq!(std::fs::read_to_string(scratch.file()).unwrap(), by_hand);
     }
 
+    /// An action with no binding gets one from its own row (Show Actions Without a Binding, then
+    /// the row's Edit: "Add a Keybinding for …"): such a row has no place in the file to go stale.
+    /// For a canvas command without a default key, that row is the editor's way to bind it.
+    #[gpui_kit::test]
+    fn an_unbound_row_gets_a_binding(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("form-unbound");
+        let (window, editor) = open(cx, &scratch);
+        cx.update(|cx| editor.update(cx, |e, cx| e.toggle_unbound(cx)));
+        cx.run_until_parked();
+        let source = cx.update(|cx| {
+            editor
+                .read(cx)
+                .rows
+                .iter()
+                .find(|r| r.action.as_ref() == "keymap_editor_test::Other")
+                .map(|r| r.source)
+        });
+        assert_eq!(source, Some(super::Source::Unbound));
+        edit(cx, window, &editor, "keymap_editor_test::Other");
+        cx.simulate_keystrokes(window, "ctrl-alt-o");
+        assert_eq!(recorded(cx, &editor), "ctrl-alt-o");
+        save(cx, window, &editor);
+        cx.update(|cx| {
+            let e = editor.read(cx);
+            let refused = e.form.as_ref().and_then(|f| f.read(cx).error.clone());
+            assert!(e.form.is_none(), "the form refused: {refused:?}");
+            assert_eq!(runs(cx, "ctrl-alt-o"), ["keymap_editor_test::Other"]);
+        });
+
+        // A canvas command with no key: the ellipse tool (only R, the rectangle's, is bound).
+        cx.update_window(window, |_, window, cx| {
+            editor.update(cx, |editor, cx| {
+                let ix = editor
+                    .rows
+                    .iter()
+                    .position(|r| {
+                        r.source == super::Source::Unbound
+                            && r.args.as_deref() == Some(r#"{"id":"tool.ellipse"}"#)
+                    })
+                    .expect("the ellipse tool's row");
+                editor.edit(ix, window, cx);
+            })
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, "ctrl-alt-e");
+        save(cx, window, &editor);
+        cx.update(|cx| {
+            let e = editor.read(cx);
+            let refused = e.form.as_ref().and_then(|f| f.read(cx).error.clone());
+            assert!(e.form.is_none(), "the form refused: {refused:?}");
+            assert_eq!(canvas_runs(cx, "ctrl-alt-e"), ["tool.ellipse"]);
+        });
+    }
+
     /// The form's keys field records every key but plain ⎋ and ↩: ⎋ stops recording, and a
     /// second ⎋ cancels the form; ↩ saves it.
     #[gpui_kit::test]

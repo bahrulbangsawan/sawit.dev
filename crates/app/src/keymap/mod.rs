@@ -462,8 +462,13 @@ impl KeymapStore {
     }
 
     /// Whether `row`, as the editor read it, is still a row of the keymap: the place in the file
-    /// a user's row came from may hold another binding once the file has changed.
+    /// a user's row came from may hold another binding once the file has changed. An action with
+    /// no binding has no place in the file: its row only adds a binding, which stays right
+    /// whatever the file holds now.
     pub fn is_current(&self, row: &Row, cx: &App) -> bool {
+        if row.source == Source::Unbound {
+            return true;
+        }
         self.rows(false, cx).iter().any(|r| {
             r.source == row.source
                 && r.action == row.action
