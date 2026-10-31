@@ -741,31 +741,35 @@ impl ToolsPage {
                 }),
                 cx,
             ))
-            .child(div().flex_1())
-            .child(catalog::menu(
-                "tools-category",
-                Lucide::Funnel,
-                categories[category].to_string(),
-                categories,
-                category,
-                cx.listener(|this, ix: &usize, _, cx| {
-                    this.category = ix.checked_sub(1).map(|ix| Category::ALL[ix]);
-                    this.page = 0;
-                    cx.notify();
-                }),
-            ))
-            .child(catalog::menu(
-                "tools-sort",
-                Lucide::ArrowUpDown,
-                format!("Sort: {}", self.sort.label()),
-                Sort::ALL.iter().map(|s| s.label()).collect(),
-                sort,
-                cx.listener(|this, ix: &usize, _, cx| {
-                    this.sort = Sort::ALL[*ix];
-                    this.page = 0;
-                    cx.notify();
-                }),
-            ))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .ml_auto()
+                    .child(catalog::menu(
+                        "tools-category",
+                        Lucide::Funnel,
+                        categories[category].to_string(),
+                        categories,
+                        category,
+                        cx.listener(|this, ix: &usize, _, cx| {
+                            this.category = ix.checked_sub(1).map(|ix| Category::ALL[ix]);
+                            this.page = 0;
+                            cx.notify();
+                        }),
+                    ))
+                    .child(catalog::menu(
+                        "tools-sort",
+                        Lucide::ArrowUpDown,
+                        format!("Sort: {}", self.sort.label()),
+                        Sort::ALL.iter().map(|s| s.label()).collect(),
+                        sort,
+                        cx.listener(|this, ix: &usize, _, cx| {
+                            this.sort = Sort::ALL[*ix];
+                            this.page = 0;
+                            cx.notify();
+                        }),
+                    )),
+            )
     }
 
     /// "3 selected" with Clear and Install, while anything is ticked.
@@ -1115,114 +1119,102 @@ impl ToolsPage {
             .border_color(cx.theme().border)
             .hover(|el| el.bg(cx.theme().list_hover))
             .when(running, |el| el.bg(cx.theme().list_hover))
-            .child(
-                h_flex()
-                    .gap_3()
-                    .child(div().w(px(16.)).flex_none().child(checkbox))
-                    .child(catalog::tile(logo(id, 22., cx), cx))
+            .child(catalog::columns(
+                // Level with the middle of the tile.
+                Some(
+                    h_flex()
+                        .h(px(catalog::TILE))
+                        .child(checkbox)
+                        .into_any_element(),
+                ),
+                catalog::tile(logo(id, 22., cx), cx),
+                v_flex()
+                    .gap_0p5()
                     .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap_0p5()
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .flex_wrap()
-                                    .child(div().text_sm().font_semibold().child(tool.name))
-                                    .child(catalog::tag(None, category_name(tool.category), cx))
-                                    .children(needs),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .whitespace_normal()
-                                    .child(tool.description),
-                            )
-                            .child(
-                                h_flex()
-                                    .gap_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_xs()
-                                            .font_family(mono.clone())
-                                            .text_color(muted)
-                                            .child(match found {
-                                                Some(f) => tilde(&f.path),
-                                                None => command.to_string(),
-                                            }),
-                                    )
-                                    .child(
-                                        Button::new(("tool-copy", ix))
-                                            .ghost()
-                                            .xsmall()
-                                            .icon(Lucide::Copy)
-                                            .tooltip(if command == tool.install {
-                                                "Copy Install Command"
-                                            } else {
-                                                "Copy Upgrade Command"
-                                            })
-                                            .on_click(move |_, _, cx| {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                                    command.to_string(),
-                                                ))
-                                            }),
-                                    ),
-                            ),
+                        h_flex()
+                            .gap_2()
+                            .flex_wrap()
+                            .child(div().text_sm().font_semibold().child(tool.name))
+                            .child(catalog::tag(None, category_name(tool.category), cx))
+                            .children(needs),
                     )
                     .child(
                         div()
-                            .w(px(catalog::STATUS_W))
-                            .flex_none()
-                            .child(catalog::pill(mark, badge, color)),
+                            .text_xs()
+                            .text_color(muted)
+                            .whitespace_normal()
+                            .child(tool.description),
                     )
                     .child(
                         h_flex()
-                            .w(px(catalog::ACTIONS_W))
-                            .flex_none()
                             .gap_1()
-                            .justify_end()
-                            .when(log.is_some(), |el| {
-                                el.child(
-                                    Button::new(("tool-log", ix))
-                                        .ghost()
-                                        .small()
-                                        .icon(Lucide::ScrollText)
-                                        .selected(expanded)
-                                        .tooltip(if expanded {
-                                            "Hide Output"
-                                        } else {
-                                            "Show Output"
-                                        })
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            if !this.expanded.remove(id) {
-                                                this.expanded.insert(id);
-                                            }
-                                            cx.notify();
-                                        })),
-                                )
-                            })
-                            .when(can_uninstall, |el| {
-                                el.child(
-                                    Button::new(("tool-uninstall", ix))
-                                        .ghost()
-                                        .small()
-                                        .icon(
-                                            Icon::new(Lucide::Trash).text_color(cx.theme().danger),
-                                        )
-                                        .tooltip(format!("Uninstall {}", tool.name))
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.confirm_uninstall(tool, window, cx)
-                                        })),
-                                )
-                            })
-                            .child(action),
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_xs()
+                                    .font_family(mono.clone())
+                                    .text_color(muted)
+                                    .child(match found {
+                                        Some(f) => tilde(&f.path),
+                                        None => command.to_string(),
+                                    }),
+                            )
+                            .child(
+                                Button::new(("tool-copy", ix))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(Lucide::Copy)
+                                    .tooltip(if command == tool.install {
+                                        "Copy Install Command"
+                                    } else {
+                                        "Copy Upgrade Command"
+                                    })
+                                    .on_click(move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            command.to_string(),
+                                        ))
+                                    }),
+                            ),
                     ),
-            )
+                catalog::pill(mark, badge, color),
+                h_flex()
+                    .gap_1()
+                    .when(log.is_some(), |el| {
+                        el.child(
+                            Button::new(("tool-log", ix))
+                                .ghost()
+                                .small()
+                                .icon(Lucide::ScrollText)
+                                .selected(expanded)
+                                .tooltip(if expanded {
+                                    "Hide Output"
+                                } else {
+                                    "Show Output"
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if !this.expanded.remove(id) {
+                                        this.expanded.insert(id);
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                    })
+                    .when(can_uninstall, |el| {
+                        el.child(
+                            Button::new(("tool-uninstall", ix))
+                                .ghost()
+                                .small()
+                                .icon(Icon::new(Lucide::Trash).text_color(cx.theme().danger))
+                                .tooltip(format!("Uninstall {}", tool.name))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.confirm_uninstall(tool, window, cx)
+                                })),
+                        )
+                    })
+                    .child(action),
+            ))
             .when_some(last_line.filter(|_| !expanded), |el, line| {
                 el.child(
                     div()
@@ -1373,7 +1365,6 @@ impl Render for ToolsPage {
                 v_flex()
                     .p_6()
                     .gap_4()
-                    .max_w(px(1180.))
                     .child(self.render_header(cx))
                     .child(self.render_toolbar(&query, cx))
                     .children(self.render_progress(cx))

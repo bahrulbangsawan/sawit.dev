@@ -1,6 +1,6 @@
 //! Pieces the catalog pages (Dev Tools, MCP) share: the toolbar (search,
-//! filter tabs, menus), status pills, tags, logo tiles, the list's column
-//! header, its pager and the empty state.
+//! filter tabs, menus), status pills, tags, logo tiles, the list's columns
+//! and their header, its pager and the empty state.
 
 use std::rc::Rc;
 
@@ -23,6 +23,9 @@ pub const STATUS_W: f32 = 200.;
 pub const ACTIONS_W: f32 = 236.;
 /// Side of a row's logo tile.
 pub const TILE: f32 = 36.;
+/// The narrowest the name column gets beside status and actions: narrower,
+/// and they wrap under the name.
+const NAME_MIN: f32 = 240.;
 
 /// How many pages `n` rows fill (at least one).
 pub fn pages(n: usize) -> usize {
@@ -176,34 +179,80 @@ pub fn tile(logo: AnyElement, cx: &App) -> Div {
         .child(logo)
 }
 
-/// The list's column titles: `lead` (a checkbox or a gap) under the
-/// checkboxes, then name, status and actions over their columns.
-pub fn header(lead: Option<AnyElement>, name: &'static str, cx: &App) -> impl IntoElement + use<> {
-    let muted = cx.theme().muted_foreground;
+/// A line of the list, the header's or a row's: `lead` (a checkbox or a gap)
+/// and the tile, then name, status and actions in their columns. Where the
+/// name would be narrower than `NAME_MIN`, status and then actions wrap under
+/// it, actions still on the right, so a narrow page shows every column.
+pub fn columns(
+    lead: Option<AnyElement>,
+    tile: impl IntoElement,
+    name: impl IntoElement,
+    status: impl IntoElement,
+    actions: impl IntoElement,
+) -> Div {
     h_flex()
-        .px_4()
-        .h(px(32.))
         .gap_3()
-        .border_b_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().secondary)
-        .text_xs()
-        .font_medium()
-        .text_color(muted)
+        .items_start()
         .when_some(lead, |el, lead| {
             el.child(div().w(px(16.)).flex_none().child(lead))
         })
-        .child(div().w(px(TILE)).flex_none())
-        .child(div().flex_1().child(name))
-        .child(div().w(px(STATUS_W)).flex_none().child("Status"))
+        .child(tile)
         .child(
-            div()
-                .w(px(ACTIONS_W))
-                .flex_none()
-                .flex()
-                .justify_end()
-                .child("Actions"),
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .flex_wrap()
+                .items_start()
+                .gap_x_3()
+                .gap_y_2()
+                .child(
+                    div()
+                        .flex_grow_1()
+                        .flex_basis(px(NAME_MIN))
+                        .min_w_0()
+                        .child(name),
+                )
+                .child(
+                    v_flex()
+                        .w(px(STATUS_W))
+                        .flex_none()
+                        .max_w_full()
+                        .items_start()
+                        .child(status),
+                )
+                .child(
+                    h_flex()
+                        .w(px(ACTIONS_W))
+                        .flex_none()
+                        .max_w_full()
+                        .ml_auto()
+                        .justify_end()
+                        .child(actions),
+                ),
         )
+}
+
+/// The list's column titles: `lead` (a checkbox or a gap) over the
+/// checkboxes, then name, status and actions over their columns. It keeps to
+/// one line: a column that wrapped under the name has nothing to title.
+pub fn header(lead: Option<AnyElement>, name: &'static str, cx: &App) -> impl IntoElement + use<> {
+    columns(
+        lead,
+        div().w(px(TILE)).flex_none(),
+        name,
+        "Status",
+        "Actions",
+    )
+    .h(px(32.))
+    .px_4()
+    .py_2()
+    .overflow_hidden()
+    .border_b_1()
+    .border_color(cx.theme().border)
+    .bg(cx.theme().secondary)
+    .text_xs()
+    .font_medium()
+    .text_color(cx.theme().muted_foreground)
 }
 
 /// "9–16 of 24 tools" and the page buttons, under the list.
@@ -263,4 +312,81 @@ pub fn divider(cx: &App) -> impl IntoElement + use<> {
         .h(px(14.))
         .mx_1()
         .bg(cx.theme().border)
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::{
+        Bounds, Context, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render,
+        Styled as _, TestAppContext, VisualTestContext, Window, div, px, size,
+    };
+
+    use super::{NAME_MIN, TILE, columns};
+
+    /// A line of the list whose parts the tests can find.
+    struct Line;
+
+    impl Render for Line {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(columns(
+                None,
+                div().size(px(TILE)).flex_none(),
+                div().debug_selector(|| "name".into()).h(px(40.)),
+                div()
+                    .debug_selector(|| "status".into())
+                    .w(px(140.))
+                    .h(px(22.)),
+                div()
+                    .debug_selector(|| "actions".into())
+                    .w(px(120.))
+                    .h(px(28.)),
+            ))
+        }
+    }
+
+    /// Where a line `width` wide puts its name, status and actions.
+    fn lay_out(width: f32, cx: &mut TestAppContext) -> [Bounds<Pixels>; 3] {
+        cx.update(gpui_kit::init);
+        let window = cx.open_window(size(px(width), px(400.)), |_, _| Line);
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        ["name", "status", "actions"].map(|selector| {
+            cx.debug_bounds(selector)
+                .unwrap_or_else(|| panic!("{selector} isn't drawn"))
+        })
+    }
+
+    fn at(edge: Pixels) -> f32 {
+        f32::from(edge).round()
+    }
+
+    #[gpui_kit::test]
+    fn a_wide_list_keeps_name_status_and_actions_on_one_line(cx: &mut TestAppContext) {
+        let [name, status, actions] = lay_out(1000., cx);
+        assert_eq!(at(status.top()), at(name.top()));
+        assert_eq!(at(actions.top()), at(name.top()));
+        assert!(name.size.width > px(NAME_MIN), "{name:?}");
+        assert!(name.right() < status.left() && status.right() < actions.left());
+        assert_eq!(at(actions.right()), 1000.);
+    }
+
+    /// The window's narrowest page, with the sidebar open, still shows every column: what
+    /// doesn't fit beside the name wraps under it, the actions on the right.
+    #[gpui_kit::test]
+    fn a_narrower_list_wraps_the_actions_under_the_name(cx: &mut TestAppContext) {
+        let [name, status, actions] = lay_out(700., cx);
+        assert_eq!(at(status.top()), at(name.top()));
+        assert!(actions.top() >= name.bottom(), "{name:?} {actions:?}");
+        assert_eq!(at(actions.right()), 700.);
+    }
+
+    #[gpui_kit::test]
+    fn a_narrow_list_wraps_status_and_actions_under_the_name(cx: &mut TestAppContext) {
+        let [name, status, actions] = lay_out(400., cx);
+        assert!(status.top() >= name.bottom(), "{name:?} {status:?}");
+        assert_eq!(at(status.left()), at(name.left()));
+        assert!(actions.top() >= status.bottom(), "{status:?} {actions:?}");
+        assert_eq!(at(actions.right()), 400.);
+        assert!(name.right() <= px(400.), "{name:?}");
+    }
 }

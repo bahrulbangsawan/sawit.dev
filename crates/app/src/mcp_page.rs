@@ -1038,31 +1038,35 @@ impl McpPage {
                 }),
                 cx,
             ))
-            .child(div().flex_1())
-            .child(catalog::menu(
-                "mcp-kind",
-                Lucide::Funnel,
-                kinds[kind].to_string(),
-                kinds,
-                kind,
-                cx.listener(|this, ix: &usize, _, cx| {
-                    this.kind = ix.checked_sub(1).map(|ix| Kind::ALL[ix]);
-                    this.page = 0;
-                    cx.notify();
-                }),
-            ))
-            .child(catalog::menu(
-                "mcp-sort",
-                Lucide::ArrowUpDown,
-                format!("Sort: {}", self.sort.label()),
-                Sort::ALL.iter().map(|s| s.label()).collect(),
-                sort,
-                cx.listener(|this, ix: &usize, _, cx| {
-                    this.sort = Sort::ALL[*ix];
-                    this.page = 0;
-                    cx.notify();
-                }),
-            ))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .ml_auto()
+                    .child(catalog::menu(
+                        "mcp-kind",
+                        Lucide::Funnel,
+                        kinds[kind].to_string(),
+                        kinds,
+                        kind,
+                        cx.listener(|this, ix: &usize, _, cx| {
+                            this.kind = ix.checked_sub(1).map(|ix| Kind::ALL[ix]);
+                            this.page = 0;
+                            cx.notify();
+                        }),
+                    ))
+                    .child(catalog::menu(
+                        "mcp-sort",
+                        Lucide::ArrowUpDown,
+                        format!("Sort: {}", self.sort.label()),
+                        Sort::ALL.iter().map(|s| s.label()).collect(),
+                        sort,
+                        cx.listener(|this, ix: &usize, _, cx| {
+                            this.sort = Sort::ALL[*ix];
+                            this.page = 0;
+                            cx.notify();
+                        }),
+                    )),
+            )
     }
 
     fn render_server(&self, s: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1135,146 +1139,135 @@ impl McpPage {
         }
         let kind = Kind::of(s);
 
-        h_flex()
-            .px_4()
-            .py_3()
-            .gap_3()
-            .items_start()
-            .border_b_1()
-            .border_color(theme.border)
-            .hover(|el| el.bg(theme.list_hover))
-            .child(catalog::tile(server_logo(server, cx), cx))
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_0p5()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .flex_wrap()
-                            .child(div().text_sm().font_semibold().child(server.name))
-                            .child(catalog::tag(Some(kind.icon()), kind.label(), cx))
-                            .when(server.auth == Auth::Browser, |el| {
-                                el.child(catalog::tag(Some(Lucide::KeyRound), "Sign-in", cx))
-                            })
-                            .when(matches!(server.auth, Auth::EnvKey(_)), |el| {
-                                el.child(catalog::tag(Some(Lucide::KeyRound), "API key", cx))
-                            }),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .whitespace_normal()
-                            .child(server.about),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .font_family(theme.mono_font_family.clone())
-                            .whitespace_normal()
-                            .child(server.address(&self.region)),
-                    )
-                    .children(notes.into_iter().map(|(icon, text, color)| {
-                        h_flex()
-                            .gap_1p5()
-                            .items_start()
-                            .text_xs()
-                            .text_color(color)
-                            .child(div().pt(px(1.)).child(Icon::new(icon).xsmall()))
-                            .child(div().whitespace_normal().child(text))
-                    })),
-            )
-            .child(
-                v_flex()
-                    .w(px(catalog::STATUS_W))
-                    .flex_none()
-                    .gap_1()
-                    .items_start()
-                    .child(catalog::pill(mark, summary, summary_color))
-                    .when(to_sign_in > 0, |el| {
-                        el.child(catalog::pill(
-                            Mark::Icon(Lucide::KeyRound),
-                            format!(
-                                "Sign-in needed · {}",
-                                plural(to_sign_in, "profile", "profiles")
-                            ),
-                            theme.warning,
-                        ))
-                    })
-                    .when(checking && to_sign_in == 0, |el| {
-                        el.child(catalog::pill(Mark::Spinner, "Checking sign-in…", muted))
-                    }),
-            )
-            .child(
-                h_flex()
-                    .w(px(catalog::ACTIONS_W))
-                    .flex_none()
-                    .gap_1()
-                    .justify_end()
-                    .when(busy, |el| {
-                        el.child(
-                            Button::new(("mcp-stop", s))
-                                .outline()
-                                .small()
-                                .icon(Lucide::CircleStop)
-                                .label("Stop")
-                                .tooltip("Stop Installing or Removing")
-                                .on_click(cx.listener(move |this, _, _, cx| this.stop(s, cx))),
-                        )
-                    })
-                    .when(!busy && !self.removable(s).is_empty(), |el| {
-                        el.child(
-                            Button::new(("mcp-uninstall", s))
-                                .ghost()
-                                .small()
-                                .icon(Icon::new(Lucide::Trash).text_color(theme.danger))
-                                .tooltip(format!("Uninstall {} from Every Client", server.name))
-                                .disabled(self.loading)
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.confirm_uninstall(s, window, cx)
-                                })),
-                        )
-                    })
-                    .when(to_sign_in > 0, |el| {
-                        el.child(
-                            Button::new(("mcp-sign-in", s))
-                                .outline()
-                                .small()
-                                .icon(Lucide::KeyRound)
-                                .label("Sign In")
-                                .tooltip(format!(
-                                    "Sign In on {}",
-                                    plural(to_sign_in, "Profile", "Profiles")
-                                ))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    let queue = this.pending_sign_ins(Some(s));
-                                    this.start_sign_in(queue, window, cx)
-                                })),
-                        )
-                    })
-                    .child(
-                        Button::new(("mcp-open", s))
-                            .when(none, |b| {
-                                b.primary().icon(Lucide::Download).label("Install")
-                            })
-                            .when(!none, |b| {
-                                b.outline().icon(Lucide::Settings2).label("Manage")
-                            })
+        catalog::columns(
+            None,
+            catalog::tile(server_logo(server, cx), cx),
+            v_flex()
+                .gap_0p5()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .flex_wrap()
+                        .child(div().text_sm().font_semibold().child(server.name))
+                        .child(catalog::tag(Some(kind.icon()), kind.label(), cx))
+                        .when(server.auth == Auth::Browser, |el| {
+                            el.child(catalog::tag(Some(Lucide::KeyRound), "Sign-in", cx))
+                        })
+                        .when(matches!(server.auth, Auth::EnvKey(_)), |el| {
+                            el.child(catalog::tag(Some(Lucide::KeyRound), "API key", cx))
+                        }),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .whitespace_normal()
+                        .child(server.about),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .font_family(theme.mono_font_family.clone())
+                        .whitespace_normal()
+                        .child(server.address(&self.region)),
+                )
+                .children(notes.into_iter().map(|(icon, text, color)| {
+                    h_flex()
+                        .gap_1p5()
+                        .items_start()
+                        .text_xs()
+                        .text_color(color)
+                        .child(div().pt(px(1.)).child(Icon::new(icon).xsmall()))
+                        .child(div().whitespace_normal().child(text))
+                })),
+            v_flex()
+                .gap_1()
+                .items_start()
+                .child(catalog::pill(mark, summary, summary_color))
+                .when(to_sign_in > 0, |el| {
+                    el.child(catalog::pill(
+                        Mark::Icon(Lucide::KeyRound),
+                        format!(
+                            "Sign-in needed · {}",
+                            plural(to_sign_in, "profile", "profiles")
+                        ),
+                        theme.warning,
+                    ))
+                })
+                .when(checking && to_sign_in == 0, |el| {
+                    el.child(catalog::pill(Mark::Spinner, "Checking sign-in…", muted))
+                }),
+            h_flex()
+                .gap_1()
+                .when(busy, |el| {
+                    el.child(
+                        Button::new(("mcp-stop", s))
+                            .outline()
                             .small()
-                            .tooltip(if none {
-                                "Choose the Clients to Install Into"
-                            } else {
-                                "Install, Update or Remove per Client"
-                            })
-                            .disabled(self.loading || self.targets.is_empty())
+                            .icon(Lucide::CircleStop)
+                            .label("Stop")
+                            .tooltip("Stop Installing or Removing")
+                            .on_click(cx.listener(move |this, _, _, cx| this.stop(s, cx))),
+                    )
+                })
+                .when(!busy && !self.removable(s).is_empty(), |el| {
+                    el.child(
+                        Button::new(("mcp-uninstall", s))
+                            .ghost()
+                            .small()
+                            .icon(Icon::new(Lucide::Trash).text_color(theme.danger))
+                            .tooltip(format!("Uninstall {} from Every Client", server.name))
+                            .disabled(self.loading)
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_install(s, window, cx)
+                                this.confirm_uninstall(s, window, cx)
                             })),
-                    ),
-            )
+                    )
+                })
+                .when(to_sign_in > 0, |el| {
+                    el.child(
+                        Button::new(("mcp-sign-in", s))
+                            .outline()
+                            .small()
+                            .icon(Lucide::KeyRound)
+                            .label("Sign In")
+                            .tooltip(format!(
+                                "Sign In on {}",
+                                plural(to_sign_in, "Profile", "Profiles")
+                            ))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                let queue = this.pending_sign_ins(Some(s));
+                                this.start_sign_in(queue, window, cx)
+                            })),
+                    )
+                })
+                .child(
+                    Button::new(("mcp-open", s))
+                        .when(none, |b| {
+                            b.primary().icon(Lucide::Download).label("Install")
+                        })
+                        .when(!none, |b| {
+                            b.outline().icon(Lucide::Settings2).label("Manage")
+                        })
+                        .small()
+                        .tooltip(if none {
+                            "Choose the Clients to Install Into"
+                        } else {
+                            "Install, Update or Remove per Client"
+                        })
+                        .disabled(self.loading || self.targets.is_empty())
+                        .on_click(
+                            cx.listener(move |this, _, window, cx| {
+                                this.open_install(s, window, cx)
+                            }),
+                        ),
+                ),
+        )
+        .px_4()
+        .py_3()
+        .border_b_1()
+        .border_color(theme.border)
+        .hover(|el| el.bg(theme.list_hover))
     }
 
     /// The list card: column titles, a page of servers and the pager, or
@@ -2079,7 +2072,6 @@ impl Render for McpPage {
                     v_flex()
                         .p_6()
                         .gap_4()
-                        .max_w(px(1180.))
                         .child(self.render_header(cx))
                         .child(self.render_toolbar(&query, cx))
                         .child(self.render_list(&query, cx)),

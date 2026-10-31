@@ -258,9 +258,8 @@ impl ServerDetail {
             }
         };
         v_flex()
-            .p_4()
-            .gap_3()
-            .max_w(px(560.))
+            .p_6()
+            .gap_4()
             .child(div().text_lg().font_semibold().child("New PostgreSQL Instance"))
             .child(
                 div()
@@ -271,8 +270,13 @@ impl ServerDetail {
                         data_root
                     )),
             )
-            .child(field("Name", Input::new(&self.name_input)))
-            .child(field("Port", Input::new(&self.port_input)))
+            .child(
+                h_flex()
+                    .gap_3()
+                    .items_start()
+                    .child(div().flex_1().child(field("Name", Input::new(&self.name_input))))
+                    .child(div().w(px(80.)).child(field("Port", Input::new(&self.port_input)))),
+            )
             .child(field("Binary", v_flex().gap_1().children(options)))
             .when_some(self.form_error.clone(), |el, e| el.child(error_box(e, cx)))
             .child(
@@ -425,7 +429,7 @@ impl ServerDetail {
                 range
                     .map(|ix| {
                         div()
-                            .px_3()
+                            .px_4()
                             .whitespace_nowrap()
                             .child(log.get(ix).cloned().unwrap_or_default())
                     })
@@ -443,7 +447,9 @@ impl ServerDetail {
             .when_some(blocked, |el, report| {
                 el.child(self.render_blocked(&name, report, cx))
             })
-            .when_some(error, |el, e| el.child(div().p_3().child(error_box(e, cx))))
+            .when_some(error, |el, e| {
+                el.child(div().px_4().py_3().child(error_box(e, cx)))
+            })
             .when_some(notice, |el, n| {
                 el.child(
                     div()
@@ -517,7 +523,8 @@ impl ServerDetail {
         let n1 = name.to_string();
         let n2 = name.to_string();
         v_flex()
-            .m_3()
+            .mx_4()
+            .my_3()
             .p_3()
             .gap_2()
             .rounded(cx.theme().radius)
@@ -600,12 +607,18 @@ impl Render for ServerDetail {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let store = self.store.read(cx);
         let content = if store.creating || store.registry.instances.is_empty() {
-            self.render_form(cx).into_any_element()
+            // Scrolls, so a short window still reaches Create Instance.
+            div()
+                .id("server-form")
+                .size_full()
+                .overflow_y_scroll()
+                .child(self.render_form(cx))
+                .into_any_element()
         } else if let Some(inst) = store.selected_instance().cloned() {
             self.render_instance(&inst, cx).into_any_element()
         } else {
             div()
-                .p_4()
+                .p_6()
                 .text_color(cx.theme().muted_foreground)
                 .child("Select an instance in the sidebar.")
                 .into_any_element()

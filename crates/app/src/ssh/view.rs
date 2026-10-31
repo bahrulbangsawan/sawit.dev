@@ -329,7 +329,7 @@ impl Render for SshHostView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(h) = self.host(cx) else {
             return div()
-                .p_4()
+                .p_6()
                 .child("This server was deleted.")
                 .into_any_element();
         };
@@ -368,7 +368,6 @@ impl Render for SshHostView {
             .bg(cx.theme().background)
             .child(
                 v_flex()
-                    .max_w(px(640.))
                     .p_6()
                     .gap_4()
                     .child(

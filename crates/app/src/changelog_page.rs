@@ -119,7 +119,7 @@ impl Render for ChangelogPage {
         v_flex()
             .size_full()
             .bg(cx.theme().background)
-            .child(div().p_4().pb_0().child(self.status(cx)))
+            .child(div().p_6().pb_0().child(self.status(cx)))
             .child(
                 div().flex_1().min_h_0().child(
                     TextView::markdown("changelog", self.markdown(cx))
