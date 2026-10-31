@@ -389,9 +389,10 @@ paths), then `open_page canvas`, then `state`. Answer: exactly two tabs, one of 
 one of kind `file` (title `x.figcraft`, path `…/proj/x.figcraft`); no other tab for either file.
 The import wrote `x.figcraft` at its first autosave, and both `.excalidraw` files are unchanged.
 
-Carry (P7.T4 (1), the real old board): a copy of `~/Library/Application Support/sawit/
-canvas.excalidraw` (167,774 bytes now, changed 2026-10-30 13:37, still 134 live elements) as
-`real/.nyawit/canvas.excalidraw`. `get`, with the board unchanged: 31 roundedRectangle,
+Carry (P7.T4 (1), the real old board): a copy of
+`~/Library/Application Support/sawit/canvas.excalidraw` (167,774 bytes now, changed 2026-10-30
+13:37, still 134 live elements) as `real/.nyawit/canvas.excalidraw`. `get`, with the board
+unchanged: 31 roundedRectangle,
 8 rectangle, 3 diamond, 2 text and 42 connector (6 with text, 38 joined at both ends, 4 at their
 end only), as expected, and the copy's checksum is unchanged. The import leaves nothing out
 (`canvas_load` of a copy into a scratch project answers 86 layers and no `notes`), and
@@ -503,25 +504,45 @@ Not failures, for the final review:
 
 ##### Hand checks (pending — needs the user)
 
-Run `SAWIT_NATIVE_CANVAS=1 target/debug/sawit` on a scratch project, open the Canvas page, and
-have an agent call `canvas_add_mermaid` for each source below, with `render_mermaid` (light) of
-the same source placed under it. Then quit, start `target/debug/sawit` without the flag on another
-scratch project and draw the same sources there. Record each answer under its number.
+Both checks compare the native canvas with today's, which only an older build still draws. Since
+P8.T1 (`763326c`) main has neither the `SAWIT_NATIVE_CANVAS` flag nor the Excalidraw canvas: every
+run of a build from main shows the native canvas, and its first open of an old board migrates it.
+The installed Sawit.app (0.0.7) can't stand in for today's canvas either: it predates `.nyawit/`,
+so it doesn't read a project's `.nyawit/canvas.excalidraw`.
 
-1. Mermaid parity (P7.T3 carry). Sources: (a) `stateDiagram-v2` / `[*] --> Still` /
-   `Still --> Still : tick` / `Still --> Moving`; (b) `sequenceDiagram` /
+- The native canvas: `target/debug/sawit` and `target/debug/sawit-mcp`, built from main.
+- Today's canvas: a build of `3c35377`, the last commit with the Excalidraw canvas, in a checkout
+  of its own (a separate clone, or `git worktree add --detach <dir> 3c35377`), built there with
+  `cargo build -p sawit -p sawit-mcp`. Start its `sawit` and its `sawit-mcp` without
+  `SAWIT_NATIVE_CANVAS`. For check 2, excalidraw.com (its Open menu) draws today's canvas too.
+- Each run gets a scratch project and a Sawit home of its own:
+  `SAWIT_HOME=<scratch>/home target/debug/sawit --foreground <scratch>/proj`, and the same
+  `SAWIT_HOME` for that build's `sawit-mcp`, which the agent calls. Neither build then reads or
+  writes your own Sawit data, or the other build's.
+- Every native run needs a fresh copy of the board: the first open migrates it, and the first
+  autosave writes `canvas.figcraft` beside it, which every later open reads instead.
+
+Record each answer under its number.
+
+1. Mermaid parity (P7.T3 carry). In each build, open the Canvas page and have an agent call
+   `canvas_add_mermaid` for each source below. In the native run, also put Pele's own picture of
+   each source under its drawing: `render_mermaid` (light), placed with `canvas_add_elements`
+   `{type: "image", svg, name: "pele.svg"}`. Sources: (a) `stateDiagram-v2` /
+   `[*] --> Still` / `Still --> Still : tick` / `Still --> Moving`; (b) `sequenceDiagram` /
    `Alice->>Bob: Hello` / `Note over Bob: Thinks` / `Bob-->>Alice: Hi` /
    `Note over Alice,Bob: Both`; (c) `classDiagram` / `Animal <|-- Dog` / `Animal *-- Leg` /
    `Animal ..> Food: get`; (d) `flowchart LR` / `A -.->|maybe| B` / `A ==> C` / `C --> C`.
-   Compare each pair, and the flag-off drawing, and choose which Skeleton fields to add for
-   parity: `fontSize` for texts and labels, label colour, `strokeStyle` and `strokeWidth`, a start
-   cap and the kind of each cap, curved or routed bound edges. None of them fails the task.
+   Compare each native drawing with Pele's picture under it and with the `3c35377` build's
+   drawing, and choose which Skeleton fields to add for parity: `fontSize` for texts and labels,
+   label colour, `strokeStyle` and `strokeWidth`, a start cap and the kind of each cap, curved or
+   routed bound edges. None of them fails the task.
    Answer: ______
-2. Import losses (P7.T4 carry (3)). Copy a real old board (never the original), for example
-   `~/Library/Application Support/sawit/canvas.excalidraw`, to `<scratch>/.nyawit/
-   canvas.excalidraw`. Open it once without the flag, then once with it (it migrates), and say
-   which losses matter: text sizes (headings come in at 12 px), label colours (the legend),
-   fonts (Excalidraw's hand-drawn one), marker kinds and a head at each end (crow's feet, bars,
-   diamonds and hollow triangles become one filled triangle at the end), dashes and widths,
-   curved routes, and, for boards drawn by hand, rotation, opacity, fill style, roughness and
-   groups. Answer: ______
+2. Import losses (P7.T4 carry (3)). Make two copies of a real old board (never the original), for
+   example `~/Library/Application Support/sawit/canvas.excalidraw`. Put one at
+   `<scratch>/proj/.nyawit/canvas.excalidraw` of a native run and open its Canvas page: the board
+   migrates. Open the other in today's canvas: as `.nyawit/canvas.excalidraw` of another scratch
+   project in the `3c35377` build, or in excalidraw.com. Say which losses matter: text sizes
+   (headings come in at 12 px), label colours (the legend), fonts (Excalidraw's hand-drawn one),
+   marker kinds and a head at each end (crow's feet, bars, diamonds and hollow triangles become
+   one filled triangle at the end), dashes and widths, curved routes, and, for boards drawn by
+   hand, rotation, opacity, fill style, roughness and groups. Answer: ______
