@@ -474,10 +474,11 @@ export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
 "#;
 
-/// The user's login shell, so the profile's `PATH` and variables apply.
-fn shell() -> tokio::process::Command {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let mut cmd = tokio::process::Command::new(shell);
+/// A login shell to run a script in: the user's own when it runs POSIX
+/// scripts, so the profile's `PATH` and variables apply, else zsh
+/// ([`crate::probe::script_shell`]). `login` is `$SHELL`.
+fn shell(login: Option<&str>) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(crate::probe::script_shell(login));
     cmd.arg("-l")
         .stdin(Stdio::null())
         .env("NONINTERACTIVE", "1")
@@ -509,9 +510,27 @@ pub struct Found {
 
 const MARK: &str = "__SAWIT_TOOL__";
 
+/// How long detection waits for the login shell.
+const DETECT_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// What [`detect`] found.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Detection {
+    pub found: HashMap<&'static str, Found>,
+    /// Why the login shell couldn't say which tools it finds, when it
+    /// couldn't. `found` then has only the tools at their usual places, so
+    /// a tool missing from it may still be installed.
+    pub problem: Option<String>,
+}
+
 /// Which tools are installed: `command -v` in one login shell, then the
 /// known install locations, then each one's `--version`.
-pub async fn detect() -> HashMap<&'static str, Found> {
+pub async fn detect() -> Detection {
+    detect_as(crate::probe::login_shell().as_deref()).await
+}
+
+/// [`detect`] with `login` as `$SHELL`.
+async fn detect_as(login: Option<&str>) -> Detection {
     let mut script = String::from(PRELUDE);
     for t in TOOLS {
         // nvm is a shell function; its path is the script that defines it.
@@ -526,14 +545,43 @@ pub async fn detect() -> HashMap<&'static str, Found> {
         };
         script.push_str(&format!("printf '{MARK}{}\\t%s\\n' \"$({probe})\"\n", t.id));
     }
-    let mut cmd = shell();
+    let mut cmd = shell(login);
     cmd.arg("-c")
         .arg(script)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let out = match tokio::time::timeout(Duration::from_secs(20), cmd.output()).await {
-        Ok(Ok(out)) => String::from_utf8_lossy(&out.stdout).into_owned(),
-        _ => String::new(),
+        .stderr(Stdio::piped());
+    let shell_name = crate::probe::script_shell(login).display().to_string();
+    let (out, problem) = match tokio::time::timeout(DETECT_TIMEOUT, cmd.output()).await {
+        Ok(Ok(out)) => {
+            let text = String::from_utf8_lossy(&out.stdout).into_owned();
+            // It printed a line per tool, unless it failed before the first.
+            let problem = (!text.contains(MARK)).then(|| {
+                let why = String::from_utf8_lossy(&out.stderr)
+                    .lines()
+                    .rev()
+                    .find(|l| !l.trim().is_empty())
+                    .map(|l| format!(": {}", l.trim()))
+                    .unwrap_or_default();
+                format!(
+                    "{shell_name} -l failed (exit {}){why}",
+                    out.status
+                        .code()
+                        .map_or_else(|| "signal".to_string(), |c| c.to_string())
+                )
+            });
+            (text, problem)
+        }
+        Ok(Err(e)) => (
+            String::new(),
+            Some(format!("{shell_name} couldn't start: {e}")),
+        ),
+        Err(_) => (
+            String::new(),
+            Some(format!(
+                "{shell_name} -l didn't answer within {} seconds",
+                DETECT_TIMEOUT.as_secs()
+            )),
+        ),
     };
     let mut paths: HashMap<&'static str, PathBuf> = HashMap::new();
     for line in out.lines() {
@@ -575,13 +623,14 @@ pub async fn detect() -> HashMap<&'static str, Found> {
     }))
     .await;
     let mut versions: HashMap<&str, String> = versions.into_iter().flatten().collect();
-    paths
+    let found = paths
         .into_iter()
         .map(|(id, path)| {
             let version = versions.remove(id);
             (id, Found { path, version })
         })
-        .collect()
+        .collect();
+    Detection { found, problem }
 }
 
 /// The version number in a `--version` line ("Python 3.13.2" → "3.13.2").
@@ -785,8 +834,24 @@ async fn run_script(
     command: &str,
     on_line: impl Fn(String) + Send + Sync,
 ) -> Result<()> {
+    run_script_as(
+        crate::probe::login_shell().as_deref(),
+        name,
+        command,
+        on_line,
+    )
+    .await
+}
+
+/// [`run_script`] with `login` as `$SHELL`.
+async fn run_script_as(
+    login: Option<&str>,
+    name: &str,
+    command: &str,
+    on_line: impl Fn(String) + Send + Sync,
+) -> Result<()> {
     let script = format!("{PRELUDE}set -e\n{command}\n");
-    let mut cmd = shell();
+    let mut cmd = shell(login);
     cmd.arg("-c")
         .arg(script)
         .stdout(Stdio::piped())
@@ -962,6 +1027,36 @@ mod tests {
         );
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(!alive(), "the script's processes outlived the run");
+    }
+
+    /// fish, nu, PowerShell and tcsh can't run the scripts: they run in zsh.
+    /// tcsh ships with macOS, so it stands in for them here.
+    #[tokio::test]
+    async fn scripts_run_whatever_the_login_shell() {
+        let lines = std::sync::Mutex::new(Vec::new());
+        run_script_as(Some("/bin/tcsh"), "test", "echo \"${NVM_DIR:+nvm}\"", |l| {
+            lines.lock().unwrap().push(l)
+        })
+        .await
+        .unwrap();
+        assert_eq!(*lines.lock().unwrap(), ["nvm"]);
+        let found = detect_as(Some("/bin/tcsh")).await;
+        assert_eq!(found.problem, None);
+    }
+
+    /// A login shell that fails is reported, not read as "nothing installed".
+    #[tokio::test]
+    async fn a_failing_login_shell_is_reported() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        // Named `sh`, so it's taken for a POSIX shell and run.
+        let sh = dir.path().join("sh");
+        std::fs::write(&sh, "#!/bin/sh\necho 'broken profile' >&2\nexit 3\n").unwrap();
+        std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let found = detect_as(sh.to_str()).await;
+        let problem = found.problem.expect("no problem reported");
+        assert!(problem.contains("broken profile"), "{problem}");
+        assert!(problem.contains("exit 3"), "{problem}");
     }
 
     #[test]

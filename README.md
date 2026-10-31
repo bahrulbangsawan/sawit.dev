@@ -231,7 +231,9 @@ explained. A conflict on the same address can't be forced.
   **Upgrade All** upgrades every one of them. Upgrades use the tool's own command (`bun upgrade`, `uv self update`,
   `claude update`, …), or its install script again.
 - **Install** one, tick several and **Install Selected**, or **Install All Missing**. Each runs its official install
-  script in your login shell, one at a time, with prerequisites first (nvm before Node.js, uv before Python).
+  script in your login shell (zsh when that is fish, nu, PowerShell or tcsh, which can't run these scripts), one at
+  a time, with prerequisites first (nvm before Node.js, uv before Python). If the shell can't say which tools are
+  installed, the page says so instead of showing them as not installed.
 - Homebrew asks for your password, so it runs in the terminal. Open a new terminal tab afterwards so it sees the
   new `PATH`.
 - From the terminal: `sawit list tools`, `sawit pasang bun uv` and `sawit pupuk`.

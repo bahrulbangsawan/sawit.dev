@@ -124,6 +124,9 @@ impl EventEmitter<ToolsEvent> for ToolsPage {}
 
 pub struct ToolsPage {
     found: HashMap<&'static str, Found>,
+    /// Why the login shell couldn't say which tools it finds, when it
+    /// couldn't: `found` has only the tools at their usual places then.
+    problem: Option<String>,
     loading: bool,
     /// Latest released versions, by tool id.
     latest: HashMap<&'static str, String>,
@@ -210,6 +213,7 @@ impl ToolsPage {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let mut this = Self {
             found: HashMap::new(),
+            problem: None,
             loading: true,
             latest: HashMap::new(),
             upgrades: HashSet::new(),
@@ -252,9 +256,10 @@ impl ToolsPage {
         self.loading = true;
         let rx = rt::spawn(cx, detect());
         cx.spawn(async move |this, cx| {
-            if let Ok(found) = rx.await {
+            if let Ok(detection) = rx.await {
                 let _ = this.update(cx, |this, cx| {
-                    this.found = found;
+                    this.found = detection.found;
+                    this.problem = detection.problem;
                     this.loading = false;
                     // Detection now agrees with these; the rest keep their
                     // optimistic or failed state.
@@ -695,10 +700,42 @@ impl ToolsPage {
                             .small()
                             .icon(Lucide::Download)
                             .label(format!("Install Missing ({})", missing.len()))
-                            .disabled(missing.is_empty() || self.loading)
+                            // Unknown which are missing: it could run installers over copies
+                            // that are there.
+                            .disabled(missing.is_empty() || self.loading || self.problem.is_some())
                             .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&missing, cx))),
                     ),
             )
+    }
+
+    /// Says when the login shell couldn't tell which tools are installed,
+    /// instead of a page of "Not installed".
+    fn render_problem(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let problem = self.problem.as_ref().filter(|_| !self.loading)?;
+        let warning = cx.theme().warning;
+        Some(
+            h_flex()
+                .px_4()
+                .py_2()
+                .gap_2()
+                .items_start()
+                .rounded(cx.theme().radius_lg)
+                .border_1()
+                .border_color(warning.opacity(0.35))
+                .bg(warning.opacity(0.08))
+                .text_sm()
+                .child(
+                    div()
+                        .pt(px(2.))
+                        .child(Icon::new(Lucide::TriangleAlert).small().text_color(warning)),
+                )
+                .child(div().flex_1().min_w_0().whitespace_normal().child(format!(
+                    "Couldn't ask your login shell which tools are installed ({problem}). Only tools in \
+                     their usual folders show as installed, so Install Missing is off until Detect Again \
+                     works."
+                )))
+                .into_any_element(),
+        )
     }
 
     /// Search, the filter tabs with their counts, category and sort.
@@ -1366,6 +1403,7 @@ impl Render for ToolsPage {
                     .p_6()
                     .gap_4()
                     .child(self.render_header(cx))
+                    .children(self.render_problem(cx))
                     .child(self.render_toolbar(&query, cx))
                     .children(self.render_progress(cx))
                     .children(self.render_selection(cx))
