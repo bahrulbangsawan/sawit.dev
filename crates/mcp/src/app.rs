@@ -109,7 +109,9 @@ pub struct TabArgs {
 pub struct TerminalRunArgs {
     #[schemars(description = "Command line(s) to type, followed by Enter")]
     pub command: String,
-    #[schemars(description = "Start a new shell in this folder (default: the project)")]
+    #[schemars(
+        description = "Start a new shell in this folder: an absolute path, or ~/… (default: the project)"
+    )]
     pub cwd: Option<String>,
     #[schemars(description = "Use a new terminal tab instead of the active idle shell")]
     #[serde(default)]
@@ -879,9 +881,15 @@ impl Sawit {
         description = "Run a command in Sawit's terminal (visible to the user), wait, and return where it ran (\"Terminal 2, pane 0:\") with the terminal's latest output. Pass that tab and pane to terminal_read to check a long-running command later, and to terminal_input (key ctrl-c) to stop it: the terminal in front may be another, one the user types in"
     )]
     async fn terminal_run(&self, Parameters(a): Parameters<TerminalRunArgs>) -> CallToolResult {
+        // A folder the shell can't go to would start it in the app's folder instead (MCP-4).
+        let cwd = a.cwd.filter(|cwd| !cwd.trim().is_empty());
+        let cwd = match cwd.as_deref().map(crate::existing_dir).transpose() {
+            Ok(cwd) => cwd,
+            Err(e) => return fail(format!("Nothing was run: {e}")),
+        };
         let command = Command::TerminalRun {
             command: a.command,
-            cwd: a.cwd.map(PathBuf::from),
+            cwd,
             new_tab: a.new_tab,
         };
         let started = match self.app_call(a.project.clone(), command).await {
@@ -1593,6 +1601,69 @@ mod tests {
                 pane: Some(1),
                 lines: Some(100),
             }
+        );
+    }
+
+    /// MCP-4: `terminal_run` starts its shell in the folder it names, or not at all. The PTY
+    /// ignores a `chdir` that fails, so a folder with `~`, a relative one or one that isn't there
+    /// started the shell in the app's own folder (`/` for Sawit.app), and the command ran there
+    /// though the tool answered ok. `~` is the home folder; a relative or missing folder is an
+    /// error, and the app isn't asked.
+    #[tokio::test]
+    async fn terminal_run_starts_where_it_says_or_not_at_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let asked = fake_app_answering(
+            &server.paths,
+            vec![
+                json!({"terminal": 1, "pane": 0}),
+                json!({"text": ""}),
+                json!({"terminal": 2, "pane": 0}),
+                json!({"text": ""}),
+            ],
+        );
+        let run = |cwd: &str| TerminalRunArgs {
+            command: "rm -rf build".into(),
+            cwd: Some(cwd.into()),
+            new_tab: false,
+            wait_secs: Some(0.0),
+            lines: None,
+            project: None,
+        };
+        let cwd_asked = |asked: &Receiver<Request>| {
+            let request = asked.recv_timeout(Duration::from_secs(5)).expect("asked");
+            let Command::TerminalRun { cwd, .. } = request.command else {
+                panic!("{:?}", request.command)
+            };
+            asked.recv_timeout(Duration::from_secs(5)).expect("read");
+            cwd
+        };
+
+        // A folder that is there, written with spaces around it, and the home folder as `~`.
+        let folder = dir.path().join("web");
+        std::fs::create_dir_all(&folder).unwrap();
+        let ran = server
+            .terminal_run(Parameters(run(&format!(" {} ", folder.display()))))
+            .await;
+        assert_ne!(ran.is_error, Some(true), "{}", said(&ran));
+        assert_eq!(cwd_asked(&asked), Some(folder));
+        if let Some(home) = std::env::var_os("HOME") {
+            let ran = server.terminal_run(Parameters(run("~"))).await;
+            assert_ne!(ran.is_error, Some(true), "{}", said(&ran));
+            assert_eq!(cwd_asked(&asked), Some(PathBuf::from(home)));
+        }
+
+        for (cwd, why) in [
+            ("web", "must be an absolute path"),
+            ("/no/such/folder", "is not a folder"),
+        ] {
+            let refused = server.terminal_run(Parameters(run(cwd))).await;
+            assert_eq!(refused.is_error, Some(true), "{cwd}: {}", said(&refused));
+            assert!(said(&refused).contains(why), "{cwd}: {}", said(&refused));
+        }
+        assert!(
+            asked.recv_timeout(Duration::from_millis(300)).is_err(),
+            "the app was asked to run in a folder that isn't one"
         );
     }
 
