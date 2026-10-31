@@ -1371,6 +1371,18 @@ impl McpPage {
                 muted,
             ));
         }
+        // What failed or was stopped, where it was started: the row's Uninstall
+        // and Install don't open the sheet that lists errors per client.
+        let failures: Vec<String> = (0..total)
+            .filter_map(|t| {
+                let error = self.errors.get(&(s, t))?;
+                Some(format!(
+                    "Couldn't change {}: {}",
+                    target_label(&self.targets[t]),
+                    error.lines().next().unwrap_or_default()
+                ))
+            })
+            .collect();
         let kind = Kind::of(s);
 
         catalog::columns(
@@ -1414,7 +1426,32 @@ impl McpPage {
                         .text_color(color)
                         .child(div().pt(px(1.)).child(Icon::new(icon).xsmall()))
                         .child(div().whitespace_normal().child(text))
-                })),
+                }))
+                .when(!failures.is_empty(), |el| {
+                    let more = failures.len().saturating_sub(2);
+                    el.child(
+                        v_flex()
+                            .debug_selector(|| "mcp-row-error".into())
+                            .gap_0p5()
+                            .text_xs()
+                            .text_color(theme.danger)
+                            .children(failures.into_iter().take(2).map(|line| {
+                                h_flex()
+                                    .gap_1p5()
+                                    .items_start()
+                                    .child(
+                                        div().pt(px(1.)).child(Icon::new(Lucide::CircleX).xsmall()),
+                                    )
+                                    .child(div().whitespace_normal().child(line))
+                            }))
+                            .when(more > 0, |el| {
+                                el.child(format!(
+                                    "And {} more: see Manage.",
+                                    plural(more, "client", "clients")
+                                ))
+                            }),
+                    )
+                }),
             v_flex()
                 .gap_1()
                 .items_start()
@@ -2560,6 +2597,32 @@ mod tests {
             assert_eq!(page.status.get(&(0, 1)), Some(&Status::Installed), "a");
             assert_eq!(page.status.get(&(0, 0)), Some(&Status::NotInstalled), "b");
         });
+    }
+
+    /// A row's Uninstall (or Install) that fails for a client says so on the row, which is
+    /// where it was started: not only in the Manage sheet, which may never be opened.
+    #[gpui_kit::test]
+    fn a_failure_shows_on_the_servers_row(cx: &mut TestAppContext) {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".cursor/mcp.json");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        // Comments: Sawit won't rewrite it, so the change fails.
+        std::fs::write(&config, "// mine\n{\"mcpServers\": {}}\n").unwrap();
+        let (page, cx) = open(cx, vec![target(Client::Cursor, &config)], |page| {
+            page.server_exists = true;
+        });
+        assert!(cx.debug_bounds("mcp-row-error").is_none());
+        page.update(cx, |page, cx| page.act((0, 0), false, cx));
+        let failed = (0..50).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            cx.run_until_parked();
+            page.read_with(cx, |page, _| !page.errors.is_empty())
+        });
+        assert!(failed, "the change didn't fail");
+        assert!(
+            cx.debug_bounds("mcp-row-error").is_some(),
+            "the row doesn't say"
+        );
     }
 
     /// The sheet opens with every installed client ticked, so its Remove asks first, as the
