@@ -50,6 +50,25 @@ pub struct KeystrokeRecorder {
 impl EventEmitter<Changed> for KeystrokeRecorder {}
 impl EventEmitter<Done> for KeystrokeRecorder {}
 
+/// The recorders' keyboards, for [`is_recorder`].
+#[derive(Default)]
+struct Recorders(Vec<WeakFocusHandle>);
+
+impl Global for Recorders {}
+
+/// Whether `focus` is a recorder's: a field that takes every key while it has the keyboard, so
+/// that only a click gives it the keyboard back once it went off screen (the workspace's
+/// [`crate::workspace::KeyboardHome`] doesn't): given back, a ⌃Tab cycle would stop at it, and
+/// ⌘W be recorded instead of closing the tab.
+pub fn is_recorder(focus: &FocusHandle, cx: &App) -> bool {
+    cx.try_global::<Recorders>().is_some_and(|recorders| {
+        recorders
+            .0
+            .iter()
+            .any(|r| r.upgrade().as_ref() == Some(focus))
+    })
+}
+
 impl KeystrokeRecorder {
     pub fn new(
         placeholder: impl Into<SharedString>,
@@ -57,6 +76,9 @@ impl KeystrokeRecorder {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus = cx.focus_handle();
+        let recorders = cx.default_global::<Recorders>();
+        recorders.0.retain(|r| r.upgrade().is_some());
+        recorders.0.push(focus.downgrade());
         let this = cx.weak_entity();
         let watched = focus.clone();
         let intercept = cx.intercept_keystrokes(move |event, window, cx| {

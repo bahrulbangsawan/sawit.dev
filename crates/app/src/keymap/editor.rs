@@ -1747,6 +1747,21 @@ mod form_tests {
         cx.update(|cx| assert_eq!(tabs.read(cx).closed, 1));
     }
 
+    /// The keystroke search field is a recorder ([`crate::keymap::is_recorder`]), so the
+    /// workspace never gives it the keyboard back when its tab shows again: it takes every key,
+    /// and a ⌃Tab round would stop there. Only a click arms it again.
+    #[gpui_kit::test]
+    fn the_keystroke_search_is_known_as_a_recorder(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("recorder-known");
+        let (_, _, editor) = open_in_tabs(cx, &scratch);
+        cx.update(|cx| {
+            let editor = editor.read(cx);
+            let field = editor.keys_filter.read(cx).focus_handle().clone();
+            assert!(crate::keymap::is_recorder(&field, cx));
+            assert!(!crate::keymap::is_recorder(&editor.focus, cx));
+        });
+    }
+
     /// The form warns when the keys and another binding in the context are a chord and its first
     /// keys: ⌘K bound alone beside ⌘K W, or ⌘J X beside ⌘J.
     #[gpui_kit::test]

@@ -1347,8 +1347,8 @@ which is git-ignored.
     keyboard, and press ⌘⇧.. The review expects this binding not to fire on a real Mac, because macOS reports ⇧⌘.
     as `cmd->`. The page's own key, used while the page has the keyboard, is not affected. Say what happens.
   - Added from the keymap-editor consolidation report (§6): rebind "browser: toggle annotate" in the Keymap
-    Editor. The page's own ⌘⇧. is fixed in its script, so it still toggles Annotate while the page has the
-    keyboard. Say whether that is acceptable.
+    Editor. The page's script no longer answers ⌘⇧. (KEYMAP-5, the hunt's keymap round 3): with the page
+    keyboard, the old key does nothing and the new one toggles Annotate. Say what happens.
 - (b) Send to terminal.
   - Run `claude` in a terminal tab, or leave zsh at its prompt. In the Annotate panel, click Send to terminal. The
     notes paste into that terminal as Markdown, without Enter. The terminal shows and takes the keyboard, and the
@@ -1430,4 +1430,9 @@ second keyboard layout. Each starts from a fresh launch of the merged main with 
   type: it goes to the terminal again. Click in a file editor's text, then press ⌃Tab twice: each press shows the next
   tab. Click another tab, then the file's tab again, and type: it goes to the text. Click in the Git panel's commit
   message, press ⌘2, then ⌘3: Files shows, then Git again; type: it goes to the message. Click in a web page, press
-  ⇧⌘J twice: the tab area hides and comes back, and typing waits for a click in the page. Answer:
+  ⇧⌘J twice: the tab area hides and comes back, and typing waits for a click in the page. With three tabs open,
+  click in a file's text and press ⌃Tab three times: each press shows the next tab, and the last one brings the
+  file back with its keyboard (type: it goes to the text). Click in the terminal and press ⌘J, ⌃Tab, ⌘J: the
+  dock hides, the next tab shows, the dock comes back with the terminal's keyboard. In the Keymap Editor, turn
+  on Search by Keystroke, click another tab, then the Keymap Editor's tab again, and press ⌃Tab: the next tab
+  shows (the search field doesn't record until a click in it). Answer:

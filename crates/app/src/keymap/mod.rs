@@ -17,6 +17,8 @@ pub mod file;
 pub mod names;
 mod recorder;
 
+pub(crate) use recorder::is_recorder;
+
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 

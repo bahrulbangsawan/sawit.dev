@@ -55,7 +55,7 @@ pub const TITLE: &str = "Browser";
 actions!(browser, [ToggleAnnotate]);
 
 /// ⇧⌘. toggles Annotate, through this binding alone, the keymap's: the page's
-/// overlay only answers an agent's synthetic press (`browser_press_key`). A Mac
+/// overlay answers no one's, and Sawit answers an agent's (`own_key`). A Mac
 /// reports ⇧⌘. as `cmd->` (Shift off, the character it types), so that is what
 /// is bound, as the canvas binds its shifted keys; `cmd-shift-.` would never
 /// match. The keymap editor and the tooltip write `cmd->` as ⇧⌘.
@@ -2526,7 +2526,7 @@ mod tests {
                     (browser.focus.clone(), browser.address.clone())
                 };
                 self.keyboard
-                    .give_back(shown, |back| *back != view, window, cx);
+                    .give_back(shown, |back, _| *back != view, window, cx);
                 div()
                     .key_context("Workspace")
                     .track_focus(&self.focus)

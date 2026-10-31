@@ -1,5 +1,5 @@
-// Sawit's page overlay module: picking, highlights, markers, flash and the
-// annotate shortcut. Spliced into the page agent (see browser_agent.js), so
+// Sawit's page overlay module: picking, highlights, markers and flash.
+// Spliced into the page agent (see browser_agent.js), so
 // `send`, `resolve`, `describe`, `clip`, `oneLine`, `modules` and `helpers`
 // are in scope.
 //
