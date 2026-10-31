@@ -1,20 +1,25 @@
-//! Shell Config sidebar: the shell startup files found on this machine
-//! (`~/.zshrc`, `/etc/profile`, …); a click opens one in the editor, a
-//! right-click offers the Files panel's commands that fit a single file.
-//! "Save to GitHub" commits the user's own files to a private repository,
-//! creating it the first time.
+//! Config Files sidebar: the shell startup files found on this machine
+//! (`~/.zshrc`, `/etc/profile`, …) and every installed coding agent's
+//! config files here and in the window's projects (`~/.claude/settings.json`,
+//! `.codex/config.toml`, …), each agent's highest priority first. A click
+//! opens one in the editor, a right-click offers the Files panel's commands
+//! that fit a single file. "Save to GitHub" commits the user's own shell
+//! files to a private repository, creating it the first time.
 
 use std::path::{Path, PathBuf};
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use sawit_core::agent_config::{self, AgentConfig};
 use sawit_core::files;
 use sawit_core::github;
+use sawit_core::mcp_clients::Client;
 use sawit_core::recent::tildify;
 use sawit_core::shell_config::{self, BACKUP_REPO, Saved, Scope, ShellConfig};
 
@@ -27,16 +32,20 @@ use crate::states::{Banner, Placeholder};
 
 actions!(shell_config, [OpenConfig]);
 
-/// The Files panel's shortcuts for the same commands.
+/// The Files panel's shortcuts for the same commands. ↩ and ⌫ act on the list only while the
+/// search box doesn't have the keyboard, like the keymap editor's table keys: the box passes on ↩,
+/// and ⌫ with nothing before the cursor, and they would open the selected file or move it to the
+/// Trash.
 pub fn init(cx: &mut App) {
     let ctx = Some("ShellConfigPanel");
+    let list = Some("ShellConfigPanel && !Input");
     cx.bind_keys([
-        KeyBinding::new("enter", OpenConfig, ctx),
+        KeyBinding::new("enter", OpenConfig, list),
         KeyBinding::new("alt-cmd-r", RevealInFinder, ctx),
         KeyBinding::new("ctrl-shift-enter", OpenInDefaultApp, ctx),
         KeyBinding::new("cmd-d", Duplicate, ctx),
         KeyBinding::new("alt-cmd-c", CopyPath, ctx),
-        KeyBinding::new("backspace", Trash, ctx),
+        KeyBinding::new("backspace", Trash, list),
         KeyBinding::new("alt-cmd-backspace", Delete, ctx),
     ]);
 }
@@ -50,9 +59,41 @@ pub enum ShellConfigEvent {
 
 impl EventEmitter<ShellConfigEvent> for ShellConfigPanel {}
 
+/// A collapsible group of rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Group {
+    Shell,
+    Agent(Client),
+}
+
+/// One file, as the list shows it.
+struct Row {
+    path: PathBuf,
+    name: String,
+    detail: String,
+    /// `None` for the Files panel's icon for the file's type.
+    icon: Option<Lucide>,
+    writable: bool,
+    /// The login shell doesn't read it.
+    dim: bool,
+}
+
+impl Row {
+    fn matches(&self, query: &str) -> bool {
+        self.name.to_lowercase().contains(query)
+            || self.detail.to_lowercase().contains(query)
+            || self.path.to_string_lossy().to_lowercase().contains(query)
+    }
+}
+
 pub struct ShellConfigPanel {
     configs: Vec<ShellConfig>,
+    agents: Vec<AgentConfig>,
+    /// The window's project folders, whose agent files are listed.
+    projects: Vec<PathBuf>,
     login_shell: Option<String>,
+    filter: Entity<InputState>,
+    collapsed: Vec<Group>,
     /// The file the menu's commands act on.
     selected: Option<PathBuf>,
     error: Option<String>,
@@ -61,24 +102,113 @@ pub struct ShellConfigPanel {
     /// The last save's outcome, and the repository's address.
     saved: Option<(String, Option<String>)>,
     focus: FocusHandle,
+    _subscription: Subscription,
 }
 
 impl ShellConfigPanel {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Search config files"));
+        let subscription = cx.subscribe(&filter, |_, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        });
         Self {
             configs: shell_config::detect(),
+            agents: agent_config::detect(&[]),
+            projects: Vec::new(),
             login_shell: shell_config::login_shell(),
+            filter,
+            collapsed: Vec::new(),
             selected: None,
             error: None,
             saving: false,
             saved: None,
             focus: cx.focus_handle(),
+            _subscription: subscription,
         }
     }
 
     /// Looks again: files may have been created or removed since.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         self.configs = shell_config::detect();
+        self.agents = agent_config::detect(&self.projects);
+        cx.notify();
+    }
+
+    /// Lists the agent files of `projects` too, and looks again.
+    pub fn set_projects(&mut self, projects: Vec<PathBuf>, cx: &mut Context<Self>) {
+        self.projects = projects;
+        self.refresh(cx);
+    }
+
+    /// Whether the login shell reads files meant for `shell`.
+    fn reads(&self, shell: &str) -> bool {
+        match self.login_shell.as_deref() {
+            Some(login) => login == shell || (login == "bash" && shell == "sh"),
+            None => true,
+        }
+    }
+
+    /// Every group that has files, with its rows.
+    fn groups(&self) -> Vec<(Group, Vec<Row>)> {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let mut groups = Vec::new();
+        let shell: Vec<Row> = self
+            .configs
+            .iter()
+            .map(|c| {
+                let read = self.reads(c.shell);
+                let detail = match (&self.login_shell, read) {
+                    (Some(login), false) => format!("Not read by {login} · {}", c.note),
+                    _ => c.note.to_string(),
+                };
+                Row {
+                    path: c.path.clone(),
+                    name: tildify(&c.path, home.as_deref()),
+                    detail,
+                    icon: Some(Lucide::FileTerminal),
+                    writable: c.writable,
+                    dim: !read,
+                }
+            })
+            .collect();
+        if !shell.is_empty() {
+            groups.push((Group::Shell, shell));
+        }
+        for config in &self.agents {
+            let group = Group::Agent(config.client);
+            if groups.last().is_none_or(|(g, _)| *g != group) {
+                groups.push((group, Vec::new()));
+            }
+            // A project's files by the project's name: `app/CLAUDE.md`.
+            let name = match &config.project {
+                Some(project) => {
+                    let rel = config.path.strip_prefix(project).unwrap_or(&config.path);
+                    format!("{}/{}", file_name(project), rel.display())
+                }
+                None => tildify(&config.path, home.as_deref()),
+            };
+            if let Some((_, rows)) = groups.last_mut() {
+                rows.push(Row {
+                    path: config.path.clone(),
+                    name,
+                    detail: format!("{} · {}", config.layer.label(), config.note),
+                    icon: None,
+                    writable: config.writable,
+                    dim: false,
+                });
+            }
+        }
+        groups
+    }
+
+    fn toggle(&mut self, group: Group, cx: &mut Context<Self>) {
+        if let Some(ix) = self.collapsed.iter().position(|g| *g == group) {
+            self.collapsed.remove(ix);
+        } else {
+            self.collapsed.push(group);
+        }
         cx.notify();
     }
 
@@ -86,7 +216,7 @@ impl ShellConfigPanel {
         div()
             .w_full()
             .h(px(26.))
-            .mt_1()
+            .mt_2()
             .px_2()
             .flex()
             .items_center()
@@ -97,25 +227,91 @@ impl ShellConfigPanel {
             .into_any_element()
     }
 
-    fn render_config(&self, ix: usize, config: &ShellConfig, cx: &mut Context<Self>) -> AnyElement {
+    fn render_group(
+        &self,
+        group: Group,
+        count: usize,
+        open: bool,
+        filtering: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let muted = cx.theme().muted_foreground;
+        let (id, title, logo): (SharedString, &str, AnyElement) = match group {
+            Group::Shell => (
+                "config-group-shell".into(),
+                "Shell",
+                Icon::new(Lucide::SquareTerminal)
+                    .small()
+                    .text_color(muted)
+                    .into_any_element(),
+            ),
+            Group::Agent(client) => (
+                format!("config-group-{}", client.name()).into(),
+                client.name(),
+                crate::mcp_page::client_logo(client, 16., cx),
+            ),
+        };
+        h_flex()
+            .id(id)
+            .w_full()
+            .h(px(28.))
+            .px_2()
+            .gap_1p5()
+            .when(!filtering, |el| {
+                el.cursor_pointer()
+                    .hover(|el| el.bg(cx.theme().list_hover))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(group, cx)))
+            })
+            .child(
+                Icon::new(if open {
+                    Lucide::ChevronDown
+                } else {
+                    Lucide::ChevronRight
+                })
+                .xsmall()
+                .text_color(muted),
+            )
+            .child(logo)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_sm()
+                    .font_medium()
+                    .child(title.to_string()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(count.to_string()),
+            )
+            .into_any_element()
+    }
+
+    fn render_row(&self, ix: usize, row: &Row, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        let name = tildify(&config.path, home.as_deref());
-        let mine = self.login_shell.as_deref() == Some(config.shell);
-        let path = config.path.clone();
-        let selected = self.selected.as_ref() == Some(&config.path);
+        let path = row.path.clone();
+        let selected = self.selected.as_ref() == Some(&row.path);
         let focus = self.focus.clone();
-        let writable = config.writable;
+        let writable = row.writable;
+        // Both lines truncate; the tooltip has them whole.
+        let full: SharedString = format!("{}\n{}", row.path.display(), row.detail).into();
         h_flex()
-            .id(("shell-config", ix))
+            .id(("config-row", ix))
             .w_full()
-            .h(px(42.))
-            .px_2()
+            .h(px(40.))
+            // In line with the group's title, past its chevron.
+            .pl(px(26.))
+            .pr_2()
             .gap_2()
             .cursor_pointer()
             .when(selected, |el| el.bg(cx.theme().list_active))
             .when(!selected, |el| el.hover(|el| el.bg(cx.theme().list_hover)))
+            .tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
             .on_click(cx.listener({
                 let path = path.clone();
                 move |this, _, window, cx| {
@@ -133,36 +329,41 @@ impl ShellConfigPanel {
                 }),
             )
             .context_menu(move |m, _, _| config_menu(m, focus.clone(), writable))
-            .child(Icon::new(Lucide::FileTerminal).small().text_color(muted))
+            // One width for both kinds of icon, so names line up.
+            .child(
+                div()
+                    .w(px(16.))
+                    .flex_none()
+                    .flex()
+                    .justify_center()
+                    .child(match row.icon {
+                        Some(icon) => Icon::new(icon).small().text_color(muted).into_any_element(),
+                        None => crate::file_icons::file_icon(&row.path, cx),
+                    }),
+            )
             .child(
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .child(div().text_sm().truncate().child(name))
+                    .child(
+                        div()
+                            .text_sm()
+                            .truncate()
+                            .when(row.dim, |el| el.text_color(muted))
+                            .child(row.name.clone()),
+                    )
                     .child(
                         div()
                             .text_xs()
                             .text_color(muted)
                             .truncate()
-                            .child(config.note),
+                            .child(row.detail.clone()),
                     ),
             )
-            .when(mine, |el| {
+            .when(!row.writable, |el| {
                 el.child(
                     div()
-                        .flex_none()
-                        .px_1p5()
-                        .rounded_full()
-                        .text_xs()
-                        .bg(cx.theme().success.opacity(0.15))
-                        .text_color(cx.theme().success)
-                        .child(config.shell),
-                )
-            })
-            .when(!config.writable, |el| {
-                el.child(
-                    div()
-                        .id(("shell-config-lock", ix))
+                        .id(("config-lock", ix))
                         .flex_none()
                         .child(Icon::new(Lucide::Lock).xsmall().text_color(muted))
                         .tooltip(|window, cx| {
@@ -194,10 +395,12 @@ impl ShellConfigPanel {
     /// The selected file, if it is still listed and saving it needs no password.
     fn selected_writable(&self) -> Option<PathBuf> {
         let path = self.selected.as_ref()?;
-        self.configs
-            .iter()
-            .find(|c| &c.path == path && c.writable)
-            .map(|c| c.path.clone())
+        let shell = self.configs.iter().map(|c| (&c.path, c.writable));
+        let agents = self.agents.iter().map(|c| (&c.path, c.writable));
+        shell
+            .chain(agents)
+            .find(|(p, writable)| *p == path && *writable)
+            .map(|(p, _)| p.clone())
     }
 
     /// Copies the file next to itself (`.zshrc copy`), as a backup.
@@ -376,11 +579,15 @@ impl ShellConfigPanel {
                     .small()
                     .w_full()
                     .icon(Lucide::Github)
-                    .label(if self.saving { "Saving to GitHub…" } else { "Save to GitHub" })
+                    .label(if self.saving {
+                        "Saving to GitHub…"
+                    } else {
+                        "Save Shell Files to GitHub"
+                    })
                     .loading(self.saving)
                     .disabled(self.saving || user_files == 0)
                     .tooltip(format!(
-                        "Commit Your {user_files} Profile Files to the Private Repository {BACKUP_REPO}"
+                        "Commit Your {user_files} Shell Files to the Private Repository {BACKUP_REPO}"
                     ))
                     .on_click(cx.listener(|this, _, window, cx| this.save_to_github(window, cx))),
             )
@@ -427,23 +634,38 @@ fn file_name(path: &Path) -> String {
 
 impl Render for ShellConfigPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let query = self.filter.read(cx).value().trim().to_lowercase();
+        let filtering = !query.is_empty();
+        let groups = self.groups();
+        let total: usize = groups.iter().map(|(_, rows)| rows.len()).sum();
         let mut items = Vec::new();
-        for (scope, title) in [
-            (Scope::User, "YOUR PROFILE"),
-            (Scope::System, "SYSTEM-WIDE"),
-        ] {
-            let configs: Vec<_> = self
-                .configs
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| c.scope == scope)
-                .collect();
-            if configs.is_empty() {
+        let mut ix = 0;
+        let mut agents_titled = false;
+        for (group, rows) in &groups {
+            let title = match group {
+                Group::Shell => "Shell",
+                Group::Agent(client) => client.name(),
+            };
+            // Searching a group's name lists all of its files.
+            let rows: Vec<&Row> = if title.to_lowercase().contains(&query) {
+                rows.iter().collect()
+            } else {
+                rows.iter().filter(|r| r.matches(&query)).collect()
+            };
+            if rows.is_empty() {
                 continue;
             }
-            items.push(self.render_section(title, cx));
-            for (ix, config) in configs {
-                items.push(self.render_config(ix, config, cx));
+            if matches!(group, Group::Agent(_)) && !agents_titled {
+                agents_titled = true;
+                items.push(self.render_section("AGENTS · HIGHEST PRIORITY FIRST", cx));
+            }
+            let open = filtering || !self.collapsed.contains(group);
+            items.push(self.render_group(*group, rows.len(), open, filtering, cx));
+            if open {
+                for row in rows {
+                    items.push(self.render_row(ix, row, cx));
+                    ix += 1;
+                }
             }
         }
         let empty = items.is_empty();
@@ -495,7 +717,7 @@ impl Render for ShellConfigPanel {
                             .text_xs()
                             .font_semibold()
                             .text_color(cx.theme().muted_foreground)
-                            .child(format!("Shell Config · {}", self.configs.len())),
+                            .child(format!("Config Files · {total}")),
                     )
                     .child(
                         Button::new("shell-config-refresh")
@@ -505,6 +727,18 @@ impl Render for ShellConfigPanel {
                             .tooltip("Look Again")
                             .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
                     ),
+            )
+            .child(
+                div().p_2().border_b_1().border_color(cx.theme().border).child(
+                    Input::new(&self.filter)
+                        .small()
+                        .prefix(
+                            Icon::new(Lucide::Search)
+                                .xsmall()
+                                .text_color(cx.theme().muted_foreground),
+                        )
+                        .cleanable(true),
+                ),
             )
             .when_some(self.error.clone(), |el, e| {
                 el.child(Banner::error("shell-config-error", e).on_dismiss(cx.listener(
@@ -520,15 +754,105 @@ impl Render for ShellConfigPanel {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .pb_2()
                     .when(!empty, |el| el.children(items))
-                    .when(empty, |el| {
+                    .when(empty && filtering, |el| {
                         el.child(
-                            Placeholder::new(Lucide::FileTerminal, "No shell config files")
+                            Placeholder::new(Lucide::Search, "No matching files")
                                 .compact()
-                                .detail("Files like ~/.zshrc, ~/.bashrc and /etc/profile show up here once they exist."),
+                                .detail("Nothing matches this name, path or description.")
+                                .action(
+                                    Button::new("clear-config-filter")
+                                        .small()
+                                        .label("Clear Search")
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.filter
+                                                .update(cx, |s, cx| s.set_value("", window, cx));
+                                        })),
+                                ),
+                        )
+                    })
+                    .when(empty && !filtering, |el| {
+                        el.child(
+                            Placeholder::new(Lucide::FileTerminal, "No config files")
+                                .compact()
+                                .detail("Files like ~/.zshrc, ~/.claude/settings.json and ~/.codex/config.toml show up here once they exist."),
                         )
                     }),
             )
             .child(self.render_footer(cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use gpui_kit::{Action, AppContext as _, FocusHandle, Focusable as _, TestAppContext};
+
+    use super::{OpenConfig, ShellConfigPanel};
+    use crate::files::Trash;
+
+    /// Typing a search runs none of the list's commands. The search box passes on ↩, and ⌫ with
+    /// nothing before the cursor (an emptied box), to the bindings around it, where the list's
+    /// would open the selected file or move it to the Trash.
+    #[gpui_kit::test]
+    fn typing_in_the_search_box_runs_no_file_command(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::init(cx);
+        });
+        let (window, panel) = cx.update(|cx| {
+            gpui_kit::open_window(Default::default(), cx, |window, cx| {
+                cx.new(|cx| ShellConfigPanel::new(window, cx))
+            })
+            .unwrap()
+        });
+        let ran = Rc::new(RefCell::new(Vec::new()));
+        let _observer = cx.update(|cx| {
+            let ran = ran.clone();
+            cx.observe_keystrokes(move |e, _, _| {
+                if let Some(action) = &e.action {
+                    let name = action.name();
+                    if name.starts_with("files::") || name.starts_with("shell_config::") {
+                        ran.borrow_mut().push(name);
+                    }
+                }
+            })
+        });
+        let focus = |cx: &mut TestAppContext, handle: FocusHandle| {
+            cx.update_window(window, |_, window, cx| window.focus(&handle, cx))
+                .unwrap();
+            cx.run_until_parked();
+        };
+
+        let search = cx.update(|cx| panel.read(cx).filter.focus_handle(cx));
+        focus(cx, search);
+        cx.simulate_keystrokes(
+            window,
+            "z s h backspace backspace backspace backspace enter",
+        );
+        cx.run_until_parked();
+        assert_eq!(*ran.borrow(), Vec::<&str>::new(), "the search box ran them");
+
+        // From the list they are the selected file's (none here, so nothing changes).
+        let list = cx.update(|cx| panel.read(cx).focus.clone());
+        focus(cx, list.clone());
+        cx.simulate_keystrokes(window, "enter backspace");
+        cx.run_until_parked();
+        assert_eq!(*ran.borrow(), ["shell_config::OpenConfig", "files::Trash"]);
+
+        // The right-click menu, which looks its keys up from the list, still shows them.
+        let key = |cx: &mut TestAppContext, action: &dyn Action| {
+            cx.update_window(window, |_, window, _| {
+                window
+                    .highest_precedence_binding_for_action_in(action, &list)
+                    .map(|b| b.keystrokes()[0].key().to_string())
+            })
+            .unwrap()
+        };
+        assert_eq!(key(cx, &OpenConfig).as_deref(), Some("enter"));
+        assert_eq!(key(cx, &Trash).as_deref(), Some("backspace"));
     }
 }

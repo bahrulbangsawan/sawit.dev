@@ -14,7 +14,7 @@ use futures::future::{AbortHandle, abortable};
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -24,6 +24,7 @@ use sawit_core::dev_tools::{
     uninstall, uninstall_command,
 };
 
+use crate::catalog::{self, Mark};
 use crate::rt;
 
 /// Lines of installer output kept per tool.
@@ -58,6 +59,63 @@ enum Job {
     Uninstall(String),
 }
 
+/// Which rows the filter tabs show.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Filter {
+    All,
+    Installed,
+    Updates,
+    Missing,
+}
+
+impl Filter {
+    const ALL: [Filter; 4] = [
+        Filter::All,
+        Filter::Installed,
+        Filter::Updates,
+        Filter::Missing,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Filter::All => "All",
+            Filter::Installed => "Installed",
+            Filter::Updates => "Updates",
+            Filter::Missing => "Not Installed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Sort {
+    Category,
+    Name,
+    NameDesc,
+    Status,
+}
+
+impl Sort {
+    const ALL: [Sort; 4] = [Sort::Category, Sort::Name, Sort::NameDesc, Sort::Status];
+
+    fn label(self) -> &'static str {
+        match self {
+            Sort::Category => "Category",
+            Sort::Name => "Name (A–Z)",
+            Sort::NameDesc => "Name (Z–A)",
+            Sort::Status => "Needs Attention",
+        }
+    }
+}
+
+fn category_name(category: Category) -> &'static str {
+    match category {
+        Category::PackageManager => "Package Managers",
+        Category::Runtime => "Languages & Runtimes",
+        Category::Agent => "AI Agents",
+        Category::Other => "Terminal & Apps",
+    }
+}
+
 pub enum ToolsEvent {
     RunInTerminal(String),
 }
@@ -81,6 +139,11 @@ pub struct ToolsPage {
     stop: Option<AbortHandle>,
     /// Progress through the current run of the queue.
     batch: (usize, usize),
+    filter: Filter,
+    category: Option<Category>,
+    sort: Sort,
+    /// The page of the list shown, from 0.
+    page: usize,
     /// Made on the first render, which has the window an input needs.
     search: Option<Entity<InputState>>,
     _search: Option<Subscription>,
@@ -158,6 +221,10 @@ impl ToolsPage {
             running: None,
             stop: None,
             batch: (0, 0),
+            filter: Filter::All,
+            category: None,
+            sort: Sort::Category,
+            page: 0,
             search: None,
             _search: None,
         };
@@ -514,110 +581,258 @@ impl ToolsPage {
             || has(tool.name)
             || has(tool.id)
             || has(tool.description)
-            || has(tool.category.title())
+            || has(category_name(tool.category))
+    }
+
+    /// Matches the search and the category: what the filter tabs count.
+    fn in_scope(&self, tool: &Tool, query: &str) -> bool {
+        Self::matches(tool, query) && self.category.is_none_or(|c| tool.category == c)
+    }
+
+    fn passes(&self, tool: &Tool, filter: Filter) -> bool {
+        match filter {
+            Filter::All => true,
+            Filter::Installed => self.installed(tool.id),
+            Filter::Updates => self.newer(tool.id).is_some(),
+            Filter::Missing => !self.installed(tool.id),
+        }
+    }
+
+    /// Sorts by what needs attention: running or failed, then updates,
+    /// then missing, then installed.
+    fn rank(&self, tool: &Tool) -> u8 {
+        match self.states.get(tool.id) {
+            Some(State::Removed) | None => {}
+            Some(State::Done) => return 3,
+            Some(_) => return 0,
+        }
+        if self.newer(tool.id).is_some() {
+            1
+        } else if self.installed(tool.id) {
+            3
+        } else {
+            2
+        }
+    }
+
+    /// The rows the search, category, tab and sort leave, with their index
+    /// in `TOOLS`.
+    fn shown(&self, query: &str) -> Vec<(usize, &'static Tool)> {
+        let mut rows: Vec<(usize, &'static Tool)> = TOOLS
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| self.in_scope(t, query) && self.passes(t, self.filter))
+            .collect();
+        match self.sort {
+            Sort::Category => rows.sort_by_key(|(ix, t)| (t.category as u8, *ix)),
+            Sort::Name => rows.sort_by_key(|(_, t)| t.name.to_lowercase()),
+            Sort::NameDesc => rows.sort_by_key(|(_, t)| std::cmp::Reverse(t.name.to_lowercase())),
+            Sort::Status => rows.sort_by_key(|(ix, t)| (self.rank(t), *ix)),
+        }
+        rows
+    }
+
+    /// Selectable rows (missing, idle, not handed to the terminal).
+    fn selectable(&self, rows: &[(usize, &'static Tool)]) -> Vec<&'static str> {
+        rows.iter()
+            .filter(|(_, t)| !t.interactive && !self.installed(t.id) && !self.busy(t.id))
+            .map(|(_, t)| t.id)
+            .collect()
     }
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let muted = cx.theme().muted_foreground;
         let missing = self.missing();
         let upgradable = self.upgradable();
-        let selected: Vec<&'static str> = TOOLS
-            .iter()
-            .filter(|t| self.selected.contains(t.id))
-            .map(|t| t.id)
-            .collect();
-        let extra = self
-            .plan_for(&selected)
-            .len()
-            .saturating_sub(selected.len());
-        let selected_label = match (selected.len(), extra) {
-            (0, _) => "Install Selected".to_string(),
-            (n, 0) => format!("Install Selected ({n})"),
-            (n, e) => format!("Install Selected ({n} + {e} required)"),
-        };
-        let all_selected =
-            !missing.is_empty() && missing.iter().all(|id| self.selected.contains(id));
-        let can_select = !missing.is_empty();
-        v_flex()
-            .gap_1()
+        h_flex()
+            .gap_4()
+            .items_start()
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(div().text_xl().font_semibold().child("Dev Tools"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(muted)
+                            .whitespace_normal()
+                            .child(
+                                "Official installers, run one at a time in your login shell, prerequisites first. \
+                                 Open a new terminal tab afterwards to pick up the new PATH.",
+                            ),
+                    ),
+            )
             .child(
                 h_flex()
+                    .flex_none()
                     .gap_2()
-                    .child(div().text_lg().font_semibold().flex_1().child("Dev Tools"))
-                    .when_some(self.search.clone(), |el, search| {
-                        el.child(
-                            div().w(px(220.)).child(
-                                Input::new(&search)
-                                    .small()
-                                    .prefix(Icon::new(Lucide::Search).xsmall().text_color(muted))
-                                    .cleanable(true),
-                            ),
-                        )
-                    })
                     .child(
                         Button::new("tools-reload")
                             .ghost()
-                            .xsmall()
+                            .small()
                             .icon(Lucide::RefreshCw)
                             .tooltip("Detect Again")
                             .loading(self.loading)
                             .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
                     )
-                    .child(
-                        Button::new("tools-select-missing")
-                            .ghost()
-                            .small()
-                            .label(if all_selected { "Clear Selection" } else { "Select Missing" })
-                            .disabled(!can_select && self.selected.is_empty())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if all_selected || !can_select {
-                                    this.selected.clear();
-                                } else {
-                                    let missing = this.missing();
-                                    this.selected.extend(missing);
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("tools-install-selected")
-                            .outline()
-                            .small()
-                            .label(selected_label)
-                            .disabled(selected.is_empty())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.enqueue(&selected, cx)
-                            })),
-                    )
-                    .child(
-                        Button::new("tools-upgrade-all")
-                            .outline()
-                            .small()
-                            .label(format!("Upgrade All ({})", upgradable.len()))
-                            .disabled(upgradable.is_empty())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.upgrade(&upgradable, cx)
-                            })),
-                    )
+                    .when(!upgradable.is_empty(), |el| {
+                        el.child(
+                            Button::new("tools-upgrade-all")
+                                .outline()
+                                .small()
+                                .icon(Lucide::CircleArrowUp)
+                                .label(format!("Upgrade All ({})", upgradable.len()))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.upgrade(&upgradable, cx)
+                                })),
+                        )
+                    })
                     .child(
                         Button::new("tools-install-all")
                             .primary()
                             .small()
-                            .label(format!("Install All Missing ({})", missing.len()))
+                            .icon(Lucide::Download)
+                            .label(format!("Install Missing ({})", missing.len()))
                             .disabled(missing.is_empty() || self.loading)
                             .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&missing, cx))),
                     ),
             )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(muted)
-                    .whitespace_normal()
-                    .child(
-                        "Each tool installs with its official cURL script, one at a time, in your login shell. \
-                         Prerequisites are queued first. Open a new terminal tab afterwards so it sees the new PATH.",
-                    ),
-            )
+    }
+
+    /// Search, the filter tabs with their counts, category and sort.
+    fn render_toolbar(&self, query: &str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let scope: Vec<&Tool> = TOOLS.iter().filter(|t| self.in_scope(t, query)).collect();
+        let choices = Filter::ALL
+            .iter()
+            .map(|f| {
+                (
+                    f.label(),
+                    scope.iter().filter(|t| self.passes(t, *f)).count(),
+                )
+            })
+            .collect();
+        let current = Filter::ALL
+            .iter()
+            .position(|f| *f == self.filter)
+            .unwrap_or(0);
+        let mut categories = vec!["All Categories"];
+        categories.extend(Category::ALL.iter().map(|c| category_name(*c)));
+        let category = self
+            .category
+            .and_then(|c| Category::ALL.iter().position(|x| *x == c))
+            .map_or(0, |ix| ix + 1);
+        let sort = Sort::ALL.iter().position(|s| *s == self.sort).unwrap_or(0);
+        h_flex()
+            .gap_2()
+            .flex_wrap()
+            .when_some(self.search.as_ref(), |el, search| {
+                el.child(catalog::search(search, cx))
+            })
+            .child(catalog::tabs(
+                "tools-filter",
+                choices,
+                current,
+                cx.listener(|this, ix: &usize, _, cx| {
+                    this.filter = Filter::ALL[*ix];
+                    this.page = 0;
+                    cx.notify();
+                }),
+                cx,
+            ))
+            .child(div().flex_1())
+            .child(catalog::menu(
+                "tools-category",
+                Lucide::Funnel,
+                categories[category].to_string(),
+                categories,
+                category,
+                cx.listener(|this, ix: &usize, _, cx| {
+                    this.category = ix.checked_sub(1).map(|ix| Category::ALL[ix]);
+                    this.page = 0;
+                    cx.notify();
+                }),
+            ))
+            .child(catalog::menu(
+                "tools-sort",
+                Lucide::ArrowUpDown,
+                format!("Sort: {}", self.sort.label()),
+                Sort::ALL.iter().map(|s| s.label()).collect(),
+                sort,
+                cx.listener(|this, ix: &usize, _, cx| {
+                    this.sort = Sort::ALL[*ix];
+                    this.page = 0;
+                    cx.notify();
+                }),
+            ))
+    }
+
+    /// "3 selected" with Clear and Install, while anything is ticked.
+    fn render_selection(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let selected: Vec<&'static str> = TOOLS
+            .iter()
+            .filter(|t| self.selected.contains(t.id))
+            .map(|t| t.id)
+            .collect();
+        if selected.is_empty() {
+            return None;
+        }
+        let theme = cx.theme();
+        let extra = self
+            .plan_for(&selected)
+            .len()
+            .saturating_sub(selected.len());
+        Some(
+            h_flex()
+                .px_4()
+                .py_2()
+                .gap_2()
+                .rounded(theme.radius_lg)
+                .border_1()
+                .border_color(theme.primary.opacity(0.35))
+                .bg(theme.primary.opacity(0.08))
+                .text_sm()
+                .child(
+                    Icon::new(Lucide::SquareCheck)
+                        .small()
+                        .text_color(theme.primary),
+                )
+                .child(
+                    div()
+                        .font_medium()
+                        .child(format!("{} selected", selected.len())),
+                )
+                .when(extra > 0, |el| {
+                    el.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(format!("+ {} needed first", extra)),
+                    )
+                })
+                .child(div().flex_1())
+                .child(
+                    Button::new("tools-clear-selection")
+                        .ghost()
+                        .small()
+                        .icon(Lucide::X)
+                        .label("Clear")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.selected.clear();
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("tools-install-selected")
+                        .primary()
+                        .small()
+                        .icon(Lucide::Download)
+                        .label(format!("Install {}", selected.len() + extra))
+                        .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&selected, cx))),
+                )
+                .into_any_element(),
+        )
     }
 
     /// "Installing Node.js · 2 of 5" and a bar, while the queue runs.
@@ -639,8 +854,9 @@ impl ToolsPage {
         Some(
             v_flex()
                 .gap_2()
-                .p_3()
-                .rounded(cx.theme().radius)
+                .px_4()
+                .py_3()
+                .rounded(cx.theme().radius_lg)
                 .border_1()
                 .border_color(cx.theme().border)
                 .bg(cx.theme().secondary)
@@ -650,7 +866,7 @@ impl ToolsPage {
                         .text_sm()
                         .child(Spinner::new().xsmall().color(muted))
                         .when_some(running, |el, (t, _)| el.child(logo(t.id, 16., cx)))
-                        .child(div().flex_1().child(match running {
+                        .child(div().flex_1().font_medium().child(match running {
                             Some((t, Job::Install)) => format!(
                                 "{} {} · {} of {total}",
                                 if self.upgrades.contains(t.id) {
@@ -675,7 +891,7 @@ impl ToolsPage {
                             )
                             .child(
                                 Button::new("tools-stop")
-                                    .ghost()
+                                    .outline()
                                     .xsmall()
                                     .icon(Lucide::CircleStop)
                                     .label("Stop Queue")
@@ -714,44 +930,82 @@ impl ToolsPage {
         let newer = self.newer(id).cloned();
         let upgrading = self.upgrades.contains(id);
 
-        let (badge, color): (String, Hsla) = match (&state, found) {
-            (Some(State::Queued { for_: Some(f) }), _) => (format!("Queued · for {f}"), muted),
-            (Some(State::Queued { for_: None }), _) => ("Queued".into(), muted),
-            (Some(State::Installing), _) if upgrading => ("Upgrading…".into(), theme.warning),
-            (Some(State::Installing), _) => ("Installing…".into(), theme.warning),
-            (Some(State::Uninstalling), _) => ("Uninstalling…".into(), theme.warning),
-            (Some(State::Removed), _) => ("Uninstalled · restart shell".into(), muted),
-            (Some(State::Stopped), _) => ("Stopped".into(), theme.warning),
-            (Some(State::Failed(_)), _) => ("Failed".into(), theme.danger),
-            (Some(State::Skipped(need)), _) => (format!("Skipped · {need} missing"), theme.danger),
-            (Some(State::InTerminal), _) => ("In terminal".into(), theme.warning),
-            (Some(State::Done), None) if !self.loading => {
-                ("Installed · restart shell".into(), theme.success)
+        let (mark, badge, color): (Mark, String, Hsla) = match (&state, found) {
+            (Some(State::Queued { for_: Some(f) }), _) => {
+                (Mark::Icon(Lucide::Clock), format!("Queued for {f}"), muted)
             }
+            (Some(State::Queued { for_: None }), _) => {
+                (Mark::Icon(Lucide::Clock), "Queued".into(), muted)
+            }
+            (Some(State::Installing), _) if upgrading => {
+                (Mark::Spinner, "Upgrading…".into(), theme.warning)
+            }
+            (Some(State::Installing), _) => (Mark::Spinner, "Installing…".into(), theme.warning),
+            (Some(State::Uninstalling), _) => {
+                (Mark::Spinner, "Uninstalling…".into(), theme.warning)
+            }
+            (Some(State::Removed), _) => (
+                Mark::Icon(Lucide::CircleMinus),
+                "Removed · restart shell".into(),
+                muted,
+            ),
+            (Some(State::Stopped), _) => (
+                Mark::Icon(Lucide::CircleStop),
+                "Stopped".into(),
+                theme.warning,
+            ),
+            (Some(State::Failed(_)), _) => {
+                (Mark::Icon(Lucide::CircleX), "Failed".into(), theme.danger)
+            }
+            (Some(State::Skipped(need)), _) => (
+                Mark::Icon(Lucide::TriangleAlert),
+                format!("Skipped · needs {need}"),
+                theme.danger,
+            ),
+            (Some(State::InTerminal), _) => (
+                Mark::Icon(Lucide::SquareTerminal),
+                "In terminal".into(),
+                theme.warning,
+            ),
+            (Some(State::Done), None) if !self.loading => (
+                Mark::Icon(Lucide::CircleCheck),
+                "Installed · restart shell".into(),
+                theme.success,
+            ),
             (
                 _,
                 Some(Found {
                     version: Some(v), ..
                 }),
             ) if newer.is_some() => (
-                format!("Installed · {v} → {}", newer.as_deref().unwrap_or_default()),
+                Mark::Icon(Lucide::CircleArrowUp),
+                format!("Update · {v} → {}", newer.as_deref().unwrap_or_default()),
                 theme.info,
             ),
             (_, Some(f)) => (
+                Mark::Icon(Lucide::CircleCheck),
                 f.version
                     .as_ref()
                     .map_or("Installed".into(), |v| format!("Installed · {v}")),
                 theme.success,
             ),
-            (Some(State::Done), None) => ("Installed".into(), theme.success),
-            (None, None) if self.loading => ("Checking…".into(), muted),
-            (None, None) => ("Not installed".into(), muted),
+            (Some(State::Done), None) => (
+                Mark::Icon(Lucide::CircleCheck),
+                "Installed".into(),
+                theme.success,
+            ),
+            (None, None) if self.loading => (Mark::Spinner, "Checking…".into(), muted),
+            (None, None) => (
+                Mark::Icon(Lucide::CircleDashed),
+                "Not installed".into(),
+                muted,
+            ),
         };
 
         let action = match &state {
             Some(State::Installing | State::Uninstalling) => Button::new(("tool-stop", ix))
-                .ghost()
-                .xsmall()
+                .outline()
+                .small()
                 .icon(Lucide::CircleStop)
                 .label("Stop")
                 .tooltip(match state {
@@ -762,37 +1016,41 @@ impl ToolsPage {
                 .on_click(cx.listener(|this, _, _, cx| this.stop_running(cx))),
             Some(State::Queued { .. }) => Button::new(("tool-dequeue", ix))
                 .ghost()
-                .xsmall()
+                .small()
+                .icon(Lucide::X)
                 .label("Cancel")
+                .tooltip("Take It Out of the Queue")
                 .on_click(cx.listener(move |this, _, _, cx| this.dequeue(id, cx))),
             Some(State::Failed(_) | State::Skipped(_)) => Button::new(("tool-retry", ix))
                 .primary()
-                .xsmall()
+                .small()
                 .icon(Lucide::RotateCcw)
                 .label("Retry")
                 .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&[id], cx))),
             _ if newer.is_some() => Button::new(("tool-upgrade", ix))
                 .primary()
-                .xsmall()
+                .small()
                 .icon(Lucide::CircleArrowUp)
                 .label("Upgrade")
                 .tooltip(tool.upgrade_command())
                 .on_click(cx.listener(move |this, _, _, cx| this.upgrade(&[id], cx))),
             _ if installed => Button::new(("tool-reinstall", ix))
-                .ghost()
-                .xsmall()
+                .outline()
+                .small()
+                .icon(Lucide::RotateCw)
                 .label("Reinstall")
                 .tooltip("Run the Installer Again (Updates to the Latest Version)")
                 .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&[id], cx))),
             _ if tool.interactive => Button::new(("tool-terminal", ix))
                 .primary()
-                .xsmall()
+                .small()
                 .icon(Lucide::SquareTerminal)
                 .label("Install in Terminal")
+                .tooltip("Asks for Your Password, So It Runs in the Terminal")
                 .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&[id], cx))),
             _ => Button::new(("tool-install", ix))
                 .primary()
-                .xsmall()
+                .small()
                 .icon(Lucide::Download)
                 .label("Install")
                 .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&[id], cx))),
@@ -820,20 +1078,20 @@ impl ToolsPage {
         let needs = tool.needs.iter().filter_map(|n| find(n)).map(|need| {
             let ok = self.installed(need.id);
             h_flex()
+                .h(px(18.))
                 .gap_1()
                 .px_1p5()
-                .py_0p5()
                 .rounded(cx.theme().radius)
                 .border_1()
                 .border_color(if ok {
-                    cx.theme().success
+                    cx.theme().success.opacity(0.4)
                 } else {
                     cx.theme().border
                 })
                 .text_xs()
                 .text_color(if ok { cx.theme().success } else { muted })
                 .child(logo(need.id, 12., cx))
-                .child(need.name)
+                .child(format!("needs {}", need.name))
                 .when(ok, |el| el.child(Icon::new(Lucide::Check).xsmall()))
         });
 
@@ -846,20 +1104,22 @@ impl ToolsPage {
         } else {
             tool.install
         };
+        // Under the name: past the checkbox, the tile and their gaps.
+        let indent = px(16. + catalog::TILE + 24.);
 
         v_flex()
-            .px_3()
-            .py_2p5()
-            .gap_1()
+            .px_4()
+            .py_3()
+            .gap_1p5()
             .border_b_1()
             .border_color(cx.theme().border)
+            .hover(|el| el.bg(cx.theme().list_hover))
             .when(running, |el| el.bg(cx.theme().list_hover))
             .child(
                 h_flex()
                     .gap_3()
-                    .items_start()
-                    .child(div().w(px(16.)).flex_none().pt(px(2.)).child(checkbox))
-                    .child(div().pt(px(1.)).child(logo(id, 20., cx)))
+                    .child(div().w(px(16.)).flex_none().child(checkbox))
+                    .child(catalog::tile(logo(id, 22., cx), cx))
                     .child(
                         v_flex()
                             .flex_1()
@@ -870,10 +1130,8 @@ impl ToolsPage {
                                     .gap_2()
                                     .flex_wrap()
                                     .child(div().text_sm().font_semibold().child(tool.name))
-                                    .when(!tool.needs.is_empty(), |el| {
-                                        el.child(div().text_xs().text_color(muted).child("needs"))
-                                            .children(needs)
-                                    }),
+                                    .child(catalog::tag(None, category_name(tool.category), cx))
+                                    .children(needs),
                             )
                             .child(
                                 div()
@@ -917,37 +1175,22 @@ impl ToolsPage {
                             ),
                     )
                     .child(
-                        h_flex()
-                            .gap_1()
-                            .w(px(170.))
+                        div()
+                            .w(px(catalog::STATUS_W))
                             .flex_none()
-                            .justify_end()
-                            .pt(px(2.))
-                            .text_xs()
-                            .text_color(color)
-                            .child(match state {
-                                Some(State::Installing | State::Uninstalling) => {
-                                    Spinner::new().xsmall().color(color).into_any_element()
-                                }
-                                _ => div()
-                                    .size(px(6.))
-                                    .rounded_full()
-                                    .bg(color)
-                                    .into_any_element(),
-                            })
-                            .child(div().truncate().child(badge)),
+                            .child(catalog::pill(mark, badge, color)),
                     )
                     .child(
                         h_flex()
-                            .gap_0p5()
-                            .w(px(150.))
+                            .w(px(catalog::ACTIONS_W))
                             .flex_none()
+                            .gap_1()
                             .justify_end()
                             .when(log.is_some(), |el| {
                                 el.child(
                                     Button::new(("tool-log", ix))
                                         .ghost()
-                                        .xsmall()
+                                        .small()
                                         .icon(Lucide::ScrollText)
                                         .selected(expanded)
                                         .tooltip(if expanded {
@@ -967,7 +1210,7 @@ impl ToolsPage {
                                 el.child(
                                     Button::new(("tool-uninstall", ix))
                                         .ghost()
-                                        .xsmall()
+                                        .small()
                                         .icon(
                                             Icon::new(Lucide::Trash).text_color(cx.theme().danger),
                                         )
@@ -983,7 +1226,7 @@ impl ToolsPage {
             .when_some(last_line.filter(|_| !expanded), |el, line| {
                 el.child(
                     div()
-                        .pl(px(60.))
+                        .pl(indent)
                         .text_xs()
                         .font_family(mono.clone())
                         .text_color(muted)
@@ -998,12 +1241,18 @@ impl ToolsPage {
                 },
                 |el, e| {
                     el.child(
-                        div()
-                            .pl(px(60.))
+                        h_flex()
+                            .pl(indent)
+                            .gap_1p5()
+                            .items_start()
                             .text_xs()
                             .text_color(cx.theme().danger)
-                            .whitespace_normal()
-                            .child(e),
+                            .child(
+                                div()
+                                    .pt(px(1.))
+                                    .child(Icon::new(Lucide::CircleAlert).xsmall()),
+                            )
+                            .child(div().whitespace_normal().child(e)),
                     )
                 },
             )
@@ -1013,9 +1262,11 @@ impl ToolsPage {
                     .unwrap_or_default();
                 el.child(
                     div()
-                        .ml(px(60.))
+                        .ml(indent)
                         .p_2()
                         .rounded(cx.theme().radius)
+                        .border_1()
+                        .border_color(cx.theme().border)
                         .bg(cx.theme().secondary)
                         .text_xs()
                         .font_family(mono)
@@ -1026,62 +1277,93 @@ impl ToolsPage {
             })
             .into_any_element()
     }
+
+    /// The list card: column titles, a page of rows and the pager, or the
+    /// empty state.
+    fn render_list(&self, query: &str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = cx.theme().clone();
+        let rows = self.shown(query);
+        let total = rows.len();
+        let selectable = self.selectable(&rows);
+        let all = !selectable.is_empty() && selectable.iter().all(|id| self.selected.contains(id));
+        let pick_all = Checkbox::new("tools-pick-all")
+            .checked(all)
+            .disabled(selectable.is_empty())
+            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                for id in &selectable {
+                    if *checked {
+                        this.selected.insert(*id);
+                    } else {
+                        this.selected.remove(*id);
+                    }
+                }
+                cx.notify();
+            }));
+        let (rows, page) = catalog::page_of(rows, self.page);
+        let card = v_flex()
+            .rounded(theme.radius_lg)
+            .border_1()
+            .border_color(theme.border)
+            .overflow_hidden();
+        if total == 0 {
+            let title = match self.query(cx) {
+                q if q.is_empty() => "No tools here".to_string(),
+                q => format!("No tools match “{q}”"),
+            };
+            return card.child(catalog::empty(
+                title,
+                Button::new("tools-clear-filters")
+                    .outline()
+                    .small()
+                    .icon(Lucide::FunnelX)
+                    .label("Clear Filters")
+                    .on_click(cx.listener(|this, _, window, cx| this.clear_filters(window, cx))),
+                cx,
+            ));
+        }
+        card.child(catalog::header(
+            Some(pick_all.into_any_element()),
+            "Tool",
+            cx,
+        ))
+        .children(rows.into_iter().map(|(ix, t)| self.render_row(ix, t, cx)))
+        .child(catalog::pager(
+            "tools-pages",
+            page,
+            total,
+            if total == 1 { "tool" } else { "tools" },
+            cx.listener(|this, page: &usize, _, cx| {
+                this.page = *page;
+                cx.notify();
+            }),
+            cx,
+        ))
+    }
+
+    fn clear_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.filter = Filter::All;
+        self.category = None;
+        self.page = 0;
+        if let Some(search) = &self.search {
+            search.update(cx, |s, cx| s.set_value("", window, cx));
+        }
+        cx.notify();
+    }
 }
 
 impl Render for ToolsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.search.is_none() {
             let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search tools"));
-            self._search = Some(cx.subscribe(&search, |_, _, e: &InputEvent, cx| {
+            self._search = Some(cx.subscribe(&search, |this, _, e: &InputEvent, cx| {
                 if matches!(e, InputEvent::Change) {
+                    this.page = 0;
                     cx.notify();
                 }
             }));
             self.search = Some(search);
         }
-        let muted = cx.theme().muted_foreground;
         let query = self.query(cx);
-        let mut sections: Vec<AnyElement> = Vec::new();
-        for category in Category::ALL {
-            let rows: Vec<AnyElement> = TOOLS
-                .iter()
-                .enumerate()
-                .filter(|(_, t)| t.category == category && Self::matches(t, &query))
-                .map(|(ix, t)| self.render_row(ix, t, cx))
-                .collect();
-            if rows.is_empty() {
-                continue;
-            }
-            sections.push(
-                div()
-                    .pt_2()
-                    .text_xs()
-                    .font_semibold()
-                    .text_color(muted)
-                    .child(category.title())
-                    .into_any_element(),
-            );
-            sections.push(
-                v_flex()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .overflow_hidden()
-                    .children(rows)
-                    .into_any_element(),
-            );
-        }
-        if sections.is_empty() {
-            sections.push(
-                div()
-                    .pt_2()
-                    .text_sm()
-                    .text_color(muted)
-                    .child(format!("No tools match “{query}”."))
-                    .into_any_element(),
-            );
-        }
-        let progress = self.render_progress(cx);
         div()
             .id("tools-page")
             .size_full()
@@ -1090,11 +1372,13 @@ impl Render for ToolsPage {
             .child(
                 v_flex()
                     .p_6()
-                    .gap_3()
-                    .max_w(px(1080.))
+                    .gap_4()
+                    .max_w(px(1180.))
                     .child(self.render_header(cx))
-                    .children(progress)
-                    .children(sections),
+                    .child(self.render_toolbar(&query, cx))
+                    .children(self.render_progress(cx))
+                    .children(self.render_selection(cx))
+                    .child(self.render_list(&query, cx)),
             )
     }
 }

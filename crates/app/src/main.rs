@@ -1,6 +1,7 @@
 mod assets;
 mod board;
 mod browser;
+mod catalog;
 mod changelog_page;
 mod cli;
 mod code_actions;

@@ -90,8 +90,9 @@ A new window opens on a welcome screen, like Zed's: **Open Folder…**, **New Po
 Picking anything lays the window out for that job. **Continue Without a Project** goes straight to the workspace.
 
 The window is split into a sidebar with ten tabs (**Instances**, **Files**, **Git**, **Database**, **Run**, **Ports**,
-**Network**, **SSH**, **Shell Config**, **Prompts**), a tabbed center area, a terminal dock at the bottom, and a status bar. The status bar shows how many
-instances are running and the project path, with a button that copies the path.
+**Network**, **SSH**, **Config Files**, **Prompts**), a tabbed center area, a terminal dock at the bottom, and a status bar. The status bar shows how many
+instances are running (a click shows them), the Git branch, the project path with a button that copies it, **Install CLI**
+while the `sawit` command isn't installed, and the version.
 
 ### Local PostgreSQL instances
 
@@ -216,6 +217,8 @@ explained. A conflict on the same address can't be forced.
 - Click **Tools** in the title bar for package managers (Homebrew, nvm, pnpm, npm, uv), languages and runtimes
   (Node.js, Bun, Deno, Python, Rust), AI agents (Claude Code, Codex, OpenCode, Amp, …) and terminal apps.
 - Each tool shows whether it's installed, its version and where it lives, and the exact command that installs it.
+- Search the list, narrow it with the **Installed**, **Updates** and **Not Installed** tabs or to one category, and
+  sort it by category, by name or by what needs attention. It shows eight tools a page.
 - When npm or GitHub has a newer release, an installed tool shows `11.21.0 → 12.16.1` and an **Upgrade** button;
   **Upgrade All** upgrades every one of them. Upgrades use the tool's own command (`bun upgrade`, `uv self update`,
   `claude update`, …), or its install script again.
@@ -318,10 +321,16 @@ explained. A conflict on the same address can't be forced.
 - Write `{{variables}}` in a prompt, fill them in its tab, and **Fill & Copy**. Copy a prompt as is from the list.
 - Stored in `prompts.json` in Sawit's data folder.
 
-### Shell config
+### Config files
 
-- The **Shell Config** tab lists the shell startup files on this Mac (`~/.zshrc`, `/etc/profile`, …).
-  Click one to edit it.
+- The **Config Files** tab lists the shell startup files on this Mac (`~/.zshrc`, `/etc/profile`, …), dimming the
+  ones your login shell doesn't read.
+- It also lists the config files of every coding agent installed (Claude Code and Codex with each of their
+  profiles, Gemini CLI, Qwen Code, opencode, Amp, GitHub Copilot CLI, Cursor, Windsurf, Kiro, Goose, Crush and
+  Claude Desktop), on this Mac and in the window's projects: `~/.claude/settings.json`, `.codex/config.toml`,
+  `AGENTS.md`, … Each agent's files come highest priority first, saying where they apply (managed, project,
+  user, …) and what they hold.
+- Search by file, path, description or agent. Click a file to edit it.
 - Right-click a file to reveal it in Finder, open it in its default app, duplicate it (`.zshrc copy`, a quick
   backup), copy its path, move it to the Trash or delete it. The Files tab's shortcuts work here too.
 
@@ -339,7 +348,7 @@ explained. A conflict on the same address can't be forced.
 
 ### Updates & changelog
 
-- Click the version in the title bar for the **Changelog** page: the running version, update status,
+- Click the version in the status bar for the **Changelog** page: the running version, update status,
   notes of a newer release, and the full history.
 - Sawit checks [GitHub Releases](https://github.com/bahrulbangsawan/sawit.dev/releases) on launch and
   every 4 hours. New versions download in the background. Once ready, a **Restart to Update** button appears in the
@@ -375,11 +384,11 @@ saved.
 | Close Clean (tabs without changes) | <kbd>⌘</kbd><kbd>K</kbd> <kbd>U</kbd> |
 | Close All | <kbd>⌘</kbd><kbd>K</kbd> <kbd>W</kbd> |
 | Pin Tab | <kbd>⌘</kbd><kbd>K</kbd> <kbd>⇧</kbd><kbd>↩</kbd> |
-| Files / Shell Config: reveal in Finder | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>R</kbd> |
-| Files / Shell Config: open in default app | <kbd>⌃</kbd><kbd>⇧</kbd><kbd>↩</kbd> |
-| Files / Shell Config: duplicate | <kbd>⌘</kbd><kbd>D</kbd> |
-| Files / Shell Config: copy path | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>C</kbd> |
-| Files / Shell Config: move to Trash / delete | <kbd>⌫</kbd> / <kbd>⌥</kbd><kbd>⌘</kbd><kbd>⌫</kbd> |
+| Files / Config Files: reveal in Finder | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>R</kbd> |
+| Files / Config Files: open in default app | <kbd>⌃</kbd><kbd>⇧</kbd><kbd>↩</kbd> |
+| Files / Config Files: duplicate | <kbd>⌘</kbd><kbd>D</kbd> |
+| Files / Config Files: copy path | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>C</kbd> |
+| Files / Config Files: move to Trash / delete | <kbd>⌫</kbd> / <kbd>⌥</kbd><kbd>⌘</kbd><kbd>⌫</kbd> |
 | Files: new file / new folder | <kbd>⌘</kbd><kbd>N</kbd> / <kbd>⌥</kbd><kbd>⌘</kbd><kbd>N</kbd> |
 | Files: rename | <kbd>F2</kbd> |
 | Files: cut / copy / paste | <kbd>⌘</kbd><kbd>X</kbd> / <kbd>⌘</kbd><kbd>C</kbd> / <kbd>⌘</kbd><kbd>V</kbd> |
@@ -390,7 +399,7 @@ saved.
 
 ## The `sawit` command
 
-Like `zed`, Sawit can be opened from the terminal. Install the command with the **Install CLI** button in the title bar
+Like `zed`, Sawit can be opened from the terminal. Install the command with the **Install CLI** button in the status bar
 (shown only while the command is not installed) or the **Sawit → Install ‘sawit’ Command in PATH…** menu item.
 Both create a symlink `/usr/local/bin/sawit` to the app and ask for an admin password if that folder is owned by
 root.
@@ -498,8 +507,10 @@ and `uninstall_mcp_server` take the name again as `confirm` (so does `remove_ins
 `confirm: true` because they run install scripts from the internet. Passwords never appear in a result.
 
 Click **MCP** in the title bar to install it, along with a catalog of other servers: AWS, Cloudflare, Neon, Postman,
-Figma, Mobbin, Exa and more. Servers that need an account sign in through the client's own sign-in, which the page
-can start for Claude Code and Codex. The page finds the AI clients on this Mac: Claude Code (every
+Figma, Mobbin, Exa and more. Search the catalog, narrow it with the **Installed**, **Not Installed** and
+**Needs Sign-In** tabs or by where a server runs (built in, remote, on this Mac), and sort it. Servers that need an
+account sign in through the client's own sign-in, which the page can start for Claude Code and Codex. The page
+finds the AI clients on this Mac: Claude Code (every
 profile, including `CLAUDE_CONFIG_DIR` folders), Codex (and `CODEX_HOME` profiles), Claude Desktop, Cursor,
 Windsurf, Gemini CLI, Zed, opencode and VS Code. It installs into each with one click and shows where each config
 lives. Claude Code and Codex are changed through their own CLI when it's installed. Other configs are edited in
@@ -588,6 +599,7 @@ crates/core   sawit-core — no GPUI, tested with plain cargo test
   prompts                prompt library and {{variables}}
   git, github            status, diff, log graph, commits, branches; GitHub pull requests and checks
   ssh, shell_config      saved SSH hosts and ~/.ssh/config; shell startup files
+  agent_config           coding agents' config files on this Mac and in projects
   scripts, search        a project's run scripts and saved commands; text search in a folder
   dev_tools              the Tools page catalog, detection, latest releases, install and upgrade
   browser                the browser tab's agent ops, page agent script, console and network logs
