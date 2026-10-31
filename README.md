@@ -41,7 +41,7 @@
 
 Sawit is built for local development with PostgreSQL. This work usually needs Docker Desktop,
 a database client, an editor, a terminal, and a few command-line tools as separate apps. In Sawit
-they all live in a single Rust binary of about **58 MiB** (see [Size & memory](#size--memory)).
+they all live in a single Rust binary of about **60 MiB** (see [Size & memory](#size--memory)).
 The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (the "One Dark" palette).
 
 <p align="center">
@@ -697,20 +697,16 @@ crates/mcp    sawit-mcp — stdio MCP server on top of core and board
 
 ## Size & memory
 
-Measured on an Apple Silicon MacBook (M3, macOS 26.6.1) on 2026-10-31, release build (`lto = "fat"`, `strip`):
+Measured on an Apple Silicon MacBook (M3, macOS 26.6.1) on 2026-11-01, release build (`lto = "fat"`, `strip`):
 
 | | |
 |---|---|
-| `sawit` | 57.6 MiB (single file, no JVM/Chromium/Node runtime; includes the MCP server, reached as `sawit-mcp` through a symlink, the FigCraft canvas engine and the canvas's Inter fonts) |
-| Memory with a large canvas board open (776 layers) | RSS 532 MiB |
-| Clean release build | 10 min 13 s, on a busy machine |
-
-Measured before the native canvas, and not measured again since:
-
-| | |
-|---|---|
-| `Sawit.app` installed · DMG · update zip | 33 MB · 13.5 MB · 17.3 MB |
-| Idle memory (1 window, 1 terminal tab, 10 seconds after launch) | RSS 85 MB · physical footprint 67 MB (peak 115 MB during startup) |
+| `sawit` | 59.8 MiB (single file, no JVM/Chromium/Node runtime; includes the MCP server, reached as `sawit-mcp` through a symlink, the FigCraft canvas engine and the canvas's Inter fonts) |
+| `Sawit.app` installed · DMG · update zip | 62.8 MB · 22.6 MB · 29.6 MB |
+| Idle memory (1 window, 1 terminal tab, 10 seconds after launch) | RSS 114 MB · physical footprint 73 MB (peak 121 MB during startup); the same a minute later |
+| The same with an empty canvas open | Physical footprint 160 MB; up to 380 MB for about half a minute after the first canvas opens, which reads the system's fonts |
+| Memory with a large canvas board open (776 layers, measured on 2026-10-31) | RSS 532 MiB |
+| Clean release build | 14 min 7 s, on a busy machine |
 
 Figures for other apps are not listed because they have not been measured on the same machine.
 
