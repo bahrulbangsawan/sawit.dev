@@ -539,7 +539,9 @@ the agent's project open (or the one `project` names), else the frontmost window
 
 Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`
 and `uninstall_mcp_server` take the name again as `confirm` (so does `remove_instance` when it deletes the data), and `install_dev_tools` and `upgrade_dev_tools` need
-`confirm: true` because they run install scripts from the internet. Passwords never appear in a result.
+`confirm: true` because they run install scripts from the internet. Passwords never appear in a result. Every tool
+also carries MCP's hints (`readOnlyHint`, `destructiveHint`, `openWorldHint`), for clients that let read-only tools
+through or ask before destructive ones.
 
 Click **MCP** in the title bar to install it, along with a catalog of other servers: AWS, Cloudflare, Neon, Postman,
 Figma, Mobbin, Exa and more. Search the catalog, narrow it with the **Installed**, **Not Installed** and **Needs
