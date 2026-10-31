@@ -427,7 +427,10 @@ impl Sawit {
     }
 
     pub async fn canvas_command_tool(&self, a: CanvasCommandArgs) -> CallToolResult {
-        let op = json!({ "op": "command", "command": a.command, "params": a.params });
+        let params = a
+            .params
+            .map(|params| with_files_resolved(&a.command, params));
+        let op = json!({ "op": "command", "command": a.command, "params": params });
         match self.canvas(a.project, op).await {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
@@ -759,6 +762,58 @@ fn is_figcraft(path: &str) -> bool {
 /// that isn't valid UTF-8 comes out with replacement characters, and the canvas says it can't be read.
 fn absolute_path(path: &str) -> String {
     crate::agent_path(path).to_string_lossy().into_owned()
+}
+
+/// The engine's commands that write or read a file or a folder named in one of their parameters,
+/// with that parameter. Every other `path` an engine command takes is no file: SVG path data
+/// (`vector.create`, `board.ink`, `node.create`), a layer (`text.onPath`), a place in a prototype's
+/// actions (`proto.action.*`).
+const FILE_PARAMS: &[(&str, &str)] = &[
+    ("file.export", "path"),
+    ("file.exportSvg", "path"),
+    ("file.exportFramesPdf", "path"),
+    ("file.exportLayers", "dir"),
+    ("data.fill", "dir"),
+    ("variable.export", "path"),
+    ("component.playground", "path"),
+    ("codeConnect.export", "path"),
+    ("codeConnect.import", "path"),
+    ("file.import", "path"),
+    ("file.placeImage", "path"),
+    ("image.place", "path"),
+    ("library.add", "path"),
+    ("text.loadFont", "path"),
+    ("collab.recoverFile", "path"),
+];
+
+/// `params` of engine command `command`, with the file or folder it names ([`FILE_PARAMS`]) made
+/// absolute as the agent means it ([`absolute_path`]), as canvas_load makes its own: the app,
+/// whose folder is not the agent's, runs the command, and the engine reads no `~` (MCP-8). The
+/// steps of a `command.batch` are read the same way. A share link (`library.add` takes one) and
+/// every other parameter go as they are.
+fn with_files_resolved(command: &str, mut params: Value) -> Value {
+    if command == "command.batch" {
+        let steps = params.get_mut("commands").and_then(Value::as_array_mut);
+        for step in steps.into_iter().flatten() {
+            let id = step
+                .get("command")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if let (Some(id), Some(params)) = (id, step.get_mut("params")) {
+                *params = with_files_resolved(&id, params.take());
+            }
+        }
+        return params;
+    }
+    let names_a_file = FILE_PARAMS.iter().find(|(id, _)| *id == command);
+    if let Some((_, key)) = names_a_file
+        && let Some(Value::String(path)) = params.get_mut(*key)
+        && !path.trim().is_empty()
+        && !path.contains("://")
+    {
+        *path = absolute_path(path);
+    }
+    params
 }
 
 /// Where an export goes when no path is given: the project's
@@ -1845,6 +1900,76 @@ mod tests {
 
         // None of it went to the file behind the app's back.
         assert_eq!(layers_in(&board_file(&project)).len(), 3);
+    }
+
+    /// MCP-8: the file or folder an engine command names goes to the canvas as the agent means
+    /// it: `~` for the home folder, and a relative one from the agent's folder. As written it was
+    /// the app's folder's (`/` for Sawit.app) with the app running, and `~/…` was no folder at
+    /// all. What isn't a file is left as it is: SVG path data, a layer's id, a share link, a
+    /// number.
+    #[tokio::test]
+    async fn canvas_command_sends_the_files_it_names_as_the_agent_means_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let asked = fake_app(&server.paths, Vec::new());
+        let here = std::env::current_dir().unwrap();
+        let sent = |command: &str, params: Value| {
+            let run = server.canvas_command_tool(CanvasCommandArgs {
+                command: command.into(),
+                params: Some(params),
+                project: project_arg(&project),
+            });
+            async {
+                let ran = run.await;
+                assert_ne!(ran.is_error, Some(true), "{}", said(&ran));
+                next(&asked)["params"].clone()
+            }
+        };
+
+        let params = sent("file.exportSvg", json!({"path": " rel/page.svg "})).await;
+        assert_eq!(params["path"], json!(here.join("rel/page.svg")));
+        let params = sent("file.exportLayers", json!({"dir": "out", "ids": [1]})).await;
+        assert_eq!(params, json!({"dir": here.join("out"), "ids": [1]}));
+        if let Some(home) = std::env::var_os("HOME") {
+            let params = sent("image.place", json!({"path": "~/Desktop/a.png"})).await;
+            let placed = Path::new(&home).join("Desktop").join("a.png");
+            assert_eq!(params["path"], json!(placed));
+        }
+        for (command, params) in [
+            ("vector.create", json!({"path": "M0 0 L10 0", "x": 0})),
+            ("board.ink", json!({"path": "M0 0 L10 10"})),
+            ("text.onPath", json!({"path": "12"})),
+            ("library.add", json!({"path": "https://share.example/f/1"})),
+            ("comment.next", json!({"dir": 1})),
+            ("file.exportSvg", json!({"path": "/abs/page.svg"})),
+        ] {
+            assert_eq!(sent(command, params.clone()).await, params, "{command}");
+        }
+        let batch = json!({"commands": [
+            {"command": "file.exportSvg", "params": {"path": "b.svg"}},
+            {"command": "vector.create", "params": {"path": "M0 0"}},
+            {"command": "file.exportSvg", "params": {"$step": 0}},
+        ]});
+        let steps = sent("command.batch", batch).await["commands"].clone();
+        assert_eq!(steps[0]["params"]["path"], json!(here.join("b.svg")));
+        assert_eq!(steps[1]["params"]["path"], json!("M0 0"));
+        assert_eq!(steps[2]["params"], json!({"$step": 0}));
+    }
+
+    /// Every command [`FILE_PARAMS`] names is one canvas_command runs, and takes that parameter:
+    /// a command the engine renamed or dropped would leave its files read from the app's folder.
+    #[test]
+    fn the_commands_that_take_a_file_are_the_engines() {
+        let mut board = BoardDoc::new_board("Canvas").unwrap();
+        let reply = ops::run(&mut board, &json!({"op": "commands"}));
+        let commands = reply["commands"].as_array().unwrap();
+        for (id, key) in FILE_PARAMS {
+            let command = commands.iter().find(|c| c["id"] == json!(id));
+            let params = command.map(|c| c["params"].as_str().unwrap_or_default());
+            let params = params.unwrap_or_else(|| panic!("{id} is no command"));
+            assert!(params.contains(key), "{id} takes no {key}: {params}");
+        }
     }
 
     #[tokio::test]
