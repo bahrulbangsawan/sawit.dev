@@ -254,6 +254,8 @@ explained. A conflict on the same address can't be forced.
   field (text that isn't a URL is searched), the device menu, **Annotate**, **Design**, **Open in Default Browser**
   and the Web Inspector.
 - Cookies and storage are kept per project, so being signed in to one app doesn't leak into another.
+- A link to another app (`mailto:`, `zoommtg:`, …) asks before it opens. After **Cancel**, the page's links to other
+  apps do nothing until you reload it or open another page.
 - **Keys**: once you click the page (or press Enter in the address field), <kbd>⌘</kbd><kbd>C</kbd>,
   <kbd>⌘</kbd><kbd>X</kbd>, <kbd>⌘</kbd><kbd>V</kbd> and <kbd>⌘</kbd><kbd>A</kbd> act in the page, through the
   **Edit** menu. Sawit's own shortcuts (<kbd>⌘</kbd><kbd>W</kbd>, <kbd>⌘</kbd><kbd>T</kbd>,

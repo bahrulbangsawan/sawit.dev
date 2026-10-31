@@ -977,7 +977,7 @@ impl BrowserView {
 
     /// The page went to a link another app handles: asks the user before opening it, one
     /// link at a time; after a "Cancel" the page asks no more until the user or an agent opens
-    /// a page.
+    /// a page or reloads it, which the question says.
     fn open_external(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) {
         if !self.external.ask() {
             return;
@@ -989,7 +989,10 @@ impl BrowserView {
         let answer = window.prompt(
             PromptLevel::Info,
             "Open this link in another app?",
-            Some(&format!("The page asked to open {shown}")),
+            Some(&format!(
+                "The page asked to open {shown}. If you cancel, the page's links to other apps do \
+                 nothing until you reload it or open another page."
+            )),
             &["Open", "Cancel"],
             cx,
         );
@@ -1036,6 +1039,11 @@ impl BrowserView {
         {
             let _ = tx.send(Ok(answer));
             return rx;
+        }
+        // Reloaded by the user (the toolbar) or an agent: the page's links to other apps may ask
+        // again, as after opening a page. A page's own reload doesn't come this way.
+        if op == BrowserOp::Reload {
+            self.external.reset();
         }
         if self.engine.is_none() {
             self.queued.push((op, tx));
@@ -1572,7 +1580,7 @@ impl ExternalGate {
         self.refused = !open;
     }
 
-    /// The user or an agent opened a page: its links may ask again.
+    /// The user or an agent opened a page, or reloaded it: its links may ask again.
     fn reset(&mut self) {
         self.refused = false;
     }
@@ -2118,6 +2126,37 @@ mod tests {
             cx.has_pending_prompt(),
             "a page the user opened may ask again"
         );
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+    }
+
+    /// After a Cancel the page's further links to other apps are dropped, so the question says
+    /// so, and how to have them ask again: they were dropped without a word, and looked dead.
+    /// A reload the user or an agent asks for lets them ask again, as opening a page does; a
+    /// page's own reload doesn't come this way, so it can't loop the question.
+    #[gpui_kit::test]
+    fn after_a_cancel_a_reload_lets_links_ask_again(cx: &mut gpui_kit::TestAppContext) {
+        use super::EngineEvent::External;
+        use sawit_core::browser::BrowserOp;
+        let (view, cx) = test_browser(cx);
+        engine_event(&view, External("zoommtg://join?confno=1".into()), cx);
+        let (_, detail) = cx.pending_prompt().expect("the user is asked");
+        assert!(detail.contains("zoommtg://join?confno=1"), "{detail}");
+        assert!(
+            detail.contains("reload"),
+            "Cancel isn't explained: {detail}"
+        );
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        engine_event(&view, External("zoommtg://join?confno=2".into()), cx);
+        assert!(
+            !cx.has_pending_prompt(),
+            "after a Cancel the page asks no more"
+        );
+
+        cx.update(|_, cx| view.update(cx, |b, cx| drop(b.apply(BrowserOp::Reload, cx))));
+        engine_event(&view, External("zoommtg://join?confno=3".into()), cx);
+        assert!(cx.has_pending_prompt(), "a reload lets the page ask again");
         cx.simulate_prompt_answer("Cancel");
         cx.run_until_parked();
     }

@@ -1470,8 +1470,10 @@ checkout of main), and `localhost:8765/annotate.html` open in the Browser.
   ```
 - Click the link. Look for: "Open this link in another app?", naming `mailto:me@example.com`. Open hands it to
   Mail, as a new message to that address.
-- Click it again and choose Cancel, then click it once more. Look for: nothing opens and nothing asks. Open the page
-  again from the address bar: the link asks again.
+- Click it again: the question also says "If you cancel, the page's links to other apps do nothing until you reload
+  it or open another page." Choose Cancel, then click it once more. Look for: nothing opens and nothing asks. Click
+  the toolbar's Reload: the link asks again (review-browser m5). Cancel, then open the page again from the address
+  bar: it asks again too.
 
 Answer: ______
 
