@@ -468,6 +468,30 @@ pub fn keys_for(action: &dyn Action, context: &str, window: &Window) -> SharedSt
         .unwrap_or_default()
 }
 
+/// [`keys_for`] with the focus deeper, in `path`, the contexts from the outermost in (`["GitCommitMessage",
+/// "Input"]`): for a binding whose context is a path (`GitCommitMessage > Input`), which no
+/// single context matches. As GPUI's own lookup, a binding counts where it matches and no other
+/// binding of its keys runs first.
+pub fn keys_for_path(action: &dyn Action, path: &[&str], cx: &App) -> SharedString {
+    let stack: Vec<KeyContext> = path
+        .iter()
+        .map(|context| KeyContext::parse(context).unwrap_or_default())
+        .collect();
+    let keymap = cx.key_bindings();
+    let keymap = keymap.borrow();
+    keymap
+        .bindings_for_action(action)
+        .rev()
+        .find(|binding| {
+            let (found, _) = keymap.bindings_for_input(binding.keystrokes(), &stack);
+            found
+                .first()
+                .is_some_and(|first| first.action().partial_eq(binding.action()))
+        })
+        .map(|binding| names::display(binding.keystrokes()).into())
+        .unwrap_or_default()
+}
+
 /// The row of `binding` from `source`.
 fn row(source: Source, binding: &KeyBinding) -> Row {
     let action = binding.action();

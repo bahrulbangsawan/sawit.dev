@@ -52,7 +52,7 @@ pub struct GitPanel {
 impl GitPanel {
     pub fn new(store: Entity<GitStore>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let message =
-            cx.new(|cx| TextareaState::new(window, cx).placeholder(commit_placeholder(window)));
+            cx.new(|cx| TextareaState::new(window, cx).placeholder(commit_placeholder(cx)));
         let new_branch = cx.new(|cx| InputState::new(window, cx).placeholder("New branch name"));
         let subscriptions = vec![
             cx.observe(&store, |_, _, cx| cx.notify()),
@@ -549,6 +549,10 @@ impl GitPanel {
             "Commit".to_string()
         };
         let empty = self.message.read(cx).value().trim().is_empty();
+        let commit_tooltip = match commit_keys(cx) {
+            keys if keys.is_empty() => "Commit".to_string(),
+            keys => format!("Commit ({keys})"),
+        };
         v_flex()
             .p_2()
             .gap_1p5()
@@ -595,11 +599,7 @@ impl GitPanel {
                                 if conflicts > 0 {
                                     button.tooltip("Resolve the conflicts first")
                                 } else {
-                                    button.tooltip_with_action(
-                                        "Commit",
-                                        &super::Commit,
-                                        Some("GitCommitMessage"),
-                                    )
+                                    button.tooltip(commit_tooltip)
                                 }
                             })
                             .on_click(cx.listener(|this, _, window, cx| this.commit(window, cx))),
@@ -968,9 +968,15 @@ impl Render for GitPanel {
     }
 }
 
-/// The commit message box's placeholder, with the keys that commit as the keymap binds them.
-fn commit_placeholder(window: &Window) -> String {
-    match crate::keymap::keys_for(&super::Commit, "GitCommitMessage", window) {
+/// The keys that commit from the message box, as the keymap binds them (`⌘↩`), or none.
+fn commit_keys(cx: &App) -> SharedString {
+    crate::keymap::keys_for_path(&super::Commit, &["GitCommitMessage", "Input"], cx)
+}
+
+/// The commit message box's placeholder, with the keys that commit in it as the keymap binds
+/// them.
+pub(super) fn commit_placeholder(cx: &App) -> String {
+    match commit_keys(cx) {
         keys if keys.is_empty() => "Commit message".into(),
         keys => format!("Commit message ({keys} to commit)"),
     }
