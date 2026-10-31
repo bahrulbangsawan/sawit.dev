@@ -283,6 +283,14 @@ impl TerminalView {
         self.shell && !self.exited && self.session.at_prompt()
     }
 
+    /// A plain shell waiting at its prompt: what commands from elsewhere (an agent's, a
+    /// preview's Run) may be typed into, and what follows the first project's folder. A Run
+    /// panel script's terminal is a shell too, waiting at its prompt between runs, but it
+    /// stays the script's: what runs there is read as the script running.
+    pub fn idle_shell(&self) -> bool {
+        self.at_prompt() && self.remote.is_none() && self.job.is_none()
+    }
+
     /// The command the shell is running, by process group.
     pub fn foreground_job(&self) -> Option<u32> {
         if self.exited {

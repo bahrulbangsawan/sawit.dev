@@ -110,11 +110,7 @@ impl TerminalPanel {
         if let Some(dir) = self.cwd.clone().filter(|_| first) {
             let idle: Vec<(usize, PaneId, bool)> = self
                 .all_panes(cx)
-                .filter(|(_, _, v)| {
-                    // `ssh` itself is "at the prompt"; the folder is local anyway.
-                    let v = v.read(cx);
-                    v.remote.is_none() && v.job.is_none() && v.at_prompt()
-                })
+                .filter(|(_, _, v)| v.read(cx).idle_shell())
                 .map(|(ix, pane, v)| (ix, pane, v.read(cx).touched))
                 .collect();
             for (ix, pane, touched) in idle {
@@ -318,9 +314,10 @@ impl TerminalPanel {
     /// focused pane if its shell is at its prompt, else the newest pane in
     /// any tab whose shell is, else a new shell tab. A shell running a
     /// program (an agent, an editor, `cat`) is left alone: the program would
-    /// get the command line and the Enter.
+    /// get the command line and the Enter. So is a Run panel script's shell,
+    /// even between runs.
     pub fn run(&mut self, commands: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let idle = |v: &Entity<TerminalView>| v.read(cx).at_prompt();
+        let idle = |v: &Entity<TerminalView>| v.read(cx).idle_shell();
         let in_active = self.tabs.get(self.active).and_then(|t| {
             let t = t.read(cx);
             idle(t.focused_view()).then_some((self.active, t.state.focused))
@@ -1391,6 +1388,65 @@ mod tests {
         cx.update(|cx| assert_eq!(panel.read(cx).tab_count(), 3));
         assert!(active(cx, &panel) == c, "the active tab moved off C");
         assert!(has_keyboard(cx, w, &c));
+    }
+
+    /// `run` never types into a Run panel script's terminal, even once the script has ended
+    /// and its shell waits at its prompt: the script would then read as running again, and
+    /// its Stop would interrupt the other command.
+    #[gpui_kit::test]
+    fn run_leaves_a_finished_scripts_shell_alone(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        let shell = cx.update(|cx| panel.read(cx).tab(0).read(cx).focused_view().clone());
+        wait_until(cx, "the shell is at its prompt", |cx| {
+            shell.read(cx).at_prompt()
+        });
+        let tag = JobTag {
+            key: "build".into(),
+            name: "build".into(),
+        };
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| {
+                p.start_job(
+                    tag,
+                    std::env::temp_dir(),
+                    "printf 'sawit-%s\\n' built",
+                    Some(window),
+                    cx,
+                )
+            })
+        })
+        .expect("the test window is open");
+        let job = cx.update(|cx| {
+            let p = panel.read(cx);
+            p.tab(p.active_index()).read(cx).focused_view().clone()
+        });
+        wait_until(cx, "the script ran and its shell is at its prompt", |cx| {
+            let v = job.read(cx);
+            v.text_tail(50).contains("sawit-built") && v.at_prompt()
+        });
+
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.run("printf 'sawit-%s\\n' other", window, cx))
+        })
+        .expect("the test window is open");
+        wait_until(cx, "the command ran", |cx| {
+            let ran =
+                |v: &Entity<super::TerminalView>| v.read(cx).text_tail(50).contains("sawit-other");
+            ran(&shell) || ran(&job)
+        });
+        cx.update(|cx| {
+            assert!(
+                !job.read(cx).text_tail(50).contains("sawit-other"),
+                "the command went into the script's terminal"
+            );
+            assert!(shell.read(cx).text_tail(50).contains("sawit-other"));
+            let status = panel
+                .read(cx)
+                .job_status("build", cx)
+                .expect("the script's tab");
+            assert_eq!(status.running, None, "the script reads as running");
+        });
     }
 
     #[gpui_kit::test]
