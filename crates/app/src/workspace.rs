@@ -41,7 +41,7 @@ use crate::ssh::{SshEvent, SshHostEvent, SshHostView, SshPanel, SshStore, SshSto
 use crate::states::Placeholder;
 use crate::tab_groups::{group_header, group_stripe, project_name};
 use crate::tabs::{
-    CloseOp, Shown, Slot, TabFlags, active_after, active_after_move, insert_index, strip, to_close,
+    CloseOp, Drawn, Slot, TabFlags, active_after, active_after_move, insert_index, strip, to_close,
 };
 use crate::terminal::{Origin, TerminalPanel, ToggleMaximize};
 use crate::tools_page::{ToolsEvent, ToolsPage};
@@ -1375,14 +1375,14 @@ impl Workspace {
         let weak = cx.entity().downgrade();
         let projects = self.roots(cx);
         // A header in front of each group's run of tabs; a folded group shows its active tab only.
-        let shown = strip(&self.slots(), self.active, |g| self.collapsed.contains(g));
-        let mut items: Vec<AnyElement> = Vec::with_capacity(shown.len());
+        let drawn = strip(&self.slots(), self.active, |g| self.collapsed.contains(g));
+        let mut items: Vec<AnyElement> = Vec::with_capacity(drawn.len());
         // The active tab's place among the bar's children, which a scroll goes by.
         let mut active_child = None;
-        for item in shown {
+        for item in drawn {
             let ix = match item {
-                Shown::Tab(ix) => ix,
-                Shown::Header { first, count } => {
+                Drawn::Tab(ix) => ix,
+                Drawn::Header { first, count } => {
                     if let Some(root) = self.tabs[first].group.clone() {
                         items.push(self.render_group_header(first, count, root, cx));
                     }

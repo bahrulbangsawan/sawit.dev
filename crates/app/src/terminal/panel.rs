@@ -22,7 +22,7 @@ use super::view::TerminalView;
 use super::{SplitDown, SplitRight};
 use crate::states::{Banner, Placeholder};
 use crate::tab_groups::{group_color, group_header, group_stripe, project_name};
-use crate::tabs::{Shown, Slot, insert_index, project_of, strip};
+use crate::tabs::{Drawn, Slot, insert_index, project_of, strip};
 
 pub struct TerminalPanel {
     tabs: Vec<Entity<TerminalTab>>,
@@ -1101,14 +1101,14 @@ impl Render for TerminalPanel {
         let weak = cx.entity().downgrade();
         // A header in front of each group's run of tabs; a folded group shows its active tab only.
         let groups = self.groups(cx);
-        let shown = strip(&slots(&groups), self.active, |g| self.collapsed.contains(g));
-        let mut tabs: Vec<AnyElement> = Vec::with_capacity(shown.len());
+        let drawn = strip(&slots(&groups), self.active, |g| self.collapsed.contains(g));
+        let mut tabs: Vec<AnyElement> = Vec::with_capacity(drawn.len());
         // The active tab's place among the strip's children, which a scroll goes by.
         let mut active_child = None;
-        for item in shown {
+        for item in drawn {
             let ix = match item {
-                Shown::Tab(ix) => ix,
-                Shown::Header { first, count } => {
+                Drawn::Tab(ix) => ix,
+                Drawn::Header { first, count } => {
                     if let Some(root) = groups[first].clone() {
                         tabs.push(self.render_group_header(first, count, root, cx));
                     }
