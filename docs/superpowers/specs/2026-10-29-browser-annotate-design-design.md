@@ -121,7 +121,7 @@ clicking Export leaves a folder Claude can build a matching UI from.
 
 ### Annotation markdown
 
-```markdown
+````markdown
 # Visual feedback — <document title>
 **URL:** <url> · **Viewport:** 393×852 (iPhone 15)
 
@@ -135,9 +135,15 @@ clicking Export leaves a folder Claude can build a matching UI from.
 - **Screenshot:** /Users/me/app/.nyawit/annotations/2026-10-29/localhost-5173-1.png
 
 ## Console errors on <current url> (2)
-- `+12.3s` Uncaught TypeError: Cannot read properties of undefined (reading 'id') — app.js:88
+```text
++12.3s Uncaught TypeError: Cannot read properties of undefined (reading 'id') — app.js:88
 ```
+````
 
+- What the page wrote (its title and address, an element's id, classes, text, styles and source, console
+  errors) is kept to data, since the markdown reaches the agent as the user's own turn: one line each, code
+  spans its backticks can't close, and the console errors in a fenced block with their later lines indented.
+  Only the comment is the user's text, as typed.
 - With annotations on several URLs, each URL gets its own `# Visual feedback` header block, the
   current page first. Console errors are those of the current page since its last navigation,
   newest 20. Their time is seconds since that page started.
