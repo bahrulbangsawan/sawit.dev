@@ -59,10 +59,10 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🖥️ **A real terminal** | Full `alacritty_terminal` emulation, fullscreen with one click, and built-in split panes with a right-click pane menu. |
 | 📡 **Ports & network** | See and stop every dev server you started, and diagnose your internet connection step by step. |
 | 💬 **Prompt library** | Save the prompts you reuse, with tags and `{{variables}}` to fill in before copying. |
-| 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with Web Inspector, and that AI agents drive through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
+| 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with device sizes and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (112 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (117 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 
 ## Install
 
@@ -233,16 +233,29 @@ explained. A conflict on the same address can't be forced.
 <img src="docs/media/browser.png" alt="Browser tab showing the acme-store demo shop on localhost:5173, with back, forward, reload, the address field and a Web Inspector button above the page" width="100%">
 
 - Click **Browser** in the title bar for a web browser tab (WebKit). With nothing typed, it opens the project's
-  running dev server. The toolbar has back, forward, reload, an address field (text that isn't a URL is searched)
-  and the Web Inspector.
+  running dev server. The toolbar has back, forward, reload, an address field (text that isn't a URL is searched),
+  the device menu, **Annotate**, **Design**, **Open in Default Browser** and the Web Inspector.
 - Cookies and storage are kept per project, so being signed in to one app doesn't leak into another.
+- **Device sizes**: the device menu lays the page out as an iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop or
+  Desktop, scaled to fit the tab. **Rotate** turns the device, and **Responsive** fills the tab again.
+- **Annotate** (<kbd>⌘</kbd><kbd>⇧</kbd><kbd>.</kbd>): click elements on the page and write what should change. Each
+  note carries the element's selector, styles, a screenshot and, in a dev build, its source file. **Copy** the notes
+  as Markdown, or **Send to terminal** to paste them into Claude Code (or a shell) without pressing Enter; both can
+  add the page's console errors. Screenshots go to `.nyawit/annotations/`.
+- **Design**: inspect any element (box model, typography, colors with contrast, hover and focus states) and copy it
+  as CSS, Tailwind or HTML. The panel also lists the page's colors, fonts and assets, and derives its design system:
+  palette ramps, type scale, spacing, radius and shadows. **Export** writes `DESIGN.md`, DTCG tokens, a Tailwind v4
+  theme, shadcn/ui variables, sample components and the assets to `.nyawit/design/<host>/` (with no project, to
+  `~/Downloads/sawit-design/<host>/`).
 - AI agents drive it through the `browser_*` MCP tools: open pages, read the page as an accessibility outline,
   click, type, pick options, press keys, scroll, wait for text, run JavaScript, and read the console, failed
-  requests and screenshots.
+  requests and screenshots. They can also set a device size, read your annotations, and inspect, read or export
+  the page's design.
 
 ### Canvas
 
 <img src="docs/media/canvas.png" alt="Canvas: a Mermaid flowchart of the demo app turned into editable shapes, with boxes for the browser, acme-store, the checkout API, payments, acme-admin, an AI agent and the shop database" width="100%">
+<br><sub>This screenshot still shows the old Excalidraw canvas until the media is recorded again.</sub>
 
 - Click **Canvas** in the title bar, or press <kbd>⌃</kbd><kbd>⌘</kbd><kbd>C</kbd>, for a native whiteboard and
   design canvas on the [FigCraft](https://github.com/storytold/figcraft) engine. It saves by itself.
@@ -263,7 +276,8 @@ explained. A conflict on the same address can't be forced.
 - **Menus and shortcuts**: the ≡ button opens the main menu, and a right-click opens the context menu.
   <kbd>⌘</kbd><kbd>K</kbd> (or <kbd>⌘</kbd><kbd>/</kbd>) opens the **Actions** palette, which finds any menu command
   by name, and <kbd>⌃</kbd><kbd>⇧</kbd><kbd>?</kbd> lists every shortcut. While the canvas has the keyboard,
-  <kbd>⌘</kbd><kbd>K</kbd> belongs to the palette, so the tab chords that start with it don't work there.
+  <kbd>⌘</kbd><kbd>K</kbd> belongs to the palette, so the chords that start with it (the tab chords, and
+  <kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd> for the Keymap Editor) don't work there.
 - **Where files live**: the project's canvas is `.nyawit/canvas.figcraft` in its folder. With no project it is
   `canvas.figcraft` in Sawit's data folder. Exports go to `.nyawit/exports/`, or to `exports/` in the data folder
   with no project or for a canvas file outside a project's `.nyawit/` (a `.figcraft` opened from the Files tab, say),
@@ -295,6 +309,7 @@ explained. A conflict on the same address can't be forced.
 
 - One row per command you started (`npm run dev`, `bun run dev`, `pnpm dev`, a database, …), with its ports
   and project folder. **Dev** shows the servers you started; **All** shows every app that listens on a port.
+- Click a port (`:5173`) to open it in the **Browser** tab; <kbd>⌘</kbd>-click opens it in your default browser.
 - **Stop** a row to stop the whole command, launcher and children, so nothing respawns. Select several rows to
   stop them together. Anything still running after a moment can be **force-stopped**.
 - Filter by port, command or folder. The list refreshes every few seconds.
@@ -358,11 +373,11 @@ explained. A conflict on the same address can't be forced.
 ## Keyboard shortcuts
 
 These are the defaults. Every shortcut can be changed in the **Keymap Editor**
-(<kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd>, the keyboard button in the title bar, or
-Sawit ▸ Keymap Editor). It lists each binding of every feature, including the workspace, panels,
-editors, terminal, Git, inputs, and the native canvas's commands, with its action, arguments,
-keys, context and source. From it you can change, add, remove or restore a binding, find bindings
-by their keys, and see which ones clash. Your changes go to
+(<kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd>, the keyboard button in the title bar,
+Sawit ▸ Keymap Editor, or an agent's `app_open_page` with `keymap`). It lists each binding of every
+feature, including the workspace, panels, editors, terminal, Git, inputs, and the native canvas's
+commands, with its action, arguments, keys, context and source. From it you can change, add, remove
+or restore a binding, find bindings by their keys, and see which ones clash. Your changes go to
 `~/Library/Application Support/sawit/keymap.json` in Zed's keymap format (*Edit in JSON*,
 <kbd>⌘</kbd><kbd>E</kbd>). You can also edit that file by hand: Sawit applies it as soon as it is
 saved.
@@ -479,7 +494,7 @@ sawit pupuk bun -y                           # upgrade one tool without asking
 
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 112 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 117 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it).
 
 | Area | Tools |
@@ -497,9 +512,9 @@ except the app-control ones, which drive the running app (`launch_app` starts it
 | Files | `search_files` |
 | Dev tools | `list_dev_tools` (with newer releases), `install_dev_tools`, `upgrade_dev_tools` |
 | MCP servers | `list_mcp_servers`, `install_mcp_server`, `uninstall_mcp_server` |
-| App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page`, `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
-| Terminal (app running) | `terminal_run`, `terminal_read`, `terminal_input`, `terminal_close` |
-| Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot` |
+| App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, changelog, git_graph, github, instance, keymap), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
+| Terminal (app running) | `terminal_run`, `terminal_read`, `terminal_input`, `terminal_close` (read, input and close can address one `pane` of a split tab) |
+| Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (what the user annotated), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`) |
 | Canvas | `canvas_get`, `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear`, `canvas_load`, `canvas_export`, `canvas_command` (any command of the canvas engine, by id), `canvas_commands` (lists them; pass a `filter` to see what each takes). All of them work on the saved canvas file when the app is closed |
 
 Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`
@@ -589,6 +604,7 @@ crates/core   sawit-core — no GPUI, tested with plain cargo test
   pgctl, control         status/initdb/start/stop/restart + log tail
   binaries, download     binary detection + download via postgresql_archive
   instances, recent      TOML registry, app paths, validation, recent folders
+  nyawit                 a project's .nyawit/ folder: its canvas, exports, diagrams, annotations and design exports
   db                     profiles, DATABASE_URL/.env, TLS, schema, paging, SQL, read-only, diagrams,
                          bulk edits, CSV/Excel export, pg_dump backups, CSV import
   keychain               passwords in the macOS Keychain
@@ -602,7 +618,9 @@ crates/core   sawit-core — no GPUI, tested with plain cargo test
   agent_config           coding agents' config files on this Mac and in projects
   scripts, search        a project's run scripts and saved commands; text search in a folder
   dev_tools              the Tools page catalog, detection, latest releases, install and upgrade
-  browser                the browser tab's agent ops, page agent script, console and network logs
+  browser                the browser tab's agent ops and page scripts, device sizes, console and network logs
+  annotations, date      Annotate's notes, their Markdown and screenshot names; calendar dates
+  site_design            the Design panel's colors (OKLCH, contrast, ramps), tokens, Tailwind classes and export files
   mcp_clients, mcp_catalog, mcp_auth   MCP install into AI clients, the server catalog, client sign-in
   app_control, update, cli    control socket for agents, self-update, the sawit command
   kebun                  sawit <db>, list, bakar, panen, backup, tanam, pasang, pupuk (no app needed)
@@ -638,11 +656,11 @@ crates/mcp    sawit-mcp — stdio MCP server on top of core and board
 
 ## Size & memory
 
-Measured on an Apple Silicon MacBook (M3, macOS 26.6) on 2026-10-31, release build (`lto = "fat"`, `strip`):
+Measured on an Apple Silicon MacBook (M3, macOS 26.6.1) on 2026-10-31, release build (`lto = "fat"`, `strip`):
 
 | | |
 |---|---|
-| `sawit` | 57.6 MiB (single file, no JVM/Chromium/Node runtime; includes the MCP server, reached as `sawit-mcp` through a symlink, and the FigCraft canvas engine with its Inter fonts) |
+| `sawit` | 57.6 MiB (single file, no JVM/Chromium/Node runtime; includes the MCP server, reached as `sawit-mcp` through a symlink, the FigCraft canvas engine and the canvas's Inter fonts) |
 | Memory with a large canvas board open (776 layers) | RSS 532 MiB |
 | Clean release build | 10 min 13 s, on a busy machine |
 
@@ -676,4 +694,4 @@ Figures for other apps are not listed because they have not been measured on the
 
 <sub>Screenshots and video in `docs/media/` were recorded from a release build with demo data (separate `SAWIT_HOME`,
 Homebrew PostgreSQL 16). The canvas screenshot and the end of the demo show the Excalidraw canvas that the native
-canvas replaced.</sub>
+canvas replaced, and the browser screenshot predates the toolbar's device menu, Annotate and Design.</sub>
