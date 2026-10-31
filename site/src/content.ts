@@ -121,7 +121,7 @@ export const faq = [
   },
   {
     q: 'How does it update?',
-    a: 'After the first install the app updates itself. Put SAWIT_VERSION=v0.0.8 before sh to install a given version.',
+    a: 'After the first install the app updates itself. To install a given release instead of the latest, put SAWIT_VERSION=vX.Y.Z (a tag from the releases page) before sh.',
   },
   {
     q: 'Can I edit a single cell in the grid?',

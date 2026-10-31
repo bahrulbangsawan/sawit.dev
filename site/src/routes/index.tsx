@@ -423,7 +423,7 @@ function Install() {
                 <svg aria-hidden="true">
                   <use href="#i-check" />
                 </svg>
-                Pin a version with SAWIT_VERSION=v0.0.8
+                Install a given release with SAWIT_VERSION=vX.Y.Z
               </li>
               <li>
                 <svg aria-hidden="true">
