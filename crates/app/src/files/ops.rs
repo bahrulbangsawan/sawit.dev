@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use objc2_foundation::{NSFileManager, NSURL};
 use sawit_core::files;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Op {
     Create {
         path: PathBuf,
@@ -68,6 +68,16 @@ impl Op {
             Op::Create { path, .. } => Some(path),
             Op::Move { to, .. } | Op::Copy { to, .. } | Op::Restore { to, .. } => Some(to),
             Op::Trash(_) => None,
+        }
+    }
+
+    /// What it changes: the file or folder it moves, copies or trashes, or for a new one, the
+    /// folder it goes in.
+    pub fn source(&self) -> &Path {
+        match self {
+            Op::Create { path, .. } => path.parent().unwrap_or(path),
+            Op::Move { from, .. } | Op::Copy { from, .. } | Op::Restore { from, .. } => from,
+            Op::Trash(path) => path,
         }
     }
 
