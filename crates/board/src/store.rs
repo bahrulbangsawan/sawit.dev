@@ -60,6 +60,10 @@ pub fn open(path: &Path) -> Result<BoardDoc, BoardError> {
 ///   imported is an error that names it, and then nothing is made either; no new board takes its
 ///   place, because the first save would hide it.
 /// - A corrupt or truncated file is `Err(BoardError::Format)`, and stays as it is.
+/// - Only a regular file is read, of at most [`MAX_FILE`] bytes ([`files::read_regular`]): a
+///   named pipe, or a link a cloned repository holds to a device such as `/dev/zero`, is refused
+///   at once, where its read blocked the UI thread for ever, or until the Mac ran out of memory
+///   (CANVAS-CORE-6). The error, `Err(BoardError::Io)`, says so.
 /// - A file opens with its version history and branches, which a save writes back
 ///   ([`BoardDoc::to_bytes`]). Images past the loader's limits stay in the file, unread, so a save
 ///   over it is refused ([`BoardDoc::refuse_dropping_images`]); one elsewhere isn't.
@@ -68,7 +72,7 @@ pub fn open(path: &Path) -> Result<BoardDoc, BoardError> {
 ///   either: it stays as it is rather than get saved over unprotected. The copy has a name of its
 ///   own: the backups that an emptying save keeps ([`Writer::save`]) move along, and go.
 pub fn open_with_issues(path: &Path) -> Result<(BoardDoc, Vec<String>), BoardError> {
-    let bytes = match std::fs::read(path) {
+    let bytes = match files::read_regular(path, MAX_FILE) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return open_missing(path),
         Err(e) => {
@@ -101,6 +105,11 @@ fn keep_copy(bak: &Path, bytes: &[u8], of: &Path) -> Result<(), sawit_core::Core
     let mode = std::fs::metadata(of).map_or(0o644, |meta| meta.permissions().mode() & 0o777);
     files::replace_file(bak, bytes, std::fs::Permissions::from_mode(mode))
 }
+
+/// The most a canvas file may hold to be opened: 4 GiB, as much as all the images FigCraft reads
+/// from one file (its `IMAGE_BUDGET`), and far more than a canvas holds. The file is read whole,
+/// on the UI thread, before it is opened.
+pub const MAX_FILE: u64 = 4 * 1024 * 1024 * 1024;
 
 /// What the canvas file `path`, which isn't there, opens as: the old canvas beside it imported,
 /// else a new board.
@@ -535,7 +544,7 @@ pub fn backup_file(path: &Path, n: usize) -> PathBuf {
 /// kept again, so that a clear of a board cleared before moves none along. A folder at one of
 /// their names stops it, and the save: it is moved nowhere.
 fn keep_backup(path: &Path) -> Result<(), String> {
-    let old = match std::fs::read(path) {
+    let old = match files::read_regular(path, MAX_FILE) {
         Ok(old) => old,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(e) => {
@@ -710,6 +719,81 @@ mod tests {
         let err = open(&path).err().unwrap();
         assert!(matches!(err, BoardError::Io(_)), "{err:?}");
         assert!(err.to_string().contains("canvas.figcraft"), "{err}");
+    }
+
+    /// Runs `f` on a thread of its own and gives what it returned, or `None` when it hadn't
+    /// returned within 5 s (the thread is left as it is).
+    fn within_seconds<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(5)).ok()
+    }
+
+    /// Makes a named pipe at `path`.
+    fn pipe_at(path: &Path) {
+        let made = std::process::Command::new("mkfifo").arg(path).status();
+        assert!(made.unwrap().success(), "mkfifo {}", path.display());
+    }
+
+    /// CANVAS-CORE-6: opening a canvas reads its file on the UI thread (and in sawit-mcp, holding
+    /// every other canvas call back). A file that is a named pipe blocked it for ever, and one a
+    /// cloned repository links to `/dev/zero` read zeros until the Mac ran out of memory. Both
+    /// are refused at once now, as an `.excalidraw` file opened from Files is.
+    #[test]
+    fn a_canvas_file_that_is_a_pipe_is_refused_at_once() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("canvas.figcraft");
+        pipe_at(&path);
+        let opened = within_seconds(move || open_with_issues(&path).map(|_| ()));
+        let error = opened.expect("opening a pipe never returned").unwrap_err();
+        assert!(matches!(error, BoardError::Io(_)), "{error:?}");
+        let error = error.to_string();
+        assert!(
+            error.contains("canvas.figcraft") && error.contains("not a regular file"),
+            "{error}"
+        );
+        let scene = dir.path().join("sketch.excalidraw");
+        pipe_at(&scene);
+        let imported = within_seconds(move || import_file(&scene).map(|_| ()));
+        let error = imported
+            .expect("importing a pipe never returned")
+            .unwrap_err();
+        let error = error.to_string();
+        assert!(
+            error.contains("sketch.excalidraw") && error.contains("not a regular file"),
+            "{error}"
+        );
+    }
+
+    /// CANVAS-CORE-6: a canvas file a cloned repository links to `/dev/zero` is refused at once.
+    /// Read, it never ended (the probe's process grew past 2.5 GB in a quarter of a second), so
+    /// this has no run against the old read.
+    #[test]
+    fn a_canvas_file_linked_to_a_device_is_refused_at_once() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("canvas.figcraft");
+        std::os::unix::fs::symlink("/dev/zero", &path).unwrap();
+        let opened = within_seconds(move || open_with_issues(&path).map(|_| ()));
+        let error = opened
+            .expect("opening /dev/zero never returned")
+            .unwrap_err();
+        assert!(error.to_string().contains("not a regular file"), "{error}");
+    }
+
+    /// CANVAS-CORE-6: a canvas file past [`MAX_FILE`] is refused before it is read. The file is
+    /// sparse: it takes no room on the disk.
+    #[test]
+    fn a_canvas_file_past_the_limit_is_refused_unread() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("canvas.figcraft");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_FILE + 1).unwrap();
+        let opened = within_seconds(move || open_with_issues(&path).map(|_| ()));
+        let error = opened.expect("opening never returned").unwrap_err();
+        assert!(matches!(error, BoardError::Io(_)), "{error:?}");
+        assert!(error.to_string().contains("more than 4096 MB"), "{error}");
     }
 
     #[test]

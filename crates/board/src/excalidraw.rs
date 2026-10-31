@@ -212,10 +212,18 @@ pub fn read_file_or_blank(path: &Path) -> Result<Value, BoardError> {
     parse(path, &text)
 }
 
-/// The text of the file at `path`.
+/// The most an Excalidraw file may hold to be read: 1 GiB of JSON, images in it included.
+const MAX_SCENE: u64 = 1024 * 1024 * 1024;
+
+/// The text of the file at `path`. Only a regular file of at most [`MAX_SCENE`] bytes is read
+/// ([`sawit_core::files::read_regular`]): a named pipe or a device is refused at once
+/// (CANVAS-CORE-6).
 fn read_text(path: &Path) -> Result<String, BoardError> {
-    std::fs::read_to_string(path)
-        .map_err(|e| BoardError::Io(format!("couldn't read {}: {e}", path.display())))
+    let couldnt_read = |e: &dyn std::fmt::Display| {
+        BoardError::Io(format!("couldn't read {}: {e}", path.display()))
+    };
+    let bytes = sawit_core::files::read_regular(path, MAX_SCENE).map_err(|e| couldnt_read(&e))?;
+    String::from_utf8(bytes).map_err(|_| couldnt_read(&"stream did not contain valid UTF-8"))
 }
 
 /// The JSON in `text`, the text of the file at `path`, without the byte order mark in front.

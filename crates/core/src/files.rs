@@ -90,6 +90,50 @@ pub fn read_text(path: &Path) -> Result<TextFile> {
     }
 }
 
+/// The bytes of the regular file at `path` (a link is followed), read
+/// through one handle, which is checked before anything is read. Anything
+/// else is refused at once ([`std::io::ErrorKind::InvalidInput`]): a named
+/// pipe would block the read for ever, and a device such as `/dev/zero`
+/// never ends (a cloned repository can link a file to one). So is a file of
+/// more than `max` bytes ([`std::io::ErrorKind::FileTooLarge`]). A missing
+/// file is [`std::io::ErrorKind::NotFound`], as for [`std::fs::read`].
+pub fn read_regular(path: &Path, max: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    // Opening a pipe for reading waits for a writer, unless it doesn't block.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file (a folder, a pipe, a socket or a device)",
+        ));
+    }
+    let too_large = || {
+        std::io::Error::new(
+            std::io::ErrorKind::FileTooLarge,
+            format!(
+                "it holds more than {} MB, more than is read from one file",
+                max / (1024 * 1024)
+            ),
+        )
+    };
+    if meta.len() > max {
+        return Err(too_large());
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
+    // A file that grew meanwhile is read only as far as `max`.
+    file.take(max.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max {
+        return Err(too_large());
+    }
+    Ok(bytes)
+}
+
 /// Writes via a private temp file in the same directory + rename, keeping
 /// the original file's permissions. A symlink stays a symlink: its target is
 /// what gets replaced ([`write_atomic`]).
@@ -673,6 +717,34 @@ mod tests {
         let t = read_text(&f).unwrap();
         assert!(t.text.is_empty());
         assert!(t.read_only_reason.unwrap().contains("MB"));
+    }
+
+    /// CANVAS-CORE-6: only a regular file is read, and only up to `max`; anything else is
+    /// refused before it is read, and at once.
+    #[test]
+    fn read_regular_reads_files_and_refuses_the_rest() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("a.bin");
+        fs::write(&f, [1, 2, 3]).unwrap();
+        assert_eq!(read_regular(&f, 3).unwrap(), [1, 2, 3]);
+        let link = d.path().join("link");
+        std::os::unix::fs::symlink(&f, &link).unwrap();
+        assert_eq!(read_regular(&link, 3).unwrap(), [1, 2, 3]);
+        let kind = |path: &Path, max| read_regular(path, max).unwrap_err().kind();
+        assert_eq!(kind(&f, 2), std::io::ErrorKind::FileTooLarge);
+        assert_eq!(
+            kind(&d.path().join("none"), 9),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(kind(d.path(), 9), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            kind(Path::new("/dev/zero"), 9),
+            std::io::ErrorKind::InvalidInput
+        );
+        let pipe = d.path().join("pipe");
+        let made = std::process::Command::new("mkfifo").arg(&pipe).status();
+        assert!(made.unwrap().success());
+        assert_eq!(kind(&pipe, 9), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]

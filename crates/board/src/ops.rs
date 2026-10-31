@@ -1294,7 +1294,9 @@ pub fn import_file(
     path: &Path,
     place: bool,
 ) -> Result<Vec<NodeId>, BoardError> {
-    let bytes = std::fs::read(path).map_err(|error| BoardError::Io(error.to_string()))?;
+    // A regular file only: a pipe or a device would never be read to its end (CANVAS-CORE-6).
+    let bytes = sawit_core::files::read_regular(path, crate::store::MAX_FILE)
+        .map_err(|error| BoardError::Io(error.to_string()))?;
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let svg =
         (Path::new(name.as_ref()).extension()).is_some_and(|ext| ext.eq_ignore_ascii_case("svg"));
