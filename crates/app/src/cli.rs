@@ -754,11 +754,27 @@ pub fn prompt_open_folder(prefer: Option<AnyWindowHandle>, cx: &mut App) {
     .detach();
 }
 
-/// The window that has `dir` open as one of its projects.
+/// The window that has `dir` open as one of its projects ([`window_with_root`]).
 fn window_with_project(dir: &Path, cx: &App) -> Option<(AnyWindowHandle, Entity<Workspace>)> {
-    workspaces(cx)
-        .into_iter()
-        .find(|(_, w)| w.read(cx).roots(cx).iter().any(|r| r == dir))
+    let spaces = workspaces(cx);
+    let roots: Vec<(usize, Vec<PathBuf>)> = spaces
+        .iter()
+        .enumerate()
+        .map(|(ix, (_, w))| (ix, w.read(cx).roots(cx)))
+        .collect();
+    window_with_root(&roots, dir).map(|ix| spaces[ix].clone())
+}
+
+/// The window, of `windows` and each one's project folders, that has `dir` open as a project.
+/// A window holds a project at its folder as it is on disk ([`Workspace::open_project`]), so
+/// `dir` is compared so too ([`sawit_core::files::resolve`]): the Open dialog keeps a link picked
+/// there as the link, and Recent Projects reopens a folder as it was remembered.
+fn window_with_root<H: Clone>(windows: &[(H, Vec<PathBuf>)], dir: &Path) -> Option<H> {
+    let dir = sawit_core::files::resolve(dir);
+    windows
+        .iter()
+        .find(|(_, roots)| roots.contains(&dir))
+        .map(|(window, _)| window.clone())
 }
 
 /// Opens `dir` as a project of the window (showing it if already open there).
@@ -946,7 +962,7 @@ pub fn install_cli(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::{bundle_of, still_open, window_holding, window_naming};
+    use super::{bundle_of, still_open, window_holding, window_naming, window_with_root};
     use gpui_kit::{KeyContext, MenuItem, OperatingSystem, OsAction, TestAppContext};
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
@@ -1223,6 +1239,41 @@ mod tests {
             window_naming(&windows, &project.join("web")),
             Some(("window", link.join("web")))
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A folder opened through a link (the Open dialog keeps a link picked there as the link,
+    /// and Recent Projects reopens folders as they were remembered) is the project open at the
+    /// folder it leads to, which is how a window holds its projects: through the links, in the
+    /// letter case on disk (review-mcp M1). Compared as written, the folder was added to the
+    /// window a second time.
+    #[test]
+    fn a_folder_opened_through_a_link_is_the_project_open_there() {
+        let dir = std::env::temp_dir().join(format!("sawit-cli-{}-root", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let project = dir.join("shop");
+        std::fs::create_dir_all(&project).unwrap();
+        let project = project.canonicalize().unwrap();
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&project, &link).unwrap();
+        std::fs::create_dir_all(dir.join("api")).unwrap();
+        let windows = vec![
+            ("first", vec![dir.join("api").canonicalize().unwrap()]),
+            ("second", vec![project.clone()]),
+        ];
+        assert_eq!(window_with_root(&windows, &project), Some("second"));
+        assert_eq!(window_with_root(&windows, &link), Some("second"));
+        // In another letter case, on a volume that ignores case (a Mac's, as a rule).
+        if dir.join("SHOP").exists() {
+            assert_eq!(
+                window_with_root(&windows, &dir.join("SHOP")),
+                Some("second")
+            );
+        }
+        // A folder inside an open project isn't that project.
+        std::fs::create_dir_all(project.join("web")).unwrap();
+        assert_eq!(window_with_root(&windows, &link.join("web")), None);
+        assert_eq!(window_with_root(&windows, &dir.join("other")), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

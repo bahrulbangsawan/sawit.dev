@@ -1715,13 +1715,15 @@ Answer: ______
 
 **H-MCP-2. A project opened through a linked folder** (MCP-2, and review-mcp M1).
 - Run `mkdir -p "$S/code/shop" && ln -s "$S/code" "$S/code-link"`. With the Open Folder dialog, open
-  `$S/code-link/shop`. From an agent, call `canvas_get {project: "$S/code/shop"}`, the other spelling.
-- Look for: it answers from that window.
+  `$S/code-link/shop`. Look for: the project is `shop`, and `app_state` and the status bar's Copy Path give it as
+  the folder on disk, `$S/code/shop` (with `/private` in front if `$S` is under `/tmp`).
+- From an agent, call `canvas_get {project: "$S/code-link/shop"}`, the other spelling. Look for: it answers from
+  that window.
 - From the agent, call `app_open` of `$S/code/shop`, the folder as it is on disk, which is what an agent's working
   folder is. Look for: that project shows, and no second project is added for it.
 - From the agent, call `save_command {project_dir: "$S/code/shop", name: "hello", commands: ["echo hi"]}`. Look
   for: the Run panel lists hello under that project.
-- Until review-mcp M1 is fixed, `app_open` adds the folder again, and hello doesn't show in the Run panel.
+- Open the welcome screen in a new window (⇧⌘N): Recent Projects lists the folder once.
 
 Answer: ______
 

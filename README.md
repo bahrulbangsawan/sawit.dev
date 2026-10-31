@@ -168,7 +168,8 @@ explained. A conflict on the same address can't be forced.
 ### Project code editor
 
 - Open a project with `sawit <folder>`, the welcome screen, or the folder icon in the **Files** tab.
-  See [The `sawit` command](#the-sawit-command).
+  See [The `sawit` command](#the-sawit-command). A folder named through a symlink opens as the folder it leads to,
+  so it is one project however it is named.
 - **Virtual file tree** with a logo per file type. The tree updates when files are created or deleted
   from the terminal.
 - **Highlighting for about 200 languages** (syntect), including Dockerfile, Makefile, Vue, Svelte, Kotlin, and more.

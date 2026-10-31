@@ -37,9 +37,13 @@ impl RecentProjects {
         Ok(())
     }
 
-    /// Moves `dir` to the front, dropping the oldest past [`MAX_RECENT`].
+    /// Moves `dir` to the front, dropping the oldest past [`MAX_RECENT`], and
+    /// any other name of it remembered before (a link to it: see
+    /// [`crate::files::resolve`]).
     pub fn touch(&mut self, dir: PathBuf) {
-        self.folders.retain(|f| *f != dir);
+        let real = crate::files::resolve(&dir);
+        self.folders
+            .retain(|f| *f != dir && crate::files::resolve(f) != real);
         self.folders.insert(0, dir);
         self.folders.truncate(MAX_RECENT);
     }
@@ -79,6 +83,24 @@ mod tests {
         r.touch("/b".into());
         r.touch("/a".into());
         assert_eq!(r.folders, vec![PathBuf::from("/a"), PathBuf::from("/b")]);
+    }
+
+    /// A folder remembered under a link's name (Sawit opened projects as they were named, before
+    /// it opened them at their folder as it is on disk) isn't listed twice once it is opened
+    /// again: the folder's own name takes its place.
+    #[test]
+    fn a_folder_is_remembered_once_under_its_own_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("shop");
+        std::fs::create_dir(&project).unwrap();
+        let project = project.canonicalize().unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&project, &link).unwrap();
+        let mut r = RecentProjects::default();
+        r.touch(link.clone());
+        r.touch("/b".into());
+        r.touch(project.clone());
+        assert_eq!(r.folders, vec![project, PathBuf::from("/b")]);
     }
 
     #[test]
