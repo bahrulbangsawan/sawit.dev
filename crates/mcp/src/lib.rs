@@ -185,6 +185,16 @@ pub(crate) fn refuse_canvas_file(tool: &str, path: &Path) -> Result<(), String> 
     Ok(())
 }
 
+/// `path` as an agent means it: trimmed, with `~` for the home folder, and a relative path taken
+/// from the folder the agent runs in (sawit-mcp's), not from the app's, whose folder is another.
+pub(crate) fn agent_path(path: &str) -> PathBuf {
+    let path = expand_home(path.trim());
+    match std::env::current_dir() {
+        Ok(cwd) if path.is_relative() => cwd.join(path),
+        _ => path,
+    }
+}
+
 pub(crate) fn expand_home(path: &str) -> PathBuf {
     match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
         (Some(rest), Some(home)) => PathBuf::from(home).join(rest),

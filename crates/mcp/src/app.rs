@@ -333,8 +333,14 @@ pub(crate) fn pretty(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
+/// The folder an agent's `project` names, as the app names the projects it opens: `~` expanded, a
+/// relative name taken from the agent's folder ([`crate::agent_path`]), then through the links on
+/// its way, in the letter case it has on disk and without `..` ([`sawit_core::files::resolve`]).
+/// Sent as written, `~/…`, `/tmp/…` (`/private/tmp/…` on macOS) or another case matched no open
+/// project, though the same names find the stored canvas with the app closed (MCP-3).
 fn project_path(p: Option<String>) -> Option<PathBuf> {
-    p.filter(|p| !p.trim().is_empty()).map(PathBuf::from)
+    let p = p.filter(|p| !p.trim().is_empty())?;
+    Some(sawit_core::files::resolve(&crate::agent_path(&p)))
 }
 
 impl Sawit {
@@ -747,12 +753,7 @@ fn is_figcraft(path: &str) -> bool {
 /// relative path taken from the folder the agent runs in. It is text for a JSON op, so a folder
 /// that isn't valid UTF-8 comes out with replacement characters, and the canvas says it can't be read.
 fn absolute_path(path: &str) -> String {
-    let path = crate::expand_home(path.trim());
-    let path = match std::env::current_dir() {
-        Ok(cwd) if path.is_relative() => cwd.join(path),
-        _ => path,
-    };
-    path.to_string_lossy().into_owned()
+    crate::agent_path(path).to_string_lossy().into_owned()
 }
 
 /// The file `output_path` names for canvas_export, read as every tool that writes a file reads
@@ -1376,6 +1377,41 @@ mod tests {
         let read = tab(schemars::schema_for!(TerminalReadArgs));
         assert!(read.contains("the user has in front"), "{read}");
         assert!(read.contains("terminal_run"), "{read}");
+    }
+
+    /// MCP-3: the project an agent names goes to the app as the folder it is on disk: trimmed,
+    /// `~` expanded, a relative name taken from the agent's folder, and through the links on its
+    /// way, in the case the folder has and without `..`, as the app names the projects it opens.
+    /// It went as written, so `~/…`, `/tmp/…` or another case matched no open project, though the
+    /// same names work with the app closed.
+    #[test]
+    fn a_project_is_sent_as_the_folder_it_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("shop");
+        std::fs::create_dir_all(real.join("web")).unwrap();
+        let real = real.canonicalize().unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        for named in [
+            format!(" {} ", link.display()),
+            dir.path().join("SHOP").display().to_string(),
+            real.join("web").join("..").display().to_string(),
+        ] {
+            assert_eq!(
+                project_path(Some(named.clone())),
+                Some(real.clone()),
+                "{named}"
+            );
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = Path::new(&home).canonicalize().unwrap();
+            assert_eq!(project_path(Some("~".into())), Some(home.clone()));
+            assert_eq!(project_path(Some("~/".into())), Some(home));
+        }
+        let here = std::env::current_dir().unwrap().canonicalize().unwrap();
+        assert_eq!(project_path(Some("src".into())), Some(here.join("src")));
+        assert_eq!(project_path(Some("  ".into())), None);
+        assert_eq!(project_path(None), None);
     }
 
     #[test]

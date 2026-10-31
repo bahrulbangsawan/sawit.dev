@@ -592,10 +592,11 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
             // Through the links on its way, as the CLI resolves its own paths and the projects'
             // folders are: `/tmp/p` is `/private/tmp/p` on macOS. Else a file of a project is
             // routed to no project's window, and a project's canvas file opens a second canvas of
-            // it (CANVAS-UI-4).
+            // it (CANVAS-UI-4). The answer names what was opened, which later calls name too.
+            let opened = sawit_core::files::resolve(&path);
             let request = OpenRequest {
                 targets: vec![Target {
-                    path: sawit_core::files::resolve(&path),
+                    path: opened.clone(),
                     line,
                     column,
                 }],
@@ -603,7 +604,7 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
                 ..OpenRequest::default()
             };
             handle(request, None, cx);
-            return Ok(Answer::Now(serde_json::json!({ "opened": path })));
+            return Ok(Answer::Now(serde_json::json!({ "opened": opened })));
         }
         _ => {}
     }
@@ -613,25 +614,33 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
         .enumerate()
         .map(|(ix, (_, w))| (ix, w.read(cx).roots(cx)))
         .collect();
-    let holding = |path: &Path| window_holding(&roots, path).map(|ix| spaces[ix].clone());
-    let (handle, workspace) = match (&request.project, &request.agent_folder) {
-        (Some(project), _) => holding(project).ok_or_else(|| {
-            format!(
-                "No Sawit window has {} open. Open it with app_open first.",
-                project.display()
-            )
-        })?,
+    let holding =
+        |path: &Path| window_naming(&roots, path).map(|(ix, named)| (spaces[ix].clone(), named));
+    let ((handle, workspace), project) = match (&request.project, &request.agent_folder) {
+        (Some(project), _) => {
+            let (window, named) = holding(project).ok_or_else(|| {
+                format!(
+                    "No Sawit window has {} open. Open it with app_open first.",
+                    project.display()
+                )
+            })?;
+            (window, Some(named))
+        }
         // No project named: the window the agent's own folder is open in,
         // else the frontmost one.
-        (None, folder) => folder
-            .as_deref()
-            .and_then(holding)
-            .or_else(|| frontmost(cx))
-            .or_else(|| open_window(None, cx))
-            .ok_or("Unable to open a Sawit window.")?,
+        (None, folder) => {
+            let window = folder
+                .as_deref()
+                .and_then(holding)
+                .map(|(window, _)| window)
+                .or_else(|| frontmost(cx))
+                .or_else(|| open_window(None, cx))
+                .ok_or("Unable to open a Sawit window.")?;
+            (window, None)
+        }
     };
     // Commands act on the project asked for: make it the active one.
-    if let Some(project) = &request.project {
+    if let Some(project) = &project {
         workspace.update(cx, |w, cx| w.activate_project_of(project, cx));
     }
     let focus = request.command == ControlCommand::Focus;
@@ -648,6 +657,38 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
         cx.activate(true);
     }
     Ok(answer)
+}
+
+/// The window whose project holds the folder an agent named, `path`, and `path` as that window's
+/// projects name it. The folder and the projects' folders are compared as they are on disk:
+/// through the links on their way, in the letter case they have there and without `..`
+/// ([`sawit_core::files::resolve`]). So `/tmp/p`, `/private/tmp/P` and `/private/tmp/q/../p` are
+/// the project at `/private/tmp/p`, as they are for `app_open` and the CLI (MCP-2, MCP-3), and
+/// `/private/tmp/p/../q` is not. The deepest project wins, the last when two tie, as in
+/// [`window_holding`]. A relative path is compared as written: the app's folder isn't the agent's.
+fn window_naming<H: Clone>(windows: &[(H, Vec<PathBuf>)], path: &Path) -> Option<(H, PathBuf)> {
+    if !path.is_absolute() {
+        return window_holding(windows, path).map(|window| (window, path.to_path_buf()));
+    }
+    let resolved = sawit_core::files::resolve(path);
+    let mut found: Option<(usize, &H, PathBuf)> = None;
+    for (window, roots) in windows {
+        for root in roots {
+            let real = sawit_core::files::resolve(root);
+            let Ok(rest) = resolved.strip_prefix(&real) else {
+                continue;
+            };
+            let depth = real.components().count();
+            if found.as_ref().is_none_or(|(deepest, ..)| depth >= *deepest) {
+                let named = match rest.as_os_str().is_empty() {
+                    true => root.clone(),
+                    false => root.join(rest),
+                };
+                found = Some((depth, window, named));
+            }
+        }
+    }
+    found.map(|(_, window, named)| (window.clone(), named))
 }
 
 /// The window whose project holds `path`, from each window's project
@@ -846,7 +887,7 @@ pub fn install_cli(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::{bundle_of, still_open, window_holding};
+    use super::{bundle_of, still_open, window_holding, window_naming};
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
 
@@ -893,6 +934,57 @@ mod tests {
         assert_eq!(window("/code/shop/web"), Some("front"));
         assert_eq!(window("/code/other"), Some("back"));
         assert_eq!(window("/tmp/elsewhere"), None);
+    }
+
+    /// MCP-2, MCP-3: an agent names an open project by another name of its folder: through a
+    /// link (`/tmp/p` for the project at `/private/tmp/p` on macOS), in another letter case (a
+    /// Mac's volumes ignore it), or with `..` in it. That is the open project, as it is for
+    /// `app_open` and the CLI, and the command goes to its window, named as the window names it.
+    /// Matched as written, it was "No Sawit window has … open. Open it with app_open first.",
+    /// while `app_open` of the same name answered that it had opened it.
+    #[test]
+    fn a_project_named_another_way_is_the_open_one() {
+        let dir = std::env::temp_dir().join(format!("sawit-cli-{}-named", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let project = dir.join("shop");
+        std::fs::create_dir_all(project.join("web")).unwrap();
+        let project = project.canonicalize().unwrap();
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&project, &link).unwrap();
+        let windows = vec![("window", vec![project.clone()])];
+        let named = |path: &Path| window_naming(&windows, path);
+
+        assert_eq!(named(&project), Some(("window", project.clone())));
+        for other in [
+            link.clone(),
+            dir.join("SHOP"),
+            project.join("web").join(".."),
+        ] {
+            assert_eq!(
+                named(&other),
+                Some(("window", project.clone())),
+                "{}",
+                other.display()
+            );
+        }
+        // A folder in it, through the link, names it as the window does.
+        assert_eq!(
+            named(&link.join("web")),
+            Some(("window", project.join("web")))
+        );
+        // `..` out of the project is another folder, though the path starts with the project's.
+        std::fs::create_dir_all(dir.join("api")).unwrap();
+        assert_eq!(named(&project.join("..").join("api")), None);
+        // Neither a folder of no open project nor a relative name is taken for one.
+        assert_eq!(named(&dir.join("other")), None);
+        assert_eq!(named(Path::new("shop")), None);
+        // A window that names its project through the link has it named so.
+        let windows = vec![("window", vec![link.clone()])];
+        assert_eq!(
+            window_naming(&windows, &project.join("web")),
+            Some(("window", link.join("web")))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
