@@ -1015,6 +1015,10 @@ impl BrowserView {
                     return;
                 }
             },
+            BrowserOp::Evaluate { script } => {
+                evaluate(Rc::downgrade(&engine), script, reply);
+                return;
+            }
             BrowserOp::Annotations { clear } => {
                 let markdown = self.annotations_markdown(cx);
                 let count = self.annotate.read(cx).annotations(cx).len();
@@ -1506,10 +1510,48 @@ fn rect_op(target: &Target) -> Value {
     op
 }
 
+/// Runs an agent's `browser_evaluate` script: as an expression, else (when that doesn't
+/// parse) as a function body. WebKit compiles it (`evaluate_call`), so it runs on pages whose
+/// Content-Security-Policy forbids `eval`.
+fn evaluate(engine: std::rc::Weak<Engine>, script: String, reply: oneshot::Sender<OpResult>) {
+    let Some(first) = engine.upgrade() else {
+        let _ = reply.send(Err("The browser isn't open.".into()));
+        return;
+    };
+    let answer = |result: Result<Option<String>, String>| {
+        result.and_then(|text| agent_answer(text.as_deref().unwrap_or_default()))
+    };
+    first.eval_text(
+        &sawit_core::browser::evaluate_call(&script, false),
+        move |result| match result {
+            Err(e) if e.contains("SyntaxError") => match engine.upgrade() {
+                Some(engine) => engine.eval_text(
+                    &sawit_core::browser::evaluate_call(&script, true),
+                    move |result| {
+                        let _ = reply.send(answer(result));
+                    },
+                ),
+                None => {
+                    let _ = reply.send(Err("The browser was closed.".into()));
+                }
+            },
+            result => {
+                let _ = reply.send(answer(result));
+            }
+        },
+    );
+}
+
 /// The agent's answer as WebKit hands it over: its return value (a JSON
 /// string) serialized as JSON once more.
 fn agent_result(result: &str) -> OpResult {
     let text: String = serde_json::from_str(result).unwrap_or_default();
+    agent_answer(&text)
+}
+
+/// The agent's answer: `{"ok": true, …}`, or `{"ok": false, "error"}`; nothing when the page
+/// has no agent.
+fn agent_answer(text: &str) -> OpResult {
     if text.is_empty() {
         return Err(
             "The page isn't ready yet (it may still be loading, or isn't a web page). Try again after browser_wait_for."
@@ -1517,7 +1559,7 @@ fn agent_result(result: &str) -> OpResult {
         );
     }
     let mut value: Value =
-        serde_json::from_str(&text).map_err(|e| format!("The page sent a bad answer: {e}"))?;
+        serde_json::from_str(text).map_err(|e| format!("The page sent a bad answer: {e}"))?;
     if value.get("ok").and_then(Value::as_bool) != Some(true) {
         return Err(value
             .get("error")

@@ -34,6 +34,23 @@ pub fn page_script(token: &str) -> String {
         .replace(TOKEN_PLACEHOLDER, token)
 }
 
+/// The script that runs an agent's `browser_evaluate` script on the page: an expression,
+/// or (`body`) a function body that uses `return`. WebKit compiles the script with this
+/// call, and the page agent only runs it: compiled by the agent (`new Function`), it failed
+/// on pages whose Content-Security-Policy forbids `eval`. Try the expression first, and the
+/// body when that is a `SyntaxError`.
+pub fn evaluate_call(script: &str, body: bool) -> String {
+    // On its own line: a script ending in a `//` comment still closes.
+    let function = if body {
+        format!("function () {{\n{script}\n}}")
+    } else {
+        format!("function () {{ return (\n{script}\n); }}")
+    };
+    format!(
+        "(() => {{ const a = window.__sawitAgent; return a ? a.run({{ op: \"evaluate\", fn: {function} }}) : \"\"; }})()"
+    )
+}
+
 /// Console messages and requests kept per browser tab, newest last.
 pub const MAX_CONSOLE: usize = 500;
 pub const MAX_NETWORK: usize = 300;
@@ -1375,6 +1392,39 @@ mod tests {
         "#,
         );
         assert_eq!(got, json!({"forged": 0, "real": 1}));
+    }
+
+    /// `browser_evaluate` on a page whose Content-Security-Policy forbids `eval` (helmet's
+    /// default `script-src 'self'`): the page's `Function` and `eval` refuse, as WebKit's do
+    /// there, and the script still runs, as an expression or as a function body.
+    #[test]
+    fn evaluate_runs_where_the_page_forbids_eval() {
+        let run = |call: String| {
+            let test = format!(
+                r#"
+                var refuse = function () {{ throw new EvalError("Refused to evaluate a string as JavaScript because 'unsafe-eval' is not an allowed source of script"); }};
+                Function.prototype.constructor = refuse;
+                globalThis.Function = refuse;
+                globalThis.eval = refuse;
+                document.title = "Shop";
+                {call}
+            "#
+            );
+            on_stand_in_page(&test)
+        };
+        assert_eq!(
+            run(evaluate_call("1 + 1", false)),
+            json!({"ok": true, "value": 2})
+        );
+        assert_eq!(
+            run(evaluate_call(
+                "const t = document.title;\nreturn t + '!'",
+                true
+            )),
+            json!({"ok": true, "value": "Shop!"})
+        );
+        // A throw is the script's error.
+        assert_eq!(run(evaluate_call("null.x", false))["ok"], json!(false));
     }
 
     #[test]

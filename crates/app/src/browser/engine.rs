@@ -120,6 +120,37 @@ impl Engine {
             .map_err(|e| e.to_string())
     }
 
+    /// Runs `script`; `callback` gets its value when that is a string (`None` for any other),
+    /// or the exception WebKit reports, a `SyntaxError: …` when the script doesn't parse.
+    pub fn eval_text(
+        &self,
+        script: &str,
+        callback: impl FnOnce(Result<Option<String>, String>) + 'static,
+    ) {
+        use objc2::runtime::AnyObject;
+        use objc2_foundation::{NSError, NSString};
+        use wry::WebViewExtMacOS as _;
+
+        let callback = std::cell::Cell::new(Some(callback));
+        let handler = block2::RcBlock::new(move |value: *mut AnyObject, error: *mut NSError| {
+            let Some(callback) = callback.take() else {
+                return;
+            };
+            if let Some(error) = unsafe { error.as_ref() } {
+                callback(Err(exception_message(error)));
+                return;
+            }
+            let text = unsafe { value.as_ref() }
+                .and_then(|v| v.downcast_ref::<NSString>())
+                .map(|s| s.to_string());
+            callback(Ok(text));
+        });
+        let wk = self.webview.webview();
+        unsafe {
+            wk.evaluateJavaScript_completionHandler(&NSString::from_str(script), Some(&handler))
+        };
+    }
+
     pub fn url(&self) -> Option<String> {
         self.webview.url().ok()
     }
@@ -218,6 +249,19 @@ impl Engine {
         let wk = self.webview.webview();
         unsafe { wk.takeSnapshotWithConfiguration_completionHandler(Some(&config), &handler) };
     }
+}
+
+/// What WebKit says went wrong running a script: the exception's own message
+/// (`SyntaxError: Unexpected keyword 'return'`) when it gives one.
+fn exception_message(error: &objc2_foundation::NSError) -> String {
+    use objc2_foundation::NSString;
+    let key = NSString::from_str("WKJavaScriptExceptionMessage");
+    error
+        .userInfo()
+        .objectForKey(&key)
+        .and_then(|m| m.downcast::<NSString>().ok())
+        .map(|m| m.to_string())
+        .unwrap_or_else(|| error.localizedDescription().to_string())
 }
 
 /// Whether WebKit can be asked to load `url`: wry makes an `NSURL` of it and unwraps that,

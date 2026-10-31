@@ -725,14 +725,11 @@
     if (text === undefined) return String(value);
     return text.length > 20000 ? clip(text, 20000) : JSON.parse(text);
   };
+  // `op.fn` is the agent's script as Sawit's call compiled it (`evaluate_call` in
+  // browser.rs): compiling it here would be an `eval`, which a page's CSP may forbid.
   const evaluate = (op) => {
-    let fn;
-    try {
-      fn = new Function("return (" + op.script + "\n);");
-    } catch (_) {
-      fn = new Function(op.script);
-    }
-    const value = fn.call(window);
+    if (typeof op.fn !== "function") throw new Error("Nothing to evaluate.");
+    const value = apply(op.fn, window, []);
     if (value && typeof value.then === "function") {
       const id = ++nextPromise;
       settledResults.set(id, { done: false });
