@@ -177,6 +177,11 @@ pub fn move_entry(from: &Path, to: &Path) -> Result<()> {
 
 /// Copies a file, or a folder and everything in it (links stay links).
 /// Refuses to replace anything at `to`.
+///
+/// Only files, folders and links are copied. A folder's pipes, sockets and devices are left
+/// out: copying a pipe opens it, which waits for a writer for ever, a socket can't be opened, and
+/// a copy of either would be of no use. One of them on its own is refused. A folder copy that
+/// fails part way is removed, so nothing half made is left that nothing could undo.
 pub fn copy_entry(from: &Path, to: &Path) -> Result<()> {
     if to.starts_with(from) {
         return Err(std::io::Error::other("A folder can't be copied into itself.").into());
@@ -184,23 +189,47 @@ pub fn copy_entry(from: &Path, to: &Path) -> Result<()> {
     if std::fs::symlink_metadata(to).is_ok() {
         return Err(already_exists(to));
     }
+    if !copied(&std::fs::symlink_metadata(from)?.file_type()) {
+        let name = from.file_name().unwrap_or_default().to_string_lossy();
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("“{name}” is a pipe, socket or device, so it can't be copied."),
+        )
+        .into());
+    }
     copy_tree(from, to)?;
     Ok(())
 }
 
+/// Whether [`copy_entry`] copies an entry of this type: a file, a folder or a link.
+fn copied(kind: &std::fs::FileType) -> bool {
+    kind.is_file() || kind.is_dir() || kind.is_symlink()
+}
+
 fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
     let meta = std::fs::symlink_metadata(from)?;
-    if meta.file_type().is_symlink() {
+    let kind = meta.file_type();
+    if kind.is_symlink() {
         std::os::unix::fs::symlink(std::fs::read_link(from)?, to)
-    } else if meta.is_dir() {
+    } else if kind.is_dir() {
         std::fs::create_dir(to)?;
-        for entry in std::fs::read_dir(from)? {
-            let entry = entry?;
-            copy_tree(&entry.path(), &to.join(entry.file_name()))?;
+        let filled = (|| {
+            for entry in std::fs::read_dir(from)? {
+                let entry = entry?;
+                copy_tree(&entry.path(), &to.join(entry.file_name()))?;
+            }
+            std::fs::set_permissions(to, meta.permissions())
+        })();
+        if filled.is_err() {
+            // Made just now, so it holds only what this copy put there.
+            let _ = std::fs::remove_dir_all(to);
         }
-        std::fs::set_permissions(to, meta.permissions())
-    } else {
+        filled
+    } else if kind.is_file() {
         std::fs::copy(from, to).map(|_| ())
+    } else {
+        // A pipe, socket or device in a folder: left out.
+        Ok(())
     }
 }
 
@@ -575,6 +604,78 @@ mod tests {
         assert!(p.join("moved/inner/x.txt").exists() && !p.join("dup").exists());
         remove(&p.join("moved")).unwrap();
         assert!(!p.join("moved").exists());
+    }
+
+    /// Duplicate and Paste copy a folder's files, links and folders, and leave out the pipes and
+    /// sockets in it (FILES-12). Opening a pipe with no writer, to copy it, waited for ever; a
+    /// socket can't be opened, which failed the copy halfway and left a partial copy. A pipe or
+    /// socket on its own isn't copied: nothing is made, and the copy says why.
+    #[test]
+    fn copying_a_folder_leaves_its_pipes_and_sockets_out() {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("src");
+        fs::create_dir_all(src.join("run")).unwrap();
+        fs::write(src.join("a.txt"), "a").unwrap();
+        std::os::unix::fs::symlink("a.txt", src.join("link")).unwrap();
+        let pipe = src.join("run/pipe");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&pipe)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let _socket = std::os::unix::net::UnixListener::bind(src.join("run/app.sock")).unwrap();
+
+        let copy = d.path().join("copy");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (from, to) = (src.clone(), copy.clone());
+        std::thread::spawn(move || tx.send(copy_entry(&from, &to).map_err(|e| e.to_string())));
+        let copied = rx.recv_timeout(std::time::Duration::from_secs(5));
+        // A copy that opened the pipe waits for a writer: this one lets it go.
+        let _ = fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&pipe);
+        copied.expect("the copy waited on the pipe").unwrap();
+        assert_eq!(fs::read_to_string(copy.join("a.txt")).unwrap(), "a");
+        assert!(
+            fs::symlink_metadata(copy.join("link"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(copy.join("run").is_dir());
+        assert!(fs::symlink_metadata(copy.join("run/pipe")).is_err());
+        assert!(fs::symlink_metadata(copy.join("run/app.sock")).is_err());
+
+        for name in ["pipe", "app.sock"] {
+            let to = d.path().join(format!("{name} copy"));
+            let refused = copy_entry(&src.join("run").join(name), &to).unwrap_err();
+            assert!(refused.to_string().contains("can't be copied"), "{refused}");
+            assert!(fs::symlink_metadata(&to).is_err(), "{name}");
+        }
+    }
+
+    /// A folder copy that fails part way, here on a file it may not read, leaves nothing behind:
+    /// no half-made copy that nothing records and nothing can undo.
+    #[test]
+    fn a_folder_copy_that_fails_leaves_nothing_behind() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("src");
+        fs::create_dir_all(src.join("inner")).unwrap();
+        fs::write(src.join("inner/a.txt"), "a").unwrap();
+        fs::write(src.join("inner/secret"), "s").unwrap();
+        fs::set_permissions(src.join("inner/secret"), fs::Permissions::from_mode(0o000)).unwrap();
+        let copy = d.path().join("copy");
+        assert!(copy_entry(&src, &copy).is_err());
+        assert!(fs::symlink_metadata(&copy).is_err());
+        // Let the temp folder go.
+        fs::set_permissions(src.join("inner/secret"), fs::Permissions::from_mode(0o600)).unwrap();
     }
 
     /// A rename that changes only the case of a name goes ahead (the volume holding the temp
