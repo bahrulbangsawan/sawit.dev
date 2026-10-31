@@ -148,6 +148,11 @@ git commit -m "docs: the canvas runs on the figcraft engine; credit figcraft"
 
 ### Task 4: Budget, size and the final check
 
+Rulings amend these steps, as written below: P8-C8 (Step 3's socket checks, Step 5's maximize
+item), P8-C12 (Step 3's launch, the stop before Step 6), P8-C13 (Step 3's board and canvas size) and
+P8-C14 (Step 7). The carried checks of the controller's P8.T4 checklist (Plan 8 ledger) are in
+"Task 4 notes" below.
+
 - [ ] **Step 1: Release build**
 Run: `cargo build --release -p sawit`
 Expected: success.
@@ -157,19 +162,35 @@ Run: `ls -l target/release/sawit`
 Record the size next to the baseline from Plan 1 Task 0 Step 3 in this plan.
 
 - [ ] **Step 3: Budget run.**
-  - Launch the release build with a scratch `SAWIT_HOME` and `RUST_LOG=sawit=debug`.
-  - Build a board of about 500 layers through `canvas_command`: `board.template` ×10, then `edit.duplicate` until `get` reports ≥ 500.
+  - Launch the release build with a scratch `SAWIT_HOME` and `RUST_LOG=sawit=debug`:
+    `SAWIT_HOME=$S/home RUST_LOG=sawit=debug target/release/sawit --foreground "$S/proj" 2>"$S/render.log" &`,
+    then `PID=$!`. Bring the window forward with `{"cmd":"open_page","page":"canvas","project":"$S/proj"}`
+    (ruling P8-C12).
+  - With no `SAWIT_NATIVE_CANVAS`: `state` shows an active tab of kind `canvas`, and
+    `{"cmd":"canvas","op":{"op":"get"}}` answers `ok:true` at once, well under the old 30 s (ruling P8-C8).
+  - Build a board of about 500 layers through `canvas_command`: `board.templates`, then
+    `board.template {name}` ×10, cycling through its ids, then `select.all` and `edit.duplicate` until
+    `node.find {limit: 0}` reports a total ≥ 500. Record that total and `get`'s top-level count
+    (ruling P8-C13).
+  - Hide the sidebar and terminal with the `layout` command, and record the canvas's size in device
+    pixels (ruling P8-C13).
   - Zoom to fit.
   - Record the p50/p95 of `canvas render … ms` over 20 renders after `view.zoomIn`/`view.zoomOut` cycles.
   - Record idle CPU: `ps -o %cpu= -p <pid>`, sampled 10 times, 1 s apart, with no input.
   - Expected: p95 ≤ 50 ms and idle CPU ≈ 0 %. If it misses, record the numbers and open a follow-up note in the spec's Risks. Do not tune here.
 
 - [ ] **Step 4: Migration on a real old board.**
-  - Copy a real `.nyawit/canvas.excalidraw` (ask the user for one) into a scratch project and open the canvas.
+  - Copy a real `.nyawit/canvas.excalidraw` into a scratch project and open the canvas. Use a copy,
+    never the original: the old board this Mac has (`~/Library/Application Support/sawit/canvas.excalidraw`),
+    else Plan 7 Task 4's fixture (cross-plan ruling).
   - Expected: the screenshot shows the content, and the `.excalidraw` checksum is unchanged.
 
 - [ ] **Step 5: Hand-check with the user.** Walk through each item and record the answers here:
-  - ⌃⌘C opens the canvas; ⇧⌘↩ maximizes
+  - ⌃⌘C opens the canvas; ⇧⌘↩ maximizes, and ⌘B or switching tabs brings the tab bar back
+    (ruling P8-C8)
+  - panning the budget board keeps up (ruling P8-C13)
+  - bold Inter on a Mac without Inter (the P2.T7 carry)
+  - a real old board: which import losses matter (the P7.T4 carry)
   - tools, flyouts, stickies, connectors, text with IME
   - layers drag and rename
   - Design panel fields
@@ -178,6 +199,252 @@ Record the size next to the baseline from Plan 1 Task 0 Step 3 in this plan.
   - export
   - `canvas_add_mermaid` from Claude Code
 
-- [ ] **Step 6: Final gates**
+- [ ] **Step 6: Final gates.** First stop the instance with `/bin/kill $PID` (ruling P8-C12).
 Run: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
 Expected: all pass. Tell the user it is ready for `/consolidate` (release). Do not push.
+
+- [ ] **Step 7: Commit the notes** (ruling P8-C14)
+```bash
+git add docs/superpowers/plans/2026-10-29-native-canvas-8-cutover.md docs/superpowers/specs/2026-10-29-native-canvas-design.md
+git commit -m "docs: record the native canvas budget, release size and final checks"
+```
+The spec is added only when a Risks note was written.
+
+#### Task 4 notes: final check (2026-10-31, at `e52cf5f`, lane 5)
+
+Every unattended step ran. The release build, the socket checks, the real board's migration, edits
+and idle CPU pass. The settle-render budget misses on boards full of stickies: p95 537 ms on the
+budget board and 382 ms at 500 nodes, against 50 ms. The stickies' drop shadows cost most of it. As
+Step 3 says, nothing was tuned: the follow-up is in the spec's Risks, beside the save-cost one the
+P7.T6 ruling asks for. Step 6's gates pass. What needs a person is under "Hand checks".
+
+How it ran:
+- Machine: Apple M3 (8 cores), 16 GB, macOS 26.6.1, window scale factor 2.
+- The release build of `e52cf5f` (main), launched from the lane as P8-C12 says, with no
+  `SAWIT_NATIVE_CANVAS`, and stopped with `/bin/kill $PID`. Two launches, load average at each
+  launch in brackets:
+  1. an empty project: the socket checks, the budget board and every measurement (2.64 2.96 3.47);
+  2. a project holding a copy of the real old board: Step 4 (4.44 10.36 10.83).
+- Everything went over the control socket. Screenshots came from window listing and
+  `screencapture -l`. No AX, osascript or posted events. The window kept Sawit's 1280 × 801 and
+  stayed unobstructed, so `focus` was never sent. No change was seen that no op of this check made
+  (P3.T4 carry).
+- Load (R-LOAD): the machine wasn't quiet. Free disk stayed near 8 GB, under the run's 10 GB
+  watchdog line, so the watchdog re-cloned the lanes' `target/` folders every 5 minutes. Each pass
+  put the 1-minute load at 20–50 for about 75 s, and macOS's storage services used one or two cores
+  throughout. Every series ran between passes, with `top` showing 70–95 % of the CPU idle as it
+  started. The load averages in the tables still carry the last pass. Repeats agree closely (the
+  budget board's 50 % renders took 222–244 ms in three series), so the verdicts don't rest on the
+  load.
+
+Step 1: `cargo build --release -p sawit` succeeded in 10 min 13 s, from clean. Its one other line is
+the future-incompatibility note for `block 0.1.6`, which the baseline's `Cargo.lock` already had.
+
+Step 2:
+
+| `target/release/sawit` | Bytes | MiB |
+|---|---|---|
+| Baseline (Plan 1 Task 0, `0f5df5e`) | 35,670,592 | 34.02 |
+| Now (`e52cf5f`) | 60,367,760 | 57.57 |
+| Change | +24,697,168 (+69.2 %) | +23.55 |
+
+- The embedded Inter fonts add 1,789,960 bytes (1.71 MiB, 7 % of the change). `OFL-Inter.txt`
+  isn't embedded.
+- The Excalidraw bundle left with the webview: −1,550,289 bytes (1.48 MiB, 107 files).
+- The rest, +24,457,497 bytes (23.32 MiB), is code: FigCraft's engine, renderer, text, format and
+  document crates with their dependencies, `sawit-board`, the canvas views, and `sawit-mcp`'s
+  headless canvas (the app binary is also `sawit-mcp`).
+- All 97 commits since the baseline belong to this program, so nothing else is in the change.
+  `wry` stays for the browser tab (P8-C1).
+- The release `__eh_frame` is 3,733,104 bytes (3.56 MiB), up from 2.23 MiB.
+
+Step 3, the checks before the budget run (P8-C8 and the P8.T1 delegate's carries):
+- `open_page canvas` answered `{"tab":0}` (1.3 ms). `state` then listed one tab, of kind `canvas`,
+  active.
+- `{"cmd":"canvas","op":{"op":"get"}}` answered `ok:true` with no elements, five times, each round
+  trip 0.0–0.1 ms as the client timed it. On the budget board it took 2.0 ms. Old clients get their
+  answer at once (Review Focus 2).
+- `text.fonts {family: "Inter"}` answered `ok:true` with 18 styles, Thin to Black with their
+  italics, so Regular, Bold and Italic too. This Mac has no Inter installed, so the list comes from
+  the fonts `board::init` registers.
+
+The budget board (P8-C13):
+- `board.templates` lists retrospective, brainstorm, weeklyPlanner, flowChart and kanban. Ten
+  `board.template {name}`, cycling through them, placed 4, 13, 6, 12, 4, 4, 13, 6, 12 and 4
+  top-level layers, centred in the view: 194 nodes. `select.all` and `edit.duplicate` made 388,
+  then 776. The recipe doubles past 500, so a 501-node board was measured too (below).
+- `node.find {limit: 0}`: 776. `get`: 312 top-level layers (88 sections, 80 connectors, 64
+  stickies, 24 texts, 24 ellipses, 16 rounded rectangles, 8 rectangles, 8 diamonds). 192 layers
+  carry an effect: the soft drop shadow FigCraft gives every sticky.
+- With the sidebar and terminal hidden, the canvas is 1280 × 675 pt: 2560 × 1350 device px, where
+  the spec's budget names 2560 × 1600. Each render covers the canvas and 256 pt more on every side:
+  3584 × 2374 px, 8.5 Mpx. Zoom to fit: 59 %.
+
+Render times. Release build, nearest-rank percentiles. Each sample is the one `canvas render … ms`
+line a command caused, and every command caused exactly one.
+
+| Series | Zoom | Renders | p50 (ms) | p95 (ms) | min–max (ms) | `vm.loadavg` (1 min) |
+|---|---|---|---|---|---|---|
+| **Step 3**: `view.zoomFit`, then `view.zoomIn`/`view.zoomOut` ×10 | 100 % / 50 % | 20 | **244.0** | **536.8** | 228.2–543.2 | 7.25 → 6.28 |
+| Fit: `view.zoomFit` after each `view.zoomIn` (Plan 1's method) | 59 % | 20 | 297.9 | 312.4 | 285.1–316.8 | → 3.81 |
+| Edits: `node.set` one sticky's fill, two colours in turn | 59 % | 20 | **38.3** | **40.5** | 18.5–41.9 | 3.38 → 3.26 |
+
+What the time goes on. This is diagnosis only, and nothing was changed. Each row renders the same
+20 views, `view.set` to 100 % and 50 % about the fit centre, and the rows ran back to back.
+
+| Board | p50 (ms) | p95 (ms) | 100 %: p50 | 50 %: p50 | `vm.loadavg` (1 min) |
+|---|---|---|---|---|---|
+| The budget board | 241.7 | 543.3 | 529.6 | 237.7 | 8.83 → 7.06 |
+| The same, every effect removed by one `node.set` (undone after) | 57.8 | 64.7 | 60.1 | 56.0 | 6.43 → 5.66 |
+| An empty page (the page and its dots) | 14.9 | 15.4 | 14.9 | 14.6 | 7.06 → 6.43 |
+| 501 nodes on a page of their own: the ten templates, one duplicate round, six more templates (199 top-level, fit 67 %) | 171.2 | 381.6 | 367.3 | 168.0 | 8.15 → 7.21 |
+| The real old board after its migration (Step 4: 182 nodes, no stickies) | 18.0 | 22.3 | 16.4 | 18.5 | 10.80 → 10.09 |
+
+- The stickies' shadows take about 89 % of a settle render at 100 % and 76 % at 50 %. FigCraft
+  draws each shadowed layer in a pixmap of its own and blurs it on the CPU, at device scale, for
+  every layer in view, on every full render.
+- Without them, the 776-node board is near the budget (p95 64.7 ms), and a board of shapes,
+  connectors and text is well inside it.
+- An edit stays inside the budget, because `Retained` redraws only what changed.
+
+Idle: no input for 3.5 minutes, with the board on screen. `ps -o %cpu=`, 10 samples 1 s apart: 0.4,
+0.4, 1.1, 0.3, 0.2, 1.5, 0.2, 0.3, 1.7, 0.3 (mean 0.6 %). `top`'s 1 s samples: 0.3–0.7 %. No
+render line came while it sampled, so nothing redraws on its own. The app held 532 MiB (RSS) with
+this board open.
+
+Verdict against the spec's budget:
+- A re-render after an edit: p95 40.5 ms. Passes.
+- A re-render after a settle: p95 536.8 ms on the budget board, 381.6 ms at 500 nodes. Misses on
+  boards full of stickies, by 7 to 11 times. The real board settles at p95 22.3 ms.
+- An idle canvas: about 0 % CPU. Passes.
+- Pan frames at display rate: synthetic scrolling can't reach the window, so this is hand check 2.
+- Nothing was tuned (Step 3). The spec's Risks has the follow-up: "Sticky shadows make settles
+  miss the budget".
+
+Beside Plan 1 (P1.T7 delegate ruling): Plan 1 timed another document, the ridgeline example (a
+design file with no sticky shadows), in a debug build under build load. Like with like, its fit
+view took about 60–63 ms once the debug-only conversion is taken out. Those numbers aren't compared
+with these.
+
+Save cost (P7.T6 carry): `savecost` on a copy of the budget board's `canvas.figcraft` (777 nodes;
+632 KB of document JSON, 32 KB saved). Best of 7, with the CPU 73–79 % idle.
+
+| Versions | Read from the file | Made in this session | File |
+|---|---|---|---|
+| None | 2.1 ms | – | 32 KB |
+| 20 | 23.0 ms (+20.9) | 41.4 ms (+39.3) | 682 KB |
+| 100 | 103.4 ms (+101.2) | 196.4 ms (+194.3) | 3,280 KB |
+
+At FigCraft's 100-version cap, an in-place autosave of a board this size holds the UI thread for
+0.1–0.2 s. So the spec's Risks also has the writer-thread follow-up the P7.T6 ruling names: "In-place
+saves encode on the UI thread".
+
+R-EHFRAME: the debug app (`cargo build -p sawit`, 41 s) has 22,694,284 bytes (21.64 MiB) of
+`__eh_frame`, against 3.56 MiB in release, and its link prints the known warning. The debug binary
+is 287 MiB. Option (b), opt-level for all dependencies in the dev profile, is the user's choice. A
+faster debug canvas also needs its own `[profile.dev.package.sawit-board]` entry, because option
+(b)'s `"*"` covers dependencies, not workspace members (P1.T7 delegate).
+
+Carried guards, all clean:
+- `git grep -n -w -e SAWIT_NATIVE_CANVAS -e native_canvas -e with_native_canvas e52cf5f -- crates`
+  prints nothing. `crates/mcp/tests/tools.rs` has no
+  `without_the_native_flag_the_canvas_tools_are_as_they_were`. Both `native()` helpers build a
+  plain `Sawit::new` (`crates/mcp/src/app.rs:1193`, `crates/mcp/tests/tools.rs:223`). These are
+  the P8.T2 and P8.T1 delegates' guards.
+- `git show main:crates/board/fonts/OFL-Inter.txt` is the OFL text that NOTICE and README name,
+  4,470 bytes (P8.T3 delegate).
+
+Step 4: a copy of the real old board, `~/Library/Application Support/sawit/canvas.excalidraw`
+(167,774 bytes, 134 live elements, last changed 2026-10-30 13:37), as the second launch's
+`.nyawit/canvas.excalidraw`.
+- `open_page canvas` answered `{"tab":0}` in 297 ms, the import included. `get`: 86 top-level
+  layers, as P7.T7 found: 31 roundedRectangle, 8 rectangle, 3 diamond, 2 text and 42 connectors (6
+  with text, 38 joined at both ends, 4 at their end only). No notes; 182 nodes.
+- The screenshot (25 %, sidebar and terminal hidden) shows the whole "sawit.dev — user flow" board:
+  its boxes, diamonds, connectors and legend. It has the import's known losses (P7.T7): the two
+  headings at 12 px, the legend's labels in ink, straight edges.
+- The first autosave wrote `canvas.figcraft` (14,252 bytes). The copy's SHA-256 (`8adfe656…82b8`)
+  was the same after the migration and after the app quit. The original, which was only read, kept
+  it too.
+- The copy and its screenshots were deleted after the check. They aren't committed.
+
+Step 6: the instance was stopped first (`/bin/kill $PID`, P8-C12). `cargo fmt --all -- --check` and
+`cargo clippy --workspace --all-targets -- -D warnings` are clean. `cargo test --workspace` passes:
+1309 passed, 9 ignored, 0 failed (sawit 264, sawit-board 632, sawit-core 324 + 23, sawit-mcp 54 +
+12). Their one other line is the `block 0.1.6` note. It is ready for the user's `/consolidate`, and
+nothing was pushed.
+
+Not failures, for the user:
+- README says the binary is "about 34 MB", in its introduction and under "Size & memory". It is now
+  57.6 MiB. Its "about 67 MB of memory when idle" wasn't measured again; with the budget board
+  open, the app held 532 MiB.
+- Two one-off pauses on the UI thread: the first `board.template` after launch took 300 ms (later
+  ones 1–23 ms), and opening the canvas that migrated the real board took 297 ms.
+
+##### Hand checks (pending — needs the user)
+
+Build and run the release app: `cargo build --release -p sawit` in a checkout of main, then
+`SAWIT_HOME=<scratch>/home target/release/sawit --foreground <scratch>/proj`, and open the Canvas
+page (⌃⌘C). The scratch home keeps your own Sawit data out of it. Where a step uses the control
+socket, use `ctl` from Plan 1 Task 7's launch recipe. Checks 4 to 9 point at earlier plans' hand
+checks, whose steps still hold on this build: their `SAWIT_NATIVE_CANVAS=1` no longer does
+anything. Record each answer under its number.
+
+1. **Opening, maximizing and the tab bar** (Step 5, P8-C8, and the P8.T1 delegate). First Plan 1
+   hand check 4: ⌃⌘C and the title bar's Canvas button bring the canvas tab forward, with no second
+   one. Then click empty canvas, so it has the keyboard, and edit no text:
+   - ⇧⌘↩ hides the tab bar, and the canvas fills the window. A second ⇧⌘↩ puts the layout back.
+   - Maximize again, then press ⌘B: the sidebar and the tab bar come back.
+   - Open a file from the Files tab, go back to the canvas tab and maximize again, then press ⌃Tab:
+     the file's tab shows, with the tab bar.
+   Answer: ______
+2. **Panning the budget board** (P8-C13). Build it over the socket: run
+   `ctl "{\"cmd\":\"canvas\",\"op\":{\"op\":\"command\",\"command\":\"board.template\",\"params\":{\"name\":\"$t\"}}}"`
+   for each `t` in retrospective, brainstorm, weeklyPlanner, flowChart, kanban, retrospective,
+   brainstorm, weeklyPlanner, flowChart, kanban. Then run
+   `ctl '{"cmd":"canvas","op":{"op":"command","command":"select.all"}}'` and
+   `ctl '{"cmd":"canvas","op":{"op":"command","command":"edit.duplicate"}}'`, twice. Then
+   `ctl '{"cmd":"layout","sidebar":false,"terminal":false}'` and
+   `ctl '{"cmd":"canvas","op":{"op":"command","command":"view.zoomFit"}}'`.
+   - Pan with two fingers. The board follows at once, as the last frame moves with the fingers. A
+     fast pan shows the page colour at the leading edge until the board fills in. Nothing jumps
+     when a new frame lands.
+   - Pinch to zoom. After the fingers stop, the board stays soft for about 0.4–0.7 s: the 150 ms
+     wait for the zoom to settle, then the 0.2–0.5 s full render measured above. Say whether that
+     is acceptable until the Risks follow-up lands.
+   Answer: ______
+3. **Bold Inter without Inter installed** (the P2.T7 carry; it replaces Plan 2 hand check 4's
+   Helvetica Neue workaround). This Mac has no Inter installed. Put a sticky with the toolbar's
+   sticky tool, type two words, select one and press ⌘B: that word turns bold on the canvas. Then
+   select a text layer and show the Design panel (⌥8): Typography's family reads Inter, and its
+   weights run from Thin to Black. Answer: ______
+4. **Tools, flyouts, stickies, connectors and text with IME** (Step 5): Plan 3 hand checks 1–5, and
+   Plan 2 hand checks 1, 7 and 10 (a Chinese input method). Answer: ______
+5. **Layers: drag and rename** (Step 5): Plan 4 hand checks 1–4. Answer: ______
+6. **Design panel fields** (Step 5): Plan 5 hand checks 1–8. Answer: ______
+7. **Menus, the palette and the sheet** (Step 5): Plan 6 hand checks 1–3 and 10. Then, with a
+   sticky selected, open the palette (⌘K), type "dupl" and press Enter: the sticky is duplicated.
+   Answer: ______
+8. **Copy and paste between two project canvases** (Step 5, Plan 2 hand check 12 (e)). Open a
+   second folder in a window of its own:
+   `SAWIT_HOME=<scratch>/home target/release/sawit -n <scratch>/proj2`, and open its Canvas page.
+   In the first window's canvas, select a sticky and press ⌘C. Click the second window's canvas
+   and press ⌘V: the sticky pastes there, and ⇧⌘V pastes it again. Answer: ______
+9. **Export** (Step 5): Plan 6 hand checks 6–8 and Plan 5 hand check 8. Answer: ______
+10. **`canvas_add_mermaid` from Claude Code** (Step 5). Point Claude Code's Sawit MCP server at this
+    build: a symlink named `sawit-mcp` to `target/release/sawit`, started with the same
+    `SAWIT_HOME`. Or use the installed app once `/consolidate` has released it.
+    - With the canvas open, ask Claude Code to add `flowchart LR; A[Start]-->B{Ok?}; B-->|yes|C[Done]`
+      to the canvas. Three editable shapes come in beside what is there, with two connectors joined
+      to them, "yes" on the second, and the tool answers `added: 5`.
+    - Quit Sawit and ask for it again. The tool works on the saved file, with no "isn't running"
+      error, and the canvas shows both diagrams when it opens again.
+    Answer: ______
+11. **A real board, walked through** (the P7.T4 carry (3) and the cross-plan ruling). Copy the old
+    board, never the original:
+    `mkdir -p <scratch>/real/.nyawit && cp ~/Library/Application\ Support/sawit/canvas.excalidraw <scratch>/real/.nyawit/`.
+    Run the release app on `<scratch>/real` and open the Canvas page: the user-flow board comes in
+    whole. Say which of the import's losses matter, so the follow-up adds those Skeleton fields:
+    heading sizes (36 and 24 px come in at 12 px), the legend labels' colours, Excalidraw's fonts,
+    and curved routes (30 edges come in straight, and the four into "Workspace" meet at one point).
+    Plan 7 hand check 2 compares the same board with the old canvas. Answer: ______

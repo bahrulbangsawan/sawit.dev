@@ -297,6 +297,22 @@ Plan 1 adds a debug log of render time per frame. Plan 8 measures the budget and
 - **FigCraft API drift.** The rev is pinned, and every upgrade is its own task with the full test suite.
 - **CPU raster at Retina sizes.** Mitigated by re-projection, `Retained`, half-resolution while zooming
   and overscan. If the budget fails, page-anchored tiles become the follow-up.
+- **Sticky shadows make settles miss the budget** (measured by Plan 8 Task 4, release build,
+  2560 × 1350-device-pixel canvas). A full re-render after a zoom takes p95 537 ms on a board of 776
+  nodes with 192 stickies, and 382 ms on one of 501 nodes, against 50 ms. Edits (p95 41 ms) and an
+  idle canvas (about 0 % CPU) are within the budget. FigCraft draws every shadowed layer in a pixmap
+  of its own and blurs it on the CPU at device scale on each full render. Without the stickies' soft
+  drop shadow the same 776 nodes settle at p95 65 ms, and a migrated board of shapes and connectors
+  at 22 ms. Follow-up: keep each layer's blurred shadow between renders, keyed by its shape and the
+  render scale, or draw the sticky's fixed shadow from one pre-blurred nine-slice. Then the
+  page-anchored tiles above, so that a settle redraws only the tiles whose content changed.
+- **In-place saves encode on the UI thread** (measured by Plan 8 Task 4). Each autosave encodes the
+  file on the UI thread (`BoardView::queue_save`, then `BoardDoc::to_bytes`), version history and
+  branches included, and only then hands the bytes to the writer thread. For that 776-node board this
+  takes 2 ms alone, 21–39 ms more with 20 versions, and 101–194 ms more with 100, FigCraft's cap
+  (versions read from the file, or made in the session). Follow-up: in-place saves encode on
+  `store.rs`'s writer thread, which is handed the document, its versions and its branches, as
+  FigCraft's `FileSnapshot` is. The thumbnail Plan 1 Task 7 found dropped can be written there too.
 - **Atlas growth.** Every replaced frame is released with `drop_image`. The worker never holds more than
   two frames.
 - **Uncommitted work in `main`.** About 1,500 lines across 29 files, including `workspace.rs`,
