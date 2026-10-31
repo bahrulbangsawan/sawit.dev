@@ -84,7 +84,7 @@ main() {
     say "Installed $dest/Sawit.app"
 
     say "Open it with: open \"$dest/Sawit.app\""
-    say "For the \`sawit\` command, click Install CLI in the app's title bar."
+    say "For the \`sawit\` command, click Install CLI in the status bar at the bottom of the window."
 }
 
 main "$@"
