@@ -9,7 +9,7 @@ use rmcp::{schemars, tool, tool_router};
 use sawit_core::db::{self, diagram};
 use sawit_core::mermaid::{self, Diagram, Palette};
 
-use crate::{Sawit, blocking, expand_home, fail, ok, tilde, tri};
+use crate::{Sawit, blocking, fail, ok, tilde, tri};
 
 /// SVGs up to this size are returned inline.
 const INLINE_SVG: usize = 4 * 1024;
@@ -88,22 +88,8 @@ pub(crate) fn palette(theme: Theme) -> Palette {
     }
 }
 
-/// The file `output_path` names for `tool` to write, if it names one: absolute (`~` expanded), and
-/// never a canvas file ([`crate::refuse_canvas_file`]). It is checked before anything is drawn.
-fn named_output(tool: &str, output_path: Option<&str>) -> Result<Option<PathBuf>, String> {
-    let Some(p) = output_path.map(str::trim).filter(|p| !p.is_empty()) else {
-        return Ok(None);
-    };
-    let path = expand_home(p);
-    if !path.is_absolute() {
-        return Err(format!("output_path “{p}” must be absolute."));
-    }
-    crate::refuse_canvas_file(tool, &path)?;
-    Ok(Some(path))
-}
-
 impl Sawit {
-    /// The file `named` ([`named_output`]), or a fresh one in the project's `.nyawit/diagrams/`
+    /// The file `named` ([`crate::output_path`]), or a fresh one in the project's `.nyawit/diagrams/`
     /// (else `<cache>/diagrams`).
     fn output_file(&self, named: Option<PathBuf>, stem: &str, ext: &str) -> PathBuf {
         if let Some(path) = named {
@@ -143,7 +129,10 @@ impl Sawit {
         if a.source.trim().is_empty() {
             return fail("The Mermaid source is empty.");
         }
-        let named = tri!(named_output("render_mermaid", a.output_path.as_deref()));
+        let named = tri!(crate::output_path(
+            "render_mermaid",
+            a.output_path.as_deref()
+        ));
         let path = self.output_file(named, "diagram", "svg");
         let diagram = tri!(Self::render(a.source, a.theme).await);
         tri!(Self::write_file(path.clone(), diagram.svg.clone()).await);
@@ -151,7 +140,10 @@ impl Sawit {
     }
 
     pub async fn schema_diagram_tool(&self, a: SchemaDiagramArgs) -> CallToolResult {
-        let named = tri!(named_output("schema_diagram", a.output_path.as_deref()));
+        let named = tri!(crate::output_path(
+            "schema_diagram",
+            a.output_path.as_deref()
+        ));
         let client = tri!(self.connect_target(&a.target, a.database.as_deref()).await);
         let schemas = tri!(db::load_schema(&client).await.map_err(|e| e.to_string()));
         let only = a.schema.as_deref().filter(|s| !s.trim().is_empty());

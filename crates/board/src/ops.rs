@@ -224,7 +224,8 @@ const MERMAID_GAP: f64 = 100.0;
 /// - `replace` (`{scene}` or `{path}`) loads a canvas in place of the canvas's pages and answers
 ///   `{ok, elements, notes?}`: `elements` as `get` gives them, and `notes` on what the importer
 ///   left out. The new canvas is an Excalidraw scene (`scene`, or an `.excalidraw` file at `path`,
-///   which [`excalidraw::import`] draws), or the `.figcraft` file at `path`. A `scene` wins over a
+///   which [`excalidraw::import`] draws), or the `.figcraft` file at `path`, or a copy Sawit kept
+///   of one there (`canvas.figcraft.bak`..., [`is_figcraft_file`]). A `scene` wins over a
 ///   `path`. It runs in the canvas's own session, so the canvas stays what it is (a board, with
 ///   its file), and undo brings the old pages back. A scene that has no `elements`, and a file
 ///   that can't be read, are errors that change nothing; a file that is no regular file (a named
@@ -787,10 +788,44 @@ fn incoming(op: &Value) -> Result<Incoming, String> {
                 .map_err(|error| format!("replace: {error}"))?;
             from_scene(&scene).map_err(|error| format!("replace: {path}: {error}"))
         }
+        _ if is_figcraft_file(Path::new(path)) => kept_copy(path),
         _ => Err(format!(
             "replace: {path} is not a .figcraft or .excalidraw file"
         )),
     }
+}
+
+/// Whether `path` names a FigCraft file: a `.figcraft` file, or a copy Sawit keeps of one under
+/// another name, the backups of the store (`<name>.figcraft.bak`, the older `.bak.<n>`, and the
+/// `.lossy.bak` of a file opened with notes). Only the name counts, in any case.
+pub fn is_figcraft_file(path: &Path) -> bool {
+    let Some(name) = path.file_name() else {
+        return false;
+    };
+    let name = name.to_string_lossy().to_lowercase();
+    let Some(at) = name.rfind(".figcraft") else {
+        return false;
+    };
+    let kept = &name[at + ".figcraft".len()..];
+    let numbered = (kept.strip_prefix(".bak."))
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    matches!(kept, "" | ".bak" | ".lossy.bak") || numbered
+}
+
+/// A copy Sawit keeps of a canvas file under another name ([`is_figcraft_file`]:
+/// `canvas.figcraft.bak`...) as what `file.import` loads: its bytes, named as the `.figcraft` file
+/// it was. The engine tells a file's kind by its name, and would place this one as an image
+/// (MCP-6). It is read as a `.figcraft` file is checked: only a regular file of at most
+/// [`crate::store::MAX_FILE`] (CANVAS-CORE-6). A copy that isn't there, or isn't one, is the error.
+fn kept_copy(path: &str) -> Result<Incoming, String> {
+    let file = Path::new(path);
+    let bytes = sawit_core::files::read_regular(file, crate::store::MAX_FILE)
+        .map_err(|error| format!("replace: couldn't read {path}: {error}"))?;
+    let name = file.file_name().unwrap_or_default().to_string_lossy();
+    Ok(Incoming {
+        import: json!({"data": STANDARD.encode(bytes), "name": format!("{name}.figcraft")}),
+        notes: Vec::new(),
+    })
 }
 
 /// An Excalidraw `scene` as something the engine imports: it is drawn on a board of its own, and
@@ -3755,13 +3790,61 @@ mod tests {
             let error = refusal(&mut board, op.clone());
             assert!(error.starts_with("replace needs"), "{op}: {error}");
         }
-        for path in ["/tmp/board.png", "/tmp/board.figcraft.bak", "/tmp/board"] {
+        for path in ["/tmp/board.png", "/tmp/board.bak", "/tmp/board"] {
             let error = refusal(&mut board, json!({"op": "replace", "path": path}));
             let expected = format!("replace: {path} is not a .figcraft or .excalidraw file");
             assert_eq!(error, expected);
         }
+        // A copy kept of a canvas file that isn't there says so.
+        let missing = "/nowhere/canvas.figcraft.bak";
+        let error = refusal(&mut board, json!({"op": "replace", "path": missing}));
+        assert!(
+            error.starts_with(&format!("replace: couldn't read {missing}: ")),
+            "{error}"
+        );
         assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
         assert_eq!(board.session.undo_depth(), (1, 0));
+    }
+
+    /// MCP-6: the copies Sawit keeps of a canvas file (`canvas.figcraft.bak` and the older
+    /// `.bak.<n>`, which a clear or a load keeps of the board it takes off, and the `.lossy.bak` of
+    /// a file opened with notes) are FigCraft files under another name, and load as the file they
+    /// were: that is how an agent brings back a board it cleared. Refused by its name, a backup
+    /// could only be loaded once someone copied it to a `.figcraft` name; and passed on by its
+    /// path, the engine, which tells a file's kind by its name, would place it as an image.
+    #[test]
+    fn replace_loads_a_copy_kept_of_a_canvas_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = other_board_file(dir.path());
+        for name in [
+            "canvas.figcraft.bak",
+            "canvas.figcraft.bak.2",
+            "canvas.figcraft.lossy.bak",
+            "Board.FIGCRAFT.BAK",
+        ] {
+            let kept = dir.path().join(name);
+            std::fs::copy(&other, &kept).unwrap();
+            let mut board = board();
+            add(
+                &mut board,
+                json!([{"type": "sticky", "x": 0, "y": 0, "text": "mine"}]),
+            );
+            let reply = ask(&mut board, json!({"op": "replace", "path": kept}));
+            let now = elements(&mut board);
+            assert_eq!(now.len(), 2, "{name}: {now:?}");
+            assert!(
+                now.iter().all(|e| e["text"] == json!("other")),
+                "{name}: {now:?}"
+            );
+            assert_eq!(reply["elements"], json!(now), "{name}");
+            assert_eq!(board.kind(), DocKind::Board);
+        }
+        // Read as a .figcraft file is checked: a named pipe at such a name is refused, unread.
+        let pipe = dir.path().join("pipe.figcraft.bak");
+        let made = std::process::Command::new("mkfifo").arg(&pipe).status();
+        assert!(made.unwrap().success(), "mkfifo {}", pipe.display());
+        let error = refusal(&mut board(), json!({"op": "replace", "path": pipe}));
+        assert!(error.contains("not a regular file"), "{error}");
     }
 
     /// Every id `commands` lists, with the whole reply checked.

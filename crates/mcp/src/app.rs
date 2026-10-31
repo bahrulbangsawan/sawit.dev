@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -14,7 +14,7 @@ use sawit_board::{BoardDoc, ops};
 use sawit_core::app_control::{self, Command, InstanceAction, Page, Panel, Request};
 use serde_json::{Value, json};
 
-use crate::{Sawit, blocking, fail, ok};
+use crate::{Sawit, blocking, fail, ok, tri};
 
 /// Most commands answer at once; browser ops wait for the page (the app
 /// gives up after 30 s).
@@ -52,7 +52,9 @@ pub struct WindowArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct LaunchArgs {
-    #[schemars(description = "Absolute folder or file to open once Sawit runs")]
+    #[schemars(
+        description = "Absolute folder or file (or ~/…) to open once Sawit runs; a file that isn't there opens as a new one"
+    )]
     pub path: Option<String>,
 }
 
@@ -72,7 +74,7 @@ pub struct OpenArgs {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct PanelArgs {
     #[schemars(
-        description = "instances, files, git, database, run, ports, network, prompts, ssh or shell_config (Config Files)"
+        description = "instances, files, git, database, run, ports, network, prompts, ssh or shell_config (the Config Files panel)"
     )]
     pub panel: String,
     pub project: Option<String>,
@@ -109,7 +111,9 @@ pub struct TabArgs {
 pub struct TerminalRunArgs {
     #[schemars(description = "Command line(s) to type, followed by Enter")]
     pub command: String,
-    #[schemars(description = "Start a new shell in this folder (default: the project)")]
+    #[schemars(
+        description = "Start a new shell in this folder: an absolute path, or ~/… (default: the project)"
+    )]
     pub cwd: Option<String>,
     #[schemars(description = "Use a new terminal tab instead of the active idle shell")]
     #[serde(default)]
@@ -277,7 +281,7 @@ pub struct CanvasDeleteArgs {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasLoadArgs {
     #[schemars(
-        description = "A .figcraft file to load, or an .excalidraw file to import (replaces the board)"
+        description = "A .figcraft file to load, or an .excalidraw file to import (replaces the board). A backup Sawit keeps loads too: canvas.figcraft.bak brings back the board a clear or a load took off"
     )]
     pub path: Option<String>,
     #[schemars(description = "Or the .excalidraw scene JSON itself")]
@@ -312,7 +316,7 @@ pub struct CanvasExportArgs {
     #[schemars(description = "svg (default) or png")]
     pub format: Option<String>,
     #[schemars(
-        description = "Where to write the file; default the project's .nyawit/exports folder (Sawit's cache folder outside a project)"
+        description = "Absolute path (or ~/…) to write the file to; default the project's .nyawit/exports folder (Sawit's cache folder outside a project)"
     )]
     pub output_path: Option<String>,
     pub project: Option<String>,
@@ -324,8 +328,7 @@ fn variant<T: serde::de::DeserializeOwned>(name: &str, choices: &str) -> Result<
         .map_err(|_| format!("Unknown “{name}”: use one of {choices}."))
 }
 
-const PANELS: &str =
-    "instances, files, git, database, run, ports, network, prompts, ssh, shell_config";
+const PANELS: &str = "instances, files, git, database, run, ports, network, prompts, ssh, shell_config (Config Files)";
 const PAGES: &str = "canvas, browser, mcp, tools, changelog, git_graph, github, instance, keymap";
 const INSTANCE_ACTIONS: &str = "select, start, stop, restart";
 
@@ -333,8 +336,14 @@ pub(crate) fn pretty(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
-fn project_path(p: Option<String>) -> Option<PathBuf> {
-    p.filter(|p| !p.trim().is_empty()).map(PathBuf::from)
+/// The folder an agent's `project` names, as the app names the projects it opens: `~` expanded, a
+/// relative name taken from the agent's folder ([`crate::agent_path`]), then through the links on
+/// its way, in the letter case it has on disk and without `..` ([`sawit_core::files::resolve`]).
+/// Sent as written, `~/…`, `/tmp/…` (`/private/tmp/…` on macOS) or another case matched no open
+/// project, though the same names find the stored canvas with the app closed (MCP-3).
+pub(crate) fn project_path(p: Option<String>) -> Option<PathBuf> {
+    let p = p.filter(|p| !p.trim().is_empty())?;
+    Some(sawit_core::files::resolve(&crate::agent_path(&p)))
 }
 
 impl Sawit {
@@ -375,7 +384,8 @@ impl Sawit {
     async fn canvas(&self, project: Option<String>, op: Value) -> Result<Value, String> {
         if !app_control::is_running(&self.paths) {
             let file = self.canvas_board_file(project.as_deref())?;
-            return blocking(move || headless(&file, &op)).await?;
+            let lock = self.paths.root.join(CANVAS_LOCK);
+            return blocking(move || headless(&file, &lock, &op)).await?;
         }
         op_reply(self.app_call(project, Command::Canvas { op }).await?)
     }
@@ -416,7 +426,10 @@ impl Sawit {
     }
 
     pub async fn canvas_command_tool(&self, a: CanvasCommandArgs) -> CallToolResult {
-        let op = json!({ "op": "command", "command": a.command, "params": a.params });
+        let params = a
+            .params
+            .map(|params| with_files_resolved(&a.command, params));
+        let op = json!({ "op": "command", "command": a.command, "params": params });
         match self.canvas(a.project, op).await {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
@@ -538,13 +551,73 @@ fn command_list(reply: &Value, filter: Option<&str>) -> String {
 
 /// The stored canvas is opened, changed and saved by one call after another: two at once (an
 /// agent's parallel tool calls) would each open the file as it was, and the later save would drop
-/// the work of the earlier. This keeps one process's calls apart; another process's (a second
-/// agent's `sawit-mcp`) are kept from it by the stamp each save checks ([`headless`]).
+/// the work of the earlier. This keeps one process's calls apart; the lock in Sawit's folder
+/// ([`lock_stored_canvas`]) keeps them from another process's (a second agent's `sawit-mcp`).
 static STORED_CANVAS: Mutex<()> = Mutex::new(());
 
 fn take_turn() -> MutexGuard<'static, ()> {
     // A call that panicked has left the file whole (it is written by rename), so the next may go on.
     STORED_CANVAS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The file in Sawit's own folder that a `sawit-mcp` holds locked while one of its calls opens,
+/// changes and saves a stored canvas ([`lock_stored_canvas`]).
+const CANVAS_LOCK: &str = "mcp-canvas.lock";
+/// How long a call waits for another process's call on the stored canvas to end.
+const CANVAS_LOCK_WAIT: Duration = Duration::from_secs(60);
+/// How many times a call reads the stored canvas and runs its op, when something that doesn't
+/// take turns (Sawit as it starts, another program) saved the file while the call ran.
+const CANVAS_ATTEMPTS: usize = 3;
+
+/// Takes the lock that keeps the canvas calls of every `sawit-mcp` of one Sawit home apart
+/// (MCP-1): a call holds it from the moment it stamps the file until its save is on disk, so no
+/// other agent's call reads, saves or checks the file in between. The stamp alone couldn't do
+/// that: two calls could each check it before either wrote, and the later save then dropped the
+/// earlier one's edit though that call had answered ok.
+///
+/// The lock is `flock`'s, on the file `lock` ([`CANVAS_LOCK`] in Sawit's folder, which every
+/// agent's `sawit-mcp` shares): let go when the returned file is dropped, and by the system when
+/// the process ends however it ends, so a crash never leaves the canvas locked. A call waits
+/// [`CANVAS_LOCK_WAIT`] at most. A link at the lock's name is not followed.
+fn lock_stored_canvas(lock: &Path) -> Result<std::fs::File, String> {
+    let failed = |e: &dyn std::fmt::Display| {
+        format!(
+            "The canvas wasn't touched: its lock {} couldn't be taken: {e}",
+            lock.display()
+        )
+    };
+    if let Some(dir) = lock.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| failed(&e))?;
+    }
+    if std::fs::symlink_metadata(lock).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return Err(failed(&"it is a link"));
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock)
+        .map_err(|e| failed(&e))?;
+    let deadline = Instant::now() + CANVAS_LOCK_WAIT;
+    let mut pause = Duration::from_millis(1);
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(Duration::from_millis(10));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(format!(
+                    "Another agent's canvas call has run for over {} s, so this one stopped \
+                     waiting for it and changed nothing. Call it again.",
+                    CANVAS_LOCK_WAIT.as_secs()
+                ));
+            }
+            Err(std::fs::TryLockError::Error(e)) => return Err(failed(&e)),
+        }
+    }
 }
 
 /// Runs canvas op `op` on the canvas stored in `file` while no app is running, as the app would run
@@ -561,17 +634,59 @@ fn take_turn() -> MutexGuard<'static, ()> {
 ///   canvas, and a `.nyawit/` made with its `.gitignore`), with the file's version history and
 ///   branches, and never over what the save would lose: images the loader left in the file, or
 ///   what something else wrote to the file since this call read it.
-fn headless(file: &Path, op: &Value) -> Result<Value, String> {
+/// - Calls take turns: this process's by [`take_turn`], every `sawit-mcp`'s by the lock `lock`
+///   ([`lock_stored_canvas`]), held from the read to the save. So an answer is true: ok when the
+///   edit is on disk, an error when nothing was saved.
+fn headless(file: &Path, lock: &Path, op: &Value) -> Result<Value, String> {
     let _turn = take_turn();
+    headless_turn(file, lock, op)
+}
+
+/// One call's turn at the stored canvas in `file`: what [`headless`] does once this process's
+/// other calls are out of the way. It holds the lock `lock`, which keeps other processes' calls
+/// out, for the whole turn.
+fn headless_turn(file: &Path, lock: &Path, op: &Value) -> Result<Value, String> {
+    let _held = lock_stored_canvas(lock)?;
     // The fonts the app's text has: Sawit's own (Inter), then the system's, which no app is
     // scanning here, so they are read the first time text is laid out.
     sawit_board::fonts::register();
     sawit_board::scan_system_fonts_on_demand();
-    // Stamped before it is read, as the app stamps a canvas file it opens: a save made in between
-    // by another process makes this call's save refuse, rather than drop that save's edit.
-    let read = Stamp::of(file);
-    let mut board = store::open(file).map_err(|e| format!("{}: {e}", file.display()))?;
-    run_and_save(&mut board, file, read, op)
+    edit_stored(file, op, || {})
+}
+
+/// Reads the canvas stored in `file`, runs `op` on it and saves it ([`run_and_save`]).
+///
+/// Every `sawit-mcp` takes turns ([`lock_stored_canvas`]), but Sawit as it starts, or another
+/// program, may still save the file while a call runs: then the call's save is refused (its edit
+/// would drop theirs), and it starts again from what is on disk now, up to [`CANVAS_ATTEMPTS`]
+/// times, so the agent's op goes through on top of theirs. When the file changed every time, the
+/// call saved nothing, and its error says so in words for an agent. `between` runs after each
+/// read, before the op: a test writes the file there.
+fn edit_stored(file: &Path, op: &Value, mut between: impl FnMut()) -> Result<Value, String> {
+    let mut attempt = 1;
+    loop {
+        // Stamped before it is read, as the app stamps a canvas file it opens: a save made in
+        // between by something else makes this call's save refuse, rather than drop its edit.
+        let read = Stamp::of(file);
+        let mut board = store::open(file).map_err(|e| format!("{}: {e}", file.display()))?;
+        between();
+        match run_and_save(&mut board, file, read, op) {
+            Err(_) if Stamp::of(file) != read && attempt < CANVAS_ATTEMPTS => attempt += 1,
+            Err(_) if Stamp::of(file) != read => return Err(changed_while_running(file)),
+            done => return done,
+        }
+    }
+}
+
+/// The error of a call on the canvas stored in `file` that saved nothing, because something else
+/// saved the file each time the call read it.
+fn changed_while_running(file: &Path) -> String {
+    format!(
+        "Nothing was saved: something else (Sawit as it opened, or another program) saved {} \
+         while this call ran, each of the {CANVAS_ATTEMPTS} times it read it. Call it again; \
+         canvas_get shows the canvas as it is now.",
+        file.display()
+    )
 }
 
 /// Runs `op` on `board`, read from `file` when the file had stamp `read` ([`Stamp::of`], `None`
@@ -634,29 +749,70 @@ fn read_scene(path: &Path) -> std::io::Result<String> {
     })
 }
 
-/// Whether `path` names a `.figcraft` file.
+/// Whether `path` names a FigCraft file: a `.figcraft` file, or a backup Sawit keeps of one, such as
+/// the `canvas.figcraft.bak` a clear keeps ([`ops::is_figcraft_file`]), which loads as the board it
+/// was (MCP-6).
 fn is_figcraft(path: &str) -> bool {
-    let extension = Path::new(path.trim()).extension();
-    extension.is_some_and(|e| e.eq_ignore_ascii_case("figcraft"))
+    ops::is_figcraft_file(Path::new(path.trim()))
 }
 
 /// `path` as the app, whose working folder is not the agent's, can open it: `~` expanded, and a
 /// relative path taken from the folder the agent runs in. It is text for a JSON op, so a folder
 /// that isn't valid UTF-8 comes out with replacement characters, and the canvas says it can't be read.
 fn absolute_path(path: &str) -> String {
-    let path = crate::expand_home(path.trim());
-    let path = match std::env::current_dir() {
-        Ok(cwd) if path.is_relative() => cwd.join(path),
-        _ => path,
-    };
-    path.to_string_lossy().into_owned()
+    crate::agent_path(path).to_string_lossy().into_owned()
 }
 
-/// The file `output_path` names for canvas_export, read as every tool that writes a file reads
-/// one: trimmed, with `~` expanded. The canvas-file guard checks this path, and it is the one
-/// written.
-fn named_export(output_path: &str) -> PathBuf {
-    crate::expand_home(output_path.trim())
+/// The engine's commands that write or read a file or a folder named in one of their parameters,
+/// with that parameter. Every other `path` an engine command takes is no file: SVG path data
+/// (`vector.create`, `board.ink`, `node.create`), a layer (`text.onPath`), a place in a prototype's
+/// actions (`proto.action.*`).
+const FILE_PARAMS: &[(&str, &str)] = &[
+    ("file.export", "path"),
+    ("file.exportSvg", "path"),
+    ("file.exportFramesPdf", "path"),
+    ("file.exportLayers", "dir"),
+    ("data.fill", "dir"),
+    ("variable.export", "path"),
+    ("component.playground", "path"),
+    ("codeConnect.export", "path"),
+    ("codeConnect.import", "path"),
+    ("file.import", "path"),
+    ("file.placeImage", "path"),
+    ("image.place", "path"),
+    ("library.add", "path"),
+    ("text.loadFont", "path"),
+    ("collab.recoverFile", "path"),
+];
+
+/// `params` of engine command `command`, with the file or folder it names ([`FILE_PARAMS`]) made
+/// absolute as the agent means it ([`absolute_path`]), as canvas_load makes its own: the app,
+/// whose folder is not the agent's, runs the command, and the engine reads no `~` (MCP-8). The
+/// steps of a `command.batch` are read the same way. A share link (`library.add` takes one) and
+/// every other parameter go as they are.
+fn with_files_resolved(command: &str, mut params: Value) -> Value {
+    if command == "command.batch" {
+        let steps = params.get_mut("commands").and_then(Value::as_array_mut);
+        for step in steps.into_iter().flatten() {
+            let id = step
+                .get("command")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if let (Some(id), Some(params)) = (id, step.get_mut("params")) {
+                *params = with_files_resolved(&id, params.take());
+            }
+        }
+        return params;
+    }
+    let names_a_file = FILE_PARAMS.iter().find(|(id, _)| *id == command);
+    if let Some((_, key)) = names_a_file
+        && let Some(Value::String(path)) = params.get_mut(*key)
+        && !path.trim().is_empty()
+        && !path.contains("://")
+    {
+        *path = absolute_path(path);
+    }
+    params
 }
 
 /// Where an export goes when no path is given: the project's
@@ -685,7 +841,7 @@ pub(crate) fn base64_decode(text: &str, from: &str) -> Result<Vec<u8>, String> {
 #[tool_router(router = app_router, vis = "pub(crate)")]
 impl Sawit {
     #[tool(
-        description = "Start the Sawit app if it isn't running (or bring it forward), optionally opening a folder or file. The app_* and terminal_* tools need it running; the canvas_* tools also work on the saved canvas file without it"
+        description = "Start the Sawit app if it isn't running (or bring it forward), optionally opening a folder or file. The app_*, terminal_* and browser_* tools need it running; the canvas_* tools also work on the saved canvas file without it"
     )]
     async fn launch_app(&self, Parameters(a): Parameters<LaunchArgs>) -> CallToolResult {
         let paths = self.paths.clone();
@@ -775,9 +931,15 @@ impl Sawit {
         description = "Run a command in Sawit's terminal (visible to the user), wait, and return where it ran (\"Terminal 2, pane 0:\") with the terminal's latest output. Pass that tab and pane to terminal_read to check a long-running command later, and to terminal_input (key ctrl-c) to stop it: the terminal in front may be another, one the user types in"
     )]
     async fn terminal_run(&self, Parameters(a): Parameters<TerminalRunArgs>) -> CallToolResult {
+        // A folder the shell can't go to would start it in the app's folder instead (MCP-4).
+        let cwd = a.cwd.filter(|cwd| !cwd.trim().is_empty());
+        let cwd = match cwd.as_deref().map(crate::existing_dir).transpose() {
+            Ok(cwd) => cwd,
+            Err(e) => return fail(format!("Nothing was run: {e}")),
+        };
         let command = Command::TerminalRun {
             command: a.command,
-            cwd: a.cwd.map(PathBuf::from),
+            cwd,
             new_tab: a.new_tab,
         };
         let started = match self.app_call(a.project.clone(), command).await {
@@ -1017,20 +1179,23 @@ impl Sawit {
             (None, Some(path)) if is_figcraft(&path) => {
                 json!({ "op": "replace", "path": absolute_path(&path) })
             }
+            // Read here, as an agent means the path (MCP-7): trimmed, `~` for the home folder,
+            // and from the agent's folder.
             (None, Some(path)) => {
+                let file = crate::agent_path(&path);
                 let text = match blocking({
-                    let path = path.clone();
-                    move || read_scene(Path::new(&path))
+                    let file = file.clone();
+                    move || read_scene(&file)
                 })
                 .await
                 {
                     Ok(Ok(text)) => text,
-                    Ok(Err(e)) => return fail(format!("Unable to read {path}: {e}")),
+                    Ok(Err(e)) => return fail(format!("Unable to read {}: {e}", file.display())),
                     Err(e) => return fail(e),
                 };
                 match serde_json::from_str::<Value>(&text) {
                     Ok(scene) => json!({ "op": "replace", "scene": scene }),
-                    Err(e) => return fail(format!("{path} isn't valid JSON: {e}")),
+                    Err(e) => return fail(format!("{} isn't valid JSON: {e}", file.display())),
                 }
             }
             (None, None) => return fail("Give a path or a scene."),
@@ -1043,18 +1208,18 @@ impl Sawit {
 
     #[tool(description = "Export the canvas as an SVG or PNG file")]
     async fn canvas_export(&self, Parameters(a): Parameters<CanvasExportArgs>) -> CallToolResult {
-        let png = match a.format.as_deref().unwrap_or("svg") {
-            "svg" => false,
+        let format = a.format.as_deref().map(str::trim).unwrap_or_default();
+        let png = match format.to_lowercase().as_str() {
+            "svg" | "" => false,
             "png" => true,
-            other => return fail(format!("Unknown format “{other}”: use svg or png.")),
+            _ => return fail(format!("Unknown format “{format}”: use svg or png.")),
         };
-        let named = a.output_path.as_deref().map(named_export);
-        // Nothing else holds the board when the app is closed: an export must never replace it.
-        if let Some(path) = &named
-            && let Err(e) = crate::refuse_canvas_file("canvas_export", path)
-        {
-            return fail(e);
-        }
+        // Read as every tool that writes a file reads its path (MCP-11): absolute, and never a
+        // canvas file, since nothing else holds the board when the app is closed.
+        let named = tri!(crate::output_path(
+            "canvas_export",
+            a.output_path.as_deref()
+        ));
         let op = json!({ "op": if png { "export_png" } else { "export_svg" } });
         let project = crate::project_dir(a.project.as_deref());
         let value = match self.canvas(a.project, op).await {
@@ -1099,7 +1264,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Run one command of the canvas engine by its id, with its parameters as JSON: board.sticky {x, y, text}, node.set, align.left, edit.undo, view.zoomFit, ... The reply is the command's result, and a command the engine refuses is an error. canvas_commands lists the ids, and with a filter what each takes"
+        description = "Run one command of the canvas engine by its id, with its parameters as JSON: board.sticky {x, y, text}, node.set, align.left, edit.undo, view.zoomFit, ... The reply is the command's result, and a command the engine refuses is an error. canvas_commands lists the ids, and with a filter what each takes. With the app closed each call starts from the saved file, so nothing carries over between calls (no undo, no selection, no view): pass ids, or run the steps in one command.batch"
     )]
     async fn canvas_command(&self, Parameters(a): Parameters<CanvasCommandArgs>) -> CallToolResult {
         self.canvas_command_tool(a).await
@@ -1122,6 +1287,8 @@ impl Sawit {
 /// Starts the app through the `sawit` binary next to `sawit-mcp` (it
 /// launches Sawit.app or a detached app process), then waits for it.
 fn launch(paths: &sawit_core::instances::AppPaths, path: Option<&str>) -> Result<String, String> {
+    let target = launch_target(path)?;
+    let path = target.as_deref();
     let running = app_control::is_running(paths);
     if running && path.is_none() {
         let request = Request {
@@ -1144,9 +1311,7 @@ fn launch(paths: &sawit_core::instances::AppPaths, path: Option<&str>) -> Result
         }
         open
     };
-    if let Some(path) = path {
-        cmd.arg(path);
-    }
+    cmd.args(launch_args(path));
     let status = cmd
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -1166,10 +1331,46 @@ fn launch(paths: &sawit_core::instances::AppPaths, path: Option<&str>) -> Result
         }
         std::thread::sleep(Duration::from_millis(200));
     }
-    Ok(match (running, path) {
-        (_, Some(path)) => format!("Sawit is running with {path} open."),
-        _ => "Sawit is running.".into(),
-    })
+    Ok(launched(path))
+}
+
+/// What `launch_app` opens for `path`: nothing for none or a blank one, else the path with `~` for
+/// the home folder, which must then be absolute, as `app_open`'s must, taken through the links on
+/// its way as the CLI and the app name what they open ([`sawit_core::files::resolve`]). The CLI
+/// read it as written (MCP-5): `~/proj` was a new file under `<the agent's folder>/~/proj`.
+fn launch_target(path: Option<&str>) -> Result<Option<PathBuf>, String> {
+    let Some(path) = path.map(str::trim).filter(|path| !path.is_empty()) else {
+        return Ok(None);
+    };
+    let expanded = crate::expand_home(path);
+    if !expanded.is_absolute() {
+        return Err(format!(
+            "“{path}” must be an absolute path (or start with ~/): nothing was opened."
+        ));
+    }
+    Ok(Some(sawit_core::files::resolve(&expanded)))
+}
+
+/// The arguments the `sawit` CLI gets to open `path`: `--`, then the path, so that nothing in it
+/// is read as an option (`-n`, `--version`) or a subcommand (`list`, a database's name).
+fn launch_args(path: Option<&Path>) -> Vec<std::ffi::OsString> {
+    match path {
+        Some(path) => vec!["--".into(), path.as_os_str().to_owned()],
+        None => Vec::new(),
+    }
+}
+
+/// `launch_app`'s answer once Sawit runs, having opened `path`: the path as it opened it, and a
+/// path with nothing there is a new file, as `sawit <path>` opens one.
+fn launched(path: Option<&Path>) -> String {
+    match path {
+        Some(path) if path.exists() => format!("Sawit is running with {} open.", path.display()),
+        Some(path) => format!(
+            "Sawit is running with {} open as a new file: nothing was there.",
+            path.display()
+        ),
+        None => "Sawit is running.".into(),
+    }
 }
 
 #[cfg(test)]
@@ -1273,6 +1474,82 @@ mod tests {
         let read = tab(schemars::schema_for!(TerminalReadArgs));
         assert!(read.contains("the user has in front"), "{read}");
         assert!(read.contains("terminal_run"), "{read}");
+    }
+
+    /// MCP-3: the project an agent names goes to the app as the folder it is on disk: trimmed,
+    /// `~` expanded, a relative name taken from the agent's folder, and through the links on its
+    /// way, in the case the folder has and without `..`, as the app names the projects it opens.
+    /// It went as written, so `~/…`, `/tmp/…` or another case matched no open project, though the
+    /// same names work with the app closed.
+    #[test]
+    fn a_project_is_sent_as_the_folder_it_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("shop");
+        std::fs::create_dir_all(real.join("web")).unwrap();
+        let real = real.canonicalize().unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        for named in [
+            format!(" {} ", link.display()),
+            dir.path().join("SHOP").display().to_string(),
+            real.join("web").join("..").display().to_string(),
+        ] {
+            assert_eq!(
+                project_path(Some(named.clone())),
+                Some(real.clone()),
+                "{named}"
+            );
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = Path::new(&home).canonicalize().unwrap();
+            assert_eq!(project_path(Some("~".into())), Some(home.clone()));
+            assert_eq!(project_path(Some("~/".into())), Some(home));
+        }
+        let here = std::env::current_dir().unwrap().canonicalize().unwrap();
+        assert_eq!(project_path(Some("src".into())), Some(here.join("src")));
+        assert_eq!(project_path(Some("  ".into())), None);
+        assert_eq!(project_path(None), None);
+    }
+
+    /// MCP-5: `launch_app` opens the folder or file its `path` names, and says what it opened.
+    /// The `sawit` CLI took the path as written: `~/proj` opened a new file under
+    /// `<the agent's folder>/~/proj` while the reply said "~/proj" was open, and `--version`
+    /// was read as an option. `~` is the home folder now, the path must be absolute (as for
+    /// `app_open`), and it comes after `--`, so nothing in it is an option or a subcommand.
+    #[test]
+    fn launch_app_opens_the_path_it_names_and_says_what_it_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("shop");
+        std::fs::create_dir_all(&real).unwrap();
+        let real = real.canonicalize().unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let target = launch_target(Some(&format!(" {} ", link.display()))).unwrap();
+        assert_eq!(target.as_deref(), Some(real.as_path()));
+        assert_eq!(
+            launch_args(target.as_deref()),
+            vec![std::ffi::OsString::from("--"), real.clone().into()]
+        );
+        assert_eq!(
+            launched(target.as_deref()),
+            format!("Sawit is running with {} open.", real.display())
+        );
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = Path::new(&home).canonicalize().unwrap();
+            let target = launch_target(Some("~/no such folder")).unwrap();
+            assert_eq!(target, Some(home.join("no such folder")));
+            // Nothing is there: the app opens it as a new file, and the answer says so.
+            let said = launched(target.as_deref());
+            assert!(said.contains("new file"), "{said}");
+        }
+        for not_absolute in ["--version", "list", "proj", "~user/x"] {
+            let refused = launch_target(Some(not_absolute)).unwrap_err();
+            assert!(refused.contains("absolute"), "{not_absolute}: {refused}");
+        }
+        assert_eq!(launch_target(Some("  ")), Ok(None));
+        assert_eq!(launch_target(None), Ok(None));
+        assert!(launch_args(None).is_empty());
     }
 
     #[test]
@@ -1457,6 +1734,69 @@ mod tests {
         );
     }
 
+    /// MCP-4: `terminal_run` starts its shell in the folder it names, or not at all. The PTY
+    /// ignores a `chdir` that fails, so a folder with `~`, a relative one or one that isn't there
+    /// started the shell in the app's own folder (`/` for Sawit.app), and the command ran there
+    /// though the tool answered ok. `~` is the home folder; a relative or missing folder is an
+    /// error, and the app isn't asked.
+    #[tokio::test]
+    async fn terminal_run_starts_where_it_says_or_not_at_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let asked = fake_app_answering(
+            &server.paths,
+            vec![
+                json!({"terminal": 1, "pane": 0}),
+                json!({"text": ""}),
+                json!({"terminal": 2, "pane": 0}),
+                json!({"text": ""}),
+            ],
+        );
+        let run = |cwd: &str| TerminalRunArgs {
+            command: "rm -rf build".into(),
+            cwd: Some(cwd.into()),
+            new_tab: false,
+            wait_secs: Some(0.0),
+            lines: None,
+            project: None,
+        };
+        let cwd_asked = |asked: &Receiver<Request>| {
+            let request = asked.recv_timeout(Duration::from_secs(5)).expect("asked");
+            let Command::TerminalRun { cwd, .. } = request.command else {
+                panic!("{:?}", request.command)
+            };
+            asked.recv_timeout(Duration::from_secs(5)).expect("read");
+            cwd
+        };
+
+        // A folder that is there, written with spaces around it, and the home folder as `~`.
+        let folder = dir.path().join("web");
+        std::fs::create_dir_all(&folder).unwrap();
+        let ran = server
+            .terminal_run(Parameters(run(&format!(" {} ", folder.display()))))
+            .await;
+        assert_ne!(ran.is_error, Some(true), "{}", said(&ran));
+        assert_eq!(cwd_asked(&asked), Some(folder));
+        if let Some(home) = std::env::var_os("HOME") {
+            let ran = server.terminal_run(Parameters(run("~"))).await;
+            assert_ne!(ran.is_error, Some(true), "{}", said(&ran));
+            assert_eq!(cwd_asked(&asked), Some(PathBuf::from(home)));
+        }
+
+        for (cwd, why) in [
+            ("web", "must be an absolute path"),
+            ("/no/such/folder", "is not a folder"),
+        ] {
+            let refused = server.terminal_run(Parameters(run(cwd))).await;
+            assert_eq!(refused.is_error, Some(true), "{cwd}: {}", said(&refused));
+            assert!(said(&refused).contains(why), "{cwd}: {}", said(&refused));
+        }
+        assert!(
+            asked.recv_timeout(Duration::from_millis(300)).is_err(),
+            "the app was asked to run in a folder that isn't one"
+        );
+    }
+
     /// Without `project`, a terminal or app tool names the folder the agent works in, so the app
     /// uses the window that has it open rather than whichever window is in front; with one, it
     /// names only the project.
@@ -1559,6 +1899,76 @@ mod tests {
 
         // None of it went to the file behind the app's back.
         assert_eq!(layers_in(&board_file(&project)).len(), 3);
+    }
+
+    /// MCP-8: the file or folder an engine command names goes to the canvas as the agent means
+    /// it: `~` for the home folder, and a relative one from the agent's folder. As written it was
+    /// the app's folder's (`/` for Sawit.app) with the app running, and `~/…` was no folder at
+    /// all. What isn't a file is left as it is: SVG path data, a layer's id, a share link, a
+    /// number.
+    #[tokio::test]
+    async fn canvas_command_sends_the_files_it_names_as_the_agent_means_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let asked = fake_app(&server.paths, Vec::new());
+        let here = std::env::current_dir().unwrap();
+        let sent = |command: &str, params: Value| {
+            let run = server.canvas_command_tool(CanvasCommandArgs {
+                command: command.into(),
+                params: Some(params),
+                project: project_arg(&project),
+            });
+            async {
+                let ran = run.await;
+                assert_ne!(ran.is_error, Some(true), "{}", said(&ran));
+                next(&asked)["params"].clone()
+            }
+        };
+
+        let params = sent("file.exportSvg", json!({"path": " rel/page.svg "})).await;
+        assert_eq!(params["path"], json!(here.join("rel/page.svg")));
+        let params = sent("file.exportLayers", json!({"dir": "out", "ids": [1]})).await;
+        assert_eq!(params, json!({"dir": here.join("out"), "ids": [1]}));
+        if let Some(home) = std::env::var_os("HOME") {
+            let params = sent("image.place", json!({"path": "~/Desktop/a.png"})).await;
+            let placed = Path::new(&home).join("Desktop").join("a.png");
+            assert_eq!(params["path"], json!(placed));
+        }
+        for (command, params) in [
+            ("vector.create", json!({"path": "M0 0 L10 0", "x": 0})),
+            ("board.ink", json!({"path": "M0 0 L10 10"})),
+            ("text.onPath", json!({"path": "12"})),
+            ("library.add", json!({"path": "https://share.example/f/1"})),
+            ("comment.next", json!({"dir": 1})),
+            ("file.exportSvg", json!({"path": "/abs/page.svg"})),
+        ] {
+            assert_eq!(sent(command, params.clone()).await, params, "{command}");
+        }
+        let batch = json!({"commands": [
+            {"command": "file.exportSvg", "params": {"path": "b.svg"}},
+            {"command": "vector.create", "params": {"path": "M0 0"}},
+            {"command": "file.exportSvg", "params": {"$step": 0}},
+        ]});
+        let steps = sent("command.batch", batch).await["commands"].clone();
+        assert_eq!(steps[0]["params"]["path"], json!(here.join("b.svg")));
+        assert_eq!(steps[1]["params"]["path"], json!("M0 0"));
+        assert_eq!(steps[2]["params"], json!({"$step": 0}));
+    }
+
+    /// Every command [`FILE_PARAMS`] names is one canvas_command runs, and takes that parameter:
+    /// a command the engine renamed or dropped would leave its files read from the app's folder.
+    #[test]
+    fn the_commands_that_take_a_file_are_the_engines() {
+        let mut board = BoardDoc::new_board("Canvas").unwrap();
+        let reply = ops::run(&mut board, &json!({"op": "commands"}));
+        let commands = reply["commands"].as_array().unwrap();
+        for (id, key) in FILE_PARAMS {
+            let command = commands.iter().find(|c| c["id"] == json!(id));
+            let params = command.map(|c| c["params"].as_str().unwrap_or_default());
+            let params = params.unwrap_or_else(|| panic!("{id} is no command"));
+            assert!(params.contains(key), "{id} takes no {key}: {params}");
+        }
     }
 
     #[tokio::test]
@@ -1798,6 +2208,77 @@ mod tests {
         assert_eq!(std::fs::read(&file).unwrap(), before);
     }
 
+    /// MCP-6: canvas_clear keeps the board it cleared as `canvas.figcraft.bak`, and canvas_load
+    /// brings it back from there. It read the backup as Excalidraw JSON ("stream did not contain
+    /// valid UTF-8"), so no tool could restore a cleared board.
+    #[tokio::test]
+    async fn canvas_load_brings_back_the_board_a_clear_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let file = board_file(&project);
+        write_board(&file, 3);
+
+        let cleared = server
+            .canvas_clear(Parameters(WindowArgs {
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_ne!(cleared.is_error, Some(true), "{}", said(&cleared));
+        assert!(layers_in(&file).is_empty());
+
+        let backup = file.with_extension("figcraft.bak");
+        let loaded = server
+            .canvas_load(Parameters(CanvasLoadArgs {
+                path: Some(backup.display().to_string()),
+                scene: None,
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_eq!(answer(&loaded)["elements"].as_array().unwrap().len(), 3);
+        let texts = texts_in(&file);
+        assert!(
+            (0..3).all(|n| texts.contains(&format!("note {n}"))),
+            "{texts:?}"
+        );
+    }
+
+    /// MCP-7: canvas_load reads an Excalidraw file's path as it reads a `.figcraft` file's:
+    /// trimmed, `~` for the home folder, and relative to the agent's folder. It read the path as
+    /// written: a space at its end, or `~/`, was "No such file or directory".
+    #[tokio::test]
+    async fn canvas_load_reads_an_import_path_as_it_reads_a_figcraft_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let old = dir.path().join("old.excalidraw");
+        std::fs::write(&old, OLD_BOARD).unwrap();
+        let load = |path: String| CanvasLoadArgs {
+            path: Some(path),
+            scene: None,
+            project: project_arg(&project),
+        };
+
+        let loaded = server
+            .canvas_load(Parameters(load(format!(" {} ", old.display()))))
+            .await;
+        assert_eq!(answer(&loaded)["elements"].as_array().unwrap().len(), 9);
+
+        if let Some(home) = std::env::var_os("HOME") {
+            let name = "sawit-test-no-such-board.excalidraw";
+            let missing = server
+                .canvas_load(Parameters(load(format!("~/{name}"))))
+                .await;
+            assert_eq!(missing.is_error, Some(true));
+            let expanded = Path::new(&home).join(name);
+            assert!(
+                said(&missing).contains(&expanded.display().to_string()),
+                "{}",
+                said(&missing)
+            );
+        }
+    }
+
     #[tokio::test]
     async fn canvas_commands_lists_every_command_and_filters_with_their_parameters() {
         let dir = tempfile::tempdir().unwrap();
@@ -1922,6 +2403,143 @@ mod tests {
         let mut board = store::open(&file).unwrap();
         run_and_save(&mut board, &file, read, &sticky).unwrap();
         assert_eq!(layers_in(&file).len(), 3);
+    }
+
+    /// The texts of the stickies and other text layers on the canvas stored in `file`.
+    fn texts_in(file: &Path) -> std::collections::HashSet<String> {
+        let layers = layers_in(file);
+        let texts = layers.iter().filter_map(|layer| layer["text"].as_str());
+        texts.map(str::to_string).collect()
+    }
+
+    /// MCP-1: two agents' `sawit-mcp` processes edit one canvas while Sawit is closed. Each call's
+    /// answer must say what happened to its edit: ok when it is on the canvas, an error when it
+    /// isn't. Their saves raced: a call answered ok while the other's save went over its edit,
+    /// and an error while its edit was the one on disk. Threads stand in for the processes here,
+    /// each taking only the turns that hold across processes ([`headless_turn`]).
+    #[test]
+    fn agents_in_two_processes_get_true_answers_and_lose_no_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = board_file(&project_in(dir.path()));
+        let lock = dir.path().join("home").join(CANVAS_LOCK);
+        let (writers, calls) = (4, 12);
+        let answers: Vec<(String, Result<Value, String>)> = std::thread::scope(|scope| {
+            let running: Vec<_> = (0..writers)
+                .map(|writer| {
+                    let (file, lock) = (&file, &lock);
+                    scope.spawn(move || {
+                        (0..calls)
+                            .map(|call| {
+                                let text = format!("w{writer}-n{call}");
+                                let sticky = json!({"type": "sticky", "x": call * 250, "y": writer * 250, "text": text});
+                                let op = json!({"op": "add", "elements": [sticky]});
+                                (text, headless_turn(file, lock, &op))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            running
+                .into_iter()
+                .flat_map(|writer| writer.join().unwrap())
+                .collect()
+        });
+
+        let on_canvas = texts_in(&file);
+        let mut lies = Vec::new();
+        for (text, answer) in &answers {
+            match answer {
+                Ok(_) if !on_canvas.contains(text) => lies.push(format!("{text}: ok, not saved")),
+                Err(e) if on_canvas.contains(text) => lies.push(format!("{text}: saved, yet {e}")),
+                _ => {}
+            }
+        }
+        assert!(lies.is_empty(), "{} wrong answers: {lies:#?}", lies.len());
+        // Taking turns, no call has anything to refuse.
+        let failed: Vec<_> = answers.iter().filter(|(_, a)| a.is_err()).collect();
+        assert!(
+            failed.is_empty(),
+            "{} calls failed: {failed:#?}",
+            failed.len()
+        );
+        assert_eq!(on_canvas.len(), writers * calls);
+    }
+
+    /// MCP-1: something that takes no turns (Sawit as it starts, another program) saves the
+    /// stored canvas while a call runs. The call's save would drop that edit, so it is refused,
+    /// and the call runs again on what is on disk now: both edits land, and the answer is ok.
+    /// When the file changes every time, nothing of the call's is saved, and the error tells the
+    /// agent what to do, not to close a tab it doesn't have.
+    #[test]
+    fn a_call_runs_again_on_a_canvas_saved_under_it_and_says_when_it_gave_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = board_file(&project_in(dir.path()));
+        write_board(&file, 1);
+        let sticky = |text: &str| json!({"op": "add", "elements": [{"type": "sticky", "x": 600, "y": 0, "text": text}]});
+        // Another program's save: the board with one more sticky.
+        let save_theirs = |text: &str| {
+            let mut board = store::open(&file).unwrap();
+            let reply = ops::run(&mut board, &sticky(text));
+            assert_eq!(reply["ok"], true, "{reply}");
+            std::fs::write(&file, board.to_bytes().unwrap()).unwrap();
+        };
+
+        let mut reads = 0;
+        let once = edit_stored(&file, &sticky("ours"), || {
+            reads += 1;
+            if reads == 1 {
+                save_theirs("theirs");
+            }
+        });
+        assert!(once.is_ok(), "{once:?}");
+        assert_eq!(reads, 2);
+        let texts = texts_in(&file);
+        assert!(
+            texts.contains("ours") && texts.contains("theirs"),
+            "{texts:?}"
+        );
+
+        let mut reads = 0;
+        let every_time = edit_stored(&file, &sticky("never"), || {
+            reads += 1;
+            save_theirs(&format!("theirs {reads}"));
+        });
+        let error = every_time.unwrap_err();
+        assert_eq!(reads, CANVAS_ATTEMPTS);
+        assert!(error.starts_with("Nothing was saved"), "{error}");
+        assert!(error.contains("Call it again"), "{error}");
+        assert!(!error.contains("tab"), "{error}");
+        let texts = texts_in(&file);
+        assert!(!texts.contains("never"), "{texts:?}");
+        assert!(
+            texts.contains(&format!("theirs {CANVAS_ATTEMPTS}")),
+            "{texts:?}"
+        );
+    }
+
+    /// The canvas lock is let go when a call ends, and a link at its name is never followed.
+    #[test]
+    fn the_canvas_lock_is_let_go_and_never_taken_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir.path().join("home").join(CANVAS_LOCK);
+        let held = lock_stored_canvas(&lock).unwrap();
+        // Held, another open file of it can't have it: as another process couldn't.
+        let other = std::fs::File::open(&lock).unwrap();
+        assert!(matches!(
+            other.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        drop(held);
+        other.try_lock().unwrap();
+        drop(other);
+
+        std::fs::remove_file(&lock).unwrap();
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "the user's").unwrap();
+        std::os::unix::fs::symlink(&victim, &lock).unwrap();
+        let refused = lock_stored_canvas(&lock).unwrap_err();
+        assert!(refused.contains("it is a link"), "{refused}");
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "the user's");
     }
 
     /// Plan 7 final review T5-6: with Sawit closed every call opens the canvas afresh, so a load
@@ -2125,6 +2743,12 @@ mod tests {
         assert!(!is_figcraft("/a/b/board.excalidraw"));
         assert!(!is_figcraft("figcraft"));
         assert!(!is_figcraft("/a/figcraft/board"));
+        // The backups Sawit keeps of a canvas file are FigCraft files too; an export of one isn't.
+        assert!(is_figcraft("/p/.nyawit/canvas.figcraft.bak"));
+        assert!(is_figcraft("/p/.nyawit/canvas.figcraft.bak.3"));
+        assert!(is_figcraft("/p/.nyawit/canvas.figcraft.lossy.bak"));
+        assert!(!is_figcraft("/p/canvas.figcraft.svg"));
+        assert!(!is_figcraft("/p/canvas.figcraft.bak.x"));
     }
 
     #[test]
@@ -2208,6 +2832,51 @@ mod tests {
         }
     }
 
+    /// MCP-11: canvas_export writes where every tool that writes a file writes: an absolute path
+    /// (or `~/…`), or with none (or a blank one) the project's exports folder. A relative path was
+    /// written in sawit-mcp's folder and reported as given, and "PNG" was an unknown format.
+    #[tokio::test]
+    async fn canvas_export_reads_its_path_and_format_as_every_tool_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = dir.path().join("project");
+        write_board(&board_file(&project), 1);
+        let export = |format: &str, output_path: &str| CanvasExportArgs {
+            format: Some(format.into()),
+            output_path: Some(output_path.into()),
+            project: project_arg(&project),
+        };
+
+        // Through a file, so that nothing can be written under the crate whatever happens.
+        let refused = server
+            .canvas_export(Parameters(export("svg", "Cargo.toml/out.svg")))
+            .await;
+        assert_eq!(refused.is_error, Some(true), "{}", said(&refused));
+        assert!(
+            said(&refused).contains("must be absolute"),
+            "{}",
+            said(&refused)
+        );
+
+        for (format, name) in [("PNG", "page.png"), (" Svg ", "page.svg")] {
+            let out = dir.path().join(name);
+            let done = server
+                .canvas_export(Parameters(export(format, &out.display().to_string())))
+                .await;
+            assert_ne!(done.is_error, Some(true), "{format}: {}", said(&done));
+            assert!(!std::fs::read(&out).unwrap().is_empty());
+        }
+
+        let blank = server.canvas_export(Parameters(export("svg", "  "))).await;
+        assert_ne!(blank.is_error, Some(true), "{}", said(&blank));
+        let exports = project.join(".nyawit").join("exports");
+        assert!(
+            said(&blank).contains(&exports.display().to_string()),
+            "{}",
+            said(&blank)
+        );
+    }
+
     /// The SVG `canvas_export` writes, with no app running, for a canvas of one sticky that says
     /// `text`.
     async fn exported_sticky(text: &str) -> String {
@@ -2255,14 +2924,15 @@ mod tests {
     /// became part of the file's name.
     #[tokio::test]
     async fn an_export_path_is_read_as_every_tool_reads_one() {
+        let named = |path: &str| crate::output_path("canvas_export", Some(path)).unwrap();
         // `~`, without writing to the home folder: the path that is written is this one.
         if let Some(home) = std::env::var_os("HOME") {
             let home = Path::new(&home);
-            let named = named_export("~/Desktop/board.svg");
-            assert_eq!(named, home.join("Desktop").join("board.svg"));
-            assert_eq!(named_export(" ~/board.png \n"), home.join("board.png"));
+            let desktop = home.join("Desktop").join("board.svg");
+            assert_eq!(named("~/Desktop/board.svg"), Some(desktop));
+            assert_eq!(named(" ~/board.png \n"), Some(home.join("board.png")));
         }
-        assert_eq!(named_export(" /a/board.svg "), Path::new("/a/board.svg"));
+        assert_eq!(named(" /a/board.svg "), Some(PathBuf::from("/a/board.svg")));
 
         let dir = tempfile::tempdir().unwrap();
         let server = native(dir.path());
