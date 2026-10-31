@@ -633,8 +633,9 @@ worktree run its own checkout's hook):
 1. `git push` of `main`, from a checkout of `main`, runs `.githooks/pre-push` → `scripts/release.sh`: the
    version in `Cargo.toml` is bumped (the first release stays 0.0.1), a new `CHANGELOG.md` section is written
    from commit messages (grouped as `feat`/`fix`/`perf`/other; `docs`, `test`, `chore`, `ci`, `build`, `style`
-   and `refactor` commits are left out unless they are all there is), then a `chore(release): vX` commit and a
-   `vX` tag are created. `scripts/release.sh --dry-run` prints that section without changing anything.
+   and `refactor` commits, and any with a `docs` or `site` scope (the sawit.dev website, which deploys on its
+   own), are left out unless they are all there is), then a `chore(release): vX` commit and a `vX` tag are
+   created. `scripts/release.sh --dry-run` prints that section without changing anything.
 2. After that push finishes, the release commit and tag are pushed too, in the background, with any earlier
    release tag a failed push left behind. A push of `main` with nothing new to release takes such a tag along
    as well. The log is the main checkout's `.git/sawit-release.log`, whichever worktree pushed
