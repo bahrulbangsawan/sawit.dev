@@ -297,11 +297,15 @@ Plan 1 adds a debug log of render time per frame. Plan 8 measures the budget and
 - **FigCraft API drift.** The rev is pinned, and every upgrade is its own task with the full test suite.
 - **CPU raster at Retina sizes.** Mitigated by re-projection, `Retained`, half-resolution while zooming
   and overscan. If the budget fails, page-anchored tiles become the follow-up.
-- **Sticky shadows make settles miss the budget** (measured by Plan 8 Task 4, release build,
-  2560 × 1350-device-pixel canvas). A full re-render after a zoom takes p95 537 ms on a board of 776
-  nodes with 192 stickies, and 382 ms on one of 501 nodes, against 50 ms. Edits (p95 41 ms) and an
-  idle canvas (about 0 % CPU) are within the budget. FigCraft draws every shadowed layer in a pixmap
-  of its own and blurs it on the CPU at device scale on each full render. Without the stickies' soft
+- **Sticky shadows make settles miss the budget when many stickies are in view** (measured by Plan 8
+  Task 4, release build, 2560 × 1350-device-pixel canvas). A full re-render after a zoom takes p95
+  537 ms on a board of 776 nodes with 192 stickies, and 382 ms on one of 501 nodes, against 50 ms.
+  Both boards are piles, with every template placed at the view's centre, so nearly every sticky's
+  shadow is in each render and these numbers are upper bounds. Laid out over their page, the same
+  501 nodes settle inside the budget: p95 47 ms at 100 % and 50 % centred on one template, and 36 ms
+  in Task 4's zoom cycles, which run at 13 % and 6 % on that board. Edits (p95 41 ms) and an idle
+  canvas (about 0 % CPU) are within the budget. FigCraft draws every shadowed layer in a pixmap of
+  its own and blurs it on the CPU at device scale on each full render. Without the stickies' soft
   drop shadow the same 776 nodes settle at p95 65 ms, and a migrated board of shapes and connectors
   at 22 ms. Follow-up: keep each layer's blurred shadow between renders, keyed by its shape and the
   render scale, or draw the sticky's fixed shadow from one pre-blurred nine-slice. Then the

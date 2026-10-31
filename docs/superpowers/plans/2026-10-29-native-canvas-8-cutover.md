@@ -213,18 +213,22 @@ The spec is added only when a Risks note was written.
 #### Task 4 notes: final check (2026-10-31, at `e52cf5f`, lane 5)
 
 Every unattended step ran. The release build, the socket checks, the real board's migration, edits
-and idle CPU pass. The settle-render budget misses on boards full of stickies: p95 537 ms on the
-budget board and 382 ms at 500 nodes, against 50 ms. The stickies' drop shadows cost most of it. As
-Step 3 says, nothing was tuned: the follow-up is in the spec's Risks, beside the save-cost one the
-P7.T6 ruling asks for. Step 6's gates pass. What needs a person is under "Hand checks".
+and idle CPU pass. The settle-render budget misses on the budget board: p95 537 ms, and 382 ms at
+500 nodes, against 50 ms. The stickies' drop shadows cost most of it. Both boards are piles, with
+every template at the view's centre, so these are upper bounds: laid out over their page, the same
+501 nodes settle inside the budget, at p95 36–47 ms (fix round 1). As Step 3 says, nothing was
+tuned: the follow-up is in the spec's Risks, beside the save-cost one the P7.T6 ruling asks for.
+Step 6's gates pass. What needs a person is under "Hand checks".
 
 How it ran:
 - Machine: Apple M3 (8 cores), 16 GB, macOS 26.6.1, window scale factor 2.
 - The release build of `e52cf5f` (main), launched from the lane as P8-C12 says, with no
-  `SAWIT_NATIVE_CANVAS`, and stopped with `/bin/kill $PID`. Two launches, load average at each
+  `SAWIT_NATIVE_CANVAS`, and stopped with `/bin/kill $PID`. Three launches, load average at each
   launch in brackets:
-  1. an empty project: the socket checks, the budget board and every measurement (2.64 2.96 3.47);
-  2. a project holding a copy of the real old board: Step 4 (4.44 10.36 10.83).
+  1. an empty project: the socket checks, the budget board and its measurements (2.64 2.96 3.47);
+  2. a project holding a copy of the real old board: Step 4 (4.44 10.36 10.83);
+  3. fix round 1, a fresh home and an empty project: the board laid out over its page (3.73 4.44
+     6.34). The binary was the same build, kept in the scratchpad, with the same SHA-256.
 - Everything went over the control socket. Screenshots came from window listing and
   `screencapture -l`. No AX, osascript or posted events. The window kept Sawit's 1280 × 801 and
   stayed unobstructed, so `focus` was never sent. No change was seen that no op of this check made
@@ -235,7 +239,8 @@ How it ran:
   throughout. Every series ran between passes, with `top` showing 70–95 % of the CPU idle as it
   started. The load averages in the tables still carry the last pass. Repeats agree closely (the
   budget board's 50 % renders took 222–244 ms in three series), so the verdicts don't rest on the
-  load.
+  load. The third launch's series ran at a 1-minute load of 2.9–3.7, with 64–78 % of the CPU idle
+  as each started.
 
 Step 1: `cargo build --release -p sawit` succeeded in 10 min 13 s, from clean. Its one other line is
 the future-incompatibility note for `block 0.1.6`, which the baseline's `Cargo.lock` already had.
@@ -276,9 +281,28 @@ The budget board (P8-C13):
 - `node.find {limit: 0}`: 776. `get`: 312 top-level layers (88 sections, 80 connectors, 64
   stickies, 24 texts, 24 ellipses, 16 rounded rectangles, 8 rectangles, 8 diamonds). 192 layers
   carry an effect: the soft drop shadow FigCraft gives every sticky.
+- The board is one pile. Given no `x` and `y`, `board.template` puts every template at the view's
+  centre, and the duplicates land on or beside what they copy, so the 776 nodes lie in one heap
+  about 1,950 × 800 pt. A 100 % render covers about 90 % of it, so it blurs nearly all 192 shadows
+  again each time. The 501-node board is a pile too. Their settle times are upper bounds: a board
+  laid out over its page puts fewer shadows, or smaller ones, in each render (below).
 - With the sidebar and terminal hidden, the canvas is 1280 × 675 pt: 2560 × 1350 device px, where
   the spec's budget names 2560 × 1600. Each render covers the canvas and 256 pt more on every side:
   3584 × 2374 px, 8.5 Mpx. Zoom to fit: 59 %.
+
+The board laid out over its page (fix round 1, the P8.T4 delegate's ruling). It supplements the
+budget board, which stays the board of record with its numbers unchanged:
+- The third launch, with one frame painted before any view op, and the sidebar and terminal hidden
+  as before: 1280 × 675 pt.
+- `board.template {name, x, y}`, cycling through the five ids, put each template's top-left at the
+  top-left of its own 1600 × 1000 pt cell, six cells to a row, until `node.find {limit: 0}`
+  reported 500 or more. No `edit.duplicate`. 26 templates made 501 nodes, 199 of them top-level,
+  with 126 stickies and their shadows: the same mix as the 501-node pile, laid out. Zoom to fit:
+  11 %.
+- The `view.set` series centres on the fourth Brainstorm (row 3, column 5), because Brainstorm
+  holds the most stickies of the five templates. At 100 % a render holds that template alone, with
+  its 8 stickies. At 50 %, overscan included, it reaches into the eight templates around it: about
+  three dozen stickies, at half the size.
 
 Render times. Release build, nearest-rank percentiles. Each sample is the one `canvas render … ms`
 line a command caused, and every command caused exactly one.
@@ -288,9 +312,12 @@ line a command caused, and every command caused exactly one.
 | **Step 3**: `view.zoomFit`, then `view.zoomIn`/`view.zoomOut` ×10 | 100 % / 50 % | 20 | **244.0** | **536.8** | 228.2–543.2 | 7.25 → 6.28 |
 | Fit: `view.zoomFit` after each `view.zoomIn` (Plan 1's method) | 59 % | 20 | 297.9 | 312.4 | 285.1–316.8 | → 3.81 |
 | Edits: `node.set` one sticky's fill, two colours in turn | 59 % | 20 | **38.3** | **40.5** | 18.5–41.9 | 3.38 → 3.26 |
+| Step 3's cycles on the laid-out board (fit 11 %) | 13 % / 6 % | 20 | 22.6 | 35.9 | 9.2–36.8 | 3.71 → 3.58 |
 
 What the time goes on. This is diagnosis only, and nothing was changed. Each row renders the same
-20 views, `view.set` to 100 % and 50 % about the fit centre, and the rows ran back to back.
+20 views, `view.set` to 100 % and 50 % about the fit centre, and the rows ran back to back. The
+laid-out board's row ran later, in the third launch, with its views centred on the fourth
+Brainstorm.
 
 | Board | p50 (ms) | p95 (ms) | 100 %: p50 | 50 %: p50 | `vm.loadavg` (1 min) |
 |---|---|---|---|---|---|
@@ -298,6 +325,7 @@ What the time goes on. This is diagnosis only, and nothing was changed. Each row
 | The same, every effect removed by one `node.set` (undone after) | 57.8 | 64.7 | 60.1 | 56.0 | 6.43 → 5.66 |
 | An empty page (the page and its dots) | 14.9 | 15.4 | 14.9 | 14.6 | 7.06 → 6.43 |
 | 501 nodes on a page of their own: the ten templates, one duplicate round, six more templates (199 top-level, fit 67 %) | 171.2 | 381.6 | 367.3 | 168.0 | 8.15 → 7.21 |
+| The same 501 nodes laid out over their page: 26 templates, one to a 1600 × 1000 pt cell (199 top-level, fit 11 %), the views on the fourth Brainstorm | 43.0 | 47.0 | 43.0 | 42.8 | 3.61 → 3.29 |
 | The real old board after its migration (Step 4: 182 nodes, no stickies) | 18.0 | 22.3 | 16.4 | 18.5 | 10.80 → 10.09 |
 
 - The stickies' shadows take about 89 % of a settle render at 100 % and 76 % at 50 %. FigCraft
@@ -305,6 +333,10 @@ What the time goes on. This is diagnosis only, and nothing was changed. Each row
   every layer in view, on every full render.
 - Without them, the 776-node board is near the budget (p95 64.7 ms), and a board of shapes,
   connectors and text is well inside it.
+- Laid out, the same 501 nodes settle inside the budget: p95 47.0 ms at 100 % and 50 %, where the
+  pile took 381.6 ms, and 35.9 ms in Step 3's cycles, which run at 13 % and 6 % on that board. A
+  repeat of each series gave 45.7 and 36.4 ms. So a settle's cost follows the number and size of
+  the shadows in its render, not the board's node count.
 - An edit stays inside the budget, because `Retained` redraws only what changed.
 
 Idle: no input for 3.5 minutes, with the board on screen. `ps -o %cpu=`, 10 samples 1 s apart: 0.4,
@@ -314,12 +346,15 @@ this board open.
 
 Verdict against the spec's budget:
 - A re-render after an edit: p95 40.5 ms. Passes.
-- A re-render after a settle: p95 536.8 ms on the budget board, 381.6 ms at 500 nodes. Misses on
-  boards full of stickies, by 7 to 11 times. The real board settles at p95 22.3 ms.
+- A re-render after a settle: p95 536.8 ms on the budget board, 381.6 ms at 500 nodes. Misses, by
+  7 to 11 times. Both boards are piles, so these are upper bounds: nearly every sticky's shadow is
+  in each render. Laid out over their page, the same 501 nodes settle inside the budget: p95
+  47.0 ms at 100 % and 50 % on one template, and 35.9 ms in Step 3's cycles. The real board settles
+  at p95 22.3 ms.
 - An idle canvas: about 0 % CPU. Passes.
 - Pan frames at display rate: synthetic scrolling can't reach the window, so this is hand check 2.
 - Nothing was tuned (Step 3). The spec's Risks has the follow-up: "Sticky shadows make settles
-  miss the budget".
+  miss the budget when many stickies are in view".
 
 Beside Plan 1 (P1.T7 delegate ruling): Plan 1 timed another document, the ridgeline example (a
 design file with no sticky shadows), in a debug build under build load. Like with like, its fit
@@ -433,13 +468,14 @@ anything. Record each answer under its number.
 9. **Export** (Step 5): Plan 6 hand checks 6–8 and Plan 5 hand check 8. Answer: ______
 10. **`canvas_add_mermaid` from Claude Code** (Step 5). Point Claude Code's Sawit MCP server at this
     build: a symlink named `sawit-mcp` to `target/release/sawit`, started with the same
-    `SAWIT_HOME`. Or use the installed app once `/consolidate` has released it.
-    - With the canvas open, ask Claude Code to add `flowchart LR; A[Start]-->B{Ok?}; B-->|yes|C[Done]`
-      to the canvas. Three editable shapes come in beside what is there, with two connectors joined
-      to them, "yes" on the second, and the tool answers `added: 5`.
-    - Quit Sawit and ask for it again. The tool works on the saved file, with no "isn't running"
-      error, and the canvas shows both diagrams when it opens again.
-    Answer: ______
+    `SAWIT_HOME`. Or use the installed app once `/consolidate` has released it, with a scratch
+    folder's window in front. With the canvas open, ask Claude Code to add
+    `flowchart LR; A[Start]-->B{Ok?}; B-->|yes|C[Done]` to the canvas. Three editable shapes come in
+    beside what is there, with two connectors joined to them, "yes" on the second, and the tool
+    answers `added: 5`. With Sawit closed, the tool edits the saved file instead. That needs no
+    hand check: sawit-mcp's offline tests cover it
+    (`the_other_canvas_tools_edit_the_stored_canvas_while_the_app_is_closed`, P8.T2 delegate
+    ruling). Answer: ______
 11. **A real board, walked through** (the P7.T4 carry (3) and the cross-plan ruling). Copy the old
     board, never the original:
     `mkdir -p <scratch>/real/.nyawit && cp ~/Library/Application\ Support/sawit/canvas.excalidraw <scratch>/real/.nyawit/`.
