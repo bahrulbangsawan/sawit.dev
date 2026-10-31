@@ -4,6 +4,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
@@ -37,6 +38,10 @@ pub struct TerminalPanel {
     pub maximized: bool,
     /// The window the panel last drew in, for acting on a tab's requests.
     window: Option<AnyWindowHandle>,
+    /// How to reach an SSH server as its settings are now, by its key (the
+    /// workspace's saved servers). Without it a session reconnects as it
+    /// first connected.
+    remotes: Option<RemoteSource>,
     /// New terminals fail to start, as when the shell can't be run (for
     /// tests: under a multiplexer every spawn goes through `env`, which
     /// always starts).
@@ -46,6 +51,9 @@ pub struct TerminalPanel {
 
 /// Asks the workspace to fill the window with the panel, or to restore.
 pub struct ToggleMaximize;
+
+/// How to connect to the SSH server with a key, as its settings are now.
+type RemoteSource = Rc<dyn Fn(&str, &mut App) -> Result<Remote, String>>;
 
 /// An SSH session's server.
 #[derive(Clone)]
@@ -97,6 +105,7 @@ impl TerminalPanel {
             error: None,
             maximized: false,
             window: None,
+            remotes: None,
             #[cfg(test)]
             fail_spawns: false,
         };
@@ -349,9 +358,19 @@ impl TerminalPanel {
         Some((ix, pane))
     }
 
+    /// Where SSH sessions get the server's settings when they reconnect.
+    pub fn set_remote_source(
+        &mut self,
+        source: impl Fn(&str, &mut App) -> Result<Remote, String> + 'static,
+    ) {
+        self.remotes = Some(Rc::new(source));
+    }
+
     /// Connects the ended SSH session in `pane` of the tab at `ix` again,
-    /// in place, and focuses it. The tab's other panes are left alone, and
-    /// so is a session that has not ended (a second click on Reconnect).
+    /// in place, and focuses it, with the server's settings as they are now
+    /// (fixed since, or with a password saved since). The tab's other panes
+    /// are left alone, and so is a session that has not ended (a second
+    /// click on Reconnect).
     pub(super) fn reconnect(
         &mut self,
         ix: usize,
@@ -362,7 +381,7 @@ impl TerminalPanel {
         let Some(tab) = self.tabs.get(ix).cloned() else {
             return;
         };
-        let Some(remote) = tab
+        let Some(old) = tab
             .read(cx)
             .view(pane)
             .map(|v| v.read(cx))
@@ -370,6 +389,17 @@ impl TerminalPanel {
             .and_then(|v| v.remote.clone())
         else {
             return;
+        };
+        let remote = match self.remotes.clone() {
+            Some(source) => match source(&old.key, cx) {
+                Ok(remote) => remote,
+                Err(e) => {
+                    self.error = Some(format!("Unable to reconnect to {}. {e}", old.name));
+                    cx.notify();
+                    return;
+                }
+            },
+            None => old,
         };
         let name = remote.name.clone();
         if let Some(view) = self.spawn_view(ssh_command(&remote.launch), &name, Some(remote), cx) {

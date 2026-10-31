@@ -1804,6 +1804,74 @@ mod tests {
         });
     }
 
+    /// Reconnect connects with the server's settings as they are now: a port, user or key fixed
+    /// since the first connect, or a password saved since, is used.
+    #[gpui_kit::test]
+    fn reconnecting_uses_the_servers_settings_as_they_are_now(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        let stale = super::super::Remote {
+            launch: sawit_core::ssh::Launch {
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), "printf 'sawit-%s\\n' stale; read line".into()],
+                env: Vec::new(),
+            },
+            ..test_remote()
+        };
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| {
+                p.open_ssh(stale, super::super::Origin::User, window, cx)
+            })
+        })
+        .unwrap()
+        .expect("the session starts");
+        cx.run_until_parked();
+        let (ix, tab) = cx.update(|cx| {
+            let p = panel.read(cx);
+            (p.active_index(), p.tab(p.active_index()).clone())
+        });
+        let (pane, ended) = cx.update(|cx| {
+            let t = tab.read(cx);
+            (t.state.focused, t.focused_view().clone())
+        });
+        cx.update(|cx| ended.read(cx).write(b"\n".to_vec()));
+        run_until(cx, "the session ends", |cx| ended.read(cx).exited);
+
+        // The server's settings changed since: its launch now says "fresh".
+        cx.update(|cx| {
+            panel.update(cx, |p, _| {
+                p.set_remote_source(|key, _| {
+                    Ok(super::super::Remote {
+                        key: key.into(),
+                        name: "test".into(),
+                        launch: sawit_core::ssh::Launch {
+                            program: "/bin/sh".into(),
+                            args: vec!["-c".into(), "printf 'sawit-%s\\n' fresh; read line".into()],
+                            env: Vec::new(),
+                        },
+                    })
+                })
+            })
+        });
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.reconnect(ix, pane, window, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        let new = cx.update(|cx| tab.read(cx).focused_view().clone());
+        assert!(new != ended, "the session didn't reconnect");
+        wait_until(cx, "the new session prints", |cx| {
+            let text = new.read(cx).text_tail(10);
+            text.contains("sawit-fresh") || text.contains("sawit-stale")
+        });
+        cx.update(|cx| {
+            assert!(
+                new.read(cx).text_tail(10).contains("sawit-fresh"),
+                "it reconnected with the old settings"
+            )
+        });
+    }
+
     #[gpui_kit::test]
     fn reconnecting_a_live_session_keeps_it(cx: &mut TestAppContext) {
         cx.update(init);

@@ -259,6 +259,14 @@ impl Workspace {
         let ssh_panel = cx.new(|cx| SshPanel::new(ssh_store.clone(), terminal.clone(), window, cx));
         // Closing the window ends its terminals: ask while one runs something.
         crate::terminal::ask_before_closing(window, terminal.downgrade(), cx);
+        // SSH sessions reconnect with their server's settings as they are now.
+        let saved_servers = ssh_store.downgrade();
+        terminal.update(cx, |t, _| {
+            t.set_remote_source(move |key, cx| {
+                let store = saved_servers.upgrade().ok_or("Sawit is closing.")?;
+                store.update(cx, |s, cx| s.remote(key, cx))
+            })
+        });
         let shell_config_panel = cx.new(|cx| ShellConfigPanel::new(window, cx));
         let cli_status = cli_status(cx);
         let updater = updater(cx);
