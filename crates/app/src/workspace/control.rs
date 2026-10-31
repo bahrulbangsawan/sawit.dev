@@ -35,6 +35,33 @@ fn panel_name(tab: SidebarTab) -> &'static str {
     }
 }
 
+/// `app_run_script`'s answer: whether the script started or ran already, and the terminal (tab
+/// and pane) it runs in, or each terminal of a saved command that runs several, by name. The
+/// agent's `terminal_read` and `terminal_input` need them: the script doesn't come in front of a
+/// terminal the user types in.
+fn script_answer(name: &str, running: bool, at: &[(String, usize, usize)]) -> Value {
+    let mut answer = match running {
+        false => json!({ "started": name }),
+        true => json!({
+            "running": name,
+            "note": "It was running already, so it wasn't started again. app_stop_script stops it.",
+        }),
+    };
+    match at {
+        [(_, tab, pane)] => {
+            answer["terminal"] = json!(tab);
+            answer["pane"] = json!(pane);
+        }
+        _ => {
+            answer["terminals"] = at
+                .iter()
+                .map(|(name, tab, pane)| json!({ "name": name, "terminal": tab, "pane": pane }))
+                .collect();
+        }
+    }
+    answer
+}
+
 fn sidebar_tab(panel: Panel) -> SidebarTab {
     match panel {
         Panel::Instances => SidebarTab::Servers,
@@ -164,7 +191,7 @@ impl Workspace {
             }
             Command::MaximizeTerminal => {
                 self.leave_welcome(Layout::default(), cx);
-                self.toggle_terminal_maximized(window, cx);
+                self.toggle_terminal_maximized(Origin::Agent, window, cx);
                 done(json!({ "maximized": self.layout == TERMINAL_ONLY }))
             }
             Command::OpenPage { page } => {
@@ -187,17 +214,18 @@ impl Workspace {
                 cwd,
                 new_tab,
             } => {
-                let tab = if cwd.is_some() || new_tab {
+                let (tab, pane) = if cwd.is_some() || new_tab {
                     self.leave_welcome(TERMINAL_ONLY, cx);
                     self.layout.terminal = true;
                     let dir = cwd.or_else(|| self.root(cx));
-                    self.terminal
-                        .update(cx, |t, cx| t.run_in_new(dir, &command, window, cx))?
+                    self.terminal.update(cx, |t, cx| {
+                        t.run_in_new(dir, &command, Origin::Agent, window, cx)
+                    })?
                 } else {
-                    self.run_in_terminal(&command, window, cx);
-                    self.terminal.read(cx).active_index()
+                    self.run_in_terminal(&command, Origin::Agent, window, cx)?
                 };
-                done(json!({ "terminal": tab }))
+                let pane = self.terminal.read(cx).pane_index(tab, pane, cx);
+                done(json!({ "terminal": tab, "pane": pane }))
             }
             Command::TerminalRead { tab, pane, lines } => {
                 let lines = lines.unwrap_or(READ_LINES).clamp(1, MAX_READ_LINES);
@@ -234,10 +262,22 @@ impl Workspace {
                 done(json!({ "scripts": scripts }))
             }
             Command::RunScript { name } => {
-                self.current()
+                let (launches, running) = self
+                    .current()
                     .run_panel
-                    .update(cx, |r, cx| r.start_named(&name, cx))?;
-                done(json!({ "started": name }))
+                    .read(cx)
+                    .launches_named(&name, cx)?;
+                self.start_scripts(&launches, Origin::Agent, window, cx)
+                    .map_err(|e| format!("“{name}” didn't start: {e}"))?;
+                let terminal = self.terminal.read(cx);
+                let at: Vec<(String, usize, usize)> = launches
+                    .iter()
+                    .filter_map(|l| {
+                        let (tab, pane) = terminal.job_terminal(&l.tag.key, cx)?;
+                        Some((l.tag.name.clone(), tab, pane))
+                    })
+                    .collect();
+                done(script_answer(&name, running, &at))
             }
             Command::StopScript { name } => {
                 self.current()
@@ -247,8 +287,9 @@ impl Workspace {
             }
             Command::SshConnect { host, new_session } => {
                 let key = self.ssh_key(&host, cx)?;
-                self.connect_ssh(key, new_session, window, cx);
-                done(json!({ "terminal": self.terminal.read(cx).active_index() }))
+                let (tab, pane) = self.connect_ssh(key, new_session, Origin::Agent, window, cx)?;
+                let pane = self.terminal.read(cx).pane_index(tab, pane, cx);
+                done(json!({ "terminal": tab, "pane": pane }))
             }
             Command::OpenTable {
                 connection,
@@ -513,5 +554,43 @@ impl Workspace {
             "tab": (!waiting).then_some(self.active),
             "connecting": waiting,
         })))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::script_answer;
+
+    /// app_run_script names the terminal its script runs in, or each terminal of a saved command
+    /// that runs several: the agent's terminal_read and terminal_input need it, as the terminal in
+    /// front may be the one the user types in.
+    #[test]
+    fn a_scripts_answer_says_where_it_runs() {
+        assert_eq!(
+            script_answer("dev", false, &[("dev".into(), 2, 0)]),
+            json!({ "started": "dev", "terminal": 2, "pane": 0 })
+        );
+        assert_eq!(
+            script_answer("dev", true, &[("dev".into(), 2, 1)]),
+            json!({
+                "running": "dev",
+                "note": "It was running already, so it wasn't started again. app_stop_script stops it.",
+                "terminal": 2,
+                "pane": 1,
+            })
+        );
+        let both = [("both 1".to_string(), 3, 0), ("both 2".to_string(), 4, 0)];
+        assert_eq!(
+            script_answer("both", false, &both),
+            json!({
+                "started": "both",
+                "terminals": [
+                    { "name": "both 1", "terminal": 3, "pane": 0 },
+                    { "name": "both 2", "terminal": 4, "pane": 0 },
+                ],
+            })
+        );
     }
 }

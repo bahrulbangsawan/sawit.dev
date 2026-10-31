@@ -151,6 +151,7 @@ impl TerminalTab {
                 TerminalEvent::MenuRequested(at) => this.request_menu(pane, *at, cx),
                 TerminalEvent::TitleChanged => cx.emit(TabEvent::Changed),
                 TerminalEvent::Exited => this.pane_exited(pane, cx),
+                TerminalEvent::Focused => this.pane_focused(pane, cx),
             }
         })
         .detach();
@@ -174,6 +175,16 @@ impl TerminalTab {
             });
         }
         cx.emit(TabEvent::Changed);
+        cx.notify();
+    }
+
+    /// `pane` took the keyboard by itself: the tab's focus (its ring, where
+    /// a split starts, what zoom and the agents' default pane mean) follows.
+    fn pane_focused(&mut self, pane: PaneId, cx: &mut Context<Self>) {
+        if self.state.focused != pane {
+            self.state.focus(pane);
+            cx.emit(TabEvent::Changed);
+        }
         cx.notify();
     }
 
@@ -954,31 +965,23 @@ impl Render for TerminalTab {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
     use gpui_kit::{
-        AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, Focusable as _,
-        InteractiveElement as _, IntoElement, Modifiers, MouseButton, ParentElement as _, Pixels,
-        Point, Render, Styled as _, TestAppContext, VisualTestContext, Window, WindowBounds,
-        WindowOptions, div, point, px, size,
+        AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, ExternalPaths,
+        FileDropEvent, Focusable as _, InteractiveElement as _, IntoElement, Modifiers,
+        MouseButton, ParentElement as _, Pixels, Point, Render, Styled as _, TestAppContext,
+        VisualTestContext, Window, WindowBounds, WindowOptions, div, point, px, size,
     };
     use sawit_core::terminal::{Layout, MIN_COLS, MIN_ROWS, SplitDir};
 
     use super::super::TerminalPanel;
 
-    use super::super::testing::{SHELLS, focus_terminal, init, open_panel, wait_until};
+    use super::super::testing::{
+        SHELLS, focus_terminal, init, open_panel, scratch_dir, wait_until,
+    };
     use super::super::view::FOLDER_TTL;
     use super::pane_menu_items;
-
-    /// A fresh, empty folder under the temp dir, by its real path (what a
-    /// process's cwd reports).
-    fn scratch_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("sawit-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.canonicalize().unwrap()
-    }
 
     /// Like `wait_until`, but lets the app handle what the shells sent
     /// (output, their exit) while it waits.
@@ -1308,6 +1311,59 @@ mod tests {
             .update_window(w, |_, window, cx| next.read(cx).has_focus(window, cx))
             .unwrap();
         assert!(kept, "the keyboard did not go to the next tab");
+    }
+
+    /// A file dropped on a pane gives that pane the keyboard and the tab's focus too: the
+    /// focus ring, ⌘D, zoom and the agents' default pane all follow the keyboard.
+    #[gpui_kit::test]
+    fn dropping_a_file_on_a_pane_focuses_it(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let tab = cx.update(|cx| panel.read(cx).tab(0).clone());
+        let panes = cx.update(|cx| tab.read(cx).state.layout.panes());
+        assert_eq!(panes.len(), 2);
+        cx.simulate_keystrokes(w, "cmd-alt-left");
+        cx.update(|cx| assert_eq!(tab.read(cx).state.focused, panes[0]));
+        // The middle of the second pane, in window coordinates.
+        let at = cx.update(|cx| {
+            let t = tab.read(cx);
+            let bounds = t.bounds.get().expect("the tab was drawn");
+            let (_, rect) = t
+                .state
+                .visible(t.area().expect("the tab was drawn"))
+                .into_iter()
+                .find(|(pane, _)| *pane == panes[1])
+                .expect("the second pane is drawn");
+            bounds.origin + point(px(rect.x + rect.w / 2.), px(rect.y + rect.h / 2.))
+        });
+        let file = scratch_dir("dropped").join("notes.txt");
+        let mut vcx = VisualTestContext::from_window(w, cx);
+        // The pointer comes over the window (GPUI ignores drops while the last input was a key).
+        vcx.simulate_mouse_move(at, None, Modifiers::default());
+        vcx.simulate_event(FileDropEvent::Entered {
+            position: at,
+            paths: ExternalPaths(vec![file.clone()].into()),
+        });
+        vcx.simulate_event(FileDropEvent::Submit { position: at });
+        vcx.run_until_parked();
+        let (focused, second) = cx.update(|cx| {
+            let t = tab.read(cx);
+            (
+                t.state.focused,
+                t.view(panes[1]).expect("the second pane").clone(),
+            )
+        });
+        let typed = cx
+            .update_window(w, |_, window, cx| {
+                second.focus_handle(cx).is_focused(window)
+            })
+            .unwrap();
+        assert!(typed, "the drop didn't give the pane the keyboard");
+        assert_eq!(focused, panes[1], "the tab still focuses the first pane");
+        let _ = std::fs::remove_dir_all(file.parent().unwrap());
     }
 
     #[gpui_kit::test]
@@ -1658,9 +1714,12 @@ mod tests {
         cx.update(init);
         let (w, panel) = open_panel(cx);
         cx.update_window(w, |_, window, cx| {
-            panel.update(cx, |p, cx| p.open_ssh(test_remote(), Some(window), cx))
+            panel.update(cx, |p, cx| {
+                p.open_ssh(test_remote(), super::super::Origin::User, window, cx)
+            })
         })
-        .unwrap();
+        .unwrap()
+        .expect("the session starts");
         cx.run_until_parked();
         let (ix, tab) = cx.update(|cx| {
             let p = panel.read(cx);
@@ -1700,9 +1759,12 @@ mod tests {
         cx.update(init);
         let (w, panel) = open_panel(cx);
         cx.update_window(w, |_, window, cx| {
-            panel.update(cx, |p, cx| p.open_ssh(test_remote(), Some(window), cx))
+            panel.update(cx, |p, cx| {
+                p.open_ssh(test_remote(), super::super::Origin::User, window, cx)
+            })
         })
-        .unwrap();
+        .unwrap()
+        .expect("the session starts");
         cx.run_until_parked();
         let tab = cx.update(|cx| {
             let p = panel.read(cx);
@@ -1742,14 +1804,85 @@ mod tests {
         });
     }
 
+    /// Reconnect connects with the server's settings as they are now: a port, user or key fixed
+    /// since the first connect, or a password saved since, is used.
+    #[gpui_kit::test]
+    fn reconnecting_uses_the_servers_settings_as_they_are_now(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        let stale = super::super::Remote {
+            launch: sawit_core::ssh::Launch {
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), "printf 'sawit-%s\\n' stale; read line".into()],
+                env: Vec::new(),
+            },
+            ..test_remote()
+        };
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| {
+                p.open_ssh(stale, super::super::Origin::User, window, cx)
+            })
+        })
+        .unwrap()
+        .expect("the session starts");
+        cx.run_until_parked();
+        let (ix, tab) = cx.update(|cx| {
+            let p = panel.read(cx);
+            (p.active_index(), p.tab(p.active_index()).clone())
+        });
+        let (pane, ended) = cx.update(|cx| {
+            let t = tab.read(cx);
+            (t.state.focused, t.focused_view().clone())
+        });
+        cx.update(|cx| ended.read(cx).write(b"\n".to_vec()));
+        run_until(cx, "the session ends", |cx| ended.read(cx).exited);
+
+        // The server's settings changed since: its launch now says "fresh".
+        cx.update(|cx| {
+            panel.update(cx, |p, _| {
+                p.set_remote_source(|key, _| {
+                    Ok(super::super::Remote {
+                        key: key.into(),
+                        name: "test".into(),
+                        launch: sawit_core::ssh::Launch {
+                            program: "/bin/sh".into(),
+                            args: vec!["-c".into(), "printf 'sawit-%s\\n' fresh; read line".into()],
+                            env: Vec::new(),
+                        },
+                    })
+                })
+            })
+        });
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.reconnect(ix, pane, window, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        let new = cx.update(|cx| tab.read(cx).focused_view().clone());
+        assert!(new != ended, "the session didn't reconnect");
+        wait_until(cx, "the new session prints", |cx| {
+            let text = new.read(cx).text_tail(10);
+            text.contains("sawit-fresh") || text.contains("sawit-stale")
+        });
+        cx.update(|cx| {
+            assert!(
+                new.read(cx).text_tail(10).contains("sawit-fresh"),
+                "it reconnected with the old settings"
+            )
+        });
+    }
+
     #[gpui_kit::test]
     fn reconnecting_a_live_session_keeps_it(cx: &mut TestAppContext) {
         cx.update(init);
         let (w, panel) = open_panel(cx);
         cx.update_window(w, |_, window, cx| {
-            panel.update(cx, |p, cx| p.open_ssh(test_remote(), Some(window), cx))
+            panel.update(cx, |p, cx| {
+                p.open_ssh(test_remote(), super::super::Origin::User, window, cx)
+            })
         })
-        .unwrap();
+        .unwrap()
+        .expect("the session starts");
         cx.run_until_parked();
         let (ix, tab) = cx.update(|cx| {
             let p = panel.read(cx);

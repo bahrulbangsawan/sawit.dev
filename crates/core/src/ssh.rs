@@ -456,12 +456,16 @@ fn control_path() -> String {
 }
 
 /// Options every Sawit session uses: share one connection per server, notice
-/// a dead network within a minute and a dead address within 10 seconds.
-fn common_options() -> Vec<String> {
+/// a dead network within a minute and a dead address within 10 seconds. The
+/// shared connection outlives the last session by 10 minutes, so the next
+/// one opens at once; for a server with port forwards only by seconds, since
+/// the connection holds the forwarded ports while it lasts.
+fn common_options(forwards: bool) -> Vec<String> {
+    let persist = if forwards { "5s" } else { "10m" };
     [
         "ControlMaster=auto".to_string(),
         format!("ControlPath={}", control_path()),
-        "ControlPersist=10m".into(),
+        format!("ControlPersist={persist}"),
         "ServerAliveInterval=20".into(),
         "ServerAliveCountMax=3".into(),
         "ConnectTimeout=10".into(),
@@ -561,7 +565,8 @@ impl Launch {
 /// `ssh` for a saved host. With `askpass` (the path of a helper that answers
 /// with the saved password, see [`askpass_main`]) the password is filled in.
 pub fn launch(host: &SshHost, askpass: Option<&Path>) -> Launch {
-    let mut args = common_options();
+    let forwards = host.forwards.iter().any(|f| parse_forward(f).is_some());
+    let mut args = common_options(forwards);
     args.extend(host_args(host));
     let env = match (host.auth, askpass) {
         (Auth::Password, Some(helper)) => vec![
@@ -606,7 +611,7 @@ pub fn plain_command(host: &SshHost) -> String {
 
 /// `ssh <alias>`: everything else comes from the user's config.
 pub fn launch_alias(alias: &str) -> Launch {
-    let mut args = common_options();
+    let mut args = common_options(false);
     args.push("--".into());
     args.push(alias.to_string());
     Launch {
@@ -964,6 +969,41 @@ mod tests {
             launch(&h, None)
                 .command_line()
                 .ends_with("'echo hi; exec \"$SHELL\" -l'")
+        );
+    }
+
+    /// The shared connection holds a server's forwarded ports, so for a server with forwards it
+    /// goes seconds after the last session closes, not ten minutes later: until then another
+    /// program (a Sawit instance on 5432) can't take those ports.
+    #[test]
+    fn a_server_with_forwards_lets_go_of_its_ports_soon_after_its_last_session() {
+        let persist = |launch: &Launch| {
+            launch
+                .args
+                .iter()
+                .find(|a| a.starts_with("ControlPersist="))
+                .cloned()
+        };
+        let mut h = host();
+        assert_eq!(
+            persist(&launch(&h, None)).as_deref(),
+            Some("ControlPersist=10m")
+        );
+        h.forwards = vec!["5432".into()];
+        assert_eq!(
+            persist(&launch(&h, None)).as_deref(),
+            Some("ControlPersist=5s")
+        );
+        assert!(
+            launch(&h, None)
+                .args
+                .contains(&"5432:localhost:5432".to_string())
+        );
+        // A forward that doesn't parse isn't passed, so it holds nothing.
+        h.forwards = vec!["not a port".into()];
+        assert_eq!(
+            persist(&launch(&h, None)).as_deref(),
+            Some("ControlPersist=10m")
         );
     }
 
