@@ -62,10 +62,23 @@ pub enum ShellConfigEvent {
 impl EventEmitter<ShellConfigEvent> for ShellConfigPanel {}
 
 /// A collapsible group of rows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Group {
     Shell,
-    Agent(Client),
+    /// An agent's files, or with a profile that profile's own: profiles are
+    /// alternatives, each its own group.
+    Agent(Client, Option<String>),
+}
+
+impl Group {
+    /// "Claude Code", or "Claude Code · work" for a profile.
+    fn title(&self) -> String {
+        match self {
+            Group::Shell => "Shell".into(),
+            Group::Agent(client, None) => client.name().into(),
+            Group::Agent(client, Some(profile)) => format!("{} · {profile}", client.name()),
+        }
+    }
 }
 
 /// One file, as the list shows it.
@@ -179,7 +192,7 @@ impl ShellConfigPanel {
             groups.push((Group::Shell, shell));
         }
         for config in &self.agents {
-            let group = Group::Agent(config.client);
+            let group = Group::Agent(config.client, config.profile.clone());
             if groups.last().is_none_or(|(g, _)| *g != group) {
                 groups.push((group, Vec::new()));
             }
@@ -238,19 +251,18 @@ impl ShellConfigPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let muted = cx.theme().muted_foreground;
-        let (id, title, logo): (SharedString, &str, AnyElement) = match group {
+        let title = group.title();
+        let (id, logo): (SharedString, AnyElement) = match &group {
             Group::Shell => (
                 "config-group-shell".into(),
-                "Shell",
                 Icon::new(Lucide::SquareTerminal)
                     .small()
                     .text_color(muted)
                     .into_any_element(),
             ),
-            Group::Agent(client) => (
-                format!("config-group-{}", client.name()).into(),
-                client.name(),
-                crate::mcp_page::client_logo(client, 16., cx),
+            Group::Agent(client, _) => (
+                format!("config-group-{title}").into(),
+                crate::mcp_page::client_logo(*client, 16., cx),
             ),
         };
         h_flex()
@@ -262,7 +274,7 @@ impl ShellConfigPanel {
             .when(!filtering, |el| {
                 el.cursor_pointer()
                     .hover(|el| el.bg(cx.theme().list_hover))
-                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(group, cx)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(group.clone(), cx)))
             })
             .child(
                 Icon::new(if open {
@@ -281,7 +293,7 @@ impl ShellConfigPanel {
                     .truncate()
                     .text_sm()
                     .font_medium()
-                    .child(title.to_string()),
+                    .child(title),
             )
             .child(
                 div()
@@ -444,10 +456,12 @@ impl ShellConfigPanel {
         let Some(path) = self.selected_writable() else {
             return;
         };
-        let name = file_name(&path);
         let answer = window.prompt(
             PromptLevel::Warning,
-            &format!("Delete “{name}” permanently?"),
+            &delete_question(
+                &path,
+                std::env::var_os("HOME").map(PathBuf::from).as_deref(),
+            ),
             Some("It won't go to the Trash, and this can't be undone."),
             &["Delete", "Cancel"],
             cx,
@@ -528,24 +542,13 @@ impl ShellConfigPanel {
                     return;
                 }
             };
-            // The first save creates the repository: say what's about to
-            // leave this Mac when it looks like a secret.
-            if plan.repo.is_none() && !plan.secrets.is_empty() {
+            // Say what's about to leave this Mac when it looks like a secret.
+            if let Some((title, detail)) = secrets_question(&plan) {
                 let Ok(answer) = this.update_in(cx, |_, window, cx| {
-                    let mut lines: Vec<&str> = plan.secrets.iter().take(6).map(String::as_str).collect();
-                    let more = plan.secrets.len().saturating_sub(lines.len());
-                    let more = format!("and {more} more");
-                    if plan.secrets.len() > 6 {
-                        lines.push(&more);
-                    }
                     window.prompt(
                         PromptLevel::Warning,
-                        "Save lines that look like secrets?",
-                        Some(&format!(
-                            "{}\n\nThey'll be stored in the new private repository github.com/{}/{BACKUP_REPO}. Anyone you give access to it can read them.",
-                            lines.join("\n"),
-                            plan.login
-                        )),
+                        &title,
+                        Some(&detail),
                         &["Save Anyway", "Cancel"],
                         cx,
                     )
@@ -561,7 +564,10 @@ impl ShellConfigPanel {
                 }
             }
             let Ok(rx) = this.update(cx, |_, cx| {
-                rt::spawn(cx, async move { shell_config::save_backup(&token, &plan).await })
+                rt::spawn(
+                    cx,
+                    async move { shell_config::save_backup(&token, &plan).await },
+                )
             }) else {
                 return;
             };
@@ -630,6 +636,31 @@ impl ShellConfigPanel {
     }
 }
 
+/// What to ask before a save that sends lines that look like secrets: on
+/// every such save, as a key added since the last one goes up the same way.
+fn secrets_question(plan: &shell_config::BackupPlan) -> Option<(String, String)> {
+    if plan.secrets.is_empty() {
+        return None;
+    }
+    let mut lines: Vec<String> = plan.secrets.iter().take(6).cloned().collect();
+    if plan.secrets.len() > 6 {
+        lines.push(format!("and {} more", plan.secrets.len() - 6));
+    }
+    let repo = if plan.repo.is_some() {
+        "the private repository"
+    } else {
+        "the new private repository"
+    };
+    Some((
+        "Save lines that look like secrets?".into(),
+        format!(
+            "{}\n\nThey'll be stored in {repo} github.com/{}/{BACKUP_REPO}. Anyone you give access to it can read them.",
+            lines.join("\n"),
+            plan.login
+        ),
+    ))
+}
+
 fn saved_message(saved: &Saved) -> String {
     let files = if saved.files == 1 {
         "1 file".to_string()
@@ -641,6 +672,12 @@ fn saved_message(saved: &Saved) -> String {
         (false, true) => format!("Saved {files} to {BACKUP_REPO}."),
         (false, false) => format!("{BACKUP_REPO} already has these {files}; nothing to save."),
     }
+}
+
+/// The question before deleting `path`: by its path, as the list shows it,
+/// since many files there share a name (every profile's `settings.json`).
+fn delete_question(path: &Path, home: Option<&Path>) -> String {
+    format!("Delete “{}” permanently?", tildify(path, home))
 }
 
 fn file_name(path: &Path) -> String {
@@ -659,10 +696,7 @@ impl Render for ShellConfigPanel {
         let mut ix = 0;
         let mut agents_titled = false;
         for (group, rows) in &groups {
-            let title = match group {
-                Group::Shell => "Shell",
-                Group::Agent(client) => client.name(),
-            };
+            let title = group.title();
             // Searching a group's name lists all of its files.
             let rows: Vec<&Row> = if title.to_lowercase().contains(&query) {
                 rows.iter().collect()
@@ -672,12 +706,12 @@ impl Render for ShellConfigPanel {
             if rows.is_empty() {
                 continue;
             }
-            if matches!(group, Group::Agent(_)) && !agents_titled {
+            if matches!(group, Group::Agent(..)) && !agents_titled {
                 agents_titled = true;
                 items.push(self.render_section("AGENTS · HIGHEST PRIORITY FIRST", cx));
             }
             let open = filtering || !self.collapsed.contains(group);
-            items.push(self.render_group(*group, rows.len(), open, filtering, cx));
+            items.push(self.render_group(group.clone(), rows.len(), open, filtering, cx));
             if open {
                 for row in rows {
                     items.push(self.render_row(ix, row, cx));
@@ -813,6 +847,52 @@ mod tests {
 
     use super::{OpenConfig, ShellConfigPanel};
     use crate::files::Trash;
+
+    /// The panel lists many files of one name (each profile's `settings.json`, a project's
+    /// `.claude/settings.json`): deleting one for good says which, by its path.
+    #[test]
+    fn deleting_names_the_file_by_its_path() {
+        use std::path::Path;
+        let home = Some(Path::new("/Users/me"));
+        assert_eq!(
+            super::delete_question(Path::new("/Users/me/.claude-work/settings.json"), home),
+            "Delete “~/.claude-work/settings.json” permanently?"
+        );
+        assert_eq!(
+            super::delete_question(Path::new("/work/app/.claude/settings.json"), home),
+            "Delete “/work/app/.claude/settings.json” permanently?"
+        );
+    }
+
+    /// A key added to `~/.zshrc` after the first save is pointed out on the next save too,
+    /// into the repository that's there by then (or one the user made), not only the first.
+    #[test]
+    fn every_save_with_secrets_asks_first() {
+        let plan = |repo: bool, secrets: &[&str]| sawit_core::shell_config::BackupPlan {
+            login: "me".into(),
+            repo: repo.then(|| sawit_core::github::OwnRepo {
+                private: true,
+                default_branch: "main".into(),
+                html_url: "https://github.com/me/sawit-shell-config".into(),
+            }),
+            secrets: secrets.iter().map(|s| s.to_string()).collect(),
+        };
+        let (title, detail) = super::secrets_question(&plan(true, &["~/.zshrc:12 ANTHROPIC_KEY"]))
+            .expect("didn't ask");
+        assert_eq!(title, "Save lines that look like secrets?");
+        assert!(
+            detail.starts_with("~/.zshrc:12 ANTHROPIC_KEY\n\n"),
+            "{detail}"
+        );
+        assert!(
+            detail.contains("github.com/me/sawit-shell-config"),
+            "{detail}"
+        );
+        assert!(!detail.contains("new private"), "{detail}");
+        let (_, first) = super::secrets_question(&plan(false, &["~/.zshrc:1 X_TOKEN"])).unwrap();
+        assert!(first.contains("the new private repository"), "{first}");
+        assert_eq!(super::secrets_question(&plan(true, &[])), None);
+    }
 
     /// Typing a search runs none of the list's commands. The search box passes on ↩, and ⌫ with
     /// nothing before the cursor (an emptied box), to the bindings around it, where the list's

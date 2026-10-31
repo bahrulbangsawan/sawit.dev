@@ -7437,6 +7437,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syntect",
+ "tempfile",
  "tokio",
  "tokio-postgres",
  "two-face",

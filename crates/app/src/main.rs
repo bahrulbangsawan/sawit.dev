@@ -132,6 +132,7 @@ fn main() -> std::process::ExitCode {
         editor::init(cx);
         files::init(cx);
         shell_config::init(cx);
+        catalog::init(cx);
         db::init(cx);
         git::init(cx);
         workspace::init(cx);

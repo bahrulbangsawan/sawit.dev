@@ -794,7 +794,7 @@ fn still_open(files: &[PathBuf], open: &HashSet<PathBuf>) -> bool {
         .any(|file| open.contains(file) || open.contains(&sawit_board::store::bound_file(file)))
 }
 
-/// Links `/usr/local/bin/sawit` to this app (menu and title bar), asking
+/// Links `/usr/local/bin/sawit` to this app (menu and status bar), asking
 /// for the admin password when the folder is root-owned.
 pub fn install_cli(cx: &mut App) {
     let Ok(exe) = std::env::current_exe().and_then(|e| e.canonicalize()) else {
