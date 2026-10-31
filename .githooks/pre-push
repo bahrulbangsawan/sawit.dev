@@ -4,7 +4,9 @@
 #   1. scripts/release.sh bumps the version, writes CHANGELOG.md, commits
 #      "chore(release): vX" and tags vX;
 #   2. once this push has finished, the release commit and tag are pushed
-#      too (a hook can't add commits to the push already under way);
+#      too (a hook can't add commits to the push already under way), with
+#      any earlier release tag a failed push left behind (--follow-tags); a
+#      failure shows a notification;
 #   3. the tag starts .github/workflows/release.yml, which builds the app
 #      and publishes the GitHub Release the in-app updater reads.
 # The release is cut on HEAD, so main is pushed from a checkout of main. A
@@ -48,6 +50,9 @@ log="$(git rev-parse --absolute-git-dir)/sawit-release.log"
 echo "pre-push: release $tag created; the release commit and tag are pushed once this push finishes (log: $log)" >&2
 nohup sh -c '
     while kill -0 "$1" 2>/dev/null; do sleep 0.3; done
-    SAWIT_RELEASE_PUSH=1 git push "$2" main "$3"
-' sh "$PPID" "$remote" "$tag" >"$log" 2>&1 &
+    if ! SAWIT_RELEASE_PUSH=1 git push --follow-tags "$2" main "$3"; then
+        echo "pre-push: pushing release $3 failed. The next release push takes its tag along; to push it now: SAWIT_RELEASE_PUSH=1 git push --follow-tags $2 main"
+        osascript -e "display notification \"Pushing release $3 failed. See $4\" with title \"Sawit release\"" >/dev/null 2>&1 || true
+    fi
+' sh "$PPID" "$remote" "$tag" "$log" >"$log" 2>&1 &
 exit 0

@@ -213,6 +213,40 @@ impl Repo {
         fs::read_to_string(self.work.join(".git/sawit-release.log")).unwrap_or_default()
     }
 
+    /// Waits for the release log to say `what`; the log.
+    fn wait_for_log(&self, what: &str) -> String {
+        let start = Instant::now();
+        loop {
+            let log = self.release_log();
+            if log.contains(what) {
+                return log;
+            }
+            assert!(
+                start.elapsed() < LANDS_WITHIN,
+                "the release log never said {what:?}: {log}"
+            );
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// What the hook asked `osascript` to show, one call a line.
+    fn notifications(&self) -> String {
+        let shown = self.work.parent().unwrap().join("notifications");
+        fs::read_to_string(shown).unwrap_or_default()
+    }
+
+    /// From now on `origin` takes no tags, as a remote that fails part of a push does; or takes
+    /// them again.
+    fn refuse_tags(&self, refuse: bool) {
+        let hook = self.remote.join("hooks/update");
+        if refuse {
+            let refuse = "case \"$1\" in refs/tags/*) echo \"no tags today\" >&2; exit 1 ;; esac\n";
+            script(&hook, refuse);
+        } else {
+            fs::remove_file(hook).unwrap();
+        }
+    }
+
     /// The subject of the commit `rev` names in the clone.
     fn subject(&self, rev: &str) -> String {
         self.git(&["log", "-1", "--format=%s", rev])
@@ -332,4 +366,59 @@ fn release_sh_stops_before_changing_anything_when_its_tag_exists() {
     assert!(said.contains("v0.0.8"), "{said}");
     assert_eq!(repo.local("HEAD"), head);
     assert_eq!(repo.git(&["status", "--porcelain"]), "");
+}
+
+/// RELEASE-4: when the release push fails after the hook has returned, its output went only to
+/// the log, which nobody reads. Now a notification says so, and the log says how to push it.
+#[test]
+fn a_failed_release_push_says_so() {
+    let repo = Repo::new();
+    repo.refuse_tags(true);
+    repo.commit("feat(app): a new thing");
+    ok(repo.push_main(None));
+    repo.wait_for_log("no tags today");
+    let start = Instant::now();
+    while !repo.notifications().contains("v0.0.8") {
+        assert!(
+            start.elapsed() < LANDS_WITHIN,
+            "no notification; the release log says: {}",
+            repo.release_log()
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+    let log = repo.wait_for_log("--follow-tags");
+    assert!(
+        log.contains("SAWIT_RELEASE_PUSH=1 git push --follow-tags origin main"),
+        "{log}"
+    );
+    assert_eq!(repo.remote("refs/tags/v0.0.8"), None);
+}
+
+/// RELEASE-4: a release tag a failed push left behind was never pushed again: the next release
+/// went out without it, so its version never became a GitHub release. Now the next release's
+/// push takes it along.
+#[test]
+fn a_release_tag_left_behind_goes_out_with_the_next_release() {
+    let repo = Repo::new();
+    repo.refuse_tags(true);
+    repo.commit("feat(app): a new thing");
+    ok(repo.push_main(None));
+    repo.wait_for_log("no tags today");
+    let released = repo.wait_for_remote("refs/heads/main");
+    assert_eq!(Some(released), repo.local("refs/tags/v0.0.8"));
+    assert_eq!(repo.remote("refs/tags/v0.0.8"), None);
+
+    repo.refuse_tags(false);
+    repo.commit("fix(app): a later fix");
+    let out = repo.push_main(None);
+    let said = stderr(&out);
+    assert!(said.contains("release v0.0.9 created"), "{said}");
+    ok(out);
+    repo.wait_for_remote("refs/tags/v0.0.9");
+    assert_eq!(
+        repo.remote("refs/tags/v0.0.8"),
+        repo.local("refs/tags/v0.0.8"),
+        "the release log says: {}",
+        repo.release_log()
+    );
 }

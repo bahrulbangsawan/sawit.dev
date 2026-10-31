@@ -218,9 +218,9 @@ Commit this as `docs: update README, screenshots and demo for <short summary>`.
      (`git worktree remove ../sawit-main`): while it holds `main`, `git fetch . <lane>:main` is refused.
    - With `core.hooksPath = .githooks`, the pre-push hook runs `scripts/release.sh`. It bumps the version in
      `Cargo.toml`/`Cargo.lock`, writes the new `CHANGELOG.md` section from the commit subjects, commits
-     `chore(release): vX` and tags `vX`. A background job then pushes that commit and tag
-     (log: `$(git rev-parse --absolute-git-dir)/sawit-release.log`). Don't run `release.sh` yourself too, or the
-     version is bumped twice.
+     `chore(release): vX` and tags `vX`. A background job then pushes that commit and tag, with any earlier
+     release tag a failed push left behind (log: `$(git rev-parse --absolute-git-dir)/sawit-release.log`; a
+     failure shows a notification). Don't run `release.sh` yourself too, or the version is bumped twice.
    - If `core.hooksPath` is not set: in the checkout of `main`, run `tag=$(scripts/release.sh)`, then
      `git push origin main && git push origin "$tag"`.
    - A `main` that reached origin without its release (pushed with the hook off, or with
