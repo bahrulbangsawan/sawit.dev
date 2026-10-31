@@ -1077,8 +1077,8 @@ There are 26 questions. They come from the ledger lines that leave a decision or
 **Q12. Should an agent's canvas reads leave your tabs alone?**
 - Every canvas op from an agent, `canvas_get` included, opens the canvas tab and makes it active. That shows the
   canvas over a maximized terminal, and it makes the requested project the window's active one.
-- With no project named, the app path draws on the frontmost window's active project, while the closed-app path
-  draws in the agent's working folder.
+- With no project named, the app path draws on the active project of the window that has the agent's working folder
+  open (else the frontmost window), while the closed-app path draws in the agent's working folder.
 - The fix is the browser tools' rule: only ops that show something bring the tab forward. That is a few lines in
   sawit-mcp or `control.rs`.
 - Source: P1:186, P7:212.
@@ -1091,6 +1091,8 @@ There are 26 questions. They come from the ledger lines that leave a decision or
 - The same question applies to the Actions palette and the context menu.
 - The follow-up starts the field without the keyboard unless the canvas had it: a few lines and one test.
 - The run sent this to the controller for Plan 7's final review, and no ruling was recorded.
+- The terminal has since answered it for itself: an agent's terminal commands never take the keyboard, and don't
+  switch away from a terminal you're typing in.
 - Source: P4:112.
 
 **Q14. Agent shapes with no `backgroundColor`: sticky yellow, or no fill?** (P7-1)
