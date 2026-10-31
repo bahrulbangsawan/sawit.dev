@@ -1,11 +1,12 @@
 //! One terminal: draws `core::terminal` snapshots on a canvas (like Zed's
 //! terminal element) and forwards keyboard, mouse and paste input. Dragging
 //! selects text and copies it on release; Shift+drag selects even while a
-//! program (herdr, vim) has the mouse. Dropped files are typed as paths.
+//! program (vim, Claude Code) has the mouse. Dropped files are typed as paths.
 
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use gpui_kit::assets::IconName as Lucide;
@@ -17,12 +18,17 @@ use sawit_core::terminal::{
     mouse_report, paste_bytes,
 };
 
+use super::{FocusDown, FocusLeft, FocusRight, FocusUp, SplitDown, SplitRight, ZoomPane};
 use crate::files::DraggedFile;
 
 const FONT_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 1.3;
 /// How long the "Copied to clipboard" toast stays up.
-const TOAST: std::time::Duration = std::time::Duration::from_millis(1400);
+const TOAST: Duration = Duration::from_millis(1400);
+/// Space left and right of the grid.
+pub(super) const PAD_X: Pixels = px(8.);
+/// How long a pane header shows a folder before asking the OS again.
+pub(super) const FOLDER_TTL: Duration = Duration::from_millis(500);
 
 /// Grid origin and cell size on screen.
 type GridLayout = (Point<Pixels>, Size<Pixels>);
@@ -31,19 +37,69 @@ type GridLayout = (Point<Pixels>, Size<Pixels>);
 /// shell needs would swallow it: Root's Tab/Shift-Tab move focus out of the
 /// terminal (and Tab is completion), Root's Cmd-C copies a stale selection
 /// elsewhere in the window. Unbinding them here hands them to `on_key`.
-/// App shortcuts (Ctrl-Tab, Cmd-…) stay with the workspace.
+/// App shortcuts (Ctrl-Tab, Cmd-…) stay with the workspace. The pane keys
+/// (split, move focus, zoom) live here too, so they only act in a terminal.
 pub(super) fn bindings() -> Vec<KeyBinding> {
     let ctx = Some("Terminal");
     vec![
         KeyBinding::new("tab", NoAction, ctx),
         KeyBinding::new("shift-tab", NoAction, ctx),
         KeyBinding::new("cmd-c", NoAction, ctx),
+        KeyBinding::new("cmd-d", SplitRight, ctx),
+        KeyBinding::new("cmd-shift-d", SplitDown, ctx),
+        KeyBinding::new("cmd-alt-left", FocusLeft, ctx),
+        KeyBinding::new("cmd-alt-right", FocusRight, ctx),
+        KeyBinding::new("cmd-alt-up", FocusUp, ctx),
+        KeyBinding::new("cmd-alt-down", FocusDown, ctx),
+        KeyBinding::new("cmd-shift-enter", ZoomPane, ctx),
     ]
+}
+
+/// The size of one grid cell: the mono font's advance by its line height.
+pub(super) fn cell_size(window: &Window, cx: &App) -> Size<Pixels> {
+    let font = font(cx.theme().mono_font_family.clone());
+    let font_id = window.text_system().resolve_font(&font);
+    let font_size = px(FONT_SIZE);
+    let cell_width = window
+        .text_system()
+        .advance(font_id, font_size, 'm')
+        .map(|s| s.width)
+        .unwrap_or(px(8.));
+    size(cell_width, (font_size * LINE_HEIGHT).round())
 }
 
 pub enum TerminalEvent {
     TitleChanged,
     Exited,
+    /// A right-click asked for the pane menu, at this window position.
+    MenuRequested(Point<Pixels>),
+}
+
+/// Where a right-click goes.
+pub enum RightClick {
+    /// Opens the pane menu.
+    Menu,
+    /// Goes to the program as a mouse report.
+    Program,
+    /// Goes nowhere: the pane sends right-clicks on, but its program does
+    /// not take the mouse.
+    Nothing,
+}
+
+/// Where a right-click goes. Shift always opens the menu; otherwise it goes
+/// to the program when the pane is set to send right-clicks on.
+pub fn right_click_target(
+    send_right_clicks: bool,
+    shift: bool,
+    program_has_mouse: bool,
+) -> RightClick {
+    if shift || !send_right_clicks {
+        RightClick::Menu
+    } else if program_has_mouse {
+        RightClick::Program
+    } else {
+        RightClick::Nothing
+    }
 }
 
 impl EventEmitter<TerminalEvent> for TerminalView {}
@@ -54,7 +110,7 @@ pub struct TerminalView {
     focus: FocusHandle,
     pub title: SharedString,
     pub exited: bool,
-    /// Runs the user's shell (not herdr), so commands can be typed into it.
+    /// Runs the user's shell, so commands can be typed into it.
     pub shell: bool,
     /// Something was typed, pasted or run here; a fresh tab can be replaced.
     pub touched: bool,
@@ -62,8 +118,9 @@ pub struct TerminalView {
     pub remote: Option<super::Remote>,
     /// Started from the Run panel: which script, under its name.
     pub job: Option<super::JobTag>,
-    /// The project whose group the tab is in (none for SSH or no project).
-    pub group: Option<std::path::PathBuf>,
+    /// Right-clicks go to the program instead of opening the pane menu
+    /// (the tab keeps this in step with the pane's settings).
+    pub send_right_clicks: bool,
     /// Grid origin and cell size from the last paint, for mouse mapping.
     layout: Rc<Cell<Option<GridLayout>>>,
     pressed: Option<TermButton>,
@@ -72,6 +129,11 @@ pub struct TerminalView {
     scroll: ScrollAccumulator,
     /// Shows the copy toast while set; finishing hides it.
     toast: Option<Task<()>>,
+    /// The last `cwd()` answer for the pane header, and when it was asked.
+    folder: Option<(Instant, Option<PathBuf>)>,
+    /// Asks for the folder again a moment after the header last read it,
+    /// redrawing if it changed.
+    folder_refresh: Option<Task<()>>,
     _events: Task<()>,
 }
 
@@ -133,12 +195,14 @@ impl TerminalView {
             touched: false,
             remote: None,
             job: None,
-            group: None,
+            send_right_clicks: false,
             layout: Rc::new(Cell::new(None)),
             pressed: None,
             selecting: false,
             scroll: ScrollAccumulator::default(),
             toast: None,
+            folder: None,
+            folder_refresh: None,
             _events: task,
         }
     }
@@ -164,6 +228,54 @@ impl TerminalView {
         self.session.clear_selection();
         self.session.cd(dir);
         self.session.scroll_to_bottom();
+    }
+
+    /// The folder the program is in now. Asks the OS on every call.
+    pub fn cwd(&self) -> Option<PathBuf> {
+        self.session.cwd()
+    }
+
+    /// The program's folder for display. Asks the OS at most every 500 ms,
+    /// since headers redraw with every frame of output. Each read also
+    /// schedules one more look 500 ms later, so after a `cd` the header
+    /// settles on the new folder even if no more output comes. That look
+    /// redraws only when the folder changed, so an idle pane stays idle.
+    pub fn folder(&mut self, cx: &mut Context<Self>) -> Option<PathBuf> {
+        let dir = match &self.folder {
+            Some((at, dir)) if at.elapsed() < FOLDER_TTL => dir.clone(),
+            _ => {
+                let dir = self.cwd();
+                self.folder = Some((Instant::now(), dir.clone()));
+                dir
+            }
+        };
+        if self.folder_refresh.is_none() {
+            self.folder_refresh = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(FOLDER_TTL).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.folder_refresh = None;
+                    let dir = this.cwd();
+                    let changed = this.folder.as_ref().is_none_or(|(_, old)| *old != dir);
+                    this.folder = Some((Instant::now(), dir));
+                    if changed {
+                        cx.notify();
+                    }
+                });
+            }));
+        }
+        dir
+    }
+
+    /// The folder the header shows now, without asking the OS (for tests).
+    #[cfg(test)]
+    pub(super) fn cached_folder(&self) -> Option<PathBuf> {
+        self.folder.as_ref().and_then(|(_, dir)| dir.clone())
+    }
+
+    /// The grid size the terminal was last laid out at (for tests).
+    #[cfg(test)]
+    pub(super) fn grid(&self) -> GridSize {
+        self.session.size()
     }
 
     /// The shell is waiting at its prompt, not running a command.
@@ -483,14 +595,7 @@ fn paint_snapshot(snap: &Snapshot, p: &Painter, window: &mut Window, cx: &mut Ap
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let font = font(cx.theme().mono_font_family.clone());
-        let font_id = window.text_system().resolve_font(&font);
-        let font_size = px(FONT_SIZE);
-        let cell_width = window
-            .text_system()
-            .advance(font_id, font_size, 'm')
-            .map(|s| s.width)
-            .unwrap_or(px(8.));
-        let cell = size(cell_width, (font_size * LINE_HEIGHT).round());
+        let cell = cell_size(window, cx);
         let session = self.session.clone();
         let palette = self.palette.clone();
         let layout = self.layout.clone();
@@ -525,7 +630,7 @@ impl Render for TerminalView {
             .key_context("Terminal")
             .track_focus(&self.focus)
             .size_full()
-            .px_2()
+            .px(PAD_X)
             .bg(hsla(self.palette.background))
             .on_key_down(cx.listener(Self::on_key))
             .on_scroll(cx.listener(Self::on_scroll))
@@ -553,13 +658,24 @@ impl Render for TerminalView {
             )
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(|this, e: &MouseDownEvent, _, _| {
-                    if this.send_mouse(
-                        MouseAction::Press(TermButton::Right),
-                        e.position,
+                cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                    let target = right_click_target(
+                        this.send_right_clicks,
                         e.modifiers.shift,
-                    ) {
-                        this.pressed = Some(TermButton::Right);
+                        this.modes().mouse_report,
+                    );
+                    match target {
+                        RightClick::Menu => cx.emit(TerminalEvent::MenuRequested(e.position)),
+                        RightClick::Program => {
+                            if this.send_mouse(
+                                MouseAction::Press(TermButton::Right),
+                                e.position,
+                                false,
+                            ) {
+                                this.pressed = Some(TermButton::Right);
+                            }
+                        }
+                        RightClick::Nothing => {}
                     }
                 }),
             )
@@ -927,5 +1043,14 @@ mod tests {
         assert!(focused, "focus left the terminal");
         let received = cx.update(|cx| host.read(cx).received.clone());
         assert_eq!(received, keys.split(' ').collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn right_clicks_open_the_menu_unless_sent_to_the_pane() {
+        use super::{RightClick::*, right_click_target};
+        assert!(matches!(right_click_target(false, false, true), Menu));
+        assert!(matches!(right_click_target(true, false, true), Program));
+        assert!(matches!(right_click_target(true, false, false), Nothing));
+        assert!(matches!(right_click_target(true, true, true), Menu));
     }
 }

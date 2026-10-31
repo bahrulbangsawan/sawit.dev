@@ -380,18 +380,6 @@ rm -rf "$HOME/.local/share/cursor-agent""#,
         )
     },
     Tool {
-        uninstall: Some(r#"rm -f "$HOME/.local/bin/herdr""#),
-        also: &["~/.local/bin/herdr"],
-        ..tool(
-            "herdr",
-            "herdr",
-            "Split panes and sessions for Sawit's terminal.",
-            Category::Other,
-            "herdr",
-            "curl -fsSL https://herdr.dev/install.sh | sh",
-        )
-    },
-    Tool {
         uninstall: Some(
             r#"rm -f "$(command -v cap)"
 rm -rf "/Applications/Cap.app" "$HOME/Applications/Cap.app""#,

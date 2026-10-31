@@ -133,6 +133,9 @@ pub enum Command {
     TerminalRead {
         #[serde(default)]
         tab: Option<usize>,
+        /// The pane within the tab; default its focused one.
+        #[serde(default)]
+        pane: Option<usize>,
         #[serde(default)]
         lines: Option<usize>,
     },
@@ -141,13 +144,19 @@ pub enum Command {
     TerminalInput {
         #[serde(default)]
         tab: Option<usize>,
+        /// The pane within the tab; default its focused one.
+        #[serde(default)]
+        pane: Option<usize>,
         #[serde(default)]
         text: Option<String>,
         #[serde(default)]
         key: Option<String>,
     },
+    /// Closes a terminal tab, or only one of its panes.
     TerminalClose {
         tab: usize,
+        #[serde(default)]
+        pane: Option<usize>,
     },
     /// The Run panel's scripts and saved commands, with running state.
     RunList,
