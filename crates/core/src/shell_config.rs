@@ -120,7 +120,7 @@ pub fn login_shell() -> Option<String> {
 }
 
 /// Whether a save can replace the file: it and its folder are writable.
-fn writable(path: &Path) -> bool {
+pub(crate) fn writable(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt as _;
     let can_write = |p: &Path| {
         std::ffi::CString::new(p.as_os_str().as_bytes())

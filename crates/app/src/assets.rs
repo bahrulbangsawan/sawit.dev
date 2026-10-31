@@ -138,7 +138,13 @@ gpui_kit::assets::icon_assets!(
         // The browser's device menu (src/browser/toolbar.rs).
         Smartphone,
         // The browser's Annotate panel (src/browser/annotate.rs).
-        Camera
+        Camera,
+        // The Dev Tools and MCP catalogs (src/catalog.rs, tools_page.rs, mcp_page.rs).
+        CircleArrowUp,
+        CircleDashed,
+        CircleMinus,
+        Clock,
+        SearchX
     ]
 );
 
