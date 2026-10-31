@@ -239,13 +239,7 @@ impl FilesPanel {
     }
 
     pub fn set_root(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        self.expanded.clear();
-        self.children.clear();
-        self.root_error = None;
-        self.repo = None;
-        self.undo.clear();
-        self.redo.clear();
-        self.edit = None;
+        self.forget_folder();
         self.expanded.insert(root.clone());
         self.load(root.clone(), cx);
         let dir = root.clone();
@@ -259,6 +253,24 @@ impl FilesPanel {
         cx.emit(FilesEvent::RootChanged(root.clone()));
         self.root = Some(root);
         cx.notify();
+    }
+
+    /// Forgets the folder shown so far, for [`Self::set_root`]: its tree and how far it was
+    /// scrolled, its repository, the entry selected and the one cut or copied there, its undo and
+    /// redo, a name being typed and the last error. No row of the next folder's tree would show
+    /// the old selection or Cut, yet ⌫ (Trash), Rename and Paste would act on them.
+    fn forget_folder(&mut self) {
+        self.expanded.clear();
+        self.children.clear();
+        self.scroll = UniformListScrollHandle::new();
+        self.selected = None;
+        self.clip = None;
+        self.root_error = None;
+        self.repo = None;
+        self.undo.clear();
+        self.redo.clear();
+        self.edit = None;
+        self.error = None;
     }
 
     fn load(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
@@ -1086,19 +1098,23 @@ impl FilesPanel {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::rc::Rc;
 
     use gpui_kit::{
-        Action, AnyWindowHandle, AppContext as _, Entity, FocusHandle, Subscription, TestAppContext,
+        Action, AnyWindowHandle, AppContext as _, Entity, FocusHandle, Point, Subscription,
+        TestAppContext, point, px,
     };
     use sawit_core::files::Entry;
 
-    use super::{FilesPanel, Trash};
+    use super::{Clip, FilesPanel, Trash};
 
     /// A project the tree shows without reading it, at a path that can't exist: nothing in it is
     /// there, so a file change that did run would change nothing.
     const ROOT: &str = "/sawit-test-no-such-folder";
+
+    /// Another such project, for the panel to change to.
+    const OTHER_ROOT: &str = "/sawit-test-no-such-other-folder";
 
     /// A Files panel with its keys bound, in a window that is active, as a window being typed in
     /// is (a name box that loses the keyboard ends its edit), showing [`ROOT`] with `files` in it.
@@ -1119,25 +1135,29 @@ mod tests {
         });
         cx.update_window(window, |_, window, _| window.activate_window())
             .unwrap();
-        let root = PathBuf::from(ROOT);
         cx.update(|cx| {
             panel.update(cx, |p, cx| {
-                let entries = files
-                    .iter()
-                    .map(|name| Entry {
-                        name: (*name).into(),
-                        path: root.join(name),
-                        is_dir: false,
-                    })
-                    .collect();
-                p.children.insert(root.clone(), entries);
-                p.expanded.insert(root.clone());
-                p.root = Some(root);
+                show(p, Path::new(ROOT), files);
                 cx.notify();
             })
         });
         cx.run_until_parked();
         (window, panel)
+    }
+
+    /// Makes `root` the panel's folder, with `files` in it, as if it had been read.
+    fn show(p: &mut FilesPanel, root: &Path, files: &[&str]) {
+        let entries = files
+            .iter()
+            .map(|name| Entry {
+                name: (*name).into(),
+                path: root.join(name),
+                is_dir: false,
+            })
+            .collect();
+        p.children.insert(root.to_path_buf(), entries);
+        p.expanded.insert(root.to_path_buf());
+        p.root = Some(root.to_path_buf());
     }
 
     /// The names of the `files::` actions keys run from now on, in order.
@@ -1244,5 +1264,57 @@ mod tests {
             assert_eq!(p.root.as_deref(), Some(Path::new(ROOT)));
             assert!(p.error.is_none() && p.undo.is_empty());
         });
+    }
+
+    /// ⌫ after the panel changes folder (its Open Project Folder button, or `sawit -r`) moves
+    /// nothing to the Trash, and ⌘V pastes nothing. No row of the new folder's tree shows the
+    /// previous folder's selected or cut entry, and Trash and Paste used to act on them all the
+    /// same. The new tree also starts at its top, with no error from the previous folder.
+    #[gpui_kit::test]
+    fn backspace_after_a_folder_change_trashes_nothing(cx: &mut TestAppContext) {
+        let (window, panel) = open_panel(cx, &["notes.txt"]);
+        let file = Path::new(ROOT).join("notes.txt");
+        cx.update(|cx| {
+            panel.update(cx, |p, _| {
+                p.selected = Some(file.clone());
+                p.clip = Some(Clip {
+                    path: file.clone(),
+                    cut: true,
+                });
+                p.error = Some("“notes.txt” couldn't be renamed.".into());
+                p.scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .set_offset(point(px(0.), px(-66.)));
+            })
+        });
+        // What set_root does, but for reading the new folder, which needs the runtime that
+        // open_panel leaves out.
+        let offset = cx.update(|cx| {
+            panel.update(cx, |p, cx| {
+                p.forget_folder();
+                // Read before a frame is drawn: drawing a tree shorter than the panel also
+                // brings it to the top, and a longer one keeps the offset.
+                let offset = p.scroll.0.borrow().base_handle.offset();
+                show(p, Path::new(OTHER_ROOT), &["readme.md"]);
+                cx.notify();
+                offset
+            })
+        });
+        let (ran, _observer) = file_actions(cx);
+        let tree = cx.update(|cx| panel.read(cx).focus.clone());
+        focus(cx, window, &tree);
+        // A Trash or a Paste this starts fails the test at once: there is no runtime.
+        cx.simulate_keystrokes(window, "backspace cmd-v");
+        assert_eq!(*ran.borrow(), ["files::Trash", "files::Paste"]);
+        cx.update(|cx| {
+            let p = panel.read(cx);
+            assert_eq!(p.root.as_deref(), Some(Path::new(OTHER_ROOT)));
+            assert_eq!(p.selected, None);
+            assert!(p.clip.is_none() && p.undo.is_empty());
+            assert_eq!(p.error, None);
+        });
+        assert_eq!(offset, Point::default(), "the new tree starts at its top");
     }
 }
