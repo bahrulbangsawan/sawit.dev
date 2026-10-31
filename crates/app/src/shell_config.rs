@@ -427,10 +427,12 @@ impl ShellConfigPanel {
         let Some(path) = self.selected_writable() else {
             return;
         };
-        let name = file_name(&path);
         let answer = window.prompt(
             PromptLevel::Warning,
-            &format!("Delete “{name}” permanently?"),
+            &delete_question(
+                &path,
+                std::env::var_os("HOME").map(PathBuf::from).as_deref(),
+            ),
             Some("It won't go to the Trash, and this can't be undone."),
             &["Delete", "Cancel"],
             cx,
@@ -643,6 +645,12 @@ fn saved_message(saved: &Saved) -> String {
     }
 }
 
+/// The question before deleting `path`: by its path, as the list shows it,
+/// since many files there share a name (every profile's `settings.json`).
+fn delete_question(path: &Path, home: Option<&Path>) -> String {
+    format!("Delete “{}” permanently?", tildify(path, home))
+}
+
 fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -810,6 +818,22 @@ mod tests {
 
     use super::{OpenConfig, ShellConfigPanel};
     use crate::files::Trash;
+
+    /// The panel lists many files of one name (each profile's `settings.json`, a project's
+    /// `.claude/settings.json`): deleting one for good says which, by its path.
+    #[test]
+    fn deleting_names_the_file_by_its_path() {
+        use std::path::Path;
+        let home = Some(Path::new("/Users/me"));
+        assert_eq!(
+            super::delete_question(Path::new("/Users/me/.claude-work/settings.json"), home),
+            "Delete “~/.claude-work/settings.json” permanently?"
+        );
+        assert_eq!(
+            super::delete_question(Path::new("/work/app/.claude/settings.json"), home),
+            "Delete “/work/app/.claude/settings.json” permanently?"
+        );
+    }
 
     /// A key added to `~/.zshrc` after the first save is pointed out on the next save too,
     /// into the repository that's there by then (or one the user made), not only the first.
