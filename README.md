@@ -251,6 +251,10 @@ explained. A conflict on the same address can't be forced.
   field (text that isn't a URL is searched), the device menu, **Annotate**, **Design**, **Open in Default Browser**
   and the Web Inspector.
 - Cookies and storage are kept per project, so being signed in to one app doesn't leak into another.
+- **Keys**: once you click the page (or press Enter in the address field), <kbd>⌘</kbd><kbd>C</kbd>,
+  <kbd>⌘</kbd><kbd>X</kbd>, <kbd>⌘</kbd><kbd>V</kbd> and <kbd>⌘</kbd><kbd>A</kbd> act in the page, through the
+  **Edit** menu. Sawit's own shortcuts (<kbd>⌘</kbd><kbd>W</kbd>, <kbd>⌘</kbd><kbd>T</kbd>,
+  <kbd>⌘</kbd><kbd>1</kbd>–<kbd>⌘</kbd><kbd>9</kbd>…) still work there, before the page sees them.
 - **Device sizes**: the device menu lays the page out as an iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop or
   Desktop, scaled to fit the tab. **Rotate** turns the device, and **Responsive** fills the tab again.
 - **Annotate** (<kbd>⇧</kbd><kbd>⌘</kbd><kbd>.</kbd>): click elements on the page and write what should change. Each
@@ -291,8 +295,9 @@ explained. A conflict on the same address can't be forced.
 - **Menus and shortcuts**: the ≡ button opens the main menu, and a right-click opens the context menu.
   <kbd>⌘</kbd><kbd>K</kbd> (or <kbd>⌘</kbd><kbd>/</kbd>) opens the **Actions** palette, which finds any menu command
   by name, and <kbd>⌃</kbd><kbd>⇧</kbd><kbd>?</kbd> lists every shortcut. While the canvas has the keyboard,
-  <kbd>⌘</kbd><kbd>K</kbd> belongs to the palette, so the chords that start with it (the tab chords, and
-  <kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd> for the Keymap Editor) don't work there.
+  <kbd>⌘</kbd><kbd>K</kbd> belongs to the palette, so the chords that start with it (the tab chords,
+  <kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd> for the Keymap Editor, and any you add) don't work there. The
+  same goes for a chord you add that starts with another key the canvas uses alone.
 - **Where files live**: the project's canvas is `.nyawit/canvas.figcraft` in its folder. With no project it is
   `canvas.figcraft` in Sawit's data folder. Exports go to `.nyawit/exports/`, or to `exports/` in the data folder
   with no project or for a canvas file outside a project's `.nyawit/` (a `.figcraft` opened from the Files tab, say),
@@ -391,15 +396,23 @@ explained. A conflict on the same address can't be forced.
 
 ## Keyboard shortcuts
 
-These are the defaults. Every shortcut can be changed in the **Keymap Editor**
+These are the defaults. Most shortcuts can be changed in the **Keymap Editor**
 (<kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd>, the keyboard button in the title bar,
 Sawit ▸ Keymap Editor, or an agent's `app_open_page` with `keymap`). It lists each binding of every
 feature, including the workspace, panels, editors, terminal, Git, inputs, and the native canvas's
 commands, with its action, arguments, keys, context and source. From it you can change, add, remove
 or restore a binding, find bindings by their keys, and see which ones clash. Your changes go to
 `~/Library/Application Support/sawit/keymap.json` in Zed's keymap format (*Edit in JSON*,
-<kbd>⌘</kbd><kbd>E</kbd>). You can also edit that file by hand: Sawit applies it as soon as it is
-saved.
+<kbd>⌘</kbd><kbd>E</kbd> in the editor). You can also edit that file by hand: Sawit applies it within a
+second of saving. A change made in the editor writes the whole file again, without your comments.
+
+A few keys aren't bindings, so the editor can't change them: the terminal's <kbd>⌘</kbd><kbd>C</kbd> and
+<kbd>⌘</kbd><kbd>V</kbd>, the video viewer's <kbd>Space</kbd>, and on the canvas <kbd>Space</kbd> to pan, the
+arrows and the number keys, and the keys of the text it edits (<kbd>⎋</kbd>, <kbd>↩</kbd>,
+<kbd>⌘</kbd><kbd>Z</kbd>, <kbd>⌘</kbd><kbd>A</kbd> and <kbd>⌘</kbd><kbd>↩</kbd> among them). The editor's
+Keystrokes field records every key but a plain <kbd>↩</kbd>, which saves, and a plain <kbd>⎋</kbd>, which
+stops recording: bind those two in keymap.json. On a keyboard layout that types some keys elsewhere (German,
+French…), the defaults move where macOS menus put them.
 
 | Action | Shortcut |
 |---|---|
@@ -587,6 +600,7 @@ scripts/bundle-macos.sh                        # target/release/Sawit.app (with 
 App data is stored in `~/Library/Application Support/sawit/`:
 
 - `instances.toml`, `profiles.toml`, `prompts.json` and `recent.toml`
+- `keymap.json`, your key bindings over the defaults (the Keymap Editor writes it)
 - `clusters/` and `logs/`
 - `bin/` for downloaded binaries
 - `run/` for sockets

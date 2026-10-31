@@ -603,8 +603,11 @@ pub enum PageEvent {
     Picked(Value),
     /// The pointer is over an element in inspect mode: `{selector, label, rect}`.
     Hovered(Value),
-    /// A shortcut pressed in the page: `toggle-annotate` or `escape`.
+    /// A key pressed in the page: `escape`, while picking.
     Key(String),
+    /// The user pressed in the page (a real `pointerdown`, never a script's), which AppKit then
+    /// gives the keyboard.
+    Pressed,
 }
 
 /// A page message, if it carries `token`.
@@ -622,6 +625,7 @@ pub fn parse_ipc(body: &str, token: &str) -> Option<PageEvent> {
         "key" => serde_json::from_str::<String>(json)
             .ok()
             .map(PageEvent::Key),
+        "pressed" => Some(PageEvent::Pressed),
         _ => None,
     }
 }
@@ -1271,10 +1275,38 @@ mod tests {
         let hovered = parse_ipc("tok\nhovered\n{\"selector\":\"#a\"}", "tok");
         assert!(matches!(hovered, Some(PageEvent::Hovered(v)) if v["selector"] == "#a"));
         assert_eq!(
-            parse_ipc("tok\nkey\n\"toggle-annotate\"", "tok"),
-            Some(PageEvent::Key("toggle-annotate".into()))
+            parse_ipc("tok\nkey\n\"escape\"", "tok"),
+            Some(PageEvent::Key("escape".into()))
         );
         assert_eq!(parse_ipc("bad\nkey\n\"escape\"", "tok"), None);
+    }
+
+    #[test]
+    fn ipc_reads_a_press_in_the_page() {
+        assert_eq!(
+            parse_ipc("tok\npressed\ntrue", "tok"),
+            Some(PageEvent::Pressed)
+        );
+        assert_eq!(parse_ipc("bad\npressed\ntrue", "tok"), None);
+        // The page agent sends it for the user's press only, before the page's own listeners.
+        // The agent's own clicks (`browser_click`) and a page script's are synthetic
+        // (`isTrusted` false): they give the page no keyboard, so they mustn't move GPUI's.
+        let start = AGENT_JS
+            .find(r#"addEventListener("pointerdown""#)
+            .expect("the agent's press listener");
+        let listener = &AGENT_JS[start..];
+        let listener = &listener[..listener.find('\n').unwrap_or(listener.len())];
+        assert!(
+            listener.contains(r#"if (e.isTrusted) send("pressed", true);"#),
+            "{listener}"
+        );
+        assert!(listener.contains("capture: true"), "{listener}");
+        // Nothing else in the page script sends it.
+        assert_eq!(
+            page_script("tok").matches(r#""pressed""#).count(),
+            1,
+            "another sender of \"pressed\""
+        );
     }
 
     /// Every field of the design contract fixtures is written by the design module.
@@ -1555,11 +1587,12 @@ mod tests {
         assert_eq!(got, json!({"forged": 0, "real": 1}));
     }
 
-    /// ⇧⌘. opens Annotate and arms the picker, so the page's listener answers only the user's
-    /// own key: a page can dispatch one too (an agent's `browser_press_key "Meta+Shift+."`
-    /// goes to Sawit instead).
+    /// ⇧⌘. opens Annotate and arms the picker, and the page's script answers it from no one: a
+    /// page can dispatch one too, and the user's own is the keymap's, which sees ⌘ keys before
+    /// the page does, so a key the keymap doesn't bind to Annotate doesn't toggle it. (An
+    /// agent's `browser_press_key "Meta+Shift+."` goes to Sawit.)
     #[test]
-    fn a_page_cant_press_shift_cmd_period() {
+    fn the_page_script_answers_no_shift_cmd_period() {
         let got = on_stand_in_page(
             r#"
             var from = posted.length;
@@ -1569,7 +1602,7 @@ mod tests {
             JSON.stringify({ synthetic: synthetic, real: count(from, "key") - synthetic })
         "#,
         );
-        assert_eq!(got, json!({"synthetic": 0, "real": 1}));
+        assert_eq!(got, json!({"synthetic": 0, "real": 0}));
     }
 
     /// The agent, with the modules spliced into it, is strict-mode code. WebKit runs a user

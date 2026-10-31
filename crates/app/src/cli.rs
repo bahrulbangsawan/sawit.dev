@@ -279,7 +279,17 @@ pub fn init(cx: &mut App) {
 /// Sets the app's menus. Their shortcuts are the keymap's as it is now, so the keymap sets them
 /// again whenever it changes.
 pub fn set_menus(cx: &mut App) {
-    cx.set_menus([
+    cx.set_menus(menus());
+}
+
+/// The app's menus. The Edit menu's items are the system's (`cut:`, `copy:`, `paste:`,
+/// `selectAll:`), sent to the view with AppKit's keyboard: a web page's clipboard keys reach it
+/// that way, which no binding of Sawit's takes there. Elsewhere Sawit's own bindings of the same
+/// keys run first, and a click on an item runs gpui-kit's text editing action in the field with
+/// the keyboard.
+fn menus() -> Vec<Menu> {
+    use gpui_kit::component::input as text;
+    vec![
         Menu::new("Sawit").items([
             MenuItem::action("Keymap Editor", crate::keymap::OpenKeymapEditor),
             MenuItem::action("Open Keymap File", crate::keymap::OpenKeymapFile),
@@ -292,7 +302,13 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("New Window", NewWindow),
             MenuItem::action("Open Folder…", OpenFolder),
         ]),
-    ]);
+        Menu::new("Edit").items([
+            MenuItem::os_action("Cut", text::Cut, OsAction::Cut),
+            MenuItem::os_action("Copy", text::Copy, OsAction::Copy),
+            MenuItem::os_action("Paste", text::Paste, OsAction::Paste),
+            MenuItem::os_action("Select All", text::SelectAll, OsAction::SelectAll),
+        ]),
+    ]
 }
 
 /// Opens a Sawit window, optionally with a project folder.
@@ -888,6 +904,7 @@ pub fn install_cli(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::{bundle_of, still_open, window_holding, window_naming};
+    use gpui_kit::{KeyContext, MenuItem, OperatingSystem, OsAction, TestAppContext};
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
 
@@ -934,6 +951,162 @@ mod tests {
         assert_eq!(window("/code/shop/web"), Some("front"));
         assert_eq!(window("/code/other"), Some("back"));
         assert_eq!(window("/tmp/elsewhere"), None);
+    }
+
+    /// The app's key bindings, bound as `main` binds them, then taken as the keymap's defaults
+    /// (with a keymap file of the test's own, which it never writes).
+    fn bind_like_the_app(cx: &mut gpui_kit::App, keymap_file: &Path) {
+        gpui_kit::init(cx);
+        crate::editor::init(cx);
+        crate::files::init(cx);
+        crate::shell_config::init(cx);
+        crate::db::init(cx);
+        crate::git::init(cx);
+        crate::workspace::init(cx);
+        crate::terminal::init(cx);
+        super::init(cx);
+        crate::keymap::init_at(keymap_file.to_path_buf(), cx);
+    }
+
+    /// The Edit menu's Cut, Copy, Paste and Select All carry ⌘X, ⌘C, ⌘V and ⌘A and go to the
+    /// view with AppKit's keyboard (`cut:`, `copy:`, `paste:`, `selectAll:`): a web page's
+    /// clipboard keys reach it that way, once no binding of Sawit's takes them.
+    #[gpui_kit::test]
+    fn the_edit_menu_gives_a_web_page_its_clipboard_keys(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("sawit-edit-menu-{}", std::process::id()));
+        cx.update(|cx| bind_like_the_app(cx, &dir.join("keymap.json")));
+        cx.update(|cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let menus = super::menus();
+            let edit = menus.iter().find(|m| m.name.as_ref() == "Edit");
+            let found: Vec<(String, Option<String>, String)> = edit
+                .map(|edit| {
+                    edit.items
+                        .iter()
+                        .filter_map(|item| match item {
+                            MenuItem::Action {
+                                name,
+                                action,
+                                os_action,
+                                ..
+                            } => Some((
+                                name.to_string(),
+                                os_action.map(|a| {
+                                    match a {
+                                        OsAction::Cut => "Cut",
+                                        OsAction::Copy => "Copy",
+                                        OsAction::Paste => "Paste",
+                                        OsAction::SelectAll => "SelectAll",
+                                        OsAction::Undo => "Undo",
+                                        OsAction::Redo => "Redo",
+                                    }
+                                    .to_string()
+                                }),
+                                keymap
+                                    .bindings_for_action(action.as_ref())
+                                    .next()
+                                    .map(|b| crate::keymap::names::unparse(b.keystrokes()))
+                                    .unwrap_or_default(),
+                            )),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let expected = [
+                ("Cut", "Cut", "cmd-x"),
+                ("Copy", "Copy", "cmd-c"),
+                ("Paste", "Paste", "cmd-v"),
+                ("Select All", "SelectAll", "cmd-a"),
+            ]
+            .map(|(n, a, k)| (n.to_string(), Some(a.to_string()), k.to_string()));
+            assert_eq!(found, expected);
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The keymap editor shows each binding's action and context, and writes them into
+    /// keymap.json, where a later rename would break the user's binding: none of them still
+    /// calls the Config Files panel by its old name.
+    #[gpui_kit::test]
+    fn the_keymap_calls_config_files_by_its_name(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("sawit-config-names-{}", std::process::id()));
+        cx.update(|cx| bind_like_the_app(cx, &dir.join("keymap.json")));
+        cx.update(|cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let old: Vec<String> = keymap
+                .bindings()
+                .flat_map(|b| {
+                    [
+                        b.action().name().to_string(),
+                        b.predicate().map(|p| p.to_string()).unwrap_or_default(),
+                    ]
+                })
+                .filter(|name| name.contains("ShellConfig") || name.contains("shell_config"))
+                .collect();
+            assert!(old.is_empty(), "{old:?}");
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A menu item carries the key of the first binding of its action that GPUI's macOS menu
+    /// builder finds in a Workspace > Pane > Editor focus, else of the first binding at all
+    /// (`find_or_first`), and AppKit runs the item for that key wherever the item's action is
+    /// handled: in Sawit, everywhere the workspace is. So each item's action has no binding, or
+    /// one that holds everywhere in a window. A key bound only in a view (the keymap editor's
+    /// ⌘E) would otherwise run the item from every other view, a web page's included.
+    #[gpui_kit::test]
+    fn menu_keys_hold_everywhere_in_a_window(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("sawit-menu-keys-{}", std::process::id()));
+        cx.update(|cx| bind_like_the_app(cx, &dir.join("keymap.json")));
+        let workspace = {
+            let mut workspace = KeyContext::new_with_defaults(OperatingSystem::Mac);
+            workspace.add("Workspace");
+            let mut pane = KeyContext::new_with_defaults(OperatingSystem::Mac);
+            pane.add("Pane");
+            let mut editor = KeyContext::new_with_defaults(OperatingSystem::Mac);
+            editor.add("Editor");
+            pane.extend(&editor);
+            workspace.extend(&pane);
+            vec![workspace]
+        };
+        cx.update(|cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            for menu in super::menus() {
+                for item in &menu.items {
+                    // A system item (the Edit menu's) goes to the view with AppKit's keyboard,
+                    // not to a GPUI action, and only when no binding of Sawit's takes its key.
+                    let MenuItem::Action {
+                        name,
+                        action,
+                        os_action: None,
+                        ..
+                    } = item
+                    else {
+                        continue;
+                    };
+                    let bindings: Vec<_> = keymap.bindings_for_action(action.as_ref()).collect();
+                    let everywhere = bindings
+                        .iter()
+                        .any(|b| b.predicate().is_none_or(|p| p.eval(&workspace)));
+                    assert!(
+                        bindings.is_empty() || everywhere,
+                        "{name}: {:?}",
+                        bindings
+                            .iter()
+                            .map(|b| (
+                                crate::keymap::names::unparse(b.keystrokes()),
+                                b.predicate().map(|p| p.to_string())
+                            ))
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+        });
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// MCP-2, MCP-3: an agent names an open project by another name of its folder: through a

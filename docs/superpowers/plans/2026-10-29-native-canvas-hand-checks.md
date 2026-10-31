@@ -1310,8 +1310,9 @@ now app key bindings (`board::Command`), and only GPUI tests have checked them.
   tool changes.
 - In the Keymap Editor, type `canvas:` in the filter. Rebind the rectangle's R to another free key, and remove one
   other canvas binding. On the canvas, the new key picks the rectangle and R doesn't, and the removed key does
-  nothing. The canvas's own hints (tooltips, menus, the shortcut sheet) still show the default keys: that is known
-  (the same review's M1).
+  nothing. The canvas's own hints follow: the rectangle's tooltip, its menu item, its row in the Actions palette
+  (⌘K) and in the shortcut sheet (⌃⇧?) show the new key, and the removed binding's command shows no key (its sheet
+  row goes when it has no key left).
 
 Answer: ______
 
@@ -1346,8 +1347,9 @@ which is git-ignored.
     keyboard, and press ⌘⇧.. The review expects this binding not to fire on a real Mac, because macOS reports ⇧⌘.
     as `cmd->`. The page's own key, used while the page has the keyboard, is not affected. Say what happens.
   - Added from the keymap-editor consolidation report (§6): rebind "browser: toggle annotate" in the Keymap
-    Editor. The page's own ⌘⇧. is fixed in its script, so it still toggles Annotate while the page has the
-    keyboard. Say whether that is acceptable.
+    Editor. The page's script no longer answers ⌘⇧. (since the hunt's keymap round 3 merged KEYMAP-5 with the
+    browser fixes): while the page has the keyboard, the old key does nothing and the new one toggles Annotate.
+    Say what happens.
 - (b) Send to terminal.
   - Run `claude` in a terminal tab, or leave zsh at its prompt. In the Annotate panel, click Send to terminal. The
     notes paste into that terminal as Markdown, without Enter. The terminal shows and takes the keyboard, and the
@@ -1384,8 +1386,54 @@ Answer: ______
 These come from the consolidation's fixes and reviews. Each starts from a fresh launch of the merged main.
 
 - **C-1 Maximize hint follows a rebind.** Open the keymap editor and rebind the canvas's Maximize (default ⇧⌘↩) to another key. Open a canvas tab and hover the top bar's Maximize button. Look for: the tooltip names the new key, and the new key maximizes the canvas. Answer:
-- **C-2 Annotate hint follows a rebind.** Rebind the Browser's Annotate (default ⇧⌘.) and hover the Annotate button. Look for: the tooltip names the new key, and the new key toggles Annotate while Sawit's side of the tab has the keyboard. Note that while the web page itself has the keyboard, only ⇧⌘. toggles it (the overlay's own key). Answer:
+- **C-2 Annotate hint follows a rebind.** Rebind the Browser's Annotate (default ⇧⌘.) to another key with ⌘ and hover the Annotate button. Look for: the tooltip names the new key, and the new key toggles Annotate both while Sawit's side of the tab has the keyboard and after a click in the web page; ⇧⌘. no longer does, from either side. (A key without ⌘ types into the page while the page has the keyboard.) Answer:
 - **C-3 ⇧⌘. after a pick (replaces PR3-1 (a)'s third bullet).** In the Browser, turn on Annotate, pick an element so the keyboard moves to the note box, then press ⇧⌘.. Look for: Annotate turns off. Answer:
 - **C-4 No tool writes over a canvas file.** Ask an agent to run `browser_screenshot` with `output_path` set to the project's `.nyawit/canvas.figcraft`. Look for: the tool refuses ("would overwrite a canvas file") and the board still opens unchanged. Answer:
 - **C-5 ⌫ while naming in Files.** In the Files panel, start a new file, type a name, then press ⌫ until the name is empty and once more. Look for: characters are deleted and nothing goes to the Trash. Then, in the tree with nothing selected, press ⌫. Look for: the project folder is not moved to the Trash. Answer:
 - **C-6 terminal_run from an agent in a pane.** Run an agent (e.g. Claude Code) in a terminal pane and ask it to use Sawit's `terminal_run` without a new tab. Look for: the command runs in an idle shell (or a new tab), never typed into the agent's own prompt. Answer:
+
+## Added by the keymap hunt (2026-10-31)
+
+The keymap hunt's fixes (`fix-keymap.md`). GPUI tests cover the rest; these need a real keyboard, a web page or a
+second keyboard layout. Each starts from a fresh launch of the merged main with the recipe's scratch `SAWIT_HOME`.
+
+- **K-1 A web page's clipboard keys.** Open a page with a text field in the Browser (the `annotate.html` fixture).
+  Type the address and press Enter, click the field, then press ⌘V, ⌘A and ⌘C, and type a word: each acts in the
+  field, and the address bar is unchanged. Select some page text and press ⌘C, then paste it in a terminal: it is
+  the page's text. Click the terminal, then the page's field, and press ⌘V: it pastes in the page, not the shell.
+  In Files, select a file and press ⌘C, click the page's field and press ⌘V: no file is created. Edit ▸ Copy,
+  Paste and Select All act on a Sawit text box too. An agent's click leaves your keyboard alone: run an agent (e.g.
+  Claude Code) in a terminal, ask it to `browser_click` the page's field, then type: the keys go to the terminal.
+  Do it again with another tab in front of the Browser: the keys still go to the terminal, and ⌘T and ⌘1 still
+  work. Click in the page, press ⇧⌘J twice: the tab area hides and comes back. Click in the page, press ⌃⌘M, then
+  ⌘W: the MCP page closes. Answer:
+- **K-2 A German keyboard layout.** Add German in System Settings ▸ Keyboard and switch to it with Sawit running.
+  On the canvas and in the Browser, ⌘< and ⇧⌘< cycle Sawit's windows (open a second one with ⇧⌘N). In the Browser,
+  ⇧⌘. toggles Annotate with the toolbar focused, and the keymap editor shows Annotate's key as ⌘:. Switch back to
+  the US layout: Annotate's key is ⇧⌘. again. Answer:
+- **K-3 ⌘E belongs to the keymap editor.** In the terminal, a file editor and a web page, press ⌘E: keymap.json
+  doesn't open (the page gets its ⌘E). The Sawit menu's Open Keymap File shows no key; in the keymap editor ⌘E
+  opens keymap.json. Answer:
+- **K-4 The keystroke field's own keys.** In the keymap editor, Edit a binding: press ⎋, and the field stops
+  recording; ⎋ again closes the form. Edit it again, press new keys and ↩: it saves. Turn on Search by Keystroke,
+  click another tab, then press ⌘W: that tab closes (the hidden field doesn't record it). Answer:
+- **K-5 A chord you add on ⌘K.** Rebind workspace: close tabs left to ⌘K L. On the canvas ⌘K opens the Actions
+  palette at once; off the canvas ⌘K L closes the tabs on the left. Creating a binding on ⌘K alone in Workspace
+  shows the warning that ⌘K also starts chords. Answer:
+- **K-6 The title bar's pages with the tab area off.** Press ⇧⌘J to hide the tab area, then click the title bar's
+  keyboard button, Tools and MCP in turn: each time the tab area shows with that page. Answer:
+- **K-7 Hand edits and links.** With the keymap editor open, write keymap.json in another editor and save, then
+  within a second change a binding in the keymap editor: it says the file changed and asks again, and your edit is
+  kept. Make keymap.json a link to a file elsewhere (`ln -s`), change a binding in the editor: the link stays a
+  link, and the file it points to has the change. Answer:
+- **K-8 Keys once what you typed in goes off screen, and back.** Click in the terminal, then press ⌘J twice: the
+  dock hides and comes back; type `ls`: it goes to the terminal. Click the title bar's Terminal button twice, then
+  type: it goes to the terminal again. Click in a file editor's text, then press ⌃Tab twice: each press shows the next
+  tab. Click another tab, then the file's tab again, and type: it goes to the text. Click in the Git panel's commit
+  message, press ⌘2, then ⌘3: Files shows, then Git again; type: it goes to the message. Click in a web page, press
+  ⇧⌘J twice: the tab area hides and comes back, and typing waits for a click in the page. With three tabs open,
+  click in a file's text and press ⌃Tab three times: each press shows the next tab, and the last one brings the
+  file back with its keyboard (type: it goes to the text). Click in the terminal and press ⌘J, ⌃Tab, ⌘J: the
+  dock hides, the next tab shows, the dock comes back with the terminal's keyboard. In the Keymap Editor, turn
+  on Search by Keystroke, click another tab, then the Keymap Editor's tab again, and press ⌃Tab: the next tab
+  shows (the search field doesn't record until a click in it). Answer:

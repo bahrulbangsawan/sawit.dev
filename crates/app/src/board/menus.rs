@@ -11,8 +11,12 @@
 //! - **The Actions palette** (⌘K, ⌘/) searches the main menu's commands and lists the best
 //!   [`PALETTE_RESULTS`]. Up and Down move the highlight, Enter runs it, and Escape or a press
 //!   outside closes the palette, as in FigCraft.
-//! - **The shortcuts sheet** (⌃⇧?, Help ▸ Keyboard shortcuts) lists FigCraft's keys in a column per
-//!   group. Escape or a press outside closes it.
+//! - **The shortcuts sheet** (⌃⇧?, Help ▸ Keyboard shortcuts) lists the commands' keys in a column
+//!   per group. Escape or a press outside closes it.
+//!
+//! The keys they show are the keymap's as it is now ([`super::command_keys`]): FigCraft's while
+//! they still run their commands, written as FigCraft writes them, else the keys the user gave
+//! them in the keymap editor or keymap.json.
 //!
 //! Each takes the keyboard while it is open, handles its own keys, and gives the keyboard back to
 //! the canvas when it closes (ruling P6-C3). The canvas takes only the keys pressed while it has
@@ -54,6 +58,9 @@ const PALETTE_ROW: f32 = 30.;
 pub(super) const SEARCH_ICON: Lucide = Lucide::Search;
 /// The width of a column of the sheet: one group's keys.
 const SHEET_COLUMN: f32 = 248.;
+/// Most keys a row of the sheet shows, as FigCraft's own panel: the rest work without being
+/// listed.
+const SHEET_KEYS: usize = 2;
 /// How far under the selection's bottom left corner the context menu opens from the keyboard, as
 /// FigCraft's does.
 const UNDER_SELECTION: f64 = 8.;
@@ -313,9 +320,10 @@ impl BoardView {
             return None;
         }
         if self.menus.palette.is_none() {
-            let actions = (self.board())
+            let mut actions = (self.board())
                 .map(|board| guarded("ui.actions", || actions::all_actions(&board.session)))
                 .unwrap_or_default();
+            live_actions(&mut actions, cx);
             let query = cx.new(|cx| InputState::new(window, cx).placeholder("Search actions"));
             let query_changed =
                 cx.subscribe_in(&query, window, |view, _, event: &InputEvent, _, cx| {
@@ -453,7 +461,7 @@ impl BoardView {
         if self.menus.sheet.is_none() {
             let focus = cx.focus_handle();
             window.focus(&focus, cx);
-            let groups = guarded("ui.shortcuts", shortcuts::sheet);
+            let groups = live_sheet(guarded("ui.shortcuts", shortcuts::sheet), cx);
             self.menus.sheet = Some(Sheet { focus, groups });
         }
         let sheet = self.menus.sheet.as_ref()?;
@@ -611,6 +619,32 @@ pub(super) fn fill_main_menu(
     add_items(menu.action_context(keyboard), &nodes, view, window, cx)
 }
 
+/// The sheet's `groups` with each command's keys as the keymap binds them now
+/// ([`super::command_keys_all`]), [`SHEET_KEYS`] at most: a row whose keys are all taken out, and
+/// a group left with no row, go.
+pub(super) fn live_sheet(groups: Vec<ShortcutGroup>, cx: &mut App) -> Vec<ShortcutGroup> {
+    groups
+        .into_iter()
+        .filter_map(|mut group| {
+            group.rows.retain_mut(|row| {
+                let mut keys = super::command_keys_all(row.id, cx);
+                keys.truncate(SHEET_KEYS);
+                row.keys = keys.join(" or ");
+                !row.keys.is_empty()
+            });
+            (!group.rows.is_empty()).then_some(group)
+        })
+        .collect()
+}
+
+/// The palette's `items` with each command's keys as the keymap binds them now
+/// ([`super::command_keys`]).
+pub(super) fn live_actions(items: &mut [ActionItem], cx: &mut App) {
+    for item in items {
+        item.shortcut = super::command_keys(item.id, cx);
+    }
+}
+
 /// A popup of `nodes` for `view`'s canvas: an item runs its command ([`BoardView::run_menu`]),
 /// and a submenu opens beside its item.
 fn to_popup(
@@ -638,14 +672,18 @@ fn add_items(
             MenuNode::Item {
                 id,
                 label,
-                shortcut,
                 checked,
                 enabled,
-            } => menu.item(
-                menu_item(id, label, shortcut.as_deref(), view.clone())
-                    .checked(*checked == Some(true))
-                    .disabled(!*enabled),
-            ),
+                ..
+            } => {
+                // The keys as the keymap binds them now, not FigCraft's in the model.
+                let keys = super::command_keys(id, cx);
+                menu.item(
+                    menu_item(id, label, keys.as_deref(), view.clone())
+                        .checked(*checked == Some(true))
+                        .disabled(!*enabled),
+                )
+            }
             MenuNode::Submenu { label, children } => {
                 let submenu = to_popup(children, view.clone(), window, cx);
                 menu.item(PopupMenuItem::submenu(label.clone(), submenu))
