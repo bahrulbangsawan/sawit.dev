@@ -52,7 +52,9 @@ pub struct WindowArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct LaunchArgs {
-    #[schemars(description = "Absolute folder or file to open once Sawit runs")]
+    #[schemars(
+        description = "Absolute folder or file (or ~/…) to open once Sawit runs; a file that isn't there opens as a new one"
+    )]
     pub path: Option<String>,
 }
 
@@ -1234,6 +1236,8 @@ impl Sawit {
 /// Starts the app through the `sawit` binary next to `sawit-mcp` (it
 /// launches Sawit.app or a detached app process), then waits for it.
 fn launch(paths: &sawit_core::instances::AppPaths, path: Option<&str>) -> Result<String, String> {
+    let target = launch_target(path)?;
+    let path = target.as_deref();
     let running = app_control::is_running(paths);
     if running && path.is_none() {
         let request = Request {
@@ -1256,9 +1260,7 @@ fn launch(paths: &sawit_core::instances::AppPaths, path: Option<&str>) -> Result
         }
         open
     };
-    if let Some(path) = path {
-        cmd.arg(path);
-    }
+    cmd.args(launch_args(path));
     let status = cmd
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -1278,10 +1280,46 @@ fn launch(paths: &sawit_core::instances::AppPaths, path: Option<&str>) -> Result
         }
         std::thread::sleep(Duration::from_millis(200));
     }
-    Ok(match (running, path) {
-        (_, Some(path)) => format!("Sawit is running with {path} open."),
-        _ => "Sawit is running.".into(),
-    })
+    Ok(launched(path))
+}
+
+/// What `launch_app` opens for `path`: nothing for none or a blank one, else the path with `~` for
+/// the home folder, which must then be absolute, as `app_open`'s must, taken through the links on
+/// its way as the CLI and the app name what they open ([`sawit_core::files::resolve`]). The CLI
+/// read it as written (MCP-5): `~/proj` was a new file under `<the agent's folder>/~/proj`.
+fn launch_target(path: Option<&str>) -> Result<Option<PathBuf>, String> {
+    let Some(path) = path.map(str::trim).filter(|path| !path.is_empty()) else {
+        return Ok(None);
+    };
+    let expanded = crate::expand_home(path);
+    if !expanded.is_absolute() {
+        return Err(format!(
+            "“{path}” must be an absolute path (or start with ~/): nothing was opened."
+        ));
+    }
+    Ok(Some(sawit_core::files::resolve(&expanded)))
+}
+
+/// The arguments the `sawit` CLI gets to open `path`: `--`, then the path, so that nothing in it
+/// is read as an option (`-n`, `--version`) or a subcommand (`list`, a database's name).
+fn launch_args(path: Option<&Path>) -> Vec<std::ffi::OsString> {
+    match path {
+        Some(path) => vec!["--".into(), path.as_os_str().to_owned()],
+        None => Vec::new(),
+    }
+}
+
+/// `launch_app`'s answer once Sawit runs, having opened `path`: the path as it opened it, and a
+/// path with nothing there is a new file, as `sawit <path>` opens one.
+fn launched(path: Option<&Path>) -> String {
+    match path {
+        Some(path) if path.exists() => format!("Sawit is running with {} open.", path.display()),
+        Some(path) => format!(
+            "Sawit is running with {} open as a new file: nothing was there.",
+            path.display()
+        ),
+        None => "Sawit is running.".into(),
+    }
 }
 
 #[cfg(test)]
@@ -1420,6 +1458,47 @@ mod tests {
         assert_eq!(project_path(Some("src".into())), Some(here.join("src")));
         assert_eq!(project_path(Some("  ".into())), None);
         assert_eq!(project_path(None), None);
+    }
+
+    /// MCP-5: `launch_app` opens the folder or file its `path` names, and says what it opened.
+    /// The `sawit` CLI took the path as written: `~/proj` opened a new file under
+    /// `<the agent's folder>/~/proj` while the reply said "~/proj" was open, and `--version`
+    /// was read as an option. `~` is the home folder now, the path must be absolute (as for
+    /// `app_open`), and it comes after `--`, so nothing in it is an option or a subcommand.
+    #[test]
+    fn launch_app_opens_the_path_it_names_and_says_what_it_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("shop");
+        std::fs::create_dir_all(&real).unwrap();
+        let real = real.canonicalize().unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let target = launch_target(Some(&format!(" {} ", link.display()))).unwrap();
+        assert_eq!(target.as_deref(), Some(real.as_path()));
+        assert_eq!(
+            launch_args(target.as_deref()),
+            vec![std::ffi::OsString::from("--"), real.clone().into()]
+        );
+        assert_eq!(
+            launched(target.as_deref()),
+            format!("Sawit is running with {} open.", real.display())
+        );
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = Path::new(&home).canonicalize().unwrap();
+            let target = launch_target(Some("~/no such folder")).unwrap();
+            assert_eq!(target, Some(home.join("no such folder")));
+            // Nothing is there: the app opens it as a new file, and the answer says so.
+            let said = launched(target.as_deref());
+            assert!(said.contains("new file"), "{said}");
+        }
+        for not_absolute in ["--version", "list", "proj", "~user/x"] {
+            let refused = launch_target(Some(not_absolute)).unwrap_err();
+            assert!(refused.contains("absolute"), "{not_absolute}: {refused}");
+        }
+        assert_eq!(launch_target(Some("  ")), Ok(None));
+        assert_eq!(launch_target(None), Ok(None));
+        assert!(launch_args(None).is_empty());
     }
 
     #[test]
