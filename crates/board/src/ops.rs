@@ -22,8 +22,9 @@
 //! Every other op that changes the document first ends the text the user is typing in on the
 //! canvas, as a click elsewhere does, unless it is a command that acts on that text
 //! ([`end_text_edit_before_op`], ruling R-TEXTEDIT): what was typed is an undo step of its own,
-//! and the op is one after it. While the user holds a drag on the canvas, such an op is refused
-//! instead and changes nothing ([`waits_for_the_drag`]): the drag's next move would take it back.
+//! and the op is one after it. While the user holds a drag on the canvas, or draws a path with the
+//! Pen, such an op is refused instead and changes nothing ([`waits_for_the_drag`]): the drag's
+//! next move would take it back, and the path's undo step would take it too.
 //!
 //! A canvas holds one document, and the view saves the one on show over the canvas's file, so no
 //! `command` op may leave another document open or on show. The ones that do that by name are
@@ -233,13 +234,14 @@ const MERMAID_GAP: f64 = 100.0;
 ///
 /// While the user holds a drag on the canvas, every op that changes the document (`add`,
 /// `update`, `delete`, `clear`, `replace`, `mermaid` and `command`) answers
-/// "<op>: finish the drag on the canvas first" and changes nothing ([`waits_for_the_drag`]).
+/// "<op>: finish the drag on the canvas first" and changes nothing, and while the Pen draws a path
+/// "<op>: finish the path the Pen draws on the canvas first" ([`waits_for_the_drag`]).
 pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
     let name = op.get("op").and_then(Value::as_str);
     if let Some(name) = name
-        && waits_for_the_drag(board, name)
+        && let Some(wait) = waits_for_the_drag(board, name)
     {
-        return failure(format!("{name}: finish the drag on the canvas first"));
+        return failure(format!("{name}: {wait}"));
     }
     if let Some(name) = name
         && let Err(error) = end_text_edit_before_op(board, name, op)
@@ -277,18 +279,36 @@ const CHANGES_THE_DOCUMENT: [&str; 7] = [
     "add", "update", "delete", "clear", "replace", "mermaid", "command",
 ];
 
-/// Whether op `name` has to wait for the gesture under way on the canvas: it changes the
-/// document, and the user holds the button down there with a tool (a move, a resize, a shape
-/// being drawn, a marquee...), as the engine's own `tool.place` refuses to place mid-drag.
+/// What op `name` has to wait for on the canvas, if anything, said for its refusal: it changes
+/// the document, and the user holds the button down there with a tool (a move, a resize, a shape
+/// being drawn, a marquee...), as the engine's own `tool.place` refuses to place mid-drag; or a
+/// gesture is open with no button held, which only the user ends: the path the Pen draws, between
+/// its clicks, until Enter or Escape.
 ///
 /// A gesture keeps the document it began with, and each move of it builds the document again
 /// from that one (`Session::preview`), as an Escape puts that one back. So what an op did in
 /// between was gone at the next move, though the op had answered ok (Plan 8 final review I-1).
-/// Refused, the op changes nothing, and the agent can send it again once the button is up. The
-/// reads (`get`, `commands`, the exports) change nothing either, and the input of `pointer`, `key`
-/// and `type` meets the gesture as the mouse and the keyboard do, so they go through.
-fn waits_for_the_drag(board: &BoardDoc, name: &str) -> bool {
-    CHANGES_THE_DOCUMENT.contains(&name) && board.session.tool.busy()
+/// And while a gesture is open no command is an undo step of its own: an op between the Pen's
+/// clicks joined the path's step, and the ⌘Z after Enter took both away (CANVAS-CORE-8).
+/// Refused, the op changes nothing, and the agent can send it again once the gesture is over.
+/// The reads (`get`, `commands`, the exports) change nothing either, and the input of `pointer`,
+/// `key` and `type` meets the gesture as the mouse and the keyboard do, so they go through. The
+/// text being typed in is a gesture too, which the op ends first instead
+/// ([`end_text_edit_before_op`]).
+fn waits_for_the_drag(board: &BoardDoc, name: &str) -> Option<&'static str> {
+    if !CHANGES_THE_DOCUMENT.contains(&name) {
+        return None;
+    }
+    let session = &board.session;
+    if session.tool.busy() {
+        return Some("finish the drag on the canvas first");
+    }
+    let open = (session.ds()).is_ok_and(|ds| ds.interaction.is_some() && ds.text_edit.is_none());
+    match (open, session.tool.pen.is_some()) {
+        (false, _) => None,
+        (true, true) => Some("finish the path the Pen draws on the canvas first"),
+        (true, false) => Some("finish what is being drawn on the canvas first"),
+    }
 }
 
 /// Ends the text being typed in on the canvas before op `name` (`op`) changes the document, as the
@@ -4014,6 +4034,40 @@ mod tests {
     /// so an op run inside it was taken back by the next move, or by an Escape, though it had
     /// answered ok. Reads still answer during the drag; once the button is up the op goes
     /// through, and what it drew stays through the next drag.
+    /// CANVAS-CORE-8: between the Pen's clicks no button is held, but the path being drawn is an
+    /// open gesture, which only Enter (or Escape) ends. An agent's op ran inside it and joined
+    /// its undo step: the ⌘Z after Enter took the path and the agent's layers away together. Such
+    /// an op waits for the path, as one waits for a drag, and changes nothing; once the path is
+    /// ended it goes through, an undo step of its own.
+    #[test]
+    fn an_op_that_changes_the_document_waits_for_the_pens_path() {
+        let mut board = board();
+        send(&mut board, "tool.pen", json!({}));
+        pointer_at(&mut board, "down", 0.0, 0.0);
+        pointer_at(&mut board, "up", 0.0, 0.0);
+        pointer_at(&mut board, "down", 100.0, 0.0);
+        pointer_at(&mut board, "up", 100.0, 0.0);
+        assert!(board.session.tool.pen.is_some() && !board.session.tool.busy());
+        let held = board.doc().unwrap();
+        let rectangle = json!([{"type": "rectangle", "x": 400, "y": 0}]);
+        for op in [
+            json!({"op": "add", "elements": rectangle}),
+            json!({"op": "command", "command": "page.add"}),
+        ] {
+            let name = op["op"].as_str().unwrap();
+            let reply = run(&mut board, &op);
+            let error = format!("{name}: finish the path the Pen draws on the canvas first");
+            assert_eq!(reply, json!({"ok": false, "error": error}), "{op}");
+            assert!(Arc::ptr_eq(&board.doc().unwrap(), &held), "{op}");
+        }
+        assert!(press(&mut board, "Enter", json!({})));
+        assert!(board.session.tool.pen.is_none() && !gesture_open(&board));
+        let path = board.doc().unwrap();
+        ask(&mut board, json!({"op": "add", "elements": rectangle}));
+        send(&mut board, "edit.undo", json!({}));
+        assert!(*board.doc().unwrap() == *path, "the undo took the path too");
+    }
+
     #[test]
     fn an_op_that_changes_the_document_waits_for_the_drag_to_end() {
         let mut board = board();

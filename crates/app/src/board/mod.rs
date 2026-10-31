@@ -670,7 +670,9 @@ impl BoardView {
     /// While the user holds a drag on the canvas, such an op is refused instead, "<op>: finish
     /// the drag on the canvas first", and changes nothing: the drag's next move would take it
     /// back. No scrub is on then for it to end: the press that began the drag closed a colour
-    /// picker's, and a label's holds the same button.
+    /// picker's, and a label's holds the same button. So is one while the Pen draws a path,
+    /// "<op>: finish the path the Pen draws on the canvas first": it would join the path's undo
+    /// step (CANVAS-CORE-8).
     ///
     /// A `clear` or a `replace` takes the board off the canvas, and its save keeps what the file
     /// holds as a backup first, the ones before it too (CANVAS-CORE-3): undo isn't saved, so after
