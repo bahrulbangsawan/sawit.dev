@@ -323,18 +323,43 @@ impl Sawit {
     }
 
     /// The URL to open when none is given: the dev server running from the
-    /// project folder, or the only one running.
+    /// project folder ([`Self::dev_server_folder`]).
     async fn dev_server_url(&self, project: &Option<String>) -> Result<String, String> {
+        let folder = self
+            .dev_server_folder(project, crate::project_dir(None))
+            .await?;
         let jobs = sawit_core::probe::listening_jobs()
             .await
             .map_err(|e| e.to_string())?;
-        let folder = project
-            .as_deref()
-            .map(crate::expand_home)
-            .unwrap_or_else(|| PathBuf::from("/"));
         pick_dev_server(&jobs, &folder).ok_or_else(|| {
             "Give a url: no single dev server is running for this project (see list_ports).".into()
         })
+    }
+
+    /// The folder whose dev server `browser_navigate` opens when it is given no url (MCP-10):
+    /// `project`, as it is on disk, which is how a dev server's folder is listed; else
+    /// `agent_folder`, the folder the agent runs in, as the canvas and app tools take it; else,
+    /// for an agent run from no project, the project of the front window, which shows the page.
+    /// Never the whole Mac: another project's server would open, or none with two running.
+    async fn dev_server_folder(
+        &self,
+        project: &Option<String>,
+        agent_folder: Option<PathBuf>,
+    ) -> Result<PathBuf, String> {
+        if let Some(folder) = crate::app::project_path(project.clone()).or(agent_folder) {
+            return Ok(folder);
+        }
+        let state = self.app_call(None, Command::State).await?;
+        let windows = state["windows"].as_array().map_or(&[][..], Vec::as_slice);
+        let front = windows.iter().find(|window| window["frontmost"] == true);
+        front
+            .and_then(|window| window["project"].as_str())
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                "Give a url, or the project whose dev server to open: the front Sawit window has \
+                 no project."
+                    .into()
+            })
     }
 }
 
@@ -776,6 +801,40 @@ mod tests {
         assert_ne!(taken.is_error, Some(true), "{}", said(&taken));
         assert_eq!(std::fs::read(&png).unwrap(), b"\x89PNG\r\n\x1a\n");
         assert!(said(&taken).ends_with(&format!("written to {}", png.display())));
+    }
+
+    /// MCP-10: with no url, browser_navigate opens the dev server of the project: the one named,
+    /// else the folder the agent runs in (as the canvas and app tools take it), else the project
+    /// of the front window, which the app shows the page in. It looked under `/`, so another
+    /// project's server opened, or with two running anywhere on the Mac none did.
+    #[tokio::test]
+    async fn the_dev_server_opened_is_the_projects() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = sawit_core::instances::AppPaths {
+            root: dir.path().join("home"),
+        };
+        let server = Sawit::new(paths.clone());
+        let shop = dir.path().join("shop");
+        std::fs::create_dir_all(&shop).unwrap();
+        let shop = shop.canonicalize().unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&shop, &link).unwrap();
+        let agent = dir.path().join("agent");
+
+        let named = Some(link.display().to_string());
+        let folder = server.dev_server_folder(&named, Some(agent.clone())).await;
+        assert_eq!(folder, Ok(shop.clone()));
+        let folder = server.dev_server_folder(&None, Some(agent.clone())).await;
+        assert_eq!(folder, Ok(agent));
+
+        // An agent run from no project: the front window's.
+        let front = json!({"windows": [
+            {"project": "/code/back", "frontmost": false},
+            {"project": shop, "frontmost": true},
+        ]});
+        fake_app_answering(&paths, vec![Ok(front)]);
+        let folder = server.dev_server_folder(&None, None).await;
+        assert_eq!(folder, Ok(shop));
     }
 
     /// A stand-in for the running app that answers its requests with `answers` in turn, the last

@@ -342,7 +342,7 @@ pub(crate) fn pretty(value: &Value) -> String {
 /// its way, in the letter case it has on disk and without `..` ([`sawit_core::files::resolve`]).
 /// Sent as written, `~/…`, `/tmp/…` (`/private/tmp/…` on macOS) or another case matched no open
 /// project, though the same names find the stored canvas with the app closed (MCP-3).
-fn project_path(p: Option<String>) -> Option<PathBuf> {
+pub(crate) fn project_path(p: Option<String>) -> Option<PathBuf> {
     let p = p.filter(|p| !p.trim().is_empty())?;
     Some(sawit_core::files::resolve(&crate::agent_path(&p)))
 }
