@@ -179,10 +179,9 @@ pub fn to_board(name: &str, scene: &Value) -> Result<(BoardDoc, Vec<String>), Bo
     let doc = drawn.doc()?;
     drop(drawn);
     let doc = Arc::try_unwrap(doc).unwrap_or_else(|shared| (*shared).clone());
-    let board = BoardDoc {
-        session: Session::with_document(doc),
-    };
-    Ok((board, notes))
+    // As a file is opened: its state made inside a guard against a panic (CANVAS-CORE-9).
+    let session = figcraft_engine::guard::run("file.open", || Ok(Session::with_document(doc)))?;
+    Ok((BoardDoc { session }, notes))
 }
 
 /// The scene in the `.excalidraw` file at `path`. A file that can't be read, or isn't JSON, is an

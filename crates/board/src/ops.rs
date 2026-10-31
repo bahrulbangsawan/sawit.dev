@@ -2,7 +2,8 @@
 //! wire contract"), run on a [`BoardDoc`] and answered as JSON.
 //!
 //! Every answer is `{ok: true, ...}` or `{ok: false, error}`, and an op never panics: a failure of
-//! the engine, or an op that is malformed, is an `error` the agent can read. The ops are `get`,
+//! the engine, or an op that is malformed, is an `error` the agent can read, and so is a bug that
+//! panics all the same ([`run_guarded`], spec D15). The ops are `get`,
 //! `add`, `update`, `delete`, `clear`, `replace`, `export_svg`, `export_png`, `command`,
 //! `commands`, `pointer`, `mermaid`, `key` and `type`; the others of the contract get their own
 //! answer, "<op> is not supported yet".
@@ -237,6 +238,26 @@ const MERMAID_GAP: f64 = 100.0;
 /// "<op>: finish the drag on the canvas first" and changes nothing, and while the Pen draws a path
 /// "<op>: finish the path the Pen draws on the canvas first" ([`waits_for_the_drag`]).
 pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
+    run_guarded(board, op, run_unguarded)
+}
+
+/// Runs op `op` on `board` with `run`, and answers a panic in it as an error, `<op>: <what
+/// panicked>`, as the engine answers one in a command ([`guard::run`], spec D15, CANVAS-CORE-9).
+/// The app runs ops in the window's callbacks, where a panic can't unwind: it aborted the app with
+/// every tab. What an op changes in the document is done in groups that roll back a panic of their
+/// own ([`crate::doc::grouped`]); one outside them, in Sawit's own reading of the op, has changed
+/// nothing yet.
+fn run_guarded(
+    board: &mut BoardDoc,
+    op: &Value,
+    run: impl FnOnce(&mut BoardDoc, &Value) -> Value,
+) -> Value {
+    let name = op.get("op").and_then(Value::as_str).unwrap_or("op");
+    guard::run(name, || Ok(run(board, op))).unwrap_or_else(failure)
+}
+
+/// [`run`], without its guard against a panic.
+fn run_unguarded(board: &mut BoardDoc, op: &Value) -> Value {
     let name = op.get("op").and_then(Value::as_str);
     if let Some(name) = name
         && let Some(wait) = waits_for_the_drag(board, name)
@@ -507,7 +528,7 @@ fn update(board: &mut BoardDoc, op: &Value) -> Value {
         Err(error) => return failure(format!("update: {error}")),
     };
     let (mut updated, mut missing, mut notes) = (0, Vec::new(), Vec::new());
-    let result = board.session.grouped("Update elements", |session| {
+    let result = crate::doc::grouped(&mut board.session, "Update elements", |session| {
         for (index, change) in changes.iter().enumerate() {
             let Some(layer) = layer_named(session.doc()?, &change.id) else {
                 missing.push(change.id.clone());
@@ -667,7 +688,7 @@ fn clear(board: &mut BoardDoc) -> Value {
     if layers.is_empty() {
         return json!({"ok": true});
     }
-    let cleared = board.session.grouped("Clear canvas", |session| {
+    let cleared = crate::doc::grouped(&mut board.session, "Clear canvas", |session| {
         session.execute("edit.delete", &json!({"ids": layers}))
     });
     match cleared {
@@ -750,7 +771,7 @@ fn from_scene(scene: &Value) -> Result<Incoming, BoardError> {
 /// The canvas keeps its document, so it stays a board (a design file's frames come in as layers of
 /// one), keeps its file and what is saved of it, and undo brings the old pages back.
 fn replace_pages(board: &mut BoardDoc, import: &Value) -> Result<(), BoardError> {
-    board.session.grouped("Replace canvas", |session| {
+    crate::doc::grouped(&mut board.session, "Replace canvas", |session| {
         let old = session.doc()?.pages.clone();
         session.execute("file.import", import)?;
         for page in old {
@@ -985,7 +1006,7 @@ fn batch(board: &mut BoardDoc, params: &Value) -> Result<Value, Failed> {
     let before = Documents::of(&board.session);
     let label = figcraft_engine::params::string(params, "label").unwrap_or_else(|| "Batch".into());
     let mut switched = false;
-    let result = board.session.grouped(&label, |session| {
+    let result = crate::doc::grouped(&mut board.session, &label, |session| {
         let result = session.execute(BATCH, params)?;
         if Documents::of(session) != before {
             switched = true;
@@ -4043,6 +4064,25 @@ mod tests {
     /// so an op run inside it was taken back by the next move, or by an Escape, though it had
     /// answered ok. Reads still answer during the drag; once the button is up the op goes
     /// through, and what it drew stays through the next drag.
+    /// CANVAS-CORE-9: a panic while an op runs is the op's error, as a panic in an engine command
+    /// is, and the canvas goes on: in the app it unwound into the window's callbacks, which
+    /// aborted the app with every tab.
+    #[test]
+    fn a_panic_in_an_op_is_its_error() {
+        let mut board = board();
+        let op = json!({"op": "add", "elements": []});
+        let reply = run_guarded(&mut board, &op, |_, _| panic!("a bug in the op"));
+        assert_eq!(reply["ok"], json!(false), "{reply}");
+        let error = reply["error"].as_str().unwrap();
+        assert!(
+            error.starts_with("internal error in `add`: a bug in the op"),
+            "{error}"
+        );
+        let sticky = json!([{"type": "sticky", "x": 0, "y": 0}]);
+        ask(&mut board, json!({"op": "add", "elements": sticky}));
+        assert_eq!(elements(&mut board).len(), 1);
+    }
+
     /// CANVAS-CORE-10: a Mermaid source with double quotes that fails is tried once more with
     /// single ones, but not after its render was stopped for running past the time limit: the
     /// second try froze the window as long again, 10 s in all.
