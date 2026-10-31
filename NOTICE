@@ -115,3 +115,36 @@ Copyright 2020 The Inter Project Authors (https://github.com/rsms/inter)
 Inter is licensed under the SIL Open Font License, Version 1.1. The full text of the licence is in
 OFL-Inter.txt, beside this file in Sawit.app (Contents/Resources) and at crates/board/fonts/ in
 Sawit's source, and is also available, with a FAQ, at https://openfontlicense.org
+
+================================================================================
+
+Visual Annotator
+----------------
+
+Sawit's browser tab adapts the picker and selector logic of Visual Annotator
+(https://github.com/wernerstrauch/visual-annotator), Copyright (c) 2026 wernerstrauch, in the page
+overlay it injects into pages (crates/core/src/browser_overlay.js in Sawit's source). Visual
+Annotator is licensed under the MIT License; its LICENSE follows, copied verbatim from revision
+4ec9a2df5a2c24a0c2baa889935efa4f6012ed21.
+
+MIT License
+
+Copyright (c) 2026 wernerstrauch
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
