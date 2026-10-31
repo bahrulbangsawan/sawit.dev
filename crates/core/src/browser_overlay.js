@@ -434,12 +434,14 @@
     render();
   };
 
-  // The annotate shortcut works on every page, picking or not. Synthetic
-  // events (browser_press_key "Meta+Shift+.") carry no `code`, so then the key
-  // counts; a real key's `key` would also match ⌘⇧< on layouts where Shift-< is ">".
+  // The annotate shortcut an agent presses in the page (browser_press_key
+  // "Meta+Shift+."), on every page, picking or not: the page dispatches that
+  // event itself, so the app never sees it. A real key press is the app's: its
+  // keymap takes the Annotate key before the page does, wherever the keyboard
+  // is, and a key it doesn't bind to Annotate must not toggle it here.
   window.addEventListener("keydown", (e) => {
-    const period = e.code ? e.code === "Period" : e.key === "." || e.key === ">";
-    if (e.metaKey && e.shiftKey && period) {
+    if (e.isTrusted) return;
+    if (e.metaKey && e.shiftKey && (e.key === "." || e.key === ">")) {
       e.preventDefault();
       send("key", "toggle-annotate");
     }

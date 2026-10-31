@@ -53,18 +53,20 @@ pub const TITLE: &str = "Browser";
 
 actions!(browser, [ToggleAnnotate]);
 
-/// ⇧⌘. toggles Annotate while Sawit has the keyboard; with the page focused
-/// the overlay posts a `key` message instead. A Mac reports ⇧⌘. as `cmd->`
-/// (Shift off, the character it types), so that is what is bound, as the
-/// canvas binds its shifted keys; `cmd-shift-.` would never match. The keymap
-/// editor and the tooltip write `cmd->` as ⇧⌘. (`keymap::names`).
+/// ⇧⌘. toggles Annotate, through this binding alone, the keymap's: the page's
+/// overlay only answers an agent's synthetic press (`browser_press_key`). A Mac
+/// reports ⇧⌘. as `cmd->` (Shift off, the character it types), so that is what
+/// is bound, as the canvas binds its shifted keys; `cmd-shift-.` would never
+/// match. The keymap editor and the tooltip write `cmd->` as ⇧⌘.
+/// (`keymap::names`).
 ///
 /// GPUI sees the ⌘ keys before the page does, even while the page has AppKit's
 /// keyboard, and runs them where GPUI's keyboard is: the view's own while the
 /// page has the keyboard ([`BrowserView::give_page_keyboard`], and a press in
-/// the page). ⌘C is let through there, as the terminal and the canvas let it
-/// through, past gpui-kit's root, which would copy its own text selection: the
-/// Edit menu then copies in the page (`cli::set_menus`).
+/// the page). So the Annotate key works in the page too when it has ⌘; a key
+/// without ⌘ types into the page. ⌘C is let through there, as the terminal and
+/// the canvas let it through, past gpui-kit's root, which would copy its own
+/// text selection: the Edit menu then copies in the page (`cli::set_menus`).
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd->", ToggleAnnotate, Some("Browser")),
@@ -792,7 +794,8 @@ impl BrowserView {
                     self.inspect_element(selector.to_string(), false, cx);
                 }
             }
-            // The page has the keyboard: it forwards ⇧⌘. and Esc.
+            // From the page: an agent's ⇧⌘. (the keymap has a real one), and Esc
+            // while picking.
             FromPage::Event(PageEvent::Key(key)) => match key.as_str() {
                 "toggle-annotate" => self.annotate_key(window, cx),
                 "escape" => self.set_pick(PickMode::Off, cx),

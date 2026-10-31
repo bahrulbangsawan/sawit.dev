@@ -1099,6 +1099,21 @@ mod tests {
         assert!(s.find("blocked_sheets").unwrap() < s.find("const OPS").unwrap());
     }
 
+    /// The overlay's Annotate key is only for a key an agent presses in the page
+    /// (`browser_press_key "Meta+Shift+."`, an event the page dispatches itself): a real key is
+    /// the app's keymap's, which takes Annotate's key before the page sees it, so a key the
+    /// keymap doesn't bind to Annotate never toggles it.
+    #[test]
+    fn the_overlay_toggles_annotate_only_for_an_agents_key() {
+        let start = OVERLAY_JS
+            .find("window.addEventListener(\"keydown\"")
+            .expect("the overlay's key listener");
+        let listener = &OVERLAY_JS[start..];
+        let listener = &listener[..listener.find("toggle-annotate").expect("its message")];
+        assert!(listener.contains("if (e.isTrusted) return;"), "{listener}");
+        assert!(!listener.contains("e.code"), "{listener}");
+    }
+
     #[test]
     fn ipc_reads_picks_hovers_and_keys() {
         let picked = parse_ipc(
