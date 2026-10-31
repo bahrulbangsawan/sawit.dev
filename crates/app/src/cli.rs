@@ -26,6 +26,7 @@ use sawit_core::instances::AppPaths;
 use sawit_core::kebun;
 use sawit_core::probe::find_in_path;
 
+use crate::files::FilesPanel;
 use crate::rt;
 use crate::terminal::TerminalPanel;
 use crate::workspace::{Answer, Workspace};
@@ -795,15 +796,16 @@ pub fn open_folder_in(dir: PathBuf, prefer: Option<AnyWindowHandle>, cx: &mut Ap
     }
 }
 
-/// Opens a folder picked with a project's Files tab (its Open Project Folder button): shows it
-/// in the window that has it already, as ⌘O does, else puts it in the place of that project's
-/// folder in `workspace`, as `sawit -r` does ([`Workspace::replace_project`]), which shows a
-/// folder the window has in another project and ungroups the tabs of the folder it replaces.
-/// Must not run while a workspace is being updated (it reads them all).
+/// Opens a folder picked with a project's Files tab, `asking` (its Open Project Folder button):
+/// shows it in the window that has it already, as ⌘O does, else puts it in the place of that
+/// project's folder in `workspace`, as `sawit -r` does ([`Workspace::replace_project_of`]), which
+/// shows a folder the window has in another project and ungroups the tabs of the folder it
+/// replaces. Must not run while a workspace is being updated (it reads them all).
 pub fn open_folder_from_files(
     dir: PathBuf,
     window: AnyWindowHandle,
     workspace: WeakEntity<Workspace>,
+    asking: WeakEntity<FilesPanel>,
     cx: &mut App,
 ) {
     let elsewhere = window_with_project(&dir, cx).filter(|(handle, _)| *handle != window);
@@ -811,7 +813,7 @@ pub fn open_folder_from_files(
         (Some(found), _) => add_project(found, dir, cx),
         (None, Some(workspace)) => window
             .update(cx, |_, window, cx| {
-                workspace.update(cx, |w, cx| w.replace_project(dir, window, cx))
+                workspace.update(cx, |w, cx| w.replace_project_of(&asking, dir, window, cx))
             })
             .ok()
             .map(|()| (window, workspace)),

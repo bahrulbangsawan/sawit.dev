@@ -1685,8 +1685,8 @@ Answer: ______
   forward.
 - With A shown, click the folder icon and, while the picker is open, click a tab of B's group. Then pick a new
   folder C.
-- Look for: A's folder becomes C, and B keeps its folder and tabs. Until review-files M1 is fixed, B's folder
-  becomes C instead, and B's tabs lose their group.
+- Look for: A is shown again with C as its folder, and A's tabs lose their group. B keeps its folder and tabs.
+  Before review-files M1 was fixed, B's folder became C instead.
 
 Answer: ______
 
