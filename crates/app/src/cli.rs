@@ -27,6 +27,7 @@ use sawit_core::kebun;
 use sawit_core::probe::find_in_path;
 
 use crate::rt;
+use crate::terminal::TerminalPanel;
 use crate::workspace::{Answer, Workspace};
 
 actions!(sawit, [InstallCli, Quit, NewWindow, OpenFolder]);
@@ -255,7 +256,8 @@ pub fn init(cx: &mut App) {
     });
     cx.set_global(GlobalCliStatus(status));
     cx.on_action(|_: &InstallCli, cx| install_cli(cx));
-    cx.on_action(|_: &Quit, cx| cx.quit());
+    // The question goes up outside the window update a key press runs in.
+    cx.on_action(|_: &Quit, cx| cx.defer(quit));
     cx.on_action(|_: &NewWindow, cx| {
         if let Some((handle, _)) = open_window(None, cx) {
             let _ = handle.update(cx, |_, window, _| window.activate_window());
@@ -334,6 +336,24 @@ pub fn reopen(cx: &mut App) {
 }
 
 /// Live windows, in the order they were opened.
+/// Quits Sawit. Quitting ends every terminal, so it asks first while one
+/// runs something.
+fn quit(cx: &mut App) {
+    let windows = terminal_panels(cx);
+    crate::terminal::end_all(windows, crate::terminal::Ending::Quit, cx, |cx| cx.quit());
+}
+
+/// Every window's terminal dock, front to back.
+pub fn terminal_panels(cx: &App) -> Vec<(AnyWindowHandle, Entity<TerminalPanel>)> {
+    let stack = cx.window_stack().unwrap_or_default();
+    let mut spaces = workspaces(cx);
+    spaces.sort_by_key(|(h, _)| stack.iter().position(|s| s == h).unwrap_or(usize::MAX));
+    spaces
+        .into_iter()
+        .map(|(h, w)| (h, w.read(cx).terminal().clone()))
+        .collect()
+}
+
 fn workspaces(cx: &App) -> Vec<(AnyWindowHandle, Entity<Workspace>)> {
     let open = cx.windows();
     let Some(windows) = cx.try_global::<Windows>() else {

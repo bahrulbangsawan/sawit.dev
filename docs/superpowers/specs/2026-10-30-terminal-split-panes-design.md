@@ -286,7 +286,10 @@ master side must stay open in some process.
 3. A shell pane that exits inside a split closes itself.
 4. `cmd-d`, `cmd-shift-d`, `cmd-alt-arrows`, and `cmd-shift-enter` for Zoom
    only in split tabs.
-5. Quitting Sawit never asks; terminals keep running.
+5. Quitting Sawit never asks; terminals keep running. (Until background
+   sessions land, terminals end with the app, so quitting, closing a window
+   and Restart to Update ask first while one runs a command or an SSH
+   session. The question goes once terminals keep running.)
 6. Run panel scripts and SSH sessions persist like shells (dev servers keep
    their ports after quit).
 7. Detached tabs reattach by project; tabs without a project go to the next

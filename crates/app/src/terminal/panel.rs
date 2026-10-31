@@ -891,6 +891,35 @@ impl TerminalPanel {
         &self.tabs[ix]
     }
 
+    /// What still runs in the terminals, one name per pane: a command in
+    /// the foreground (by the pane's name, its script's, else the program's)
+    /// and a live SSH session. Shells at their prompt, a script's terminal
+    /// between runs and ended sessions don't count. These end when the app
+    /// quits, or with their window.
+    pub fn running(&self, cx: &App) -> Vec<String> {
+        let mut running = Vec::new();
+        for tab in &self.tabs {
+            let t = tab.read(cx);
+            for (pane, view) in t.views() {
+                let v = view.read(cx);
+                if v.exited {
+                    continue;
+                }
+                let named = t.state.panes.get(&pane).and_then(|m| m.name.clone());
+                if v.remote.is_some() {
+                    running.push(format!("{} (SSH)", t.pane_label(pane, v)));
+                } else if v.foreground_job().is_some() {
+                    let name = named
+                        .or_else(|| v.job.as_ref().map(|j| j.name.clone()))
+                        .or_else(|| v.foreground_name())
+                        .unwrap_or_else(|| v.title.to_string());
+                    running.push(name);
+                }
+            }
+        }
+        running
+    }
+
     /// A terminal tab has the keyboard.
     pub fn has_focus(&self, window: &Window, cx: &App) -> bool {
         self.tabs
@@ -1327,7 +1356,7 @@ mod tests {
 
     use super::super::tab::TerminalTab;
     use super::super::testing::{
-        focus_terminal, init, open_panel, ready, scratch_dir, start_cat, wait_until,
+        focus_terminal, init, open_panel, ready, scratch_dir, start, start_cat, wait_until,
     };
     use super::{JobTag, Origin, TerminalPanel};
 
@@ -1885,6 +1914,53 @@ mod tests {
                 .text(Some(0), Some(0), 50, cx)
                 .is_ok_and(|t| t.contains("sawit-here"))
         });
+    }
+
+    /// What quitting or closing the window would end: commands in the foreground and live SSH
+    /// sessions. Shells at their prompt and a script's terminal between runs don't count.
+    #[gpui_kit::test]
+    fn running_lists_what_would_end_with_the_app(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        let shell = cx.update(|cx| panel.read(cx).tab(0).read(cx).focused_view().clone());
+        ready(cx, &shell);
+        let tag = JobTag {
+            key: "build".into(),
+            name: "build".into(),
+        };
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| {
+                p.start_job(
+                    tag,
+                    std::env::temp_dir(),
+                    "printf 'sawit-%s\\n' built",
+                    Some(Origin::User),
+                    window,
+                    cx,
+                )
+            })
+        })
+        .expect("the test window is open");
+        let job = active(cx, &panel);
+        let job = cx.update(|cx| job.read(cx).focused_view().clone());
+        wait_until(cx, "the script ran", |cx| {
+            let v = job.read(cx);
+            v.text_tail(50).contains("sawit-built") && v.at_prompt()
+        });
+        let running = |cx: &mut TestAppContext| cx.update(|cx| panel.read(cx).running(cx));
+        assert_eq!(running(cx), Vec::<String>::new());
+
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| {
+                p.open_ssh(test_remote(), Origin::User, window, cx)
+            })
+        })
+        .expect("the test window is open")
+        .expect("the session starts");
+        assert_eq!(running(cx), ["test (SSH)"]);
+
+        start(cx, &shell, "sleep 30", "sleep");
+        assert_eq!(running(cx), ["sleep", "test (SSH)"]);
     }
 
     /// A stand-in SSH server: a session that ends once it reads a line.

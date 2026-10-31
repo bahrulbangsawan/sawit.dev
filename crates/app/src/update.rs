@@ -80,6 +80,24 @@ pub fn init(cx: &mut App) {
     cx.set_global(GlobalUpdater(updater));
 }
 
+/// "Restart to Update": installs the downloaded update and relaunches, or
+/// opens the release page. Restarting ends the terminals, so it asks first
+/// while one runs something.
+pub fn restart(cx: &mut App) {
+    let updater = updater(cx);
+    if !matches!(updater.read(cx).state, UpdateState::Ready { .. }) {
+        updater.update(cx, |u, cx| u.restart(cx));
+        return;
+    }
+    // The question goes up outside the button's window update.
+    cx.defer(move |cx| {
+        let windows = crate::cli::terminal_panels(cx);
+        crate::terminal::end_all(windows, crate::terminal::Ending::Restart, cx, move |cx| {
+            updater.update(cx, |u, cx| u.restart(cx))
+        });
+    });
+}
+
 impl Updater {
     pub fn check(&mut self, cx: &mut Context<Self>) {
         if matches!(self.state, UpdateState::Downloading(_)) {

@@ -210,6 +210,8 @@ explained. A conflict on the same address can't be forced.
 - Drag to select text; it's copied when you release the mouse. Shift+drag selects even while a program
   (vim, Claude Code) uses the mouse.
 - New terminals start in the project folder. Shells idle at their prompt follow when you open another project.
+- Terminals end with the app and with their window. So quitting, closing a window and **Restart to Update** ask
+  first while a terminal runs a command or an SSH session, and name them. Shells waiting at their prompt don't count.
 
 ### Dev tools
 
@@ -368,8 +370,8 @@ explained. A conflict on the same address can't be forced.
   notes of a newer release, and the full history.
 - Sawit checks [GitHub Releases](https://github.com/bahrulbangsawan/sawit.dev/releases) on launch and
   every 4 hours. New versions download in the background. Once ready, a **Restart to Update** button appears in the
-  title bar: the app quits, `Sawit.app` is replaced, and it reopens. Builds from `cargo` only
-  open the releases page.
+  title bar: the app quits, `Sawit.app` is replaced, and it reopens. It asks first while a terminal runs something,
+  since quitting ends it. Builds from `cargo` only open the releases page.
 
 ## Keyboard shortcuts
 

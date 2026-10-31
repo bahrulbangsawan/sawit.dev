@@ -257,6 +257,8 @@ impl Workspace {
         let network_panel = cx.new(|cx| NetworkPanel::new(window, cx));
         let ssh_store = cx.new(SshStore::new);
         let ssh_panel = cx.new(|cx| SshPanel::new(ssh_store.clone(), terminal.clone(), window, cx));
+        // Closing the window ends its terminals: ask while one runs something.
+        crate::terminal::ask_before_closing(window, terminal.downgrade(), cx);
         let shell_config_panel = cx.new(|cx| ShellConfigPanel::new(window, cx));
         let cli_status = cli_status(cx);
         let updater = updater(cx);
@@ -448,6 +450,11 @@ impl Workspace {
     /// The active project's folder, if it has one.
     pub fn root(&self, cx: &App) -> Option<PathBuf> {
         self.current().root(cx)
+    }
+
+    /// The window's terminal dock.
+    pub fn terminal(&self) -> &Entity<TerminalPanel> {
+        &self.terminal
     }
 
     /// Files shown in tabs (editors and viewers), for `sawit --wait`.
@@ -2543,11 +2550,7 @@ impl Workspace {
                         &InstallUpdate,
                         Some("Workspace"),
                     )
-                    .on_click(
-                        cx.listener(|this, _, _, cx| {
-                            this.updater.update(cx, |u, cx| u.restart(cx))
-                        }),
-                    )
+                    .on_click(|_, _, cx| crate::update::restart(cx))
             }))
             .child(
                 group()
@@ -2828,7 +2831,7 @@ impl Render for Workspace {
                 // Installs a pending update, else checks for one and shows
                 // the changelog page, where the result appears.
                 if this.updater.read(cx).pending().is_some() {
-                    this.updater.update(cx, |u, cx| u.restart(cx));
+                    crate::update::restart(cx);
                 } else {
                     this.updater.update(cx, |u, cx| u.check(cx));
                     this.show_center(cx);

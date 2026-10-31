@@ -303,7 +303,6 @@ impl TerminalView {
     }
 
     /// The name of the command the shell is running (`vim`, `claude`).
-    #[cfg(test)]
     pub fn foreground_name(&self) -> Option<String> {
         if self.exited {
             return None;

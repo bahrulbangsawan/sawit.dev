@@ -89,11 +89,7 @@ impl ChangelogPage {
                     .primary()
                     .small()
                     .label(label)
-                    .on_click(
-                        cx.listener(|this, _, _, cx| {
-                            this.updater.update(cx, |u, cx| u.restart(cx))
-                        }),
-                    )
+                    .on_click(|_, _, cx| crate::update::restart(cx))
             }))
     }
 

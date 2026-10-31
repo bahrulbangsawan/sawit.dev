@@ -1,5 +1,6 @@
 //! Bottom-dock terminal: tabs of real terminals (shell or SSH).
 
+mod guard;
 mod panel;
 mod tab;
 #[cfg(test)]
@@ -8,6 +9,7 @@ mod view;
 
 use gpui_kit::actions;
 
+pub use guard::{Ending, ask_before_closing, end_all};
 pub use panel::{JobTag, Origin, Remote, TerminalPanel, ToggleMaximize};
 
 actions!(
