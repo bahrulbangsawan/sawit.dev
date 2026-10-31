@@ -14,6 +14,47 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+actions!(
+    catalog,
+    [
+        /// Moves the keyboard to the page's search field.
+        FocusSearch,
+        /// Selects the next row of the list.
+        SelectNext,
+        /// Selects the previous row of the list.
+        SelectPrevious,
+        /// Runs the selected row's main action: Install, Upgrade, Retry, or opens a server's
+        /// sheet; in the MCP page's sheet, Install.
+        Confirm
+    ]
+);
+
+/// The catalog pages' keys. The list's plain keys act while the search field doesn't have
+/// the keyboard (↩ there moves it to the first row), and the MCP page's while its sheet is
+/// closed; in the sheet, ↩ installs.
+pub fn init(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("cmd-f", FocusSearch, Some("ToolsPage")),
+        KeyBinding::new("down", SelectNext, Some("ToolsPage && !Input")),
+        KeyBinding::new("up", SelectPrevious, Some("ToolsPage && !Input")),
+        KeyBinding::new("enter", Confirm, Some("ToolsPage && !Input")),
+        KeyBinding::new("cmd-f", FocusSearch, Some("McpPage && !McpSheet")),
+        KeyBinding::new("down", SelectNext, Some("McpPage && !Input && !McpSheet")),
+        KeyBinding::new("up", SelectPrevious, Some("McpPage && !Input && !McpSheet")),
+        KeyBinding::new("enter", Confirm, Some("McpPage && !Input")),
+    ]);
+}
+
+/// The row a step of ↑ or ↓ selects in a list of `len` rows, from `current`.
+pub fn step(current: Option<usize>, len: usize, down: bool) -> Option<usize> {
+    let last = len.checked_sub(1)?;
+    Some(match (current, down) {
+        (None, _) => 0,
+        (Some(ix), true) => (ix + 1).min(last),
+        (Some(ix), false) => ix.saturating_sub(1).min(last),
+    })
+}
+
 /// Rows on one page of a catalog.
 pub const PER_PAGE: usize = 8;
 

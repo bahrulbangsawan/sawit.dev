@@ -227,6 +227,8 @@ explained. A conflict on the same address can't be forced.
 - Each tool shows whether it's installed, its version and where it lives, and the exact command that installs it.
 - Search the list, narrow it with the **Installed**, **Updates** and **Not Installed** tabs or to one category, and
   sort it by category, by name or by what needs attention. It shows eight tools a page.
+- The keyboard starts in the search (⌘F goes back to it); ↩ there moves to the first tool, ↑ and ↓ select, and ↩
+  installs, upgrades or retries the selected one.
 - When npm or GitHub has a newer release, an installed tool shows `11.21.0 → 12.16.1` and an **Upgrade** button;
   **Upgrade All** upgrades every one of them. Upgrades use the tool's own command (`bun upgrade`, `uv self update`,
   `claude update`, …), or its install script again.
@@ -540,7 +542,9 @@ and `uninstall_mcp_server` take the name again as `confirm` (so does `remove_ins
 
 Click **MCP** in the title bar to install it, along with a catalog of other servers: AWS, Cloudflare, Neon, Postman,
 Figma, Mobbin, Exa and more. Search the catalog, narrow it with the **Installed**, **Not Installed** and
-**Needs Sign-In** tabs or by where a server runs (built in, remote, on this Mac), and sort it. Servers that need an
+**Needs Sign-In** tabs or by where a server runs (built in, remote, on this Mac), and sort it. From the keyboard:
+⌘F searches, ↩ in the search moves to the first server, ↑ and ↓ select, ↩ opens the server's sheet, and ↩ there
+installs. Servers that need an
 account sign in through the client's own sign-in, which the page can start for Claude Code and Codex. The page
 finds the AI clients on this Mac: Claude Code (every
 profile, including `CLAUDE_CONFIG_DIR` folders), Codex (and `CODEX_HOME` profiles), Claude Desktop, Cursor,

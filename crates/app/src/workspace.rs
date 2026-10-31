@@ -2462,8 +2462,8 @@ impl Workspace {
         browser.update(cx, |b, _| b.set_visible(visible));
     }
 
-    /// Shows the MCP install page (one tab).
-    fn open_mcp_page(&mut self, cx: &mut Context<Self>) {
+    /// Shows the MCP install page (one tab), with the keyboard in its search.
+    fn open_mcp_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_welcome(CENTER_ONLY, cx);
         let key: SharedString = "mcp".into();
         if let Some(ix) = self
@@ -2472,8 +2472,14 @@ impl Workspace {
             .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
         {
             self.active = ix;
+            if let PaneItem::Other { view, .. } = &self.tabs[ix].item
+                && let Ok(page) = view.clone().downcast::<McpPage>()
+            {
+                page.update(cx, |page, cx| page.focus_search(window, cx));
+            }
         } else {
-            let view = cx.new(McpPage::new);
+            let view = cx.new(|cx| McpPage::new(window, cx));
+            view.update(cx, |page, cx| page.focus_search(window, cx));
             self.push_tab(
                 PaneItem::Other {
                     view: view.into(),
@@ -2535,7 +2541,7 @@ impl Workspace {
         self.open_file(path, window, cx);
     }
 
-    /// Shows the Dev Tools install page (one tab).
+    /// Shows the Dev Tools install page (one tab), with the keyboard in its search.
     fn open_tools_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_welcome(CENTER_ONLY, cx);
         let key: SharedString = "tools".into();
@@ -2545,8 +2551,15 @@ impl Workspace {
             .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
         {
             self.active = ix;
+            // The keyboard goes to its search, as for a new one.
+            if let PaneItem::Other { view, .. } = &self.tabs[ix].item
+                && let Ok(page) = view.clone().downcast::<ToolsPage>()
+            {
+                page.update(cx, |page, cx| page.focus_search(window, cx));
+            }
         } else {
-            let view = cx.new(ToolsPage::new);
+            let view = cx.new(|cx| ToolsPage::new(window, cx));
+            view.update(cx, |page, cx| page.focus_search(window, cx));
             cx.subscribe_in(
                 &view,
                 window,
@@ -2744,7 +2757,9 @@ impl Workspace {
                                 &OpenMcp,
                                 Some("Workspace"),
                             )
-                            .on_click(cx.listener(|this, _, _, cx| this.open_mcp_page(cx))),
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.open_mcp_page(window, cx)),
+                            ),
                     )
                     .child(
                         Button::new("open-keymap")
@@ -2954,7 +2969,7 @@ impl Render for Workspace {
             )
             .on_action(cx.listener(|this, _: &OpenCanvas, _, cx| this.show_canvas(cx)))
             .on_action(cx.listener(|this, _: &OpenDevTools, w, cx| this.open_tools_page(w, cx)))
-            .on_action(cx.listener(|this, _: &OpenMcp, _, cx| this.open_mcp_page(cx)))
+            .on_action(cx.listener(|this, _: &OpenMcp, w, cx| this.open_mcp_page(w, cx)))
             .on_action(cx.listener(|this, _: &OpenKeymapEditor, w, cx| {
                 this.show_center(cx);
                 this.open_keymap_editor(w, cx)
@@ -3088,16 +3103,15 @@ mod tests {
     #[gpui_kit::test]
     fn a_dev_tools_tab_that_installs_counts_as_unsaved(cx: &mut gpui_kit::TestAppContext) {
         use gpui_kit::AppContext as _;
-        let tab = |page: crate::tools_page::ToolsPage, cx: &mut gpui_kit::TestAppContext| {
-            super::PaneItem::Other {
-                view: cx.new(|_| page).into(),
-                key: "tools".into(),
-                title: "Dev Tools".into(),
-                icon: gpui_kit::assets::IconName::Package,
-                file: None,
-            }
+        let busy = super::PaneItem::Other {
+            view: cx
+                .new(|cx| crate::tools_page::ToolsPage::installing("bun", cx))
+                .into(),
+            key: "tools".into(),
+            title: "Dev Tools".into(),
+            icon: gpui_kit::assets::IconName::Package,
+            file: None,
         };
-        let busy = tab(crate::tools_page::ToolsPage::installing("bun"), cx);
         cx.update(|cx| {
             assert_eq!(
                 super::tools_work(&busy, cx).as_deref(),

@@ -147,7 +147,12 @@ pub struct ToolsPage {
     sort: Sort,
     /// The page of the list shown, from 0.
     page: usize,
-    /// Made on the first render, which has the window an input needs.
+    /// The search as the list last filtered by it.
+    last_query: String,
+    /// The row ↑ and ↓ select and ↩ acts on, by its place in the list.
+    cursor: Option<usize>,
+    focus: FocusHandle,
+    /// Made with the page when it has a window, else on the first render.
     search: Option<Entity<InputState>>,
     _search: Option<Subscription>,
 }
@@ -201,14 +206,80 @@ fn logo(id: &str, size: f32, cx: &App) -> AnyElement {
 }
 
 impl ToolsPage {
-    pub fn new(cx: &mut Context<Self>) -> Self {
-        let mut this = Self::blank();
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut this = Self::blank(cx);
+        this.make_search(window, cx);
         this.refresh(cx);
         this
     }
 
+    /// The search field: typing filters, ↩ moves the keyboard to the first row.
+    fn make_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search tools"));
+        self._search = Some(cx.subscribe_in(
+            &search,
+            window,
+            |this, _, e: &InputEvent, window, cx| match e {
+                // Only when the text changed: the field also says so when it loses the
+                // keyboard.
+                InputEvent::Change if this.query(cx) != this.last_query => {
+                    this.last_query = this.query(cx);
+                    this.page = 0;
+                    this.cursor = None;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {
+                    this.cursor = None;
+                    this.select(true, window, cx);
+                }
+                _ => {}
+            },
+        ));
+        self.search = Some(search);
+    }
+
+    /// Gives the search field the keyboard, as opening the page does.
+    pub fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search.is_none() {
+            self.make_search(window, cx);
+        }
+        if let Some(search) = &self.search {
+            search.update(cx, |s, cx| s.focus(window, cx));
+        }
+    }
+
+    /// Selects the next (or previous) row, turning the list's page to it, and
+    /// gives the list the keyboard.
+    fn select(&mut self, down: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let len = self.shown(&self.query(cx)).len();
+        self.cursor = catalog::step(self.cursor, len, down);
+        if let Some(ix) = self.cursor {
+            self.page = ix / catalog::PER_PAGE;
+        }
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// ↩ on a row: what its main button does, when that's safe from one key: Install,
+    /// Upgrade, Retry, and taking it out of the queue. Never Reinstall, Stop or Uninstall.
+    fn confirm(&mut self, cx: &mut Context<Self>) {
+        let rows = self.shown(&self.query(cx));
+        let Some(&(_, tool)) = self.cursor.and_then(|ix| rows.get(ix)) else {
+            return;
+        };
+        let id = tool.id;
+        match self.states.get(id) {
+            Some(State::Queued { .. }) => self.dequeue(id, cx),
+            Some(State::Failed(_) | State::Skipped(_)) => self.enqueue(&[id], cx),
+            Some(State::Installing | State::Uninstalling) => {}
+            _ if self.newer(id).is_some() => self.upgrade(&[id], cx),
+            _ if !self.installed(id) && !self.busy(id) => self.enqueue(&[id], cx),
+            _ => {}
+        }
+    }
+
     /// The page before anything is detected.
-    fn blank() -> Self {
+    fn blank(cx: &mut Context<Self>) -> Self {
         Self {
             found: HashMap::new(),
             problem: None,
@@ -227,6 +298,9 @@ impl ToolsPage {
             category: None,
             sort: Sort::Category,
             page: 0,
+            cursor: None,
+            last_query: String::new(),
+            focus: cx.focus_handle(),
             search: None,
             _search: None,
         }
@@ -234,8 +308,8 @@ impl ToolsPage {
 
     /// A page running `id`'s installer, for tests elsewhere.
     #[cfg(test)]
-    pub(crate) fn installing(id: &'static str) -> Self {
-        let mut page = Self::blank();
+    pub(crate) fn installing(id: &'static str, cx: &mut Context<Self>) -> Self {
+        let mut page = Self::blank(cx);
         page.running = Some((id, Job::Install));
         page
     }
@@ -798,6 +872,7 @@ impl ToolsPage {
                 cx.listener(|this, ix: &usize, _, cx| {
                     this.filter = Filter::ALL[*ix];
                     this.page = 0;
+                    this.cursor = None;
                     cx.notify();
                 }),
                 cx,
@@ -815,6 +890,7 @@ impl ToolsPage {
                         cx.listener(|this, ix: &usize, _, cx| {
                             this.category = ix.checked_sub(1).map(|ix| Category::ALL[ix]);
                             this.page = 0;
+                            this.cursor = None;
                             cx.notify();
                         }),
                     ))
@@ -827,6 +903,7 @@ impl ToolsPage {
                         cx.listener(|this, ix: &usize, _, cx| {
                             this.sort = Sort::ALL[*ix];
                             this.page = 0;
+                            this.cursor = None;
                             cx.notify();
                         }),
                     )),
@@ -983,7 +1060,13 @@ impl ToolsPage {
         )
     }
 
-    fn render_row(&self, ix: usize, tool: &'static Tool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_row(
+        &self,
+        ix: usize,
+        tool: &'static Tool,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let mono = theme.mono_font_family.clone();
@@ -1180,6 +1263,7 @@ impl ToolsPage {
             .border_color(cx.theme().border)
             .hover(|el| el.bg(cx.theme().list_hover))
             .when(running, |el| el.bg(cx.theme().list_hover))
+            .when(selected, |el| el.bg(cx.theme().list_active))
             .child(catalog::columns(
                 // Level with the middle of the tile.
                 Some(
@@ -1352,6 +1436,7 @@ impl ToolsPage {
                 }
                 cx.notify();
             }));
+        let selected = self.cursor.and_then(|c| rows.get(c)).map(|(_, t)| t.id);
         let (rows, page) = catalog::page_of(rows, self.page);
         let card = v_flex()
             .rounded(theme.radius_lg)
@@ -1379,7 +1464,10 @@ impl ToolsPage {
             "Tool",
             cx,
         ))
-        .children(rows.into_iter().map(|(ix, t)| self.render_row(ix, t, cx)))
+        .children(
+            rows.into_iter()
+                .map(|(ix, t)| self.render_row(ix, t, selected == Some(t.id), cx)),
+        )
         .child(catalog::pager(
             "tools-pages",
             page,
@@ -1387,6 +1475,7 @@ impl ToolsPage {
             if total == 1 { "tool" } else { "tools" },
             cx.listener(|this, page: &usize, _, cx| {
                 this.page = *page;
+                this.cursor = None;
                 cx.notify();
             }),
             cx,
@@ -1417,18 +1506,25 @@ impl Drop for ToolsPage {
 impl Render for ToolsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.search.is_none() {
-            let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search tools"));
-            self._search = Some(cx.subscribe(&search, |this, _, e: &InputEvent, cx| {
-                if matches!(e, InputEvent::Change) {
-                    this.page = 0;
-                    cx.notify();
-                }
-            }));
-            self.search = Some(search);
+            self.make_search(window, cx);
         }
         let query = self.query(cx);
         div()
             .id("tools-page")
+            .key_context("ToolsPage")
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &catalog::FocusSearch, window, cx| {
+                this.focus_search(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &catalog::SelectNext, window, cx| {
+                this.select(true, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &catalog::SelectPrevious, window, cx| {
+                    this.select(false, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &catalog::Confirm, _, cx| this.confirm(cx)))
             .size_full()
             .overflow_y_scroll()
             .bg(cx.theme().background)
@@ -1453,15 +1549,15 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
     use sawit_core::dev_tools::find;
 
-    use super::{Job, ToolsPage};
+    use super::{Job, State, ToolsPage};
 
     /// Closing the Dev Tools tab drops the page: the installer it runs stops with it, instead
     /// of running on unseen, its queue gone, while a reopened page offers to start it again.
     #[gpui_kit::test]
     fn closing_the_page_stops_its_installer(cx: &mut TestAppContext) {
         let (run, stop) = abortable(futures::future::pending::<()>());
-        let page = cx.new(|_| {
-            let mut page = ToolsPage::blank();
+        let page = cx.new(|cx| {
+            let mut page = ToolsPage::blank(cx);
             page.running = Some(("bun", Job::Install));
             page.queue.push_back((find("deno").unwrap(), Job::Install));
             page.stop = Some(stop);
@@ -1476,5 +1572,65 @@ mod tests {
         cx.update(|_| {});
         cx.run_until_parked();
         assert_eq!(run.now_or_never(), Some(Err(Aborted)), "still running");
+    }
+
+    /// The list works from the keyboard: the search has it when the page opens, ↩ there moves
+    /// it to the first row, ↑ and ↓ select, ↩ runs the row's main action (here: taking a tool
+    /// out of the queue, which runs nothing), and ⌘F goes back to the search.
+    #[gpui_kit::test]
+    fn the_list_works_from_the_keyboard(cx: &mut TestAppContext) {
+        use gpui_kit::Focusable as _;
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::catalog::init(cx);
+        });
+        let (window, page) = cx
+            .update(|cx| {
+                gpui_kit::open_window(Default::default(), cx, |_, cx| {
+                    cx.new(|cx| {
+                        let mut page = ToolsPage::blank(cx);
+                        page.loading = false;
+                        page.states.insert("nvm", State::Queued { for_: None });
+                        page.queue.push_back((find("nvm").unwrap(), Job::Install));
+                        page
+                    })
+                })
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.update_window(window, |_, window, cx| {
+            page.update(cx, |page, cx| page.focus_search(window, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        // nvm, and Node.js, whose description names it.
+        cx.simulate_keystrokes(window, "n v m");
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, "enter");
+        cx.run_until_parked();
+        let state = |cx: &mut TestAppContext| {
+            page.read_with(cx, |page, _| (page.cursor, page.states.get("nvm").cloned()))
+        };
+        let queued = Some(State::Queued { for_: None });
+        assert_eq!(state(cx), (Some(0), queued.clone()), "↩ in the search");
+        cx.simulate_keystrokes(window, "down");
+        assert_eq!(state(cx), (Some(1), queued.clone()));
+        cx.simulate_keystrokes(window, "down up");
+        assert_eq!(state(cx), (Some(0), queued));
+        cx.simulate_keystrokes(window, "enter");
+        assert_eq!(
+            state(cx),
+            (Some(0), None),
+            "↩ didn't take it out of the queue"
+        );
+        cx.simulate_keystrokes(window, "cmd-f");
+        cx.run_until_parked();
+        let search = page.read_with(cx, |page, cx| {
+            page.search.as_ref().unwrap().focus_handle(cx)
+        });
+        cx.update_window(window, |_, window, _| {
+            assert!(search.is_focused(window), "⌘F")
+        })
+        .unwrap();
     }
 }

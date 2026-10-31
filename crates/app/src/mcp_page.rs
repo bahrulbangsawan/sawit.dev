@@ -79,7 +79,15 @@ pub struct McpPage {
     sort: Sort,
     /// The page of the list shown, from 0.
     page: usize,
-    /// Made on the first render, which has the window an input needs.
+    /// The search as the list last filtered by it.
+    last_query: String,
+    /// The row ↑ and ↓ select and ↩ opens, by its place in the list.
+    cursor: Option<usize>,
+    /// The page's own keyboard focus (the sheet has `focus`).
+    page_focus: FocusHandle,
+    /// A sheet closed: the list gets the keyboard back on the next render.
+    refocus: bool,
+    /// Made with the page when it has a window, else on the first render.
     search: Option<Entity<InputState>>,
     _search: Option<Subscription>,
 }
@@ -296,10 +304,96 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 }
 
 impl McpPage {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut this = Self::blank(cx);
+        this.make_search(window, cx);
         this.reload(cx);
         this
+    }
+
+    /// The search field: typing filters, ↩ moves the keyboard to the first row.
+    fn make_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search servers"));
+        self._search = Some(cx.subscribe_in(
+            &search,
+            window,
+            |this, _, e: &InputEvent, window, cx| match e {
+                // Only when the text changed: the field also says so when it loses the
+                // keyboard.
+                InputEvent::Change if this.query(cx) != this.last_query => {
+                    this.last_query = this.query(cx);
+                    this.page = 0;
+                    this.cursor = None;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {
+                    this.cursor = None;
+                    this.select(true, window, cx);
+                }
+                _ => {}
+            },
+        ));
+        self.search = Some(search);
+    }
+
+    /// Gives the search field the keyboard, as opening the page does.
+    pub fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sheet.is_some() {
+            return;
+        }
+        if self.search.is_none() {
+            self.make_search(window, cx);
+        }
+        if let Some(search) = &self.search {
+            search.update(cx, |s, cx| s.focus(window, cx));
+        }
+    }
+
+    fn query(&self, cx: &App) -> String {
+        self.search
+            .as_ref()
+            .map(|s| s.read(cx).value().trim().to_lowercase())
+            .unwrap_or_default()
+    }
+
+    /// Selects the next (or previous) row, turning the list's page to it, and
+    /// gives the list the keyboard.
+    fn select(&mut self, down: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let len = self.shown(&self.query(cx)).len();
+        self.cursor = catalog::step(self.cursor, len, down);
+        if let Some(ix) = self.cursor {
+            self.page = ix / catalog::PER_PAGE;
+        }
+        window.focus(&self.page_focus, cx);
+        cx.notify();
+    }
+
+    /// ↩: in the install sheet, Install (when it can); after a sign-in, Done;
+    /// on the list, the selected server's sheet.
+    fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match &self.sheet {
+            Some(Sheet::Install(sheet)) => {
+                let s = sheet.server;
+                let busy = (0..self.targets.len()).any(|t| self.busy.contains(&(s, t)));
+                if !busy && !self.install_blocked(s) && !self.selected_for(false).is_empty() {
+                    self.install_selected(cx);
+                }
+            }
+            Some(Sheet::SignIn(flow)) => {
+                if flow.pos >= flow.queue.len() {
+                    self.close_sheet(cx);
+                }
+            }
+            None => {
+                let rows = self.shown(&self.query(cx));
+                if !self.loading
+                    && !self.targets.is_empty()
+                    && let Some(&s) = self.cursor.and_then(|ix| rows.get(ix))
+                {
+                    self.open_install(s, window, cx);
+                }
+            }
+        }
     }
 
     /// The page before anything is detected.
@@ -330,6 +424,10 @@ impl McpPage {
             kind: None,
             sort: Sort::Catalog,
             page: 0,
+            cursor: None,
+            last_query: String::new(),
+            page_focus: cx.focus_handle(),
+            refocus: false,
             search: None,
             _search: None,
         }
@@ -434,6 +532,20 @@ impl McpPage {
             Some(Status::Outdated(sig)) if server.has_region() => server.region_in(sig),
             _ => None,
         }
+    }
+
+    /// Why server `s` can't be installed at all now: its program isn't
+    /// there, or the sheet's Region isn't one.
+    fn install_blocked(&self, s: usize) -> bool {
+        let region_invalid = matches!(
+            &self.sheet,
+            Some(Sheet::Install(sheet)) if sheet.server == s && sheet.region_invalid
+        );
+        (s == 0 && !self.server_exists)
+            || region_invalid
+            || SERVERS[s]
+                .missing_program(|c| self.programs.get(c).cloned())
+                .is_some()
     }
 
     /// A remote server can't go into a client that only runs programs: it
@@ -1008,6 +1120,7 @@ impl McpPage {
         if !rechecks.is_empty() {
             self.check_sign_ins(rechecks, cx);
         }
+        self.refocus = true;
         cx.notify();
     }
 
@@ -1226,6 +1339,7 @@ impl McpPage {
                 cx.listener(|this, ix: &usize, _, cx| {
                     this.filter = Filter::ALL[*ix];
                     this.page = 0;
+                    this.cursor = None;
                     cx.notify();
                 }),
                 cx,
@@ -1243,6 +1357,7 @@ impl McpPage {
                         cx.listener(|this, ix: &usize, _, cx| {
                             this.kind = ix.checked_sub(1).map(|ix| Kind::ALL[ix]);
                             this.page = 0;
+                            this.cursor = None;
                             cx.notify();
                         }),
                     ))
@@ -1255,13 +1370,19 @@ impl McpPage {
                         cx.listener(|this, ix: &usize, _, cx| {
                             this.sort = Sort::ALL[*ix];
                             this.page = 0;
+                            this.cursor = None;
                             cx.notify();
                         }),
                     )),
             )
     }
 
-    fn render_server(&self, s: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_server(
+        &self,
+        s: usize,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let theme = cx.theme().clone();
         let muted = theme.muted_foreground;
         let server = &SERVERS[s];
@@ -1539,6 +1660,7 @@ impl McpPage {
         .border_b_1()
         .border_color(theme.border)
         .hover(|el| el.bg(theme.list_hover))
+        .when(selected, |el| el.bg(theme.list_active))
     }
 
     /// The list card: column titles, a page of servers and the pager, or
@@ -1588,9 +1710,13 @@ impl McpPage {
                 ))
                 .into_any_element();
         }
+        let selected = self.cursor.and_then(|c| rows.get(c)).copied();
         let (rows, page) = catalog::page_of(rows, self.page);
         card.child(catalog::header(None, "Server", cx))
-            .children(rows.into_iter().map(|s| self.render_server(s, cx)))
+            .children(
+                rows.into_iter()
+                    .map(|s| self.render_server(s, selected == Some(s), cx)),
+            )
             .child(catalog::pager(
                 "mcp-pages",
                 page,
@@ -1598,6 +1724,7 @@ impl McpPage {
                 if total == 1 { "server" } else { "servers" },
                 cx.listener(|this, page: &usize, _, cx| {
                     this.page = *page;
+                    this.cursor = None;
                     cx.notify();
                 }),
                 cx,
@@ -1631,11 +1758,7 @@ impl McpPage {
             .filter(|(_, t)| selected.contains(t))
             .collect();
         let busy = (0..self.targets.len()).any(|t| self.busy.contains(&(s, t)));
-        let blocked = (s == 0 && !self.server_exists)
-            || sheet.region_invalid
-            || server
-                .missing_program(|c| self.programs.get(c).cloned())
-                .is_some();
+        let blocked = self.install_blocked(s);
 
         // Targets grouped under their client: agents first, then editors.
         let mut groups: Vec<(Client, Vec<usize>)> = Vec::new();
@@ -2323,20 +2446,12 @@ impl McpPage {
 impl Render for McpPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.search.is_none() {
-            let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search servers"));
-            self._search = Some(cx.subscribe(&search, |this, _, e: &InputEvent, cx| {
-                if matches!(e, InputEvent::Change) {
-                    this.page = 0;
-                    cx.notify();
-                }
-            }));
-            self.search = Some(search);
+            self.make_search(window, cx);
         }
-        let query = self
-            .search
-            .as_ref()
-            .map(|s| s.read(cx).value().trim().to_lowercase())
-            .unwrap_or_default();
+        if std::mem::take(&mut self.refocus) {
+            window.focus(&self.page_focus, cx);
+        }
+        let query = self.query(cx);
         let overlay = match &self.sheet {
             Some(Sheet::Install(sheet)) => Some(self.render_install_sheet(sheet, cx)),
             Some(Sheet::SignIn(flow)) => Some(self.render_sign_in_sheet(flow, cx)),
@@ -2345,6 +2460,22 @@ impl Render for McpPage {
         div()
             .relative()
             .size_full()
+            .key_context("McpPage")
+            .track_focus(&self.page_focus)
+            .on_action(cx.listener(|this, _: &catalog::FocusSearch, window, cx| {
+                this.focus_search(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &catalog::SelectNext, window, cx| {
+                this.select(true, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &catalog::SelectPrevious, window, cx| {
+                    this.select(false, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &catalog::Confirm, window, cx| this.confirm(window, cx)),
+            )
             .bg(cx.theme().background)
             .child(
                 div().id("mcp-page").size_full().overflow_y_scroll().child(
@@ -2360,6 +2491,7 @@ impl Render for McpPage {
                 el.child(
                     div()
                         .id("mcp-sheet")
+                        .key_context("McpSheet")
                         .track_focus(&self.focus)
                         .absolute()
                         .inset_0()
@@ -2633,6 +2765,53 @@ mod tests {
         assert!(McpPage::matches(at("aws"), "sign"));
         assert!(McpPage::matches(at("epidemic-sound"), "api key"));
         assert!(!McpPage::matches(at("exa"), "sign"));
+    }
+
+    /// The page works from the keyboard: ↩ in the search moves it to the first row, ↩ there
+    /// opens the server's sheet, ↩ in the sheet installs, Escape closes it and ↓ goes on down
+    /// the list.
+    #[gpui_kit::test]
+    fn the_page_works_from_the_keyboard(cx: &mut TestAppContext) {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".cursor/mcp.json");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(&config, "{}").unwrap();
+        let cursor = target(Client::Cursor, &config);
+        let read = sawit_core::mcp_clients::read_entries(&cursor);
+        let (page, cx) = open(cx, vec![cursor], |page| {
+            page.entries = vec![read];
+            page.recompute();
+            page.server_exists = true;
+        });
+        cx.update(|_, cx| crate::catalog::init(cx));
+        page.update_in(cx, |page, window, cx| page.focus_search(window, cx));
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        assert_eq!(page.read_with(cx, |page, _| page.cursor), Some(0));
+        cx.simulate_keystrokes("enter");
+        let sheet = |cx: &mut VisualTestContext| {
+            page.read_with(cx, |page, _| match &page.sheet {
+                Some(super::Sheet::Install(sheet)) => Some(sheet.server),
+                _ => None,
+            })
+        };
+        assert_eq!(sheet(cx), Some(0), "↩ didn't open Sawit's sheet");
+        page.update(cx, |page, _| {
+            if let Some(super::Sheet::Install(sheet)) = &mut page.sheet {
+                sheet.selected.insert(0);
+            }
+        });
+        cx.simulate_keystrokes("enter");
+        let installed = (0..50).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            cx.run_until_parked();
+            std::fs::read_to_string(&config).unwrap().contains("sawit")
+        });
+        assert!(installed, "↩ in the sheet didn't install");
+        cx.simulate_keystrokes("escape");
+        assert_eq!(sheet(cx), None);
+        cx.simulate_keystrokes("down");
+        assert_eq!(page.read_with(cx, |page, _| page.cursor), Some(1));
     }
 
     /// The sheet opens with every installed client ticked, so its Remove asks first, as the

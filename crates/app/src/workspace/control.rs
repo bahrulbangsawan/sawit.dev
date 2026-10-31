@@ -408,7 +408,7 @@ impl Workspace {
                 self.open_canvas(cx);
             }
             Page::Browser => self.open_browser(None, window, cx),
-            Page::Mcp => self.open_mcp_page(cx),
+            Page::Mcp => self.open_mcp_page(window, cx),
             Page::Tools => self.open_tools_page(window, cx),
             Page::Changelog => {
                 self.show_center(cx);
