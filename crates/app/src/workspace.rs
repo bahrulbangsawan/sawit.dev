@@ -41,7 +41,7 @@ use crate::ssh::{SshEvent, SshHostEvent, SshHostView, SshPanel, SshStore, SshSto
 use crate::states::Placeholder;
 use crate::tab_groups::{group_header, group_stripe, project_name};
 use crate::tabs::{
-    CloseOp, Slot, TabFlags, active_after, active_after_move, insert_index, to_close,
+    CloseOp, Shown, Slot, TabFlags, active_after, active_after_move, insert_index, strip, to_close,
 };
 use crate::terminal::{Origin, TerminalPanel, ToggleMaximize};
 use crate::tools_page::{ToolsEvent, ToolsPage};
@@ -234,8 +234,9 @@ pub struct Workspace {
     /// Shown instead of the panels until something is opened.
     welcome: Option<Entity<Welcome>>,
     tab_scroll: ScrollHandle,
-    /// Active tab last scrolled into view.
-    scrolled_to: Option<usize>,
+    /// The active tab last scrolled into view: the view it shows, and its index. Another tab, or
+    /// the same one moved, is scrolled to; a fold or a scroll by hand leaves the bar alone.
+    scrolled_to: Option<(EntityId, usize)>,
     /// A table/SQL tab asked for while its connection was being re-made.
     pending_db: Option<DbEvent>,
     cli_status: Entity<CliStatus>,
@@ -1327,52 +1328,73 @@ impl Workspace {
         cached(view)
     }
 
+    /// The view the tab at `ix` shows: what tells it apart from a tab that takes its place.
+    fn tab_view(&self, ix: usize) -> Option<EntityId> {
+        Some(match &self.tabs.get(ix)?.item {
+            PaneItem::Server => self.server_detail.entity_id(),
+            PaneItem::File(editor) => editor.entity_id(),
+            PaneItem::Other { view, .. } => view.entity_id(),
+        })
+    }
+
+    /// The header in front of the run of `root`'s tabs that starts at tab `first`, `count` long:
+    /// a click folds the group, and its menu closes the group's tabs.
+    fn render_group_header(
+        &self,
+        first: usize,
+        count: usize,
+        root: PathBuf,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let weak = cx.entity().downgrade();
+        let color = self.group_color(&root, cx);
+        let collapsed = self.collapsed.contains(&root);
+        let (toggle, close) = (root.clone(), root.clone());
+        group_header(
+            ("tab-group", first),
+            project_name(&root),
+            color,
+            collapsed,
+            count,
+            cx,
+        )
+        .on_click(cx.listener(move |this, _, _, cx| this.toggle_group(toggle.clone(), cx)))
+        .context_menu(move |menu, _, _| {
+            let weak = weak.clone();
+            let close = close.clone();
+            menu.item(
+                PopupMenuItem::new("Close Tabs in Group").on_click(move |_, _, cx| {
+                    let _ = weak.update(cx, |ws, cx| ws.close_group(&close, cx));
+                }),
+            )
+        })
+        .into_any_element()
+    }
+
     fn render_tab_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let weak = cx.entity().downgrade();
         let projects = self.roots(cx);
-        let mut items: Vec<AnyElement> = Vec::new();
-        for (ix, tab) in self.tabs.iter().enumerate() {
+        // A header in front of each group's run of tabs; a folded group shows its active tab only.
+        let shown = strip(&self.slots(), self.active, |g| self.collapsed.contains(g));
+        let mut items: Vec<AnyElement> = Vec::with_capacity(shown.len());
+        // The active tab's place among the bar's children, which a scroll goes by.
+        let mut active_child = None;
+        for item in shown {
+            let ix = match item {
+                Shown::Tab(ix) => ix,
+                Shown::Header { first, count } => {
+                    if let Some(root) = self.tabs[first].group.clone() {
+                        items.push(self.render_group_header(first, count, root, cx));
+                    }
+                    continue;
+                }
+            };
+            let tab = &self.tabs[ix];
             let group = tab.group.clone().filter(|_| !tab.pinned);
             let color = group.as_ref().map(|g| self.group_color(g, cx));
-            // A header in front of each group's run of tabs.
-            let starts_run =
-                ix == 0 || self.tabs[ix - 1].pinned || self.tabs[ix - 1].group != tab.group;
-            if let (Some(root), Some(color), true) = (&group, color, starts_run) {
-                let collapsed = self.collapsed.contains(root);
-                let count = self.tabs[ix..]
-                    .iter()
-                    .take_while(|t| !t.pinned && t.group == tab.group)
-                    .count();
-                let (toggle, close) = (root.clone(), root.clone());
-                let weak = weak.clone();
-                items.push(
-                    group_header(
-                        ("tab-group", ix),
-                        project_name(root),
-                        color,
-                        collapsed,
-                        count,
-                        cx,
-                    )
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.toggle_group(toggle.clone(), cx)),
-                    )
-                    .context_menu(move |menu, _, _| {
-                        let weak = weak.clone();
-                        let close = close.clone();
-                        menu.item(PopupMenuItem::new("Close Tabs in Group").on_click(
-                            move |_, _, cx| {
-                                let _ = weak.update(cx, |ws, cx| ws.close_group(&close, cx));
-                            },
-                        ))
-                    })
-                    .into_any_element(),
-                );
-            }
             let active = ix == self.active;
-            // A folded group still shows its active tab.
-            if !active && group.as_ref().is_some_and(|g| self.collapsed.contains(g)) {
-                continue;
+            if active {
+                active_child = Some(items.len());
             }
             let projects = projects.clone();
             let tab_group = tab.group.clone();
@@ -1479,10 +1501,14 @@ impl Workspace {
                     .into_any_element()
             });
         }
-        if self.scrolled_to != Some(self.active) {
-            // Bring a newly opened/activated tab into view.
-            self.tab_scroll.scroll_to_item(self.active);
-            self.scrolled_to = Some(self.active);
+        // Bring a newly opened or activated tab into view, by its place among the bar's children:
+        // the group headers and the folded tabs make that differ from its index (SMOKE-1).
+        let key = self.tab_view(self.active).map(|view| (view, self.active));
+        if let (Some(key), Some(child)) = (key, active_child)
+            && self.scrolled_to != Some(key)
+        {
+            self.tab_scroll.scroll_to_item(child);
+            self.scrolled_to = Some(key);
         }
         h_flex()
             .id("tab-bar")

@@ -86,6 +86,40 @@ pub fn insert_index(tabs: &[Slot], pinned: bool, group: Option<&Path>) -> usize 
     }
 }
 
+/// One thing a tab strip draws ([`strip`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shown {
+    /// The header of the group whose run of tabs starts at tab `first`, `count` tabs long.
+    Header { first: usize, count: usize },
+    /// The tab at this index.
+    Tab(usize),
+}
+
+/// What a tab strip draws of `tabs`, in order: a header in front of each group's run of tabs,
+/// then the run's tabs, of which a group that is `folded` shows only the active one. Pinned tabs
+/// are in no group. The center tab bar and the terminal dock both draw this, one element per
+/// item, so the active tab's place in it, not its index, is the child a scroll must bring into
+/// view.
+pub fn strip(tabs: &[Slot], active: usize, folded: impl Fn(&Path) -> bool) -> Vec<Shown> {
+    let mut shown = Vec::with_capacity(tabs.len());
+    for (ix, tab) in tabs.iter().enumerate() {
+        let group = tab.group.filter(|_| !tab.pinned);
+        let starts_run = ix == 0 || tabs[ix - 1].pinned || tabs[ix - 1].group != tab.group;
+        if group.is_some() && starts_run {
+            let count = tabs[ix..]
+                .iter()
+                .take_while(|t| !t.pinned && t.group == tab.group)
+                .count();
+            shown.push(Shown::Header { first: ix, count });
+        }
+        if ix != active && group.is_some_and(&folded) {
+            continue;
+        }
+        shown.push(Shown::Tab(ix));
+    }
+    shown
+}
+
 /// Where the active tab ends up when the tab at `from` moves to `to`
 /// (`to` counted after the removal).
 pub fn active_after_move(active: usize, from: usize, to: usize) -> usize {
@@ -116,8 +150,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        CloseOp, Slot, TabFlags, active_after, active_after_move, insert_index, project_of,
-        to_close,
+        CloseOp, Shown, Slot, TabFlags, active_after, active_after_move, insert_index, project_of,
+        strip, to_close,
     };
 
     const PLAIN: TabFlags = TabFlags {
@@ -193,6 +227,120 @@ mod tests {
         let grouped_only = [slot(true, None), slot(false, Some("/a"))];
         assert_eq!(insert_index(&grouped_only, false, None), 1);
         assert_eq!(insert_index(&[], false, Some(Path::new("/a"))), 0);
+    }
+
+    /// Where the tab at `ix` is among what a strip draws (`shown`): the child of the strip a
+    /// scroll to it goes by.
+    fn shown_at(shown: &[Shown], ix: usize) -> Option<usize> {
+        shown.iter().position(|s| *s == Shown::Tab(ix))
+    }
+
+    /// SMOKE-1 and SMOKE-2: a strip draws a header in front of each group's run of tabs and
+    /// leaves out a folded group's other tabs, so the active tab's place among what is drawn,
+    /// which is what a scroll brings into view, is not its index among the tabs.
+    #[test]
+    fn a_strip_draws_headers_and_leaves_out_folded_tabs() {
+        use Shown::{Header, Tab};
+        let none = |_: &Path| false;
+        // Pages of no project (Instance, Browser, Dev Tools...): no header, so the two agree.
+        let pages = [slot(false, None), slot(false, None), slot(false, None)];
+        assert_eq!(strip(&pages, 2, none), [Tab(0), Tab(1), Tab(2)]);
+        assert_eq!(shown_at(&strip(&pages, 2, none), 2), Some(2));
+
+        // One project, after a page: its header comes before its tabs, so the active tab is
+        // child 4, and child 3, which its index names, is the tab left of it.
+        let one = [
+            slot(false, None),
+            slot(false, Some("/p")),
+            slot(false, Some("/p")),
+            slot(false, Some("/p")),
+        ];
+        assert_eq!(
+            strip(&one, 3, none),
+            [
+                Tab(0),
+                Header { first: 1, count: 3 },
+                Tab(1),
+                Tab(2),
+                Tab(3)
+            ]
+        );
+        assert_eq!(shown_at(&strip(&one, 3, none), 3), Some(4));
+
+        // Two projects: a header each.
+        let two = [
+            slot(false, Some("/p")),
+            slot(false, Some("/p")),
+            slot(false, Some("/q")),
+            slot(false, Some("/q")),
+        ];
+        let shown = strip(&two, 2, none);
+        assert_eq!(
+            shown,
+            [
+                Header { first: 0, count: 2 },
+                Tab(0),
+                Tab(1),
+                Header { first: 2, count: 2 },
+                Tab(2),
+                Tab(3),
+            ]
+        );
+        assert_eq!(shown_at(&shown, 2), Some(4));
+        assert_eq!(shown_at(&shown, 3), Some(5));
+
+        // A folded group before the active one draws its header alone, so the active tab's
+        // index can be past the last child: here tab 4 is child 3 of 4.
+        let folded = |g: &Path| g == Path::new("/p");
+        let three_then_two = [
+            slot(false, Some("/p")),
+            slot(false, Some("/p")),
+            slot(false, Some("/p")),
+            slot(false, Some("/q")),
+            slot(false, Some("/q")),
+        ];
+        let shown = strip(&three_then_two, 4, folded);
+        assert_eq!(
+            shown,
+            [
+                Header { first: 0, count: 3 },
+                Header { first: 3, count: 2 },
+                Tab(3),
+                Tab(4),
+            ]
+        );
+        assert_eq!(shown_at(&shown, 4), Some(3));
+        assert_eq!(shown_at(&shown, 0), None, "a folded tab isn't drawn");
+
+        // A folded group still draws its active tab.
+        let shown = strip(&two, 1, folded);
+        assert_eq!(
+            shown,
+            [
+                Header { first: 0, count: 2 },
+                Tab(1),
+                Header { first: 2, count: 2 },
+                Tab(2),
+                Tab(3),
+            ]
+        );
+        assert_eq!(shown_at(&shown, 1), Some(1));
+
+        // Pinned tabs are in no group, even folded: the header comes after them.
+        let pinned = [
+            slot(true, Some("/p")),
+            slot(true, None),
+            slot(false, Some("/p")),
+            slot(false, Some("/p")),
+        ];
+        let shown = strip(&pinned, 3, folded);
+        assert_eq!(
+            shown,
+            [Tab(0), Tab(1), Header { first: 2, count: 2 }, Tab(3)]
+        );
+        assert_eq!(shown_at(&shown, 3), Some(3));
+
+        assert!(strip(&[], 0, none).is_empty());
     }
 
     #[test]
