@@ -2,15 +2,31 @@
 // the page's own scripts (see crates/core/src/browser.rs).
 //
 // - Reports console messages, page errors, requests and URL changes to the
-//   app over IPC, each message signed with the webview's token (held in this
-//   closure, out of the page's reach).
+//   app over IPC, each message signed with the webview's token. The token is
+//   held in this closure, and so are the functions that sign with it (`send`)
+//   or pick (the overlay's listeners). They stay out of the page's reach only
+//   while no page script can get one of them: messages go out through the
+//   handler's own `postMessage` (see `post`), the picker's listeners only
+//   through the listener methods taken at document start (see the overlay's
+//   `listen`), and all of it is strict-mode code. JavaScriptCore answers
+//   `Function.prototype.caller` for a sloppy function, arrows included, so a
+//   page function the agent calls (a replaced `JSON.stringify`, a getter on an
+//   event) would otherwise get `send` or `click` from its caller.
 // - Answers the agent's ops through `window.__sawitAgent.run(op)`, which
 //   returns a JSON string synchronously: `{"ok":true,…}` or
 //   `{"ok":false,"error":…}`.
 (() => {
-  if (window.__sawitAgent || !window.ipc || !window.ipc.postMessage) return;
+  "use strict";
+  const handlers = window.webkit && window.webkit.messageHandlers;
+  const ipc = handlers && handlers.ipc;
+  if (window.__sawitAgent || !ipc || typeof ipc.postMessage !== "function") return;
   const TOKEN = "__SAWIT_TOKEN__";
-  const post = window.ipc.postMessage.bind(window.ipc);
+  // The handler's own `postMessage` and `Reflect.apply`, as they are before any page script
+  // runs. wry's `window.ipc` shim looks the handler's method up on every call, so a page
+  // that patched it (on the handler's prototype) would read every signed message.
+  const postMessage = ipc.postMessage;
+  const apply = Reflect.apply;
+  const post = (message) => apply(postMessage, ipc, [message]);
   const send = (kind, data) => {
     try {
       post(TOKEN + "\n" + kind + "\n" + JSON.stringify(data));
@@ -139,7 +155,11 @@
   const xhrOpen = XMLHttpRequest.prototype.open;
   const xhrSend = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.open = function (method, url) {
-    xhrs.set(this, { method: String(method).toUpperCase(), url: absolute(String(url)) });
+    // A call on something that isn't a request gets the browser's own error: in strict mode
+    // `this` isn't made an object, and a WeakMap would throw first.
+    try {
+      xhrs.set(this, { method: String(method).toUpperCase(), url: absolute(String(url)) });
+    } catch (_) {}
     return xhrOpen.apply(this, arguments);
   };
   XMLHttpRequest.prototype.send = function (body) {
@@ -722,14 +742,11 @@
     if (text === undefined) return String(value);
     return text.length > 20000 ? clip(text, 20000) : JSON.parse(text);
   };
+  // `op.fn` is the agent's script as Sawit's call compiled it (`evaluate_call` in
+  // browser.rs): compiling it here would be an `eval`, which a page's CSP may forbid.
   const evaluate = (op) => {
-    let fn;
-    try {
-      fn = new Function("return (" + op.script + "\n);");
-    } catch (_) {
-      fn = new Function(op.script);
-    }
-    const value = fn.call(window);
+    if (typeof op.fn !== "function") throw new Error("Nothing to evaluate.");
+    const value = apply(op.fn, window, []);
     if (value && typeof value.then === "function") {
       const id = ++nextPromise;
       settledResults.set(id, { done: false });

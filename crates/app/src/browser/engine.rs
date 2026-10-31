@@ -36,8 +36,12 @@ pub enum EngineEvent {
         url: String,
     },
     Title(String),
-    /// A link asked for a new window: it opens in the tab instead.
+    /// The page asked for a new window (`window.open`, a `target=_blank` link): web
+    /// pages open in the tab instead (`new_window_action`).
     NewWindow(String),
+    /// The page (or a frame in it) went to a link another app handles
+    /// (`mailto:`, `slack://…`).
+    External(String),
 }
 
 pub struct Engine {
@@ -53,9 +57,16 @@ impl Engine {
         let ipc = on_event.clone();
         let loads = on_event.clone();
         let titles = on_event.clone();
+        let external = on_event.clone();
         let opens = on_event;
+        // wry unwraps the `NSURL` it makes of the address.
+        let url = if loadable(&spec.url) {
+            spec.url.as_str()
+        } else {
+            "about:blank"
+        };
         let mut builder = WebViewBuilder::new()
-            .with_url(&spec.url)
+            .with_url(url)
             .with_initialization_script_for_main_only(spec.init_script, true)
             .with_ipc_handler(move |request| ipc(EngineEvent::Ipc(request.body().clone())))
             .with_on_page_load_handler(move |event, url| {
@@ -63,14 +74,7 @@ impl Engine {
                 loads(EngineEvent::Load { started, url });
             })
             .with_document_title_changed_handler(move |title| titles(EngineEvent::Title(title)))
-            .with_navigation_handler(|url| {
-                if is_web(&url) {
-                    return true;
-                }
-                // mailto:, tel:, app links: the system's handler.
-                let _ = std::process::Command::new("open").arg(&url).spawn();
-                false
-            })
+            .with_navigation_handler(move |url| navigation(&url, &external))
             .with_new_window_req_handler(move |url, _| {
                 opens(EngineEvent::NewWindow(url));
                 NewWindowResponse::Deny
@@ -89,8 +93,12 @@ impl Engine {
         Ok(Engine { webview })
     }
 
-    pub fn load_url(&self, url: &str) {
-        let _ = self.webview.load_url(url);
+    /// Loads `url`; text that isn't a URL WebKit reads ([`loadable`]) is refused.
+    pub fn load_url(&self, url: &str) -> Result<(), String> {
+        if !loadable(url) {
+            return Err(format!("WebKit can't load “{url}”: it isn't a URL."));
+        }
+        self.webview.load_url(url).map_err(|e| e.to_string())
     }
 
     pub fn reload(&self) {
@@ -110,6 +118,37 @@ impl Engine {
         self.webview
             .evaluate_script_with_callback(script, callback)
             .map_err(|e| e.to_string())
+    }
+
+    /// Runs `script`; `callback` gets its value when that is a string (`None` for any other),
+    /// or the exception WebKit reports, a `SyntaxError: …` when the script doesn't parse.
+    pub fn eval_text(
+        &self,
+        script: &str,
+        callback: impl FnOnce(Result<Option<String>, String>) + 'static,
+    ) {
+        use objc2::runtime::AnyObject;
+        use objc2_foundation::{NSError, NSString};
+        use wry::WebViewExtMacOS as _;
+
+        let callback = std::cell::Cell::new(Some(callback));
+        let handler = block2::RcBlock::new(move |value: *mut AnyObject, error: *mut NSError| {
+            let Some(callback) = callback.take() else {
+                return;
+            };
+            if let Some(error) = unsafe { error.as_ref() } {
+                callback(Err(exception_message(error)));
+                return;
+            }
+            let text = unsafe { value.as_ref() }
+                .and_then(|v| v.downcast_ref::<NSString>())
+                .map(|s| s.to_string());
+            callback(Ok(text));
+        });
+        let wk = self.webview.webview();
+        unsafe {
+            wk.evaluateJavaScript_completionHandler(&NSString::from_str(script), Some(&handler))
+        };
     }
 
     pub fn url(&self) -> Option<String> {
@@ -212,6 +251,39 @@ impl Engine {
     }
 }
 
+/// What WebKit says went wrong running a script: the exception's own message
+/// (`SyntaxError: Unexpected keyword 'return'`) when it gives one.
+fn exception_message(error: &objc2_foundation::NSError) -> String {
+    use objc2_foundation::NSString;
+    let key = NSString::from_str("WKJavaScriptExceptionMessage");
+    error
+        .userInfo()
+        .objectForKey(&key)
+        .and_then(|m| m.downcast::<NSString>().ok())
+        .map(|m| m.to_string())
+        .unwrap_or_else(|| error.localizedDescription().to_string())
+}
+
+/// Whether WebKit can be asked to load `url`: wry makes an `NSURL` of it and unwraps that,
+/// and there is none for text that isn't a URL (`file://my host/x`, a second `:port`), so
+/// loading such text would abort the app.
+pub fn loadable(url: &str) -> bool {
+    use objc2_foundation::{NSString, NSURL};
+    NSURL::URLWithString(&NSString::from_str(url)).is_some()
+}
+
+/// Whether a navigation goes ahead in the tab: web pages do. A link another app handles
+/// (`mailto:`, `slack://…`) is handed to the tab, which asks before opening it: WebKit asks
+/// for every frame's navigations, with no word of a click, so a page could otherwise
+/// launch any app with arguments of its choosing.
+fn navigation(url: &str, send: &impl Fn(EngineEvent)) -> bool {
+    if is_web(url) {
+        return true;
+    }
+    send(EngineEvent::External(url.to_string()));
+    false
+}
+
 fn is_web(url: &str) -> bool {
     ["http:", "https:", "about:", "data:", "blob:", "file:"]
         .iter()
@@ -246,12 +318,38 @@ fn at_1x(png: Vec<u8>, width: u32) -> Result<(Vec<u8>, u32, u32), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{at_1x, is_web};
+    use super::{EngineEvent, at_1x, is_web, navigation};
 
     #[test]
     fn web_schemes_stay_in_the_tab() {
         assert!(is_web("https://a.dev") && is_web("about:blank") && is_web("file:///x"));
         assert!(!is_web("mailto:a@b.c") && !is_web("slack://open"));
+    }
+
+    /// A page, or a frame it adds with no click, can't launch another app: a link to one is
+    /// handed to the tab to ask about, never opened from here.
+    #[test]
+    fn links_to_other_apps_are_handed_over_not_opened() {
+        let sent = std::cell::RefCell::new(Vec::new());
+        let send = |e: EngineEvent| sent.borrow_mut().push(e);
+        // A scheme no app handles: opening it launches nothing.
+        let link = "sawit-test-no-handler://x?i=1";
+        assert!(!navigation(link, &send));
+        assert!(
+            matches!(&sent.borrow()[..], [EngineEvent::External(u)] if u == link),
+            "the tab is told"
+        );
+        sent.borrow_mut().clear();
+        for web in [
+            "https://a.dev",
+            "about:blank",
+            "data:text/html,x",
+            "blob:https://a.dev/1",
+            "file:///x",
+        ] {
+            assert!(navigation(web, &send), "{web}");
+        }
+        assert!(sent.borrow().is_empty());
     }
 
     #[test]

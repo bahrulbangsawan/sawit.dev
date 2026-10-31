@@ -245,18 +245,40 @@ impl Workspace {
             .filter(|t| t.group.as_ref() == Some(&root))
             .filter(|t| matches!(&t.item, PaneItem::File(e) if e.read(cx).dirty))
             .count();
-        if unsaved == 0 {
+        // Its browser's annotation notes not yet copied or sent go with it too.
+        let notes: usize = self
+            .tabs
+            .iter()
+            .filter(|t| t.group.as_ref() == Some(&root))
+            .filter_map(|t| match &t.item {
+                PaneItem::Other { view, .. } => view.clone().downcast::<BrowserView>().ok(),
+                _ => None,
+            })
+            .map(|b| b.read(cx).unsent_notes(cx))
+            .sum();
+        if unsaved == 0 && notes == 0 {
             self.remove_project(&root, window, cx);
             return;
         }
+        let name = crate::tab_groups::project_name(&root);
+        let (message, detail) = if unsaved > 0 {
+            (
+                format!(
+                    "Close {name} with {unsaved} unsaved file{}?",
+                    if unsaved == 1 { "" } else { "s" }
+                ),
+                "Your changes will be lost if you don't save them.".to_string(),
+            )
+        } else {
+            (
+                format!("Close {name} with its browser's annotations?"),
+                crate::browser::notes_lost(notes),
+            )
+        };
         let answer = window.prompt(
             PromptLevel::Warning,
-            &format!(
-                "Close {} with {unsaved} unsaved file{}?",
-                crate::tab_groups::project_name(&root),
-                if unsaved == 1 { "" } else { "s" }
-            ),
-            Some("Your changes will be lost if you don't save them."),
+            &message,
+            Some(&detail),
             &["Close Anyway", "Cancel"],
             cx,
         );

@@ -34,9 +34,82 @@ pub fn page_script(token: &str) -> String {
         .replace(TOKEN_PLACEHOLDER, token)
 }
 
+/// The script that runs an agent's `browser_evaluate` script on the page: an expression,
+/// or (`body`) a function body that uses `return`. WebKit compiles the script with this
+/// call, and the page agent only runs it: compiled by the agent (`new Function`), it failed
+/// on pages whose Content-Security-Policy forbids `eval`. [`evaluate_as_body`] picks the form.
+pub fn evaluate_call(script: &str, body: bool) -> String {
+    // On its own line: a script ending in a `//` comment still closes.
+    let function = if body {
+        format!("function () {{\n{script}\n}}")
+    } else {
+        format!("function () {{ return (\n{script}\n); }}")
+    };
+    format!(
+        "(() => {{ const a = window.__sawitAgent; return a ? a.run({{ op: \"evaluate\", fn: {function} }}) : \"\"; }})()"
+    )
+}
+
+/// Whether an agent's `browser_evaluate` script goes to WebKit as a function body at once:
+/// its expression form ([`evaluate_call`]) doesn't compile and its body form does. WebKit
+/// reports a failed compile to the page as an uncaught `SyntaxError` of the page's own (in
+/// its console, to `window.onerror`, in the notes' console errors), so the form is picked
+/// here first, by QuickJS compiling each call without running it. `false` when the
+/// expression compiles, and when neither does (a real error, or syntax QuickJS lacks):
+/// WebKit then tries the expression, and the body after its `SyntaxError`.
+pub fn evaluate_as_body(script: &str) -> bool {
+    let Ok(rt) = rquickjs::Runtime::new() else {
+        return false;
+    };
+    rt.set_memory_limit(COMPILE_MEMORY);
+    let Ok(cx) = rquickjs::Context::full(&rt) else {
+        return false;
+    };
+    cx.with(|cx| {
+        !compiles(&cx, &evaluate_call(script, false)) && compiles(&cx, &evaluate_call(script, true))
+    })
+}
+
+/// What compiling an agent's script may take; past it, the script counts as not compiling.
+const COMPILE_MEMORY: usize = 64 << 20;
+
+/// Whether `source` compiles as a script, the way WebKit compiles one (sloppy mode). Nothing
+/// in it runs: the text is an agent's, and could close any wrapper put around it.
+fn compiles(cx: &rquickjs::Ctx<'_>, source: &str) -> bool {
+    use rquickjs::qjs;
+
+    let Ok(text) = std::ffi::CString::new(source) else {
+        return false;
+    };
+    let flags = (qjs::JS_EVAL_TYPE_GLOBAL | qjs::JS_EVAL_FLAG_COMPILE_ONLY) as i32;
+    let ctx = cx.as_raw().as_ptr();
+    // SAFETY: `ctx` is the live context `cx` borrows. `JS_Eval` reads `input[input_len]`,
+    // which is the NUL `CString` ends with. It returns an owned value, the compiled script
+    // or the exception marker; the script, or the exception taken from the context, is freed
+    // here once, so the runtime is left holding nothing.
+    unsafe {
+        let compiled = qjs::JS_Eval(
+            ctx,
+            text.as_ptr(),
+            text.as_bytes().len() as _,
+            c"evaluate".as_ptr(),
+            flags,
+        );
+        if qjs::JS_IsException(compiled) {
+            qjs::JS_FreeValue(ctx, qjs::JS_GetException(ctx));
+            return false;
+        }
+        qjs::JS_FreeValue(ctx, compiled);
+        true
+    }
+}
+
 /// Console messages and requests kept per browser tab, newest last.
 pub const MAX_CONSOLE: usize = 500;
 pub const MAX_NETWORK: usize = 300;
+
+/// What an agent's op that doesn't open the browser gets while the project has none open.
+pub const NOT_OPEN: &str = "The browser isn't open. Open a page with browser_navigate.";
 
 /// What the address field searches with when the text isn't a URL.
 const SEARCH: &str = "https://duckduckgo.com/?q=";
@@ -367,40 +440,42 @@ pub fn resize_mode(
 
 /// What the address field loads for typed text: URLs as they are, hosts
 /// with a scheme added (`http://` for local ones), anything else searched.
+/// A web URL whose host isn't one (whitespace, a second `:port`) is searched
+/// too: WebKit can't load it.
 pub fn normalize_address(input: &str) -> String {
     let text = input.trim();
     if text.is_empty() {
         return "about:blank".into();
     }
     let lower = text.to_ascii_lowercase();
-    if ["http://", "https://", "file://", "about:", "data:"]
+    if let Some(rest) = ["http://", "https://"]
+        .iter()
+        .find_map(|s| lower.strip_prefix(s))
+    {
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        return match split_host(authority) {
+            Some(_) => text.to_string(),
+            None => search_url(text),
+        };
+    }
+    if ["file://", "about:", "data:", "mailto:", "tel:"]
         .iter()
         .any(|s| lower.starts_with(s))
     {
         return text.to_string();
     }
     if text.contains(char::is_whitespace) {
-        return format!("{SEARCH}{}", encode_query(text));
+        return search_url(text);
     }
-    let host = lower
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default()
-        .rsplit_once('@')
-        .map_or(lower.as_str(), |(_, h)| h)
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default();
-    let (name, port) = match host.rsplit_once(':') {
-        Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
-            (name, true)
-        }
-        _ => (host, false),
+    let authority = lower.split(['/', '?', '#']).next().unwrap_or_default();
+    let Some((name, port)) = split_host(authority) else {
+        return search_url(text);
     };
     let local = name == "localhost"
         || name.ends_with(".localhost")
         || name.ends_with(".local")
         || name.ends_with(".test")
+        || name == "[::1]"
         || is_ipv4(name);
     if local {
         return format!("http://{text}");
@@ -408,7 +483,44 @@ pub fn normalize_address(input: &str) -> String {
     if name.contains('.') || port {
         return format!("https://{text}");
     }
-    format!("{SEARCH}{}", encode_query(text))
+    search_url(text)
+}
+
+/// A URL authority's host and whether it names a port: `None` when it isn't a host
+/// (empty, whitespace, a port that isn't a number, a second `:port`, a bare IPv6 address).
+fn split_host(authority: &str) -> Option<(&str, bool)> {
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    if host.is_empty() || host.contains(char::is_whitespace) {
+        return None;
+    }
+    // `[::1]` and `[::1]:3000`: the brackets hold the colons.
+    let (name, port) = match host.strip_prefix('[') {
+        Some(v6) => {
+            let (inside, after) = v6.split_once(']')?;
+            if inside.is_empty() || after.contains(['[', ']']) {
+                return None;
+            }
+            (&host[..inside.len() + 2], after.strip_prefix(':'))
+        }
+        None => match host.split_once(':') {
+            Some((name, port)) => (name, Some(port)),
+            None => (host, None),
+        },
+    };
+    if name.is_empty() || (!name.starts_with('[') && name.contains([':', '[', ']'])) {
+        return None;
+    }
+    match port {
+        Some(p) if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) => None,
+        Some(_) => Some((name, true)),
+        None if host.len() > name.len() => None,
+        None => Some((name, false)),
+    }
+}
+
+/// The search the address field runs for `text`.
+pub fn search_url(text: &str) -> String {
+    format!("{SEARCH}{}", encode_query(text.trim()))
 }
 
 fn is_ipv4(host: &str) -> bool {
@@ -483,7 +595,7 @@ pub enum PageEvent {
     Picked(Value),
     /// The pointer is over an element in inspect mode: `{selector, label, rect}`.
     Hovered(Value),
-    /// A shortcut pressed in the page: `toggle-annotate` or `escape`.
+    /// A key pressed in the page: `escape`, while picking.
     Key(String),
     /// The user pressed in the page (a real `pointerdown`, never a script's), which AppKit then
     /// gives the keyboard.
@@ -726,6 +838,51 @@ mod tests {
             normalize_address("c++"),
             "https://duckduckgo.com/?q=c%2B%2B"
         );
+    }
+
+    /// Text that isn't a URL WebKit can read is searched, never loaded: the browser asks
+    /// `NSURL` for what it loads, and `NSURL` has none for these (wry unwraps it, so loading
+    /// one aborted Sawit). A second `:port`, whitespace or a bad port in the host, and a bare
+    /// IPv6 address are typos.
+    #[test]
+    fn hosts_that_arent_urls_are_searched() {
+        for typed in [
+            "localhost:3000:3000",
+            "127.0.0.1:3000:3000",
+            "http://localhost 3000",
+            "http:// localhost:3000",
+            "https://my site.com",
+            "https://localhost:3000:3000",
+            "HTTPS://localhost:3000:3000/x",
+            "http://127.0.0.1:3000:3000",
+            "https://foo:exa%7Cmple.com",
+            "https://::1",
+            "https://user@host:1:2",
+            "https://",
+            "example.com:80a",
+            "a.b:c/x",
+        ] {
+            let url = normalize_address(typed);
+            assert!(url.starts_with(SEARCH), "{typed} → {url}");
+            assert_eq!(url, search_url(typed), "{typed}");
+        }
+        // Spaces after the host are the path's: WebKit encodes them.
+        assert_eq!(
+            normalize_address("https://example.com/a b"),
+            "https://example.com/a b"
+        );
+        assert_eq!(normalize_address("[::1]:3000/x"), "http://[::1]:3000/x");
+        assert_eq!(
+            normalize_address("https://[::1]:3000"),
+            "https://[::1]:3000"
+        );
+        assert_eq!(
+            normalize_address("user@example.com:8443/x"),
+            "https://user@example.com:8443/x"
+        );
+        // Mail and phone links go to their apps, as the page's links do.
+        assert_eq!(normalize_address("mailto:a@b.c"), "mailto:a@b.c");
+        assert_eq!(normalize_address("tel:+15551234"), "tel:+15551234");
     }
 
     #[test]
@@ -1100,21 +1257,6 @@ mod tests {
         assert!(s.find("blocked_sheets").unwrap() < s.find("const OPS").unwrap());
     }
 
-    /// The overlay's Annotate key is only for a key an agent presses in the page
-    /// (`browser_press_key "Meta+Shift+."`, an event the page dispatches itself): a real key is
-    /// the app's keymap's, which takes Annotate's key before the page sees it, so a key the
-    /// keymap doesn't bind to Annotate never toggles it.
-    #[test]
-    fn the_overlay_toggles_annotate_only_for_an_agents_key() {
-        let start = OVERLAY_JS
-            .find("window.addEventListener(\"keydown\"")
-            .expect("the overlay's key listener");
-        let listener = &OVERLAY_JS[start..];
-        let listener = &listener[..listener.find("toggle-annotate").expect("its message")];
-        assert!(listener.contains("if (e.isTrusted) return;"), "{listener}");
-        assert!(!listener.contains("e.code"), "{listener}");
-    }
-
     #[test]
     fn ipc_reads_picks_hovers_and_keys() {
         let picked = parse_ipc(
@@ -1125,8 +1267,8 @@ mod tests {
         let hovered = parse_ipc("tok\nhovered\n{\"selector\":\"#a\"}", "tok");
         assert!(matches!(hovered, Some(PageEvent::Hovered(v)) if v["selector"] == "#a"));
         assert_eq!(
-            parse_ipc("tok\nkey\n\"toggle-annotate\"", "tok"),
-            Some(PageEvent::Key("toggle-annotate".into()))
+            parse_ipc("tok\nkey\n\"escape\"", "tok"),
+            Some(PageEvent::Key("escape".into()))
         );
         assert_eq!(parse_ipc("bad\nkey\n\"escape\"", "tok"), None);
     }
@@ -1235,6 +1377,350 @@ mod tests {
         assert!(got[10].is_some());
         // Left to the browser's canvas in the page.
         assert!(got[11].is_none());
+    }
+
+    /// Runs the page script (token `T0K3N`) in QuickJS on a stand-in page, then `test`, which
+    /// returns a JSON string. The page: a `window` whose `webkit.messageHandlers.ipc` keeps what
+    /// is posted (`posted`, `kinds`, `count`), wry's `window.ipc` shim (it looks the handler up
+    /// when called), `EventTarget.prototype`'s listener methods (the window's too) keeping the
+    /// listeners added in the browser's own list (`listeners`, by type), `fire` and `click` for
+    /// the browser dispatching an event to them, and one element, `#buy`, under every point.
+    /// The helpers use nothing a test's page script may patch. It all runs as sloppy-mode code,
+    /// as WebKit runs a page and the user script (rquickjs would make it strict).
+    fn on_stand_in_page(test: &str) -> Value {
+        const PAGE: &str = r#"
+            var window = globalThis;
+            var posted = [];
+            var listeners = {};
+            function Handler() {}
+            Handler.prototype.postMessage = function (s) { posted[posted.length] = String(s); };
+            window.webkit = { messageHandlers: { ipc: new Handler() } };
+            Object.defineProperty(window, "ipc", { value: Object.freeze({ postMessage: function (s) { window.webkit.messageHandlers.ipc.postMessage(s); } }) });
+            function EventTarget() {}
+            EventTarget.prototype.addEventListener = function (type, fn) {
+                var all = listeners[type] || (listeners[type] = []);
+                for (var i = 0; i < all.length; i++) if (all[i] === fn) return;
+                all[all.length] = fn;
+            };
+            EventTarget.prototype.removeEventListener = function (type, fn) {
+                var all = listeners[type] || [];
+                var left = [];
+                for (var i = 0; i < all.length; i++) if (all[i] !== fn) left[left.length] = all[i];
+                listeners[type] = left;
+            };
+            window.addEventListener = EventTarget.prototype.addEventListener;
+            window.removeEventListener = EventTarget.prototype.removeEventListener;
+            var console = { log: function () {}, info: function () {}, warn: function () {}, error: function () {}, debug: function () {}, trace: function () {} };
+            var performance = { now: function () { return 0; } };
+            var location = { href: "http://localhost:5173/" };
+            var history = { pushState: function () {}, replaceState: function () {} };
+            function XMLHttpRequest() {}
+            XMLHttpRequest.prototype.open = function () {};
+            XMLHttpRequest.prototype.send = function () {};
+            var setTimeout = function () { return 0; };
+            var clearTimeout = function () {};
+            var setInterval = function () { return 0; };
+            var clearInterval = function () {};
+            var requestAnimationFrame = function () { return 0; };
+            var innerWidth = 800, innerHeight = 600;
+            var Node = { ELEMENT_NODE: 1, TEXT_NODE: 3, DOCUMENT_FRAGMENT_NODE: 11 };
+            function Element() {}
+            function ShadowRoot() {}
+            var CSS = { escape: function (s) { return s; } };
+            var getComputedStyle = function () { return { getPropertyValue: function () { return ""; } }; };
+            var document = { readyState: "complete", documentElement: {} };
+            var el = new Element();
+            el.id = "buy"; el.localName = "button"; el.nodeType = 1; el.className = ""; el.classList = [];
+            el.innerText = "Buy"; el.outerHTML = "<button id=buy>Buy</button>"; el.parentElement = null; el.isConnected = true;
+            el.getBoundingClientRect = function () { return { x: 1, y: 1, width: 40, height: 20, left: 1, top: 1, right: 41, bottom: 21 }; };
+            el.getAttribute = function () { return null; };
+            el.hasAttribute = function () { return false; };
+            el.getRootNode = function () { return document; };
+            el.contains = function (other) { return other === el; };
+            document.elementsFromPoint = function () { return [el]; };
+            document.querySelectorAll = function () { return [el]; };
+            var kinds = function (from) {
+                var out = [];
+                for (var i = from; i < posted.length; i++) out[out.length] = posted[i].split("\n")[1];
+                return out;
+            };
+            var count = function (from, kind) {
+                var all = kinds(from);
+                var n = 0;
+                for (var i = 0; i < all.length; i++) if (all[i] === kind) n++;
+                return n;
+            };
+            var noop = function () {};
+            var fire = function (type, event) {
+                var all = listeners[type] || [];
+                var now = [];
+                for (var i = 0; i < all.length; i++) now[now.length] = all[i];
+                for (var j = 0; j < now.length; j++) now[j](event);
+            };
+            var click = function (trusted) {
+                fire("click", { isTrusted: trusted, type: "click", clientX: 5, clientY: 5, preventDefault: noop, stopImmediatePropagation: noop });
+            };
+            var shiftCmdPeriod = function (trusted) {
+                fire("keydown", { isTrusted: trusted, type: "keydown", key: ".", code: trusted ? "Period" : "", metaKey: true, shiftKey: true, altKey: false, preventDefault: noop, stopImmediatePropagation: noop });
+            };
+        "#;
+        let source = format!("{PAGE}\n{}\n{test}", page_script("T0K3N"));
+        let rt = rquickjs::Runtime::new().unwrap();
+        let ctx = rquickjs::Context::full(&rt).unwrap();
+        let mut sloppy = rquickjs::context::EvalOptions::default();
+        sloppy.strict = false;
+        let json: String = ctx.with(|ctx| {
+            ctx.eval_with_options::<String, _>(source, sloppy)
+                .unwrap_or_else(|e| {
+                    let caught = ctx.catch();
+                    let why = caught
+                        .as_exception()
+                        .map(|x| format!("{:?} {:?}", x.message(), x.stack()));
+                    panic!("the stand-in page failed: {e:?} {why:?}")
+                })
+        });
+        serde_json::from_str(&json).unwrap()
+    }
+
+    /// A page script that patches the IPC handler's `postMessage` (on its prototype, which
+    /// wry's shim looks up on every call) sees what the agent posts after that; the token
+    /// signing it must not be in it, or the page could sign messages of its own.
+    #[test]
+    fn page_scripts_never_see_the_token() {
+        let got = on_stand_in_page(
+            r#"
+            var stolen = [];
+            Handler.prototype.postMessage = function (s) { stolen.push(String(s)); };
+            window.webkit.messageHandlers.ipc.postMessage = Handler.prototype.postMessage;
+            console.error("boom");
+            JSON.stringify({ stolen: stolen.filter(function (m) { return m.indexOf("T0K3N") >= 0; }).length, sent: kinds(0) })
+        "#,
+        );
+        assert_eq!(got["stolen"], 0, "{got}");
+        assert_eq!(got["sent"], json!(["console"]), "{got}");
+    }
+
+    /// The picker takes only the user's clicks: a page that arms it through `__sawitAgent`
+    /// and dispatches a click of its own picks nothing.
+    #[test]
+    fn synthetic_clicks_pick_nothing() {
+        let got = on_stand_in_page(
+            r#"
+            __sawitAgent.run({ op: "pick", mode: "annotate" });
+            var from = posted.length;
+            click(false);
+            var forged = count(from, "picked");
+            click(true);
+            var real = count(from, "picked") - forged;
+            JSON.stringify({ forged: forged, real: real })
+        "#,
+        );
+        assert_eq!(got, json!({"forged": 0, "real": 1}));
+    }
+
+    /// The picker's listeners never reach a page script: one that kept them could call them
+    /// with an `isTrusted: true` object of its own, and pick (with a screenshot, taking the
+    /// keyboard) while the user is annotating. The page here patched, before the picker was
+    /// armed, every way they could pass it: the window's and `EventTarget.prototype`'s listener
+    /// methods, the array iterator (`for…of` and destructuring), `Array.prototype`'s callbacks
+    /// and `Reflect.apply`.
+    #[test]
+    fn pages_never_get_the_pickers_listeners() {
+        let got = on_stand_in_page(
+            r#"
+            var kept = [];
+            var keep = function (v) {
+                if (typeof v === "function") kept[kept.length] = v;
+                else if (v && typeof v === "object" && typeof v.length === "number")
+                    for (var i = 0; i < v.length; i++) if (typeof v[i] === "function") kept[kept.length] = v[i];
+            };
+            var add = EventTarget.prototype.addEventListener;
+            var remove = EventTarget.prototype.removeEventListener;
+            var keptAdd = function (type, fn, options) { keep(fn); return add.call(this, type, fn, options); };
+            var keptRemove = function (type, fn, options) { keep(fn); return remove.call(this, type, fn, options); };
+            window.addEventListener = keptAdd;
+            window.removeEventListener = keptRemove;
+            EventTarget.prototype.addEventListener = keptAdd;
+            EventTarget.prototype.removeEventListener = keptRemove;
+            var iterator = Object.getPrototypeOf([][Symbol.iterator]());
+            var next = iterator.next;
+            iterator.next = function () {
+                var r = next.call(this);
+                if (r && !r.done) keep(r.value);
+                return r;
+            };
+            var methods = ["forEach", "map", "filter", "some", "every", "find", "findIndex", "reduce", "flatMap", "slice", "concat", "includes", "indexOf"];
+            for (var m = 0; m < methods.length; m++) (function (name) {
+                var real = Array.prototype[name];
+                Array.prototype[name] = function () {
+                    for (var i = 0; i < this.length; i++) keep(this[i]);
+                    for (var j = 0; j < arguments.length; j++) keep(arguments[j]);
+                    return real.apply(this, arguments);
+                };
+            })(methods[m]);
+            var reflectApply = Reflect.apply;
+            Reflect.apply = function (f, self, args) { keep(f); keep(args); return reflectApply(f, self, args); };
+
+            // Sawit arms the picker (the user opened Annotate), stops it and arms it again.
+            __sawitAgent.run({ op: "pick", mode: "annotate" });
+            __sawitAgent.run({ op: "pick", mode: "off" });
+            __sawitAgent.run({ op: "pick", mode: "annotate" });
+            var from = posted.length;
+            var event = { isTrusted: true, type: "click", key: ".", code: "Period", metaKey: true, shiftKey: true, altKey: false,
+                clientX: 5, clientY: 5, deltaY: -1, preventDefault: noop, stopImmediatePropagation: noop };
+            for (var i = 0; i < kept.length; i++) {
+                try { kept[i](event); } catch (_) {}
+            }
+            var forged = kinds(from).length;
+            click(true);
+            JSON.stringify({ forged: forged, real: count(from, "picked") })
+        "#,
+        );
+        assert_eq!(got, json!({"forged": 0, "real": 1}));
+    }
+
+    /// ⇧⌘. opens Annotate and arms the picker, and the page's script answers it from no one: a
+    /// page can dispatch one too, and the user's own is the keymap's, which sees ⌘ keys before
+    /// the page does, so a key the keymap doesn't bind to Annotate doesn't toggle it. (An
+    /// agent's `browser_press_key "Meta+Shift+."` goes to Sawit.)
+    #[test]
+    fn the_page_script_answers_no_shift_cmd_period() {
+        let got = on_stand_in_page(
+            r#"
+            var from = posted.length;
+            shiftCmdPeriod(false);
+            var synthetic = count(from, "key");
+            shiftCmdPeriod(true);
+            JSON.stringify({ synthetic: synthetic, real: count(from, "key") - synthetic })
+        "#,
+        );
+        assert_eq!(got, json!({"synthetic": 0, "real": 0}));
+    }
+
+    /// The agent, with the modules spliced into it, is strict-mode code. WebKit runs a user
+    /// script as sloppy code unless it says otherwise, and JavaScriptCore answers
+    /// `Function.prototype.caller` for a sloppy function, arrows included: a page function the
+    /// agent calls (a replaced `JSON.stringify` or `preventDefault`, a getter on an event) got
+    /// `send`, which signs with the token, or the picker's own `click`, from its caller. With
+    /// either a page opened Annotate and picked for itself. QuickJS has no `caller`, but tells
+    /// the two apart: reading it throws for a strict function and not for a sloppy one.
+    #[test]
+    fn the_agent_is_strict_mode_code() {
+        // The agent's hooks, on a page that is sloppy (as pages are).
+        let got = on_stand_in_page(
+            r#"
+            var strict = function (f) { try { f.caller; return false; } catch (_) { return true; } };
+            JSON.stringify({ console: strict(console.log), xhr: strict(XMLHttpRequest.prototype.send),
+                history: strict(history.pushState), page: strict(function () {}) })
+        "#,
+        );
+        assert_eq!(
+            got,
+            json!({"console": true, "xhr": true, "history": true, "page": false})
+        );
+        // So is every other function in it: the directive is first in the one function that
+        // holds the agent and its modules.
+        let mut code = AGENT_JS
+            .lines()
+            .skip_while(|line| line.starts_with("//") || line.trim().is_empty());
+        assert_eq!(code.next(), Some("(() => {"));
+        assert_eq!(code.next().map(str::trim), Some("\"use strict\";"));
+        assert!(AGENT_JS.trim_end().ends_with("})();"));
+    }
+
+    /// `browser_evaluate` on a page whose Content-Security-Policy forbids `eval` (helmet's
+    /// default `script-src 'self'`): the page's `Function` and `eval` refuse, as WebKit's do
+    /// there, and the script still runs, as an expression or as a function body.
+    #[test]
+    fn evaluate_runs_where_the_page_forbids_eval() {
+        let run = |call: String| {
+            let test = format!(
+                r#"
+                var refuse = function () {{ throw new EvalError("Refused to evaluate a string as JavaScript because 'unsafe-eval' is not an allowed source of script"); }};
+                Function.prototype.constructor = refuse;
+                globalThis.Function = refuse;
+                globalThis.eval = refuse;
+                document.title = "Shop";
+                {call}
+            "#
+            );
+            on_stand_in_page(&test)
+        };
+        assert_eq!(
+            run(evaluate_call("1 + 1", false)),
+            json!({"ok": true, "value": 2})
+        );
+        assert_eq!(
+            run(evaluate_call(
+                "const t = document.title;\nreturn t + '!'",
+                true
+            )),
+            json!({"ok": true, "value": "Shop!"})
+        );
+        // A throw is the script's error.
+        assert_eq!(run(evaluate_call("null.x", false))["ok"], json!(false));
+    }
+
+    /// `browser_evaluate` picks its form before WebKit compiles anything. WebKit reports a
+    /// compile's `SyntaxError` to the page as an error of its own (the page's console,
+    /// `window.onerror`, the notes' console errors), so trying the expression there first left
+    /// one behind for every script written as a function body.
+    #[test]
+    fn evaluate_picks_its_form_before_webkit_compiles() {
+        // An expression, as WebKit tried first, also when it reads as a body too.
+        for script in [
+            "document.title",
+            "1 // c",
+            "({a: 1})",
+            "{a: 1}",
+            "x = 5",
+            "async () => (await fetch('/a')).status",
+            "`${location.host}/a`",
+            "/a+/.test(document.title)",
+            "010",
+        ] {
+            assert!(!evaluate_as_body(script), "{script}");
+        }
+        // A function body, at once.
+        for script in [
+            "return 1",
+            "const t = 1; return t",
+            "document.title;",
+            "if (!document.body) return null\nreturn document.body.innerText // the text",
+            "with (document) return title",
+            "for (const a of document.links) a.remove()",
+        ] {
+            assert!(evaluate_as_body(script), "{script}");
+        }
+        // Neither compiles here (a real error, or syntax QuickJS lacks): WebKit says, trying the
+        // expression first.
+        for script in ["1 +", "return (", "}", "a\0b"] {
+            assert!(!evaluate_as_body(script), "{script:?}");
+        }
+    }
+
+    /// The agent's script is only compiled here, never run: it could close the wrapper and run
+    /// anything (loop forever) in Sawit's own QuickJS.
+    #[test]
+    fn evaluate_forms_are_compiled_not_run() {
+        let rt = rquickjs::Runtime::new().unwrap();
+        let cx = rquickjs::Context::full(&rt).unwrap();
+        cx.with(|cx| {
+            let ran = || {
+                !cx.eval::<rquickjs::Value, _>("globalThis.ran")
+                    .unwrap()
+                    .is_undefined()
+            };
+            assert!(compiles(&cx, "globalThis.ran = true"));
+            assert!(!ran());
+            assert!(compiles(&cx, "globalThis.ran = true; while (true) {}"));
+            assert!(!ran());
+            // Compiled as WebKit compiles a script: sloppy-mode code.
+            assert!(compiles(&cx, "with (document) title"));
+            // A failed compile leaves nothing pending.
+            assert!(!compiles(&cx, "1 +"));
+            assert!(!cx.has_exception());
+        });
     }
 
     #[test]

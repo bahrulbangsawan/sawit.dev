@@ -65,10 +65,10 @@ clicking Export leaves a folder Claude can build a matching UI from.
 | D4 | Highlights, markers, the hover label and measurements are drawn in-page, in one closed shadow root on a `<sawit-overlay data-sawit-overlay>` host. The host is created on first use and appended to `<html>`, never `<body>`. It uses `pointer-events: none` except while picking. | Hover feedback has to sit on the page. Staying outside `<body>` avoids React hydration mismatches. A closed root keeps page CSS out. |
 | D5 | The agent snapshot, the design scan and the picker skip `[data-sawit-overlay]`. Every screenshot (agent, annotation, export) hides the overlay first and restores it after. | Anti-goal 1. |
 | D6 | Annotations are kept in `BrowserView` memory for the session, numbered per page URL. Screenshots go to `.nyawit/annotations/<yyyy-mm-dd>/<host>[-<port>]-<n>.png`, or Sawit's cache dir without a project. | Claude Code reads image files by path. `.nyawit/` is already git-ignored. |
-| D7 | Send to terminal pastes the markdown into the terminal panel's active tab (bracketed paste, via `sawit_core::terminal::paste_bytes`). It doesn't press Enter, so the user can add a line before submitting. It also shows and focuses that terminal. | Claude Code runs there. Not pressing Enter keeps the user in control. |
-| D8 | Exports go to `.nyawit/design/<host>/`. A re-export of the same host replaces that folder. Without a project they go to `~/Downloads/sawit-design/<host>/`. | Stable path for agents; regenerable from the site. |
-| D9 | Stylesheets the page can't read (cross-origin, `cssRules` throws) are fetched by Sawit with `/usr/bin/curl` (`Referer` = page URL). Their text goes back into the page, which parses it with a constructable `CSSStyleSheet`. | @font-face sources, `:root` custom properties, breakpoints and `:hover`/`:focus` rules often live in CDN sheets. curl matches `update.rs`; no new dependency. |
-| D10 | Assets are downloaded by Sawit with curl: `Referer` = page URL, Safari user agent, `--max-time 30`, `--max-filesize 50M`, 6 at a time, 300 MB total per export. `data:` URLs are decoded in Rust. `blob:` URLs aren't saved; they're listed as "Can't save blob: media (made by the page's scripts)". Inline SVG is saved from its markup. Icons listed in the web app manifest are found by fetching the manifest. Failures are listed with a reason, not fatal. | Hotlink-protected CDNs need the Referer. Caps keep a video-heavy site from filling the disk. |
+| D7 | Send to terminal pastes the markdown into a terminal tab, the agent's first (see the Annotate panel below; bracketed paste, via `sawit_core::terminal::paste_bytes`). It doesn't press Enter, so the user can add a line before submitting. It also shows and focuses that terminal. | Claude Code runs there. Not pressing Enter keeps the user in control. |
+| D8 | Exports go to `.nyawit/design/<host>/`, the host keeping a port that isn't its scheme's own (`localhost-5173`), so two dev servers don't share a folder. A re-export of the same host replaces that folder. Without a project they go to `~/Downloads/sawit-design/<host>/`. | Stable path for agents; regenerable from the site. |
+| D9 | Stylesheets the page can't read (cross-origin, `cssRules` throws) are fetched by Sawit with `/usr/bin/curl` (`Referer` = page URL). Their text goes back into the page, which parses it with a constructable `CSSStyleSheet`. Only text served as `text/css` goes back, and from this Mac or its network only to a page named as local (`localhost`, `*.local`, an address there) on that same host: the host asked for, where redirects ended and the address curl got the sheet from all count. | @font-face sources, `:root` custom properties, breakpoints and `:hover`/`:focus` rules often live in CDN sheets. curl matches `update.rs`; no new dependency. The page's scripts can read what goes back, so a page can't read the dev server or the LAN through Sawit. |
+| D10 | Assets are downloaded by Sawit with curl: `-q` (no `~/.curlrc`), `Referer` = page URL, Safari user agent, `--max-time 30`, no `--compressed` (so the caps count the bytes written), 6 at a time, 300 MB total per export, each download capped at the share of that it holds (at most 50 MB). What a download may fetch and keep follows where the page is, by the tab's own URL, never the page's word. A page on this Mac or its network downloads from any host. It is one when its host is named so (`localhost`, `*.localhost`, `*.local`, a loopback, private, link-local or shared address), or resolves only to such addresses when the download starts (`myapp.test` from Herd or Valet, `*.ddev.site`, `lvh.me`, a hosts-file name). A page on the web gets nothing from this Mac or its network: no host named so, where curl asked or where redirects ended, and no file from such an address. Through a proxy curl reports the proxy's address, so then the names decide (curl 8.7, macOS 15; with an older curl, a proxy on the local network leaves a web page's files out). `file://` assets are copied only for a `file://` page. `data:` URLs are decoded in Rust. `blob:` URLs aren't saved; they're listed as "Can't save blob: media (made by the page's scripts)". Inline SVG is saved from its markup. Icons listed in the web app manifest are found by fetching the manifest. A Save names a new file after those already in the folder (`logo-2.png`). Failures are listed with a reason, not fatal. | Hotlink-protected CDNs need the Referer. Caps keep a video-heavy site from filling the disk. Downloads reach only the disk, never the page, so a dev site keeps what its other local names serve it (Vite's `127.0.0.1:5173` for a `.test` page), and only a page on the web is kept from this Mac and its network. A web page whose name resolves here when the export starts counts as local; at worst that saves what its local hosts serve, which the page never sees. |
 | D11 | All token derivation and every export format is pure Rust in `sawit_core::site_design`, tested headless. The page only observes and reports. | Anti-goal 3: deterministic, testable rules about what counts as a token. |
 | D12 | Device sizes set the web view's frame to the device size scaled to fit, and the page zoom to the same scale (`WebView::zoom`). So the CSS viewport equals the device size even in a small window. | A clipped frame would lay the page out at the wrong width. |
 
@@ -86,7 +86,10 @@ clicking Export leaves a folder Claude can build a matching UI from.
   panel in that mode. They show as active while open. Opening Annotate turns on pick mode.
 - **↗** (Lucide `ExternalLink`): opens the current URL in the default browser.
 - **</>** (Lucide `Code`): Web Inspector, unchanged.
-- **⌘⇧.** toggles Annotate, whether the page or Sawit has the keyboard.
+- **⌘⇧.** toggles Annotate, whether the page or Sawit has the keyboard. The user's own key is the
+  keymap's (it sees ⌘ keys before the page, so the binding can move); the page answers no one's,
+  as a page can dispatch keys too. Sawit answers an agent's `browser_press_key "Meta+Shift+."`
+  itself, and its `Escape` while picking.
 
 ### Picking (shared by Annotate and Design → Inspect)
 
@@ -95,6 +98,13 @@ clicking Export leaves a folder Claude can build a matching UI from.
 - **↑ / ↓** (or Alt+scroll) walks to the parent or back to the child. **Esc** leaves pick mode.
 - A click selects the element. It doesn't reach the page: `click`, `mousedown`, `pointerdown` and
   `mouseup` are cancelled in the capture phase.
+- Only the user's own input picks. Events a page dispatches, and an agent's `browser_click`, reach
+  the page as if the picker weren't there. That holds only while no page script gets hold of a
+  picker listener, or of the agent's `send` that signs messages, to call it with an event or a
+  message of its own. So the listeners go only through the listener methods as they were before
+  any page script ran, and the whole page agent is strict-mode code: JavaScriptCore answers
+  `Function.prototype.caller` for a sloppy function, so a page function the agent calls (a getter
+  on the event, a replaced `JSON.stringify`) would otherwise get one from its caller.
 - In Design → Inspect, with an element selected, holding **Alt** while hovering another shows the
   distances between the two boxes.
 - Leaving pick mode removes every listener the picker added.
@@ -111,17 +121,21 @@ clicking Export leaves a folder Claude can build a matching UI from.
 - Footer: **Include console errors** (on by default; adds nothing when there are none), **Copy**
   (Lucide `Copy`), **Send to terminal** (Lucide `SquareTerminal`) and **Clear**. Copy and Send
   show a note in the footer for 3 seconds: "Copied" or "Sent to Terminal 2".
+- The notes live only in the tab, so Clear, closing the Browser tab and closing its project ask
+  first while a comment hasn't been copied, sent or read by an agent as it is now; Close Others
+  and Close All leave such a tab open, as they do an unsaved file.
 - Send to terminal only pastes into a tab whose program accepts bracketed paste: Claude Code,
-  zsh, bash ≥ 5.1. It uses the active tab if it accepts one, else the highest-numbered tab that
-  does. Otherwise it copies instead and says "No terminal is ready for a paste, so it was copied."
-  This way pasted lines never run as shell commands.
+  zsh, bash ≥ 5.1. A tab whose focused pane runs such a program (the agent) comes before one at a
+  shell prompt: the active tab if it has one, else the highest-numbered tab that does; then a
+  shell at its prompt the same way. Otherwise it copies instead and says "No terminal is ready for
+  a paste, so it was copied." This way pasted lines never run as shell commands.
 - Markers are numbered dots on the page for the current URL's annotations. They follow their
   elements on scroll and resize, and are re-attached when the user comes back to a URL and the
   selector still matches.
 
 ### Annotation markdown
 
-```markdown
+````markdown
 # Visual feedback — <document title>
 **URL:** <url> · **Viewport:** 393×852 (iPhone 15)
 
@@ -135,9 +149,15 @@ clicking Export leaves a folder Claude can build a matching UI from.
 - **Screenshot:** /Users/me/app/.nyawit/annotations/2026-10-29/localhost-5173-1.png
 
 ## Console errors on <current url> (2)
-- `+12.3s` Uncaught TypeError: Cannot read properties of undefined (reading 'id') — app.js:88
+```text
++12.3s Uncaught TypeError: Cannot read properties of undefined (reading 'id') — app.js:88
 ```
+````
 
+- What the page wrote (its title and address, an element's id, classes, text, styles and source, console
+  errors) is kept to data, since the markdown reaches the agent as the user's own turn: one line each, code
+  spans its backticks can't close, and the console errors in a fenced block with their later lines indented.
+  Only the comment is the user's text, as typed.
 - With annotations on several URLs, each URL gets its own `# Visual feedback` header block, the
   current page first. Console errors are those of the current page since its last navigation,
   newest 20. Their time is seconds since that page started.
@@ -327,7 +347,7 @@ GPUI BrowserView (browser/mod.rs) ── toolbar.rs ── device menu, panel to
   the app orchestrates page ops, fetches and files). The page-side ops are internal, not
   `BrowserOp` variants, so agents use the tool-level API.
 - `PageEvent` gains `Picked(Value)`, `Hovered(Value)` (throttled to 10 per second) and
-  `Key(String)` (`toggle-annotate`, `escape`). `Picked` carries the element's full annotation
+  `Key(String)` (`escape`, while picking). `Picked` carries the element's full annotation
   details (selector, label, text, box, key styles, source hint, outerHTML ≤ 20 000 characters),
   so a pick needs no second round trip. `Hovered` carries only selector, label and box.
 - `BrowserView` emits `BrowserEvent::SendToTerminal(String)`. The workspace subscribes, shows the

@@ -31,6 +31,8 @@ struct Row {
 
 pub struct AnnotatePanel {
     rows: Vec<Row>,
+    /// The notes as last copied, sent or read by an agent: `(url, n, comment)`.
+    sent: Vec<(String, u32, String)>,
     /// The page on show, whose group comes first.
     current: String,
     include_errors: bool,
@@ -44,6 +46,7 @@ impl AnnotatePanel {
     pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
         Self {
             rows: Vec::new(),
+            sent: Vec::new(),
             current: String::new(),
             include_errors: true,
             note: None,
@@ -88,8 +91,63 @@ impl AnnotatePanel {
 
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         self.rows.clear();
+        self.sent.clear();
         cx.emit(AnnotateEvent::Changed);
         cx.notify();
+    }
+
+    /// Each row's `(url, n, comment)`, the comment as typed so far.
+    fn notes(&self, cx: &App) -> Vec<(String, u32, String)> {
+        self.rows
+            .iter()
+            .map(|r| {
+                let a = &r.annotation;
+                (a.url.clone(), a.n, r.comment.read(cx).value().to_string())
+            })
+            .collect()
+    }
+
+    /// How many notes would be lost with the rows: comments not copied, sent or read by an
+    /// agent as they are now. The notes live only here (spec D6), so closing the tab or
+    /// Clear asks first.
+    pub fn unsent(&self, cx: &App) -> usize {
+        self.notes(cx)
+            .into_iter()
+            .filter(|note| !note.2.trim().is_empty() && !self.sent.contains(note))
+            .count()
+    }
+
+    /// The notes as they are now were copied, sent or read by an agent.
+    pub fn mark_sent(&mut self, cx: &App) {
+        self.sent = self.notes(cx);
+    }
+
+    /// Types `note` as the comment of row `ix` (for tests).
+    #[cfg(test)]
+    pub(super) fn type_note(&mut self, ix: usize, note: &str, window: &mut Window, cx: &mut App) {
+        let comment = self.rows[ix].comment.clone();
+        comment.update(cx, |c, cx| c.set_value(note.to_string(), window, cx));
+    }
+
+    /// The Clear button: asks first when notes would be lost.
+    fn request_clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let unsent = self.unsent(cx);
+        if unsent == 0 {
+            return self.clear(cx);
+        }
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            "Clear the annotations?",
+            Some(&notes_lost(unsent)),
+            &["Clear", "Cancel"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if let Ok(0) = answer.await {
+                let _ = this.update(cx, |this, cx| this.clear(cx));
+            }
+        })
+        .detach();
     }
 
     pub fn set_current(&mut self, url: &str, cx: &mut Context<Self>) {
@@ -317,8 +375,8 @@ impl Render for AnnotatePanel {
                                 .xsmall()
                                 .label("Clear")
                                 .disabled(!has_rows)
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.clear(cx);
+                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                    this.request_clear(window, cx);
                                 })),
                         ),
                 )
@@ -329,6 +387,15 @@ impl Render for AnnotatePanel {
                 ),
         )
     }
+}
+
+/// What a prompt says is lost with `n` notes.
+pub fn notes_lost(n: usize) -> String {
+    format!(
+        "{n} note{} on the page {} been copied or sent.",
+        if n == 1 { "" } else { "s" },
+        if n == 1 { "hasn't" } else { "haven't" }
+    )
 }
 
 /// The intent as its button shows it: "Fix", "Change", "Question", "Copy".
@@ -410,6 +477,57 @@ mod tests {
             screenshot: None,
             include_screenshot: true,
         }
+    }
+
+    /// Clear asks before it drops notes that weren't copied, sent or read by an agent, and
+    /// doesn't once they were.
+    #[gpui_kit::test]
+    fn clear_asks_before_dropping_notes_not_sent(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::{AppContext as _, VisualTestContext};
+        cx.update(gpui_kit::init);
+        let cx = cx.add_empty_window();
+        let panel = cx.update(|window, cx| cx.new(|cx| super::AnnotatePanel::new(window, cx)));
+        let rows =
+            |cx: &mut VisualTestContext| cx.update(|_, cx| panel.read(cx).annotations(cx).len());
+        let add = |note: &str, cx: &mut VisualTestContext| {
+            cx.update(|window, cx| {
+                panel.update(cx, |p, cx| p.add(at("http://a/1", 1), window, cx));
+                let comment = panel.read(cx).rows.last().unwrap().comment.clone();
+                comment.update(cx, |c, cx| c.set_value(note.to_string(), window, cx));
+            });
+        };
+        let clear = |cx: &mut VisualTestContext| {
+            cx.update(|window, cx| panel.update(cx, |p, cx| p.request_clear(window, cx)));
+            cx.run_until_parked();
+        };
+
+        add("Make it blue", cx);
+        assert_eq!(cx.update(|_, cx| panel.read(cx).unsent(cx)), 1);
+        clear(cx);
+        assert!(cx.has_pending_prompt(), "a note would be lost");
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        assert_eq!(rows(cx), 1);
+        clear(cx);
+        cx.simulate_prompt_answer("Clear");
+        cx.run_until_parked();
+        assert_eq!(rows(cx), 0);
+
+        add("Make it blue", cx);
+        cx.update(|_, cx| panel.update(cx, |p, cx| p.mark_sent(cx)));
+        assert_eq!(cx.update(|_, cx| panel.read(cx).unsent(cx)), 0);
+        // A note edited after it was sent is unsent again.
+        cx.update(|window, cx| {
+            let comment = panel.read(cx).rows[0].comment.clone();
+            comment.update(cx, |c, cx| {
+                c.set_value("Make it red".to_string(), window, cx)
+            });
+        });
+        assert_eq!(cx.update(|_, cx| panel.read(cx).unsent(cx)), 1);
+        cx.update(|_, cx| panel.update(cx, |p, cx| p.mark_sent(cx)));
+        clear(cx);
+        assert!(!cx.has_pending_prompt(), "everything was sent");
+        assert_eq!(rows(cx), 0);
     }
 
     #[test]

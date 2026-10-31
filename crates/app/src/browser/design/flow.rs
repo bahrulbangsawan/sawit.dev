@@ -344,9 +344,7 @@ impl BrowserView {
             .to_path_buf();
         let job = rt::spawn(cx, async move {
             // `assets` is what was chosen, videos included.
-            let file_page = is_file_url(&url);
-            let outcomes =
-                download_all(assets, &dir, &url, file_page, true, MAX_TOTAL, |_, _| {}).await;
+            let outcomes = download_all(assets, &dir, &url, &url, true, MAX_TOTAL, |_, _| {}).await;
             let saved = outcomes.iter().filter(|o| o.error.is_none()).count();
             let first_error = outcomes.iter().find_map(|o| o.error.clone());
             (saved, outcomes.len(), first_error)
@@ -481,21 +479,9 @@ impl BrowserView {
         Ok(folder)
     }
 
-    /// `.nyawit/design/<host>` (made, with `.nyawit/`'s ignore file) or
-    /// `~/Downloads/sawit-design/<host>`; never a symbolic link, since an export clears it.
+    /// The export folder of `host` (see [`export_folder_for`]).
     fn export_folder(&self, host: &str) -> Result<PathBuf, String> {
-        let folder = folder_for(self.project.as_deref(), host);
-        if let (Some(project), Some(parent)) = (&self.project, folder.parent()) {
-            sawit_core::nyawit::ensure(project, parent)
-                .map_err(|e| format!("Couldn't make {}: {e}", parent.display()))?;
-        }
-        if std::fs::symlink_metadata(&folder).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err(format!(
-                "{} is a symbolic link; Sawit won't replace it.",
-                folder.display()
-            ));
-        }
-        Ok(folder)
+        export_folder_for(self.project.as_deref(), host)
     }
 
     /// `ExportDesign`: `{"export": "started"|"running", "folder"}`.
@@ -856,8 +842,8 @@ async fn run_export(
     cx: &mut AsyncApp,
 ) -> Result<(ExportReport, usize), String> {
     let ready = scan.await?;
-    // Local files are copied for a local page by the tab's own URL, not the page's word.
-    let file_page = is_file_url(&url);
+    // What may be downloaded follows the tab's own URL, not the page's word.
+    let page = url.clone();
     let referer = if ready.scan.url.is_empty() {
         url
     } else {
@@ -913,7 +899,7 @@ async fn run_export(
             items,
             &assets_dir,
             &referer,
-            file_page,
+            &page,
             include_videos,
             MAX_TOTAL,
             report,
@@ -954,10 +940,6 @@ async fn run_export(
     Ok((report, total))
 }
 
-fn is_file_url(url: &str) -> bool {
-    url.trim().to_ascii_lowercase().starts_with("file://")
-}
-
 /// Only web pages and local files have styles to read.
 fn extractable(url: &str) -> bool {
     let l = url.trim().to_ascii_lowercase();
@@ -992,15 +974,31 @@ fn style_op(target: Value, html: bool) -> Value {
     op
 }
 
-/// The URL's host without port, as a folder name: `[a-z0-9.-]`, else `page`.
+/// The URL's host as a folder name, `[a-z0-9.-]` (else `page`), with its port when it
+/// isn't the scheme's own: two dev servers on one host are two apps (`localhost-5173`).
 fn export_host(url: &str) -> String {
-    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     let authority = authority.rsplit('@').next().unwrap_or(authority);
-    let host = if let Some(v6) = authority.strip_prefix('[') {
-        v6.split(']').next().unwrap_or("")
+    let (host, port) = if let Some(v6) = authority.strip_prefix('[') {
+        let (host, after) = v6.split_once(']').unwrap_or((v6, ""));
+        (host, after.strip_prefix(':'))
     } else {
-        authority.split(':').next().unwrap_or("")
+        match authority.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        }
+    };
+    let default = match scheme.to_ascii_lowercase().as_str() {
+        "http" => "80",
+        "https" => "443",
+        _ => "",
+    };
+    let port =
+        port.filter(|p| !p.is_empty() && *p != default && p.bytes().all(|b| b.is_ascii_digit()));
+    let host = match port {
+        Some(port) if !host.trim_matches(['-', '.', ':']).is_empty() => format!("{host}-{port}"),
+        _ => host.to_string(),
     };
     let host: String = host
         .to_ascii_lowercase()
@@ -1022,7 +1020,33 @@ fn export_host(url: &str) -> String {
     }
 }
 
-/// Where an export of `host` goes (see [`BrowserView::export_folder`]).
+/// `.nyawit/design/<host>` (made, with `.nyawit/`'s ignore file) or
+/// `~/Downloads/sawit-design/<host>`. An export clears that folder and writes into its
+/// `assets/`, so none of them is reached through a symbolic link: not `.nyawit`, `design`,
+/// the host's folder nor `assets/` (a repository can commit one, pointing anywhere).
+fn export_folder_for(project: Option<&Path>, host: &str) -> Result<PathBuf, String> {
+    let folder = folder_for(project, host);
+    let assets = folder.join("assets");
+    // From the project down; without one, the host's folder and its `assets/`.
+    let base = project.or(folder.parent()).unwrap_or(&folder);
+    let mut at = base.to_path_buf();
+    for part in assets.strip_prefix(base).unwrap_or(&assets).components() {
+        at.push(part);
+        if std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(format!(
+                "{} is a symbolic link; Sawit won't write through it.",
+                at.display()
+            ));
+        }
+    }
+    if let (Some(project), Some(parent)) = (project, folder.parent()) {
+        sawit_core::nyawit::ensure(project, parent)
+            .map_err(|e| format!("Couldn't make {}: {e}", parent.display()))?;
+    }
+    Ok(folder)
+}
+
+/// Where an export of `host` goes (see [`export_folder_for`]).
 fn folder_for(project: Option<&Path>, host: &str) -> PathBuf {
     match project {
         Some(project) => sawit_core::nyawit::dir(project).join("design").join(host),
@@ -1255,13 +1279,6 @@ mod tests {
     }
 
     #[test]
-    fn file_pages_by_their_url() {
-        assert!(is_file_url("file:///Users/a/index.html"));
-        assert!(is_file_url(" FILE:///x"));
-        assert!(!is_file_url("https://a.dev/file://x"));
-    }
-
-    #[test]
     fn extractable_pages() {
         assert!(extractable("https://a.dev"));
         assert!(extractable("http://localhost:5173/x"));
@@ -1324,12 +1341,73 @@ mod tests {
 
     #[test]
     fn export_hosts_are_safe_folder_names() {
-        assert_eq!(export_host("http://LocalHost:5173/"), "localhost");
+        assert_eq!(export_host("http://LocalHost:5173/"), "localhost-5173");
         assert_eq!(export_host("https://user:pw@x.dev/a"), "x.dev");
         assert_eq!(export_host("file:///Users/me/a.html"), "page");
-        assert_eq!(export_host("http://[::1]:8080/"), "1");
+        assert_eq!(export_host("http://[::1]:8080/"), "1-8080");
         assert_eq!(export_host("http://../"), "page");
         assert_eq!(export_host("http://a_b.dev/"), "a-b.dev");
+        // The scheme's own port says nothing.
+        assert_eq!(export_host("http://x.dev:80/"), "x.dev");
+        assert_eq!(export_host("http://x.dev:443/"), "x.dev-443");
+    }
+
+    /// An export clears its folder and writes into its `assets/`: a repository that commits a
+    /// link for `.nyawit`, `.nyawit/design`, the host's folder or its `assets/` would have
+    /// Sawit write there, and clear it, somewhere else.
+    #[test]
+    fn exports_never_go_through_a_link() {
+        /// A folder of this test's own, removed when done.
+        struct Scratch(std::path::PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let scratch = |name: &str| {
+            let dir = std::env::temp_dir()
+                .join(format!("sawit-export-links-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Scratch(dir)
+        };
+        for (i, link) in [
+            ".nyawit",
+            ".nyawit/design",
+            ".nyawit/design/x.dev",
+            ".nyawit/design/x.dev/assets",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let project = scratch(&format!("project-{i}"));
+            let elsewhere = scratch(&format!("elsewhere-{i}"));
+            let at = project.0.join(link);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&elsewhere.0, &at).unwrap();
+            assert!(
+                export_folder_for(Some(&project.0), "x.dev").is_err(),
+                "through {link}"
+            );
+            let written = std::fs::read_dir(&elsewhere.0).unwrap().count();
+            assert_eq!(written, 0, "nothing written through {link}");
+        }
+        let project = scratch("plain");
+        assert_eq!(
+            export_folder_for(Some(&project.0), "x.dev").unwrap(),
+            project.0.join(".nyawit/design/x.dev")
+        );
+        assert!(project.0.join(".nyawit/.gitignore").exists());
+    }
+
+    /// Two dev servers on one host are two apps: an export of one used to replace the
+    /// other's folder, a `DESIGN.md` edited there included.
+    #[test]
+    fn apps_on_one_host_export_apart() {
+        assert_ne!(
+            export_host("http://localhost:3000/"),
+            export_host("http://localhost:5173/")
+        );
     }
 
     #[test]

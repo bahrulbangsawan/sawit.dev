@@ -9,6 +9,23 @@
   const HOST_TAG = "sawit-overlay";
   const ACCENT = "#0a84ff";
 
+  // The listener methods as they are before any page script runs (this module runs with the
+  // agent, at document start), called through the agent's own `apply`, with options that
+  // have no prototype a page could give a `signal` or `once`. The picker's listeners go only
+  // through these, and only by index: a page script that got one (by patching the methods,
+  // the array iterator that `for…of` and destructuring use, or `Array.prototype`) could call
+  // it with an `isTrusted: true` object of its own and pick for the user. Nor can a page
+  // take one from the `caller` of a function a listener calls (a getter on the event, a
+  // replaced `preventDefault`): the agent is strict-mode code, so `caller` is null there.
+  const addListener = EventTarget.prototype.addEventListener;
+  const removeListener = EventTarget.prototype.removeEventListener;
+  const listen = (type, fn, options) => apply(addListener, window, [type, fn, options]);
+  const unlisten = (type, fn, options) => apply(removeListener, window, [type, fn, options]);
+  const CAPTURE = { __proto__: null, capture: true };
+  const SCROLLS = { __proto__: null, capture: true, passive: true };
+  const PASSIVE = { __proto__: null, passive: true };
+  const ONCE = { __proto__: null, once: true };
+
   // ---- Host: one closed shadow root on <html>, made once the page has settled ----
 
   let host = null;
@@ -300,9 +317,9 @@
     const want = items.length > 0 || mode !== "off";
     if (want === watching) return;
     watching = want;
-    const act = want ? "addEventListener" : "removeEventListener";
-    window[act]("scroll", schedule, { capture: true, passive: true });
-    window[act]("resize", schedule, { passive: true });
+    const act = want ? listen : unlisten;
+    act("scroll", schedule, SCROLLS);
+    act("resize", schedule, PASSIVE);
     if (want) timer = setInterval(schedule, 500);
     else clearInterval(timer);
   };
@@ -313,12 +330,12 @@
       render();
     }, 1000);
   } else {
-    window.addEventListener("load", () => {
+    listen("load", () => {
       setTimeout(() => {
         ready = true;
         render();
       }, 1000);
-    }, { once: true });
+    }, ONCE);
   }
 
   // ---- Picking ----
@@ -410,6 +427,14 @@
     else if (e.deltaY > 0) back();
   };
   const SWALLOWED = ["pointerdown", "pointerup", "mousedown", "mouseup", "auxclick", "contextmenu"];
+  // Only the user's own input picks: a page can arm the picker (`__sawitAgent` is on the
+  // page) and dispatch events, and those, like an agent's clicks, go to the page untouched.
+  // `isTrusted` holds only while no page script has the listener itself (see `listen`), nor
+  // the raw `fn` behind it: `click` reads `e.clientX`, a getter a page can replace.
+  const user = (fn) => (e) => {
+    if (e.isTrusted) fn(e);
+  };
+  // Built now, before any page script runs; read only by index from here on.
   const LISTENERS = [
     ["pointermove", move],
     ["mousemove", move],
@@ -418,10 +443,10 @@
     ["keydown", keydown],
     ["keyup", altKey],
     ["wheel", wheel],
-  ];
+  ].map(([type, fn]) => [type, user(fn)]);
   const stopPicking = () => {
     if (mode === "off") return;
-    for (const [type, fn] of LISTENERS) window.removeEventListener(type, fn, { capture: true });
+    for (let i = 0; i < LISTENERS.length; i++) unlisten(LISTENERS[i][0], LISTENERS[i][1], CAPTURE);
     mode = "off";
     current = null;
     pinned = null;
@@ -434,18 +459,11 @@
     render();
   };
 
-  // The annotate shortcut an agent presses in the page (browser_press_key
-  // "Meta+Shift+."), on every page, picking or not: the page dispatches that
-  // event itself, so the app never sees it. A real key press is the app's: its
-  // keymap takes the Annotate key before the page does, wherever the keyboard
-  // is, and a key it doesn't bind to Annotate must not toggle it here.
-  window.addEventListener("keydown", (e) => {
-    if (e.isTrusted) return;
-    if (e.metaKey && e.shiftKey && (e.key === "." || e.key === ">")) {
-      e.preventDefault();
-      send("key", "toggle-annotate");
-    }
-  }, { capture: true });
+  // Annotate's key (⇧⌘. unless the keymap moves it) is never the page's to answer. The
+  // user's own reaches Sawit's keymap first, wherever it is bound (GPUI sees ⌘ keys before
+  // the page does), so a key the keymap doesn't bind to Annotate doesn't toggle it. A key
+  // the page dispatches mustn't open Annotate and arm the picker, and Sawit answers an
+  // agent's browser_press_key "Meta+Shift+." itself.
 
   // ---- Ops ----
 
@@ -460,7 +478,7 @@
       stopPicking();
     } else if (mode === "off") {
       mode = op.mode;
-      for (const [type, fn] of LISTENERS) window.addEventListener(type, fn, { capture: true });
+      for (let i = 0; i < LISTENERS.length; i++) listen(LISTENERS[i][0], LISTENERS[i][1], CAPTURE);
       applyMode();
       watch();
     } else {
