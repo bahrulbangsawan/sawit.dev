@@ -144,6 +144,15 @@ pub fn is_canvas_file(path: &Path) -> bool {
 /// The command that runs other commands as its steps.
 const BATCH: &str = "command.batch";
 
+/// The clipboard's commands ([`policy::CLIPBOARD`]) that change layers when the engine runs them:
+/// the `command` op ends the text being typed in before them ([`command_keeps_text_edit`]).
+const ENDS_TEXT_EDIT_IN_THE_ENGINE: [&str; 4] = [
+    "edit.cut",
+    "edit.paste",
+    "edit.pasteOver",
+    "edit.pasteReplace",
+];
+
 /// How far right of what the page holds the `mermaid` op puts a diagram that names no place.
 const MERMAID_GAP: f64 = 100.0;
 
@@ -280,8 +289,8 @@ fn waits_for_the_drag(board: &BoardDoc, name: &str) -> bool {
 /// were gone, though each answered ok, and the autosave wrote that (Plan 7 final review I-2).
 ///
 /// - `add`, `update`, `delete`, `clear`, `replace` and `mermaid` end the edit.
-/// - `command` ends it unless the command acts on the text being typed in
-///   ([`policy::keeps_text_edit`]: the Text menu's commands, copy and paste), or is a
+/// - `command` ends it unless the command acts on the text being typed in, or changes nothing
+///   ([`command_keeps_text_edit`]: the Text menu's commands, and a copy), or is a
 ///   `command.batch` whose every step does. A command refused up front runs nothing, and ends
 ///   nothing either ([`refused`]).
 /// - The reads (`get`, `commands`, the exports) leave the edit alone, and so does the input of
@@ -304,12 +313,19 @@ fn end_text_edit_before_op(board: &mut BoardDoc, name: &str, op: &Value) -> Resu
     }
 }
 
-/// Whether command `id`, with `params`, runs with the text being typed in still open: it acts on
-/// that text ([`policy::keeps_text_edit`]), or it is a `command.batch` whose every step does,
-/// however deeply batches are nested.
+/// Whether command `id`, with `params`, runs with the text being typed in still open, as the
+/// engine runs it: it acts on that text (the Text menu's commands, [`policy::keeps_text_edit`]),
+/// or it is a copy, which changes nothing, or it is a `command.batch` whose every step is one of
+/// these, however deeply batches are nested.
+///
+/// The canvas's keys and menus keep the edit open for a cut and the pastes too, because they send
+/// them to the text's characters. The engine acts on layers instead (CANVAS-CORE-2): its cut, and
+/// its paste to replace, delete the text being typed in without ending its edit, which left the
+/// "Edit text" gesture open for the next click to cancel, and its pastes joined the typing's undo
+/// step. They end the edit first.
 fn command_keeps_text_edit(id: &str, params: &Value) -> bool {
     if id != BATCH {
-        return policy::keeps_text_edit(id);
+        return policy::keeps_text_edit(id) && !ENDS_TEXT_EDIT_IN_THE_ENGINE.contains(&id);
     }
     let steps = params.get("commands").and_then(Value::as_array);
     steps.is_some_and(|steps| {
@@ -3737,7 +3753,7 @@ mod tests {
     }
 
     /// Ruling R-TEXTEDIT for the command op: a command that acts on the text being typed in (the
-    /// Text menu's, copy and paste) runs inside the edit, which goes on, and so does a
+    /// Text menu's) or changes nothing (a copy) runs inside the edit, which goes on, and so does a
     /// `command.batch` of only such steps; a batch with any other step ends the edit first. A
     /// command refused up front runs nothing and ends nothing, and the reads and the input ops
     /// leave the edit as it is.
@@ -3765,6 +3781,54 @@ mod tests {
         ask(&mut board, batch);
         assert!(!editing(&board) && !gesture_open(&board));
         assert_eq!(sticky_text(&board, note), "hi!");
+    }
+
+    /// CANVAS-CORE-2 (ruling R-TEXTEDIT): the canvas's keys and menus send copy and paste to the
+    /// characters of the text being typed in, but the `command` op hands them to the engine, whose
+    /// cut and pastes act on layers. A cut, or a paste to replace, deleted the text being typed
+    /// without ending its edit: the "Edit text" gesture stayed open, and the user's next click on
+    /// a layer cancelled it, taking back the typing, the cut and every op since, though each had
+    /// answered ok. A paste joined the typing's undo step. Each now ends the typing first: it is
+    /// an undo step of its own, which the next click keeps, and the op is one after it.
+    #[test]
+    fn a_cut_or_a_paste_ends_the_typing_first() {
+        let cut = json!({"command": "edit.cut"});
+        let copy = json!({"command": "edit.copy"});
+        for op in [
+            cut.clone(),
+            json!({"command": "edit.pasteReplace"}),
+            json!({"command": "edit.paste"}),
+            json!({"command": "edit.pasteOver"}),
+            json!({"command": "command.batch", "params": {"commands": [copy, cut]}}),
+        ] {
+            let mut op = op;
+            op["op"] = json!("command");
+            // A rectangle on the page and on the clipboard, and a sticky being typed in.
+            let mut board = board();
+            let rectangle = json!([{"type": "rectangle", "x": 600, "y": 0, "width": 100,
+                "height": 100}]);
+            let added = ask(&mut board, json!({"op": "add", "elements": rectangle}));
+            send(&mut board, "edit.copy", json!({"ids": added["ids"]}));
+            let note = typing_in_a_new_sticky(&mut board);
+            textedit::insert(&mut board.session, "hi").unwrap();
+
+            ask(&mut board, op.clone());
+            assert!(
+                editing(&board) || !gesture_open(&board),
+                "{op}: the typing's gesture is open with no text being typed in"
+            );
+            // The user's next click, on the rectangle, takes nothing back.
+            let shown = board.doc().unwrap();
+            pointer_at(&mut board, "down", 650.0, 50.0);
+            pointer_at(&mut board, "up", 650.0, 50.0);
+            assert!(
+                *board.doc().unwrap() == *shown,
+                "{op}: the click took edits back"
+            );
+            // Undo takes back the op alone: the sticky is there, with what was typed.
+            send(&mut board, "edit.undo", json!({}));
+            assert_eq!(sticky_text(&board, note), "hi", "{op}");
+        }
     }
 
     /// The middle of the box `get` gives `element`, on the page.

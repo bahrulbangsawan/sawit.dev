@@ -140,8 +140,11 @@ pub fn is_clipboard(id: &str) -> bool {
 
 /// Whether command `id` acts on the text being typed in, and so runs with the edit still open:
 /// the Text menu's commands (`text.*`), which style the text or the characters selected in it,
-/// and copy and paste ([`CLIPBOARD`]), which take its characters. Before any other command the
-/// canvas ends the edit first ([`crate::input::end_text_edit_before`], ruling R-TEXTEDIT).
+/// and copy and paste ([`CLIPBOARD`]), which the canvas's keys and menus send to its characters.
+/// Before any other command the canvas ends the edit first
+/// ([`crate::input::end_text_edit_before`], ruling R-TEXTEDIT). An agent's `command` op hands
+/// copy and paste to the engine, which acts on layers, so it keeps the edit open for a copy alone
+/// (`crate::ops`, CANVAS-CORE-2).
 pub fn keeps_text_edit(id: &str) -> bool {
     id.starts_with("text.") || is_clipboard(id)
 }
