@@ -68,7 +68,8 @@ export const features = [
 // The CLI, set as the plantation's menu. Commands from `sawit --help`.
 export const menu = [
   {
-    group: 'Kebun · the estate',
+    group: 'Kebun',
+    gloss: 'the estate',
     items: [
       { cmd: 'sawit kalimantan', means: 'tables', note: 'Lists the tables of a database' },
       { cmd: 'sawit kalimantan hutan', means: 'rows', note: 'The first 100 rows, like psql' },
@@ -77,7 +78,8 @@ export const menu = [
     ],
   },
   {
-    group: 'Panen · the harvest',
+    group: 'Panen',
+    gloss: 'the harvest',
     items: [
       { cmd: 'sawit panen kalimantan hutan hutan.xlsx', means: 'export', note: 'A table or a query, to CSV or Excel' },
       { cmd: 'sawit backup kalimantan kalimantan.dump', means: 'pg_dump', note: 'The database, one schema or one table' },
@@ -85,7 +87,8 @@ export const menu = [
     ],
   },
   {
-    group: 'Bakar · the burning',
+    group: 'Bakar',
+    gloss: 'the burning',
     items: [
       { cmd: 'sawit bakar ports', means: 'stop', note: 'Dev servers only: asks, then SIGTERM, then SIGKILL' },
       { cmd: 'sawit bakar ports 3000 -y', means: 'stop :3000', note: 'Whatever listens there, without asking' },
@@ -93,7 +96,8 @@ export const menu = [
     ],
   },
   {
-    group: 'Pupuk · the fertiliser',
+    group: 'Pupuk',
+    gloss: 'the fertiliser',
     items: [
       { cmd: 'sawit list tools', means: 'tools', note: 'Package managers, runtimes and AI agents' },
       { cmd: 'sawit pasang bun uv', means: 'install', note: 'Official install scripts, prerequisites first' },

@@ -44,9 +44,9 @@ function Hero() {
               Download the DMG
             </a>
           </div>
-          <pre className="cmd" tabIndex={0} aria-label="Install command">
+          <pre className="cmd" tabIndex={0} role="group" aria-label="Install command">
             <code>
-              <span aria-hidden="true">$ </span>
+              <span className="prompt" aria-hidden="true">$ </span>
               {INSTALL}
             </code>
           </pre>
@@ -261,7 +261,8 @@ function Postgres() {
 function Keys({ keys }: { keys: readonly string[] }) {
   if (!keys.length) return null
   return (
-    <span className="keys" aria-label={`Shortcut ${keys.join(' ')}`}>
+    <span className="keys">
+      <span className="sr-only">, shortcut </span>
       {keys.map((k) => (
         <kbd key={k}>{k}</kbd>
       ))}
@@ -368,7 +369,9 @@ function Menu() {
             <div className="groups">
               {menu.map((g) => (
                 <div key={g.group}>
-                  <h3>{g.group}</h3>
+                  <h3>
+                    <span lang="id">{g.group}</span> · {g.gloss}
+                  </h3>
                   <ul>
                     {g.items.map((it) => (
                       <li key={it.cmd}>
@@ -382,7 +385,7 @@ function Menu() {
             </div>
             <hr />
             <p className="sign">
-              “Bakar 2 lahan di atas? Asapnya tanggung sendiri.”
+              <span lang="id">“Bakar 2 lahan di atas? Asapnya tanggung sendiri.”</span>
               <small>Burn the two plots above? The smoke is on you.</small>
             </p>
           </div>
@@ -499,7 +502,7 @@ function Cta() {
         <span className="icon">
           <img src="/media/sawit-icon.png" width={1024} height={1024} alt="The Sawit app icon: a palm tree whose trunk is three database discs" />
         </span>
-        <h2 id="cta-title" className="blue">
+        <h2 id="cta-title" className="blue" lang="id">
           Pasang Sawit
         </h2>
         <p className="lead">Install it with one command on an Apple Silicon Mac.</p>

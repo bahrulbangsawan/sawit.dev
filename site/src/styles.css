@@ -451,8 +451,10 @@ kbd {
   color: var(--ink);
   text-align: left;
 }
-.cmd span {
+.cmd .prompt {
   color: var(--fg-muted);
+  /* selecting the command by hand copies it without the prompt, which a shell rejects */
+  user-select: none;
 }
 .hero small,
 .cta small {
@@ -1055,7 +1057,7 @@ kbd {
   font-size: 13px;
   color: var(--fg);
 }
-.groups span {
+.groups li span {
   font-size: 12.5px;
   color: var(--fg-muted);
 }
