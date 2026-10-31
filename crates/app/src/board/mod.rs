@@ -394,7 +394,8 @@ impl BoardView {
     /// - A file that another app or window wrote to since the canvas opened or saved it is never
     ///   saved over, which would replace what was written: an edit says so instead, in FigCraft's
     ///   words ([`Writer::guard`]). A file that wasn't there yet is written by the first save, and
-    ///   is guarded from then on.
+    ///   is guarded from then on, unless a file was made there meanwhile (another window's canvas
+    ///   of it, a `git pull`), which isn't saved over either (CANVAS-CORE-5).
     pub fn open(path: PathBuf, cx: &mut Context<Self>) -> Self {
         // Stamped before it is read, as FigCraft stamps a file it opens: a change made while it is
         // read makes the next save refuse rather than replace it.
@@ -2326,12 +2327,50 @@ mod tests {
         assert!(first.read_with(cx, |view, _| view.toast.is_none()));
     }
 
+    /// CANVAS-CORE-5: two windows with no project share Sawit's own `canvas.figcraft`, and
+    /// `sawit -n` puts one project in two; each window has its own canvas of the file. With no
+    /// file there when they opened, the second to save replaced the first's board without a word,
+    /// and the first's next save was refused: its work was in no file. The second's save is
+    /// refused now, and the first goes on saving.
+    #[gpui_kit::test]
+    fn of_two_canvases_of_a_file_not_made_yet_the_second_to_save_is_refused(
+        cx: &mut TestAppContext,
+    ) {
+        let tmp = Scratch::new("two-canvases-new");
+        let path = tmp.0.join("canvas.figcraft");
+        let first = open(cx, &path);
+        let second = cx.new(|cx| BoardView::open(path.clone(), cx));
+        add_sticky(&first, cx);
+        first.update(cx, |view, _| view.flush());
+        assert_eq!(saved_layers(&path), 1);
+        let saved = std::fs::read(&path).unwrap();
+        // The second's edit would replace the first's: it is refused, and says so.
+        let reply = run_op(&second, sticky_op(), cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        cx.executor().advance_clock(SAVE_DELAY);
+        cx.run_until_parked();
+        let toast = second.read_with(cx, |view, _| view.toast.clone());
+        let toast = toast.expect("no toast").to_string();
+        assert!(toast.starts_with("canvas wasn't saved: "), "{toast}");
+        second.update(cx, |view, _| view.flush());
+        assert!(
+            std::fs::read(&path).unwrap() == saved,
+            "the first's board was replaced"
+        );
+        // The first goes on saving its own edits.
+        add_sticky(&first, cx);
+        first.update(cx, |view, _| view.flush());
+        assert_eq!(saved_layers(&path), 2);
+        assert!(first.read_with(cx, |view, _| view.toast.is_none()));
+    }
+
     #[gpui_kit::test]
     fn a_board_with_no_file_at_open_is_written_by_its_first_flush_and_guarded_after(
         cx: &mut TestAppContext,
     ) {
         // An `.excalidraw` file imported, and a project's old canvas migrated: neither `.figcraft`
-        // file is there yet, so nothing else can have written to it.
+        // file is there yet, and nothing else makes one meanwhile (when something does, the save
+        // is refused: CANVAS-CORE-5).
         let imported = Scratch::new("guard-import");
         let old = imported.0.join("x.excalidraw");
         std::fs::write(&old, FIXTURE).unwrap();

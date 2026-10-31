@@ -293,10 +293,13 @@ impl Writer {
     ///
     /// A save to `path` is then refused, right before it would be written, when the writer holds a
     /// stamp of the file and the file there now has another: the stamp it was given, then that of
-    /// each save of the file it wrote, so the canvas's own saves never refuse each other. No stamp
-    /// held (there was no file, and none has been written yet), or no file there now, writes as
-    /// before. A refusal is the save's error ([`Writer::last_error`]) and leaves the file as it is,
-    /// and so does every later save of it, until the canvas opens the file again. A path that isn't
+    /// each save of the file it wrote, so the canvas's own saves never refuse each other. With no
+    /// stamp held (there was no file, and none has been written yet) a file there now is refused
+    /// too: something made it since the canvas looked, another window's canvas of the same file
+    /// say, or a `git pull` (CANVAS-CORE-5). No file there now writes as before, so the first save
+    /// of a canvas whose file isn't there yet (a new one, a migrated or an imported one) makes it.
+    /// A refusal is the save's error ([`Writer::last_error`]) and leaves the file as it is, and
+    /// so does every later save of it, until the canvas opens the file again. A path that isn't
     /// guarded is saved as before, whatever wrote to it since.
     pub fn guard(&self, path: PathBuf, read: Option<Stamp>) {
         lock(&self.stamps).insert(path, read);
@@ -432,7 +435,7 @@ fn write(save: &Save, stamps: &Stamps) -> Result<Option<String>, String> {
     let failed = |why: String| format!("The canvas couldn't be saved to {}: {why}", path.display());
     let guarded = lock(stamps).get(path).copied();
     let gone = matches!(guarded, Some(Some(_))) && Stamp::of(path).is_none();
-    if let Some(Some(held)) = guarded {
+    if let Some(held) = guarded {
         refuse_overwriting_changes(path, held)?;
     }
     make_folder(path).map_err(|e| failed(e.to_string()))?;
@@ -460,19 +463,27 @@ fn written_again(path: &Path) -> String {
 }
 
 /// Refuses a save over the file at `path` when something else wrote to it since the canvas read
-/// or saved it: the file there now has another stamp than `held`. No file there has nothing to
+/// or saved it: the file there now has another stamp than `held`, or there was no file
+/// (`held` is `None`) and there is one now (CANVAS-CORE-5). No file there has nothing to
 /// replace. It is FigCraft's own rule and sentence (`refuse_overwriting_changes`, #1330), with
 /// Sawit's way out in place of FigCraft's Revert to saved and Save as.
-fn refuse_overwriting_changes(path: &Path, held: Stamp) -> Result<(), String> {
-    match Stamp::of(path) {
-        Some(now) if now != held => Err(format!(
-            "{} wasn't saved: the file changed on disk since it was opened or saved here (another \
-             app or window wrote to it), and saving would replace those changes. Close its tab \
-             and open it again to load them, or save it under another name to keep this version \
-             as well.",
-            path.file_stem()
-                .and_then(OsStr::to_str)
-                .unwrap_or("Untitled")
+fn refuse_overwriting_changes(path: &Path, held: Option<Stamp>) -> Result<(), String> {
+    let name = path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or("Untitled");
+    match (held, Stamp::of(path)) {
+        (Some(held), Some(now)) if now != held => Err(format!(
+            "{name} wasn't saved: the file changed on disk since it was opened or saved here \
+             (another app or window wrote to it), and saving would replace those changes. Close \
+             its tab and open it again to load them, or save it under another name to keep this \
+             version as well."
+        )),
+        (None, Some(_)) => Err(format!(
+            "{name} wasn't saved: a file was made on disk at its place since it was opened here \
+             (another app or window wrote it), and saving would replace it. Close its tab and \
+             open it again to load it, or save it under another name to keep this version as \
+             well."
         )),
         _ => Ok(()),
     }
@@ -1718,6 +1729,33 @@ mod tests {
         assert_eq!(writer.last_error(), None);
         assert!(is_empty(&open(&read).unwrap().doc().unwrap()));
         assert!(has_text(&open(&sibling(&read, ".bak")).unwrap(), "burst 9"));
+    }
+
+    /// CANVAS-CORE-5: a canvas that found no file at its path (a project's canvas not saved yet,
+    /// an imported `.excalidraw` file's `.figcraft`) refuses to save over a file made there since:
+    /// another window's canvas of the same file, `sawit -n`, a `git pull` of a committed
+    /// `.nyawit/`, a headless sawit-mcp. Its first save used to replace that file without a word.
+    /// The writer's own first save is still written, and guards the file from then on.
+    #[test]
+    fn a_file_made_since_the_canvas_found_none_is_not_saved_over() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("canvas.figcraft");
+        let writer = Writer::spawn();
+        writer.guard(path.clone(), Stamp::of(&path));
+        let theirs = bytes_with(&["theirs"]);
+        std::fs::write(&path, &theirs).unwrap();
+
+        writer.save(path.clone(), bytes_with(&["mine"]), false);
+        writer.flush();
+        let error = writer.last_error().expect("the save went through");
+        assert!(error.starts_with("canvas wasn't saved: "), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), theirs);
+        // Nor is an emptying save, whose backup isn't made either.
+        writer.save(path.clone(), blank(), true);
+        writer.flush();
+        assert!(writer.last_error().is_some());
+        assert_eq!(std::fs::read(&path).unwrap(), theirs);
+        assert_eq!(names(dir.path()), ["canvas.figcraft"]);
     }
 
     #[test]
