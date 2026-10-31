@@ -706,6 +706,72 @@ fn write_config(config: &Path, text: &str) -> Result<()> {
     write_text_atomic(config, text)
 }
 
+/// An exclusive hold on one client config while it's read, changed and
+/// written back, so two of Sawit's writers (the MCP page, an agent's
+/// `install_mcp_server` in another process) never interleave and lose an
+/// entry. The lock file is Sawit's own, in the temp folder, not one more
+/// file beside the user's config. Dropping it lets go.
+struct ConfigLock(#[allow(dead_code)] std::fs::File);
+
+fn lock_file(config: &Path) -> Result<std::fs::File> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let key = std::fs::canonicalize(config)
+        .or_else(|_| {
+            let dir = std::fs::canonicalize(config.parent().unwrap_or(Path::new(".")))?;
+            Ok::<_, std::io::Error>(dir.join(config.file_name().unwrap_or_default()))
+        })
+        .unwrap_or_else(|_| config.to_path_buf());
+    // FNV-1a: stable across processes and builds.
+    let hash = key
+        .as_os_str()
+        .as_bytes()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+            (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
+        });
+    let dir = std::env::temp_dir().join("sawit-config-locks");
+    std::fs::create_dir_all(&dir)?;
+    Ok(std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(format!("{hash:016x}.lock")))?)
+}
+
+/// Waits for the config's lock: for file edits, which take milliseconds.
+fn lock_config(config: &Path) -> Result<ConfigLock> {
+    use std::os::fd::AsRawFd as _;
+    let file = lock_file(config)?;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(ConfigLock(file))
+}
+
+/// Waits for the config's lock without blocking a worker: a CLI update
+/// holds it for as long as the client's CLI runs.
+async fn lock_config_async(config: &Path) -> Result<ConfigLock> {
+    use std::os::fd::AsRawFd as _;
+    let file = lock_file(config)?;
+    let deadline = std::time::Instant::now() + 2 * CLI_TIMEOUT + std::time::Duration::from_secs(5);
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(ConfigLock(file));
+        }
+        let e = std::io::Error::last_os_error();
+        if e.raw_os_error() != Some(libc::EWOULDBLOCK) {
+            return Err(e.into());
+        }
+        if std::time::Instant::now() > deadline {
+            return Err(CoreError::Config(format!(
+                "Another change to {} is still running. Try again in a moment.",
+                config.display()
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
 /// The keys of a JSON entry that say how a server is reached. Sawit writes
 /// them on every install. The rest of an entry (Cline's `autoApprove`,
 /// `disabled`, an `env` or `headers` the user added, a timeout, …) is the
@@ -856,6 +922,15 @@ pub fn install_file(target: &Target, spec: &Spec) -> Result<()> {
     if !target.client.editable() {
         return Err(manual(target, spec, "YAML/script format"));
     }
+    let _lock = lock_config(&target.config)?;
+    install_file_locked(target, spec)
+}
+
+/// [`install_file`] while the config's lock is held.
+fn install_file_locked(target: &Target, spec: &Spec) -> Result<()> {
+    if !target.client.editable() {
+        return Err(manual(target, spec, "YAML/script format"));
+    }
     let legacy = spec.name == SERVER_NAME;
     if target.client == Client::Codex {
         let mut doc = read_toml(&target.config).map_err(|e| manual(target, spec, &e))?;
@@ -926,6 +1001,12 @@ fn json_indent(text: &str) -> String {
 
 /// Removes the server entry (other servers and settings stay).
 pub fn uninstall_file(target: &Target, name: &str) -> Result<()> {
+    let _lock = lock_config(&target.config)?;
+    uninstall_file_locked(target, name)
+}
+
+/// [`uninstall_file`] while the config's lock is held.
+fn uninstall_file_locked(target: &Target, name: &str) -> Result<()> {
     if !target.client.editable() {
         return Err(CoreError::Config(format!(
             "Remove the `{name}` entry from {} manually.",
@@ -1219,6 +1300,11 @@ impl Drop for PutBack<'_> {
 /// can only remove an entry and add it again: the old entry comes back if
 /// the add fails or is stopped, and the user's own keys of it are kept.
 pub async fn install(target: &Target, spec: &Spec, cli: Option<&Path>) -> Result<()> {
+    if !target.client.editable() {
+        return Err(manual(target, spec, "YAML/script format"));
+    }
+    // Held to the end: the guard below, made after it, puts back first.
+    let _lock = lock_config_async(&target.config).await?;
     if let Some(cli) = cli
         && let Some(add) = cli_add(target, spec, cli)
     {
@@ -1251,7 +1337,7 @@ pub async fn install(target: &Target, spec: &Spec, cli: Option<&Path>) -> Result
         }
         return Ok(());
     }
-    install_file(target, spec)
+    install_file_locked(target, spec)
 }
 
 /// Whether the config still has the pre-rename (PG Desk) entry.
@@ -1272,6 +1358,7 @@ fn has_legacy(target: &Target) -> bool {
 }
 
 pub async fn uninstall(target: &Target, name: &str, cli: Option<&Path>) -> Result<()> {
+    let _lock = lock_config_async(&target.config).await?;
     if let Some(cli) = cli
         && let Some(remove) = cli_remove(target, cli, name)
     {
@@ -1281,7 +1368,7 @@ pub async fn uninstall(target: &Target, name: &str, cli: Option<&Path>) -> Resul
         }
         return Ok(());
     }
-    uninstall_file(target, name)
+    uninstall_file_locked(target, name)
 }
 
 #[cfg(test)]
@@ -2110,6 +2197,30 @@ mod tests {
             text.starts_with("{\n\t\"mcpServers\": {\n\t\t\"sawit\""),
             "{text}"
         );
+    }
+
+    /// The MCP page and an agent's `install_mcp_server` (another process)
+    /// can change one config at once: neither loses the other's entry, and
+    /// the file never ends up half one write and half the other.
+    #[test]
+    fn two_writers_to_one_config_lose_nothing() {
+        let h = home();
+        fs::create_dir_all(h.path().join(".cursor")).unwrap();
+        let t = find(&discover(h.path(), None), Client::Cursor, "default").clone();
+        std::thread::scope(|scope| {
+            for name in ["one", "two"] {
+                let t = &t;
+                scope.spawn(move || {
+                    for i in 0..150 {
+                        let spec = Spec::stdio(name, format!("/bin/{name}-{i}"), vec![]);
+                        install_file(t, &spec).unwrap_or_else(|e| panic!("{name} {i}: {e}"));
+                    }
+                });
+            }
+        });
+        let v = json_at(&t.config);
+        assert_eq!(v["mcpServers"]["one"]["command"], "/bin/one-149");
+        assert_eq!(v["mcpServers"]["two"]["command"], "/bin/two-149");
     }
 
     #[test]
