@@ -76,8 +76,9 @@ This installs the latest release into `/Applications` (or `~/Applications`). Add
 to pick a version. After that, the app updates itself.
 
 Sawit is not notarized yet, so if you open the `Sawit.dmg` from a browser download, macOS says it "could not verify
-Sawit is free of malware." Use the script above, or right-click **Sawit.app → Open** once, or run
-`xattr -dr com.apple.quarantine /Applications/Sawit.app`.
+Sawit is free of malware." Use the script above. Or open Sawit once, choose **Done**, then **Open Anyway** in
+**System Settings → Privacy & Security**, or run `xattr -dr com.apple.quarantine /Applications/Sawit.app`. Since
+macOS 15, right-click → **Open** no longer gets past the warning.
 
 ## Features
 

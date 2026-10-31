@@ -113,7 +113,7 @@ export const faq = [
   },
   {
     q: 'Why does macOS say it cannot verify Sawit?',
-    a: 'Sawit is not notarized yet. The install script avoids the warning. With the DMG, right-click Sawit.app and choose Open once.',
+    a: 'Sawit is not notarized yet. The install script avoids the warning. With the DMG, open Sawit once and choose Done, then Open Anyway in System Settings → Privacy & Security, or run xattr -dr com.apple.quarantine /Applications/Sawit.app.',
   },
   {
     q: 'Where do my passwords go?',

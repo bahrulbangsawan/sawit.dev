@@ -453,7 +453,7 @@ function Install() {
                 <svg aria-hidden="true">
                   <use href="#i-check" />
                 </svg>
-                Not notarized yet: right-click Sawit.app, Open, once
+                Not notarized yet: Open Anyway in Privacy & Security, once
               </li>
               <li>
                 <svg aria-hidden="true">
