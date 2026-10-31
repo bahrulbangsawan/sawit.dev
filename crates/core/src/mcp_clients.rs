@@ -689,40 +689,79 @@ fn read_toml(path: &Path) -> std::result::Result<toml_edit::DocumentMut, String>
         .map_err(|e| e.to_string())
 }
 
-/// Whether `spec` is installed for `target`.
-pub fn status(target: &Target, spec: &Spec) -> Status {
-    let wanted = spec.key();
+/// A target's config, read once: what every server in it points at, so
+/// the statuses of the whole catalog come from one read of the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Entries {
+    /// A YAML or script config, searched as text.
+    Manual(String),
+    /// Each server's command, arguments and URL, space-separated, by name.
+    Servers(std::collections::HashMap<String, String>),
+    /// Why the config can't be read safely (comments, syntax errors).
+    Unreadable(String),
+}
+
+/// Reads `target`'s config once: see [`status_in`].
+pub fn read_entries(target: &Target) -> Entries {
     if !target.client.editable() {
-        let text = std::fs::read_to_string(&target.config).unwrap_or_default();
-        return if text.contains(&spec.name) && text.contains(&wanted) {
-            Status::Installed
-        } else {
-            Status::Manual
+        return Entries::Manual(std::fs::read_to_string(&target.config).unwrap_or_default());
+    }
+    if target.client == Client::Codex {
+        return match read_toml(&target.config) {
+            Ok(doc) => Entries::Servers(
+                doc.get("mcp_servers")
+                    .and_then(|t| t.as_table_like())
+                    .map(|t| {
+                        t.iter()
+                            .map(|(name, item)| (name.to_string(), toml_signature(item)))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            ),
+            Err(e) => Entries::Unreadable(e),
         };
     }
-    let found: Option<String> = if target.client == Client::Codex {
-        match read_toml(&target.config) {
-            Ok(doc) => doc
-                .get("mcp_servers")
-                .and_then(|t| t.get(&spec.name))
-                .map(toml_signature),
-            Err(e) => return Status::Unreadable(e),
-        }
-    } else {
-        match read_json(&target.config) {
-            Ok(map) => map
-                .as_ref()
+    match read_json(&target.config) {
+        Ok(map) => Entries::Servers(
+            map.as_ref()
                 .and_then(|m| m.get(servers_key(target.client)))
-                .and_then(|s| s.get(&spec.name))
-                .map(signature),
-            Err(e) => return Status::Unreadable(e),
+                .and_then(|s| s.as_object())
+                .map(|servers| {
+                    servers
+                        .iter()
+                        .map(|(name, v)| (name.clone(), signature(v)))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        ),
+        Err(e) => Entries::Unreadable(e),
+    }
+}
+
+/// Whether `spec` is installed in a config already read.
+pub fn status_in(entries: &Entries, spec: &Spec) -> Status {
+    let wanted = spec.key();
+    let found = match entries {
+        Entries::Manual(text) => {
+            return if text.contains(&spec.name) && text.contains(&wanted) {
+                Status::Installed
+            } else {
+                Status::Manual
+            };
         }
+        Entries::Unreadable(e) => return Status::Unreadable(e.clone()),
+        Entries::Servers(servers) => servers.get(&spec.name),
     };
     match found {
         None => Status::NotInstalled,
         Some(sig) if sig.contains(&wanted) => Status::Installed,
-        Some(sig) => Status::Outdated(sig),
+        Some(sig) => Status::Outdated(sig.clone()),
     }
+}
+
+/// Whether `spec` is installed for `target`.
+pub fn status(target: &Target, spec: &Spec) -> Status {
+    status_in(&read_entries(target), spec)
 }
 
 /// `<config>.sawit-backup`: the file as it was before Sawit's last change to

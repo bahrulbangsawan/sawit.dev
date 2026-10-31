@@ -26,7 +26,8 @@ use sawit_core::mcp_auth::{
 };
 use sawit_core::mcp_catalog::{Auth, DEFAULT_AWS_REGION, SERVERS, Server};
 use sawit_core::mcp_clients::{
-    Category, Client, Spec, Status, Target, discover, install, snippet, status, uninstall,
+    Category, Client, Entries, Spec, Status, Target, discover, install, read_entries, snippet,
+    status_in, uninstall,
 };
 
 use crate::catalog::{self, Mark};
@@ -44,6 +45,8 @@ pub struct McpPage {
     server: PathBuf,
     server_exists: bool,
     targets: Vec<Target>,
+    /// Each target's config as the last detection read it, by target.
+    entries: Vec<Entries>,
     status: HashMap<Pair, Status>,
     /// What Claude Code and Codex profiles report, by server name.
     sign_ins: HashMap<usize, HashMap<String, SignIn>>,
@@ -303,6 +306,7 @@ impl McpPage {
             server_exists: false,
             server,
             targets: Vec::new(),
+            entries: Vec::new(),
             status: HashMap::new(),
             sign_ins: HashMap::new(),
             checking: HashSet::new(),
@@ -335,13 +339,14 @@ impl McpPage {
         client.cli().and_then(|n| self.clis.get(n).cloned())
     }
 
-    /// Re-detects clients and re-reads every config (off the UI thread),
-    /// then asks Claude Code and Codex which servers need a sign-in.
+    /// Re-detects clients and reads every config once (off the UI thread and
+    /// off the async workers), then asks Claude Code and Codex which servers
+    /// need a sign-in.
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.loading = true;
         let server = self.server.clone();
         let region = self.region.clone();
-        let rx = rt::spawn(cx, async move {
+        let rx = rt::spawn_blocking(cx, move || {
             let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
             let claude_dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from);
             let targets = discover(&home, claude_dir);
@@ -351,23 +356,25 @@ impl McpPage {
                 .into_iter()
                 .filter_map(|n| find_program(n).map(|p| (n, p)))
                 .collect();
+            let entries: Vec<Entries> = targets.iter().map(read_entries).collect();
             let mut statuses = HashMap::new();
             for (s, server_entry) in SERVERS.iter().enumerate() {
                 let spec = server_entry.spec(&server, &region, |c| programs.get(c).cloned());
-                for (t, target) in targets.iter().enumerate() {
-                    statuses.insert((s, t), status(target, &spec));
+                for (t, read) in entries.iter().enumerate() {
+                    statuses.insert((s, t), status_in(read, &spec));
                 }
             }
             let clis: HashMap<&'static str, PathBuf> = ["claude", "codex"]
                 .into_iter()
                 .filter_map(|n| find_program(n).map(|p| (n, p)))
                 .collect();
-            (targets, statuses, clis, programs, server.is_file())
+            (targets, entries, statuses, clis, programs, server.is_file())
         });
         cx.spawn(async move |this, cx| {
-            if let Ok((targets, statuses, clis, programs, exists)) = rx.await {
+            if let Ok((targets, entries, statuses, clis, programs, exists)) = rx.await {
                 let _ = this.update(cx, |this, cx| {
                     this.targets = targets;
+                    this.entries = entries;
                     this.status = statuses;
                     this.clis = clis;
                     this.programs = programs;
@@ -472,10 +479,10 @@ impl McpPage {
         let rx = rt::spawn(cx, async move {
             // `None` when it was stopped; the config is read again either way.
             let result = run.await.ok();
-            (result, status(&target, &spec))
+            (result, read_entries(&target))
         });
         cx.spawn(async move |this, cx| {
-            if let Ok((result, new_status)) = rx.await {
+            if let Ok((result, read)) = rx.await {
                 let _ = this.update(cx, |this, cx| {
                     this.busy.remove(&pair);
                     this.stops.remove(&pair);
@@ -488,7 +495,15 @@ impl McpPage {
                         }
                         Some(Ok(())) => {}
                     }
-                    this.status.insert(pair, new_status);
+                    // Every server's status in that config: an install can also drop
+                    // the old pre-rename entry.
+                    for s in 0..SERVERS.len() {
+                        let spec = this.spec(s);
+                        this.status.insert((s, t), status_in(&read, &spec));
+                    }
+                    if let Some(entries) = this.entries.get_mut(t) {
+                        *entries = read;
+                    }
                     if !remove && SERVERS[s].auth == Auth::Browser {
                         if let Some(states) = this.sign_ins.get_mut(&t) {
                             states.remove(SERVERS[s].id);
@@ -553,8 +568,9 @@ impl McpPage {
         for (s, server) in SERVERS.iter().enumerate() {
             if server.has_region() {
                 let spec = self.spec(s);
-                for (t, target) in self.targets.iter().enumerate() {
-                    self.status.insert((s, t), status(target, &spec));
+                // From the configs as read: no file is read per keystroke.
+                for (t, read) in self.entries.iter().enumerate() {
+                    self.status.insert((s, t), status_in(read, &spec));
                 }
             }
         }
@@ -2226,6 +2242,31 @@ mod tests {
             .unwrap_or_else(|| panic!("{selector} isn't drawn"));
         cx.simulate_click(bounds.center(), Modifiers::default());
         cx.run_until_parked();
+    }
+
+    /// Typing a Region works out the statuses from the configs the last detection read: it
+    /// doesn't read every client's config again, on the UI thread, for each character.
+    #[gpui_kit::test]
+    fn typing_a_region_reads_no_config(cx: &mut TestAppContext) {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".codex/config.toml");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config,
+            "[mcp_servers.aws]\nurl = \"https://aws-mcp.eu-west-1.api.aws/mcp\"\n",
+        )
+        .unwrap();
+        let codex = target(Client::Codex, &config);
+        let read = sawit_core::mcp_clients::read_entries(&codex);
+        let (page, cx) = open(cx, vec![codex], |page| page.entries = vec![read]);
+        // Since the detection, the file has changed (here: it no longer reads).
+        std::fs::write(&config, "[mcp_servers\n").unwrap();
+        page.update(cx, |page, cx| page.set_region("eu-west-1".into(), cx));
+        let aws = super::SERVERS.iter().position(|s| s.id == "aws").unwrap();
+        assert_eq!(
+            page.read_with(cx, |page, _| page.status.get(&(aws, 0)).cloned()),
+            Some(Status::Installed)
+        );
     }
 
     /// The sheet opens with every installed client ticked, so its Remove asks first, as the
