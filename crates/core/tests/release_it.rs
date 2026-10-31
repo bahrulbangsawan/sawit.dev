@@ -125,6 +125,17 @@ impl Repo {
         args: &[&str],
         env: Option<(&str, &str)>,
     ) -> Output {
+        self.command(dir, program, args, env).output().unwrap()
+    }
+
+    /// `program args` in the folder `dir`, set up as [`Repo::run_in`] runs them, not yet started.
+    fn command(
+        &self,
+        dir: &Path,
+        program: &str,
+        args: &[&str],
+        env: Option<(&str, &str)>,
+    ) -> Command {
         let path = std::env::var("PATH").unwrap_or_default();
         let mut command = Command::new(program);
         command
@@ -150,7 +161,7 @@ impl Repo {
         if let Some((key, value)) = env {
             command.env(key, value);
         }
-        command.output().unwrap()
+        command
     }
 
     /// `git args` in the clone, which must succeed; its stdout.
@@ -258,6 +269,23 @@ impl Repo {
     fn notifications(&self) -> String {
         let shown = self.work.parent().unwrap().join("notifications");
         fs::read_to_string(shown).unwrap_or_default()
+    }
+
+    /// Waits for the hook to show a notification that says `what`; the notifications.
+    fn wait_for_notification(&self, what: &str) -> String {
+        let start = Instant::now();
+        loop {
+            let shown = self.notifications();
+            if shown.contains(what) {
+                return shown;
+            }
+            assert!(
+                start.elapsed() < LANDS_WITHIN,
+                "no notification says {what:?}: {shown}; the release log says: {}",
+                self.release_log()
+            );
+            thread::sleep(Duration::from_millis(100));
+        }
     }
 
     /// From now on `origin` takes no tags, as a remote that fails part of a push does; or takes
@@ -541,6 +569,92 @@ fn a_dry_run_of_main_sends_no_release_tag_left_behind() {
     repo.wait_for_log("did not go out");
     assert_eq!(repo.remote("refs/heads/main"), pushed);
     assert_eq!(repo.remote("refs/tags/v0.0.8"), None);
+}
+
+/// Git runs the hook for `git push --dry-run` of main too, without saying so, and the hook cut
+/// the release and pushed it for real: a dry run published a release. A release now follows only
+/// a push of main that went through. A dry run still cuts it here, as the hook can't tell, and
+/// says so; the next push of main takes it along.
+#[test]
+fn a_dry_run_of_main_publishes_no_release() {
+    let repo = Repo::new();
+    repo.commit("feat(app): a new thing");
+    let before = repo.remote("refs/heads/main");
+    let out = repo.run("git", &["push", "--dry-run", "origin", "main"], None);
+    let said = stderr(&out);
+    assert!(said.contains("release v0.0.8 created"), "{said}");
+    ok(out);
+    let start = Instant::now();
+    while !repo.release_log().contains("did not go out") {
+        assert_eq!(
+            repo.remote("refs/tags/v0.0.8"),
+            None,
+            "the dry run published v0.0.8; the release log says: {}",
+            repo.release_log()
+        );
+        assert!(
+            start.elapsed() < LANDS_WITHIN,
+            "the release log never said main did not go out: {}",
+            repo.release_log()
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+    let log = repo.release_log();
+    assert!(
+        log.contains("SAWIT_RELEASE_PUSH=1 git push --follow-tags origin main"),
+        "{log}"
+    );
+    repo.wait_for_notification("v0.0.8");
+    assert_eq!(repo.remote("refs/heads/main"), before);
+    assert_eq!(repo.remote("refs/tags/v0.0.8"), None);
+
+    let released = repo.local("refs/tags/v0.0.8").expect("no release here");
+    let out = repo.push_main(None);
+    let said = stderr(&out);
+    assert!(
+        said.contains("nothing new since the last release"),
+        "{said}"
+    );
+    ok(out);
+    repo.wait_for_remote_at("refs/tags/v0.0.8", &released);
+    repo.wait_for_remote_at("refs/heads/main", &released);
+}
+
+/// A push to the remote's URL, not its name, moves no remote-tracking main. A release still
+/// follows it once it went through: the hook then asks the remote where its main is.
+#[test]
+fn a_release_pushed_to_the_remotes_url_goes_out() {
+    let repo = Repo::new();
+    repo.commit("feat(app): a new thing");
+    let url = repo.remote.display().to_string();
+    let out = repo.run("git", &["push", &url, "main"], None);
+    let said = stderr(&out);
+    assert!(said.contains("release v0.0.8 created"), "{said}");
+    ok(out);
+    let tagged = repo.wait_for_remote("refs/tags/v0.0.8");
+    repo.wait_for_remote_at("refs/heads/main", &tagged);
+}
+
+/// With nothing new, a push of main to the remote's URL said "main did not go out" though it
+/// had, and left the release tag behind: no remote-tracking main moved. Now the hook asks the
+/// remote, and the tag follows.
+#[test]
+fn a_release_left_behind_goes_out_when_main_is_pushed_again_to_the_remotes_url() {
+    let repo = Repo::new();
+    repo.commit("feat(app): a new thing");
+    ok(repo.push_main(Some(("SAWIT_SKIP_RELEASE", "1"))));
+    assert_eq!(ok(repo.release(None)), "v0.0.8");
+    let released = repo.local("main").unwrap();
+    let url = repo.remote.display().to_string();
+    let out = repo.run("git", &["push", &url, "main"], None);
+    let said = stderr(&out);
+    assert!(
+        said.contains("nothing new since the last release"),
+        "{said}"
+    );
+    ok(out);
+    repo.wait_for_remote_at("refs/tags/v0.0.8", &released);
+    assert_eq!(repo.remote("refs/heads/main"), Some(released));
 }
 
 /// The refusal's steps get run as printed, by agents too, from wherever `git push` was typed.

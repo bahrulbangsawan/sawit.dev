@@ -3,9 +3,9 @@
 # `git config core.hooksPath .githooks`):
 #   1. scripts/release.sh bumps the version, writes CHANGELOG.md, commits
 #      "chore(release): vX" and tags vX;
-#   2. once this push has finished, the release commit and tag are pushed
-#      too (a hook can't add commits to the push already under way), with
-#      any earlier release tag a failed push left behind (--follow-tags),
+#   2. once this push has gone through, the release commit and tag are
+#      pushed too (a hook can't add commits to the push already under way),
+#      with any earlier release tag a failed push left behind (--follow-tags),
 #      which a push of main with nothing new to release that goes through
 #      sends too. That push runs in the main working tree, with the common
 #      git folder, and logs there, so it doesn't depend on the worktree main
@@ -15,6 +15,10 @@
 # The release is cut on HEAD, so main is pushed from a checkout of main. A
 # push of main from anywhere else would release nothing, so it is refused;
 # SAWIT_SKIP_RELEASE=1 pushes it anyway, on purpose without a release.
+# Git runs this hook for `git push --dry-run` too, and doesn't say so: a dry
+# run of main cuts the release here and pushes nothing, so the release stays
+# here until the next push of main takes it along. To read the notes a push
+# would publish, run scripts/release.sh --dry-run instead.
 set -eu
 [ -z "${SAWIT_RELEASE_PUSH:-}${SAWIT_SKIP_RELEASE:-}" ] || exit 0
 remote=$1
@@ -53,7 +57,7 @@ main_tree=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
 log=$common/sawit-release.log
 tag=$(scripts/release.sh)
 if [ -n "$tag" ]; then
-    echo "pre-push: release $tag created; the release commit and tag are pushed once this push finishes (log: $log)" >&2
+    echo "pre-push: release $tag created; the release commit and tag are pushed once this push has gone through (log: $log)" >&2
     echo "pre-push: it is out once git ls-remote --tags $remote $tag lists the tag" >&2
 else
     echo "pre-push: nothing new since the last release, so no release" >&2
@@ -63,20 +67,30 @@ fi
 # soon as this push returns, and its git folder (the GIT_DIR git gives this
 # hook) with it. From the main working tree, which stays, with the common git
 # folder: a remote at a relative path is found there as a push of main from
-# the main checkout finds it. With nothing new, tags left behind follow only a
-# push that went through, which moves the remote-tracking main: git runs this
-# hook for a dry run too, and doesn't say so.
+# the main checkout finds it. The release, or the tags left behind, follow
+# only a push of main that went through, not a dry run: such a push moved the
+# remote-tracking main to what it pushed. A push to a URL moves none, so then
+# the remote is asked.
 cd "${main_tree:-$common}"
 GIT_DIR=$common nohup sh -c '
     pid=$1 remote=$2 tag=$3 pushed=$4 log=$5
     while kill -0 "$pid" 2>/dev/null; do sleep 0.3; done
-    if [ -n "$tag" ]; then
-        what="release $tag"
-    elif [ "$(git rev-parse -q --verify "refs/remotes/$remote/main")" = "$pushed" ]; then
-        what="release tags"
-    else
+    landed=$(git rev-parse -q --verify "refs/remotes/$remote/main") ||
+        landed=$(git ls-remote "$remote" refs/heads/main | while read -r sha ref; do
+            [ "$ref" != refs/heads/main ] || echo "$sha"
+        done)
+    if [ "$landed" != "$pushed" ] && [ -z "$tag" ]; then
         echo "pre-push: main did not go out (a dry run, or a push that failed), so no release tag follows it"
         exit 0
+    elif [ "$landed" != "$pushed" ]; then
+        echo "pre-push: main did not go out (a dry run, or a push that failed), so release $tag stays here, unpushed. The next push of main takes it along; to push it now: SAWIT_RELEASE_PUSH=1 git push --follow-tags $remote main"
+        osascript -e "display notification \"Release $tag was not pushed: main did not go out. See $log\" with title \"Sawit release\"" >/dev/null 2>&1 || true
+        exit 0
+    fi
+    if [ -n "$tag" ]; then
+        what="release $tag"
+    else
+        what="release tags"
     fi
     if ! SAWIT_RELEASE_PUSH=1 git push --follow-tags "$remote" main ${tag:+"$tag"}; then
         echo "pre-push: pushing $what failed. The next release push takes the tags left behind along; to push them now: SAWIT_RELEASE_PUSH=1 git push --follow-tags $remote main"

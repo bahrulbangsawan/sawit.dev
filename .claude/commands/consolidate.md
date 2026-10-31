@@ -217,11 +217,13 @@ Commit this as `docs: update README, screenshots and demo for <short summary>`.
    passed on this exact HEAD.
 2. Note the version you expect: the patch after the one in `Cargo.toml` (for example `0.0.5` → `0.0.6`), and
    read the notes the push will publish: `scripts/release.sh --dry-run` in a checkout of `main` (see step 3)
-   prints the section and changes nothing. An entry that is internal or reads badly comes from its commit
-   subject: tell the user before pushing. To change the notes of this release only, cut it by hand in the
-   checkout of `main` (`tag=$(scripts/release.sh)`), edit the new `CHANGELOG.md` section, run
-   `git commit --amend --no-verify --no-edit -- CHANGELOG.md` and `git tag -fa --cleanup=whitespace "$tag" -F
-   <the edited section>`, then push with `SAWIT_RELEASE_PUSH=1 git push origin main "$tag"` instead of step 3.
+   prints the section and changes nothing. Not `git push --dry-run`: git runs the hook for it too, so it cuts
+   the release in the checkout, unpushed, for the next push of `main`. An entry that is internal or reads
+   badly comes from its commit subject: tell the user before pushing. To change the notes of this release
+   only, cut it by hand in the checkout of `main` (`tag=$(scripts/release.sh)`), edit the new `CHANGELOG.md`
+   section, run `git commit --amend --no-verify --no-edit -- CHANGELOG.md` and
+   `git tag -fa --cleanup=whitespace "$tag" -F <the edited section>`, then push with
+   `SAWIT_RELEASE_PUSH=1 git push origin main "$tag"` instead of step 3.
 3. Push from a checkout of `main`: `git push origin main`.
    - The release is cut on `HEAD`, so the hook refuses a push of `main` from any other checkout (another
      branch, a detached `HEAD`): it would release nothing. When `main` is checked out nowhere (lanes move it

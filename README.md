@@ -637,10 +637,12 @@ worktree run its own checkout's hook):
    and `refactor` commits, and any with a `docs` or `site` scope (the sawit.dev website, which deploys on its
    own), are left out unless they are all there is), then a `chore(release): vX` commit and a `vX` tag are
    created. `scripts/release.sh --dry-run` prints that section without changing anything.
-2. After that push finishes, the release commit and tag are pushed too, in the background, with any earlier
-   release tag a failed push left behind. A push of `main` with nothing new to release takes such a tag along
-   as well. The log is the main checkout's `.git/sawit-release.log`, whichever worktree pushed
-   (`$(git rev-parse --git-common-dir)/sawit-release.log`). A failure shows a notification.
+2. Once that push has gone through, the release commit and tag are pushed too, in the background, with any
+   earlier release tag a failed push left behind. A push of `main` with nothing new to release takes such a tag
+   along as well. The log is the main checkout's `.git/sawit-release.log`, whichever worktree pushed
+   (`$(git rev-parse --git-common-dir)/sawit-release.log`). A failure shows a notification. Git runs the hook
+   for `git push --dry-run` too: a dry run of `main` cuts the release in the checkout and pushes nothing, and
+   the next push of `main` takes it along. To read the notes first, use `scripts/release.sh --dry-run`.
 3. The tag triggers `.github/workflows/release.yml`: the app is built on a macOS runner and published as a
    GitHub Release (`Sawit-X-macos-arm64.zip` for the updater, `Sawit.dmg`, notes from `CHANGELOG.md`).
 
