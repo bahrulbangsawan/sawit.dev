@@ -7,8 +7,9 @@
 //! Claude Code and Codex are changed through their own CLI when it is
 //! installed (they rewrite their config files while running); everything
 //! else, and those two without a CLI, by editing the config file in place —
-//! other settings, key order and TOML comments are kept, and the file is
-//! copied next to it before every change. Updating an entry changes only how
+//! other settings, their order, the JSON file's indentation and TOML comments
+//! are kept (JSON with comments is left alone), and the file is copied next
+//! to it before every change. Updating an entry changes only how
 //! the server is reached: the keys the user added to it (`autoApprove`,
 //! `env`, timeouts, …) stay, through the CLI too. Remote servers are written
 //! in each client's own format; clients that only run local programs get
@@ -888,15 +889,39 @@ pub fn install_file(target: &Target, spec: &Spec) -> Result<()> {
     };
     servers.insert(spec.name.clone(), value);
     if legacy {
-        servers.remove(LEGACY_SERVER_NAME);
+        // Shifting, not swapping: the other servers keep their order.
+        servers.shift_remove(LEGACY_SERVER_NAME);
     }
     write_json(&target.config, map)
 }
 
+/// Writes `map` as the config, indented as the file was (two spaces for a
+/// new one).
 fn write_json(config: &Path, map: Map<String, Value>) -> Result<()> {
-    let text = serde_json::to_string_pretty(&Value::Object(map))
+    use serde::Serialize as _;
+    let text = std::fs::read_to_string(config).unwrap_or_default();
+    let indent = json_indent(&text);
+    let mut out = Vec::new();
+    let mut writer = serde_json::Serializer::with_formatter(
+        &mut out,
+        serde_json::ser::PrettyFormatter::with_indent(indent.as_bytes()),
+    );
+    Value::Object(map)
+        .serialize(&mut writer)
         .map_err(|e| CoreError::Config(e.to_string()))?;
-    write_config(config, &format!("{text}\n"))
+    out.push(b'\n');
+    write_config(config, &String::from_utf8_lossy(&out))
+}
+
+/// The indent of a JSON file's first indented line: its own spaces or tabs.
+fn json_indent(text: &str) -> String {
+    text.lines()
+        .find_map(|line| {
+            let rest = line.trim_start_matches([' ', '\t']);
+            (rest.len() < line.len() && !rest.is_empty())
+                .then(|| line[..line.len() - rest.len()].to_string())
+        })
+        .unwrap_or_else(|| "  ".into())
 }
 
 /// Removes the server entry (other servers and settings stay).
@@ -921,7 +946,7 @@ pub fn uninstall_file(target: &Target, name: &str) -> Result<()> {
         return Ok(());
     };
     if let Some(Value::Object(servers)) = map.get_mut(servers_key(target.client)) {
-        servers.remove(name);
+        servers.shift_remove(name);
     }
     write_json(&target.config, map)
 }
@@ -2035,6 +2060,56 @@ mod tests {
         let entry = json_at(&t.config)["mcpServers"]["sawit"].clone();
         assert_eq!(entry["command"], "/new/sawit-mcp");
         assert_eq!(entry["env"], json!({"SAWIT_HOME": "/x"}));
+    }
+
+    #[test]
+    fn removing_a_server_keeps_the_others_in_order_and_the_files_indent() {
+        let h = home();
+        fs::create_dir_all(h.path().join(".cursor")).unwrap();
+        let config = h.path().join(".cursor/mcp.json");
+        fs::write(
+            &config,
+            "{\n    \"mcpServers\": {\n        \"a\": {\"command\": \"a\"},\n        \"b\": {\"command\": \"b\"},\n        \"c\": {\"command\": \"c\"}\n    }\n}\n",
+        )
+        .unwrap();
+        let t = find(&discover(h.path(), None), Client::Cursor, "default").clone();
+        uninstall_file(&t, "a").unwrap();
+        let text = fs::read_to_string(&config).unwrap();
+        let v: Value = serde_json::from_str(&text).unwrap();
+        let names: Vec<_> = v["mcpServers"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(names, ["b", "c"]);
+        assert!(
+            text.starts_with("{\n    \"mcpServers\": {\n        \"b\""),
+            "{text}"
+        );
+        // The pre-rename entry goes the same way.
+        fs::write(
+            &config,
+            r#"{"mcpServers": {"pgdesk": {"command": "/old/pgdesk-mcp"}, "x": {}, "y": {}}}"#,
+        )
+        .unwrap();
+        install_file(&t, &Spec::sawit(Path::new("/bin/sawit-mcp"))).unwrap();
+        let v = json_at(&config);
+        let names: Vec<_> = v["mcpServers"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(names, ["x", "y", "sawit"]);
+        // A file with tabs keeps them.
+        fs::write(&config, "{\n\t\"mcpServers\": {}\n}\n").unwrap();
+        install_file(&t, &Spec::sawit(Path::new("/bin/sawit-mcp"))).unwrap();
+        let text = fs::read_to_string(&config).unwrap();
+        assert!(
+            text.starts_with("{\n\t\"mcpServers\": {\n\t\t\"sawit\""),
+            "{text}"
+        );
     }
 
     #[test]
