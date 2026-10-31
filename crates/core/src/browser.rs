@@ -1300,7 +1300,8 @@ mod tests {
     /// when called), `EventTarget.prototype`'s listener methods (the window's too) keeping the
     /// listeners added in the browser's own list (`listeners`, by type), `fire` and `click` for
     /// the browser dispatching an event to them, and one element, `#buy`, under every point.
-    /// The helpers use nothing a test's page script may patch.
+    /// The helpers use nothing a test's page script may patch. It all runs as sloppy-mode code,
+    /// as WebKit runs a page and the user script (rquickjs would make it strict).
     fn on_stand_in_page(test: &str) -> Value {
         const PAGE: &str = r#"
             var window = globalThis;
@@ -1381,14 +1382,17 @@ mod tests {
         let source = format!("{PAGE}\n{}\n{test}", page_script("T0K3N"));
         let rt = rquickjs::Runtime::new().unwrap();
         let ctx = rquickjs::Context::full(&rt).unwrap();
+        let mut sloppy = rquickjs::context::EvalOptions::default();
+        sloppy.strict = false;
         let json: String = ctx.with(|ctx| {
-            ctx.eval::<String, _>(source).unwrap_or_else(|e| {
-                let caught = ctx.catch();
-                let why = caught
-                    .as_exception()
-                    .map(|x| format!("{:?} {:?}", x.message(), x.stack()));
-                panic!("the stand-in page failed: {e:?} {why:?}")
-            })
+            ctx.eval_with_options::<String, _>(source, sloppy)
+                .unwrap_or_else(|e| {
+                    let caught = ctx.catch();
+                    let why = caught
+                        .as_exception()
+                        .map(|x| format!("{:?} {:?}", x.message(), x.stack()));
+                    panic!("the stand-in page failed: {e:?} {why:?}")
+                })
         });
         serde_json::from_str(&json).unwrap()
     }
@@ -1505,6 +1509,37 @@ mod tests {
         "#,
         );
         assert_eq!(got, json!({"synthetic": 0, "real": 1}));
+    }
+
+    /// The agent, with the modules spliced into it, is strict-mode code. WebKit runs a user
+    /// script as sloppy code unless it says otherwise, and JavaScriptCore answers
+    /// `Function.prototype.caller` for a sloppy function, arrows included: a page function the
+    /// agent calls (a replaced `JSON.stringify` or `preventDefault`, a getter on an event) got
+    /// `send`, which signs with the token, or the picker's own `click`, from its caller. With
+    /// either a page opened Annotate and picked for itself. QuickJS has no `caller`, but tells
+    /// the two apart: reading it throws for a strict function and not for a sloppy one.
+    #[test]
+    fn the_agent_is_strict_mode_code() {
+        // The agent's hooks, on a page that is sloppy (as pages are).
+        let got = on_stand_in_page(
+            r#"
+            var strict = function (f) { try { f.caller; return false; } catch (_) { return true; } };
+            JSON.stringify({ console: strict(console.log), xhr: strict(XMLHttpRequest.prototype.send),
+                history: strict(history.pushState), page: strict(function () {}) })
+        "#,
+        );
+        assert_eq!(
+            got,
+            json!({"console": true, "xhr": true, "history": true, "page": false})
+        );
+        // So is every other function in it: the directive is first in the one function that
+        // holds the agent and its modules.
+        let mut code = AGENT_JS
+            .lines()
+            .skip_while(|line| line.starts_with("//") || line.trim().is_empty());
+        assert_eq!(code.next(), Some("(() => {"));
+        assert_eq!(code.next().map(str::trim), Some("\"use strict\";"));
+        assert!(AGENT_JS.trim_end().ends_with("})();"));
     }
 
     /// `browser_evaluate` on a page whose Content-Security-Policy forbids `eval` (helmet's

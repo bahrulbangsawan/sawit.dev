@@ -14,7 +14,9 @@
   // have no prototype a page could give a `signal` or `once`. The picker's listeners go only
   // through these, and only by index: a page script that got one (by patching the methods,
   // the array iterator that `for…of` and destructuring use, or `Array.prototype`) could call
-  // it with an `isTrusted: true` object of its own and pick for the user.
+  // it with an `isTrusted: true` object of its own and pick for the user. Nor can a page
+  // take one from the `caller` of a function a listener calls (a getter on the event, a
+  // replaced `preventDefault`): the agent is strict-mode code, so `caller` is null there.
   const addListener = EventTarget.prototype.addEventListener;
   const removeListener = EventTarget.prototype.removeEventListener;
   const listen = (type, fn, options) => apply(addListener, window, [type, fn, options]);
@@ -427,7 +429,8 @@
   const SWALLOWED = ["pointerdown", "pointerup", "mousedown", "mouseup", "auxclick", "contextmenu"];
   // Only the user's own input picks: a page can arm the picker (`__sawitAgent` is on the
   // page) and dispatch events, and those, like an agent's clicks, go to the page untouched.
-  // `isTrusted` holds only while no page script has the listener itself (see `listen`).
+  // `isTrusted` holds only while no page script has the listener itself (see `listen`), nor
+  // the raw `fn` behind it: `click` reads `e.clientX`, a getter a page can replace.
   const user = (fn) => (e) => {
     if (e.isTrusted) fn(e);
   };

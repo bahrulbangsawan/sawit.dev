@@ -2,12 +2,21 @@
 // the page's own scripts (see crates/core/src/browser.rs).
 //
 // - Reports console messages, page errors, requests and URL changes to the
-//   app over IPC, each message signed with the webview's token (held in this
-//   closure, out of the page's reach: see `post`).
+//   app over IPC, each message signed with the webview's token. The token is
+//   held in this closure, and so are the functions that sign with it (`send`)
+//   or pick (the overlay's listeners). They stay out of the page's reach only
+//   while no page script can get one of them: messages go out through the
+//   handler's own `postMessage` (see `post`), the picker's listeners only
+//   through the listener methods taken at document start (see the overlay's
+//   `listen`), and all of it is strict-mode code. JavaScriptCore answers
+//   `Function.prototype.caller` for a sloppy function, arrows included, so a
+//   page function the agent calls (a replaced `JSON.stringify`, a getter on an
+//   event) would otherwise get `send` or `click` from its caller.
 // - Answers the agent's ops through `window.__sawitAgent.run(op)`, which
 //   returns a JSON string synchronously: `{"ok":true,…}` or
 //   `{"ok":false,"error":…}`.
 (() => {
+  "use strict";
   const handlers = window.webkit && window.webkit.messageHandlers;
   const ipc = handlers && handlers.ipc;
   if (window.__sawitAgent || !ipc || typeof ipc.postMessage !== "function") return;
@@ -142,7 +151,11 @@
   const xhrOpen = XMLHttpRequest.prototype.open;
   const xhrSend = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.open = function (method, url) {
-    xhrs.set(this, { method: String(method).toUpperCase(), url: absolute(String(url)) });
+    // A call on something that isn't a request gets the browser's own error: in strict mode
+    // `this` isn't made an object, and a WeakMap would throw first.
+    try {
+      xhrs.set(this, { method: String(method).toUpperCase(), url: absolute(String(url)) });
+    } catch (_) {}
     return xhrOpen.apply(this, arguments);
   };
   XMLHttpRequest.prototype.send = function (body) {
