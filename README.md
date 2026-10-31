@@ -236,6 +236,8 @@ explained. A conflict on the same address can't be forced.
   installed, the page says so instead of showing them as not installed.
 - Homebrew asks for your password, so it runs in the terminal. Open a new terminal tab afterwards so it sees the
   new `PATH`.
+- Closing the tab while something installs asks first, and stops it. One tool is installed, upgraded or removed at a
+  time, whether from this page, an agent or `sawit pasang`.
 - From the terminal: `sawit list tools`, `sawit pasang bun uv` and `sawit pupuk`.
 
 ### Browser

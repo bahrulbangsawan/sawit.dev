@@ -889,13 +889,16 @@ impl Workspace {
             .iter()
             .map(|t| TabFlags {
                 pinned: t.pinned,
-                dirty: matches!(&t.item, PaneItem::File(e) if e.read(cx).dirty),
+                // A Dev Tools tab that installs something counts too: closing it stops that.
+                dirty: matches!(&t.item, PaneItem::File(e) if e.read(cx).dirty)
+                    || tools_work(&t.item, cx).is_some(),
             })
             .collect()
     }
 
     /// Closes tabs per `op` relative to `target`. Closing a single tab with
-    /// unsaved changes asks first; bulk closes leave such tabs open.
+    /// unsaved changes, or the Dev Tools tab while it installs, asks first;
+    /// bulk closes leave such tabs open.
     fn close(&mut self, op: CloseOp, target: usize, window: &mut Window, cx: &mut Context<Self>) {
         let closing = to_close(op, target, &self.flags(cx));
         if let [ix] = closing[..]
@@ -905,7 +908,39 @@ impl Workspace {
             self.confirm_close_dirty(editor, window, cx);
             return;
         }
+        if let [ix] = closing[..]
+            && let Some(work) = self.tabs.get(ix).and_then(|t| tools_work(&t.item, cx))
+        {
+            self.confirm_close_tools(work, window, cx);
+            return;
+        }
         self.remove_tabs(&closing, cx);
+    }
+
+    /// Asks before closing the Dev Tools tab while it installs: closing it
+    /// stops the installer, and what's queued doesn't run.
+    fn confirm_close_tools(&mut self, work: String, window: &mut Window, cx: &mut Context<Self>) {
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            "Stop the Dev Tools installs?",
+            Some(&format!(
+                "{work}. Closing the tab stops it, and what's queued doesn't run."
+            )),
+            &["Stop and Close", "Cancel"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if matches!(answer.await, Ok(0)) {
+                let _ = this.update(cx, |this, cx| {
+                    if let Some(ix) = this.tabs.iter().position(
+                        |t| matches!(&t.item, PaneItem::Other { key, .. } if key.as_ref() == "tools"),
+                    ) {
+                        this.remove_tabs(&[ix], cx);
+                    }
+                });
+            }
+        })
+        .detach();
     }
 
     fn remove_tabs(&mut self, closing: &[usize], cx: &mut Context<Self>) {
@@ -3013,6 +3048,18 @@ fn same_canvas_file(a: &Path, b: &Path) -> bool {
     a == b || resolve(a) == resolve(b)
 }
 
+/// What the Dev Tools page in `item` runs and has queued, when it is that page
+/// and it runs something.
+fn tools_work(item: &PaneItem, cx: &App) -> Option<String> {
+    let PaneItem::Other { view, key, .. } = item else {
+        return None;
+    };
+    if key.as_ref() != "tools" {
+        return None;
+    }
+    view.clone().downcast::<ToolsPage>().ok()?.read(cx).work()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -3039,6 +3086,30 @@ mod tests {
             }
         }
         out + key
+    }
+
+    /// The Dev Tools tab counts as unsaved while it installs: closing it alone asks first
+    /// (closing stops the installer), and closing others or all leaves it open.
+    #[gpui_kit::test]
+    fn a_dev_tools_tab_that_installs_counts_as_unsaved(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::AppContext as _;
+        let tab = |page: crate::tools_page::ToolsPage, cx: &mut gpui_kit::TestAppContext| {
+            super::PaneItem::Other {
+                view: cx.new(|_| page).into(),
+                key: "tools".into(),
+                title: "Dev Tools".into(),
+                icon: gpui_kit::assets::IconName::Package,
+                file: None,
+            }
+        };
+        let busy = tab(crate::tools_page::ToolsPage::installing("bun"), cx);
+        cx.update(|cx| {
+            assert_eq!(
+                super::tools_work(&busy, cx).as_deref(),
+                Some("Installing Bun")
+            );
+            assert_eq!(super::tools_work(&super::PaneItem::Server, cx), None);
+        });
     }
 
     #[test]

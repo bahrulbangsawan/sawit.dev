@@ -211,7 +211,14 @@ fn tilde(path: &std::path::Path) -> String {
 
 impl ToolsPage {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let mut this = Self {
+        let mut this = Self::blank();
+        this.refresh(cx);
+        this
+    }
+
+    /// The page before anything is detected.
+    fn blank() -> Self {
+        Self {
             found: HashMap::new(),
             problem: None,
             loading: true,
@@ -231,9 +238,35 @@ impl ToolsPage {
             page: 0,
             search: None,
             _search: None,
-        };
-        this.refresh(cx);
-        this
+        }
+    }
+
+    /// A page running `id`'s installer, for tests elsewhere.
+    #[cfg(test)]
+    pub(crate) fn installing(id: &'static str) -> Self {
+        let mut page = Self::blank();
+        page.running = Some((id, Job::Install));
+        page
+    }
+
+    /// What is running and waiting, when anything is: "Installing Bun, 2
+    /// more queued". Closing the tab stops it.
+    pub fn work(&self) -> Option<String> {
+        let running = self.running.as_ref().and_then(|(id, job)| {
+            let tool = find(id)?;
+            Some(match job {
+                Job::Install if self.upgrades.contains(id) => format!("Upgrading {}", tool.name),
+                Job::Install => format!("Installing {}", tool.name),
+                Job::Uninstall(_) => format!("Uninstalling {}", tool.name),
+            })
+        });
+        let queued = self.queue.len();
+        match (running, queued) {
+            (None, 0) => None,
+            (Some(running), 0) => Some(running),
+            (Some(running), n) => Some(format!("{running}, {n} more queued")),
+            (None, n) => Some(format!("{n} queued")),
+        }
     }
 
     /// Detects again and rereads the latest versions.
@@ -1380,6 +1413,16 @@ impl ToolsPage {
     }
 }
 
+/// Closing the tab stops the installer that runs (and everything it started),
+/// rather than leaving it running unseen with nobody to show its end.
+impl Drop for ToolsPage {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            stop.abort();
+        }
+    }
+}
+
 impl Render for ToolsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.search.is_none() {
@@ -1409,5 +1452,38 @@ impl Render for ToolsPage {
                     .children(self.render_selection(cx))
                     .child(self.render_list(&query, cx)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::FutureExt as _;
+    use futures::future::{Aborted, abortable};
+    use gpui_kit::{AppContext as _, TestAppContext};
+    use sawit_core::dev_tools::find;
+
+    use super::{Job, ToolsPage};
+
+    /// Closing the Dev Tools tab drops the page: the installer it runs stops with it, instead
+    /// of running on unseen, its queue gone, while a reopened page offers to start it again.
+    #[gpui_kit::test]
+    fn closing_the_page_stops_its_installer(cx: &mut TestAppContext) {
+        let (run, stop) = abortable(futures::future::pending::<()>());
+        let page = cx.new(|_| {
+            let mut page = ToolsPage::blank();
+            page.running = Some(("bun", Job::Install));
+            page.queue.push_back((find("deno").unwrap(), Job::Install));
+            page.stop = Some(stop);
+            page
+        });
+        assert_eq!(
+            page.read_with(cx, |page, _| page.work()).as_deref(),
+            Some("Installing Bun, 1 more queued")
+        );
+        drop(page);
+        // The app lets go of a dropped page at the end of its next update.
+        cx.update(|_| {});
+        cx.run_until_parked();
+        assert_eq!(run.now_or_never(), Some(Err(Aborted)), "still running");
     }
 }

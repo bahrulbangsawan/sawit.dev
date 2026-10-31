@@ -907,12 +907,12 @@ pub fn is_newer(latest: &str, installed: &str) -> bool {
 /// Fails with the last lines of output when it exits non-zero. Dropping
 /// the future stops the installer and everything it started.
 pub async fn install(tool: &Tool, on_line: impl Fn(String) + Send + Sync) -> Result<()> {
-    run_script(tool.name, tool.install, on_line).await
+    run_locked(tool.id, tool.name, tool.install, on_line).await
 }
 
 /// Runs `command` (`tool`'s installer or upgrade) like [`install`].
 pub async fn run(tool: &Tool, command: &str, on_line: impl Fn(String) + Send + Sync) -> Result<()> {
-    run_script(tool.name, command, on_line).await
+    run_locked(tool.id, tool.name, command, on_line).await
 }
 
 /// How to remove the copy of `tool` found at `found`: `brew uninstall`
@@ -969,7 +969,43 @@ pub async fn uninstall(
     command: &str,
     on_line: impl Fn(String) + Send + Sync,
 ) -> Result<()> {
-    run_script(tool.name, command, on_line).await
+    run_locked(tool.id, tool.name, command, on_line).await
+}
+
+/// Runs `command` for the tool `id` while holding that tool's lock: one
+/// installer, upgrade or uninstaller per tool at a time, whether the Dev
+/// Tools page, an agent (`install_dev_tools`) or `sawit pasang` runs it. Two
+/// at once would write the same folders (rustup, nvm's clone, uv's).
+async fn run_locked(
+    id: &str,
+    name: &str,
+    command: &str,
+    on_line: impl Fn(String) + Send + Sync,
+) -> Result<()> {
+    let _lock = lock_tool(id, name)?;
+    run_script(name, command, on_line).await
+}
+
+/// Holds tool `id`'s lock until dropped; fails at once when it's held.
+fn lock_tool(id: &str, name: &str) -> Result<std::fs::File> {
+    use std::os::fd::AsRawFd as _;
+    let dir = std::env::temp_dir().join("sawit-tool-locks");
+    std::fs::create_dir_all(&dir)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(format!("{id}.lock")))?;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        let e = std::io::Error::last_os_error();
+        if e.raw_os_error() == Some(libc::EWOULDBLOCK) {
+            return Err(CoreError::Config(format!(
+                "{name} is already being installed, upgraded or removed (from the Dev Tools page, an agent or `sawit pasang`). Try again when that's done."
+            )));
+        }
+        return Err(e.into());
+    }
+    Ok(file)
 }
 
 /// The tools that need `id` installed first.
@@ -1381,6 +1417,24 @@ mod tests {
             let d = d.replace("~/", "$HOME/");
             assert!(PRELUDE.contains(&format!("{d}:")), "{d}");
         }
+    }
+
+    /// Two runs for one tool (the page, an agent, `sawit pasang`) never
+    /// overlap: the second says the first is running.
+    #[tokio::test]
+    async fn one_run_per_tool_at_a_time() {
+        let id = format!("test-{}", std::process::id());
+        let first = run_locked(&id, "Test", "sleep 2", |_| {});
+        let second = async {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            run_locked(&id, "Test", "true", |_| {}).await
+        };
+        let (first, second) = tokio::join!(first, second);
+        first.unwrap();
+        let err = second.expect_err("ran alongside the first");
+        assert!(err.to_string().contains("already"), "{err}");
+        // Once the first is done, the next runs.
+        run_locked(&id, "Test", "true", |_| {}).await.unwrap();
     }
 
     #[test]
