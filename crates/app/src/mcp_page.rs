@@ -480,6 +480,12 @@ impl McpPage {
 
     /// Takes in what a detection found.
     fn apply(&mut self, detected: Detected, cx: &mut Context<Self>) {
+        // A sheet's rows are places in the old list, which may now hold
+        // other clients, or none.
+        if self.sheet.is_some() && detected.targets != self.targets {
+            self.sheet = None;
+            self.refocus = true;
+        }
         self.targets = detected.targets;
         self.entries = detected.entries;
         self.clis = detected.clis;
@@ -1211,6 +1217,9 @@ impl McpPage {
                                         .small()
                                         .icon(Lucide::KeyRound)
                                         .label(format!("Sign In to All ({pending})"))
+                                        // Its sheet lists clients by their place in the list,
+                                        // which a detection can change.
+                                        .disabled(self.loading)
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             let queue = this.pending_sign_ins(None);
                                             this.start_sign_in(queue, window, cx)
@@ -1623,6 +1632,7 @@ impl McpPage {
                             .small()
                             .icon(Lucide::KeyRound)
                             .label("Sign In")
+                            .disabled(self.loading)
                             .tooltip(format!(
                                 "Sign In on {}",
                                 plural(to_sign_in, "Profile", "Profiles")
@@ -2729,6 +2739,51 @@ mod tests {
             assert_eq!(page.status.get(&(0, 1)), Some(&Status::Installed), "a");
             assert_eq!(page.status.get(&(0, 0)), Some(&Status::NotInstalled), "b");
         });
+    }
+
+    /// A detection that finds other clients closes a sheet opened on the old list: its rows
+    /// are places in that list, which now hold other clients or none.
+    #[gpui_kit::test]
+    fn a_detection_closes_a_sheet_on_the_old_list(cx: &mut TestAppContext) {
+        let home = tempfile::tempdir().unwrap();
+        let config = |name: &str| {
+            let path = home.path().join(name).join(".claude.json");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "{}").unwrap();
+            path
+        };
+        let (a, b) = (config("a"), config("b"));
+        let aws = super::SERVERS.iter().position(|s| s.id == "aws").unwrap();
+        let (page, cx) = open(
+            cx,
+            vec![
+                target(Client::ClaudeCode, &a),
+                target(Client::ClaudeCode, &b),
+            ],
+            |_| {},
+        );
+        page.update_in(cx, |page, window, cx| {
+            page.start_sign_in(vec![(aws, 1)], window, cx)
+        });
+        cx.run_until_parked();
+        page.update(cx, |page, cx| {
+            let targets = vec![target(Client::ClaudeCode, &a)];
+            page.apply(
+                super::Detected {
+                    entries: targets
+                        .iter()
+                        .map(sawit_core::mcp_clients::read_entries)
+                        .collect(),
+                    targets,
+                    clis: Default::default(),
+                    programs: Default::default(),
+                    server_exists: true,
+                },
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        assert!(page.read_with(cx, |page, _| page.sheet.is_none()));
     }
 
     /// A row's Uninstall (or Install) that fails for a client says so on the row, which is
