@@ -335,7 +335,6 @@ pub fn reopen(cx: &mut App) {
     }
 }
 
-/// Live windows, in the order they were opened.
 /// Quits Sawit. Quitting ends every terminal, so it asks first while one
 /// runs something.
 fn quit(cx: &mut App) {
@@ -354,6 +353,7 @@ pub fn terminal_panels(cx: &App) -> Vec<(AnyWindowHandle, Entity<TerminalPanel>)
         .collect()
 }
 
+/// Live windows, in the order they were opened.
 fn workspaces(cx: &App) -> Vec<(AnyWindowHandle, Entity<Workspace>)> {
     let open = cx.windows();
     let Some(windows) = cx.try_global::<Windows>() else {

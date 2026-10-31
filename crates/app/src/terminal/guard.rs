@@ -66,27 +66,50 @@ pub fn detail(running: &[String], ending: Ending) -> String {
     )
 }
 
-/// Set while a question is up, so a second ⌘Q or close doesn't stack another.
+/// The window whose question is up, so a second ⌘Q or close doesn't stack another question but
+/// brings that window forward: the user may have gone to another window since.
 #[derive(Default)]
-struct Asking(bool);
+struct Asking(Option<AnyWindowHandle>);
 
 impl Global for Asking {}
 
-fn asking(cx: &App) -> bool {
-    cx.try_global::<Asking>().is_some_and(|a| a.0)
+/// While a question is up, brings its window forward and answers true. `here` is the window
+/// being updated, if any, which can only be reached through itself. A question whose window has
+/// gone counts as answered.
+fn question_up(here: Option<&mut Window>, cx: &mut App) -> bool {
+    let Some(asked) = cx.try_global::<Asking>().and_then(|a| a.0) else {
+        return false;
+    };
+    match here {
+        Some(window) if window.window_handle() == asked => {
+            window.activate_window();
+            true
+        }
+        _ => asked
+            .update(cx, |_, window, _| window.activate_window())
+            .is_ok(),
+    }
 }
 
-fn set_asking(on: bool, cx: &mut App) {
-    cx.default_global::<Asking>().0 = on;
+/// Clears the question in `window`, unless another one has taken its place.
+fn done_asking(window: AnyWindowHandle, cx: &mut App) {
+    let asking = cx.default_global::<Asking>();
+    if asking.0 == Some(window) {
+        asking.0 = None;
+    }
 }
 
-/// Puts the question in `window`; true when the user goes on.
+/// Puts the question in `window`, which comes forward with it: the window may be behind the one
+/// the user works in (only it runs something), and a sheet there is never seen. True when the
+/// user goes on.
 fn ask(
     running: &[String],
     ending: Ending,
     window: &mut Window,
     cx: &mut App,
 ) -> impl Future<Output = bool> + use<> {
+    cx.default_global::<Asking>().0 = Some(window.window_handle());
+    window.activate_window();
     let answer = window.prompt(
         PromptLevel::Warning,
         ending.question(),
@@ -99,8 +122,9 @@ fn ask(
 
 /// Runs `then` (which quits or restarts the app) when no terminal of
 /// `windows` runs anything, else once the user says so, asked in the first
-/// window with something running (callers pass windows front to back).
-/// Call it outside any window's update, which the question needs.
+/// window with something running (callers pass windows front to back),
+/// which comes forward with the question. Call it outside any window's
+/// update, which the question needs.
 pub fn end_all(
     windows: Vec<(AnyWindowHandle, Entity<TerminalPanel>)>,
     ending: Ending,
@@ -120,17 +144,16 @@ pub fn end_all(
         then(cx);
         return;
     };
-    if asking(cx) {
+    if question_up(None, cx) {
         return;
     }
     let Ok(answer) = handle.update(cx, |_, window, cx| ask(&running, ending, window, cx)) else {
         return;
     };
-    set_asking(true, cx);
     cx.spawn(async move |cx| {
         let go = answer.await;
         cx.update(|cx| {
-            set_asking(false, cx);
+            done_asking(handle, cx);
             if go {
                 then(cx);
             }
@@ -141,6 +164,10 @@ pub fn end_all(
 
 /// Makes closing `window` ask first while `panel`'s terminals run
 /// something; "Close Window" then closes it.
+///
+/// A window has one should-close hook: a later `on_window_should_close`
+/// replaces this one. Anything else that must ask before the window closes
+/// (unsaved files) belongs in this question.
 pub fn ask_before_closing(window: &mut Window, panel: WeakEntity<TerminalPanel>, cx: &App) {
     window.on_window_should_close(cx, move |window, cx| {
         let Some(panel) = panel.upgrade() else {
@@ -150,16 +177,15 @@ pub fn ask_before_closing(window: &mut Window, panel: WeakEntity<TerminalPanel>,
         if running.is_empty() {
             return true;
         }
-        if asking(cx) {
+        if question_up(Some(&mut *window), cx) {
             return false;
         }
-        set_asking(true, cx);
         let answer = ask(&running, Ending::CloseWindow, window, cx);
         let handle = window.window_handle();
         cx.spawn(async move |cx| {
             let close = answer.await;
             cx.update(|cx| {
-                set_asking(false, cx);
+                done_asking(handle, cx);
                 if close {
                     let _ = handle.update(cx, |_, window, _| window.remove_window());
                 }
@@ -250,6 +276,101 @@ mod tests {
         cx.simulate_prompt_answer("Quit");
         cx.run_until_parked();
         assert_eq!(quits.get(), 2);
+    }
+
+    /// The window the platform has in front.
+    fn front(cx: &mut TestAppContext) -> Option<AnyWindowHandle> {
+        cx.update(|cx| cx.active_window())
+    }
+
+    /// Brings `w` to the front, as a click on it does.
+    fn bring_forward(cx: &mut TestAppContext, w: AnyWindowHandle) {
+        cx.update_window(w, |_, window, _| window.activate_window())
+            .expect("the test window is open");
+        cx.run_until_parked();
+    }
+
+    /// With two windows, the question goes up in the one whose terminal runs something, behind
+    /// the idle one in front, and that window comes forward with it: a question on a window
+    /// behind is never seen, and ⌘Q seems to do nothing. ⌘Q again, from the front window, brings
+    /// the question forward again instead of stacking a second one.
+    #[gpui_kit::test]
+    fn the_question_comes_forward_with_its_window(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (idle_window, idle) = open_panel(cx);
+        let (busy_window, busy) = open_panel(cx);
+        let shell = cx.update(|cx| idle.read(cx).tab(0).read(cx).focused_view().clone());
+        ready(cx, &shell);
+        start_sleep(cx, &busy);
+        bring_forward(cx, idle_window);
+        assert_eq!(front(cx), Some(idle_window));
+
+        let quits = Rc::new(Cell::new(0));
+        let quit = |cx: &mut TestAppContext| {
+            let quits = quits.clone();
+            let windows = vec![(idle_window, idle.clone()), (busy_window, busy.clone())];
+            cx.update(|cx| {
+                end_all(windows, Ending::Quit, cx, move |_| {
+                    quits.set(quits.get() + 1)
+                })
+            });
+            cx.run_until_parked();
+        };
+        quit(cx);
+        assert!(cx.has_pending_prompt(), "quitting didn't ask");
+        assert_eq!(
+            front(cx),
+            Some(busy_window),
+            "the question went up on the window behind"
+        );
+
+        bring_forward(cx, idle_window);
+        quit(cx);
+        assert_eq!(
+            front(cx),
+            Some(busy_window),
+            "⌘Q again left the question behind"
+        );
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        assert!(!cx.has_pending_prompt(), "a second question was stacked");
+        assert_eq!(quits.get(), 0, "Cancel quit");
+    }
+
+    /// Closing a window while the quit question is up, this window or another, keeps it open
+    /// and brings the question forward rather than stacking a second one.
+    #[gpui_kit::test]
+    fn closing_while_the_question_is_up_brings_it_forward(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (asked, asked_panel) = open_panel(cx);
+        let (other, other_panel) = open_panel(cx);
+        for (w, panel) in [(asked, &asked_panel), (other, &other_panel)] {
+            cx.update_window(w, |_, window, cx| {
+                ask_before_closing(window, panel.downgrade(), cx)
+            })
+            .expect("the test window is open");
+            start_sleep(cx, panel);
+        }
+        let windows = vec![(asked, asked_panel.clone()), (other, other_panel.clone())];
+        cx.update(|cx| end_all(windows, Ending::Quit, cx, |_| {}));
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt(), "quitting didn't ask");
+
+        for (w, which) in [(other, "another window"), (asked, "the asked window")] {
+            bring_forward(cx, other);
+            let mut vcx = VisualTestContext::from_window(w, cx);
+            assert!(!vcx.simulate_close(), "closing {which} didn't wait");
+            cx.run_until_parked();
+            assert_eq!(
+                front(cx),
+                Some(asked),
+                "closing {which} left the question behind"
+            );
+        }
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        assert!(!cx.has_pending_prompt(), "a second question was stacked");
+        assert!(cx.windows().contains(&asked) && cx.windows().contains(&other));
     }
 
     /// Closing a window asks first while its terminals run something; Cancel keeps it open and
