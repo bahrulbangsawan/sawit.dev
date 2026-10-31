@@ -9,7 +9,7 @@ use std::time::Duration;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
-use sawit_board::store::{self, Writer};
+use sawit_board::store::{self, Stamp, Writer};
 use sawit_board::{BoardDoc, ops};
 use sawit_core::app_control::{self, Command, InstanceAction, Page, Panel, Request};
 use serde_json::{Value, json};
@@ -333,17 +333,33 @@ impl Sawit {
     /// so the app's autosave and the file never race.
     async fn canvas(&self, project: Option<String>, op: Value) -> Result<Value, String> {
         if !app_control::is_running(&self.paths) {
-            let file = self.canvas_board_file(project.as_deref());
+            let file = self.canvas_board_file(project.as_deref())?;
             return blocking(move || headless(&file, &op)).await?;
         }
         op_reply(self.app_call(project, Command::Canvas { op }).await?)
     }
 
-    /// The file `project`'s canvas is saved in: its `.nyawit/canvas.figcraft` (the project is the
-    /// folder the agent runs in, unless it names one), else `canvas.figcraft` in Sawit's own
-    /// folder. This is the app's choice of file too.
-    fn canvas_board_file(&self, project: Option<&str>) -> PathBuf {
-        store::board_file(crate::project_dir(project).as_deref(), &self.paths.root)
+    /// The file `project`'s canvas is saved in while the app is closed: its
+    /// `.nyawit/canvas.figcraft` (the project is the folder the agent runs in, unless it names
+    /// one), else `canvas.figcraft` in Sawit's own folder. This is the app's choice of file too.
+    ///
+    /// A project the agent names must be a folder that is there, as the app answers only for a
+    /// project one of its windows has open. A name that is no folder (a project's name rather than
+    /// its path, say) would otherwise get a canvas of its own, in a new folder of that name, where
+    /// neither the agent nor the user would look.
+    fn canvas_board_file(&self, project: Option<&str>) -> Result<PathBuf, String> {
+        let named = project.is_some_and(|project| !project.trim().is_empty());
+        let dir = crate::project_dir(project);
+        if named
+            && let Some(dir) = &dir
+            && !dir.is_dir()
+        {
+            return Err(format!(
+                "{} is not a folder: name the project by its folder's absolute path.",
+                dir.display()
+            ));
+        }
+        Ok(store::board_file(dir.as_deref(), &self.paths.root))
     }
 
     pub async fn canvas_get_tool(&self, a: WindowArgs) -> CallToolResult {
@@ -374,7 +390,7 @@ impl Sawit {
     /// made from it: the old reader says what it always did. Once the canvas file is there its own
     /// error is the answer, because the old canvas is months behind it.
     async fn canvas_get_stored(&self, project: Option<String>) -> Result<Value, String> {
-        let file = self.canvas_board_file(project.as_deref());
+        let file = self.canvas_board_file(project.as_deref())?;
         match self.canvas(project.clone(), json!({ "op": "get" })).await {
             Err(_) if !file.exists() => self.canvas_file_summary(project.as_deref()),
             reply => reply,
@@ -481,7 +497,8 @@ fn command_list(reply: &Value, filter: Option<&str>) -> String {
 
 /// The stored canvas is opened, changed and saved by one call after another: two at once (an
 /// agent's parallel tool calls) would each open the file as it was, and the later save would drop
-/// the work of the earlier.
+/// the work of the earlier. This keeps one process's calls apart; another process's (a second
+/// agent's `sawit-mcp`) are kept from it by the stamp each save checks ([`headless`]).
 static STORED_CANVAS: Mutex<()> = Mutex::new(());
 
 fn take_turn() -> MutexGuard<'static, ()> {
@@ -498,36 +515,84 @@ fn take_turn() -> MutexGuard<'static, ()> {
 ///   imported. Nothing is written until an op changes the canvas, and the old canvas is never
 ///   touched. A canvas that can't be opened is an error, and then nothing is written, so a blank
 ///   board never takes its place.
-/// - A change is saved through the store's [`Writer`], like the app's autosave: a temporary file
-///   renamed into place, a `.bak` kept before a save that empties a canvas, and a `.nyawit/` made
-///   with its `.gitignore`.
+/// - A change is saved as the app's autosave saves it ([`run_and_save`]): through the store's
+///   [`Writer`] (a temporary file renamed into place, a `.bak` kept before a save that empties a
+///   canvas, and a `.nyawit/` made with its `.gitignore`), with the file's version history and
+///   branches, and never over what the save would lose: images the loader left in the file, or
+///   what something else wrote to the file since this call read it.
 fn headless(file: &Path, op: &Value) -> Result<Value, String> {
     let _turn = take_turn();
     // The fonts the app's text has: Sawit's own (Inter), then the system's, which no app is
     // scanning here, so they are read the first time text is laid out.
     sawit_board::fonts::register();
     sawit_board::scan_system_fonts_on_demand();
+    // Stamped before it is read, as the app stamps a canvas file it opens: a save made in between
+    // by another process makes this call's save refuse, rather than drop that save's edit.
+    let read = Stamp::of(file);
     let mut board = store::open(file).map_err(|e| format!("{}: {e}", file.display()))?;
-    run_and_save(&mut board, file, op)
+    run_and_save(&mut board, file, read, op)
 }
 
-/// Runs `op` on `board` and saves it to `file` if the op changed the document: a new document, as
-/// the engine makes one for every edit, is how the app tells too. Selection and view changes are
-/// not in it, so they save nothing.
-fn run_and_save(board: &mut BoardDoc, file: &Path, op: &Value) -> Result<Value, String> {
-    let before = board.doc().map_err(|e| e.to_string())?;
+/// Runs `op` on `board`, read from `file` when the file had stamp `read` ([`Stamp::of`], `None`
+/// when there was no file), and saves it there if the op changed the document itself: a new
+/// document, as the engine makes one for every edit, is how the app tells too. Selection and view
+/// changes are not in it, and neither is a version the engine shows in its place, so none of them
+/// saves anything.
+///
+/// The save is refused, as the app's autosave refuses it, with the reason as the error and the
+/// file as it was:
+/// - when the file holds images the loader left out, past what it reads from one file, which the
+///   save would delete ([`BoardDoc::refuse_dropping_images`]);
+/// - when something else wrote to the file since it was read ([`Writer::guard`]): another
+///   `sawit-mcp`, say, whose edit the save would drop though its call answered ok.
+///
+/// A `replace` of a canvas with layers keeps the file it replaces as `<file>.bak` first. The app
+/// can undo a replace; here every call opens the canvas afresh, so that copy is all that is left
+/// of the board.
+fn run_and_save(
+    board: &mut BoardDoc,
+    file: &Path,
+    read: Option<Stamp>,
+    op: &Value,
+) -> Result<Value, String> {
+    let before = board.document_itself().map_err(|e| e.to_string())?;
     let reply = op_reply(ops::run(board, op))?;
-    let after = board.doc().map_err(|e| e.to_string())?;
-    if !Arc::ptr_eq(&before, &after) {
-        let bytes = board.to_bytes().map_err(|e| e.to_string())?;
-        let writer = Writer::spawn();
-        writer.save(file.to_path_buf(), bytes, store::is_empty(&after));
-        writer.flush();
-        if let Some(error) = writer.last_error() {
-            return Err(error);
-        }
+    let after = board.document_itself().map_err(|e| e.to_string())?;
+    if Arc::ptr_eq(&before, &after) {
+        return Ok(reply);
     }
-    Ok(reply)
+    board
+        .refuse_dropping_images(file)
+        .map_err(|e| e.to_string())?;
+    let bytes = board.to_bytes().map_err(|e| e.to_string())?;
+    if op["op"] == "replace" && !store::is_empty(&before) {
+        keep_replaced_canvas(file)?;
+    }
+    let writer = Writer::spawn();
+    writer.guard(file.to_path_buf(), read);
+    writer.save(file.to_path_buf(), bytes, store::is_empty(&after));
+    writer.flush();
+    match writer.last_error() {
+        Some(error) => Err(error),
+        None => Ok(reply),
+    }
+}
+
+/// Copies the canvas file at `file`, which a `replace` is about to save over, to `<file>.bak`. With
+/// no file there (an old canvas imported, which stays as it is) there is nothing to keep. When the
+/// copy can't be made the error says why, and the replace must not be saved.
+fn keep_replaced_canvas(file: &Path) -> Result<(), String> {
+    let mut bak = file.as_os_str().to_owned();
+    bak.push(".bak");
+    let bak = PathBuf::from(bak);
+    match std::fs::copy(file, &bak) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !file.exists() => Ok(()),
+        Err(e) => Err(format!(
+            "The canvas wasn't replaced: it couldn't be copied to {} first: {e}",
+            bak.display()
+        )),
+    }
 }
 
 /// Whether `path` names a `.figcraft` file.
@@ -1135,6 +1200,14 @@ mod tests {
         Some(project.display().to_string())
     }
 
+    /// A project folder in `dir`, with nothing in it yet: a project the agent works in for the
+    /// first time.
+    fn project_in(dir: &Path) -> PathBuf {
+        let project = dir.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        project
+    }
+
     /// `<project>/.nyawit/canvas.figcraft`.
     fn board_file(project: &Path) -> PathBuf {
         project.join(".nyawit").join("canvas.figcraft")
@@ -1275,7 +1348,7 @@ mod tests {
     async fn the_other_canvas_tools_edit_the_stored_canvas_while_the_app_is_closed() {
         let dir = tempfile::tempdir().unwrap();
         let server = native(dir.path());
-        let project = dir.path().join("project");
+        let project = project_in(dir.path());
         let file = board_file(&project);
 
         // Two boxes and an arrow between them, with the agent's own ids.
@@ -1374,7 +1447,7 @@ mod tests {
     async fn parallel_calls_each_land_in_the_stored_canvas() {
         let dir = tempfile::tempdir().unwrap();
         let server = native(dir.path());
-        let project = dir.path().join("project");
+        let project = project_in(dir.path());
 
         // An agent's parallel tool calls: each opens the file, adds its box and saves.
         let calls = (0..8).map(|n| {
@@ -1441,10 +1514,11 @@ mod tests {
     async fn canvas_commands_lists_every_command_and_filters_with_their_parameters() {
         let dir = tempfile::tempdir().unwrap();
         let server = native(dir.path());
+        let project = project_in(dir.path());
         let list = |filter: Option<&str>| {
             server.canvas_commands(Parameters(CanvasCommandsArgs {
                 filter: filter.map(str::to_string),
-                project: project_arg(&dir.path().join("project")),
+                project: project_arg(&project),
             }))
         };
 
@@ -1529,6 +1603,71 @@ mod tests {
             said(&result)
         );
         assert_eq!(std::fs::read(&file).unwrap(), before);
+    }
+
+    /// Plan 7 final review I-1 and T5-5: a canvas file written by another since this call read it
+    /// (a second agent's `sawit-mcp`, whose turns this process doesn't take) is never saved over,
+    /// which would drop that edit though its call answered ok. The save is refused in FigCraft's
+    /// sentence, and the file keeps the other's bytes; read again, the call goes through.
+    #[test]
+    fn a_canvas_saved_by_another_since_it_was_read_is_not_saved_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = board_file(&project_in(dir.path()));
+        write_board(&file, 1);
+        // Read as `headless` reads it: stamped, then opened.
+        let read = Stamp::of(&file);
+        let mut board = store::open(&file).unwrap();
+        // The other process saves its edit in between.
+        write_board(&file, 2);
+        let theirs = std::fs::read(&file).unwrap();
+
+        let sticky =
+            json!({"op": "command", "command": "board.sticky", "params": {"x": 900, "y": 0}});
+        let refused = run_and_save(&mut board, &file, read, &sticky).unwrap_err();
+        assert!(
+            refused.contains("the file changed on disk since it was opened or saved here"),
+            "{refused}"
+        );
+        assert_eq!(std::fs::read(&file).unwrap(), theirs);
+
+        let read = Stamp::of(&file);
+        let mut board = store::open(&file).unwrap();
+        run_and_save(&mut board, &file, read, &sticky).unwrap();
+        assert_eq!(layers_in(&file).len(), 3);
+    }
+
+    /// Plan 7 final review T5-6: with Sawit closed every call opens the canvas afresh, so a load
+    /// can't be undone as it can in the app. The canvas it replaces is kept as `<file>.bak`, as a
+    /// clear keeps one, so one mistaken load doesn't lose the board. A canvas with nothing on it
+    /// has nothing to keep.
+    #[tokio::test]
+    async fn an_offline_load_keeps_the_canvas_it_replaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let file = board_file(&project);
+        let bak = file.with_extension("figcraft.bak");
+        write_board(&file, 2);
+        let replaced = std::fs::read(&file).unwrap();
+        let other = dir.path().join("other.figcraft");
+        write_board(&other, 1);
+        let load = |path: &Path| CanvasLoadArgs {
+            path: Some(path.display().to_string()),
+            scene: None,
+            project: project_arg(&project),
+        };
+
+        let loaded = server.canvas_load(Parameters(load(&other))).await;
+        assert_eq!(answer(&loaded)["elements"].as_array().unwrap().len(), 1);
+        assert_eq!(layers_in(&file).len(), 1);
+        assert_eq!(std::fs::read(&bak).unwrap(), replaced);
+
+        // Over a canvas with nothing on it.
+        std::fs::remove_file(&bak).unwrap();
+        write_board(&file, 0);
+        let loaded = server.canvas_load(Parameters(load(&other))).await;
+        assert_eq!(answer(&loaded)["elements"].as_array().unwrap().len(), 1);
+        assert!(!bak.exists());
     }
 
     #[test]

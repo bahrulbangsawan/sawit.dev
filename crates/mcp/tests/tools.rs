@@ -226,9 +226,12 @@ fn native(dir: &Path) -> Sawit {
     })
 }
 
-/// A project folder in `dir`: not made yet, as a project the agent works in for the first time.
+/// A project folder in `dir`, with nothing in it yet: a project the agent works in for the first
+/// time.
 fn project_in(dir: &Path) -> PathBuf {
-    dir.join("project")
+    let project = dir.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    project
 }
 
 fn project_arg(project: &Path) -> Option<String> {
@@ -258,6 +261,29 @@ fn write_board(path: &Path, stickies: usize) {
         board.execute("board.sticky", &sticky).unwrap();
     }
     write_file(path, board.to_bytes().unwrap());
+}
+
+/// A canvas file at `path` with one sticky, "kept", and one image more than FigCraft reads from a
+/// file (20 000): that image stays in the file, unread, so a save over the file would delete it.
+/// Building its 20 001 archive members takes most of a second.
+fn write_board_with_an_image_past_the_limit(path: &Path) {
+    let mut board = BoardDoc::new_board("Canvas").unwrap();
+    let sticky = json!({"x": 0, "y": 0, "text": "kept"});
+    board.execute("board.sticky", &sticky).unwrap();
+    let doc = board.document_itself().unwrap();
+    let document = serde_json::to_vec(&figcraft_format::to_json(&doc).unwrap()).unwrap();
+    let names: Vec<String> = (0..=20_000).map(|n| format!("images/i{n}")).collect();
+    let members = std::iter::once(("document.json", document.as_slice()))
+        .chain(names.iter().map(|name| (name.as_str(), &b"x"[..])));
+    write_file(path, figcraft_format::zip_files(members).unwrap());
+}
+
+/// The file at `path` as the disk has it: a file that is written again, even with the same bytes,
+/// is a new one (saves are renames).
+fn on_disk(path: &Path) -> (u64, i64, i64) {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path).unwrap();
+    (meta.ino(), meta.mtime(), meta.mtime_nsec())
 }
 
 /// What `get` lists on the canvas file at `path`, opened as the app opens it.
@@ -331,8 +357,9 @@ async fn offline_get_reads_figcraft_then_excalidraw() {
 
     // With neither, the canvas is empty and nothing is made.
     let empty = dir.path().join("empty-project");
+    std::fs::create_dir(&empty).unwrap();
     assert!(elements(&get(&server, &empty).await).is_empty());
-    assert!(!empty.exists());
+    assert!(names(&empty).is_empty());
 }
 
 #[tokio::test]
@@ -340,7 +367,6 @@ async fn offline_command_edits_the_file() {
     let dir = tempfile::tempdir().unwrap();
     let server = native(dir.path());
     let project = project_in(dir.path());
-    std::fs::create_dir_all(&project).unwrap();
 
     let sticky = json!({"x": 0, "y": 0});
     let made = command(&server, &project, "board.sticky", sticky.clone()).await;
@@ -398,26 +424,120 @@ async fn an_offline_edit_of_an_old_canvas_saves_the_import_and_keeps_the_origina
 
 #[tokio::test]
 async fn offline_get_and_other_reads_write_nothing() {
-    use std::os::unix::fs::MetadataExt;
-
     let dir = tempfile::tempdir().unwrap();
     let server = native(dir.path());
     let project = project_in(dir.path());
     write_board(&board_file(&project), 2);
-    // A file that is written again, even with the same bytes, is a new one (saves are renames).
-    let stamp = |path: &Path| {
-        let meta = std::fs::metadata(path).unwrap();
-        (meta.ino(), meta.mtime(), meta.mtime_nsec())
-    };
-    let before = stamp(&board_file(&project));
+    let before = on_disk(&board_file(&project));
 
     elements(&get(&server, &project).await);
     // A view command changes what is on show and not the document.
     let zoom = command(&server, &project, "view.zoomIn", json!({})).await;
     assert_ne!(zoom.is_error, Some(true), "{}", text(&zoom));
 
-    assert_eq!(stamp(&board_file(&project)), before);
+    assert_eq!(on_disk(&board_file(&project)), before);
     assert_eq!(names(&project.join(".nyawit")), ["canvas.figcraft"]);
+}
+
+/// Plan 7 final review I-1 (ruling P7-C1, offline): a version of the canvas shown in place of the
+/// document is no edit. Nothing is saved, so the file keeps the document, and no backup of a
+/// canvas being emptied is made either, though the version on show is blank.
+#[tokio::test]
+async fn an_offline_version_preview_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = native(dir.path());
+    let project = project_in(dir.path());
+    let file = board_file(&project);
+    // A canvas with a sticky, and a version from when it was blank.
+    let mut board = BoardDoc::new_board("Canvas").unwrap();
+    board
+        .execute("file.saveVersion", &json!({"name": "Blank"}))
+        .unwrap();
+    let sticky = json!({"x": 0, "y": 0, "text": "now"});
+    board.execute("board.sticky", &sticky).unwrap();
+    write_file(&file, board.to_bytes().unwrap());
+    let before = on_disk(&file);
+
+    let preview = command(&server, &project, "version.preview", json!({"index": 0})).await;
+    assert_ne!(preview.is_error, Some(true), "{}", text(&preview));
+
+    assert_eq!(on_disk(&file), before);
+    assert_eq!(names(&project.join(".nyawit")), ["canvas.figcraft"]);
+    assert_eq!(layers_in(&file).len(), 1);
+}
+
+/// Plan 7 final review I-1 (ruling P7-C1, offline): a canvas file that holds images FigCraft's
+/// loader left out, past what it reads from one file, is never saved over, which would delete
+/// them. The edit is refused in FigCraft's words, the file stays as it is, and the canvas still
+/// reads.
+#[tokio::test]
+async fn an_offline_edit_never_saves_over_images_left_in_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = native(dir.path());
+    let project = project_in(dir.path());
+    let file = board_file(&project);
+    write_board_with_an_image_past_the_limit(&file);
+    let before = std::fs::read(&file).unwrap();
+
+    let sticky = command(&server, &project, "board.sticky", json!({"x": 300, "y": 0})).await;
+    assert_eq!(sticky.is_error, Some(true), "{}", text(&sticky));
+    assert!(
+        text(&sticky).starts_with("canvas wasn't saved: 1 of its images weren't loaded"),
+        "{}",
+        text(&sticky)
+    );
+    assert!(
+        std::fs::read(&file).unwrap() == before,
+        "the file was saved"
+    );
+    // Beside it is only the copy the store keeps of a file it opens with notes.
+    assert_eq!(
+        names(&project.join(".nyawit")),
+        ["canvas.figcraft", "canvas.figcraft.lossy.bak"]
+    );
+
+    let listed = elements(&get(&server, &project).await);
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0]["text"], json!("kept"));
+}
+
+/// Plan 7 final review T5-7: a project the agent names must be a folder that is there. The app
+/// answers only for a project one of its windows has open; with it closed, a name that is no
+/// folder (a project's name rather than its path) got a canvas of its own, in a new folder by
+/// that name, which neither the agent nor the user would see.
+#[tokio::test]
+async fn an_offline_canvas_needs_a_project_folder_that_is_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = native(dir.path());
+    let nowhere = dir.path().join("sawit.dev");
+
+    let listed = get(&server, &nowhere).await;
+    assert_eq!(listed.is_error, Some(true), "{}", text(&listed));
+    assert!(
+        text(&listed).contains("is not a folder"),
+        "{}",
+        text(&listed)
+    );
+    let sticky = command(&server, &nowhere, "board.sticky", json!({"x": 0, "y": 0})).await;
+    assert_eq!(sticky.is_error, Some(true), "{}", text(&sticky));
+    assert!(
+        text(&sticky).contains("is not a folder"),
+        "{}",
+        text(&sticky)
+    );
+    assert!(!nowhere.exists());
+
+    // A file is no project folder either.
+    let file = dir.path().join("notes.txt");
+    std::fs::write(&file, "notes").unwrap();
+    let sticky = command(&server, &file, "board.sticky", json!({"x": 0, "y": 0})).await;
+    assert_eq!(sticky.is_error, Some(true), "{}", text(&sticky));
+    assert!(
+        text(&sticky).contains("is not a folder"),
+        "{}",
+        text(&sticky)
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "notes");
 }
 
 #[tokio::test]

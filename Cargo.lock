@@ -7496,6 +7496,7 @@ dependencies = [
 name = "sawit-mcp"
 version = "0.0.7"
 dependencies = [
+ "figcraft-format",
  "futures",
  "rmcp",
  "sawit-board",
