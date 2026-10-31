@@ -627,7 +627,7 @@ mod tests {
         // Gemini isn't installed, so its project file is left out.
         touch(&project.join("GEMINI.md"));
 
-        let found = detect_in(&home, &root, &[project.clone()]);
+        let found = detect_in(&home, &root, std::slice::from_ref(&project));
         let got: Vec<_> = found
             .iter()
             .map(|c| (c.client, c.layer, c.path.clone()))
