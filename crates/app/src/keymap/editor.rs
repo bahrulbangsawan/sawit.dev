@@ -906,9 +906,12 @@ impl BindingForm {
                 store.add(context, &keystrokes, &action, args, cx)
             }),
             FormTarget::Row(row) => {
-                if let Source::Default(ix) = row.source {
+                if let Source::Default(ix) = row.source
+                    && row.args.is_none()
+                {
                     // A default built in code with arguments the keymap can't show: writing it
-                    // back would bind another action.
+                    // back would bind another action. (A default that shows its arguments, as
+                    // the canvas's do, may be given others.)
                     let default = store.read(cx).defaults()[ix].action().boxed_clone();
                     if action == row.action.as_ref() && !default.partial_eq(built.as_ref()) {
                         return Err("This default's action has arguments the keymap can't show. Remove it, then create a binding with the arguments.".into());
@@ -1160,7 +1163,11 @@ mod tests {
 /// its recorder, then Save.
 #[cfg(test)]
 mod form_tests {
-    use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, KeyBinding, TestAppContext};
+    use gpui_kit::{
+        AnyWindowHandle, App, AppContext as _, Entity, KeyBinding, KeyBindingContextPredicate,
+        KeyContext, Keystroke, OperatingSystem, TestAppContext,
+    };
+    use sawit_board::shortcuts::CANVAS_CONTEXT;
 
     use super::super::tests::{Scratch, runs};
     use super::KeymapEditor;
@@ -1168,7 +1175,8 @@ mod form_tests {
     gpui_kit::actions!(keymap_editor_test, [ToggleDock, CloseAll, Other]);
 
     /// A keymap editor in an active window, over the defaults ⌘J (toggle the dock) and ⌘K W
-    /// (close all) in `Workspace`, with its keymap file in `scratch`.
+    /// (close all) in `Workspace`, and the canvas's R (the rectangle tool), with its keymap file
+    /// in `scratch`.
     fn open(cx: &mut TestAppContext, scratch: &Scratch) -> (AnyWindowHandle, Entity<KeymapEditor>) {
         cx.update(|cx| {
             gpui_kit::init(cx);
@@ -1176,6 +1184,7 @@ mod form_tests {
                 KeyBinding::new("cmd-j", ToggleDock, Some("Workspace")),
                 KeyBinding::new("cmd-k w", CloseAll, Some("Workspace")),
             ]);
+            cx.bind_keys([canvas_key("r", "tool.rectangle", cx)]);
             crate::keymap::init_at(scratch.file(), cx);
         });
         let (window, editor) = cx.update(|cx| {
@@ -1188,6 +1197,34 @@ mod form_tests {
             .unwrap();
         cx.run_until_parked();
         (window, editor)
+    }
+
+    /// The canvas's binding of `keys` to its command `id`, as `board::bindings` makes it.
+    fn canvas_key(keys: &str, id: &str, cx: &App) -> KeyBinding {
+        let context = KeyBindingContextPredicate::parse(CANVAS_CONTEXT).unwrap();
+        KeyBinding::load(
+            keys,
+            Box::new(crate::board::Command { id: id.into() }),
+            Some(std::rc::Rc::new(context)),
+            false,
+            Some(serde_json::json!({ "id": id }).to_string().into()),
+            cx,
+        )
+        .unwrap()
+    }
+
+    /// The canvas commands `keys` runs on the canvas, by id.
+    fn canvas_runs(cx: &App, keys: &str) -> Vec<String> {
+        let typed = [Keystroke::parse_with_os(keys, OperatingSystem::Mac).unwrap()];
+        let contexts = ["Workspace", "Board"].map(|c| KeyContext::parse(c).unwrap());
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let (bindings, _) = keymap.bindings_for_input(&typed, &contexts);
+        bindings
+            .iter()
+            .filter_map(|b| b.action().as_any().downcast_ref::<crate::board::Command>())
+            .map(|command| command.id.clone())
+            .collect()
     }
 
     /// Opens the form on the first row of `action`, as its Edit button does.
@@ -1361,6 +1398,49 @@ mod form_tests {
             assert_eq!(
                 runs(cx, "ctrl-alt-w"),
                 ["keymap_editor_test::Other", "keymap_editor_test::CloseAll"]
+            );
+        });
+    }
+
+    /// A canvas key can be pointed at another command: its row shows the command's id as its
+    /// arguments, and a new id is saved as the user's binding of the key in place of the default.
+    #[gpui_kit::test]
+    fn a_canvas_key_can_run_another_command(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("form-canvas-id");
+        let (window, editor) = open(cx, &scratch);
+        edit(cx, window, &editor, "board::Command");
+        cx.update_window(window, |_, window, cx| {
+            let form = editor.read(cx).form.clone().unwrap();
+            let args = form.read(cx).args.clone();
+            assert_eq!(args.read(cx).value().as_ref(), r#"{"id":"tool.rectangle"}"#);
+            args.update(cx, |a, cx| {
+                a.set_value(r#"{"id": "tool.ellipse"}"#, window, cx)
+            });
+        })
+        .unwrap();
+        save(cx, window, &editor);
+        cx.update(|cx| {
+            let editor = editor.read(cx);
+            let refused = editor.form.as_ref().map(|form| form.read(cx).error.clone());
+            assert_eq!(refused, None, "the form refused");
+            assert_eq!(canvas_runs(cx, "r"), ["tool.ellipse"]);
+            let sources: Vec<_> = editor
+                .rows
+                .iter()
+                .filter(|row| row.keystrokes.as_ref() == "r")
+                .map(|row| (row.args.clone().unwrap_or_default(), row.source))
+                .collect();
+            assert!(
+                sources
+                    .iter()
+                    .any(|(args, source)| args.contains("tool.rectangle")
+                        && matches!(source, super::Source::Removed { .. })),
+                "{sources:?}"
+            );
+            assert!(
+                !sources
+                    .iter()
+                    .any(|(_, source)| matches!(source, super::Source::Default(_)))
             );
         });
     }

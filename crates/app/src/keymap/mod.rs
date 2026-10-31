@@ -296,16 +296,21 @@ impl KeymapStore {
                 let same_place = default_context.as_deref() == context.map(str::trim)
                     && Some(default_keys.as_str())
                         == names::normalize_keystrokes(keystrokes).as_deref();
+                let same_action = cx
+                    .build_action(action, args_of(&entry))
+                    .is_ok_and(|built| self.defaults[ix].action().partial_eq(built.as_ref()));
+                if same_place && same_action {
+                    return Ok(());
+                }
                 self.write(cx, |user| {
-                    // The same keys in the same context: the user's binding, which is later and
-                    // stronger, takes them.
-                    if !same_place {
-                        user.add(
-                            default_context.as_deref(),
-                            &default_keys,
-                            Entry::unbind(&default_action),
-                        );
-                    }
+                    // The unbind goes first: the new binding, after it, is not unbound by it
+                    // when it has the same keys and action name (a canvas key pointed at
+                    // another command).
+                    user.add(
+                        default_context.as_deref(),
+                        &default_keys,
+                        Entry::unbind(&default_action),
+                    );
                     user.add(context, keystrokes, entry);
                 })
             }
