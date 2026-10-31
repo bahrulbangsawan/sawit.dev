@@ -115,9 +115,10 @@ clicking Export leaves a folder Claude can build a matching UI from.
   first while a comment hasn't been copied, sent or read by an agent as it is now; Close Others
   and Close All leave such a tab open, as they do an unsaved file.
 - Send to terminal only pastes into a tab whose program accepts bracketed paste: Claude Code,
-  zsh, bash ≥ 5.1. It uses the active tab if it accepts one, else the highest-numbered tab that
-  does. Otherwise it copies instead and says "No terminal is ready for a paste, so it was copied."
-  This way pasted lines never run as shell commands.
+  zsh, bash ≥ 5.1. A tab whose focused pane runs such a program (the agent) comes before one at a
+  shell prompt: the active tab if it has one, else the highest-numbered tab that does; then a
+  shell at its prompt the same way. Otherwise it copies instead and says "No terminal is ready for
+  a paste, so it was copied." This way pasted lines never run as shell commands.
 - Markers are numbered dots on the page for the current URL's annotations. They follow their
   elements on scroll and resize, and are re-attached when the user comes back to a URL and the
   selector still matches.
