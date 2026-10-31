@@ -1093,10 +1093,12 @@ mod tests {
     /// move the selected entry, or the project folder, to the Trash without asking.
     #[gpui_kit::test]
     fn backspace_while_naming_trashes_nothing(cx: &mut TestAppContext) {
+        // No Tokio runtime: a file change the test started would run on its pool and answer
+        // after the test has ended, which the test scheduler can't allow. Without one, a change
+        // started here fails at once instead.
         cx.update(|cx| {
             gpui_kit::init(cx);
             super::init(cx);
-            cx.set_global(crate::rt::Rt(sawit_core::rt::Runtime::start()));
         });
         let (window, panel) = cx.update(|cx| {
             gpui_kit::open_window(Default::default(), cx, |_, cx| cx.new(FilesPanel::new)).unwrap()
@@ -1169,9 +1171,18 @@ mod tests {
             "⌫ at the start of a name"
         );
 
-        // From the tree, ⌫ is still Trash, and the right-click menu still finds its key.
+        // From the tree, ⌫ is still Trash, which acts on the selected file, and the right-click
+        // menu still finds its key. The Trash itself doesn't run: with nothing left for it to
+        // act on, this ⌫ starts no file change.
         focus(cx, tree.clone());
         assert_eq!(name(cx), None, "leaving the name box ends the edit");
+        cx.update(|cx| assert_eq!(panel.read(cx).target(), Some(file.clone())));
+        cx.update(|cx| {
+            panel.update(cx, |p, _| {
+                p.selected = None;
+                p.root = None;
+            })
+        });
         cx.simulate_keystrokes(window, "backspace");
         assert_eq!(
             *ran.borrow(),
