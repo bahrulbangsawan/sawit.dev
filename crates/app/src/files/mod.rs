@@ -325,7 +325,8 @@ impl FilesPanel {
         }
     }
 
-    /// Re-reads every open folder; the tree only changes if they did.
+    /// Re-reads every open folder, one after the other off the UI thread; the tree only
+    /// changes if they did.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         let dirs: Vec<PathBuf> = self
             .expanded
@@ -333,8 +334,8 @@ impl FilesPanel {
             .filter(|d| self.children.contains_key(*d))
             .cloned()
             .collect();
-        for dir in dirs {
-            self.load(dir, cx);
+        if !dirs.is_empty() {
+            self.load_all(dirs, cx);
         }
     }
 
@@ -396,8 +397,13 @@ impl FilesPanel {
     }
 
     fn load(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
+        self.load_all(vec![dir], cx);
+    }
+
+    /// Reads `dirs`, one after the other off the UI thread.
+    fn load_all(&mut self, dirs: Vec<PathBuf>, cx: &mut Context<Self>) {
         let folder = self.folder;
-        let rx = (self.disk.list)(vec![dir], cx);
+        let rx = (self.disk.list)(dirs, cx);
         cx.spawn(async move |this, cx| {
             let Ok(listings) = rx.await else {
                 return;
@@ -433,6 +439,9 @@ impl FilesPanel {
                     cx.notify();
                 }
             }
+            // A read that failed but for a while (too many files open at once, say) leaves what
+            // was read before.
+            Err(e) if !gone(&e) && self.children.contains_key(&dir) => {}
             // The folder was deleted or renamed: forget it (or, for the
             // project folder, say so).
             Err(e) => {
@@ -863,6 +872,14 @@ fn file_menu(menu: PopupMenu, focus: FocusHandle, can: MenuState) -> PopupMenu {
         .menu("Collapse All", Box::new(CollapseAll))
 }
 
+/// Whether reading a folder failed because it can't be read any more: it isn't there (deleted,
+/// renamed, or a file now), or may not be read. Not when too many files are open at once, say.
+fn gone(error: &sawit_core::CoreError) -> bool {
+    use std::io::ErrorKind::{NotADirectory, NotFound, PermissionDenied};
+    matches!(error, sawit_core::CoreError::Io(e)
+        if matches!(e.kind(), NotFound | NotADirectory | PermissionDenied))
+}
+
 /// Every folder under `dir` with its entries, breadth first, up to `MAX_EXPAND`.
 fn read_tree(dir: PathBuf) -> Vec<(PathBuf, Vec<Entry>)> {
     let mut out = Vec::new();
@@ -874,7 +891,16 @@ fn read_tree(dir: PathBuf) -> Vec<(PathBuf, Vec<Entry>)> {
         let Ok(entries) = list_dir(&dir) else {
             continue;
         };
-        queue.extend(entries.iter().filter(|e| e.is_dir).map(|e| e.path.clone()));
+        // A link to a folder opens by hand only: one to a folder above, or to its own, would
+        // take Expand All out of the project or round in circles.
+        let linked =
+            |path: &Path| std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+        queue.extend(
+            entries
+                .iter()
+                .filter(|e| e.is_dir && !linked(&e.path))
+                .map(|e| e.path.clone()),
+        );
         out.push((dir, entries));
     }
     out
@@ -1520,7 +1546,7 @@ mod tests {
     /// The file changes a panel starts, which the test lands when it likes, in place of the
     /// runtime's, and the folders it reads, which get no answer.
     #[derive(Clone, Default)]
-    struct Changes(Rc<RefCell<Vec<Started>>>, Rc<RefCell<Vec<PathBuf>>>);
+    struct Changes(Rc<RefCell<Vec<Started>>>, Rc<RefCell<Vec<Vec<PathBuf>>>>);
 
     /// A change the panel started, and how to land it, until it has landed.
     type Started = (Op, Option<oneshot::Sender<Outcome>>);
@@ -1538,7 +1564,7 @@ mod tests {
                             rx
                         }),
                         list: Rc::new(move |dirs, _| {
-                            read.1.borrow_mut().extend(dirs);
+                            read.1.borrow_mut().push(dirs);
                             oneshot::channel().1
                         }),
                     }
@@ -1549,6 +1575,11 @@ mod tests {
 
         /// The folders read so far, in order.
         fn read(&self) -> Vec<PathBuf> {
+            self.1.borrow().concat()
+        }
+
+        /// The reads so far, each the folders it read.
+        fn reads(&self) -> Vec<Vec<PathBuf>> {
             self.1.borrow().clone()
         }
 
@@ -1871,6 +1902,64 @@ mod tests {
             .unwrap();
         }
         assert_eq!(changes.read()[before..], [docs.clone(), docs]);
+    }
+
+    /// Expand All doesn't follow links to folders (FILES-10): a link to a folder above (`up ->
+    /// ..`) took it out of the project, and one to its own folder (`loop -> .`) opened the same
+    /// folder inside itself again and again, until 2000 folders were open, each read again
+    /// every 3 seconds. Linked folders still open by hand.
+    #[test]
+    fn expand_all_leaves_linked_folders_closed() {
+        let dir = Scratch::new("expand-all-links");
+        let root = dir.0.as_path();
+        std::fs::create_dir(root.join("a")).unwrap();
+        std::os::unix::fs::symlink("..", root.join("a/up")).unwrap();
+        std::os::unix::fs::symlink(".", root.join("loop")).unwrap();
+        let tree = super::read_tree(root.to_path_buf());
+        let read: Vec<&Path> = tree.iter().map(|(dir, _)| dir.as_path()).collect();
+        assert_eq!(read, [root, &root.join("a")]);
+        // Both links are still listed, as folders.
+        assert!(tree[0].1.iter().any(|e| e.name == "loop" && e.is_dir));
+    }
+
+    /// The 3-second refresh reads every open folder in one go, off the UI thread, and a read
+    /// that fails but for a while (too many files open at once) leaves what was read before
+    /// (FILES-10). It used to start one read per folder at once, up to 2000 of them, and took
+    /// any error for the folder being deleted: the folder closed, and the project folder showed
+    /// "Unable to read this folder".
+    #[gpui_kit::test]
+    fn the_refresh_reads_open_folders_at_once_and_keeps_them_through_errors(
+        cx: &mut TestAppContext,
+    ) {
+        let (_window, panel) = open_panel(cx, &[]);
+        let changes = Changes::install(&panel, cx);
+        let root = Path::new(ROOT);
+        cx.update(|cx| panel.update(cx, |p, _| show_tree(p, root)));
+        cx.update(|cx| panel.update(cx, |p, cx| p.refresh(cx)));
+        let reads = changes.reads();
+        assert_eq!(reads.len(), 1, "one read per folder: {reads:?}");
+        let mut read = reads[0].clone();
+        read.sort();
+        assert_eq!(read, [root, &root.join("src"), &root.join("src/lib")]);
+
+        cx.update(|cx| {
+            panel.update(cx, |p, cx| {
+                let folder = p.folder;
+                // Too many files open: what was read stays.
+                for dir in [root.join("src"), root.to_path_buf()] {
+                    // EMFILE, "Too many open files".
+                    let busy = std::io::Error::from_raw_os_error(24);
+                    p.listed(folder, dir.clone(), Err(busy.into()), cx);
+                    assert!(p.children.contains_key(&dir) && p.expanded.contains(&dir));
+                }
+                assert_eq!(p.root_error, None);
+                // Gone: forgotten.
+                let gone = std::io::Error::from(std::io::ErrorKind::NotFound);
+                p.listed(folder, root.join("src/lib"), Err(gone.into()), cx);
+                assert!(!p.children.contains_key(&root.join("src/lib")));
+                assert!(!p.expanded.contains(&root.join("src/lib")));
+            })
+        });
     }
 
     /// ⌘Z pressed while a change runs undoes that change, once it has landed (FILES-5). Changes
