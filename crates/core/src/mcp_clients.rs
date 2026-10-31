@@ -1220,9 +1220,26 @@ pub struct CliCall {
 }
 
 pub(crate) fn cli_call(target: &Target, cli: &Path, args: Vec<String>) -> Option<CliCall> {
+    let node = crate::dev_tools::find_program("node");
+    let path = std::env::var_os("PATH");
+    cli_call_with(target, cli, args, node.as_deref(), path.as_deref())
+}
+
+/// [`cli_call`], given the `node` found and the app's `path`. A CLI
+/// installed with npm (`#!/usr/bin/env node`) runs with its own folder on
+/// `PATH`, where nvm keeps the node beside its global packages, then the
+/// folder of the node found (nvm's default, say), for one installed
+/// elsewhere: Claude Code's old `~/.claude/local`, `~/.npm-global/bin`.
+fn cli_call_with(
+    target: &Target,
+    cli: &Path,
+    args: Vec<String>,
+    node: Option<&Path>,
+    path: Option<&std::ffi::OsStr>,
+) -> Option<CliCall> {
     let var = target.client.profile_var()?;
     let mut env = vec![(var.to_string(), target.profile_dir.clone())];
-    if let Some(path) = path_with(cli.parent()) {
+    if let Some(path) = path_with(&[cli.parent(), node.and_then(Path::parent)], path) {
         env.push(("PATH".into(), Some(path)));
     }
     Some(CliCall {
@@ -1232,16 +1249,26 @@ pub(crate) fn cli_call(target: &Target, cli: &Path, args: Vec<String>) -> Option
     })
 }
 
-/// `PATH` with `dir` in front, when it isn't on it: a CLI installed with
-/// npm (`#!/usr/bin/env node`) then finds the node nvm keeps beside it.
-fn path_with(dir: Option<&Path>) -> Option<PathBuf> {
-    let dir = dir.filter(|d| d.is_absolute())?;
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    if std::env::split_paths(&path).any(|p| p == dir) {
+/// `path` with `dirs` in front, those it doesn't have. `None` when it has
+/// them all.
+fn path_with(dirs: &[Option<&Path>], path: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    let path: Vec<PathBuf> = path
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .collect();
+    let mut front: Vec<PathBuf> = Vec::new();
+    for dir in dirs.iter().flatten() {
+        if dir.is_absolute() && !path.iter().chain(&front).any(|p| p == dir) {
+            front.push(dir.to_path_buf());
+        }
+    }
+    if front.is_empty() {
         return None;
     }
-    let dirs = std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(&path));
-    std::env::join_paths(dirs).ok().map(PathBuf::from)
+    std::env::join_paths(front.into_iter().chain(path))
+        .ok()
+        .map(PathBuf::from)
 }
 
 pub fn cli_add(target: &Target, spec: &Spec, cli: &Path) -> Option<CliCall> {
@@ -2557,6 +2584,39 @@ mod tests {
             "{}",
             path.display()
         );
+    }
+
+    /// CATALOG M3: a CLI found outside nvm's folders whose `#!/usr/bin/env node` needs nvm's
+    /// node (Claude Code's old `~/.claude/local/claude`, `~/.npm-global/bin`, `~/.bun/bin`) runs
+    /// with that node's folder on `PATH` too. With only its own folder there, every install
+    /// through it failed ("env: node: No such file or directory"), and so did its sign-in checks.
+    #[tokio::test]
+    async fn a_cli_finds_the_node_nvm_keeps_elsewhere() {
+        use std::os::unix::fs::PermissionsExt;
+        let h = home();
+        let t = find(&discover(h.path(), None), Client::ClaudeCode, "default").clone();
+        let program = |path: &Path, text: &str| {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let cli = h.path().join(".claude/local/claude");
+        program(&cli, "#!/usr/bin/env node\n");
+        let node = h.path().join(".nvm/versions/node/v22.11.0/bin/node");
+        program(&node, "#!/bin/sh\necho \"node ran $2 $3\"\n");
+        // The PATH of an app opened from Finder: no nvm.
+        let path = std::ffi::OsString::from("/usr/bin:/bin");
+        let args = vec!["mcp".to_string(), "list".to_string()];
+        let call = cli_call_with(&t, &cli, args, Some(&node), Some(&path)).unwrap();
+        let out = run_cli(&call, std::time::Duration::from_secs(10))
+            .await
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "node ran mcp list\n");
     }
 
     #[test]
