@@ -209,6 +209,20 @@ impl Repo {
         }
     }
 
+    /// Waits for the background release push to move `rev` on `origin` to `commit`: a push of
+    /// several refs lands them one at a time.
+    fn wait_for_remote_at(&self, rev: &str, commit: &str) {
+        let start = Instant::now();
+        while self.remote(rev).as_deref() != Some(commit) {
+            assert!(
+                start.elapsed() < LANDS_WITHIN,
+                "{rev} never reached origin at {commit}; the release log says: {}",
+                self.release_log()
+            );
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     fn release_log(&self) -> String {
         fs::read_to_string(self.work.join(".git/sawit-release.log")).unwrap_or_default()
     }
@@ -265,9 +279,8 @@ fn a_push_of_main_from_main_releases_it() {
     ok(out);
     let tagged = repo.wait_for_remote("refs/tags/v0.0.8");
     assert_eq!(repo.subject("main"), "chore(release): v0.0.8");
-    assert_eq!(Some(tagged), repo.local("main"));
-    repo.wait_for_remote("refs/heads/main");
-    assert_eq!(repo.remote("refs/heads/main"), repo.local("main"));
+    assert_eq!(repo.local("main").as_deref(), Some(tagged.as_str()));
+    repo.wait_for_remote_at("refs/heads/main", &tagged);
 }
 
 /// RELEASE-1: the release is cut on HEAD, so a push of main from a checkout of another branch
@@ -403,9 +416,13 @@ fn a_release_tag_left_behind_goes_out_with_the_next_release() {
     repo.refuse_tags(true);
     repo.commit("feat(app): a new thing");
     ok(repo.push_main(None));
+    let released = repo.local("main").unwrap();
+    assert_eq!(
+        repo.local("refs/tags/v0.0.8").as_deref(),
+        Some(released.as_str())
+    );
+    repo.wait_for_remote_at("refs/heads/main", &released);
     repo.wait_for_log("no tags today");
-    let released = repo.wait_for_remote("refs/heads/main");
-    assert_eq!(Some(released), repo.local("refs/tags/v0.0.8"));
     assert_eq!(repo.remote("refs/tags/v0.0.8"), None);
 
     repo.refuse_tags(false);
@@ -415,12 +432,7 @@ fn a_release_tag_left_behind_goes_out_with_the_next_release() {
     assert!(said.contains("release v0.0.9 created"), "{said}");
     ok(out);
     repo.wait_for_remote("refs/tags/v0.0.9");
-    assert_eq!(
-        repo.remote("refs/tags/v0.0.8"),
-        repo.local("refs/tags/v0.0.8"),
-        "the release log says: {}",
-        repo.release_log()
-    );
+    repo.wait_for_remote_at("refs/tags/v0.0.8", &released);
 }
 
 /// The section release.sh wrote for `version` in CHANGELOG.md, without its heading line.
