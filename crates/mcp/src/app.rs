@@ -74,7 +74,7 @@ pub struct LayoutArgs {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct PageArgs {
     #[schemars(
-        description = "canvas, browser, mcp, tools, changelog, git_graph, github or instance"
+        description = "canvas, browser, mcp, tools, changelog, git_graph, github, instance or keymap"
     )]
     pub page: String,
     pub project: Option<String>,
@@ -723,7 +723,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Open a page as a tab: canvas (whiteboard and design canvas), browser (web browser agents can drive), mcp (install page), tools (dev tools installer), changelog, git_graph, github, instance (selected PostgreSQL instance)"
+        description = "Open a page as a tab: canvas (whiteboard and design canvas), browser (web browser agents can drive), mcp (install page), tools (dev tools installer), changelog, git_graph, github, instance (selected PostgreSQL instance), keymap (keymap editor)"
     )]
     async fn app_open_page(&self, Parameters(a): Parameters<PageArgs>) -> CallToolResult {
         match variant::<Page>(&a.page, PAGES) {
@@ -1149,6 +1149,7 @@ mod tests {
             Ok(Panel::ShellConfig)
         );
         assert_eq!(variant::<Page>("git_graph", PAGES), Ok(Page::GitGraph));
+        assert_eq!(variant::<Page>("keymap", PAGES), Ok(Page::Keymap));
         assert_eq!(
             variant::<InstanceAction>("Restart", INSTANCE_ACTIONS),
             Ok(InstanceAction::Restart)
