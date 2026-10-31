@@ -99,7 +99,9 @@ impl Workspace {
             "tabs": tabs,
             "terminals": self.terminal.read(cx).describe(cx),
             "canvas_open": self.boards.iter().any(|b| b.upgrade().is_some()),
-            "browser": self.browser.as_ref().and_then(|b| b.upgrade()).map(|b| b.read(cx).describe()),
+            "browser": self
+                .browser_tab(self.root(cx).as_deref())
+                .map(|(_, b)| b.read(cx).describe()),
         })
     }
 
@@ -335,19 +337,15 @@ impl Workspace {
                 let board = self.open_canvas(cx).ok_or("The canvas didn't open.")?;
                 Ok(Answer::Now(board.update(cx, |b, cx| b.run_op(&op, cx))))
             }
+            // The active project's browser: the one for the project the agent named.
             Command::Browser { op } => {
-                let open = self.browser.as_ref().and_then(|b| b.upgrade());
+                let open = self.browser_tab(self.root(cx).as_deref()).map(|(_, b)| b);
+                let shown = open.is_some() && open == self.active_browser();
                 // Only opening a page or a screenshot brings the tab forward;
                 // other ops work with it in the background.
                 let browser = match open {
-                    Some(browser) if !op.shows_tab() || self.browser_active() => browser,
-                    _ => {
-                        self.open_browser(None, window, cx);
-                        self.browser
-                            .as_ref()
-                            .and_then(|b| b.upgrade())
-                            .ok_or("The browser didn't open.")?
-                    }
+                    Some(browser) if !op.shows_tab() || shown => browser,
+                    _ => self.open_browser(None, window, cx),
                 };
                 Ok(Answer::Later(browser.update(cx, |b, cx| b.apply(op, cx))))
             }
@@ -366,7 +364,9 @@ impl Workspace {
             Page::Canvas => {
                 self.open_canvas(cx);
             }
-            Page::Browser => self.open_browser(None, window, cx),
+            Page::Browser => {
+                self.open_browser(None, window, cx);
+            }
             Page::Mcp => self.open_mcp_page(cx),
             Page::Tools => self.open_tools_page(window, cx),
             Page::Changelog => {

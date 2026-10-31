@@ -227,8 +227,9 @@ pub struct Workspace {
     boards: Vec<WeakEntity<BoardView>>,
     /// The canvas fills the window: no sidebar, terminal or tab bar.
     canvas_maximized: bool,
-    /// The browser tab (owned by its tab), while open.
-    browser: Option<WeakEntity<BrowserView>>,
+    /// The browser tabs' views (owned by their tabs): one per project at most, and one for
+    /// no project.
+    browsers: Vec<WeakEntity<BrowserView>>,
     /// Shown instead of the panels until something is opened.
     welcome: Option<Entity<Welcome>>,
     tab_scroll: ScrollHandle,
@@ -276,7 +277,7 @@ impl Workspace {
                 window,
                 |this, _, event: &PortsEvent, window, cx| match event {
                     PortsEvent::OpenInBrowser(url) => {
-                        this.open_browser(Some(url.clone()), window, cx)
+                        this.open_browser(Some(url.clone()), window, cx);
                     }
                 },
             ),
@@ -432,7 +433,7 @@ impl Workspace {
             unmaximized: None,
             boards: Vec::new(),
             canvas_maximized: false,
-            browser: None,
+            browsers: Vec::new(),
             welcome: Some(welcome),
             tab_scroll: ScrollHandle::new(),
             scrolled_to: None,
@@ -2184,50 +2185,74 @@ impl Workspace {
         );
     }
 
-    /// Opens the browser (one tab), at `url` when given; an open browser
-    /// becomes the active tab, and goes to `url` when one is given.
+    /// Opens the active project's browser (one tab per project, in its group, as its canvas;
+    /// one for no project), at `url` when given; an open browser becomes the active tab, and
+    /// goes to `url` when one is given. Each project's browser keeps its own cookies, and
+    /// writes its screenshots and exports into that project.
     pub(crate) fn open_browser(
         &mut self,
         url: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Entity<BrowserView> {
         self.leave_welcome(CENTER_ONLY, cx);
         if !self.layout.center {
             self.layout.toggle(Area::Center);
         }
-        let key: SharedString = "browser".into();
-        if let Some(ix) = self
-            .tabs
-            .iter()
-            .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
-        {
-            self.active = ix;
-            if let Some(browser) = self.browser.as_ref().and_then(|b| b.upgrade()) {
+        let root = self.root(cx);
+        let browser = match self.browser_tab(root.as_deref()) {
+            Some((ix, browser)) => {
+                self.active = ix;
                 browser.update(cx, |b, cx| b.show(url.as_deref(), cx));
+                browser
             }
-        } else {
-            let project = self.root(cx);
-            let view = cx.new(|cx| BrowserView::new(project, url, window, cx));
-            self.browser = Some(view.downgrade());
-            cx.subscribe_in(&view, window, |this, browser, event, window, cx| {
-                let crate::browser::BrowserEvent::SendToTerminal(md) = event;
-                this.send_to_terminal(browser, md, window, cx);
-            })
-            .detach();
-            self.push_tab(
-                PaneItem::Other {
-                    view: view.into(),
-                    key,
-                    title: crate::browser::TITLE.into(),
-                    icon: crate::browser::ICON,
-                    file: None,
-                },
-                None,
-                cx,
-            );
-        }
+            None => {
+                let view = cx.new(|cx| BrowserView::new(root.clone(), url, window, cx));
+                self.browsers.retain(|b| b.upgrade().is_some());
+                self.browsers.push(view.downgrade());
+                cx.subscribe_in(&view, window, |this, browser, event, window, cx| {
+                    let crate::browser::BrowserEvent::SendToTerminal(md) = event;
+                    this.send_to_terminal(browser, md, window, cx);
+                })
+                .detach();
+                self.push_tab(
+                    PaneItem::Other {
+                        view: view.clone().into(),
+                        key: browser_key(root.as_deref()),
+                        title: crate::browser::TITLE.into(),
+                        icon: crate::browser::ICON,
+                        file: None,
+                    },
+                    root,
+                    cx,
+                );
+                view
+            }
+        };
         cx.notify();
+        browser
+    }
+
+    /// The browser tab of the project at `root` (`None`: the one for no project), and its view.
+    pub(super) fn browser_tab(&self, root: Option<&Path>) -> Option<(usize, Entity<BrowserView>)> {
+        let key = browser_key(root);
+        self.tabs
+            .iter()
+            .enumerate()
+            .find_map(|(ix, t)| match &t.item {
+                PaneItem::Other { key: k, view, .. } if *k == key => {
+                    view.clone().downcast::<BrowserView>().ok().map(|b| (ix, b))
+                }
+                _ => None,
+            })
+    }
+
+    /// The browser whose tab is the active one.
+    pub(super) fn active_browser(&self) -> Option<Entity<BrowserView>> {
+        match self.tabs.get(self.active).map(|t| &t.item) {
+            Some(PaneItem::Other { view, .. }) => view.clone().downcast::<BrowserView>().ok(),
+            _ => None,
+        }
     }
 
     /// Pastes annotations into the terminal running an agent; copies them
@@ -2266,23 +2291,22 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The browser is the tab showing in the center pane.
-    fn browser_active(&self) -> bool {
-        matches!(
-            self.tabs.get(self.active).map(|t| &t.item),
-            Some(PaneItem::Other { key, .. }) if key.as_ref() == "browser"
-        )
-    }
-
-    /// Keeps the browser's native webview in step with what is on screen:
-    /// it draws above GPUI, so it is hidden unless its tab is showing.
+    /// Keeps the browsers' native webviews in step with what is on screen:
+    /// they draw above GPUI, so each is hidden unless its tab is showing.
     fn sync_browser(&mut self, cx: &mut Context<Self>) {
-        let Some(browser) = self.browser.as_ref().and_then(|b| b.upgrade()) else {
-            self.browser = None;
-            return;
-        };
-        let visible = self.welcome.is_none() && self.layout.center && self.browser_active();
-        browser.update(cx, |b, _| b.set_visible(visible));
+        self.browsers.retain(|b| b.upgrade().is_some());
+        let shown = (self.welcome.is_none() && self.layout.center)
+            .then(|| self.active_browser())
+            .flatten();
+        let browsers: Vec<Entity<BrowserView>> =
+            self.browsers.iter().filter_map(|b| b.upgrade()).collect();
+        // Hidden first: a webview that hides hands the keyboard back.
+        for browser in browsers.iter().filter(|b| shown.as_ref() != Some(*b)) {
+            browser.update(cx, |b, _| b.set_visible(false));
+        }
+        if let Some(browser) = shown {
+            browser.update(cx, |b, _| b.set_visible(true));
+        }
     }
 
     /// Shows the MCP install page (one tab).
@@ -2542,7 +2566,7 @@ impl Workspace {
                             .label("Browser")
                             .tooltip("Preview Your App in a Browser an Agent Can Drive")
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_browser(None, window, cx)
+                                this.open_browser(None, window, cx);
                             })),
                     )
                     .child(
@@ -2849,6 +2873,14 @@ fn canvas_project(
         .find(|root| board_file(root.as_deref(), app_root) == file)
 }
 
+/// The key of the Browser tab of the project at `root` (`None`: the one for no project).
+fn browser_key(root: Option<&Path>) -> SharedString {
+    match root {
+        Some(root) => format!("browser\u{0}{}", root.display()).into(),
+        None => "browser".into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -2856,7 +2888,26 @@ mod tests {
 
     use gpui_kit::Modifiers;
 
-    use super::{CENTER_ONLY, bindings, canvas_project, settle_canvas_fill, toggle_canvas_fill};
+    use super::{
+        CENTER_ONLY, bindings, browser_key, canvas_project, settle_canvas_fill, toggle_canvas_fill,
+    };
+
+    /// Each project has its own Browser tab, as it has its own canvas: its cookies, its
+    /// annotation screenshots and its design exports are the project's ("a browser tab per
+    /// project"). A window used to keep one, tied to the project it was opened in.
+    #[test]
+    fn each_project_has_its_own_browser() {
+        let (a, b) = (Path::new("/work/a"), Path::new("/work/b"));
+        assert_ne!(browser_key(Some(a)), browser_key(Some(b)));
+        assert_ne!(browser_key(Some(a)), browser_key(None));
+        assert_eq!(
+            browser_key(Some(a)),
+            browser_key(Some(&PathBuf::from("/work/a")))
+        );
+        // `app_state` names a tab's kind by its key's first part.
+        assert_eq!(browser_key(Some(a)).split('\u{0}').next(), Some("browser"));
+        assert_eq!(browser_key(None).as_ref(), "browser");
+    }
     use crate::layout::{Area, Layout};
 
     /// A keystroke written as `ctrl-alt-shift-cmd-key`.

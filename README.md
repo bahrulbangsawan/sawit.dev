@@ -233,8 +233,8 @@ explained. A conflict on the same address can't be forced.
 
 <img src="docs/media/browser.png" alt="Browser tab showing the acme-store demo shop on localhost:5173, with back, forward, reload, the address field and a Web Inspector button above the page" width="100%">
 
-- Click **Browser** in the title bar for a web browser tab (WebKit). With nothing typed, it opens the project's
-  running dev server. The toolbar has back, forward, reload, an address field (text that isn't a URL is searched),
+- Click **Browser** in the title bar for the project's web browser tab (WebKit; each project has its own). With
+  nothing typed, it opens the project's running dev server. The toolbar has back, forward, reload, an address field (text that isn't a URL is searched),
   the device menu, **Annotate**, **Design**, **Open in Default Browser** and the Web Inspector.
 - Cookies and storage are kept per project, so being signed in to one app doesn't leak into another.
 - **Device sizes**: the device menu lays the page out as an iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop or
