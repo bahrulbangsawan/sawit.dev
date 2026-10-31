@@ -402,6 +402,9 @@ explained. A conflict on the same address can't be forced.
   title bar: the app quits, `Sawit.app` is replaced, and it reopens. It asks first while a terminal runs something
   or a file has unsaved changes, since quitting ends or closes them. A downloaded update also installs when you
   quit. Builds from `cargo` only open the releases page.
+- AI agents keep the `sawit-mcp` they started with until their session ends, so after an update, restart their
+  sessions (or reconnect their Sawit MCP server) to give them the new version's tools. An older server can't name
+  the panes of a split terminal, for one.
 
 ## Keyboard shortcuts
 
