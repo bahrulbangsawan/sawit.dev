@@ -318,6 +318,9 @@ pub struct BoardView {
     /// was handed over: the next keeps the board the file holds as a backup first, as a save that
     /// empties the canvas does ([`Writer::save`], CANVAS-CORE-3).
     replaced: bool,
+    /// The document last kept in a copy of its own because it couldn't be saved as the canvas
+    /// closed ([`Self::keep_unsaved`]): it isn't kept twice.
+    kept_unsaved: Option<Arc<Document>>,
     /// Saves the document once the canvas has been still for [`SAVE_DELAY`].
     save_later: Option<Task<()>>,
     /// A message at the bottom of the canvas (a failed save, what opening the file dropped), up
@@ -496,6 +499,7 @@ impl BoardView {
             saved,
             pending: None,
             replaced: false,
+            kept_unsaved: None,
             save_later: None,
             toast_timer: toast.is_some().then(|| hide_toast_later(cx)),
             toast: toast.map(SharedString::from),
@@ -519,7 +523,7 @@ impl BoardView {
             _frames: frames,
             // ⌘Q quits without dropping the views: what isn't on disk yet is written first.
             _quit: cx.on_app_quit(|this, _| {
-                this.flush();
+                this.flush_on_close();
                 async {}
             }),
             _release: cx.on_release(|this, cx| this.release_images(cx)),
@@ -1092,11 +1096,12 @@ impl BoardView {
         })
     }
 
-    /// Saves the document now if it isn't the one in the file, and waits until it is on disk.
-    /// When that fails, or the save is refused (it would delete images the file holds, or replace
-    /// what another app or window wrote to it since), the error is logged, and the next flush or
-    /// edit tries again; the writer's [`Writer::last_error`] still says why a write failed. So is
-    /// the note of a save that wrote the file again where it had gone ([`Writer::take_notice`]).
+    /// Saves the document now if it isn't the one in the file, and waits until it is on disk, as
+    /// a closing canvas does ([`Self::flush_on_close`]), without keeping a copy of what it can't
+    /// save: the tests' way to have what is queued written. When that fails, or the save is
+    /// refused, the error is logged, and the next flush or edit tries again; the writer's
+    /// [`Writer::last_error`] still says why a write failed.
+    #[cfg(test)]
     pub fn flush(&mut self) {
         match self.save_now() {
             Ok(Some(notice)) => log::info!("{notice}"),
@@ -1105,9 +1110,69 @@ impl BoardView {
         }
     }
 
-    /// [`Self::flush`], with why the document isn't on disk as the error, a sentence for a toast:
-    /// what File ▸ Save (⌘S) does ([`commands`]). On success, the note of a save that wrote the
-    /// file again where it had gone, if one did.
+    /// The canvas is closing, its tab, its window or the app: saves the document now if it isn't
+    /// the one in the file, and waits until it is on disk ([`Self::save_now`]). When that fails,
+    /// or the save is refused (it would delete images the file holds, or replace what another app
+    /// or window wrote to it since), the error is logged, and the document is kept in a copy of
+    /// its own ([`Self::keep_unsaved`]), whose path is logged too:
+    /// closing used to drop every edit since the last save that went through, with only a line
+    /// in the log, though the refusal's own toast says to close the tab (CANVAS-CORE-4).
+    fn flush_on_close(&mut self) {
+        let err = match self.save_now() {
+            Ok(Some(notice)) => return log::info!("{notice}"),
+            Ok(None) => return,
+            Err(err) => err,
+        };
+        log::warn!("the canvas couldn't be saved: {err}");
+        match self.keep_unsaved(&app_root()) {
+            Ok(Some(copy)) => log::warn!(
+                "its edits since the last save are kept in {}",
+                copy.display()
+            ),
+            Ok(None) => {}
+            Err(e) => log::error!("its edits since the last save couldn't be kept: {e}"),
+        }
+    }
+
+    /// Keeps the document, which the canvas couldn't save, in a file of its own, as a save would
+    /// write it: `<name> (unsaved <date>).figcraft` beside the canvas file, numbered when that is
+    /// taken, made new and never through a link ([`sawit_core::nyawit::write_unique`]); else, when
+    /// nothing can be made there (the folder is read-only, or gone), in `unsaved/` in Sawit's own
+    /// folder, `app_root`. The file that was there stays as it is. A document kept already isn't
+    /// kept again. The copy it made, if it made one.
+    fn keep_unsaved(&mut self, app_root: &Path) -> Result<Option<PathBuf>, String> {
+        let Ok(board) = &self.board else {
+            return Ok(None);
+        };
+        let doc = board.document_itself().map_err(|e| e.to_string())?;
+        if same(&self.kept_unsaved, &doc) {
+            return Ok(None);
+        }
+        let bytes = board.to_bytes().map_err(|e| e.to_string())?;
+        let stem = (self.path.file_stem()).map_or_else(|| TITLE.into(), |s| s.to_string_lossy());
+        let name = format!(
+            "{stem} (unsaved {}).figcraft",
+            sawit_core::date::local_date()
+        );
+        let beside = (self.path.parent())
+            .map(|folder| sawit_core::nyawit::write_unique(folder, &name, &bytes));
+        let copy = match beside {
+            Some(Ok(copy)) => copy,
+            _ => {
+                let folder = app_root.join("unsaved");
+                std::fs::create_dir_all(&folder)
+                    .and_then(|()| sawit_core::nyawit::write_unique(&folder, &name, &bytes))
+                    .map_err(|e| format!("{}: {e}", folder.join(&name).display()))?
+            }
+        };
+        self.kept_unsaved = Some(doc);
+        Ok(Some(copy))
+    }
+
+    /// Saves the document now if it isn't the one in the file, and waits until it is on disk,
+    /// with why it isn't as the error, a sentence for a toast: what File ▸ Save (⌘S) does
+    /// ([`commands`]), and closing the canvas ([`Self::flush_on_close`]). On success, the note of a
+    /// save that wrote the file again where it had gone, if one did.
     fn save_now(&mut self) -> Result<Option<String>, String> {
         let queued = self.queue_save();
         self.writer.flush();
@@ -1380,9 +1445,22 @@ impl BoardView {
 
 impl Drop for BoardView {
     fn drop(&mut self) {
-        // The tab is closing: what isn't on disk yet is written now.
-        self.flush();
+        // The tab is closing: what isn't on disk yet is written now, or kept in a copy.
+        self.flush_on_close();
     }
+}
+
+/// Sawit's own folder, where the edits a closing canvas couldn't save go when nothing can be made
+/// beside its file ([`BoardView::keep_unsaved`]).
+#[cfg(not(test))]
+fn app_root() -> PathBuf {
+    sawit_core::instances::AppPaths::default_macos().root
+}
+
+/// A folder of the tests' own in place of Sawit's.
+#[cfg(test)]
+fn app_root() -> PathBuf {
+    std::env::temp_dir().join(format!("sawit-board-view-{}-app-root", std::process::id()))
 }
 
 impl Focusable for BoardView {
@@ -2266,8 +2344,8 @@ mod tests {
     /// name: FigCraft's sentence, with Sawit's way out.
     const CHANGED_ON_DISK: &str = "wasn't saved: the file changed on disk since it was opened or \
         saved here (another app or window wrote to it), and saving would replace those changes. \
-        Close its tab and open it again to load them, or save it under another name to keep this \
-        version as well.";
+        Save it under another name to keep this version, or close its tab and open the file again \
+        to load those changes.";
 
     #[gpui_kit::test]
     fn a_file_changed_on_disk_since_it_opened_is_not_saved_over(cx: &mut TestAppContext) {
@@ -2289,11 +2367,74 @@ mod tests {
         let toast = view.read_with(cx, |view, _| view.toast.clone()).unwrap();
         assert_eq!(toast.to_string(), format!("design {CHANGED_ON_DISK}"));
         assert!(kept_theirs(), "the file was saved over");
-        // Closing the tab doesn't save over it either.
+        // Closing the tab doesn't save over it either. It keeps the canvas's edits in a copy beside
+        // it, where they used to be in no file (CANVAS-CORE-4).
         drop(view);
         cx.update(|_| {});
         assert!(kept_theirs(), "the file was saved over");
-        assert_eq!(names(&tmp.0), ["design.figcraft"]);
+        assert_eq!(unsaved_copies(&tmp.0, "design"), [3]);
+    }
+
+    /// The copies of canvas `stem`'s unsaved edits in `dir` ([`BoardView::keep_unsaved`]): how many
+    /// layers each holds.
+    fn unsaved_copies(dir: &Path, stem: &str) -> Vec<usize> {
+        let copies = names(dir).into_iter().filter(|name| {
+            name.starts_with(&format!("{stem} (unsaved ")) && name.ends_with(".figcraft")
+        });
+        copies.map(|name| saved_layers(&dir.join(name))).collect()
+    }
+
+    /// CANVAS-CORE-4: a canvas whose folder became read-only can't save its edits, nor make a
+    /// copy of them beside its file: closing it keeps them in `unsaved/` in Sawit's own folder.
+    #[gpui_kit::test]
+    fn closing_a_canvas_whose_folder_is_read_only_keeps_its_edits_in_sawits_folder(
+        cx: &mut TestAppContext,
+    ) {
+        use std::os::unix::fs::PermissionsExt as _;
+        let tmp = Scratch::new("read-only-unsaved");
+        let folder = tmp.0.join("designs");
+        std::fs::create_dir(&folder).unwrap();
+        let path = folder.join("locked.figcraft");
+        write_board(&path, &board_with(&["mine"]));
+        let view = open(cx, &path);
+        let mode = |mode| std::fs::Permissions::from_mode(mode);
+        std::fs::set_permissions(&folder, mode(0o555)).unwrap();
+        add_sticky(&view, cx);
+        let kept = view.update(cx, |view, _| {
+            assert!(view.save_now().is_err(), "the save went through");
+            view.keep_unsaved(&tmp.0.join("app"))
+        });
+        std::fs::set_permissions(&folder, mode(0o755)).unwrap();
+        let kept = kept.unwrap().expect("no copy");
+        assert_eq!(kept.parent().unwrap(), tmp.0.join("app").join("unsaved"));
+        assert_eq!(saved_layers(&kept), 2);
+        assert_eq!(names(&folder), ["locked.figcraft"]);
+        assert_eq!(saved_layers(&path), 1);
+        // Kept once: the same edits again make no second copy.
+        let again = view.update(cx, |view, _| view.keep_unsaved(&tmp.0.join("app")));
+        assert_eq!(again, Ok(None));
+    }
+
+    /// CANVAS-CORE-4: quitting with edits the canvas couldn't save (another app wrote the file)
+    /// keeps them in a copy beside the file; it used to drop them with a line in the log.
+    #[gpui_kit::test]
+    fn quitting_keeps_edits_it_couldnt_save_in_a_copy(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("quit-unsaved");
+        let path = tmp.0.join("plan.figcraft");
+        write_board(&path, &board_with(&["mine"]));
+        let view = open(cx, &path);
+        let theirs = write_board(&path, &board_with(&["theirs"]));
+        add_sticky(&view, cx);
+        cx.quit();
+        assert!(
+            std::fs::read(&path).unwrap() == theirs,
+            "the file was saved over"
+        );
+        assert_eq!(unsaved_copies(&tmp.0, "plan"), [2]);
+        // The view, dropped after, keeps no second copy of the same edits.
+        drop(view);
+        cx.update(|_| {});
+        assert_eq!(unsaved_copies(&tmp.0, "plan"), [2]);
     }
 
     #[gpui_kit::test]

@@ -475,7 +475,8 @@ fn written_again(path: &Path) -> String {
 /// or saved it: the file there now has another stamp than `held`, or there was no file
 /// (`held` is `None`) and there is one now (CANVAS-CORE-5). No file there has nothing to
 /// replace. It is FigCraft's own rule and sentence (`refuse_overwriting_changes`, #1330), with
-/// Sawit's way out in place of FigCraft's Revert to saved and Save as.
+/// Sawit's way out in place of FigCraft's Revert to saved and Save as: Save as first, which keeps
+/// this version (CANVAS-CORE-4); a tab that closes keeps it in a copy too, beside the file.
 fn refuse_overwriting_changes(path: &Path, held: Option<Stamp>) -> Result<(), String> {
     let name = path
         .file_stem()
@@ -484,15 +485,15 @@ fn refuse_overwriting_changes(path: &Path, held: Option<Stamp>) -> Result<(), St
     match (held, Stamp::of(path)) {
         (Some(held), Some(now)) if now != held => Err(format!(
             "{name} wasn't saved: the file changed on disk since it was opened or saved here \
-             (another app or window wrote to it), and saving would replace those changes. Close \
-             its tab and open it again to load them, or save it under another name to keep this \
-             version as well."
+             (another app or window wrote to it), and saving would replace those changes. Save \
+             it under another name to keep this version, or close its tab and open the file \
+             again to load those changes."
         )),
         (None, Some(_)) => Err(format!(
             "{name} wasn't saved: a file was made on disk at its place since it was opened here \
-             (another app or window wrote it), and saving would replace it. Close its tab and \
-             open it again to load it, or save it under another name to keep this version as \
-             well."
+             (another app or window wrote it), and saving would replace it. Save it under \
+             another name to keep this version, or close its tab and open the file again to load \
+             that one."
         )),
         _ => Ok(()),
     }
@@ -1767,8 +1768,8 @@ mod tests {
             Some(
                 "design wasn't saved: the file changed on disk since it was opened or saved here \
                  (another app or window wrote to it), and saving would replace those changes. \
-                 Close its tab and open it again to load them, or save it under another name to \
-                 keep this version as well."
+                 Save it under another name to keep this version, or close its tab and open the \
+                 file again to load those changes."
             )
         );
         assert_eq!(std::fs::read(&path).unwrap(), theirs);
