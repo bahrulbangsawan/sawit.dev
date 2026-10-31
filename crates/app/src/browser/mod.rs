@@ -801,8 +801,15 @@ impl BrowserView {
                 "escape" => self.set_pick(PickMode::Off, cx),
                 _ => {}
             },
-            // A press in the page gave it AppKit's keyboard: GPUI's follows.
-            FromPage::Event(PageEvent::Pressed) => self.focus.focus(window, cx),
+            // The user's press in the page gave it AppKit's keyboard: GPUI's follows.
+            // Never while the tab is hidden: nobody can press in a hidden page, and a
+            // view that isn't drawn mustn't hold GPUI's keyboard (keys would then go
+            // from the window's root, past the workspace's shortcuts).
+            FromPage::Event(PageEvent::Pressed) => {
+                if self.visible {
+                    self.focus.focus(window, cx);
+                }
+            }
             FromPage::Event(PageEvent::Url(url)) => {
                 self.url = url;
                 self.design_url_changed();
@@ -1748,9 +1755,9 @@ mod tests {
         });
     }
 
-    /// A press in the page (the page agent's `pressed` message) moves GPUI's keyboard to the
-    /// browser's view, as AppKit gave the page its own: off the address field, the terminal or
-    /// Files, whose ⌘V, ⌘C and ⌘Z would otherwise act there.
+    /// The user's press in the page (the page agent's `pressed` message, sent for a real press
+    /// only) moves GPUI's keyboard to the browser's view, as AppKit gave the page its own: off
+    /// the address field, the terminal or Files, whose ⌘V, ⌘C and ⌘Z would otherwise act there.
     #[gpui_kit::test]
     fn a_press_in_the_page_moves_gpuis_keyboard_to_it(cx: &mut gpui_kit::TestAppContext) {
         cx.update(|cx| {
@@ -1771,5 +1778,39 @@ mod tests {
             })
         });
         cx.update(|window, cx| assert!(view.read(cx).focus.is_focused(window)));
+    }
+
+    /// A press reported while the tab is hidden leaves GPUI's keyboard where the user has it (the
+    /// terminal, say): the user can't press in a hidden page, and a view that isn't drawn must
+    /// not hold the keyboard, or keys go from the window's root and ⌘W, ⌘T and ⌘1 stop working.
+    #[gpui_kit::test]
+    fn a_press_in_a_hidden_page_leaves_the_keyboard(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::init(cx);
+        });
+        let cx = cx.add_empty_window();
+        let view = browser_view(cx);
+        let elsewhere = cx.update(|_, cx| cx.focus_handle());
+        cx.update(|window, cx| {
+            view.update(cx, |view, _| view.visible = false);
+            elsewhere.focus(window, cx);
+        });
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.receive(
+                    super::FromPage::Event(sawit_core::browser::PageEvent::Pressed),
+                    window,
+                    cx,
+                )
+            })
+        });
+        cx.update(|window, cx| {
+            assert!(
+                elsewhere.is_focused(window),
+                "a hidden page's press took the keyboard: the view has it = {}",
+                view.read(cx).focus.is_focused(window)
+            )
+        });
     }
 }

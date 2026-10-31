@@ -485,7 +485,8 @@ pub enum PageEvent {
     Hovered(Value),
     /// A shortcut pressed in the page: `toggle-annotate` or `escape`.
     Key(String),
-    /// A pointer went down in the page, which AppKit then gives the keyboard.
+    /// The user pressed in the page (a real `pointerdown`, never a script's), which AppKit then
+    /// gives the keyboard.
     Pressed,
 }
 
@@ -1137,9 +1138,24 @@ mod tests {
             Some(PageEvent::Pressed)
         );
         assert_eq!(parse_ipc("bad\npressed\ntrue", "tok"), None);
-        // The page agent sends it for every press, before the page's own listeners.
+        // The page agent sends it for the user's press only, before the page's own listeners.
+        // The agent's own clicks (`browser_click`) and a page script's are synthetic
+        // (`isTrusted` false): they give the page no keyboard, so they mustn't move GPUI's.
+        let start = AGENT_JS
+            .find(r#"addEventListener("pointerdown""#)
+            .expect("the agent's press listener");
+        let listener = &AGENT_JS[start..];
+        let listener = &listener[..listener.find('\n').unwrap_or(listener.len())];
         assert!(
-            AGENT_JS.contains(r#"addEventListener("pointerdown", () => send("pressed", true)"#)
+            listener.contains(r#"if (e.isTrusted) send("pressed", true);"#),
+            "{listener}"
+        );
+        assert!(listener.contains("capture: true"), "{listener}");
+        // Nothing else in the page script sends it.
+        assert_eq!(
+            page_script("tok").matches(r#""pressed""#).count(),
+            1,
+            "another sender of \"pressed\""
         );
     }
 
