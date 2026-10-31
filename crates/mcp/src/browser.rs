@@ -612,8 +612,9 @@ impl Sawit {
         );
         match v["markdown"].as_str() {
             Some(md) => ok(md.to_string()),
+            // Sawit-mcp can't see the user's keymap, which may give Annotate another key.
             None => ok(
-                "No annotations yet. The user adds them with Annotate (⌘⇧.) in the Browser tab."
+                "No annotations yet. The user adds them with Annotate in the Browser tab's toolbar (⇧⌘. by default)."
                     .to_string(),
             ),
         }

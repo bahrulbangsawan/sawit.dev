@@ -1099,7 +1099,7 @@ impl Focusable for BrowserView {
 }
 
 impl Render for BrowserView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(error) = &self.error {
             return Placeholder::error("The browser couldn't start")
                 .detail(error.clone())
@@ -1151,7 +1151,7 @@ impl Render for BrowserView {
                 this.annotate_key(window, cx);
             }))
             .size_full()
-            .child(self.toolbar(cx))
+            .child(self.toolbar(window, cx))
             .child(
                 h_flex()
                     .flex_1()
@@ -1558,5 +1558,35 @@ mod tests {
         assert_eq!(PickMode::Off.as_str(), "off");
         assert_eq!(PickMode::Annotate.as_str(), "annotate");
         assert_eq!(PickMode::Inspect.as_str(), "inspect");
+    }
+
+    /// The Annotate button's tooltip says the key the keymap gives Annotate: ⇧⌘. by default, the
+    /// user's own once they change it, and none once they take that out too.
+    #[gpui_kit::test]
+    fn the_annotate_tooltip_follows_the_keymap(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::{Action, KeyBinding, KeyBindingContextPredicate, Unbind, VisualTestContext};
+        cx.update(super::init);
+        let cx = cx.add_empty_window();
+        let tooltip = |cx: &mut VisualTestContext| {
+            cx.update(|window, _| super::toolbar::annotate_tooltip(window))
+        };
+        // The user's binding of `keys` to `action` in the browser, as the keymap file binds it.
+        let bind = |keys: &str, action: Box<dyn Action>, cx: &mut VisualTestContext| {
+            cx.update(|_, cx| {
+                let browser = KeyBindingContextPredicate::parse("Browser").ok();
+                let context = browser.map(std::rc::Rc::new);
+                let binding = KeyBinding::load(keys, action, context, false, None, cx).unwrap();
+                cx.bind_keys([binding.with_meta(crate::keymap::USER)]);
+            })
+        };
+        let off = || Box::new(Unbind("browser::ToggleAnnotate".into()));
+        assert_eq!(tooltip(cx).as_ref(), "Annotate (⇧⌘.)");
+
+        bind("cmd-shift-.", off(), cx);
+        bind("ctrl-alt-a", Box::new(super::ToggleAnnotate), cx);
+        assert_eq!(tooltip(cx).as_ref(), "Annotate (⌃⌥A)");
+
+        bind("ctrl-alt-a", off(), cx);
+        assert_eq!(tooltip(cx).as_ref(), "Annotate");
     }
 }

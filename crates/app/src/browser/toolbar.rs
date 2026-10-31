@@ -14,12 +14,12 @@ use sawit_core::browser::{BrowserOp, DEVICES, ViewportMode};
 use super::{BrowserView, Panel, TOOLBAR_HEIGHT, rotated};
 
 impl BrowserView {
-    pub(super) fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn toolbar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let loading = self.loading;
         let waiting = self.pick_waiting;
-        let tip = |panel: Panel, text: &'static str| {
+        let tip = |panel: Panel, text: SharedString| {
             if waiting && self.panel() == Some(panel) {
-                "Waiting for the page…"
+                "Waiting for the page…".into()
             } else {
                 text
             }
@@ -85,7 +85,7 @@ impl BrowserView {
                     .ghost()
                     .xsmall()
                     .icon(Lucide::Pencil)
-                    .tooltip(tip(Panel::Annotate, "Annotate (⌘⇧.)"))
+                    .tooltip(tip(Panel::Annotate, annotate_tooltip(window)))
                     .selected(self.panel() == Some(Panel::Annotate))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.take_keyboard(window, cx);
@@ -97,7 +97,7 @@ impl BrowserView {
                     .ghost()
                     .xsmall()
                     .icon(Lucide::Palette)
-                    .tooltip(tip(Panel::Design, "Design"))
+                    .tooltip(tip(Panel::Design, "Design".into()))
                     .selected(self.panel() == Some(Panel::Design))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.take_keyboard(window, cx);
@@ -125,6 +125,15 @@ impl BrowserView {
                         drop(this.apply(BrowserOp::Devtools, cx));
                     })),
             )
+    }
+}
+
+/// The Annotate button's tooltip, with the key that toggles Annotate as the keymap is now
+/// (`Annotate (⇧⌘.)`); its name alone when no key does.
+pub(super) fn annotate_tooltip(window: &Window) -> SharedString {
+    match crate::keymap::keys_for(&super::ToggleAnnotate, "Browser", window) {
+        keys if keys.is_empty() => "Annotate".into(),
+        keys => format!("Annotate ({keys})").into(),
     }
 }
 

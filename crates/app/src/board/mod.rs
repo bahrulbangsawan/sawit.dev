@@ -4561,6 +4561,48 @@ mod tests {
         }
     }
 
+    /// The Maximize button's tooltip says the workspace's key for it as the keymap is now: ⇧⌘↩ by
+    /// default, the key the user gives it in the keymap editor instead, and none once they take
+    /// that one out too.
+    #[gpui_kit::test]
+    fn the_maximize_tooltip_follows_the_keymap(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("maximize-tooltip");
+        cx.update(bind_app_keys);
+        cx.update(|cx| crate::keymap::init_at(tmp.0.join("keymap.json"), cx));
+        let cx = cx.add_empty_window();
+        let tooltip =
+            |cx: &mut VisualTestContext| cx.update(|window, _| top_bar::maximize_tooltip(window));
+        // The row of the keymap that binds Maximize now.
+        let bound = |cx: &mut VisualTestContext| {
+            cx.update(|_, cx| {
+                let rows = crate::keymap::store(cx).read(cx).rows(false, cx);
+                let row = rows.into_iter().find(|row| {
+                    row.action.as_ref() == "workspace::ToggleMaximizePane"
+                        && !matches!(row.source, crate::keymap::Source::Removed { .. })
+                });
+                row.unwrap().source
+            })
+        };
+        assert_eq!(tooltip(cx), "Maximize  ⇧⌘↩");
+
+        let default = bound(cx);
+        let maximize = "workspace::ToggleMaximizePane";
+        let rebound = cx.update(|_, cx| {
+            crate::keymap::store(cx).update(cx, |store, cx| {
+                store.change(default, Some("Workspace"), "ctrl-alt-m", maximize, None, cx)
+            })
+        });
+        assert_eq!(rebound, Ok(()));
+        assert_eq!(tooltip(cx), "Maximize  ⌃⌥M");
+
+        let users = bound(cx);
+        let removed = cx.update(|_, cx| {
+            crate::keymap::store(cx).update(cx, |store, cx| store.remove(users, cx))
+        });
+        assert_eq!(removed, Ok(()));
+        assert_eq!(tooltip(cx), "Maximize");
+    }
+
     #[test]
     fn the_top_bar_names_the_canvas_and_shows_its_zoom() {
         let name = |path: &str| top_bar::document_name(Path::new(path));

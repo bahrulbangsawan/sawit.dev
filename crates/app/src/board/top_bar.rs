@@ -49,7 +49,7 @@ pub(super) const DESIGN_ICON: Lucide = Lucide::PanelRight;
 /// The top bar of `view`'s canvas.
 pub(super) fn render_top_bar(
     view: &mut BoardView,
-    _: &mut Window,
+    window: &mut Window,
     cx: &mut Context<BoardView>,
 ) -> impl IntoElement + use<> {
     let this = cx.entity().downgrade();
@@ -113,9 +113,7 @@ pub(super) fn render_top_bar(
                         .ghost()
                         .small()
                         .icon(MAXIMIZE_ICON)
-                        // The workspace's key for it, which the canvas leaves to Sawit unless it
-                        // edits text (spec, "Keyboard conflict policy").
-                        .tooltip("Maximize  ⇧⌘↩")
+                        .tooltip(maximize_tooltip(window))
                         .debug_selector(|| "board-maximize".into())
                         .on_click(move |_, _, cx| {
                             let _ = this.update(cx, |_, cx| cx.emit(ToggleCanvasMaximize));
@@ -137,6 +135,15 @@ pub(super) fn document_name(path: &Path) -> SharedString {
 /// The zoom as the zoom button shows it: `100%` at 1.
 pub(super) fn zoom_label(zoom: f64) -> String {
     format!("{:.0}%", zoom * 100.0)
+}
+
+/// The Maximize button's tooltip, with the workspace's key for it as the keymap is now
+/// (`Maximize  ⇧⌘↩`), which the canvas leaves to Sawit unless it edits text (spec, "Keyboard
+/// conflict policy").
+pub(super) fn maximize_tooltip(window: &Window) -> String {
+    let maximize = &crate::workspace::ToggleMaximizePane;
+    let keys = crate::keymap::keys_for(maximize, "Workspace", window);
+    with_keys("Maximize", (!keys.is_empty()).then(|| keys.to_string()))
 }
 
 /// `label` with the keys that run it after two spaces, as the chrome's tooltips read them
