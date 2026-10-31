@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::ffi::OsString;
+use std::net::IpAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -343,8 +344,24 @@ fn local_v4(ip: std::net::Ipv4Addr) -> bool {
         || (o[0] == 100 && o[1] & 0xc0 == 64)
 }
 
-/// Whether `host` (a name or an address) is this Mac or its network: loopback, private,
-/// link-local, shared (100.64/10) and unique-local addresses, `localhost` and `.local` names.
+/// Whether `ip` is this Mac or its network: loopback, private, link-local, shared
+/// (100.64/10) and unique-local addresses.
+pub fn is_local_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => local_v4(v4),
+        IpAddr::V6(v6) => {
+            let first = v6.segments()[0];
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || first & 0xfe00 == 0xfc00
+                || first & 0xffc0 == 0xfe80
+                || v6.to_ipv4_mapped().is_some_and(local_v4)
+        }
+    }
+}
+
+/// Whether `host` (a name or an address) is this Mac or its network: an address
+/// [`is_local_ip`] counts, `localhost` and `.local` names.
 pub fn is_local_host(host: &str) -> bool {
     let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
     let host = host.trim_start_matches('[').trim_end_matches(']');
@@ -358,14 +375,48 @@ pub fn is_local_host(host: &str) -> bool {
         .unwrap_or("")
         .parse::<std::net::Ipv6Addr>()
     {
-        let first = ip.segments()[0];
-        return ip.is_loopback()
-            || ip.is_unspecified()
-            || first & 0xfe00 == 0xfc00
-            || first & 0xffc0 == 0xfe80
-            || ip.to_ipv4_mapped().is_some_and(local_v4);
+        return is_local_ip(IpAddr::V6(ip));
     }
     host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local")
+}
+
+/// Whether the page at `page_url` (the tab's URL, by Sawit's word) is on this Mac or its
+/// network: an http(s) page whose host is named so ([`is_local_host`]), or whose every
+/// address is (`addrs`, where its host resolves; none when it didn't).
+pub fn page_is_local(page_url: &str, addrs: &[IpAddr]) -> bool {
+    if !is_http_url(page_url) {
+        return false;
+    }
+    let Some(host) = url_host(page_url) else {
+        return false;
+    };
+    is_local_host(&host) || (!addrs.is_empty() && addrs.iter().all(|ip| is_local_ip(*ip)))
+}
+
+/// How long a page's host may take to resolve; after that it counts as on the web.
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// [`page_is_local`], with the page's host looked up as the system does (the hosts file,
+/// `/etc/resolver`, DNS): a dev site on `myapp.test` (Herd, Valet), `*.ddev.site` or `lvh.me`
+/// is on this Mac though its name doesn't say so.
+pub async fn local_page(page_url: &str) -> bool {
+    if page_is_local(page_url, &[]) {
+        return true;
+    }
+    let Some(host) = url_host(page_url).filter(|_| is_http_url(page_url)) else {
+        return false;
+    };
+    let lookup = tokio::net::lookup_host((host.as_str(), 0));
+    let addrs: Vec<IpAddr> = match tokio::time::timeout(RESOLVE_TIMEOUT, lookup).await {
+        Ok(Ok(found)) => found.map(|a| a.ip()).collect(),
+        _ => Vec::new(),
+    };
+    page_is_local(page_url, &addrs)
+}
+
+fn is_http_url(url: &str) -> bool {
+    let l = url.trim().to_ascii_lowercase();
+    l.starts_with("http://") || l.starts_with("https://")
 }
 
 /// Whether Sawit may fetch `url` for the page at `page_url`: a host on this Mac or its
@@ -377,11 +428,12 @@ pub fn may_fetch_for(url: &str, page_url: &str) -> bool {
     !is_local_host(&host) || url_host(page_url).is_some_and(|p| p == host)
 }
 
-/// Whether what curl got for `href` may be kept for the page at `page_url` (Sawit's own URL
-/// for the tab, not the page's word): asked for, and ended (redirects followed), at hosts
+/// Whether a sheet curl got for `href` may go back to the page at `page_url` (Sawit's own
+/// URL for the tab, not the page's word): asked for, and ended (redirects followed), at hosts
 /// the page may reach ([`may_fetch_for`]), and from a public address (`remote_ip`) — unless
 /// the page is itself on this Mac or its network and the answer from its own host. An
-/// answer whose address curl didn't report isn't kept. Otherwise why not.
+/// answer whose address curl didn't report isn't kept. Otherwise why not. (Downloads, which
+/// only reach the disk, follow [`download_allowed`].)
 pub fn answer_allowed(
     href: &str,
     final_url: &str,
@@ -402,6 +454,45 @@ pub fn answer_allowed(
         return Err(format!("its host is at {ip}"));
     }
     Ok(())
+}
+
+/// Whether a page on the web may have Sawit download `url`: a host Sawit can name, and not
+/// one on this Mac or its network.
+fn may_download(url: &str) -> bool {
+    url_host(url).is_some_and(|h| !is_local_host(&h))
+}
+
+/// Whether a file curl downloaded for an export may be kept. The file only reaches the
+/// disk, never the page, so a page on this Mac or its network (`local_page`, from
+/// [`local_page`]) keeps whatever it listed: a dev site's assets are on this Mac, often on
+/// another local name than the page's (Vite's `127.0.0.1:5173` for a `.test` page). A page on
+/// the web keeps nothing from this Mac or its network: hosts named so are refused where curl
+/// asked and where redirects ended (`final_url`), and the address curl got the file from
+/// (`remote_ip`) must be public, which a name resolving to this Mac fails. Through a proxy
+/// (`proxied`, curl's `%{proxy_used}`) that address is the proxy's, so the names decide.
+/// Otherwise why not.
+pub fn download_allowed(
+    href: &str,
+    final_url: &str,
+    remote_ip: &str,
+    proxied: bool,
+    local_page: bool,
+) -> Result<(), String> {
+    if local_page {
+        return Ok(());
+    }
+    if !may_download(href) || !may_download(final_url) {
+        return Err("it is on this Mac or its network".into());
+    }
+    if proxied {
+        return Ok(());
+    }
+    let ip = remote_ip.trim();
+    match ip.parse::<IpAddr>() {
+        Err(_) => Err(format!("curl didn't say where its host is (“{ip}”)")),
+        Ok(addr) if is_local_ip(addr) => Err(format!("its host is at {ip}")),
+        Ok(_) => Ok(()),
+    }
 }
 
 /// The text of a sheet fetched from `href`, when it may go back to the page at `page_url`:
@@ -542,8 +633,19 @@ fn claim(total: &AtomicU64, budget: u64, most: u64) -> Option<u64> {
     }
 }
 
-/// What curl writes after a download (to stdout, the file going to `-o`).
-const DOWNLOAD_OUT: &str = "%{url_effective}\n%{remote_ip}";
+/// What curl writes after a download (to stdout, the file going to `-o`). `proxy_used` is
+/// curl 8.7's (macOS 15); an older curl writes nothing for it.
+const DOWNLOAD_OUT: &str = "%{url_effective}\n%{remote_ip}\n%{proxy_used}";
+
+/// Where a download ended, the address curl got it from and whether through a proxy, from
+/// what curl wrote after it ([`DOWNLOAD_OUT`]).
+fn download_report(stdout: &str) -> (&str, &str, bool) {
+    let mut lines = stdout.lines().map(str::trim);
+    let final_url = lines.next().unwrap_or("");
+    let remote_ip = lines.next().unwrap_or("");
+    let proxied = lines.next() == Some("1");
+    (final_url, remote_ip, proxied)
+}
 
 #[allow(clippy::too_many_arguments)]
 async fn fetch_one(
@@ -552,7 +654,7 @@ async fn fetch_one(
     rel: String,
     dir: &Path,
     referer: &str,
-    page: &str,
+    local_page: bool,
     total: &AtomicU64,
     budget: u64,
 ) -> AssetOutcome {
@@ -576,8 +678,8 @@ async fn fetch_one(
     let err = match res {
         // Redirects may have ended on this Mac or its network.
         Ok(o) if o.code == Some(0) => {
-            let (final_url, ip) = o.stdout.trim().split_once('\n').unwrap_or(("", ""));
-            answer_allowed(url, final_url, ip, page)
+            let (final_url, ip, proxied) = download_report(&o.stdout);
+            download_allowed(url, final_url, ip, proxied, local_page)
                 .err()
                 .map(|why| format!("Left out: {why}."))
         }
@@ -628,12 +730,40 @@ pub fn is_skipped_video(o: &AssetOutcome) -> bool {
 }
 
 /// Downloads `items` into `assets_dir`. `page` is the tab's URL by Sawit's word (not the
-/// page's, which `referer` may be): only for a `file://` page are `file://` assets copied.
+/// page's, which `referer` may be): only for a `file://` page are `file://` assets copied, and
+/// what a download may fetch and keep follows where the page is ([`local_page`], looked up
+/// once something is to be downloaded; [`download_allowed`]).
 pub async fn download_all(
     items: Vec<AssetRef>,
     assets_dir: &Path,
     referer: &str,
     page: &str,
+    include_videos: bool,
+    budget: u64,
+    progress: impl Fn(usize, usize) + Send + Sync,
+) -> Vec<AssetOutcome> {
+    download_for(
+        items,
+        assets_dir,
+        referer,
+        page,
+        None,
+        include_videos,
+        budget,
+        progress,
+    )
+    .await
+}
+
+/// [`download_all`], with whether the page is on this Mac or its network known
+/// (`page_here`) or, when `None`, looked up the first time it matters.
+#[allow(clippy::too_many_arguments)]
+async fn download_for(
+    items: Vec<AssetRef>,
+    assets_dir: &Path,
+    referer: &str,
+    page: &str,
+    mut page_here: Option<bool>,
     include_videos: bool,
     budget: u64,
     progress: impl Fn(usize, usize) + Send + Sync,
@@ -682,17 +812,23 @@ pub async fn download_all(
                 0,
                 Some(format!("Can't download {scheme}: URLs.")),
             ))
-        } else if url.is_some_and(|u| !may_fetch_for(u, page)) {
-            Some(outcome(
-                a,
-                None,
-                0,
-                Some("Left out: it is on this Mac or its network.".into()),
-            ))
         } else if let Some(u) = url {
-            let rel = format!("{}/{}", sub_dir(a.kind), file_name(a, &mut taken));
-            remote.push((i, u.to_string(), rel));
-            None
+            let here = match page_here {
+                Some(known) => known,
+                None => *page_here.insert(local_page(page).await),
+            };
+            if here || may_download(u) {
+                let rel = format!("{}/{}", sub_dir(a.kind), file_name(a, &mut taken));
+                remote.push((i, u.to_string(), rel));
+                None
+            } else {
+                Some(outcome(
+                    a,
+                    None,
+                    0,
+                    Some("Left out: it is on this Mac or its network.".into()),
+                ))
+            }
         } else {
             Some(outcome(a, None, 0, Some("No source to download.".into())))
         };
@@ -703,6 +839,8 @@ pub async fn download_all(
         }
     }
 
+    // Known by now whenever there is something to download.
+    let here = page_here.unwrap_or(false);
     let items_ref = &items;
     let total_ref = &total;
     let mut stream = futures::stream::iter(remote.into_iter().map(|(i, url, rel)| async move {
@@ -712,7 +850,7 @@ pub async fn download_all(
             rel,
             assets_dir,
             referer,
-            page,
+            here,
             total_ref,
             budget,
         )
@@ -1106,9 +1244,8 @@ mod tests {
         );
     }
 
-    /// An export's downloads follow the stylesheets' host rule: a page on the web can't have
-    /// Sawit fetch, and save, what is on this Mac or its network; a page there gets its own
-    /// host's files.
+    /// A page on the web can't have Sawit fetch, and save, what is on this Mac or its
+    /// network; a page there gets its files. Where the page is follows the tab's own URL.
     #[tokio::test]
     async fn a_web_page_cant_save_what_is_on_this_mac() {
         let origin = zeros_server();
@@ -1190,6 +1327,214 @@ mod tests {
             "192.168.1.2",
             local
         ));
+    }
+
+    /// A dev site on a name that resolves to this Mac (Herd and Valet's `.test`, DDEV's
+    /// `*.ddev.site`, `lvh.me`, a hosts-file name) is on this Mac, though its name doesn't say
+    /// so; a page with any public address, or none, is on the web.
+    #[test]
+    fn a_dev_site_on_a_name_that_resolves_here_is_local() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        assert!(page_is_local("http://myapp.test/", &[ip("127.0.0.1")]));
+        assert!(page_is_local(
+            "https://shop.ddev.site/",
+            &[ip("127.0.0.1"), ip("::1")]
+        ));
+        assert!(page_is_local("http://lvh.me:3000/", &[ip("127.0.0.1")]));
+        assert!(page_is_local("http://nas.lan:8080/", &[ip("192.168.1.10")]));
+        // Named so: no lookup needed.
+        assert!(page_is_local("http://localhost:5173/", &[]));
+        assert!(page_is_local("http://127.0.0.1:5173/", &[]));
+        assert!(page_is_local("http://[::1]:5173/", &[]));
+        assert!(page_is_local("http://printer.local/", &[]));
+        // On the web.
+        assert!(!page_is_local(
+            "https://shop.example/",
+            &[ip("93.184.215.14")]
+        ));
+        assert!(!page_is_local(
+            "https://evil.example/",
+            &[ip("127.0.0.1"), ip("93.184.215.14")]
+        ));
+        assert!(!page_is_local("https://shop.example/", &[]));
+        // Not a web page.
+        assert!(!page_is_local(
+            "file:///Users/a/index.html",
+            &[ip("127.0.0.1")]
+        ));
+        assert!(!page_is_local("about:blank", &[ip("127.0.0.1")]));
+        assert!(is_local_ip(ip("::ffff:10.0.0.1")) && !is_local_ip(ip("2606:4700::1")));
+    }
+
+    #[tokio::test]
+    async fn local_pages_by_name_need_no_lookup() {
+        assert!(local_page("http://localhost:5173/").await);
+        assert!(local_page("http://127.0.0.1/").await);
+        assert!(local_page("http://app.localhost./").await);
+        assert!(!local_page("file:///Users/a/index.html").await);
+        assert!(!local_page("about:blank").await);
+    }
+
+    /// A page on this Mac or its network keeps every download: its own (a `.test` page's,
+    /// from 127.0.0.1), what another local name serves it (Vite's `127.0.0.1:5173`), and the
+    /// web's. The files go to the disk, never back to the page.
+    #[test]
+    fn a_local_page_keeps_every_download() {
+        let ok = |href: &str, final_url: &str, ip: &str| {
+            download_allowed(href, final_url, ip, false, true).is_ok()
+        };
+        let own = "http://myapp.test/logo.png";
+        assert!(ok(own, own, "127.0.0.1"));
+        let vite = "http://127.0.0.1:5173/resources/hero.png";
+        assert!(ok(vite, vite, "127.0.0.1"));
+        assert!(ok(
+            "http://localhost:5173/a.png",
+            "http://192.168.1.2/a.png",
+            "192.168.1.2"
+        ));
+        let cdn = "https://cdn.example/a.png";
+        assert!(ok(cdn, cdn, "93.184.215.14"));
+    }
+
+    /// A page on the web keeps no download from this Mac or its network: not from a host
+    /// named so, where it asked or where redirects ended, and not from a local address (a
+    /// public name resolving here). Through a proxy the address is the proxy's, so the names
+    /// decide.
+    #[test]
+    fn a_web_page_keeps_no_download_from_this_mac() {
+        let ok = |href: &str, final_url: &str, ip: &str, proxied: bool| {
+            download_allowed(href, final_url, ip, proxied, false).is_ok()
+        };
+        let cdn = "https://cdn.example/a.png";
+        assert!(ok(cdn, cdn, "93.184.215.14", false));
+        let dev = "http://127.0.0.1:5173/a.png";
+        assert!(!ok(dev, dev, "127.0.0.1", false));
+        let printer = "http://printer.local/a.png";
+        assert!(!ok(printer, printer, "192.168.1.2", false));
+        assert!(!ok(cdn, dev, "127.0.0.1", false));
+        assert!(!ok(cdn, cdn, "192.168.1.2", false));
+        let dev_name = "http://myapp.test/a.png";
+        assert!(!ok(dev_name, dev_name, "127.0.0.1", false));
+        assert!(!ok(cdn, cdn, "100.64.3.4", false));
+        assert!(!ok(cdn, cdn, "", false));
+        assert!(!ok(
+            "https://user@cdn.example/a.png",
+            cdn,
+            "93.184.215.14",
+            false
+        ));
+        // Through a proxy on the office network.
+        assert!(ok(cdn, cdn, "10.0.0.5", true));
+        assert!(!ok(dev, dev, "10.0.0.5", true));
+        assert!(!ok(cdn, "http://192.168.1.2/a.png", "10.0.0.5", true));
+    }
+
+    #[test]
+    fn curl_says_where_a_download_came_from() {
+        let url = "https://cdn.example/a.png";
+        assert_eq!(
+            download_report("https://cdn.example/a.png\n93.184.215.14\n0"),
+            (url, "93.184.215.14", false)
+        );
+        assert_eq!(
+            download_report("https://cdn.example/a.png\n10.0.0.5\n1"),
+            (url, "10.0.0.5", true)
+        );
+        // A curl before 8.7 (macOS 13 and 14) writes nothing for `proxy_used`.
+        assert_eq!(
+            download_report("https://cdn.example/a.png\n93.184.215.14\n"),
+            (url, "93.184.215.14", false)
+        );
+        assert_eq!(download_report(""), ("", "", false));
+    }
+
+    /// A page on `localhost` saves its assets from another local name: `127.0.0.1` (the
+    /// page's own server here) and `localhost`.
+    #[tokio::test]
+    async fn a_localhost_page_saves_its_assets_from_any_local_name() {
+        let origin = zeros_server();
+        let port = origin.rsplit(':').next().unwrap().to_string();
+        let page = format!("http://localhost:{port}/");
+        let items = vec![
+            asset(
+                AssetKind::Image,
+                Some(&format!("http://127.0.0.1:{port}/plain/10/hero.png")),
+                None,
+                "hero",
+            ),
+            asset(
+                AssetKind::Image,
+                Some(&format!("http://localhost:{port}/plain/20/logo.png")),
+                None,
+                "logo",
+            ),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let out = download_all(items, dir.path(), &page, &page, false, MAX_TOTAL, |_, _| {}).await;
+        assert_eq!(
+            out[0].file.as_deref(),
+            Some("images/hero.png"),
+            "{:?}",
+            out[0]
+        );
+        assert_eq!(
+            out[1].file.as_deref(),
+            Some("images/logo.png"),
+            "{:?}",
+            out[1]
+        );
+        assert_eq!(bytes_in(dir.path()), 30);
+    }
+
+    /// A `.test` page (resolved to this Mac) saves what Vite serves it from `127.0.0.1`; had
+    /// its name resolved to the web, that file would be left out.
+    #[tokio::test]
+    async fn a_test_page_saves_what_vite_serves_it() {
+        let origin = zeros_server();
+        let page = "http://myapp.test/";
+        let vite = || {
+            vec![asset(
+                AssetKind::Image,
+                Some(&format!("{origin}/plain/10/app.png")),
+                None,
+                "app",
+            )]
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let out = download_for(
+            vite(),
+            dir.path(),
+            page,
+            page,
+            Some(true),
+            false,
+            1 << 20,
+            |_, _| {},
+        )
+        .await;
+        assert_eq!(
+            out[0].file.as_deref(),
+            Some("images/app.png"),
+            "{:?}",
+            out[0]
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let out = download_for(
+            vite(),
+            dir.path(),
+            page,
+            page,
+            Some(false),
+            false,
+            1 << 20,
+            |_, _| {},
+        )
+        .await;
+        assert_eq!(
+            out[0].error.as_deref(),
+            Some("Left out: it is on this Mac or its network.")
+        );
+        assert_eq!(bytes_in(dir.path()), 0);
     }
 
     /// A host with letters curl may read another way (no IDN support in macOS's curl) isn't
