@@ -36,7 +36,9 @@
 //! Nor may a `command` op write over a canvas file. An engine command that writes where its `path`
 //! says (`file.export`, `variable.export`...: [`WRITES_TO_PATH`]) is refused, as the steps of a
 //! `command.batch` too, when `path` names a `.figcraft` or `.excalidraw` file or a copy Sawit keeps
-//! of one ([`is_canvas_file`]): with the app closed nothing else holds the board.
+//! of one ([`is_canvas_file`]): with the app closed nothing else holds the board. So is a batch
+//! step of one that takes its params from another step's result, which names a path only as the
+//! batch runs.
 //!
 //! It also holds the document's side of the commands Sawit carries out itself instead of the
 //! engine, which the canvas's menus and keys run ([`export_page`], [`frames_pdf`], [`copy_as`],
@@ -203,7 +205,9 @@ const MERMAID_GAP: f64 = 100.0;
 /// - `command` (`{command, params?}`) runs engine command `command` and answers `{ok, result}`,
 ///   or the engine's own `error`. It refuses the commands Sawit handles itself, as the steps of a
 ///   `command.batch` too ("<id> is handled by Sawit"), and the commands that write a file where
-///   their `path` says when that is a canvas file ("<id> would overwrite a canvas file"). A command
+///   their `path` says when that is a canvas file ("<id> would overwrite a canvas file"), or, in a
+///   batch, is taken from another step's result ("<id> in a command.batch needs its params
+///   written out: ..."). A command
 ///   that would leave the canvas with another document open or on show is undone and answers
 ///   "<id> would open or switch documents; the canvas keeps its one document".
 /// - `commands` answers `{ok, commands: [{id, label, params}]}`: the engine's commands that
@@ -839,8 +843,19 @@ enum Failed {
 
 /// Why the `command` op won't run `id` with `params`, if it won't. `id` itself, or a step of a
 /// `command.batch`, however deeply batches are nested, is one that Sawit handles
-/// ([`HANDLED_BY_SAWIT`]), or that would write over a canvas file ([`WRITES_TO_PATH`]).
+/// ([`HANDLED_BY_SAWIT`]), or that would write over a canvas file ([`WRITES_TO_PATH`]), or a step
+/// that writes where its params say and takes any of them from another step's result
+/// ([`refers_to_a_step`]): what that names isn't known until the batch runs (CANVAS-CORE-7).
 fn refused(id: &str, params: &Value) -> Option<Refusal> {
+    refused_in(id, params, false)
+}
+
+/// [`refused`] for `id`, a step of a `command.batch` when `in_batch` says so. Such a step's params
+/// can be taken from another step's result as the batch runs: a writer's are then no text to
+/// check, and the step is refused. A command's own params, outside a batch, are never resolved.
+/// Nor are a nested batch's: the engine passes them on as written, and the nested batch puts its
+/// own steps' results in place as they run, so its steps are checked as the steps of a batch.
+fn refused_in(id: &str, params: &Value, in_batch: bool) -> Option<Refusal> {
     if let Some(handled) = handled(id) {
         return Some(Refusal::Handled(handled));
     }
@@ -848,14 +863,32 @@ fn refused(id: &str, params: &Value) -> Option<Refusal> {
         let steps = params.get("commands")?.as_array()?;
         return steps.iter().find_map(|step| {
             let id = step.get("command")?.as_str()?;
-            refused(id, step.get("params").unwrap_or(&Value::Null))
+            refused_in(id, step.get("params").unwrap_or(&Value::Null), true)
         });
     }
     if !WRITES_TO_PATH.contains(&id) {
         return None;
     }
+    if in_batch && refers_to_a_step(params) {
+        return Some(Refusal::Unchecked(id.to_string()));
+    }
     let path = params.get("path")?.as_str()?;
     is_canvas_file(Path::new(path)).then(|| Refusal::Overwrites(id.to_string()))
+}
+
+/// Whether `params`, or anything in them, is a reference to another step's result, which
+/// FigCraft's `command.batch` puts in its place as it runs the step: `{"$step": n}` or
+/// `{"$ref": name}`, each with an optional `field`.
+fn refers_to_a_step(params: &Value) -> bool {
+    match params {
+        Value::Object(map) => {
+            map.contains_key("$step")
+                || map.contains_key("$ref")
+                || map.values().any(refers_to_a_step)
+        }
+        Value::Array(items) => items.iter().any(refers_to_a_step),
+        _ => false,
+    }
 }
 
 /// Why a command op is refused before anything runs ([`refused`]).
@@ -867,6 +900,13 @@ enum Refusal {
     /// The command, by its id, would write over a canvas file.
     #[error("{0} would overwrite a canvas file")]
     Overwrites(String),
+    /// A step of a batch that writes where its params say takes them from another step's result,
+    /// so whether it writes a canvas file isn't known before the batch runs.
+    #[error(
+        "{0} in a command.batch needs its params written out: taken from another step's result, \
+         what it writes can't be checked for a canvas file before the batch runs"
+    )]
+    Unchecked(String),
 }
 
 /// The documents a session holds, as a command op found them: their uids in order, and the uid of
@@ -1831,6 +1871,118 @@ mod tests {
         assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
         assert_eq!(board.session.undo_depth(), (0, 0));
         assert_eq!(std::fs::read(&canvas).unwrap(), was);
+    }
+
+    /// CANVAS-CORE-7: a step of a `command.batch` can take its params from an earlier step's
+    /// result (`{"$ref": name, "field": …}`, `{"$step": n}`), which the engine puts in place as the
+    /// batch runs. A writer's path taken so is no text to check before then, and went through: the
+    /// batch below wrote SVG over the canvas file. Such a writer is refused, and nothing runs.
+    #[test]
+    fn a_batch_writer_whose_path_comes_from_another_step_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let canvas = canvas_files(dir.path()).remove(0);
+        let was = std::fs::read(&canvas).unwrap();
+        let mut board = board();
+        send(&mut board, "board.sticky", json!({"x": 0, "y": 0}));
+        let before = board.doc().unwrap();
+        let by_name = json!({"$ref": "pages", "field": "0/name"});
+        let by_step = json!({"$step": 1, "field": "0/name"});
+        for params in [
+            json!({"path": by_name}),
+            json!({"path": by_step}),
+            json!({"$ref": "pages", "field": "0"}),
+            json!({"format": "svg", "path": [by_name]}),
+        ] {
+            let reply = send(
+                &mut board,
+                "command.batch",
+                json!({"commands": [
+                    {"command": "page.rename", "params": {"name": canvas}},
+                    {"command": "page.list", "as": "pages"},
+                    {"command": "file.exportSvg", "params": params},
+                ]}),
+            );
+            assert_eq!(reply["ok"], json!(false), "{params}: {reply}");
+            let error = reply["error"].as_str().unwrap();
+            assert!(
+                error.starts_with("file.exportSvg in a command.batch needs its params written out"),
+                "{params}: {error}"
+            );
+            assert_eq!(std::fs::read(&canvas).unwrap(), was, "{params}");
+        }
+        // So is such a writer in a nested batch, whose references are to the nested batch's own
+        // steps.
+        let reply = send(
+            &mut board,
+            "command.batch",
+            json!({"commands": [
+                {"command": "command.batch", "params": {"commands": [
+                    {"command": "page.rename", "params": {"name": canvas}},
+                    {"command": "page.list", "as": "pages"},
+                    {"command": "file.exportSvg", "params": {"path": by_name}},
+                ]}},
+            ]}),
+        );
+        let error = reply["error"].as_str().unwrap_or_default();
+        assert!(
+            error.starts_with("file.exportSvg in a command.batch needs its params written out"),
+            "{reply}"
+        );
+        assert_eq!(std::fs::read(&canvas).unwrap(), was);
+        // A nested batch's own params are passed on as written, never taken from a step: one that
+        // is a reference holds no steps, and the engine refuses it.
+        let reply = send(
+            &mut board,
+            "command.batch",
+            json!({"commands": [
+                {"command": "page.list", "as": "pages"},
+                {"command": "command.batch", "params": {"$ref": "pages", "field": "0"}},
+            ]}),
+        );
+        assert_eq!(reply["ok"], json!(false), "{reply}");
+        assert_eq!(std::fs::read(&canvas).unwrap(), was);
+        // Outside a batch nothing is taken from a step, so nothing is refused for it: a path that
+        // is no text writes nothing (the engine gives the export back instead).
+        let top = send(
+            &mut board,
+            "file.exportSvg",
+            json!({"path": {"$ref": "pages"}}),
+        );
+        assert_eq!(top["ok"], json!(true), "{top}");
+        assert!(top["result"]["data"].is_string(), "{top}");
+        assert_eq!(std::fs::read(&canvas).unwrap(), was);
+        // None of them changed the document.
+        assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
+        // A writer of a path written out, as a step's own text, still runs.
+        let svg = dir.path().join("page.svg");
+        let written = send(
+            &mut board,
+            "command.batch",
+            json!({"commands": [{"command": "file.exportSvg", "params": {"path": svg}}]}),
+        );
+        assert_eq!(written["ok"], json!(true), "{written}");
+        assert!(std::fs::read_to_string(&svg).unwrap().contains("<svg"));
+    }
+
+    /// A nested `command.batch` gets its params as written: the engine puts no other step's result
+    /// in them. The nested batch puts its own steps' results in place as they run, so one whose
+    /// steps refer to each other is an ordinary batch, and runs, as it does in FigCraft.
+    #[test]
+    fn a_nested_batch_whose_steps_refer_to_each_other_runs() {
+        let mut board = board();
+        let reply = send(
+            &mut board,
+            "command.batch",
+            json!({"commands": [
+                {"command": "command.batch", "params": {"commands": [
+                    {"command": "board.sticky", "params": {"x": 0, "y": 0}, "as": "inner"},
+                    {"command": "node.set", "params": {"id": {"$ref": "inner"}, "props": {"name": "renamed"}}},
+                ]}},
+            ]}),
+        );
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        let sticky = id_of(&reply["result"][0][0]["id"]).unwrap();
+        assert_eq!(board.doc().unwrap().node(sticky).unwrap().name, "renamed");
     }
 
     /// `file.exportLayers` and `data.fill` write into a folder, naming each file after its layer
