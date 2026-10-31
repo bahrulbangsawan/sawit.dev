@@ -606,14 +606,23 @@ happen in the app: download `Sawit.dmg` once from Releases.
 - Versions start at **0.0.1** and bump one patch on **every push to `main`**. The history is in
   [`CHANGELOG.md`](CHANGELOG.md) and on the in-app **Changelog** page.
 
-Release flow (enable once per clone with `git config core.hooksPath .githooks`):
+Release flow (enable once per clone with `git config core.hooksPath .githooks`; the relative path has each
+worktree run its own checkout's hook):
 
-1. `git push` to `main` runs `.githooks/pre-push` → `scripts/release.sh`: the version in `Cargo.toml`
-   is bumped (the first release stays 0.0.1), a new `CHANGELOG.md` section is written from commit messages
-   (grouped as `feat`/`fix`/`perf`/other), then a `chore(release): vX` commit and a `vX` tag are created.
-2. After that push finishes, the release commit and tag are pushed too (log in `.git/sawit-release.log`).
+1. `git push` of `main`, from a checkout of `main`, runs `.githooks/pre-push` → `scripts/release.sh`: the
+   version in `Cargo.toml` is bumped (the first release stays 0.0.1), a new `CHANGELOG.md` section is written
+   from commit messages (grouped as `feat`/`fix`/`perf`/other), then a `chore(release): vX` commit and a `vX`
+   tag are created.
+2. After that push finishes, the release commit and tag are pushed too (log in
+   `$(git rev-parse --absolute-git-dir)/sawit-release.log`: `.git/sawit-release.log` in the main checkout).
 3. The tag triggers `.github/workflows/release.yml`: the app is built on a macOS runner and published as a
    GitHub Release (`Sawit-X-macos-arm64.zip` for the updater, `Sawit.dmg`, notes from `CHANGELOG.md`).
+
+The release is cut on `HEAD`, so `main` is pushed from a checkout of `main`. A push of `main` from anywhere else
+(another branch, a detached `HEAD`) would release nothing, so the hook refuses it. Push from a checkout of `main`
+instead (`git worktree add ../sawit-main main`, push there, then `git worktree remove ../sawit-main`), or set
+`SAWIT_SKIP_RELEASE=1` to push without a release. `scripts/release.sh` runs on `main` only, too
+(`SAWIT_RELEASE_ANY_BRANCH=1` cuts a release on another branch on purpose).
 
 ## Test
 

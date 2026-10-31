@@ -4,8 +4,21 @@
 # section from the commit subjects, commits "chore(release): vX" and tags
 # vX. Called by .githooks/pre-push; prints the new tag, or nothing when
 # there is nothing new to release.
+#
+# A release is what main holds, so it is cut on main only:
+# SAWIT_RELEASE_ANY_BRANCH=1 cuts one on another branch on purpose.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
+
+if branch=$(git symbolic-ref -q --short HEAD); then
+    here="on $branch"
+else
+    here="on a detached HEAD"
+fi
+if [ "$here" != "on main" ] && [ -z "${SAWIT_RELEASE_ANY_BRANCH:-}" ]; then
+    echo "release: releases are cut on main, and this checkout is $here: run it in a checkout of main (SAWIT_RELEASE_ANY_BRANCH=1 cuts one here anyway)" >&2
+    exit 1
+fi
 
 for f in Cargo.toml Cargo.lock CHANGELOG.md; do
     if ! git diff --quiet HEAD -- "$f"; then
@@ -24,6 +37,12 @@ if git rev-parse -q --verify "refs/tags/v$current" >/dev/null; then
     next=$(echo "$current" | awk -F. '{ printf "%d.%d.%d", $1, $2, $3 + 1 }')
 else
     next=$current
+fi
+# Checked before anything changes: otherwise the release commit is made and
+# only its tag fails, which leaves that commit untagged on this branch.
+if git rev-parse -q --verify "refs/tags/v$next" >/dev/null; then
+    echo "release: tag v$next exists already, though Cargo.toml says $current, so v$next can't be cut; nothing was changed. If that tag was made by mistake and never pushed, delete it: git tag -d v$next" >&2
+    exit 1
 fi
 
 notes=$(mktemp)
