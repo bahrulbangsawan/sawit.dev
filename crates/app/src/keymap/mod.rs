@@ -640,16 +640,21 @@ fn mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-/// Writes `text` to `path` through a file beside it, so a crash never leaves half a keymap. A
-/// `path` that is a link (to a dotfiles folder) stays one: the file it points to is written.
+/// Writes `text` to `path` as Sawit writes every file it saves ([`files::write_atomic`]): through
+/// a staging file of its own, made new beside it, then renamed over it, so a crash never leaves
+/// half a keymap, and nothing already beside it (a link at a name another write used) is written
+/// through. The file keeps its permissions, and a `path` that is a link (to a dotfiles folder)
+/// stays one: the file it points to is written.
+///
+/// [`files::write_atomic`]: sawit_core::files::write_atomic
 fn write_atomically(path: &Path, text: &str) -> std::io::Result<()> {
-    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, &path)
+    sawit_core::files::write_atomic(path, text.as_bytes()).map_err(|e| match e {
+        sawit_core::CoreError::Io(e) => e,
+        e => std::io::Error::other(e.to_string()),
+    })
 }
 
 #[cfg(test)]
@@ -1114,6 +1119,81 @@ mod tests {
                 .unwrap()
                 .contains("ctrl-alt-l")
         );
+    }
+
+    /// Adds a binding of ⌃⌥`key` to `Other`, as the Keymap Editor does, which writes the file.
+    fn add_binding(cx: &mut TestAppContext, store: &Entity<KeymapStore>, key: &str) {
+        let keys = format!("ctrl-alt-{key}");
+        cx.update(|cx| {
+            store
+                .update(cx, |s, cx| {
+                    s.add(Some("Workspace"), &keys, "keymap_test::Other", None, cx)
+                })
+                .unwrap();
+        });
+    }
+
+    /// Seams m6: keymap.json is written as every file Sawit saves is (`files::write_atomic`): it
+    /// keeps its permissions. The keymap's own write made a new file in its place, 0644 whatever
+    /// the user had set.
+    #[gpui_kit::test]
+    fn the_keymap_file_keeps_its_permissions(cx: &mut TestAppContext) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let scratch = Scratch::new("mode");
+        std::fs::create_dir_all(&scratch.0).unwrap();
+        std::fs::write(scratch.file(), "[]").unwrap();
+        let owner_only = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(scratch.file(), owner_only).unwrap();
+        let store = start(cx, &scratch);
+        add_binding(cx, &store, "m");
+        let file = std::fs::symlink_metadata(scratch.file()).unwrap();
+        assert!(file.is_file(), "keymap.json isn't a file");
+        assert_eq!(
+            file.permissions().mode() & 0o777,
+            0o600,
+            "keymap.json's permissions changed"
+        );
+        assert!(
+            std::fs::read_to_string(scratch.file())
+                .unwrap()
+                .contains("ctrl-alt-m")
+        );
+    }
+
+    /// Seams m6: the write goes through a staging file of its own, made new beside keymap.json,
+    /// never through what is already at a name beside it. The keymap's own write staged at a
+    /// fixed `keymap.json.tmp` with `fs::write`, which follows a link there: it wrote the keymap
+    /// into the file the link points to, then made keymap.json that link.
+    #[gpui_kit::test]
+    fn the_keymap_file_is_never_written_through_a_link_beside_it(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("staged");
+        std::fs::create_dir_all(&scratch.0).unwrap();
+        std::fs::write(scratch.file(), "[]").unwrap();
+        let elsewhere = scratch.0.join("elsewhere.json");
+        std::fs::write(&elsewhere, "not the keymap").unwrap();
+        let link = scratch.0.join("keymap.json.tmp");
+        std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+        let store = start(cx, &scratch);
+        add_binding(cx, &store, "s");
+        assert_eq!(
+            std::fs::read_to_string(&elsewhere).unwrap(),
+            "not the keymap",
+            "the keymap was written through the link beside it"
+        );
+        assert!(
+            !std::fs::symlink_metadata(scratch.file())
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "keymap.json became a link"
+        );
+        assert!(
+            std::fs::read_to_string(scratch.file())
+                .unwrap()
+                .contains("ctrl-alt-s")
+        );
+        assert_eq!(std::fs::read_link(&link).unwrap(), elsewhere);
     }
 
     /// A chord the user binds that starts with a key the canvas binds alone (⌘K, its Actions
