@@ -74,7 +74,7 @@ pub struct OpenArgs {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct PanelArgs {
     #[schemars(
-        description = "instances, files, git, database, run, ports, network, prompts, ssh or shell_config"
+        description = "instances, files, git, database, run, ports, network, prompts, ssh or shell_config (the Config Files panel)"
     )]
     pub panel: String,
     pub project: Option<String>,
@@ -328,8 +328,7 @@ fn variant<T: serde::de::DeserializeOwned>(name: &str, choices: &str) -> Result<
         .map_err(|_| format!("Unknown “{name}”: use one of {choices}."))
 }
 
-const PANELS: &str =
-    "instances, files, git, database, run, ports, network, prompts, ssh, shell_config";
+const PANELS: &str = "instances, files, git, database, run, ports, network, prompts, ssh, shell_config (Config Files)";
 const PAGES: &str = "canvas, browser, mcp, tools, changelog, git_graph, github, instance, keymap";
 const INSTANCE_ACTIONS: &str = "select, start, stop, restart";
 
@@ -842,7 +841,7 @@ pub(crate) fn base64_decode(text: &str, from: &str) -> Result<Vec<u8>, String> {
 #[tool_router(router = app_router, vis = "pub(crate)")]
 impl Sawit {
     #[tool(
-        description = "Start the Sawit app if it isn't running (or bring it forward), optionally opening a folder or file. The app_* and terminal_* tools need it running; the canvas_* tools also work on the saved canvas file without it"
+        description = "Start the Sawit app if it isn't running (or bring it forward), optionally opening a folder or file. The app_*, terminal_* and browser_* tools need it running; the canvas_* tools also work on the saved canvas file without it"
     )]
     async fn launch_app(&self, Parameters(a): Parameters<LaunchArgs>) -> CallToolResult {
         let paths = self.paths.clone();
@@ -1265,7 +1264,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Run one command of the canvas engine by its id, with its parameters as JSON: board.sticky {x, y, text}, node.set, align.left, edit.undo, view.zoomFit, ... The reply is the command's result, and a command the engine refuses is an error. canvas_commands lists the ids, and with a filter what each takes"
+        description = "Run one command of the canvas engine by its id, with its parameters as JSON: board.sticky {x, y, text}, node.set, align.left, edit.undo, view.zoomFit, ... The reply is the command's result, and a command the engine refuses is an error. canvas_commands lists the ids, and with a filter what each takes. With the app closed each call starts from the saved file, so nothing carries over between calls (no undo, no selection, no view): pass ids, or run the steps in one command.batch"
     )]
     async fn canvas_command(&self, Parameters(a): Parameters<CanvasCommandArgs>) -> CallToolResult {
         self.canvas_command_tool(a).await

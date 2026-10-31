@@ -86,7 +86,7 @@ These control the running Sawit app (start it with launch_app; app_state shows w
 - app_*: open files/folders, show panels, layout, tabs, pages (canvas, MCP, tools, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
 - terminal_*: run commands in Sawit's terminal and read their output, type keys (ctrl-c), close tabs or panes. terminal_run, app_run_script and app_ssh_connect return the terminal (tab) and `pane` they used: pass both to terminal_read, terminal_input and terminal_close, since the user may be typing in another terminal, which stays in front (app_state lists tabs and panes). terminal_input needs the tab, and a split tab needs its pane; terminal_read without a tab reads the pane the user has in front, and terminal_close without a pane closes the whole tab.
 - canvas_*: the canvas (FigCraft engine): list, add shapes/stickies/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG. They also work on the saved file when the app is closed.
-- canvas_command: run any command of the canvas engine by id with its parameters (board.sticky, node.set, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes.
+- canvas_command: run any command of the canvas engine by id with its parameters (board.sticky, node.set, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes. With the app closed each call starts from the saved file, so nothing carries over between calls (no undo, no selection, no view): pass ids, or run the steps in one command.batch.
 - browser_*: a browser tab (WebKit) to check the app being built: navigate (default the project's dev server), snapshot the page as an outline with element refs, click/hover/type/press keys/select/scroll by ref or CSS selector, wait for text, screenshot, read console errors and network requests, evaluate JS, resize to a device, read the user's annotations, inspect an element's design, read the page's design system, export it as DESIGN.md + tokens + assets. Take a new browser_snapshot after the page changes; refs reset.
 Most app tools take `project` to pick the window that has that folder open; without it, the window that has the folder sawit-mcp runs in open is used, else the frontmost window.
 Targets: database tools take a Sawit instance name or a saved connection name (see list_connections).";
@@ -611,6 +611,52 @@ mod tests {
                 "{what} doesn't mention the filter: {text}"
             );
         }
+    }
+
+    /// What an agent is told matches what the tools do:
+    /// - MCP-12: with the app closed every canvas_command opens the saved file afresh, so nothing
+    ///   carries over from one call to the next: edit.undo has nothing to undo, and a command that
+    ///   acts on the selection has none unless it is given ids or runs in one command.batch.
+    /// - MCP-13: the browser_* tools need the app, as the app_* and terminal_* tools do.
+    /// - MCP-14: app_show_panel's `shell_config` is the panel the app calls Config Files.
+    #[test]
+    fn agents_are_told_what_needs_the_app_and_what_a_closed_one_keeps() {
+        let sent: Vec<(String, String)> = Sawit::router()
+            .list_all()
+            .iter()
+            .map(|tool| (tool.name.to_string(), serde_json::to_string(tool).unwrap()))
+            .collect();
+        let tool = |name: &str| {
+            let found = sent.iter().find(|(candidate, _)| candidate == name);
+            found.map_or_else(|| panic!("no tool {name}"), |(_, text)| text.clone())
+        };
+        let line = INSTRUCTIONS
+            .lines()
+            .find(|line| line.starts_with("- canvas_command:"))
+            .expect("a canvas_command line");
+        for (what, text) in [
+            ("canvas_command", tool("canvas_command")),
+            ("the canvas_command line", line.to_string()),
+        ] {
+            for said in [
+                "With the app closed each call starts from the saved file",
+                "no undo",
+                "pass ids",
+                "command.batch",
+            ] {
+                assert!(text.contains(said), "{what} doesn't say {said:?}: {text}");
+            }
+        }
+        let launch = tool("launch_app");
+        assert!(
+            launch.contains("The app_*, terminal_* and browser_* tools need it running"),
+            "{launch}"
+        );
+        let panel = tool("app_show_panel");
+        assert!(
+            panel.contains("shell_config (the Config Files panel)"),
+            "{panel}"
+        );
     }
 
     /// The terminal_* line says what the tools do now that a terminal tab can hold split panes
