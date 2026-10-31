@@ -49,9 +49,13 @@ actions!(
     ]
 );
 
-/// Zed's project panel bindings for the same commands.
+/// Zed's project panel bindings for the same commands. ⌫ acts on the tree only while no name is
+/// being typed, like Config Files' list keys and the keymap editor's table keys: the name box
+/// passes on ⌫ with nothing before the cursor (a new name starts empty), and Trash would move the
+/// selected entry, or the project folder, to the Trash without asking.
 pub fn init(cx: &mut App) {
     let ctx = Some("FilesPanel");
+    let tree = Some("FilesPanel && !Input");
     cx.bind_keys([
         KeyBinding::new("cmd-n", NewFile, ctx),
         KeyBinding::new("alt-cmd-n", NewFolder, ctx),
@@ -67,7 +71,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("alt-cmd-c", CopyPath, ctx),
         KeyBinding::new("alt-cmd-shift-c", CopyRelativePath, ctx),
         KeyBinding::new("f2", Rename, ctx),
-        KeyBinding::new("backspace", Trash, ctx),
+        KeyBinding::new("backspace", Trash, tree),
         KeyBinding::new("alt-cmd-backspace", Delete, ctx),
     ]);
 }
@@ -1069,5 +1073,117 @@ impl FilesPanel {
         let root = self.root.clone();
         self.expanded.retain(|d| Some(d) == root.as_ref());
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+    use std::rc::Rc;
+
+    use gpui_kit::{Action, AppContext as _, FocusHandle, TestAppContext};
+    use sawit_core::files::Entry;
+
+    use super::{FilesPanel, Trash};
+
+    /// ⌫ while a name is typed in the tree edits the name and runs none of the panel's commands.
+    /// The name box passes on ⌫ with nothing before the cursor, which a new name has at once and
+    /// a rename once the start of the name is reached, to the panel's bindings, where Trash would
+    /// move the selected entry, or the project folder, to the Trash without asking.
+    #[gpui_kit::test]
+    fn backspace_while_naming_trashes_nothing(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::init(cx);
+            cx.set_global(crate::rt::Rt(sawit_core::rt::Runtime::start()));
+        });
+        let (window, panel) = cx.update(|cx| {
+            gpui_kit::open_window(Default::default(), cx, |_, cx| cx.new(FilesPanel::new)).unwrap()
+        });
+        // Active, as a window being typed in is: a name box that loses the keyboard ends its edit.
+        cx.update_window(window, |_, window, _| window.activate_window())
+            .unwrap();
+        cx.run_until_parked();
+        // A project the tree shows without reading it, at a path that can't exist: the selected
+        // file isn't there, so a Trash that does run moves nothing.
+        let root = PathBuf::from("/sawit-test-no-such-folder");
+        let file = root.join("notes.txt");
+        cx.update(|cx| {
+            panel.update(cx, |p, cx| {
+                p.root = Some(root.clone());
+                p.expanded.insert(root.clone());
+                let entry = Entry {
+                    name: "notes.txt".into(),
+                    path: file.clone(),
+                    is_dir: false,
+                };
+                p.children.insert(root.clone(), vec![entry]);
+                p.selected = Some(file.clone());
+                cx.notify();
+            })
+        });
+        let ran = Rc::new(RefCell::new(Vec::new()));
+        let _observer = cx.update(|cx| {
+            let ran = ran.clone();
+            cx.observe_keystrokes(move |e, _, _| {
+                if let Some(action) = &e.action
+                    && action.name().starts_with("files::")
+                {
+                    ran.borrow_mut().push(action.name());
+                }
+            })
+        });
+        let focus = |cx: &mut TestAppContext, handle: FocusHandle| {
+            cx.update_window(window, |_, window, cx| window.focus(&handle, cx))
+                .unwrap();
+            cx.run_until_parked();
+        };
+        let tree = cx.update(|cx| panel.read(cx).focus.clone());
+        let name = |cx: &mut TestAppContext| {
+            cx.update(|cx| {
+                let p = panel.read(cx);
+                p.edit
+                    .as_ref()
+                    .map(|e| e.input.read(cx).value().to_string())
+            })
+        };
+
+        // New File: the name box starts empty.
+        focus(cx, tree.clone());
+        cx.simulate_keystrokes(window, "cmd-n");
+        assert_eq!(name(cx).as_deref(), Some(""));
+        cx.simulate_keystrokes(window, "backspace");
+        assert_eq!(*ran.borrow(), ["files::NewFile"], "⌫ in a new name");
+
+        // Rename: the name without its extension is selected; the first ⌫ deletes it, and the
+        // second is at the start of the name.
+        focus(cx, tree.clone());
+        cx.simulate_keystrokes(window, "f2");
+        assert_eq!(name(cx).as_deref(), Some("notes.txt"));
+        cx.simulate_keystrokes(window, "backspace backspace");
+        assert_eq!(name(cx).as_deref(), Some(".txt"));
+        assert_eq!(
+            *ran.borrow(),
+            ["files::NewFile", "files::Rename"],
+            "⌫ at the start of a name"
+        );
+
+        // From the tree, ⌫ is still Trash, and the right-click menu still finds its key.
+        focus(cx, tree.clone());
+        assert_eq!(name(cx), None, "leaving the name box ends the edit");
+        cx.simulate_keystrokes(window, "backspace");
+        assert_eq!(
+            *ran.borrow(),
+            ["files::NewFile", "files::Rename", "files::Trash"]
+        );
+        let key = cx
+            .update_window(window, |_, window, _| {
+                window
+                    .highest_precedence_binding_for_action_in(&Trash as &dyn Action, &tree)
+                    .map(|b| b.keystrokes()[0].key().to_string())
+            })
+            .unwrap();
+        assert_eq!(key.as_deref(), Some("backspace"));
     }
 }
