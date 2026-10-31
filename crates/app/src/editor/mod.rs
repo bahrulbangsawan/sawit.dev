@@ -4,6 +4,8 @@
 
 mod diagrams;
 pub(crate) use diagrams::palette;
+#[cfg(test)]
+pub(crate) mod testing;
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -41,6 +43,26 @@ pub enum FileEditorEvent {
     Changed,
 }
 
+/// Every open file editor, with the window it is in: what quitting, Restart to Update and closing
+/// a window ask about ([`unsaved`]).
+#[derive(Default)]
+struct Editors(Vec<(AnyWindowHandle, WeakEntity<FileEditor>)>);
+
+impl Global for Editors {}
+
+/// The open files with unsaved changes, each with its window, in the order they were opened.
+pub fn unsaved(cx: &App) -> Vec<(AnyWindowHandle, Entity<FileEditor>)> {
+    let Some(editors) = cx.try_global::<Editors>() else {
+        return Vec::new();
+    };
+    editors
+        .0
+        .iter()
+        .filter_map(|(window, editor)| Some((*window, editor.upgrade()?)))
+        .filter(|(_, editor)| editor.read(cx).dirty)
+        .collect()
+}
+
 impl EventEmitter<FileEditorEvent> for FileEditor {}
 
 /// How a previewable file (Markdown, HTML, SVG) is shown.
@@ -74,6 +96,9 @@ pub struct FileEditor {
     pub dirty: bool,
     /// Set from the tab menu ("Make Tab Read-Only"): no edits, no saves.
     pub read_only: bool,
+    /// The user chose Don't Save for these changes as the app quit or restarted, so quitting
+    /// doesn't keep them. The next edit clears it.
+    discarded: bool,
     notice: Option<Notice>,
     loading: bool,
     formatting: bool,
@@ -137,6 +162,10 @@ impl FileEditor {
             });
         })
         .detach();
+        let (me, here) = (cx.weak_entity(), window.window_handle());
+        let editors = cx.default_global::<Editors>();
+        editors.0.retain(|(_, editor)| editor.upgrade().is_some());
+        editors.0.push((here, me));
         let kind = classify(&path);
         Self {
             language: language_for(&path),
@@ -153,6 +182,7 @@ impl FileEditor {
             saved_text: String::new(),
             dirty: false,
             read_only: false,
+            discarded: false,
             notice: None,
             loading: true,
             formatting: false,
@@ -322,6 +352,7 @@ impl FileEditor {
                         this.dirty = dirty;
                         cx.emit(FileEditorEvent::Changed);
                     }
+                    this.discarded = false;
                     this.schedule_preview(cx);
                     cx.notify();
                 }
@@ -380,6 +411,12 @@ impl FileEditor {
             });
         })
         .detach();
+    }
+
+    /// The user chose Don't Save for these changes as the app quits or restarts: the quit doesn't
+    /// keep them for the next launch.
+    pub fn discard(&mut self) {
+        self.discarded = true;
     }
 
     pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
