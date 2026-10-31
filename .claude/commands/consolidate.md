@@ -245,12 +245,15 @@ Commit this as `docs: update README, screenshots and demo for <short summary>`.
      `SAWIT_RELEASE_PUSH=1 git push origin main "$tag"`.
    - A release whose background push failed: the log says why, and how to push it. Pushing `main` again from
      the checkout of `main` takes the release commit and tag along too, while origin's `main` lacks that commit.
-4. Wait for the release push to finish, then confirm:
+4. Wait for the release push to finish, then confirm. These read `main` itself, not whatever branch the
+   checkout you run them in has (the main checkout may be on another one), so they hold from anywhere:
    - `cat "$(git rev-parse --git-common-dir)/sawit-release.log"` has no errors;
-   - `git log --oneline -3` shows `chore(release): vX` on top, and `git ls-remote --tags origin vX` lists the tag;
-   - `git status -sb` shows `main` even with `origin/main`;
-   - `head -20 CHANGELOG.md` shows the new section with sensible entries. If a line reads badly, the cause
-     is its commit subject. Tell the user; don't rewrite pushed history.
+   - `git log --oneline -3 main` shows `chore(release): vX` on top, and `git ls-remote --tags origin vX` lists
+     the tag;
+   - `git ls-remote origin refs/heads/main` shows the commit `git rev-parse main` prints: origin's `main` is
+     the release;
+   - `git show main:CHANGELOG.md | head -20` shows the new section with sensible entries. If a line reads
+     badly, the cause is its commit subject. Tell the user; don't rewrite pushed history.
    - `gh run list --workflow release.yml --limit 1` shows the release build started. Report its URL.
 
 ## Report
