@@ -376,6 +376,9 @@ explained. A conflict on the same address can't be forced.
   Read-Only, and Pin Tab.
 - Bulk close leaves pinned and unsaved tabs alone. Closing an unsaved file
   asks for confirmation.
+- Quitting, closing a window and **Restart to Update** ask too, and offer to save every unsaved file first
+  (**Save All**, **Don't Save**, **Cancel**). A quit that can't ask (the Dock's Quit, logging out, the install script)
+  keeps the unsaved changes instead, and the next launch reopens those files with the changes back in, unsaved.
 - The instance tab can be closed, and it reappears when an instance is selected.
 - The sidebar, terminal, and tab area can be hidden or shown from the title bar buttons or
   with shortcuts (see below).
@@ -387,9 +390,10 @@ explained. A conflict on the same address can't be forced.
 - Click the version in the status bar for the **Changelog** page: the running version, update status,
   notes of a newer release, and the full history.
 - Sawit checks [GitHub Releases](https://github.com/bahrulbangsawan/sawit.dev/releases) on launch and
-  every 4 hours. New versions download in the background. Once ready, a **Restart to Update** button appears in the
-  title bar: the app quits, `Sawit.app` is replaced, and it reopens. It asks first while a terminal runs something,
-  since quitting ends it. Builds from `cargo` only open the releases page.
+  every hour. New versions download in the background. Once ready, a **Restart to Update** button appears in the
+  title bar: the app quits, `Sawit.app` is replaced, and it reopens. It asks first while a terminal runs something
+  or a file has unsaved changes, since quitting ends or closes them. A downloaded update also installs when you
+  quit. Builds from `cargo` only open the releases page.
 
 ## Keyboard shortcuts
 
