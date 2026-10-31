@@ -115,16 +115,25 @@ impl BoardDoc {
 
     /// The document as a `.figcraft` archive, with its version history and branches, and without a
     /// thumbnail (a preview, not content). It is the document itself
-    /// ([`BoardDoc::document_itself`]), never a version shown in its place.
+    /// ([`BoardDoc::document_itself`]), never a version shown in its place. It records the page on
+    /// show, as FigCraft's own save does (`FileSnapshot::encode`), so the file opens on that page
+    /// again, here and in FigCraft (CANVAS-CORE-12).
     pub fn to_bytes(&self) -> Result<Vec<u8>, BoardError> {
         let ds = self.session.ds()?;
-        figcraft_format::save_bytes_with_history(
-            ds.document_itself(),
-            None,
-            &ds.versions,
-            &ds.branches,
-        )
-        .map_err(format_error)
+        let itself = ds.document_itself();
+        let on_show = Some(ds.page).filter(|page| itself.pages.contains(page));
+        let encode = |doc: &Document| {
+            figcraft_format::save_bytes_with_history(doc, None, &ds.versions, &ds.branches)
+                .map_err(format_error)
+        };
+        match on_show {
+            Some(page) if itself.current_page != Some(page) => {
+                let mut doc = (**itself).clone();
+                doc.current_page = Some(page);
+                encode(&doc)
+            }
+            _ => encode(itself),
+        }
     }
 
     /// Refuses a save over the file at `path` that would delete images the loader left in it,
@@ -424,6 +433,24 @@ mod tests {
         // Read with no file, it has no file to save over.
         let (board, _) = BoardDoc::from_bytes_with_issues(&bytes).unwrap();
         assert!(board.refuse_dropping_images(path).is_ok());
+    }
+
+    /// CANVAS-CORE-12: a save records the page on show, as FigCraft's own does, so the file
+    /// opens on it again, here and in FigCraft. It opened on the page FigCraft last saved.
+    #[test]
+    fn a_save_keeps_the_page_on_show() {
+        let mut board = BoardDoc::new_board("Canvas").unwrap();
+        let first = board.session.ds().unwrap().page;
+        board.execute("page.add", &json!({})).unwrap();
+        let second = board.session.ds().unwrap().page;
+        assert_ne!(first, second, "page.add shows the new page");
+        let page_on_open = |board: &BoardDoc| {
+            let back = BoardDoc::from_bytes(&board.to_bytes().unwrap()).unwrap();
+            back.session.ds().unwrap().page
+        };
+        assert_eq!(page_on_open(&board), second);
+        board.execute("page.select", &json!({"id": first})).unwrap();
+        assert_eq!(page_on_open(&board), first);
     }
 
     #[test]
