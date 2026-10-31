@@ -92,7 +92,11 @@ pub struct Row {
 
 pub struct KeymapStore {
     path: PathBuf,
-    /// What every feature bound in code, as [`init`] found it, each with [`DEFAULT`].
+    /// What every feature bound in code, as [`init`] found it, each with [`DEFAULT`]: written
+    /// for a US keyboard layout.
+    sources: Vec<KeyBinding>,
+    /// The defaults as bound: `sources` with their keys where the keyboard layout types them
+    /// ([`relocated`]), in the same order.
     defaults: Vec<KeyBinding>,
     /// The file as last read without error.
     user: UserKeymap,
@@ -137,19 +141,27 @@ pub fn init(cx: &mut App) {
         }
     })
     .detach();
+    // Another keyboard layout may type the defaults' keys elsewhere.
+    let store = self::store(cx).downgrade();
+    cx.on_keyboard_layout_change(move |cx| {
+        store.update(cx, |store, cx| store.relayout(cx)).ok();
+    })
+    .detach();
 }
 
 /// [`init`] with the keymap file at `path`, without watching it (tests).
 pub fn init_at(path: PathBuf, cx: &mut App) {
     cx.bind_keys(editor::bindings());
-    let defaults = cx
+    let sources: Vec<KeyBinding> = cx
         .key_bindings()
         .borrow()
         .bindings()
         .map(|b| b.clone().with_meta(DEFAULT))
         .collect();
+    let defaults = layout_defaults(&sources, cx);
     let store = cx.new(|_| KeymapStore {
         path,
+        sources,
         defaults,
         user: UserKeymap::default(),
         loaded: Vec::new(),
@@ -163,6 +175,50 @@ pub fn init_at(path: PathBuf, cx: &mut App) {
 
 pub fn store(cx: &App) -> Entity<KeymapStore> {
     cx.global::<GlobalKeymap>().0.clone()
+}
+
+/// The defaults written in `sources` with their keys where the keyboard layout in use types
+/// them, and the keymap's display told whether it moves any.
+fn layout_defaults(sources: &[KeyBinding], cx: &App) -> Vec<KeyBinding> {
+    let moves = cx.keyboard_mapper().get_key_equivalents();
+    names::set_layout_moves_keys(moves.is_some_and(|table| !table.is_empty()));
+    match moves {
+        Some(table) => relocated(sources, |c| table.get(&c).copied(), cx),
+        None => sources.to_vec(),
+    }
+}
+
+/// `sources` with each key that `moves` moves put where the keyboard layout types it, as macOS
+/// menus and Zed's default keymap do (Apple's key equivalents, [`names::relocate`]): on a German
+/// layout ⇧⌘. (bound `cmd->`) is typed `cmd-:`, and the ⌘< that cycles windows there is no longer
+/// the canvas's text size. Bindings that no key of moves stay as they are.
+fn relocated(
+    sources: &[KeyBinding],
+    moves: impl Fn(char) -> Option<char>,
+    cx: &App,
+) -> Vec<KeyBinding> {
+    sources
+        .iter()
+        .map(|binding| {
+            names::relocate(&names::unparse(binding.keystrokes()), &moves)
+                .and_then(|keys| {
+                    KeyBinding::load(
+                        &keys,
+                        binding.action().boxed_clone(),
+                        binding.predicate(),
+                        false,
+                        binding.action_input(),
+                        cx,
+                    )
+                    .ok()
+                })
+                .map(|moved| match binding.meta() {
+                    Some(meta) => moved.with_meta(meta),
+                    None => moved,
+                })
+                .unwrap_or_else(|| binding.clone())
+        })
+        .collect()
 }
 
 impl KeymapStore {
@@ -186,6 +242,21 @@ impl KeymapStore {
 
     pub fn defaults(&self) -> &[KeyBinding] {
         &self.defaults
+    }
+
+    /// Binds the defaults again where the keyboard layout now in use types their keys.
+    pub fn relayout(&mut self, cx: &mut Context<Self>) {
+        self.defaults = layout_defaults(&self.sources, cx);
+        self.apply(cx);
+        cx.notify();
+    }
+
+    /// [`Self::relayout`] for a layout that moves keys by `moves` (tests).
+    #[cfg(test)]
+    fn relayout_with(&mut self, moves: impl Fn(char) -> Option<char>, cx: &mut Context<Self>) {
+        self.defaults = relocated(&self.sources, moves, cx);
+        self.apply(cx);
+        cx.notify();
     }
 
     /// Reads the file again and binds the keys anew. A file that can't be read keeps the
@@ -1080,6 +1151,42 @@ mod tests {
                 bindings.first().map(|b| b.action().name()),
                 Some("keymap_test::Close")
             );
+        });
+    }
+
+    /// On a layout that types some keys elsewhere (German), the defaults are bound where the
+    /// layout types them, as macOS menus have them: ⇧⌘. (`cmd->`) as `cmd-:`, and the window
+    /// cycling key `cmd->` (⇧⌘<) is left to macOS. A binding the user turns off there stays off.
+    #[gpui_kit::test]
+    fn the_defaults_follow_the_keyboard_layout(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("layout");
+        let store = cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("cmd->", Other, Some("Workspace")),
+                KeyBinding::new("cmd-w", Close, Some("Workspace")),
+            ]);
+            init_at(scratch.file(), cx);
+            store(cx)
+        });
+        let german = |c: char| match c {
+            '>' => Some(':'),
+            '<' => Some(';'),
+            _ => None,
+        };
+        cx.update(|cx| {
+            assert_eq!(runs(cx, "cmd->"), ["keymap_test::Other"]);
+            store.update(cx, |s, cx| s.relayout_with(german, cx));
+            assert_eq!(runs(cx, "cmd-:"), ["keymap_test::Other"]);
+            assert!(runs(cx, "cmd->").is_empty());
+            assert_eq!(runs(cx, "cmd-w"), ["keymap_test::Close"]);
+            // Removed in the editor, it is unbound where it is bound.
+            let other = default_row(&store, cx, "keymap_test::Other");
+            store.update(cx, |s, cx| s.remove(other, cx)).unwrap();
+            assert!(runs(cx, "cmd-:").is_empty());
+            assert!(matches!(
+                default_row(&store, cx, "keymap_test::Other"),
+                Source::Removed { .. }
+            ));
         });
     }
 
