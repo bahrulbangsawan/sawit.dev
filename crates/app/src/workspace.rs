@@ -644,8 +644,8 @@ impl Workspace {
                 .iter()
                 .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
             {
-                self.active = ix;
-                cx.notify();
+                // As a text file's tab: shown with its project.
+                self.activate_tab(ix, cx);
                 return;
             }
             let title: SharedString = path
@@ -2433,8 +2433,8 @@ impl Workspace {
             .iter()
             .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
         {
-            self.active = ix;
-            cx.notify();
+            // With its project: another project's canvas file opened by its path, say.
+            self.activate_tab(ix, cx);
             // The canvas is the tab's own view.
             let PaneItem::Other { view, .. } = &self.tabs[ix].item else {
                 return None;

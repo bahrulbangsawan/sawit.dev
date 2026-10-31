@@ -240,10 +240,12 @@ impl Workspace {
                 self.open_page(page, window, cx)?;
                 done(json!({ "tab": self.active }))
             }
+            // As a click on the tab: its group unfolds, and its project becomes the active one.
+            // The keyboard stays where the user has it, a canvas's tab included.
             Command::ActivateTab { tab } => {
                 let ix = self.find_tab(&tab, cx)?;
                 self.show_center(cx);
-                self.active = ix;
+                self.activate_tab(ix, cx);
                 done(json!({ "tab": ix }))
             }
             Command::CloseTab { tab } => {

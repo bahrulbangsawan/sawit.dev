@@ -915,7 +915,9 @@ impl Sawit {
         }
     }
 
-    #[tool(description = "Switch to a center tab by index or title")]
+    #[tool(
+        description = "Switch to a center tab by index or title, as a click on it does: its project becomes the active one"
+    )]
     async fn app_activate_tab(&self, Parameters(a): Parameters<TabArgs>) -> CallToolResult {
         self.app_tool(a.project, Command::ActivateTab { tab: a.tab })
             .await

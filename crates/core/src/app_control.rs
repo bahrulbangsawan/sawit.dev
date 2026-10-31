@@ -116,7 +116,7 @@ pub enum Command {
     OpenPage {
         page: Page,
     },
-    /// Activates the tab with this index (from `state`) or title.
+    /// Activates the tab with this index (from `state`) or title, and its project.
     ActivateTab {
         tab: String,
     },
