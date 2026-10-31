@@ -525,6 +525,34 @@ impl BoardView {
         &self.path
     }
 
+    /// The canvas's file was renamed or moved to `path`, its folder with it perhaps, as the Files
+    /// panel renames and moves files: the canvas follows the file, as a file editor's tab does,
+    /// and saves there from now on (CANVAS-UI-3). Before, it went on saving at the old path, which
+    /// made the file again there: the board forked into two files, and the renamed one lacked
+    /// every edit made since.
+    ///
+    /// A save handed to the writer before is written first, where it was going. When that was
+    /// after the move, it made the old file again, with the newest document, and the file at
+    /// `path` is an older save: the canvas then saves the document at `path` too, guarded from the
+    /// file there now. Otherwise the guard against another app's changes moves with the file
+    /// ([`Writer::follow`]).
+    pub fn rebind(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if path == self.path {
+            return;
+        }
+        self.writer.flush();
+        if Stamp::of(&self.path).is_some() {
+            self.writer.guard(path.clone(), Stamp::of(&path));
+            self.saved = None;
+            self.pending = None;
+        } else {
+            self.writer.follow(&self.path, path.clone());
+        }
+        self.path = path;
+        self.autosave(cx);
+        cx.notify();
+    }
+
     /// The canvas takes the keyboard with the next frame it is drawn in, as the canvas the user
     /// went to (CANVAS-UI-2): the workspace asks for it on the user's ways in, ⌃⌘C and the title
     /// bar's Canvas button, a canvas file opened, a click on the canvas's tab and ⌃Tab, as the
@@ -1043,24 +1071,29 @@ impl BoardView {
     /// Saves the document now if it isn't the one in the file, and waits until it is on disk.
     /// When that fails, or the save is refused (it would delete images the file holds, or replace
     /// what another app or window wrote to it since), the error is logged, and the next flush or
-    /// edit tries again; the writer's [`Writer::last_error`] still says why a write failed.
+    /// edit tries again; the writer's [`Writer::last_error`] still says why a write failed. So is
+    /// the note of a save that wrote the file again where it had gone ([`Writer::take_notice`]).
     pub fn flush(&mut self) {
-        if let Err(err) = self.save_now() {
-            log::warn!("the canvas couldn't be saved: {err}");
+        match self.save_now() {
+            Ok(Some(notice)) => log::info!("{notice}"),
+            Ok(None) => {}
+            Err(err) => log::warn!("the canvas couldn't be saved: {err}"),
         }
     }
 
     /// [`Self::flush`], with why the document isn't on disk as the error, a sentence for a toast:
-    /// what File ▸ Save (⌘S) does ([`commands`]).
-    fn save_now(&mut self) -> Result<(), String> {
+    /// what File ▸ Save (⌘S) does ([`commands`]). On success, the note of a save that wrote the
+    /// file again where it had gone, if one did.
+    fn save_now(&mut self) -> Result<Option<String>, String> {
         let queued = self.queue_save();
         self.writer.flush();
         let written = self.writer.last_error();
+        let notice = self.writer.take_notice();
         if written.is_some() {
             self.saved = None;
         }
         queued.map_err(|err| err.to_string())?;
-        written.map_or(Ok(()), Err)
+        written.map_or(Ok(notice), Err)
     }
 
     /// Hands the document to the writer if it isn't the one saved last. The document handed
@@ -1090,7 +1123,9 @@ impl BoardView {
     /// After a frame: when the document isn't the one saved, saves it once the canvas has been
     /// still for [`SAVE_DELAY`]. Every new document (each edit makes one) starts the wait over,
     /// so a drag is saved once it ends. A failed or refused save shows its error as a toast: the
-    /// queue's refusal (images the file holds) or the writer's (the file changed on disk).
+    /// queue's refusal (images the file holds) or the writer's (the file changed on disk). So
+    /// does a save that wrote the file again where it had gone (moved, renamed, put in the Trash
+    /// or deleted without the canvas following it), which used to be silent (CANVAS-UI-3).
     fn autosave(&mut self, cx: &mut Context<Self>) {
         let Some(doc) = self.board().and_then(|board| board.document_itself().ok()) else {
             return;
@@ -1112,10 +1147,10 @@ impl BoardView {
                 return;
             };
             // The write is waited for off the UI thread.
-            let error = cx
+            let (error, notice) = cx
                 .background_spawn(async move {
                     writer.flush();
-                    writer.last_error()
+                    (writer.last_error(), writer.take_notice())
                 })
                 .await;
             if let Some(error) = error {
@@ -1126,6 +1161,8 @@ impl BoardView {
                     }
                     this.show_toast(error, cx);
                 });
+            } else if let Some(notice) = notice {
+                let _ = this.update(cx, |this, cx| this.show_toast(notice, cx));
             }
         }));
     }
@@ -2297,6 +2334,131 @@ mod tests {
                 "{file:?} was saved over"
             );
         }
+    }
+
+    /// The path of the canvas's file.
+    fn bound_to(view: &Entity<BoardView>, cx: &TestAppContext) -> PathBuf {
+        view.read_with(cx, |view, _| view.path().to_path_buf())
+    }
+
+    /// CANVAS-UI-3: the Files panel renames a canvas's file, and the workspace has the canvas
+    /// follow it ([`BoardView::rebind`]). Its edits are saved under the new name, and the old one
+    /// doesn't come back. Before, the canvas went on saving at the old path: the board forked
+    /// into two files, and the renamed one lacked every edit made since.
+    #[gpui_kit::test]
+    fn a_canvas_follows_its_file_when_it_is_renamed(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("renamed-under-canvas");
+        let (a, b) = (tmp.0.join("a.figcraft"), tmp.0.join("b.figcraft"));
+        write_board(&a, &board_with(&["mine"]));
+        let view = open(cx, &a);
+        std::fs::rename(&a, &b).unwrap();
+        view.update(cx, |view, cx| view.rebind(b.clone(), cx));
+        assert_eq!(bound_to(&view, cx), b);
+        add_sticky(&view, cx);
+        cx.executor().advance_clock(SAVE_DELAY * 2);
+        cx.run_until_parked();
+        view.update(cx, |view, _| view.flush());
+        assert_eq!(names(&tmp.0), ["b.figcraft"]);
+        assert_eq!(saved_layers(&b), 2);
+        assert_eq!(view.read_with(cx, |view, _| view.toast.clone()), None);
+        // Closing the tab writes nothing at the old name either.
+        add_sticky(&view, cx);
+        drop(view);
+        cx.update(|_| {});
+        assert_eq!(names(&tmp.0), ["b.figcraft"]);
+        assert_eq!(saved_layers(&b), 3);
+    }
+
+    /// CANVAS-UI-3 for a folder: the folder that holds the canvas's file is moved, and the canvas
+    /// follows the file into it. The guard against another app's changes goes with the file: a
+    /// write made to it after the move is still not saved over.
+    #[gpui_kit::test]
+    fn a_canvas_follows_its_file_when_its_folder_moves(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("folder-moved-under-canvas");
+        let (sub, moved) = (tmp.0.join("sub"), tmp.0.join("moved"));
+        std::fs::create_dir_all(&sub).unwrap();
+        write_board(&sub.join("a.figcraft"), &board_with(&["mine"]));
+        let view = open(cx, &sub.join("a.figcraft"));
+        std::fs::rename(&sub, &moved).unwrap();
+        let file = moved.join("a.figcraft");
+        view.update(cx, |view, cx| view.rebind(file.clone(), cx));
+        add_sticky(&view, cx);
+        view.update(cx, |view, _| view.flush());
+        assert_eq!(names(&tmp.0), ["moved"]);
+        assert_eq!(saved_layers(&file), 2);
+
+        // Another app writes the file where it is now: the canvas's next save is refused.
+        let theirs = write_board(&file, &board_with(&["theirs", "and more", "still more"]));
+        add_sticky(&view, cx);
+        view.update(cx, |view, _| view.flush());
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            theirs,
+            "the file was saved over"
+        );
+    }
+
+    /// CANVAS-UI-3, a file that went without the canvas being told: moved to the Trash, deleted,
+    /// or renamed or moved by another app. The next save writes it there again, as FigCraft's own
+    /// save does, rather than lose the edits, and says so in a toast: before, the Trash was
+    /// silently undone. The same for a project's `.nyawit/` deleted under its canvas.
+    #[gpui_kit::test]
+    fn a_canvas_whose_file_went_saves_it_again_and_says_so(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("file-went");
+        let a = tmp.0.join("a.figcraft");
+        write_board(&a, &board_with(&["mine"]));
+        let view = open(cx, &a);
+        std::fs::remove_file(&a).unwrap();
+        // Nothing changed: nothing is written.
+        cx.executor().advance_clock(SAVE_DELAY * 2);
+        cx.run_until_parked();
+        assert!(!a.exists());
+        let reply = run_op(&view, sticky_op(), cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        cx.executor().advance_clock(SAVE_DELAY * 2);
+        cx.run_until_parked();
+        assert_eq!(saved_layers(&a), 2);
+        let toast = view.read_with(cx, |view, _| view.toast.clone()).unwrap();
+        assert!(
+            toast.starts_with("a.figcraft was no longer in ")
+                && toast.contains("saved it there again"),
+            "{toast}"
+        );
+
+        // A project's canvas whose `.nyawit/` was deleted.
+        let nyawit = tmp.0.join(".nyawit");
+        let canvas = nyawit.join("canvas.figcraft");
+        std::fs::create_dir_all(&nyawit).unwrap();
+        write_board(&canvas, &board_with(&["mine"]));
+        let view = open(cx, &canvas);
+        std::fs::remove_dir_all(&nyawit).unwrap();
+        run_op(&view, sticky_op(), cx);
+        cx.executor().advance_clock(SAVE_DELAY * 2);
+        cx.run_until_parked();
+        assert_eq!(saved_layers(&canvas), 2);
+        let toast = view.read_with(cx, |view, _| view.toast.clone()).unwrap();
+        assert!(
+            toast.starts_with("canvas.figcraft was no longer in "),
+            "{toast}"
+        );
+    }
+
+    /// CANVAS-UI-3, a save under way when the file was renamed: written after the rename, it
+    /// made the old file again, with the newest document, and the renamed file has an older one.
+    /// The canvas, bound to the new name, saves the newest document there too.
+    #[gpui_kit::test]
+    fn a_save_that_lands_after_the_rename_reaches_the_new_name_too(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("rename-mid-save");
+        let (a, b) = (tmp.0.join("a.figcraft"), tmp.0.join("b.figcraft"));
+        let older = write_board(&a, &board_with(&["mine"]));
+        let view = open(cx, &a);
+        add_sticky(&view, cx);
+        view.update(cx, |view, _| view.flush());
+        // As if the rename came first: `b` is the file as it was, `a` the save written after.
+        std::fs::write(&b, &older).unwrap();
+        view.update(cx, |view, cx| view.rebind(b.clone(), cx));
+        view.update(cx, |view, _| view.flush());
+        assert_eq!(saved_layers(&b), 2);
     }
 
     #[gpui_kit::test]

@@ -76,9 +76,10 @@ pub(super) fn run_ui(
 }
 
 /// Save: writes the canvas's own file now, as a flush does ([`BoardView::flush`]). What to say:
-/// that it is saved, or why it isn't.
+/// that it is saved, or that it was written again where it had gone, or why it isn't.
 fn save(view: &mut BoardView) -> Result<String, String> {
-    view.save_now().map(|()| "Saved".to_string())
+    view.save_now()
+        .map(|notice| notice.unwrap_or_else(|| "Saved".to_string()))
 }
 
 /// Import from file… (`place` false) and Place image… (`place` true): asks for files, then brings

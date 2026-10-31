@@ -1899,20 +1899,40 @@ impl Workspace {
     }
 
     /// Open tabs of a renamed or moved file (or of files in a moved folder)
-    /// follow it.
+    /// follow it: a file editor's, and a canvas file's, whose canvas saves
+    /// there from now on ([`BoardView::rebind`], CANVAS-UI-3). A project's
+    /// canvas stays the project's, `.nyawit/canvas.figcraft` by definition.
     fn follow_move(&mut self, from: &Path, to: &Path, cx: &mut Context<Self>) {
-        for tab in &self.tabs {
-            if let PaneItem::File(editor) = &tab.item {
-                editor.update(cx, |e, cx| {
-                    if let Ok(rest) = e.path.strip_prefix(from) {
-                        e.path = if rest.as_os_str().is_empty() {
-                            to.to_path_buf()
-                        } else {
-                            to.join(rest)
-                        };
+        for tab in &mut self.tabs {
+            match &mut tab.item {
+                PaneItem::File(editor) => editor.update(cx, |e, cx| {
+                    if let Some(path) = moved_to(&e.path, from, to) {
+                        e.path = path;
                         cx.notify();
                     }
-                });
+                }),
+                PaneItem::Other {
+                    view,
+                    key,
+                    title,
+                    file,
+                    ..
+                } if key.starts_with("file\u{0}") => {
+                    let Ok(board) = view.clone().downcast::<BoardView>() else {
+                        continue;
+                    };
+                    let Some(path) = moved_to(board.read(cx).path(), from, to) else {
+                        continue;
+                    };
+                    board.update(cx, |board, cx| board.rebind(path.clone(), cx));
+                    *key = format!("file\u{0}{}", path.display()).into();
+                    *title = (path.file_name())
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                        .into();
+                    *file = Some(path);
+                }
+                PaneItem::Other { .. } | PaneItem::Server => {}
             }
         }
         cx.notify();
@@ -2886,6 +2906,17 @@ fn cached(view: AnyView) -> AnyElement {
         .into_any_element()
 }
 
+/// Where `path` is once `from` has been renamed or moved to `to`: `to` itself, or for a path in a
+/// moved folder its place in `to`. `None` when the move left it where it was.
+fn moved_to(path: &Path, from: &Path, to: &Path) -> Option<PathBuf> {
+    let rest = path.strip_prefix(from).ok()?;
+    Some(if rest.as_os_str().is_empty() {
+        to.to_path_buf()
+    } else {
+        to.join(rest)
+    })
+}
+
 /// The project that `file` is the canvas file of (spec D5), among `roots`, the folders of the
 /// window's projects: `Some` of its folder as `roots` has it, which is `None` for a project with no
 /// folder (its canvas is the app's own, in `app_root`). `None` when it is no project's.
@@ -2906,7 +2937,9 @@ mod tests {
 
     use gpui_kit::Modifiers;
 
-    use super::{CENTER_ONLY, bindings, canvas_project, settle_canvas_fill, toggle_canvas_fill};
+    use super::{
+        CENTER_ONLY, bindings, canvas_project, moved_to, settle_canvas_fill, toggle_canvas_fill,
+    };
     use crate::layout::{Area, Layout};
 
     /// A keystroke written as `ctrl-alt-shift-cmd-key`.
@@ -2944,6 +2977,27 @@ mod tests {
         let app_canvas = Path::new("/support/sawit/canvas.figcraft");
         let folders = [Some(PathBuf::from("/work/a"))];
         assert_eq!(canvas_project(app_canvas, folders, app), None);
+    }
+
+    /// A renamed or moved file, and the files of a moved folder, are where the move put them:
+    /// the tabs of file editors and of canvas files follow them there (CANVAS-UI-3).
+    #[test]
+    fn a_moved_path_is_found_where_the_move_put_it() {
+        let (from, to) = (Path::new("/p/sub"), Path::new("/p/moved"));
+        let moved = |path: &str| moved_to(Path::new(path), from, to);
+        assert_eq!(moved("/p/sub"), Some(PathBuf::from("/p/moved")));
+        assert_eq!(
+            moved("/p/sub/a.figcraft"),
+            Some(PathBuf::from("/p/moved/a.figcraft"))
+        );
+        assert_eq!(
+            moved("/p/sub/deeper/b.figcraft"),
+            Some(PathBuf::from("/p/moved/deeper/b.figcraft"))
+        );
+        // Beside it, or with a name that only starts the same: where it was.
+        assert_eq!(moved("/p/other.figcraft"), None);
+        assert_eq!(moved("/p/sub2/a.figcraft"), None);
+        assert_eq!(moved("/p"), None);
     }
 
     #[test]
