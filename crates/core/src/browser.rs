@@ -1296,19 +1296,34 @@ mod tests {
 
     /// Runs the page script (token `T0K3N`) in QuickJS on a stand-in page, then `test`, which
     /// returns a JSON string. The page: a `window` whose `webkit.messageHandlers.ipc` keeps what
-    /// is posted (`posted`), wry's `window.ipc` shim (it looks the handler up when called), the
-    /// listeners added (`listeners`, by type), and one element, `#buy`, under every point.
+    /// is posted (`posted`, `kinds`, `count`), wry's `window.ipc` shim (it looks the handler up
+    /// when called), `EventTarget.prototype`'s listener methods (the window's too) keeping the
+    /// listeners added in the browser's own list (`listeners`, by type), `fire` and `click` for
+    /// the browser dispatching an event to them, and one element, `#buy`, under every point.
+    /// The helpers use nothing a test's page script may patch.
     fn on_stand_in_page(test: &str) -> Value {
         const PAGE: &str = r#"
             var window = globalThis;
             var posted = [];
             var listeners = {};
             function Handler() {}
-            Handler.prototype.postMessage = function (s) { posted.push(String(s)); };
+            Handler.prototype.postMessage = function (s) { posted[posted.length] = String(s); };
             window.webkit = { messageHandlers: { ipc: new Handler() } };
             Object.defineProperty(window, "ipc", { value: Object.freeze({ postMessage: function (s) { window.webkit.messageHandlers.ipc.postMessage(s); } }) });
-            window.addEventListener = function (type, fn) { (listeners[type] = listeners[type] || []).push(fn); };
-            window.removeEventListener = function (type, fn) { listeners[type] = (listeners[type] || []).filter(function (f) { return f !== fn; }); };
+            function EventTarget() {}
+            EventTarget.prototype.addEventListener = function (type, fn) {
+                var all = listeners[type] || (listeners[type] = []);
+                for (var i = 0; i < all.length; i++) if (all[i] === fn) return;
+                all[all.length] = fn;
+            };
+            EventTarget.prototype.removeEventListener = function (type, fn) {
+                var all = listeners[type] || [];
+                var left = [];
+                for (var i = 0; i < all.length; i++) if (all[i] !== fn) left[left.length] = all[i];
+                listeners[type] = left;
+            };
+            window.addEventListener = EventTarget.prototype.addEventListener;
+            window.removeEventListener = EventTarget.prototype.removeEventListener;
             var console = { log: function () {}, info: function () {}, warn: function () {}, error: function () {}, debug: function () {}, trace: function () {} };
             var performance = { now: function () { return 0; } };
             var location = { href: "http://localhost:5173/" };
@@ -1338,12 +1353,29 @@ mod tests {
             el.contains = function (other) { return other === el; };
             document.elementsFromPoint = function () { return [el]; };
             document.querySelectorAll = function () { return [el]; };
-            var kinds = function (from) { return posted.slice(from).map(function (m) { return m.split("\n")[1]; }); };
+            var kinds = function (from) {
+                var out = [];
+                for (var i = from; i < posted.length; i++) out[out.length] = posted[i].split("\n")[1];
+                return out;
+            };
+            var count = function (from, kind) {
+                var all = kinds(from);
+                var n = 0;
+                for (var i = 0; i < all.length; i++) if (all[i] === kind) n++;
+                return n;
+            };
             var noop = function () {};
+            var fire = function (type, event) {
+                var all = listeners[type] || [];
+                var now = [];
+                for (var i = 0; i < all.length; i++) now[now.length] = all[i];
+                for (var j = 0; j < now.length; j++) now[j](event);
+            };
             var click = function (trusted) {
-                (listeners.click || []).forEach(function (fn) {
-                    fn({ isTrusted: trusted, clientX: 5, clientY: 5, preventDefault: noop, stopImmediatePropagation: noop });
-                });
+                fire("click", { isTrusted: trusted, type: "click", clientX: 5, clientY: 5, preventDefault: noop, stopImmediatePropagation: noop });
+            };
+            var shiftCmdPeriod = function (trusted) {
+                fire("keydown", { isTrusted: trusted, type: "keydown", key: ".", code: trusted ? "Period" : "", metaKey: true, shiftKey: true, altKey: false, preventDefault: noop, stopImmediatePropagation: noop });
             };
         "#;
         let source = format!("{PAGE}\n{}\n{test}", page_script("T0K3N"));
@@ -1388,13 +1420,91 @@ mod tests {
             __sawitAgent.run({ op: "pick", mode: "annotate" });
             var from = posted.length;
             click(false);
-            var forged = kinds(from).filter(function (k) { return k === "picked"; }).length;
+            var forged = count(from, "picked");
             click(true);
-            var real = kinds(from).filter(function (k) { return k === "picked"; }).length - forged;
+            var real = count(from, "picked") - forged;
             JSON.stringify({ forged: forged, real: real })
         "#,
         );
         assert_eq!(got, json!({"forged": 0, "real": 1}));
+    }
+
+    /// The picker's listeners never reach a page script: one that kept them could call them
+    /// with an `isTrusted: true` object of its own, and pick (with a screenshot, taking the
+    /// keyboard) while the user is annotating. The page here patched, before the picker was
+    /// armed, every way they could pass it: the window's and `EventTarget.prototype`'s listener
+    /// methods, the array iterator (`for…of` and destructuring), `Array.prototype`'s callbacks
+    /// and `Reflect.apply`.
+    #[test]
+    fn pages_never_get_the_pickers_listeners() {
+        let got = on_stand_in_page(
+            r#"
+            var kept = [];
+            var keep = function (v) {
+                if (typeof v === "function") kept[kept.length] = v;
+                else if (v && typeof v === "object" && typeof v.length === "number")
+                    for (var i = 0; i < v.length; i++) if (typeof v[i] === "function") kept[kept.length] = v[i];
+            };
+            var add = EventTarget.prototype.addEventListener;
+            var remove = EventTarget.prototype.removeEventListener;
+            var keptAdd = function (type, fn, options) { keep(fn); return add.call(this, type, fn, options); };
+            var keptRemove = function (type, fn, options) { keep(fn); return remove.call(this, type, fn, options); };
+            window.addEventListener = keptAdd;
+            window.removeEventListener = keptRemove;
+            EventTarget.prototype.addEventListener = keptAdd;
+            EventTarget.prototype.removeEventListener = keptRemove;
+            var iterator = Object.getPrototypeOf([][Symbol.iterator]());
+            var next = iterator.next;
+            iterator.next = function () {
+                var r = next.call(this);
+                if (r && !r.done) keep(r.value);
+                return r;
+            };
+            var methods = ["forEach", "map", "filter", "some", "every", "find", "findIndex", "reduce", "flatMap", "slice", "concat", "includes", "indexOf"];
+            for (var m = 0; m < methods.length; m++) (function (name) {
+                var real = Array.prototype[name];
+                Array.prototype[name] = function () {
+                    for (var i = 0; i < this.length; i++) keep(this[i]);
+                    for (var j = 0; j < arguments.length; j++) keep(arguments[j]);
+                    return real.apply(this, arguments);
+                };
+            })(methods[m]);
+            var reflectApply = Reflect.apply;
+            Reflect.apply = function (f, self, args) { keep(f); keep(args); return reflectApply(f, self, args); };
+
+            // Sawit arms the picker (the user opened Annotate), stops it and arms it again.
+            __sawitAgent.run({ op: "pick", mode: "annotate" });
+            __sawitAgent.run({ op: "pick", mode: "off" });
+            __sawitAgent.run({ op: "pick", mode: "annotate" });
+            var from = posted.length;
+            var event = { isTrusted: true, type: "click", key: ".", code: "Period", metaKey: true, shiftKey: true, altKey: false,
+                clientX: 5, clientY: 5, deltaY: -1, preventDefault: noop, stopImmediatePropagation: noop };
+            for (var i = 0; i < kept.length; i++) {
+                try { kept[i](event); } catch (_) {}
+            }
+            var forged = kinds(from).length;
+            click(true);
+            JSON.stringify({ forged: forged, real: count(from, "picked") })
+        "#,
+        );
+        assert_eq!(got, json!({"forged": 0, "real": 1}));
+    }
+
+    /// ⇧⌘. opens Annotate and arms the picker, so the page's listener answers only the user's
+    /// own key: a page can dispatch one too (an agent's `browser_press_key "Meta+Shift+."`
+    /// goes to Sawit instead).
+    #[test]
+    fn a_page_cant_press_shift_cmd_period() {
+        let got = on_stand_in_page(
+            r#"
+            var from = posted.length;
+            shiftCmdPeriod(false);
+            var synthetic = count(from, "key");
+            shiftCmdPeriod(true);
+            JSON.stringify({ synthetic: synthetic, real: count(from, "key") - synthetic })
+        "#,
+        );
+        assert_eq!(got, json!({"synthetic": 0, "real": 1}));
     }
 
     /// `browser_evaluate` on a page whose Content-Security-Policy forbids `eval` (helmet's

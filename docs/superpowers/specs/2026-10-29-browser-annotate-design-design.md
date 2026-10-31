@@ -86,7 +86,9 @@ clicking Export leaves a folder Claude can build a matching UI from.
   panel in that mode. They show as active while open. Opening Annotate turns on pick mode.
 - **↗** (Lucide `ExternalLink`): opens the current URL in the default browser.
 - **</>** (Lucide `Code`): Web Inspector, unchanged.
-- **⌘⇧.** toggles Annotate, whether the page or Sawit has the keyboard.
+- **⌘⇧.** toggles Annotate, whether the page or Sawit has the keyboard. On the page only the user's
+  own key counts (a page can dispatch keys too); Sawit answers an agent's `browser_press_key
+  "Meta+Shift+."` itself, and its `Escape` while picking.
 
 ### Picking (shared by Annotate and Design → Inspect)
 
@@ -95,6 +97,9 @@ clicking Export leaves a folder Claude can build a matching UI from.
 - **↑ / ↓** (or Alt+scroll) walks to the parent or back to the child. **Esc** leaves pick mode.
 - A click selects the element. It doesn't reach the page: `click`, `mousedown`, `pointerdown` and
   `mouseup` are cancelled in the capture phase.
+- Only the user's own input picks. Events a page dispatches, and an agent's `browser_click`, reach
+  the page as if the picker weren't there. The picker's listeners go through the listener methods
+  as they were before any page script ran, so no page script can call one with an event of its own.
 - In Design → Inspect, with an element selected, holding **Alt** while hovering another shows the
   distances between the two boxes.
 - Leaving pick mode removes every listener the picker added.

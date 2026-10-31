@@ -80,8 +80,8 @@ impl BrowserView {
             Panel::Annotate => ("Annotate", self.annotate.clone().into_any_element()),
             Panel::Design => ("Design", self.design_panel.clone().into_any_element()),
         };
-        let close = cx.listener(move |this, _: &ClickEvent, window, cx| {
-            this.toggle_panel(panel, window, cx);
+        let close = cx.listener(move |this, _: &ClickEvent, _, cx| {
+            this.toggle_panel(panel, cx);
         });
         div()
             .w(px(PANEL_WIDTH))

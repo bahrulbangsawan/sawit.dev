@@ -99,6 +99,40 @@ fn pick_wanted(panel: Option<Panel>, pick: PickMode, mode: &str) -> bool {
     }
 }
 
+/// A key an agent presses (`browser_press_key`) that Sawit answers instead of the page.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum OwnKey {
+    /// ⇧⌘.: toggles Annotate.
+    ToggleAnnotate,
+    /// Esc: stops picking, while picking.
+    Escape,
+}
+
+/// Whether `key` (`Meta+Shift+.`, as `browser_press_key` takes it) is ⇧⌘. or Esc. The page
+/// answers only the user's own ⇧⌘. and Esc while picking (a page can dispatch keys, and ⇧⌘.
+/// opens Annotate and arms the picker), so an agent's go to Sawit. `>` is ⇧. on the keyboard.
+fn own_key(key: &str) -> Option<OwnKey> {
+    let parts: Vec<String> = key
+        .split('+')
+        .map(|p| p.trim().to_ascii_lowercase())
+        .collect();
+    let (key, mods) = parts.split_last()?;
+    let meta = mods
+        .iter()
+        .any(|m| matches!(m.as_str(), "meta" | "cmd" | "command"));
+    let shift = mods.iter().any(|m| m == "shift");
+    let others = mods
+        .iter()
+        .any(|m| !matches!(m.as_str(), "meta" | "cmd" | "command" | "shift"));
+    match key.as_str() {
+        "." if meta && shift && !others => Some(OwnKey::ToggleAnnotate),
+        ">" if meta && !others => Some(OwnKey::ToggleAnnotate),
+        // As the picker takes it: any Esc.
+        "escape" | "esc" => Some(OwnKey::Escape),
+        _ => None,
+    }
+}
+
 /// What a click on the page does.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PickMode {
@@ -332,7 +366,7 @@ impl BrowserView {
 
     /// Opens `panel`, or closes it when it is the one open. Annotate arms
     /// element picking, Design inspecting (on its Inspect segment); closing disarms.
-    pub fn toggle_panel(&mut self, panel: Panel, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn toggle_panel(&mut self, panel: Panel, cx: &mut Context<Self>) {
         if self.panel == Some(panel) {
             self.panel = None;
             self.set_pick(PickMode::Off, cx);
@@ -347,12 +381,27 @@ impl BrowserView {
 
     /// ⇧⌘.: like the Annotate button, except that with Annotate open after Esc
     /// it picks again instead of closing.
-    fn annotate_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn annotate_key(&mut self, cx: &mut Context<Self>) {
         if self.panel == Some(Panel::Annotate) && self.pick == PickMode::Off {
             self.set_pick(PickMode::Annotate, cx);
         } else {
-            self.toggle_panel(Panel::Annotate, window, cx);
+            self.toggle_panel(Panel::Annotate, cx);
         }
+    }
+
+    /// An agent's ⇧⌘., or Esc while picking: does what the user's key does and answers
+    /// where that left the panel and the picker. `None` for a key that is the page's.
+    fn press_own_key(&mut self, key: &str, cx: &mut Context<Self>) -> Option<Value> {
+        match own_key(key)? {
+            OwnKey::ToggleAnnotate => self.annotate_key(cx),
+            OwnKey::Escape if self.pick != PickMode::Off => self.set_pick(PickMode::Off, cx),
+            OwnKey::Escape => return None,
+        }
+        Some(json!({
+            "pressed": key,
+            "panel": self.panel.map(Panel::as_str),
+            "picking": self.pick.as_str(),
+        }))
     }
 
     /// Arms (or disarms) picking on the page.
@@ -812,9 +861,9 @@ impl BrowserView {
                     self.inspect_element(selector.to_string(), false, cx);
                 }
             }
-            // The page has the keyboard: it forwards ⇧⌘. and Esc.
+            // The page has the keyboard: it forwards the user's ⇧⌘. and Esc.
             FromPage::Event(PageEvent::Key(key)) => match key.as_str() {
-                "toggle-annotate" => self.annotate_key(window, cx),
+                "toggle-annotate" => self.annotate_key(cx),
                 "escape" => self.set_pick(PickMode::Off, cx),
                 _ => {}
             },
@@ -936,6 +985,13 @@ impl BrowserView {
         let (tx, rx) = oneshot::channel();
         if let Some(e) = &self.error {
             let _ = tx.send(Err(format!("The browser couldn't start: {e}")));
+            return rx;
+        }
+        // Sawit's keys, not the page's (see `own_key`): no page needed.
+        if let BrowserOp::Press { key } = &op
+            && let Some(answer) = self.press_own_key(key, cx)
+        {
+            let _ = tx.send(Ok(answer));
             return rx;
         }
         if self.engine.is_none() {
@@ -1243,8 +1299,8 @@ impl Render for BrowserView {
         v_flex()
             .key_context("Browser")
             .track_focus(&self.focus)
-            .on_action(cx.listener(|this, _: &ToggleAnnotate, window, cx| {
-                this.annotate_key(window, cx);
+            .on_action(cx.listener(|this, _: &ToggleAnnotate, _, cx| {
+                this.annotate_key(cx);
             }))
             .size_full()
             .child(self.toolbar(window, cx))
@@ -1846,11 +1902,7 @@ mod tests {
         picked(cx);
         assert_eq!(rows(cx), 0, "Annotate is closed");
 
-        cx.update(|window, cx| {
-            view.update(cx, |b, cx| {
-                b.toggle_panel(super::Panel::Annotate, window, cx)
-            })
-        });
+        cx.update(|_, cx| view.update(cx, |b, cx| b.toggle_panel(super::Panel::Annotate, cx)));
         picked(cx);
         assert_eq!(rows(cx), 1, "the user's pick");
 
@@ -1860,11 +1912,92 @@ mod tests {
         assert_eq!(rows(cx), 1, "picking is off");
 
         // Design's Inspect picks are no annotations either.
-        cx.update(|window, cx| {
-            view.update(cx, |b, cx| b.toggle_panel(super::Panel::Design, window, cx))
-        });
+        cx.update(|_, cx| view.update(cx, |b, cx| b.toggle_panel(super::Panel::Design, cx)));
         picked(cx);
         assert_eq!(rows(cx), 1, "Design is open");
+    }
+
+    /// The page answers only the user's own ⇧⌘. (a page can dispatch one), so an agent's
+    /// `browser_press_key "Meta+Shift+."` is Sawit's to answer: it toggles Annotate as the
+    /// user's key does, before the page has loaded too. Esc while picking stops picking as
+    /// the user's does; other keys, and Esc while not picking, go to the page.
+    #[gpui_kit::test]
+    fn an_agents_shift_cmd_period_is_sawits_to_handle(cx: &mut gpui_kit::TestAppContext) {
+        use sawit_core::browser::BrowserOp;
+        let (view, cx) = test_browser(cx);
+        let press = |key: &str, cx: &mut gpui_kit::VisualTestContext| {
+            let mut answer = cx.update(|_, cx| {
+                view.update(cx, |b, cx| {
+                    b.apply(BrowserOp::Press { key: key.into() }, cx)
+                })
+            });
+            cx.run_until_parked();
+            answer.try_recv().ok().flatten()
+        };
+        let state = |cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|_, cx| {
+                let b = view.read(cx);
+                (b.panel(), b.pick)
+            })
+        };
+
+        let answer = press("Meta+Shift+.", cx);
+        assert_eq!(state(cx), (Some(Panel::Annotate), PickMode::Annotate));
+        assert_eq!(
+            answer,
+            Some(Ok(
+                json!({"pressed": "Meta+Shift+.", "panel": "annotate", "picking": "annotate"})
+            ))
+        );
+        press("Escape", cx);
+        assert_eq!(
+            state(cx),
+            (Some(Panel::Annotate), PickMode::Off),
+            "Esc stops picking"
+        );
+        press("Cmd+Shift+.", cx);
+        assert_eq!(
+            state(cx),
+            (Some(Panel::Annotate), PickMode::Annotate),
+            "picks again"
+        );
+        press("shift+meta+>", cx);
+        assert_eq!(state(cx), (None, PickMode::Off), "and closes");
+        // The page's: waits for it (this tab never loads one).
+        assert_eq!(press("Escape", cx), None);
+        assert_eq!(press("Meta+.", cx), None);
+        assert_eq!(state(cx), (None, PickMode::Off));
+    }
+
+    #[test]
+    fn sawits_own_keys() {
+        use super::{OwnKey, own_key};
+        for key in [
+            "Meta+Shift+.",
+            "Shift+Meta+.",
+            "cmd+shift+.",
+            "Command+Shift+>",
+            "Meta+>",
+            " Meta + Shift + . ",
+        ] {
+            assert_eq!(own_key(key), Some(OwnKey::ToggleAnnotate), "{key}");
+        }
+        for key in ["Escape", "esc", "Shift+Escape"] {
+            assert_eq!(own_key(key), Some(OwnKey::Escape), "{key}");
+        }
+        for key in [
+            ".",
+            "Meta+.",
+            "Shift+.",
+            "Ctrl+Meta+Shift+.",
+            "Meta+Alt+Shift+.",
+            "Meta+Shift+,",
+            "Meta+Shift+a",
+            "Enter",
+            "",
+        ] {
+            assert_eq!(own_key(key), None, "{key}");
+        }
     }
 
     /// A note typed on an annotation holds the tab open (closing it asks) until it is copied
@@ -1873,11 +2006,7 @@ mod tests {
     fn unsent_notes_hold_the_tab(cx: &mut gpui_kit::TestAppContext) {
         use sawit_core::browser::PageEvent;
         let (view, cx) = test_browser(cx);
-        cx.update(|window, cx| {
-            view.update(cx, |b, cx| {
-                b.toggle_panel(super::Panel::Annotate, window, cx)
-            })
-        });
+        cx.update(|_, cx| view.update(cx, |b, cx| b.toggle_panel(super::Panel::Annotate, cx)));
         let pick = serde_json::json!({"mode": "annotate", "element": {
             "selector": "#buy", "label": "button#buy", "tag": "button",
             "rect": {"x": 1, "y": 1, "width": 40, "height": 20}}});

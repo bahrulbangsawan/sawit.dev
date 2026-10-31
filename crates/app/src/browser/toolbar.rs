@@ -89,7 +89,7 @@ impl BrowserView {
                     .selected(self.panel() == Some(Panel::Annotate))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.take_keyboard(window, cx);
-                        this.toggle_panel(Panel::Annotate, window, cx);
+                        this.toggle_panel(Panel::Annotate, cx);
                     })),
             )
             .child(
@@ -101,7 +101,7 @@ impl BrowserView {
                     .selected(self.panel() == Some(Panel::Design))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.take_keyboard(window, cx);
-                        this.toggle_panel(Panel::Design, window, cx);
+                        this.toggle_panel(Panel::Design, cx);
                     })),
             )
             .child(
