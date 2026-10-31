@@ -3,9 +3,25 @@
 # version (the very first release keeps 0.0.1), writes its CHANGELOG.md
 # section from the commit subjects, commits "chore(release): vX" and tags
 # vX. Called by .githooks/pre-push; prints the new tag, or nothing when
-# there is nothing new to release.
+# there is nothing new to release. `release.sh --dry-run` prints the section
+# it would write instead, and changes nothing.
+#
+# A release is what main holds, so it is cut on main only:
+# SAWIT_RELEASE_ANY_BRANCH=1 cuts one on another branch on purpose.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
+dry_run=no
+[ "${1:-}" != --dry-run ] || dry_run=yes
+
+if branch=$(git symbolic-ref -q --short HEAD); then
+    here="on $branch"
+else
+    here="on a detached HEAD"
+fi
+if [ "$here" != "on main" ] && [ -z "${SAWIT_RELEASE_ANY_BRANCH:-}" ]; then
+    echo "release: releases are cut on main, and this checkout is $here: run it in a checkout of main (SAWIT_RELEASE_ANY_BRANCH=1 cuts one here anyway)" >&2
+    exit 1
+fi
 
 for f in Cargo.toml Cargo.lock CHANGELOG.md; do
     if ! git diff --quiet HEAD -- "$f"; then
@@ -25,6 +41,18 @@ if git rev-parse -q --verify "refs/tags/v$current" >/dev/null; then
 else
     next=$current
 fi
+# Checked before anything changes: otherwise the release commit is made and
+# only its tag fails, which leaves that commit untagged on this branch.
+if git rev-parse -q --verify "refs/tags/v$next" >/dev/null; then
+    echo "release: tag v$next exists already, though Cargo.toml says $current, so v$next can't be cut; nothing was changed. If that tag was made by mistake and never pushed, delete it: git tag -d v$next" >&2
+    exit 1
+fi
+
+# The notes go to the GitHub release, the updater and the in-app Changelog,
+# so they list what users get: docs, tests, refactors and build, CI and chore
+# work (by type, or a docs scope) are left out, unless that is all there is.
+listed=$(echo "$subjects" | grep -Ev '^(docs|test|chore|ci|build|style|refactor)(\(|!?:)|^[a-z]+\(docs\)!?:' || true)
+[ -n "$listed" ] || listed=$subjects
 
 notes=$(mktemp)
 trap 'rm -f "$notes" "$notes.new"' EXIT
@@ -32,7 +60,7 @@ trap 'rm -f "$notes" "$notes.new"' EXIT
 group() {
     title=$1
     shift
-    lines=$(echo "$subjects" | grep -E "$@" | sed -E \
+    lines=$(echo "$listed" | grep -E "$@" | sed -E \
         -e 's/^[a-z]+\(([^)]*)\)!?: /**\1**: /' \
         -e 's/^[a-z]+!?: //' \
         -e 's/^/- /' || true)
@@ -42,6 +70,11 @@ group "Features" '^feat'
 group "Fixes" '^fix'
 group "Performance" '^perf'
 group "Other" -v '^(feat|fix|perf)'
+if [ "$dry_run" = yes ]; then
+    printf '## [%s] - %s\n\n' "$next" "$(date +%Y-%m-%d)"
+    cat "$notes"
+    exit 0
+fi
 
 # The new section goes above the previous ones, below the intro.
 section=$(mktemp)
@@ -63,5 +96,6 @@ fi
 
 git add Cargo.toml Cargo.lock CHANGELOG.md
 git commit --quiet --no-verify -m "chore(release): v$next" -- Cargo.toml Cargo.lock CHANGELOG.md
-git tag -a "v$next" -F "$notes"
+# whitespace, not the default strip, which would drop the "### Features" headings.
+git tag -a --cleanup=whitespace "v$next" -F "$notes"
 echo "v$next"

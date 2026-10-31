@@ -4,7 +4,7 @@ The Browser tab (`docs/superpowers/specs/2026-10-29-browser-pane-design.md`, mer
 where the user checks the web app Claude Code is building and hands visual feedback back, and where
 they lift another site's design system into their project. Two features are added inside the tab:
 
-- **Annotate:** a rebuild of Visual Annotator (MIT, `~/Documents/visual-annotator-main`). Point at
+- **Annotate:** a rebuild of Visual Annotator (MIT, https://github.com/wernerstrauch/visual-annotator). Point at
   elements, comment, screenshot, and send structured markdown to Claude.
 - **Design:** a rebuild of the Woblo Chrome extension. Inspect any element, list the page's colors,
   fonts and assets, and export a design system (DESIGN.md, tokens, Tailwind/shadcn themes, assets)

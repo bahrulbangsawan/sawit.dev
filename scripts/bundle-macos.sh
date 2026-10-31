@@ -36,9 +36,9 @@ cp "$out/sawit" "$app/Contents/MacOS/"
 ln -s sawit "$app/Contents/MacOS/sawit-mcp"
 cp assets/logo/Sawit.icns "$app/Contents/Resources/"
 # The licence texts of what the binary carries: FigCraft's notice and MIT
-# licence and Visual Annotator's MIT licence (NOTICE), and the SIL Open Font
-# License of the Inter fonts it embeds, which asks that every copy of the fonts
-# come with it.
+# licence, craft-libs' MIT licence and Visual Annotator's MIT licence (NOTICE),
+# and the SIL Open Font License of the Inter fonts it embeds, which asks that
+# every copy of the fonts come with it.
 cp NOTICE crates/board/fonts/OFL-Inter.txt "$app/Contents/Resources/"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

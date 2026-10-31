@@ -19,7 +19,7 @@ git worktree list --porcelain
 git branch -vv --no-color
 git branch -r --no-color
 git fetch --prune origin && git log --oneline main..origin/main && git log --oneline origin/main..main
-git config core.hooksPath     # must print .githooks (release hook)
+git config core.hooksPath     # must print .githooks (release hook; relative, so each worktree runs its own copy)
 ```
 
 For each **stash**, run `git stash show -p stash@{N} | head -200`. Decide whether it is already in `main`
@@ -151,10 +151,14 @@ For each user-facing change:
 ## Phase 4: Commit the work
 
 Group the changes into a few logical commits (one feature or fix each) rather than one huge commit. The
-subject of every commit becomes a changelog line through `scripts/release.sh`, so:
+subject of every `feat`, `fix` and `perf` commit (and of any without a type) becomes a changelog line through
+`scripts/release.sh`, which the GitHub release, the updater and the in-app Changelog show; `docs`, `test`,
+`chore`, `ci`, `build`, `style` and `refactor` subjects, and a `docs` scope, are left out unless they are all
+there is. So:
 
 - Use Conventional Commits: `feat:`, `fix:`, `perf:`, `docs:`, `refactor:`, `chore:` (optionally with a scope:
-  `feat(db): …`).
+  `feat(db): …`). Give internal work (plans, records, tests, merge reconciliations) a type that stays out of the
+  notes.
 - Write the subject as a short, lowercase, user-facing sentence, like the existing CHANGELOG.md entries.
 - Never write a `chore(release):` commit by hand, and leave the `version` in `Cargo.toml` and the
   `CHANGELOG.md` sections alone. The release step owns them, and `release.sh` refuses to run while those
@@ -209,16 +213,36 @@ Commit this as `docs: update README, screenshots and demo for <short summary>`.
 1. Final check: `git status --short` is empty, `git stash list` holds only what the user chose to keep,
    `git worktree list` and `git branch` show only what the user chose to keep, and the Phase 2 gates
    passed on this exact HEAD.
-2. Note the version you expect: the patch after the one in `Cargo.toml` (for example `0.0.5` → `0.0.6`).
-3. Push: `git push origin main`.
+2. Note the version you expect: the patch after the one in `Cargo.toml` (for example `0.0.5` → `0.0.6`), and
+   read the notes the push will publish: `scripts/release.sh --dry-run` in a checkout of `main` (see step 3)
+   prints the section and changes nothing. An entry that is internal or reads badly comes from its commit
+   subject: tell the user before pushing. To change the notes of this release only, cut it by hand in the
+   checkout of `main` (`tag=$(scripts/release.sh)`), edit the new `CHANGELOG.md` section, run
+   `git commit --amend --no-verify --no-edit -- CHANGELOG.md` and `git tag -fa --cleanup=whitespace "$tag" -F
+   <the edited section>`, then push with `SAWIT_RELEASE_PUSH=1 git push origin main "$tag"` instead of step 3.
+3. Push from a checkout of `main`: `git push origin main`.
+   - The release is cut on `HEAD`, so the hook refuses a push of `main` from any other checkout (another
+     branch, a detached `HEAD`): it would release nothing. When `main` is checked out nowhere (lanes move it
+     with `git fetch . <lane>:main`), check it out in a worktree of its own, from the main checkout's root:
+     `git worktree add ../sawit-main main`, then `git -C ../sawit-main push origin main`. Remove that worktree
+     only once step 4 is done (`git worktree remove ../sawit-main`): while it holds `main`,
+     `git fetch . <lane>:main` is refused.
    - With `core.hooksPath = .githooks`, the pre-push hook runs `scripts/release.sh`. It bumps the version in
      `Cargo.toml`/`Cargo.lock`, writes the new `CHANGELOG.md` section from the commit subjects, commits
-     `chore(release): vX` and tags `vX`. A background job then pushes that commit and tag
-     (log: `.git/sawit-release.log`). Don't run `release.sh` yourself too, or the version is bumped twice.
-   - If `core.hooksPath` is not set: run `tag=$(scripts/release.sh)`, then
+     `chore(release): vX` and tags `vX`. A background job then pushes that commit and tag, with any earlier
+     release tag a failed push left behind (log: `$(git rev-parse --git-common-dir)/sawit-release.log`, the main
+     checkout's `.git/sawit-release.log` whichever worktree pushed; a failure shows a notification). Don't run
+     `release.sh` yourself too, or the version is bumped twice.
+   - If `core.hooksPath` is not set: in the checkout of `main`, run `tag=$(scripts/release.sh)`, then
      `git push origin main && git push origin "$tag"`.
+   - A `main` that reached origin without its release (pushed with the hook off, or with
+     `SAWIT_SKIP_RELEASE=1`) isn't released by pushing it again: that push is "Everything up-to-date" and runs no
+     hook. Cut the release by hand in the checkout of `main` (`tag=$(scripts/release.sh)`), then push it with
+     `SAWIT_RELEASE_PUSH=1 git push origin main "$tag"`.
+   - A release whose background push failed: the log says why, and how to push it. Pushing `main` again from
+     the checkout of `main` takes the release commit and tag along too, while origin's `main` lacks that commit.
 4. Wait for the release push to finish, then confirm:
-   - `cat .git/sawit-release.log` has no errors;
+   - `cat "$(git rev-parse --git-common-dir)/sawit-release.log"` has no errors;
    - `git log --oneline -3` shows `chore(release): vX` on top, and `git ls-remote --tags origin vX` lists the tag;
    - `git status -sb` shows `main` even with `origin/main`;
    - `head -20 CHANGELOG.md` shows the new section with sensible entries. If a line reads badly, the cause

@@ -383,7 +383,7 @@ mod tests {
         assert!(validate_socket_dir(&long, 5432).is_err());
         assert!(
             validate_socket_dir(
-                Path::new("/Users/rulisme/Library/Application Support/sawit/run"),
+                Path::new("/Users/someone/Library/Application Support/sawit/run"),
                 5432
             )
             .is_ok()

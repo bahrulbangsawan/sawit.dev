@@ -41,7 +41,7 @@
 
 Sawit is built for local development with PostgreSQL. This work usually needs Docker Desktop,
 a database client, an editor, a terminal, and a few command-line tools as separate apps. In Sawit
-they all live in a single Rust binary of about **58 MiB** (see [Size & memory](#size--memory)).
+they all live in a single Rust binary of about **60 MiB** (see [Size & memory](#size--memory)).
 The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (the "One Dark" palette).
 
 <p align="center">
@@ -627,14 +627,28 @@ happen in the app: download `Sawit.dmg` once from Releases.
 - Versions start at **0.0.1** and bump one patch on **every push to `main`**. The history is in
   [`CHANGELOG.md`](CHANGELOG.md) and on the in-app **Changelog** page.
 
-Release flow (enable once per clone with `git config core.hooksPath .githooks`):
+Release flow (enable once per clone with `git config core.hooksPath .githooks`; the relative path has each
+worktree run its own checkout's hook):
 
-1. `git push` to `main` runs `.githooks/pre-push` → `scripts/release.sh`: the version in `Cargo.toml`
-   is bumped (the first release stays 0.0.1), a new `CHANGELOG.md` section is written from commit messages
-   (grouped as `feat`/`fix`/`perf`/other), then a `chore(release): vX` commit and a `vX` tag are created.
-2. After that push finishes, the release commit and tag are pushed too (log in `.git/sawit-release.log`).
+1. `git push` of `main`, from a checkout of `main`, runs `.githooks/pre-push` → `scripts/release.sh`: the
+   version in `Cargo.toml` is bumped (the first release stays 0.0.1), a new `CHANGELOG.md` section is written
+   from commit messages (grouped as `feat`/`fix`/`perf`/other; `docs`, `test`, `chore`, `ci`, `build`, `style`
+   and `refactor` commits are left out unless they are all there is), then a `chore(release): vX` commit and a
+   `vX` tag are created. `scripts/release.sh --dry-run` prints that section without changing anything.
+2. After that push finishes, the release commit and tag are pushed too, in the background, with any earlier
+   release tag a failed push left behind. A push of `main` with nothing new to release takes such a tag along
+   as well. The log is the main checkout's `.git/sawit-release.log`, whichever worktree pushed
+   (`$(git rev-parse --git-common-dir)/sawit-release.log`). A failure shows a notification.
 3. The tag triggers `.github/workflows/release.yml`: the app is built on a macOS runner and published as a
    GitHub Release (`Sawit-X-macos-arm64.zip` for the updater, `Sawit.dmg`, notes from `CHANGELOG.md`).
+
+The release is cut on `HEAD`, so `main` is pushed from a checkout of `main`. A push of `main` from anywhere else
+(another branch, a detached `HEAD`) would release nothing, so the hook refuses it and prints, with full paths,
+the steps to push from a worktree of `main` instead. From the checkout's root, they are
+`git worktree add ../sawit-main main` and `git -C ../sawit-main push origin main`, then, once the release is out
+(`git ls-remote --tags origin vX` lists its tag), `git worktree remove ../sawit-main`. Or set
+`SAWIT_SKIP_RELEASE=1` to push without a release. `scripts/release.sh` runs on `main` only, too
+(`SAWIT_RELEASE_ANY_BRANCH=1` cuts a release on another branch on purpose).
 
 ## Test
 
@@ -707,20 +721,16 @@ crates/mcp    sawit-mcp — stdio MCP server on top of core and board
 
 ## Size & memory
 
-Measured on an Apple Silicon MacBook (M3, macOS 26.6.1) on 2026-10-31, release build (`lto = "fat"`, `strip`):
+Measured on an Apple Silicon MacBook (M3, macOS 26.6.1) on 2026-11-01, release build (`lto = "fat"`, `strip`):
 
 | | |
 |---|---|
-| `sawit` | 57.6 MiB (single file, no JVM/Chromium/Node runtime; includes the MCP server, reached as `sawit-mcp` through a symlink, the FigCraft canvas engine and the canvas's Inter fonts) |
-| Memory with a large canvas board open (776 layers) | RSS 532 MiB |
-| Clean release build | 10 min 13 s, on a busy machine |
-
-Measured before the native canvas, and not measured again since:
-
-| | |
-|---|---|
-| `Sawit.app` installed · DMG · update zip | 33 MB · 13.5 MB · 17.3 MB |
-| Idle memory (1 window, 1 terminal tab, 10 seconds after launch) | RSS 85 MB · physical footprint 67 MB (peak 115 MB during startup) |
+| `sawit` | 59.8 MiB (single file, no JVM/Chromium/Node runtime; includes the MCP server, reached as `sawit-mcp` through a symlink, the FigCraft canvas engine and the canvas's Inter fonts) |
+| `Sawit.app` installed · DMG · update zip | 62.8 MB · 22.6 MB · 29.6 MB |
+| Idle memory (1 window, 1 terminal tab, 10 seconds after launch) | RSS 114 MB · physical footprint 73 MB (peak 121 MB during startup); the same a minute later |
+| The same with an empty canvas open | Physical footprint 160 MB; up to 380 MB for about half a minute after the first canvas opens, which reads the system's fonts |
+| Memory with a large canvas board open (776 layers, measured on 2026-10-31) | RSS 532 MiB |
+| Clean release build | 14 min 7 s, on a busy machine |
 
 Figures for other apps are not listed because they have not been measured on the same machine.
 
@@ -741,6 +751,9 @@ Figures for other apps are not listed because they have not been measured on the
 
 - Sawit includes [FigCraft](https://github.com/storytold/figcraft), Copyright (c) 2026 ArtCraft Team and the FigCraft
   contributors, licensed under MIT OR Apache-2.0. See [`NOTICE`](NOTICE).
+- Sawit includes four crates of [craft-libs](https://github.com/storytold/craft-libs), which FigCraft builds on,
+  Copyright (c) 2026 ArtCraft Team and the craft-libs contributors, licensed under MIT OR Apache-2.0. See
+  [`NOTICE`](NOTICE).
 - Sawit embeds [Inter](https://github.com/rsms/inter), Copyright 2020 The Inter Project Authors, licensed under the
   SIL Open Font License 1.1. See [`NOTICE`](NOTICE).
 - The browser tab's page picker adapts [Visual Annotator](https://github.com/wernerstrauch/visual-annotator),

@@ -92,13 +92,28 @@ pub const TITLE: &str = "Canvas";
 pub struct ToggleCanvasMaximize;
 
 /// Starts what every canvas shares, once at startup: its key bindings ([`bindings`]), bound after
-/// the workspace's, Sawit's own fonts ([`sawit_board::fonts::register`]), and the system's, read
-/// on a background thread. Then every window repaints: text laid out meanwhile in the default face
-/// is laid out again in its own ([`figcraft_text::layout_generation`] has changed).
+/// the workspace's, and Sawit's own fonts ([`sawit_board::fonts::register`]). The system's fonts
+/// are read once a canvas first opens ([`read_system_fonts`]).
 pub fn init(cx: &mut App) {
     init_keys(cx);
     // Before the scan, so that an Inter installed on the Mac doesn't take the place of Sawit's.
     sawit_board::fonts::register();
+}
+
+/// The system's fonts are being read, or were ([`read_system_fonts`]).
+struct SystemFonts;
+impl Global for SystemFonts {}
+
+/// Reads the system's fonts into the canvas's font database on a background thread, once: when
+/// the first canvas opens, since only the canvas uses them. Reading them at startup left AppKit's
+/// 160 MB symbol catalog resident for the first half minute of every launch, with or without a
+/// canvas. Then every window repaints: text laid out meanwhile in the default face is laid out
+/// again in its own ([`figcraft_text::layout_generation`] has changed).
+fn read_system_fonts(cx: &mut App) {
+    if cx.has_global::<SystemFonts>() {
+        return;
+    }
+    cx.set_global(SystemFonts);
     let scan = cx.background_spawn(async { figcraft_text::scan_system_fonts() });
     cx.spawn(async move |cx| {
         scan.await;
@@ -582,6 +597,7 @@ impl BoardView {
         read: Option<Stamp>,
         cx: &mut Context<Self>,
     ) -> Self {
+        read_system_fonts(cx);
         let (worker, mut frames) = Worker::spawn();
         let frames = cx.spawn(async move |this, cx| {
             while let Some(frame) = frames.next().await {
@@ -1963,8 +1979,8 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        BoardView, Command, SAVE_DELAY, TOAST_TIME, design_panel, init_keys, issues_line,
-        layers_panel, menus, toolbar, top_bar,
+        BoardView, Command, SAVE_DELAY, SystemFonts, TOAST_TIME, design_panel, init_keys,
+        issues_line, layers_panel, menus, toolbar, top_bar,
     };
 
     /// A folder of the test's own, removed when the test ends. The view's other test modules
@@ -1996,6 +2012,24 @@ mod tests {
         // The canvas's shortcuts are key bindings.
         cx.update(init_keys);
         cx.new(|cx| BoardView::open(path.to_path_buf(), cx))
+    }
+
+    /// RELEASE-2: reading the system's fonts left AppKit's 160 MB symbol catalog resident for
+    /// the first half minute of every launch, with or without a canvas. They are read once a
+    /// canvas first opens now: starting the app reads none.
+    #[gpui_kit::test]
+    fn the_system_fonts_are_read_when_a_canvas_first_opens(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        cx.update(gpui_kit::init);
+        cx.update(super::init);
+        cx.run_until_parked();
+        let reading = |cx: &mut TestAppContext| cx.update(|cx| cx.has_global::<SystemFonts>());
+        assert!(!reading(cx), "starting the app read the system's fonts");
+        let tmp = Scratch::new("system-fonts");
+        let _view = cx.new(|cx| BoardView::open(tmp.0.join("canvas.figcraft"), cx));
+        assert!(reading(cx));
+        cx.run_until_parked();
+        assert!(figcraft_text::installed_fonts_known());
     }
 
     /// The names in `dir`, sorted.

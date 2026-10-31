@@ -967,7 +967,7 @@ There are 26 questions. They come from the ledger lines that leave a decision or
   - The zoom went from 100 % to 34 %. No zoom step or fit gives 34 %, but a pinch or a ⌘-scroll does.
   - The window lost key focus in between.
   - `.nyawit/canvas.figcraft.bak`, written at 18:18:21, holds the flow chart.
-  - The instance listened on `/tmp/sawit-rulisme-945615192beed5f.sock`. Neither sawit-mcp nor the `sawit` CLI
+  - The instance listened on `/tmp/sawit-$USER-945615192beed5f.sock`. Neither sawit-mcp nor the `sawit` CLI
     uses that socket without the check's scratch `SAWIT_HOME`.
 - 22:38:47–22:39:26: this was Plan 4 Task 3's live check, on the example design file in lane 3.
   - The zoom went from 15 % to 45 %, and four rows of the layers panel opened. Nothing was edited.
