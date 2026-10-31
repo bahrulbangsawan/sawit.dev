@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { Page } from '../components/chrome'
-import { DemoVideo, InstallButton, InstanceSwitch } from '../components/interactive'
+import { COMMAND_ID, DemoVideo, InstallButton, InstanceSwitch } from '../components/interactive'
 import { DMG, INSTALL, REPO, SIZE, faq, features, menu } from '../content'
 
 export const Route = createFileRoute('/')({ component: Home })
@@ -47,7 +47,7 @@ function Hero() {
           <pre className="cmd" tabIndex={0} role="group" aria-label="Install command">
             <code>
               <span className="prompt" aria-hidden="true">$ </span>
-              {INSTALL}
+              <span id={COMMAND_ID}>{INSTALL}</span>
             </code>
           </pre>
           <small>Apple Silicon · macOS · one {SIZE} binary</small>

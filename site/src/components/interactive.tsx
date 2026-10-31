@@ -1,30 +1,48 @@
 import { useEffect, useRef, useState } from 'react'
 import { INSTALL } from '../content'
 
+// The element holding the install command on the page, which a copy the browser refuses selects.
+export const COMMAND_ID = 'install-command'
+
 // No single-letter shortcuts: C, D and G used to copy the command, download the DMG and open GitHub
 // from anywhere on the page, which a stray key press or speech input set off and nothing could turn
 // off (WCAG 2.1.4).
 export function InstallButton({ id, className = 'btn pri' }: { id?: string; className?: string }) {
-  const [copied, setCopied] = useState(false)
+  // What the last click did: copied the command, or, when the browser refused to write the
+  // clipboard (no permission, no focus, a page not served over HTTPS), selected it for ⌘C.
+  const [done, setDone] = useState<'copied' | 'selected' | null>(null)
+  const timer = useRef(0)
+  const show = (what: 'copied' | 'selected') => {
+    setDone(what)
+    window.clearTimeout(timer.current)
+    timer.current = window.setTimeout(() => setDone(null), what === 'copied' ? 1800 : 6000)
+  }
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(INSTALL)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1800)
+      show('copied')
     } catch {
-      setCopied(false)
+      const command = document.getElementById(COMMAND_ID)
+      const selection = window.getSelection()
+      if (command && selection) {
+        const range = document.createRange()
+        range.selectNodeContents(command)
+        selection.removeAllRanges()
+        selection.addRange(range)
+      }
+      show('selected')
     }
   }
   return (
     <>
       <button type="button" id={id} className={className} onClick={copy}>
         <svg aria-hidden="true">
-          <use href={copied ? '#i-check' : '#i-copy'} />
+          <use href={done === 'copied' ? '#i-check' : '#i-copy'} />
         </svg>
-        {copied ? 'Copied, paste in Terminal' : 'Copy install command'}
+        {done === 'copied' ? 'Copied, paste in Terminal' : done === 'selected' ? 'Selected, press ⌘C to copy' : 'Copy install command'}
       </button>
       <span className="sr-only" role="status">
-        {copied ? 'Install command copied' : ''}
+        {done === 'copied' ? 'Install command copied' : done === 'selected' ? 'Install command selected. Press Command C to copy it.' : ''}
       </span>
     </>
   )
