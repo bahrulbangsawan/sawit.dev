@@ -2282,9 +2282,10 @@ impl Workspace {
         browser.update(cx, |b, _| b.set_visible(visible));
     }
 
-    /// Shows the MCP install page (one tab).
+    /// Shows the MCP install page (one tab), with the tab area, which may be hidden.
     fn open_mcp_page(&mut self, cx: &mut Context<Self>) {
         self.leave_welcome(CENTER_ONLY, cx);
+        self.show_center(cx);
         let key: SharedString = "mcp".into();
         if let Some(ix) = self
             .tabs
@@ -2309,9 +2310,11 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Shows the keymap editor (one tab), with the keyboard.
+    /// Shows the keymap editor (one tab), with the tab area, which may be hidden, and the
+    /// keyboard.
     fn open_keymap_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_welcome(CENTER_ONLY, cx);
+        self.show_center(cx);
         let key: SharedString = "keymap".into();
         if let Some(ix) = self
             .tabs
@@ -2355,9 +2358,10 @@ impl Workspace {
         self.open_file(path, window, cx);
     }
 
-    /// Shows the Dev Tools install page (one tab).
+    /// Shows the Dev Tools install page (one tab), with the tab area, which may be hidden.
     fn open_tools_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_welcome(CENTER_ONLY, cx);
+        self.show_center(cx);
         let key: SharedString = "tools".into();
         if let Some(ix) = self
             .tabs
