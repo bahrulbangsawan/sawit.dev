@@ -605,14 +605,15 @@ impl Workspace {
     }
 
     /// The tab of the canvas bound to the `.figcraft` file `file` ([`BoardView::path`]), and the
-    /// canvas, whatever opened it: a project's canvas tab, or a canvas file's.
+    /// canvas, whatever opened it: a project's canvas tab, or a canvas file's. Named through a
+    /// link or as written, it is one file ([`same_canvas_file`]).
     fn board_tab(&self, file: &Path, cx: &App) -> Option<(usize, Entity<BoardView>)> {
         self.tabs.iter().enumerate().find_map(|(ix, tab)| {
             let PaneItem::Other { view, .. } = &tab.item else {
                 return None;
             };
             let board = view.clone().downcast::<BoardView>().ok()?;
-            (board.read(cx).path() == file).then_some((ix, board))
+            same_canvas_file(board.read(cx).path(), file).then_some((ix, board))
         })
     }
 
@@ -2919,7 +2920,8 @@ fn moved_to(path: &Path, from: &Path, to: &Path) -> Option<PathBuf> {
 
 /// The project that `file` is the canvas file of (spec D5), among `roots`, the folders of the
 /// window's projects: `Some` of its folder as `roots` has it, which is `None` for a project with no
-/// folder (its canvas is the app's own, in `app_root`). `None` when it is no project's.
+/// folder (its canvas is the app's own, in `app_root`). `None` when it is no project's. Named
+/// through a link or as written, it is one file ([`same_canvas_file`]).
 fn canvas_project(
     file: &Path,
     roots: impl IntoIterator<Item = Option<PathBuf>>,
@@ -2927,7 +2929,17 @@ fn canvas_project(
 ) -> Option<Option<PathBuf>> {
     roots
         .into_iter()
-        .find(|root| board_file(root.as_deref(), app_root) == file)
+        .find(|root| same_canvas_file(&board_file(root.as_deref(), app_root), file))
+}
+
+/// Whether `a` and `b` name one canvas file: as written, or through the links on their way, the
+/// file there yet or not (CANVAS-UI-4). An agent's `app_open` passes its path as given, where the
+/// CLI's paths and the projects' folders are resolved: `/tmp/p/x.figcraft` is
+/// `/private/tmp/p/x.figcraft` on macOS. Two canvases of one file would each save over the
+/// other's edits.
+fn same_canvas_file(a: &Path, b: &Path) -> bool {
+    use sawit_core::files::resolve;
+    a == b || resolve(a) == resolve(b)
 }
 
 #[cfg(test)]
@@ -2998,6 +3010,41 @@ mod tests {
         assert_eq!(moved("/p/other.figcraft"), None);
         assert_eq!(moved("/p/sub2/a.figcraft"), None);
         assert_eq!(moved("/p"), None);
+    }
+
+    /// CANVAS-UI-4: a project's canvas file named through a link (an agent's `app_open` of
+    /// `/tmp/p/.nyawit/canvas.figcraft` for the project at `/private/tmp/p`, `/tmp` being a link
+    /// on macOS) is that project's canvas still, whether `.nyawit/` is there yet or not: one
+    /// canvas per file. Compared as written, it was a file of its own, and a second canvas of it
+    /// opened in a tab, whose saves the first one's refused.
+    #[test]
+    fn a_projects_canvas_file_named_through_a_link_is_that_projects_canvas() {
+        let scratch = std::env::temp_dir().join(format!(
+            "sawit-workspace-{}-canvas-link",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let project = scratch.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let link = scratch.join("link");
+        std::os::unix::fs::symlink(&project, &link).unwrap();
+        let app = Path::new("/support/sawit");
+        let roots = || vec![Some(project.clone()), None];
+        let aliased = link.join(".nyawit").join("canvas.figcraft");
+        assert_eq!(
+            canvas_project(&aliased, roots(), app),
+            Some(Some(project.clone()))
+        );
+        std::fs::create_dir_all(project.join(".nyawit")).unwrap();
+        std::fs::write(project.join(".nyawit/canvas.figcraft"), b"").unwrap();
+        assert_eq!(
+            canvas_project(&aliased, roots(), app),
+            Some(Some(project.clone()))
+        );
+        // Another file through the link is still one of its own.
+        let other = link.join(".nyawit").join("sketch.figcraft");
+        assert_eq!(canvas_project(&other, roots(), app), None);
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     #[test]

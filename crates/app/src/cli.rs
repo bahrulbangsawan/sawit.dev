@@ -569,9 +569,13 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
             if !path.is_absolute() {
                 return Err(format!("{} isn't an absolute path.", path.display()));
             }
+            // Through the links on its way, as the CLI resolves its own paths and the projects'
+            // folders are: `/tmp/p` is `/private/tmp/p` on macOS. Else a file of a project is
+            // routed to no project's window, and a project's canvas file opens a second canvas of
+            // it (CANVAS-UI-4).
             let request = OpenRequest {
                 targets: vec![Target {
-                    path: path.clone(),
+                    path: sawit_core::files::resolve(&path),
                     line,
                     column,
                 }],

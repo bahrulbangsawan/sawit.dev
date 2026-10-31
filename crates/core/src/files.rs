@@ -215,6 +215,28 @@ pub fn remove(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// `path` with the links on its way resolved, as far as it exists: the longest part of it that
+/// is there, as [`std::fs::canonicalize`] gives it, then the rest as written. Two names of one
+/// place give one path this way, whether the file is there yet or not: on macOS
+/// `/tmp/p/.nyawit/canvas.figcraft` and `/private/tmp/p/.nyawit/canvas.figcraft`, `/tmp` being a
+/// link, before `.nyawit/` is made. A path none of which can be looked up stays as it is.
+pub fn resolve(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut there = path;
+    loop {
+        if let Ok(real) = there.canonicalize() {
+            return rest.iter().rev().fold(real, |real, name| real.join(name));
+        }
+        match (there.parent(), there.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name);
+                there = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
 /// Only the case of the name differs (macOS volumes ignore case).
 fn same_entry(a: &Path, b: &Path) -> bool {
     a.parent() == b.parent()
@@ -458,6 +480,27 @@ pub fn language_label(token: &str) -> String {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn resolve_gives_one_path_for_two_names_of_a_place_there_or_not() {
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("project");
+        fs::create_dir(&real).unwrap();
+        let link = d.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let canonical = real.canonicalize().unwrap();
+        // A file that is there, one that isn't yet, and one in a folder that isn't yet.
+        fs::write(real.join("a.figcraft"), "").unwrap();
+        for name in ["a.figcraft", "new.figcraft", ".nyawit/canvas.figcraft"] {
+            assert_eq!(resolve(&link.join(name)), canonical.join(name), "{name}");
+            assert_eq!(resolve(&real.join(name)), canonical.join(name), "{name}");
+        }
+        // A path with nothing of it there stays as it is.
+        assert_eq!(
+            resolve(Path::new("relative/x")),
+            PathBuf::from("relative/x")
+        );
+    }
 
     #[test]
     fn list_dir_sorts_dirs_first_and_hides_noise() {
