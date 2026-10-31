@@ -281,7 +281,7 @@ pub struct CanvasDeleteArgs {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasLoadArgs {
     #[schemars(
-        description = "A .figcraft file to load, or an .excalidraw file to import (replaces the board)"
+        description = "A .figcraft file to load, or an .excalidraw file to import (replaces the board). A backup Sawit keeps loads too: canvas.figcraft.bak brings back the board a clear or a load took off"
     )]
     pub path: Option<String>,
     #[schemars(description = "Or the .excalidraw scene JSON itself")]
@@ -747,10 +747,11 @@ fn read_scene(path: &Path) -> std::io::Result<String> {
     })
 }
 
-/// Whether `path` names a `.figcraft` file.
+/// Whether `path` names a FigCraft file: a `.figcraft` file, or a backup Sawit keeps of one, such as
+/// the `canvas.figcraft.bak` a clear keeps ([`ops::is_figcraft_file`]), which loads as the board it
+/// was (MCP-6).
 fn is_figcraft(path: &str) -> bool {
-    let extension = Path::new(path.trim()).extension();
-    extension.is_some_and(|e| e.eq_ignore_ascii_case("figcraft"))
+    ops::is_figcraft_file(Path::new(path.trim()))
 }
 
 /// `path` as the app, whose working folder is not the agent's, can open it: `~` expanded, and a
@@ -2087,6 +2088,41 @@ mod tests {
         assert_eq!(std::fs::read(&file).unwrap(), before);
     }
 
+    /// MCP-6: canvas_clear keeps the board it cleared as `canvas.figcraft.bak`, and canvas_load
+    /// brings it back from there. It read the backup as Excalidraw JSON ("stream did not contain
+    /// valid UTF-8"), so no tool could restore a cleared board.
+    #[tokio::test]
+    async fn canvas_load_brings_back_the_board_a_clear_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let file = board_file(&project);
+        write_board(&file, 3);
+
+        let cleared = server
+            .canvas_clear(Parameters(WindowArgs {
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_ne!(cleared.is_error, Some(true), "{}", said(&cleared));
+        assert!(layers_in(&file).is_empty());
+
+        let backup = file.with_extension("figcraft.bak");
+        let loaded = server
+            .canvas_load(Parameters(CanvasLoadArgs {
+                path: Some(backup.display().to_string()),
+                scene: None,
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_eq!(answer(&loaded)["elements"].as_array().unwrap().len(), 3);
+        let texts = texts_in(&file);
+        assert!(
+            (0..3).all(|n| texts.contains(&format!("note {n}"))),
+            "{texts:?}"
+        );
+    }
+
     #[tokio::test]
     async fn canvas_commands_lists_every_command_and_filters_with_their_parameters() {
         let dir = tempfile::tempdir().unwrap();
@@ -2551,6 +2587,12 @@ mod tests {
         assert!(!is_figcraft("/a/b/board.excalidraw"));
         assert!(!is_figcraft("figcraft"));
         assert!(!is_figcraft("/a/figcraft/board"));
+        // The backups Sawit keeps of a canvas file are FigCraft files too; an export of one isn't.
+        assert!(is_figcraft("/p/.nyawit/canvas.figcraft.bak"));
+        assert!(is_figcraft("/p/.nyawit/canvas.figcraft.bak.3"));
+        assert!(is_figcraft("/p/.nyawit/canvas.figcraft.lossy.bak"));
+        assert!(!is_figcraft("/p/canvas.figcraft.svg"));
+        assert!(!is_figcraft("/p/canvas.figcraft.bak.x"));
     }
 
     #[test]
