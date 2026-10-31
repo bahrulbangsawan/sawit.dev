@@ -252,6 +252,7 @@ explained. A conflict on the same address can't be forced.
 ### Canvas
 
 <img src="docs/media/canvas.png" alt="Canvas: a Mermaid flowchart of the demo app turned into editable shapes, with boxes for the browser, acme-store, the checkout API, payments, acme-admin, an AI agent and the shop database" width="100%">
+<br><sub>This screenshot still shows the old Excalidraw canvas until the media is recorded again.</sub>
 
 - Click **Canvas** in the title bar, or press <kbd>⌃</kbd><kbd>⌘</kbd><kbd>C</kbd>, for a native whiteboard and
   design canvas on the [FigCraft](https://github.com/storytold/figcraft) engine. It saves by itself.
@@ -643,11 +644,11 @@ crates/mcp    sawit-mcp — stdio MCP server on top of core and board
 
 ## Size & memory
 
-Measured on an Apple Silicon MacBook (M3, macOS 26.6) on 2026-10-31, release build (`lto = "fat"`, `strip`):
+Measured on an Apple Silicon MacBook (M3, macOS 26.6.1) on 2026-10-31, release build (`lto = "fat"`, `strip`):
 
 | | |
 |---|---|
-| `sawit` | 57.6 MiB (single file, no JVM/Chromium/Node runtime; includes the MCP server, reached as `sawit-mcp` through a symlink, and the FigCraft canvas engine with its Inter fonts) |
+| `sawit` | 57.6 MiB (single file, no JVM/Chromium/Node runtime; includes the MCP server, reached as `sawit-mcp` through a symlink, the FigCraft canvas engine and the canvas's Inter fonts) |
 | Memory with a large canvas board open (776 layers) | RSS 532 MiB |
 | Clean release build | 10 min 13 s, on a busy machine |
 
@@ -681,4 +682,4 @@ Figures for other apps are not listed because they have not been measured on the
 
 <sub>Screenshots and video in `docs/media/` were recorded from a release build with demo data (separate `SAWIT_HOME`,
 Homebrew PostgreSQL 16). The canvas screenshot and the end of the demo show the Excalidraw canvas that the native
-canvas replaced.</sub>
+canvas replaced, and the browser screenshot predates the toolbar's device menu, Annotate and Design.</sub>
