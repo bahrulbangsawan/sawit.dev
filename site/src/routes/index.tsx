@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { Page } from '../components/chrome'
 import { DemoVideo, InstallButton, InstanceSwitch } from '../components/interactive'
-import { DMG, INSTALL, REPO, faq, features, menu } from '../content'
+import { DMG, INSTALL, REPO, SIZE, faq, features, menu } from '../content'
 
 export const Route = createFileRoute('/')({ component: Home })
 
@@ -50,7 +50,7 @@ function Hero() {
               {INSTALL}
             </code>
           </pre>
-          <small>Apple Silicon · macOS · one 34 MB binary</small>
+          <small>Apple Silicon · macOS · one {SIZE} binary</small>
         </div>
       </header>
     </>
@@ -67,7 +67,7 @@ function Trio() {
         </div>
         <div>
           <h2>Drawn by the GPU</h2>
-          <p>Rust and GPUI. About 67 MB of memory when idle, with no JVM, Chromium or Node runtime inside.</p>
+          <p>Rust and GPUI in one native binary, with no JVM, Chromium or Node runtime inside.</p>
         </div>
         <div>
           <h2>Agents welcome</h2>
@@ -326,7 +326,7 @@ function Binary() {
     <section className="sec os gr" id="demo" aria-labelledby="binary-title">
       <div className="w c">
         <h2 id="binary-title" className="h2 blue">
-          One binary, 34 MB
+          One binary, about {SIZE}
         </h2>
         <p className="lead">Welcome screen, instances, a table, SQL, a schema diagram, code with a terminal, ports, git, dev tools, MCP and the canvas, in one take.</p>
         <figure className="video frame">
@@ -334,12 +334,12 @@ function Binary() {
         </figure>
         <dl className="stats">
           <div>
-            <dt>Download</dt>
-            <dd>34 MB</dd>
+            <dt>Binary</dt>
+            <dd>{SIZE}</dd>
           </div>
           <div>
-            <dt>Memory when idle</dt>
-            <dd>67 MB</dd>
+            <dt>PostgreSQL</dt>
+            <dd>16–18</dd>
           </div>
           <div>
             <dt>Tools for agents</dt>

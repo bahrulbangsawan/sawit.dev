@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { HeadContent, Outlet, Scripts, createRootRoute } from '@tanstack/react-router'
 import appCss from '../styles.css?url'
+import { SIZE } from '../content'
 
 export const Route = createRootRoute({
   head: () => ({
@@ -11,7 +12,7 @@ export const Route = createRootRoute({
       {
         name: 'description',
         content:
-          'Run local PostgreSQL without Docker, browse data, write SQL, edit code and open a terminal in one native macOS app of about 34 MB.',
+          `Run local PostgreSQL without Docker, browse data, write SQL, edit code and open a terminal in one native macOS app of about ${SIZE}.`,
       },
       { name: 'theme-color', content: '#1b1d22' },
       { property: 'og:title', content: 'Sawit' },
