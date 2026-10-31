@@ -499,6 +499,26 @@ impl Workspace {
         }
     }
 
+    /// Opens `kept.path` with the unsaved changes the app kept for it when it last quit without
+    /// asking ([`crate::editor::kept`]): they're back in its buffer, unsaved, and `from`, the file
+    /// that kept them, goes once they're in.
+    pub fn restore_kept(
+        &mut self,
+        kept: crate::editor::kept::Kept,
+        from: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_file_at(kept.path.clone(), None, window, cx);
+        let editor = self.tabs.iter().find_map(|t| match &t.item {
+            PaneItem::File(e) if e.read(cx).path == kept.path => Some(e.clone()),
+            _ => None,
+        });
+        if let Some(editor) = editor {
+            editor.update(cx, |e, cx| e.restore(kept.text, from, window, cx));
+        }
+    }
+
     pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let kind = classify(&path);
         // Canvas files open on a canvas (spec D14), which takes the keyboard, as a file editor

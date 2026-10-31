@@ -145,6 +145,8 @@ fn main() -> std::process::ExitCode {
         // Last of the key bindings: what every feature bound above is the defaults.
         keymap::init(cx);
         cli::handle(request, None, cx);
+        // Unsaved changes the last quit kept, because it couldn't ask, come back.
+        cli::restore_kept(cx);
         cli::serve(cx);
     });
     std::process::ExitCode::SUCCESS

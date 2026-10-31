@@ -4,6 +4,10 @@
 //! ask first while one runs a command or an SSH session, and say which; shells waiting at their
 //! prompt don't count. They close every file too, so they also ask to save the files with unsaved
 //! changes first (SITE-1): one question covers both.
+//!
+//! A quit that can't ask (the Dock's Quit, logging out, the install script's `quit app`) goes
+//! straight through: the file editors then keep their unsaved changes for the next launch
+//! ([`crate::editor::kept`]).
 
 use gpui_kit::*;
 

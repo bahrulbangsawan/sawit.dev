@@ -328,6 +328,21 @@ pub fn open_window(
     Some((handle, workspace))
 }
 
+/// Opens each file whose unsaved changes the app kept when it last quit without asking (the Dock's
+/// Quit, logging out, the install script's quit), in the window whose project holds it, with the
+/// changes back in it, unsaved ([`crate::editor::kept`]).
+pub fn restore_kept(cx: &mut App) {
+    let folder = crate::editor::kept::folder(cx);
+    for (from, kept) in crate::editor::kept::all(&folder) {
+        let Some((handle, workspace)) = window_for_file(&kept.path, cx) else {
+            continue;
+        };
+        let _ = handle.update(cx, |_, window, cx| {
+            workspace.update(cx, |w, cx| w.restore_kept(kept, from, window, cx))
+        });
+    }
+}
+
 /// Dock icon clicked with every window closed.
 pub fn reopen(cx: &mut App) {
     if workspaces(cx).is_empty() {

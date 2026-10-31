@@ -84,3 +84,12 @@ pub(crate) fn type_into(
         "typing left the buffer unchanged"
     );
 }
+
+/// The text in `editor`'s buffer.
+pub(crate) fn buffer(cx: &mut TestAppContext, editor: &Entity<FileEditor>) -> String {
+    cx.update(|cx| {
+        let editor = editor.read(cx);
+        let state = editor.state.as_ref().expect("the file has loaded");
+        state.read(cx).value().to_string()
+    })
+}

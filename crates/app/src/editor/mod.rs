@@ -3,6 +3,7 @@
 //! preview (side by side or alone) for Markdown, HTML, SVG and Mermaid.
 
 mod diagrams;
+pub mod kept;
 pub(crate) use diagrams::palette;
 #[cfg(test)]
 pub(crate) mod testing;
@@ -99,6 +100,9 @@ pub struct FileEditor {
     /// The user chose Don't Save for these changes as the app quit or restarted, so quitting
     /// doesn't keep them. The next edit clears it.
     discarded: bool,
+    /// Changes the app kept when it last quit with this file unsaved, and the file that holds
+    /// them, to put back once the file has loaded ([`Self::restore`]).
+    restoring: Option<(String, PathBuf)>,
     notice: Option<Notice>,
     loading: bool,
     formatting: bool,
@@ -120,6 +124,8 @@ pub struct FileEditor {
     shown_cursor: Option<(u32, u32)>,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
+    /// A quit that couldn't ask keeps the unsaved changes ([`Self::keep_unsaved`]).
+    _quit: Subscription,
 }
 
 impl FileEditor {
@@ -183,6 +189,7 @@ impl FileEditor {
             dirty: false,
             read_only: false,
             discarded: false,
+            restoring: None,
             notice: None,
             loading: true,
             formatting: false,
@@ -196,6 +203,10 @@ impl FileEditor {
             shown_cursor: None,
             focus: cx.focus_handle(),
             _subscriptions: Vec::new(),
+            _quit: cx.on_app_quit(|this, cx| {
+                this.keep_unsaved(cx);
+                async {}
+            }),
         }
     }
 
@@ -376,6 +387,9 @@ impl FileEditor {
         if let Some((line, column)) = self.pending_cursor.take() {
             self.go_to(line, column, window, cx);
         }
+        if let Some((text, from)) = self.restoring.take() {
+            self.put_back(text, &from, window, cx);
+        }
         self.watch_disk(window, cx);
     }
 
@@ -417,6 +431,70 @@ impl FileEditor {
     /// keep them for the next launch.
     pub fn discard(&mut self) {
         self.discarded = true;
+    }
+
+    /// Puts back changes the app kept when it last quit with this file unsaved ([`kept`]): the
+    /// buffer holds them, unsaved, now or once the file has loaded, and `from`, the file that kept
+    /// them, goes once they're in. A file that can't be edited (binary, too large, unreadable)
+    /// leaves `from` for the next launch to try again.
+    pub fn restore(
+        &mut self,
+        text: String,
+        from: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.state.is_some() {
+            self.put_back(text, &from, window, cx);
+        } else {
+            self.restoring = Some((text, from));
+        }
+    }
+
+    fn put_back(&mut self, text: String, from: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        state.update(cx, |s, cx| s.set_value(text.clone(), window, cx));
+        // set_value doesn't emit Change: the unsaved mark and the preview follow here.
+        self.dirty = text != self.saved_text;
+        self.discarded = false;
+        self.preview = text.into();
+        self.refresh_diagrams(cx);
+        if let Err(e) = std::fs::remove_file(from) {
+            log::warn!("{} stays: {e}", from.display());
+        }
+        self.flash(
+            "Unsaved changes Sawit kept when it quit are back. Save them, or close the tab to drop them.".into(),
+            cx,
+        );
+        cx.emit(FileEditorEvent::Changed);
+        cx.notify();
+    }
+
+    /// The app is quitting with this file's changes unsaved. ⌘Q, Restart to Update and closing a
+    /// window ask first, but the Dock's Quit, logging out and the install script's quit end the
+    /// app with no way to ask: the changes are kept for the next launch to bring back
+    /// ([`kept`]), unless the user chose Don't Save. The file itself isn't written.
+    fn keep_unsaved(&mut self, cx: &App) {
+        if !self.dirty || self.discarded {
+            return;
+        }
+        let Some(state) = &self.state else {
+            return;
+        };
+        let text = state.read(cx).value().to_string();
+        match kept::keep(&kept::folder(cx), &self.path, &text) {
+            Ok(file) => log::warn!(
+                "{} has unsaved changes; they're kept in {} for the next launch",
+                self.path.display(),
+                file.display()
+            ),
+            Err(e) => log::error!(
+                "{}'s unsaved changes couldn't be kept: {e}",
+                self.path.display()
+            ),
+        }
     }
 
     pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
