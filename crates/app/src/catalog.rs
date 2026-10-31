@@ -17,6 +17,20 @@ use gpui_kit::*;
 /// Rows on one page of a catalog.
 pub const PER_PAGE: usize = 8;
 
+/// `~/…` instead of the home folder's path.
+pub fn tilde(path: &std::path::Path) -> String {
+    tilde_in(
+        path,
+        std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .as_deref(),
+    )
+}
+
+fn tilde_in(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
+    sawit_core::recent::tildify(path, home)
+}
+
 /// Width of the status column, header and rows alike.
 pub const STATUS_W: f32 = 200.;
 /// Width of the actions column, header and rows alike.
@@ -321,7 +335,23 @@ mod tests {
         Styled as _, TestAppContext, VisualTestContext, Window, div, px, size,
     };
 
-    use super::{NAME_MIN, TILE, columns};
+    use super::{NAME_MIN, TILE, columns, tilde_in};
+
+    /// The home folder by its path's parts, not its text: `/Users/bobby` isn't in `/Users/bob`.
+    #[test]
+    fn only_the_home_folder_is_shown_as_tilde() {
+        use std::path::Path;
+        let home = Some(Path::new("/Users/bob"));
+        assert_eq!(
+            tilde_in(Path::new("/Users/bob/.cursor/mcp.json"), home),
+            "~/.cursor/mcp.json"
+        );
+        assert_eq!(
+            tilde_in(Path::new("/Users/bobby/x"), home),
+            "/Users/bobby/x"
+        );
+        assert_eq!(tilde_in(Path::new("/opt/x"), None), "/opt/x");
+    }
 
     /// A line of the list whose parts the tests can find.
     struct Line;

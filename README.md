@@ -230,7 +230,7 @@ explained. A conflict on the same address can't be forced.
 - When npm or GitHub has a newer release, an installed tool shows `11.21.0 → 12.16.1` and an **Upgrade** button;
   **Upgrade All** upgrades every one of them. Upgrades use the tool's own command (`bun upgrade`, `uv self update`,
   `claude update`, …), or its install script again.
-- **Install** one, tick several and **Install Selected**, or **Install All Missing**. Each runs its official install
+- **Install** one, tick several and **Install N**, or **Install Missing (N)**. Each runs its official install
   script in your login shell (zsh when that is fish, nu, PowerShell or tcsh, which can't run these scripts), one at
   a time, with prerequisites first (nvm before Node.js, uv before Python). If the shell can't say which tools are
   installed, the page says so instead of showing them as not installed.

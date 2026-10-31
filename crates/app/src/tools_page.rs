@@ -24,7 +24,7 @@ use sawit_core::dev_tools::{
     uninstall, uninstall_command,
 };
 
-use crate::catalog::{self, Mark};
+use crate::catalog::{self, Mark, tilde};
 use crate::rt;
 
 /// Lines of installer output kept per tool.
@@ -197,15 +197,6 @@ fn logo(id: &str, size: f32, cx: &App) -> AnyElement {
             .flex_none()
             .text_color(cx.theme().foreground)
             .into_any_element()
-    }
-}
-
-/// `~/…` instead of the full home path.
-fn tilde(path: &std::path::Path) -> String {
-    let s = path.display().to_string();
-    match std::env::var("HOME") {
-        Ok(home) if s.starts_with(&home) => s.replacen(&home, "~", 1),
-        _ => s,
     }
 }
 

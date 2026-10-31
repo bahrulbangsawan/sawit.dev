@@ -30,7 +30,7 @@ use sawit_core::mcp_clients::{
     snippet, status_in, uninstall,
 };
 
-use crate::catalog::{self, Mark};
+use crate::catalog::{self, Mark, tilde};
 use crate::rt;
 
 /// A server in the catalog and a target, by index.
@@ -279,15 +279,6 @@ fn logo_image(logo: Option<(&str, bool)>, glyph: Lucide, size: f32, cx: &App) ->
             .flex_none()
             .text_color(cx.theme().foreground)
             .into_any_element()
-    }
-}
-
-/// `~/…` instead of the full home path.
-fn tilde(path: &std::path::Path) -> String {
-    let s = path.display().to_string();
-    match std::env::var("HOME") {
-        Ok(home) if s.starts_with(&home) => s.replacen(&home, "~", 1),
-        _ => s,
     }
 }
 
@@ -1155,6 +1146,16 @@ impl McpPage {
             || has(server.id)
             || has(server.about)
             || has(Kind::of(s).label())
+            || Self::tags(server).iter().any(|t| has(t))
+    }
+
+    /// The tags a row shows beside the server's kind.
+    fn tags(server: &Server) -> Vec<&'static str> {
+        match server.auth {
+            Auth::Browser => vec!["Sign-in"],
+            Auth::EnvKey(_) => vec!["API key"],
+            Auth::None | Auth::Program => Vec::new(),
+        }
     }
 
     /// Matches the search and the kind: what the filter tabs count.
@@ -1396,12 +1397,11 @@ impl McpPage {
                         .flex_wrap()
                         .child(div().text_sm().font_semibold().child(server.name))
                         .child(catalog::tag(Some(kind.icon()), kind.label(), cx))
-                        .when(server.auth == Auth::Browser, |el| {
-                            el.child(catalog::tag(Some(Lucide::KeyRound), "Sign-in", cx))
-                        })
-                        .when(matches!(server.auth, Auth::EnvKey(_)), |el| {
-                            el.child(catalog::tag(Some(Lucide::KeyRound), "API key", cx))
-                        }),
+                        .children(
+                            Self::tags(server)
+                                .into_iter()
+                                .map(|tag| catalog::tag(Some(Lucide::KeyRound), tag, cx)),
+                        ),
                 )
                 .child(
                     div()
@@ -2623,6 +2623,16 @@ mod tests {
             cx.debug_bounds("mcp-row-error").is_some(),
             "the row doesn't say"
         );
+    }
+
+    /// The search finds what the rows show, their tags too: "sign" finds the servers tagged
+    /// Sign-in, "api key" the one tagged API key.
+    #[test]
+    fn the_search_matches_the_tags() {
+        let at = |id: &str| super::SERVERS.iter().position(|s| s.id == id).unwrap();
+        assert!(McpPage::matches(at("aws"), "sign"));
+        assert!(McpPage::matches(at("epidemic-sound"), "api key"));
+        assert!(!McpPage::matches(at("exa"), "sign"));
     }
 
     /// The sheet opens with every installed client ticked, so its Remove asks first, as the

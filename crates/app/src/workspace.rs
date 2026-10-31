@@ -2740,7 +2740,7 @@ impl Workspace {
                             .icon(Lucide::Plug)
                             .label("MCP")
                             .tooltip_with_action(
-                                "Set Up the MCP Server for Claude, Codex and More",
+                                "Install MCP Servers into Claude, Codex and More",
                                 &OpenMcp,
                                 Some("Workspace"),
                             )
