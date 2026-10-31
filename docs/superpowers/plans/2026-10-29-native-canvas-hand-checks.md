@@ -1425,6 +1425,9 @@ second keyboard layout. Each starts from a fresh launch of the merged main with 
   within a second change a binding in the keymap editor: it says the file changed and asks again, and your edit is
   kept. Make keymap.json a link to a file elsewhere (`ln -s`), change a binding in the editor: the link stays a
   link, and the file it points to has the change. Answer:
-- **K-8 Keys once what you typed in goes off screen.** Click in the terminal, then press ⌘J twice: the dock hides
-  and comes back. Click in a file editor's text, then press ⌃Tab twice: each press shows the next tab. Click in the
-  Git panel's commit message, press ⌘2, then ⌘3: Files shows, then Git again. Answer:
+- **K-8 Keys once what you typed in goes off screen, and back.** Click in the terminal, then press ⌘J twice: the
+  dock hides and comes back; type `ls`: it goes to the terminal. Click the title bar's Terminal button twice, then
+  type: it goes to the terminal again. Click in a file editor's text, then press ⌃Tab twice: each press shows the next
+  tab. Click another tab, then the file's tab again, and type: it goes to the text. Click in the Git panel's commit
+  message, press ⌘2, then ⌘3: Files shows, then Git again; type: it goes to the message. Click in a web page, press
+  ⇧⌘J twice: the tab area hides and comes back, and typing waits for a click in the page. Answer:

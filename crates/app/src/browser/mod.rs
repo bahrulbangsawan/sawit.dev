@@ -804,7 +804,7 @@ impl BrowserView {
             // The user's press in the page gave it AppKit's keyboard: GPUI's follows. Never
             // while the tab is hidden: nobody can press in a hidden page, and the keyboard
             // would leave the terminal or field that has it for a view that isn't drawn, which
-            // the workspace then takes it from (`workspace::keyboard_falls_back_to`).
+            // the workspace then takes it from (`workspace::KeyboardHome`).
             FromPage::Event(PageEvent::Pressed) => {
                 if self.visible {
                     self.focus.focus(window, cx);
@@ -1061,8 +1061,8 @@ impl BrowserView {
     /// be hidden whenever another tab or pane takes its place. Hidden, it gives
     /// AppKit's keyboard back to the window. GPUI's, if the view or a field in it
     /// had it (after a press in the page), goes to the workspace once the view is
-    /// no longer drawn (`workspace::keyboard_falls_back_to`). Shown again, the
-    /// page has neither until a click in it.
+    /// no longer drawn (`workspace::KeyboardHome`). Shown again, the address
+    /// field has GPUI's back if it had it; the page has neither until a click in it.
     pub fn set_visible(&mut self, visible: bool) {
         if self.visible == visible {
             return;
@@ -1787,7 +1787,7 @@ mod tests {
     /// A press reported while the tab is hidden leaves GPUI's keyboard where the user has it (the
     /// terminal, say): the user can't press in a hidden page, and a view that isn't drawn must
     /// not take the keyboard: keys would go from the window's root, so that ⌘W, ⌘T and ⌘1 stop
-    /// working, until the workspace takes it back (`workspace::keyboard_falls_back_to`), and
+    /// working, until the workspace takes it back (`workspace::KeyboardHome`), and
     /// then the terminal no longer has it.
     #[gpui_kit::test]
     fn a_press_in_a_hidden_page_leaves_the_keyboard(cx: &mut gpui_kit::TestAppContext) {
@@ -1837,13 +1837,14 @@ mod tests {
     /// isn't drawn and still has the keyboard makes GPUI send the keys from the window's root,
     /// gpui-kit's `Root`, past every workspace shortcut, until a click: ⇧⌘J didn't bring the tab
     /// area back, ⌘W didn't close the page in front. The workspace takes the keyboard back
-    /// ([`crate::workspace::keyboard_falls_back_to`]), from the page and the address field alike.
+    /// ([`crate::workspace::KeyboardHome`]), from the page and the address field alike.
     ///
     /// The workspace here is a stand-in, in a window as `cli::open_window` makes one (under
     /// gpui-kit's `Root`): the workspace's keys and key context, its keyboard, `render`'s refocus
-    /// when nothing has the keyboard, the fallback `Workspace::new` registers, and the browser's
-    /// tab, told whether it shows as `sync_browser` tells it and drawn while it shows (its key
-    /// context, its view's keyboard, the address field). The webview itself needs a real window.
+    /// when nothing has the keyboard, its `KeyboardHome`, given back to as `render` does (never to
+    /// the browser's view), and the browser's tab, told whether it shows as `sync_browser` tells
+    /// it and drawn while it shows (its key context, its view's keyboard, the address field). The
+    /// webview itself needs a real window.
     #[gpui_kit::test]
     fn the_workspace_keys_work_once_the_browser_tab_is_hidden(cx: &mut gpui_kit::TestAppContext) {
         use super::{BrowserView, FromPage};
@@ -1851,8 +1852,7 @@ mod tests {
         use gpui_kit::component::input::Input;
         use gpui_kit::prelude::*;
         use gpui_kit::{
-            AnyWindowHandle, Entity, FocusHandle, Focusable as _, Subscription, TestAppContext,
-            Window, div,
+            AnyWindowHandle, Entity, FocusHandle, Focusable as _, TestAppContext, Window, div,
         };
         use sawit_core::browser::PageEvent;
 
@@ -1865,7 +1865,7 @@ mod tests {
             other_tab: bool,
             toggles: usize,
             closes: usize,
-            _keyboard: Subscription,
+            keyboard: crate::workspace::KeyboardHome<bool>,
         }
         impl Render for StandIn {
             fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1878,6 +1878,8 @@ mod tests {
                     let browser = self.browser.read(cx);
                     (browser.focus.clone(), browser.address.clone())
                 };
+                self.keyboard
+                    .give_back(shown, |back| *back != view, window, cx);
                 div()
                     .key_context("Workspace")
                     .track_focus(&self.focus)
@@ -1915,16 +1917,18 @@ mod tests {
                     let browser = cx.new(|cx| BrowserView::new(None, None, window, cx));
                     cx.new(|cx| {
                         let focus = cx.focus_handle();
-                        let fallback =
-                            crate::workspace::keyboard_falls_back_to(focus.clone(), window, cx);
                         StandIn {
+                            keyboard: crate::workspace::KeyboardHome::new(
+                                focus.clone(),
+                                window,
+                                cx,
+                            ),
                             focus,
                             browser,
                             area: true,
                             other_tab: false,
                             toggles: 0,
                             closes: 0,
-                            _keyboard: fallback,
                         }
                     })
                 })
