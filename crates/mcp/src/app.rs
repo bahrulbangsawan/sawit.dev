@@ -587,9 +587,11 @@ fn headless(file: &Path, op: &Value) -> Result<Value, String> {
 /// - when something else wrote to the file since it was read ([`Writer::guard`]): another
 ///   `sawit-mcp`, say, whose edit the save would drop though its call answered ok.
 ///
-/// A `replace` of a canvas with layers keeps the file it replaces as `<file>.bak` first. The app
-/// can undo a replace; here every call opens the canvas afresh, so that copy is all that is left
-/// of the board.
+/// A `replace` of a canvas with layers keeps the file it replaces as a backup first, as a save
+/// that empties it does: `<file>.bak`, the backups before it moving along ([`Writer::save`]). The
+/// app can undo a replace; here every call opens the canvas afresh, so the backups are all that is
+/// left of the board, and one was not enough: an agent that started over twice lost the board it
+/// replaced first (CANVAS-CORE-3). A refused save keeps no backup either.
 fn run_and_save(
     board: &mut BoardDoc,
     file: &Path,
@@ -606,12 +608,10 @@ fn run_and_save(
         .refuse_dropping_images(file)
         .map_err(|e| e.to_string())?;
     let bytes = board.to_bytes().map_err(|e| e.to_string())?;
-    if op["op"] == "replace" && !store::is_empty(&before) {
-        keep_replaced_canvas(file)?;
-    }
+    let backup = op["op"] == "replace" || store::is_empty(&after);
     let writer = Writer::spawn();
     writer.guard(file.to_path_buf(), read);
-    writer.save(file.to_path_buf(), bytes, store::is_empty(&after));
+    writer.save(file.to_path_buf(), bytes, backup);
     writer.flush();
     match writer.last_error() {
         Some(error) => Err(error),
@@ -619,21 +619,19 @@ fn run_and_save(
     }
 }
 
-/// Copies the canvas file at `file`, which a `replace` is about to save over, to `<file>.bak`. With
-/// no file there (an old canvas imported, which stays as it is) there is nothing to keep. When the
-/// copy can't be made the error says why, and the replace must not be saved.
-fn keep_replaced_canvas(file: &Path) -> Result<(), String> {
-    let mut bak = file.as_os_str().to_owned();
-    bak.push(".bak");
-    let bak = PathBuf::from(bak);
-    match std::fs::copy(file, &bak) {
-        Ok(_) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !file.exists() => Ok(()),
-        Err(e) => Err(format!(
-            "The canvas wasn't replaced: it couldn't be copied to {} first: {e}",
-            bak.display()
-        )),
-    }
+/// The text of the scene file at `path`, for `canvas_load`: only a regular file of at most
+/// [`sawit_board::excalidraw::MAX_SCENE`] bytes is read, as the canvas reads an `.excalidraw`
+/// file ([`sawit_core::files::read_regular`]). A named pipe blocked the read for ever, and a link
+/// a cloned repository holds to `/dev/zero` read until the Mac ran out of memory (CANVAS-CORE-6);
+/// both are refused at once. It blocks, so it runs off the server's async threads.
+fn read_scene(path: &Path) -> std::io::Result<String> {
+    let bytes = sawit_core::files::read_regular(path, sawit_board::excalidraw::MAX_SCENE)?;
+    String::from_utf8(bytes).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "stream did not contain valid UTF-8",
+        )
+    })
 }
 
 /// Whether `path` names a `.figcraft` file.
@@ -999,7 +997,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Clear the whole canvas. In the app the user can undo it; with the app closed the cleared board is kept as canvas.figcraft.bak beside the canvas file"
+        description = "Clear the whole canvas. The board it held is kept beside the canvas file as canvas.figcraft.bak, the 4 kept before it moving to .bak.1 to .bak.4 (the oldest goes); in the app the user can also undo it"
     )]
     async fn canvas_clear(&self, Parameters(a): Parameters<WindowArgs>) -> CallToolResult {
         match self.canvas(a.project, json!({ "op": "clear" })).await {
@@ -1009,19 +1007,26 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Replace the canvas with a .figcraft file, or import an .excalidraw file or scene JSON in its place"
+        description = "Replace the canvas with a .figcraft file, or import an .excalidraw file or scene JSON in its place. The board it replaces is kept as canvas.figcraft.bak, as canvas_clear keeps one"
     )]
     async fn canvas_load(&self, Parameters(a): Parameters<CanvasLoadArgs>) -> CallToolResult {
         let op = match (a.scene, a.path) {
             (Some(scene), _) => json!({ "op": "replace", "scene": scene }),
-            // A .figcraft file is loaded by the canvas itself, from where it is.
+            // A .figcraft file is loaded by the canvas itself, from where it is, which refuses a
+            // file it can't read whole, a pipe or a device included.
             (None, Some(path)) if is_figcraft(&path) => {
                 json!({ "op": "replace", "path": absolute_path(&path) })
             }
             (None, Some(path)) => {
-                let text = match std::fs::read_to_string(&path) {
-                    Ok(t) => t,
-                    Err(e) => return fail(format!("Unable to read {path}: {e}")),
+                let text = match blocking({
+                    let path = path.clone();
+                    move || read_scene(Path::new(&path))
+                })
+                .await
+                {
+                    Ok(Ok(text)) => text,
+                    Ok(Err(e)) => return fail(format!("Unable to read {path}: {e}")),
+                    Err(e) => return fail(e),
                 };
                 match serde_json::from_str::<Value>(&text) {
                     Ok(scene) => json!({ "op": "replace", "scene": scene }),
@@ -1722,6 +1727,77 @@ mod tests {
         assert_eq!(said(&nothing), "Give a path or a scene.");
     }
 
+    /// Runs `call` on a runtime of its own, on a thread of its own, and gives what it answered:
+    /// `None` when it hadn't answered within 5 s (the thread is left as it is). For a call whose
+    /// read could block for ever, so that a test of it fails rather than hangs.
+    fn within_seconds<F>(call: F) -> Option<F::Output>
+    where
+        F: std::future::Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let _ = tx.send(runtime.block_on(call));
+        });
+        rx.recv_timeout(Duration::from_secs(5)).ok()
+    }
+
+    /// CANVAS-CORE-6, for an agent's load: `canvas_load` of a file that is a named pipe, or a link
+    /// a cloned repository holds to `/dev/zero`, never answered. The canvas's engine read a
+    /// `.figcraft` file (with the app closed, in the blocking task that holds every other canvas
+    /// call back; with it open, on its UI thread), and the tool itself read any other, on the
+    /// server's async thread. Each is refused at once now, and the canvas is as it was.
+    #[test]
+    fn canvas_load_of_a_pipe_or_a_device_is_refused_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let file = board_file(&project);
+        write_board(&file, 1);
+        let before = std::fs::read(&file).unwrap();
+        let refused_at_once = |paths: &[PathBuf]| {
+            let failed: Vec<String> = (paths.iter())
+                .filter_map(|path| {
+                    let (server, project) = (server.clone(), project_arg(&project));
+                    let path = path.display().to_string();
+                    let load = CanvasLoadArgs {
+                        path: Some(path.clone()),
+                        scene: None,
+                        project,
+                    };
+                    let call = async move { server.canvas_load(Parameters(load)).await };
+                    let Some(result) = within_seconds(call) else {
+                        return Some(format!("{path}: no answer within 5 s"));
+                    };
+                    let error = said(&result);
+                    let refused = result.is_error == Some(true)
+                        && error.contains(&path)
+                        && error.contains("not a regular file");
+                    (!refused).then(|| format!("{path}: {error}"))
+                })
+                .collect();
+            assert!(failed.is_empty(), "{}", failed.join("\n"));
+        };
+        let pipes =
+            ["board.figcraft", "scene.excalidraw", "scene.json"].map(|n| dir.path().join(n));
+        for pipe in &pipes {
+            let made = std::process::Command::new("mkfifo").arg(pipe).status();
+            assert!(made.unwrap().success(), "mkfifo {}", pipe.display());
+        }
+        // The pipes first: a device that never ends is read only once they are refused.
+        refused_at_once(&pipes);
+        let zeros = ["zero.figcraft", "zero.excalidraw"].map(|n| dir.path().join(n));
+        for zero in &zeros {
+            std::os::unix::fs::symlink("/dev/zero", zero).unwrap();
+        }
+        refused_at_once(&zeros);
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+    }
+
     #[tokio::test]
     async fn canvas_commands_lists_every_command_and_filters_with_their_parameters() {
         let dir = tempfile::tempdir().unwrap();
@@ -1880,6 +1956,147 @@ mod tests {
         let loaded = server.canvas_load(Parameters(load(&other))).await;
         assert_eq!(answer(&loaded)["elements"].as_array().unwrap().len(), 1);
         assert!(!bak.exists());
+    }
+
+    /// The bytes of the backups beside the canvas file `file`: `<name>.bak` and the older ones.
+    fn backups_of(file: &Path) -> Vec<Vec<u8>> {
+        let dir = file.parent().unwrap();
+        let name = format!("{}.bak", file.file_name().unwrap().to_string_lossy());
+        let mut kept: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(&name)
+            })
+            .collect();
+        kept.sort();
+        kept.iter()
+            .map(|path| std::fs::read(path).unwrap())
+            .collect()
+    }
+
+    /// CANVAS-CORE-3: with Sawit closed every call opens the canvas afresh, so its backups are all
+    /// that is left of a board an agent clears or loads over. Starting over twice (a clear, a
+    /// drawing and a clear; or a load, then another) kept one `.bak`, of the step between, and
+    /// the user's board was in no file. It is still kept.
+    #[tokio::test]
+    async fn starting_over_twice_with_sawit_closed_keeps_the_users_board() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let file = board_file(&project);
+        let window = || WindowArgs {
+            project: project_arg(&project),
+        };
+        write_board(&file, 3);
+        let users = std::fs::read(&file).unwrap();
+
+        // A clear, a drawing and a clear.
+        let cleared = server.canvas_clear(Parameters(window())).await;
+        assert_ne!(cleared.is_error, Some(true), "{}", said(&cleared));
+        let drawn = server
+            .canvas_add_elements(Parameters(CanvasElementsArgs {
+                elements: vec![json!({"type": "rectangle", "x": 0, "y": 0})],
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_ne!(drawn.is_error, Some(true), "{}", said(&drawn));
+        let cleared = server.canvas_clear(Parameters(window())).await;
+        assert_ne!(cleared.is_error, Some(true), "{}", said(&cleared));
+        assert!(layers_in(&file).is_empty());
+        assert!(
+            backups_of(&file).contains(&users),
+            "the user's board is gone"
+        );
+
+        // A load, then another.
+        write_board(&file, 3);
+        let users = std::fs::read(&file).unwrap();
+        let (one, two) = (
+            dir.path().join("one.figcraft"),
+            dir.path().join("two.figcraft"),
+        );
+        write_board(&one, 1);
+        write_board(&two, 2);
+        for other in [&one, &two] {
+            let loaded = server
+                .canvas_load(Parameters(CanvasLoadArgs {
+                    path: Some(other.display().to_string()),
+                    scene: None,
+                    project: project_arg(&project),
+                }))
+                .await;
+            assert_ne!(loaded.is_error, Some(true), "{}", said(&loaded));
+        }
+        assert_eq!(layers_in(&file).len(), 2);
+        assert!(
+            backups_of(&file).contains(&users),
+            "the user's board is gone"
+        );
+    }
+
+    /// CANVAS-CORE-3: a load the changed-on-disk guard refuses changes nothing, the backups
+    /// included. Its `.bak` used to be made first, from the other process's file.
+    #[test]
+    fn a_refused_load_leaves_the_backups_as_they_were() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = board_file(&project_in(dir.path()));
+        write_board(&file, 1);
+        let bak = file.with_extension("figcraft.bak");
+        write_board(&bak, 4);
+        let before = backups_of(&file);
+        let read = Stamp::of(&file);
+        let mut board = store::open(&file).unwrap();
+        write_board(&file, 2);
+        let theirs = std::fs::read(&file).unwrap();
+
+        let other = dir.path().join("other.figcraft");
+        write_board(&other, 3);
+        let load = json!({"op": "replace", "path": other});
+        let refused = run_and_save(&mut board, &file, read, &load).unwrap_err();
+        assert!(refused.contains("changed on disk"), "{refused}");
+        assert_eq!(std::fs::read(&file).unwrap(), theirs);
+        assert!(backups_of(&file) == before, "the backup was replaced");
+    }
+
+    /// CANVAS-CORE-1: a cloned project can hold a link at `canvas.figcraft.bak` to any file of
+    /// the user's. A load with Sawit closed keeps the canvas it replaces in place of the link,
+    /// never through it.
+    #[tokio::test]
+    async fn an_offline_load_never_writes_through_a_link_at_the_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let file = board_file(&project);
+        let bak = file.with_extension("figcraft.bak");
+        write_board(&file, 2);
+        let replaced = std::fs::read(&file).unwrap();
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "the user's").unwrap();
+        std::os::unix::fs::symlink(&victim, &bak).unwrap();
+        let other = dir.path().join("other.figcraft");
+        write_board(&other, 1);
+
+        let loaded = server
+            .canvas_load(Parameters(CanvasLoadArgs {
+                path: Some(other.display().to_string()),
+                scene: None,
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_ne!(loaded.is_error, Some(true), "{}", said(&loaded));
+        assert_eq!(layers_in(&file).len(), 1);
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "the user's");
+        assert!(
+            std::fs::symlink_metadata(&bak)
+                .unwrap()
+                .file_type()
+                .is_file()
+        );
+        assert_eq!(std::fs::read(&bak).unwrap(), replaced);
     }
 
     #[test]

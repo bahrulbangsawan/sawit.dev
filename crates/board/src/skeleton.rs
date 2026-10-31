@@ -158,7 +158,7 @@ pub fn apply(
     offset: (f64, f64),
 ) -> Result<Applied, BoardError> {
     let selection = board.session.selection();
-    let applied = board.session.grouped("Add elements", |session| {
+    let applied = crate::doc::grouped(&mut board.session, "Add elements", |session| {
         Maker::new(session, offset)?.make(items)
     })?;
     // Making a layer selects it. The selection is the user's, so it goes back (unless nothing was

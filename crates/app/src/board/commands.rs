@@ -75,7 +75,7 @@ pub(super) fn run_ui(
     }
 }
 
-/// Save: writes the canvas's own file now, as a flush does ([`BoardView::flush`]). What to say:
+/// Save: writes the canvas's own file now, as closing it does ([`BoardView::save_now`]). What to say:
 /// that it is saved, or that it was written again where it had gone, or why it isn't.
 fn save(view: &mut BoardView) -> Result<String, String> {
     view.save_now()
