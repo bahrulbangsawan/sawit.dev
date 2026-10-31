@@ -198,7 +198,8 @@ fn command_title(id: &str) -> &str {
 
 /// The keymap editor's rows for the canvas commands no row of `rows` binds: those of FigCraft's
 /// shortcuts and menus that the canvas runs or carries out itself (import, export, save and copy
-/// as, [`commands`]), but the hidden ones, so a key can be given to any of them.
+/// as, [`commands`]), so a key can be given to any of them. The commands the canvas doesn't offer
+/// at all ([`shortcuts::is_offered`]: hidden, or of no use in it) aren't among them.
 pub fn unbound_rows(rows: &[crate::keymap::Row]) -> Vec<crate::keymap::Row> {
     let bound: std::collections::HashSet<String> = rows
         .iter()
@@ -213,7 +214,7 @@ pub fn unbound_rows(rows: &[crate::keymap::Row]) -> Vec<crate::keymap::Row> {
         .iter()
         .map(|binding| binding.id)
         .chain(figcraft_engine::catalog::items().map(|item| item.id))
-        .filter(|id| !policy::is_hidden(id) && !bound.contains(*id))
+        .filter(|id| shortcuts::is_offered(id) && !bound.contains(*id))
         .filter(|id| seen.insert(*id))
         .map(|id| crate::keymap::Row {
             source: crate::keymap::Source::Unbound,
@@ -3228,18 +3229,24 @@ mod tests {
         });
     }
 
-    /// The keymap editor offers the canvas's commands that have no key, those Sawit carries out
-    /// itself among them (export as SVG, copy as text), and a key the user gives one carries it
-    /// out as its menu item does.
-    #[gpui_kit::test]
-    fn a_key_the_user_gives_a_command_sawit_carries_out_runs_it(cx: &mut TestAppContext) {
-        let offered: Vec<String> = super::unbound_rows(&[])
+    /// The canvas commands the keymap editor offers to bind when no row binds any: the ids of
+    /// [`super::unbound_rows`].
+    fn offered_to_bind() -> Vec<String> {
+        super::unbound_rows(&[])
             .iter()
             .filter_map(|row| {
                 let args: Value = serde_json::from_str(row.args.as_deref()?).ok()?;
                 Some(args["id"].as_str()?.to_string())
             })
-            .collect();
+            .collect()
+    }
+
+    /// The keymap editor offers the canvas's commands that have no key, those Sawit carries out
+    /// itself among them (export as SVG, copy as text), and a key the user gives one carries it
+    /// out as its menu item does.
+    #[gpui_kit::test]
+    fn a_key_the_user_gives_a_command_sawit_carries_out_runs_it(cx: &mut TestAppContext) {
+        let offered = offered_to_bind();
         for id in [
             "file.exportSvg",
             "file.exportFramesPdf",
@@ -3270,6 +3277,29 @@ mod tests {
         assert_eq!(copied.as_deref(), Some("Ship it"));
         let toast = view.read_with(&cx, |view, _| view.toast.clone());
         assert_eq!(toast.as_deref(), Some("Copied as text"));
+    }
+
+    /// The keymap editor doesn't offer to bind the commands the canvas has no use for, which get
+    /// no key and stay off the shortcuts sheet: Dev Mode, the switch to prototyping, cursor chat,
+    /// F6's regions and the keyboard box selection. A key given to `select.area` would bring
+    /// back a box selection whose box the canvas never draws.
+    #[test]
+    fn the_keymap_editor_offers_no_command_the_canvas_has_no_use_for() {
+        let offered = offered_to_bind();
+        assert!(
+            offered.iter().any(|id| id == "file.exportSvg"),
+            "{offered:?}"
+        );
+        for id in [
+            "view.devMode",
+            "view.designPrototype",
+            "collab.cursorChat",
+            "view.nextRegion",
+            "view.previousRegion",
+            "select.area",
+        ] {
+            assert!(!offered.iter().any(|o| o == id), "{id} is offered");
+        }
     }
 
     /// The canvas chrome's keys are rows of the keymap editor, bound as the app binds them: the

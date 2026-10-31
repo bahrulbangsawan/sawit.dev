@@ -31,8 +31,9 @@ const MAX_KEYS: usize = 2;
 /// window (toolbar, layers, canvas, properties), which Sawit's chrome does not have, and
 /// FigCraft's keyboard box selection (`select.area`, ⌥Space or F8): it raises a `selectArea`
 /// request for a box that the arrows move and Enter selects with, and the canvas never draws that
-/// box. The sheet does not advertise them, and they get no key binding ([`key_bindings`]): the
-/// keyboard reaches one only once the user gives it a key in the keymap editor.
+/// box. The sheet does not advertise them, they get no key binding ([`key_bindings`]), and the
+/// keymap editor doesn't offer them to bind ([`is_offered`]): only a binding written into the
+/// keymap file by hand reaches one.
 const NOT_OFFERED: &[&str] = &[
     "view.devMode",
     "view.designPrototype",
@@ -41,6 +42,14 @@ const NOT_OFFERED: &[&str] = &[
     "view.previousRegion",
     "select.area",
 ];
+
+/// Whether the canvas offers command `id` to the keyboard: the policy doesn't hide it
+/// ([`is_hidden`]) and the canvas has a use for it (it isn't one of `NOT_OFFERED`). The sheet,
+/// the key bindings ([`key_bindings`]) and the keymap editor's rows for commands with no key
+/// offer only these.
+pub fn is_offered(id: &str) -> bool {
+    !is_hidden(id) && !NOT_OFFERED.contains(&id)
+}
 
 /// One row of the sheet: a command and its keys.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,7 +91,7 @@ pub fn sheet() -> Vec<ShortcutGroup> {
 
 /// The sheet's row for `binding`, if it has one.
 fn row(binding: &Binding) -> Option<ShortcutRow> {
-    if is_hidden(binding.id) || NOT_OFFERED.contains(&binding.id) {
+    if !is_offered(binding.id) {
         return None;
     }
     let mut keys: Vec<String> = Vec::new();
@@ -131,7 +140,7 @@ pub struct KeyBinding {
 pub fn key_bindings() -> Vec<KeyBinding> {
     let mut out = Vec::new();
     for binding in KEYS.iter() {
-        if is_hidden(binding.id) || NOT_OFFERED.contains(&binding.id) {
+        if !is_offered(binding.id) {
             continue;
         }
         for spec in binding.keys(Platform::Mac) {
