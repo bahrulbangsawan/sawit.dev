@@ -1461,8 +1461,9 @@ hand checks only into their own reports, which aren't in the repository. They ar
 reviews added. No test can build a `Workspace` (P8-C8), so for the workspace wiring of those fixes these checks are
 the only cover: the canvas taking the keyboard, a canvas file renamed under its tab, the hand-offs from Files, one
 browser per project, where the quit question goes up, the center bar's scroll and the restore warning on screen.
-- There are **40 checks**. F-1 to F-5 and H-MCP-n are the reports' own numbers (H-MCP-n after the finding MCP-n it
-  checks); H-CORE-n and H-UI-n are canvas core's and canvas UI's H-n; the others are numbered here.
+- There are **43 checks**. F-1 to F-5 and H-MCP-n are the reports' own numbers (H-MCP-n after the finding MCP-n it
+  checks); H-CORE-n and H-UI-n are canvas core's and canvas UI's H-n; the others are numbered here. H-WS-1 to
+  H-WS-3 came with the workspace fixes made after the hunt's final review (smoke m3, final-seams m1 and m2).
 - The fixers drove some of them over the control socket before their lanes merged. Nobody has run them by hand.
 - Each starts from a fresh launch of the merged main, as under "Before you start", with start state A unless it
   says otherwise. A debug build is enough.
@@ -1713,7 +1714,7 @@ Answer: ______
 
 Answer: ______
 
-### MCP: 3 checks
+### MCP: 6 checks
 
 **H-MCP-1. Two agents on one closed canvas** (MCP-1).
 - Quit Sawit. Run two Claude Code sessions in one project, with the scratch `SAWIT_HOME` so that they find no
@@ -1738,6 +1739,52 @@ Answer: ______
 - Start Sawit with `/` as its working folder: the installed Sawit.app from the Dock, or `cd /` before the recipe's
   launch line. Have an agent call `terminal_run {cwd: "web", command: "pwd"}`.
 - Look for: "Nothing was run", and no shell opens in `/`.
+
+Answer: ______
+
+The next three need a second project in the window, `proj2`, shown in front of `proj`:
+
+```bash
+mkdir -p "$S/proj2" && touch "$S/proj/f01.txt" "$S/proj2/g01.txt"
+ctl "{\"cmd\":\"open\",\"path\":\"$S/proj2\"}"
+ctl "{\"cmd\":\"open\",\"path\":\"$S/proj/f01.txt\"}"
+ctl "{\"cmd\":\"open\",\"path\":\"$S/proj2/g01.txt\"}"
+```
+
+**H-WS-1. An agent's tab switch brings the tab's project** (smoke m3).
+- Click into the terminal (⌘J shows it). Run `ctl '{"cmd":"activate_tab","tab":"f01.txt"}'`.
+- Look for: `f01.txt` is shown, with proj's Files tree in the sidebar and proj's chip active in the title bar, and
+  `ctl '{"cmd":"state"}'` names proj as `project`. Typing still goes to the terminal.
+- Click `g01.txt`'s tab, fold proj's group with a click on its header, and run the line again. Look for: the group
+  unfolds, with `f01.txt` active.
+
+Answer: ______
+
+**H-WS-2. The Keymap Editor an agent opens leaves your keyboard** (final-seams m2).
+- Open the Keymap Editor (⌘K ⌘S) and click a binding to select it. Click into the terminal and type `echo hi`,
+  without Enter.
+- Run `ctl '{"cmd":"open_page","page":"keymap"}'`, which is an agent's `app_open_page keymap`, then press ⌫ twice.
+- Look for: the Keymap Editor comes forward, and the ⌫s erase `hi` in the terminal. The binding you selected is
+  still there, and `$S/home/keymap.json` wasn't written.
+- Close the Keymap Editor's tab and do it again. Look for: it opens, and the keys still go to the terminal.
+
+Answer: ______
+
+**H-WS-3. An agent's browser is its own project's** (final-seams m1).
+- Serve the browser fixtures as for the Browser checks (`python3 -m http.server 8765 -d docs/fixtures/browser`),
+  with proj2 shown. Run what an agent working in `$S/proj` sends when it names no project:
+
+  ```bash
+  ctl "{\"agent_folder\":\"$S/proj\",\"cmd\":\"browser\",\"op\":{\"op\":\"navigate\",\"url\":\"http://localhost:8765/form.html\"}}"
+  ```
+- Look for: proj comes forward with a Browser tab of its own, in proj's group, showing `form.html`. proj2 has
+  no Browser tab.
+- Click `g01.txt`'s tab, then run the same line with `{\"op\":\"state\"}` as the op. Look for: the answer's
+  `url` is `form.html`, and nothing on screen changes: proj2 and `g01.txt` stay in front.
+- Run `ctl "{\"agent_folder\":\"$S/proj\",\"cmd\":\"open_page\",\"page\":\"browser\"}"`. Look for: proj's
+  Browser tab comes forward, and no second one opens.
+- Before final-seams m1 was fixed, the page opened in proj2's browser, with proj2's cookies, and the `state` op
+  answered from proj2's.
 
 Answer: ______
 
