@@ -20,20 +20,31 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use sawit_core::dev_tools::find_program;
 use sawit_core::mcp_auth::{
     self, Login, LoginEvent, SignIn, is_callback_url, login_call, sign_in_states,
 };
-use sawit_core::mcp_catalog::{Auth, DEFAULT_AWS_REGION, SERVERS, Server};
+use sawit_core::mcp_catalog::{Auth, DEFAULT_AWS_REGION, SERVERS, Server, valid_region};
 use sawit_core::mcp_clients::{
-    Category, Client, Spec, Status, Target, discover, install, snippet, status, uninstall,
+    Category, Client, Entries, Spec, Status, Target, discover, install, needs_bridge, read_entries,
+    snippet, status_in, uninstall,
 };
-use sawit_core::probe::find_in_path;
 
-use crate::catalog::{self, Mark};
+use crate::catalog::{self, Mark, tilde};
 use crate::rt;
 
 /// A server in the catalog and a target, by index.
 type Pair = (usize, usize);
+
+/// What a detection finds, off the UI thread.
+struct Detected {
+    targets: Vec<Target>,
+    /// Each target's config, read once.
+    entries: Vec<Entries>,
+    clis: HashMap<&'static str, PathBuf>,
+    programs: HashMap<&'static str, PathBuf>,
+    server_exists: bool,
+}
 
 /// Programs local servers and the remote bridge run.
 const PROGRAMS: [&str; 2] = ["npx", "cap"];
@@ -44,6 +55,8 @@ pub struct McpPage {
     server: PathBuf,
     server_exists: bool,
     targets: Vec<Target>,
+    /// Each target's config as the last detection read it, by target.
+    entries: Vec<Entries>,
     status: HashMap<Pair, Status>,
     /// What Claude Code and Codex profiles report, by server name.
     sign_ins: HashMap<usize, HashMap<String, SignIn>>,
@@ -51,6 +64,9 @@ pub struct McpPage {
     clis: HashMap<&'static str, PathBuf>,
     programs: HashMap<&'static str, PathBuf>,
     region: String,
+    /// The Region was typed here: a detection no longer takes it from the
+    /// installed entries.
+    region_chosen: bool,
     busy: HashSet<Pair>,
     /// Stops the install or removal running for a pair.
     stops: HashMap<Pair, AbortHandle>,
@@ -63,7 +79,15 @@ pub struct McpPage {
     sort: Sort,
     /// The page of the list shown, from 0.
     page: usize,
-    /// Made on the first render, which has the window an input needs.
+    /// The search as the list last filtered by it.
+    last_query: String,
+    /// The row ↑ and ↓ select and ↩ opens, by its place in the list.
+    cursor: Option<usize>,
+    /// The page's own keyboard focus (the sheet has `focus`).
+    page_focus: FocusHandle,
+    /// A sheet closed: the list gets the keyboard back on the next render.
+    refocus: bool,
+    /// Made with the page when it has a window, else on the first render.
     search: Option<Entity<InputState>>,
     _search: Option<Subscription>,
 }
@@ -163,6 +187,8 @@ struct InstallSheet {
     server: usize,
     selected: HashSet<usize>,
     region: Option<Entity<InputState>>,
+    /// What's typed as the Region isn't one.
+    region_invalid: bool,
     _subscription: Option<Subscription>,
 }
 
@@ -264,15 +290,6 @@ fn logo_image(logo: Option<(&str, bool)>, glyph: Lucide, size: f32, cx: &App) ->
     }
 }
 
-/// `~/…` instead of the full home path.
-fn tilde(path: &std::path::Path) -> String {
-    let s = path.display().to_string();
-    match std::env::var("HOME") {
-        Ok(home) if s.starts_with(&home) => s.replacen(&home, "~", 1),
-        _ => s,
-    }
-}
-
 /// "Claude Code · work", or the client alone for its only profile.
 fn target_label(t: &Target) -> String {
     if t.profile == "default" {
@@ -287,21 +304,116 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 }
 
 impl McpPage {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut this = Self::blank(cx);
+        this.make_search(window, cx);
+        this.reload(cx);
+        this
+    }
+
+    /// The search field: typing filters, ↩ moves the keyboard to the first row.
+    fn make_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search servers"));
+        self._search = Some(cx.subscribe_in(
+            &search,
+            window,
+            |this, _, e: &InputEvent, window, cx| match e {
+                // Only when the text changed: the field also says so when it loses the
+                // keyboard.
+                InputEvent::Change if this.query(cx) != this.last_query => {
+                    this.last_query = this.query(cx);
+                    this.page = 0;
+                    this.cursor = None;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {
+                    this.cursor = None;
+                    this.select(true, window, cx);
+                }
+                _ => {}
+            },
+        ));
+        self.search = Some(search);
+    }
+
+    /// Gives the search field the keyboard, as opening the page does.
+    pub fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sheet.is_some() {
+            return;
+        }
+        if self.search.is_none() {
+            self.make_search(window, cx);
+        }
+        if let Some(search) = &self.search {
+            search.update(cx, |s, cx| s.focus(window, cx));
+        }
+    }
+
+    fn query(&self, cx: &App) -> String {
+        self.search
+            .as_ref()
+            .map(|s| s.read(cx).value().trim().to_lowercase())
+            .unwrap_or_default()
+    }
+
+    /// Selects the next (or previous) row, turning the list's page to it, and
+    /// gives the list the keyboard.
+    fn select(&mut self, down: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let len = self.shown(&self.query(cx)).len();
+        self.cursor = catalog::step(self.cursor, len, down);
+        if let Some(ix) = self.cursor {
+            self.page = ix / catalog::PER_PAGE;
+        }
+        window.focus(&self.page_focus, cx);
+        cx.notify();
+    }
+
+    /// ↩: in the install sheet, Install (when it can); after a sign-in, Done;
+    /// on the list, the selected server's sheet.
+    fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match &self.sheet {
+            Some(Sheet::Install(sheet)) => {
+                let s = sheet.server;
+                let busy = (0..self.targets.len()).any(|t| self.busy.contains(&(s, t)));
+                if !busy && !self.install_blocked(s) && !self.selected_for(false).is_empty() {
+                    self.install_selected(cx);
+                }
+            }
+            Some(Sheet::SignIn(flow)) => {
+                if flow.pos >= flow.queue.len() {
+                    self.close_sheet(cx);
+                }
+            }
+            None => {
+                let rows = self.shown(&self.query(cx));
+                if !self.loading
+                    && !self.targets.is_empty()
+                    && let Some(&s) = self.cursor.and_then(|ix| rows.get(ix))
+                {
+                    self.open_install(s, window, cx);
+                }
+            }
+        }
+    }
+
+    /// The page before anything is detected.
+    fn blank(cx: &mut Context<Self>) -> Self {
         let server = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(|d| d.join("sawit-mcp")))
             .unwrap_or_else(|| PathBuf::from("sawit-mcp"));
-        let mut this = Self {
+        Self {
             server_exists: false,
             server,
             targets: Vec::new(),
+            entries: Vec::new(),
             status: HashMap::new(),
             sign_ins: HashMap::new(),
             checking: HashSet::new(),
             clis: HashMap::new(),
             programs: HashMap::new(),
             region: DEFAULT_AWS_REGION.into(),
+            region_chosen: false,
             busy: HashSet::new(),
             stops: HashMap::new(),
             errors: HashMap::new(),
@@ -312,11 +424,13 @@ impl McpPage {
             kind: None,
             sort: Sort::Catalog,
             page: 0,
+            cursor: None,
+            last_query: String::new(),
+            page_focus: cx.focus_handle(),
+            refocus: false,
             search: None,
             _search: None,
-        };
-        this.reload(cx);
-        this
+        }
     }
 
     fn spec(&self, ix: usize) -> Spec {
@@ -330,58 +444,142 @@ impl McpPage {
         client.cli().and_then(|n| self.clis.get(n).cloned())
     }
 
-    /// Re-detects clients and re-reads every config (off the UI thread),
-    /// then asks Claude Code and Codex which servers need a sign-in.
+    /// Re-detects clients and reads every config once (off the UI thread and
+    /// off the async workers), then asks Claude Code and Codex which servers
+    /// need a sign-in.
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.loading = true;
         let server = self.server.clone();
-        let region = self.region.clone();
-        let rx = rt::spawn(cx, async move {
+        let rx = rt::spawn_blocking(cx, move || {
             let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
             let claude_dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from);
             let targets = discover(&home, claude_dir);
-            let programs: HashMap<&'static str, PathBuf> = PROGRAMS
-                .into_iter()
-                .filter_map(|n| find_in_path(n).map(|p| (n, p)))
-                .collect();
-            let mut statuses = HashMap::new();
-            for (s, server_entry) in SERVERS.iter().enumerate() {
-                let spec = server_entry.spec(&server, &region, |c| programs.get(c).cloned());
-                for (t, target) in targets.iter().enumerate() {
-                    statuses.insert((s, t), status(target, &spec));
-                }
+            Detected {
+                entries: targets.iter().map(read_entries).collect(),
+                targets,
+                // Where the Dev Tools page finds them, not only on the app's
+                // PATH: that misses what `~/.zshrc` adds (nvm, ~/.local/bin).
+                programs: PROGRAMS
+                    .into_iter()
+                    .filter_map(|n| find_program(n).map(|p| (n, p)))
+                    .collect(),
+                clis: ["claude", "codex"]
+                    .into_iter()
+                    .filter_map(|n| find_program(n).map(|p| (n, p)))
+                    .collect(),
+                server_exists: server.is_file(),
             }
-            let clis: HashMap<&'static str, PathBuf> = ["claude", "codex"]
-                .into_iter()
-                .filter_map(|n| find_in_path(n).map(|p| (n, p)))
-                .collect();
-            (targets, statuses, clis, programs, server.is_file())
         });
         cx.spawn(async move |this, cx| {
-            if let Ok((targets, statuses, clis, programs, exists)) = rx.await {
-                let _ = this.update(cx, |this, cx| {
-                    this.targets = targets;
-                    this.status = statuses;
-                    this.clis = clis;
-                    this.programs = programs;
-                    this.server_exists = exists;
-                    this.sign_ins.clear();
-                    this.errors.clear();
-                    this.loading = false;
-                    let all: Vec<usize> = (0..this.targets.len()).collect();
-                    this.check_sign_ins(all, cx);
-                    cx.notify();
-                });
+            if let Ok(detected) = rx.await {
+                let _ = this.update(cx, |this, cx| this.apply(detected, cx));
             }
         })
         .detach();
+    }
+
+    /// Takes in what a detection found.
+    fn apply(&mut self, detected: Detected, cx: &mut Context<Self>) {
+        // A sheet's rows are places in the old list, which may now hold
+        // other clients, or none.
+        if self.sheet.is_some() && detected.targets != self.targets {
+            self.sheet = None;
+            self.refocus = true;
+        }
+        self.targets = detected.targets;
+        self.entries = detected.entries;
+        self.clis = detected.clis;
+        self.programs = detected.programs;
+        self.server_exists = detected.server_exists;
+        if !self.region_chosen
+            && let Some(region) = self.installed_region()
+        {
+            self.region = region;
+        }
+        self.recompute();
+        self.sign_ins.clear();
+        self.errors.clear();
+        self.loading = false;
+        let all: Vec<usize> = (0..self.targets.len()).collect();
+        self.check_sign_ins(all, cx);
+        cx.notify();
+    }
+
+    /// The AWS Region most clients have the server in, if any has it: the
+    /// page shows that one, so an install there reads as installed, not as
+    /// out of date. A tie keeps the page's.
+    fn installed_region(&self) -> Option<String> {
+        let mut counts: Vec<(String, usize)> = Vec::new();
+        for server in SERVERS.iter().filter(|s| s.has_region()) {
+            for read in &self.entries {
+                if let Entries::Servers(map) = read
+                    && let Some(region) = map.get(server.id).and_then(|sig| server.region_in(sig))
+                {
+                    match counts.iter_mut().find(|(r, _)| *r == region) {
+                        Some((_, n)) => *n += 1,
+                        None => counts.push((region, 1)),
+                    }
+                }
+            }
+        }
+        let most = counts.iter().map(|(_, n)| *n).max()?;
+        counts
+            .iter()
+            .find(|(r, n)| *n == most && *r == self.region)
+            .or_else(|| counts.iter().find(|(_, n)| *n == most))
+            .map(|(r, _)| r.clone())
+    }
+
+    /// The Region a client has a regional server in, when it's another one
+    /// than the page's: installed there, not out of date.
+    fn other_region(&self, (s, t): Pair) -> Option<String> {
+        let server = &SERVERS[s];
+        match self.status.get(&(s, t)) {
+            Some(Status::Outdated(sig)) if server.has_region() => server.region_in(sig),
+            _ => None,
+        }
+    }
+
+    /// Why server `s` can't be installed at all now: its program isn't
+    /// there, or the sheet's Region isn't one.
+    fn install_blocked(&self, s: usize) -> bool {
+        let region_invalid = matches!(
+            &self.sheet,
+            Some(Sheet::Install(sheet)) if sheet.server == s && sheet.region_invalid
+        );
+        (s == 0 && !self.server_exists)
+            || region_invalid
+            || SERVERS[s]
+                .missing_program(|c| self.programs.get(c).cloned())
+                .is_some()
+    }
+
+    /// A remote server can't go into a client that only runs programs: it
+    /// would get the `mcp-remote` bridge, and `npx` to run it isn't found.
+    fn bridge_blocked(&self, (s, t): Pair) -> bool {
+        SERVERS[s].is_remote()
+            && !self.programs.contains_key("npx")
+            && self.targets.get(t).is_some_and(|x| needs_bridge(x.client))
+    }
+
+    /// Every status, from the configs as read.
+    fn recompute(&mut self) {
+        self.status.clear();
+        for s in 0..SERVERS.len() {
+            let spec = self.spec(s);
+            for (t, read) in self.entries.iter().enumerate() {
+                self.status.insert((s, t), status_in(read, &spec));
+            }
+        }
     }
 
     /// Asks each Claude Code / Codex profile in `targets` that has a remote
     /// catalog server which servers are signed in.
     fn check_sign_ins(&mut self, targets: Vec<usize>, cx: &mut Context<Self>) {
         for t in targets {
-            let target = self.targets[t].clone();
+            let Some(target) = self.targets.get(t).cloned() else {
+                continue;
+            };
             let Some(cli) = self.cli_for(target.client) else {
                 continue;
             };
@@ -462,16 +660,27 @@ impl McpPage {
             }
         });
         self.stops.insert(pair, stop);
+        // The client, not its place in the list: a detection can move it.
+        let id = (target.client, target.config.clone());
         let rx = rt::spawn(cx, async move {
             // `None` when it was stopped; the config is read again either way.
             let result = run.await.ok();
-            (result, status(&target, &spec))
+            (result, read_entries(&target))
         });
         cx.spawn(async move |this, cx| {
-            if let Ok((result, new_status)) = rx.await {
+            if let Ok((result, read)) = rx.await {
                 let _ = this.update(cx, |this, cx| {
                     this.busy.remove(&pair);
                     this.stops.remove(&pair);
+                    let Some(t) = this
+                        .targets
+                        .iter()
+                        .position(|x| x.client == id.0 && x.config == id.1)
+                    else {
+                        cx.notify();
+                        return;
+                    };
+                    let pair = (s, t);
                     match result {
                         Some(Err(e)) => {
                             this.errors.insert(pair, e.to_string());
@@ -481,7 +690,15 @@ impl McpPage {
                         }
                         Some(Ok(())) => {}
                     }
-                    this.status.insert(pair, new_status);
+                    // Every server's status in that config: an install can also drop
+                    // the old pre-rename entry.
+                    for s in 0..SERVERS.len() {
+                        let spec = this.spec(s);
+                        this.status.insert((s, t), status_in(&read, &spec));
+                    }
+                    if let Some(entries) = this.entries.get_mut(t) {
+                        *entries = read;
+                    }
                     if !remove && SERVERS[s].auth == Auth::Browser {
                         if let Some(states) = this.sign_ins.get_mut(&t) {
                             states.remove(SERVERS[s].id);
@@ -499,8 +716,10 @@ impl McpPage {
     // Install sheet
 
     fn open_install(&mut self, s: usize, window: &mut Window, cx: &mut Context<Self>) {
+        // What's installed, to update or remove; not an install in another
+        // Region, which Install would move.
         let selected = (0..self.targets.len())
-            .filter(|t| self.is_installed((s, *t)))
+            .filter(|t| self.is_installed((s, *t)) && self.other_region((s, *t)).is_none())
             .collect();
         let (region, subscription) = if SERVERS[s].has_region() {
             let region = self.region.clone();
@@ -512,14 +731,21 @@ impl McpPage {
             let sub = cx.subscribe_in(&input, window, |this, input, e: &InputEvent, _, cx| {
                 if matches!(e, InputEvent::Change) {
                     let value = input.read(cx).value().trim().to_string();
-                    this.set_region(
-                        if value.is_empty() {
-                            DEFAULT_AWS_REGION.into()
-                        } else {
-                            value
-                        },
-                        cx,
-                    );
+                    let region = if value.is_empty() {
+                        DEFAULT_AWS_REGION.to_string()
+                    } else {
+                        value
+                    };
+                    // It goes into the server's host name.
+                    let valid = valid_region(&region);
+                    if let Some(Sheet::Install(sheet)) = &mut this.sheet {
+                        sheet.region_invalid = !valid;
+                    }
+                    if valid {
+                        this.region_chosen = true;
+                        this.set_region(region, cx);
+                    }
+                    cx.notify();
                 }
             });
             (Some(input), Some(sub))
@@ -530,6 +756,7 @@ impl McpPage {
             server: s,
             selected,
             region,
+            region_invalid: false,
             _subscription: subscription,
         }));
         self.focus.focus(window, cx);
@@ -546,8 +773,9 @@ impl McpPage {
         for (s, server) in SERVERS.iter().enumerate() {
             if server.has_region() {
                 let spec = self.spec(s);
-                for (t, target) in self.targets.iter().enumerate() {
-                    self.status.insert((s, t), status(target, &spec));
+                // From the configs as read: no file is read per keystroke.
+                for (t, read) in self.entries.iter().enumerate() {
+                    self.status.insert((s, t), status_in(read, &spec));
                 }
             }
         }
@@ -612,23 +840,86 @@ impl McpPage {
         .detach();
     }
 
-    fn install_selected(&mut self, remove: bool, cx: &mut Context<Self>) {
+    /// Asks, then removes the sheet's server from the ticked clients, as the
+    /// row's trash does: the sheet opens with every installed client ticked.
+    fn confirm_remove_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(Sheet::Install(sheet)) = &self.sheet else {
             return;
         };
         let s = sheet.server;
-        let mut chosen: Vec<usize> = sheet.selected.iter().copied().collect();
-        chosen.sort();
-        for t in chosen {
-            let editable = self.targets[t].client.editable();
-            let todo = match self.status.get(&(s, t)) {
-                Some(Status::NotInstalled | Status::Outdated(_)) => !remove && editable,
-                Some(Status::Installed) => remove && editable,
-                _ => false,
-            };
-            if todo || (remove && matches!(self.status.get(&(s, t)), Some(Status::Outdated(_)))) {
-                self.act((s, t), remove, cx);
+        let targets = self.selected_for(true);
+        if targets.is_empty() {
+            return;
+        }
+        let names: Vec<String> = targets
+            .iter()
+            .map(|&t| target_label(&self.targets[t]))
+            .collect();
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!(
+                "Remove {} from {}?",
+                SERVERS[s].name,
+                plural(targets.len(), "client", "clients")
+            ),
+            Some(&format!(
+                "Its entry is removed from: {}. Restart those clients to drop it.",
+                names.join(", ")
+            )),
+            &["Remove", "Cancel"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if matches!(answer.await, Ok(0)) {
+                let _ = this.update(cx, |this, cx| {
+                    for t in targets {
+                        this.act((s, t), true, cx);
+                    }
+                });
             }
+        })
+        .detach();
+    }
+
+    /// The ticked clients the sheet's Install (or Remove) acts on.
+    fn selected_for(&self, remove: bool) -> Vec<usize> {
+        let Some(Sheet::Install(sheet)) = &self.sheet else {
+            return Vec::new();
+        };
+        let s = sheet.server;
+        let mut chosen: Vec<usize> = sheet
+            .selected
+            .iter()
+            .copied()
+            .filter(|&t| {
+                let editable = self.targets.get(t).is_some_and(|x| x.client.editable());
+                // Without npx, there's nothing to install there.
+                let installable = editable && !self.bridge_blocked((s, t));
+                match self.status.get(&(s, t)) {
+                    Some(Status::NotInstalled) => !remove && installable,
+                    Some(Status::Outdated(_)) => {
+                        if remove {
+                            editable
+                        } else {
+                            installable
+                        }
+                    }
+                    Some(Status::Installed) => remove && editable,
+                    _ => false,
+                }
+            })
+            .collect();
+        chosen.sort();
+        chosen
+    }
+
+    fn install_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(Sheet::Install(sheet)) = &self.sheet else {
+            return;
+        };
+        let s = sheet.server;
+        for t in self.selected_for(false) {
+            self.act((s, t), false, cx);
         }
     }
 
@@ -677,7 +968,9 @@ impl McpPage {
         let Some(&(s, t)) = flow.queue.get(flow.pos) else {
             return;
         };
-        let target = self.targets[t].clone();
+        let Some(target) = self.targets.get(t).cloned() else {
+            return;
+        };
         let cli = self.cli_for(target.client);
         let started = cli
             .and_then(|cli| login_call(&target, &cli, SERVERS[s].id))
@@ -833,6 +1126,7 @@ impl McpPage {
         if !rechecks.is_empty() {
             self.check_sign_ins(rechecks, cx);
         }
+        self.refocus = true;
         cx.notify();
     }
 
@@ -905,8 +1199,15 @@ impl McpPage {
                                     .ghost()
                                     .small()
                                     .icon(Lucide::RefreshCw)
-                                    .tooltip("Detect Again")
+                                    .tooltip(if self.busy.is_empty() {
+                                        "Detect Again"
+                                    } else {
+                                        "Detect Again When the Installs Finish"
+                                    })
                                     .loading(self.loading)
+                                    // A detection can reorder the clients under a running
+                                    // install.
+                                    .disabled(!self.busy.is_empty())
                                     .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
                             )
                             .when(pending > 0, |el| {
@@ -916,6 +1217,9 @@ impl McpPage {
                                         .small()
                                         .icon(Lucide::KeyRound)
                                         .label(format!("Sign In to All ({pending})"))
+                                        // Its sheet lists clients by their place in the list,
+                                        // which a detection can change.
+                                        .disabled(self.loading)
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             let queue = this.pending_sign_ins(None);
                                             this.start_sign_in(queue, window, cx)
@@ -964,6 +1268,16 @@ impl McpPage {
             || has(server.id)
             || has(server.about)
             || has(Kind::of(s).label())
+            || Self::tags(server).iter().any(|t| has(t))
+    }
+
+    /// The tags a row shows beside the server's kind.
+    fn tags(server: &Server) -> Vec<&'static str> {
+        match server.auth {
+            Auth::Browser => vec!["Sign-in"],
+            Auth::EnvKey(_) => vec!["API key"],
+            Auth::None | Auth::Program => Vec::new(),
+        }
     }
 
     /// Matches the search and the kind: what the filter tabs count.
@@ -1034,6 +1348,7 @@ impl McpPage {
                 cx.listener(|this, ix: &usize, _, cx| {
                     this.filter = Filter::ALL[*ix];
                     this.page = 0;
+                    this.cursor = None;
                     cx.notify();
                 }),
                 cx,
@@ -1051,6 +1366,7 @@ impl McpPage {
                         cx.listener(|this, ix: &usize, _, cx| {
                             this.kind = ix.checked_sub(1).map(|ix| Kind::ALL[ix]);
                             this.page = 0;
+                            this.cursor = None;
                             cx.notify();
                         }),
                     ))
@@ -1063,13 +1379,19 @@ impl McpPage {
                         cx.listener(|this, ix: &usize, _, cx| {
                             this.sort = Sort::ALL[*ix];
                             this.page = 0;
+                            this.cursor = None;
                             cx.notify();
                         }),
                     )),
             )
     }
 
-    fn render_server(&self, s: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_server(
+        &self,
+        s: usize,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let theme = cx.theme().clone();
         let muted = theme.muted_foreground;
         let server = &SERVERS[s];
@@ -1078,15 +1400,25 @@ impl McpPage {
             .filter(|t| self.status.get(&(s, *t)) == Some(&Status::Installed))
             .count();
         let other = (0..total)
-            .filter(|t| matches!(self.status.get(&(s, *t)), Some(Status::Outdated(_))))
+            .filter(|t| {
+                matches!(self.status.get(&(s, *t)), Some(Status::Outdated(_)))
+                    && self.other_region((s, *t)).is_none()
+            })
             .count();
+        // Installed in another Region: installed, not out of date.
+        let mut elsewhere: Vec<String> = (0..total)
+            .filter_map(|t| self.other_region((s, t)))
+            .collect();
+        let in_other_regions = elsewhere.len();
+        elsewhere.sort();
+        elsewhere.dedup();
         let to_sign_in = self.pending_sign_ins(Some(s)).len();
         let checking = server.auth == Auth::Browser
             && (0..total).any(|t| self.checking.contains(&t) && self.is_installed((s, t)));
         let missing = server.missing_program(|c| self.programs.get(c).cloned());
         let bundled_missing = s == 0 && !self.server_exists;
         let busy = (0..total).any(|t| self.busy.contains(&(s, t)));
-        let none = installed + other == 0;
+        let none = installed + other + in_other_regions == 0;
 
         let (mark, summary, summary_color) = if busy {
             (Mark::Spinner, "Working…".to_string(), theme.warning)
@@ -1099,13 +1431,16 @@ impl McpPage {
         } else if other > 0 {
             (
                 Mark::Icon(Lucide::CircleAlert),
-                format!("{installed} of {total} · {other} to update"),
+                format!(
+                    "{} of {total} · {other} to update",
+                    installed + in_other_regions
+                ),
                 theme.warning,
             )
         } else {
             (
                 Mark::Icon(Lucide::CircleCheck),
-                format!("Installed · {installed} of {total}"),
+                format!("Installed · {} of {total}", installed + in_other_regions),
                 theme.success,
             )
         };
@@ -1130,6 +1465,36 @@ impl McpPage {
         } else if let Some(note) = server.note {
             notes.push((Lucide::Info, note.to_string(), muted));
         }
+        let bridge_only: Vec<&str> = (0..total)
+            .filter(|&t| self.bridge_blocked((s, t)))
+            .map(|t| self.targets[t].client.name())
+            .fold(Vec::new(), |mut names, name| {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+                names
+            });
+        if !bridge_only.is_empty() {
+            notes.push((
+                Lucide::TriangleAlert,
+                format!(
+                    "{} reach remote servers through npx, and `npx` isn't installed: install Node.js.",
+                    bridge_only.join(", ")
+                ),
+                theme.warning,
+            ));
+        }
+        if !elsewhere.is_empty() {
+            notes.push((
+                Lucide::Globe,
+                format!(
+                    "{} in another Region: {}.",
+                    plural(in_other_regions, "client has it", "clients have it"),
+                    elsewhere.join(", ")
+                ),
+                muted,
+            ));
+        }
         if let Auth::EnvKey(var) = server.auth {
             notes.push((
                 Lucide::KeyRound,
@@ -1137,6 +1502,18 @@ impl McpPage {
                 muted,
             ));
         }
+        // What failed or was stopped, where it was started: the row's Uninstall
+        // and Install don't open the sheet that lists errors per client.
+        let failures: Vec<String> = (0..total)
+            .filter_map(|t| {
+                let error = self.errors.get(&(s, t))?;
+                Some(format!(
+                    "Couldn't change {}: {}",
+                    target_label(&self.targets[t]),
+                    error.lines().next().unwrap_or_default()
+                ))
+            })
+            .collect();
         let kind = Kind::of(s);
 
         catalog::columns(
@@ -1150,12 +1527,11 @@ impl McpPage {
                         .flex_wrap()
                         .child(div().text_sm().font_semibold().child(server.name))
                         .child(catalog::tag(Some(kind.icon()), kind.label(), cx))
-                        .when(server.auth == Auth::Browser, |el| {
-                            el.child(catalog::tag(Some(Lucide::KeyRound), "Sign-in", cx))
-                        })
-                        .when(matches!(server.auth, Auth::EnvKey(_)), |el| {
-                            el.child(catalog::tag(Some(Lucide::KeyRound), "API key", cx))
-                        }),
+                        .children(
+                            Self::tags(server)
+                                .into_iter()
+                                .map(|tag| catalog::tag(Some(Lucide::KeyRound), tag, cx)),
+                        ),
                 )
                 .child(
                     div()
@@ -1180,7 +1556,32 @@ impl McpPage {
                         .text_color(color)
                         .child(div().pt(px(1.)).child(Icon::new(icon).xsmall()))
                         .child(div().whitespace_normal().child(text))
-                })),
+                }))
+                .when(!failures.is_empty(), |el| {
+                    let more = failures.len().saturating_sub(2);
+                    el.child(
+                        v_flex()
+                            .debug_selector(|| "mcp-row-error".into())
+                            .gap_0p5()
+                            .text_xs()
+                            .text_color(theme.danger)
+                            .children(failures.into_iter().take(2).map(|line| {
+                                h_flex()
+                                    .gap_1p5()
+                                    .items_start()
+                                    .child(
+                                        div().pt(px(1.)).child(Icon::new(Lucide::CircleX).xsmall()),
+                                    )
+                                    .child(div().whitespace_normal().child(line))
+                            }))
+                            .when(more > 0, |el| {
+                                el.child(format!(
+                                    "And {} more: see Manage.",
+                                    plural(more, "client", "clients")
+                                ))
+                            }),
+                    )
+                }),
             v_flex()
                 .gap_1()
                 .items_start()
@@ -1231,6 +1632,7 @@ impl McpPage {
                             .small()
                             .icon(Lucide::KeyRound)
                             .label("Sign In")
+                            .disabled(self.loading)
                             .tooltip(format!(
                                 "Sign In on {}",
                                 plural(to_sign_in, "Profile", "Profiles")
@@ -1268,6 +1670,7 @@ impl McpPage {
         .border_b_1()
         .border_color(theme.border)
         .hover(|el| el.bg(theme.list_hover))
+        .when(selected, |el| el.bg(theme.list_active))
     }
 
     /// The list card: column titles, a page of servers and the pager, or
@@ -1317,9 +1720,13 @@ impl McpPage {
                 ))
                 .into_any_element();
         }
+        let selected = self.cursor.and_then(|c| rows.get(c)).copied();
         let (rows, page) = catalog::page_of(rows, self.page);
         card.child(catalog::header(None, "Server", cx))
-            .children(rows.into_iter().map(|s| self.render_server(s, cx)))
+            .children(
+                rows.into_iter()
+                    .map(|s| self.render_server(s, selected == Some(s), cx)),
+            )
             .child(catalog::pager(
                 "mcp-pages",
                 page,
@@ -1327,6 +1734,7 @@ impl McpPage {
                 if total == 1 { "server" } else { "servers" },
                 cx.listener(|this, page: &usize, _, cx| {
                     this.page = *page;
+                    this.cursor = None;
                     cx.notify();
                 }),
                 cx,
@@ -1351,25 +1759,16 @@ impl McpPage {
         let server = &SERVERS[s];
         let spec = self.spec(s);
         let selected = &sheet.selected;
-        let count = |pred: &dyn Fn(&Status) -> bool| {
-            selected
-                .iter()
-                .filter(|t| self.targets[**t].client.editable())
-                .filter(|t| self.status.get(&(s, **t)).is_some_and(pred))
-                .count()
-        };
-        let to_install = count(&|st| matches!(st, Status::NotInstalled | Status::Outdated(_)));
-        let to_remove = count(&|st| matches!(st, Status::Installed | Status::Outdated(_)));
+        // What Install and Remove act on.
+        let to_install = self.selected_for(false).len();
+        let to_remove = self.selected_for(true).len();
         let to_sign_in: Vec<Pair> = self
             .pending_sign_ins(Some(s))
             .into_iter()
             .filter(|(_, t)| selected.contains(t))
             .collect();
         let busy = (0..self.targets.len()).any(|t| self.busy.contains(&(s, t)));
-        let blocked = (s == 0 && !self.server_exists)
-            || server
-                .missing_program(|c| self.programs.get(c).cloned())
-                .is_some();
+        let blocked = self.install_blocked(s);
 
         // Targets grouped under their client: agents first, then editors.
         let mut groups: Vec<(Client, Vec<usize>)> = Vec::new();
@@ -1474,12 +1873,17 @@ impl McpPage {
                                 .gap_2()
                                 .child(div().text_sm().child("Region"))
                                 .child(div().w(px(180.)).child(Input::new(region).small()))
-                                .child(
+                                .child(if sheet.region_invalid {
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.danger)
+                                        .child("Not an AWS Region (like eu-west-1).")
+                                } else {
                                     div()
                                         .text_xs()
                                         .text_color(muted)
-                                        .child("The AWS Region the server works in."),
-                                ),
+                                        .child("The AWS Region the server works in.")
+                                }),
                         )
                     }),
             )
@@ -1529,25 +1933,25 @@ impl McpPage {
                     .child(div().flex_1())
                     .child(
                         Button::new("mcp-sheet-remove")
+                            .debug_selector(|| "mcp-sheet-remove".into())
                             .danger()
                             .outline()
                             .small()
                             .label(format!("Remove from {to_remove}"))
                             .disabled(to_remove == 0 || busy)
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.install_selected(true, cx)),
-                            ),
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.confirm_remove_selected(window, cx)
+                            })),
                     )
                     .child(
                         Button::new("mcp-sheet-install")
+                            .debug_selector(|| "mcp-sheet-install".into())
                             .primary()
                             .small()
                             .label(format!("Install to {to_install}"))
                             .loading(busy)
                             .disabled(to_install == 0 || busy || blocked)
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.install_selected(false, cx)),
-                            ),
+                            .on_click(cx.listener(|this, _, _, cx| this.install_selected(cx))),
                     ),
             )
             .into_any_element()
@@ -1575,19 +1979,27 @@ impl McpPage {
             .get(&t)
             .and_then(|m| m.get(SERVERS[s].id))
             .copied();
-        let (badge, color): (&str, Hsla) = match &state {
-            Status::Installed if self.needs_sign_in(pair) => ("Needs sign-in", theme.warning),
+        let elsewhere = self.other_region(pair);
+        let (badge, color): (String, Hsla) = match &state {
+            Status::Installed if self.needs_sign_in(pair) => {
+                ("Needs sign-in".into(), theme.warning)
+            }
             Status::Installed
                 if signed == Some(SignIn::SignedIn) && SERVERS[s].auth == Auth::Browser =>
             {
-                ("Signed in", theme.success)
+                ("Signed in".into(), theme.success)
             }
-            Status::Installed => ("Installed", theme.success),
-            Status::Outdated(_) if SERVERS[s].has_region() => ("Other region", theme.warning),
-            Status::Outdated(_) => ("Other version", theme.warning),
-            Status::NotInstalled => ("Not installed", muted),
-            Status::Unreadable(_) => ("Edit manually", theme.danger),
-            Status::Manual => ("Paste by hand", muted),
+            Status::Installed => ("Installed".into(), theme.success),
+            Status::Outdated(_) if let Some(region) = &elsewhere => {
+                (format!("In {region}"), theme.info)
+            }
+            Status::Outdated(_) => ("Other version".into(), theme.warning),
+            Status::NotInstalled if self.bridge_blocked(pair) => {
+                ("Needs Node.js".into(), theme.warning)
+            }
+            Status::NotInstalled => ("Not installed".into(), muted),
+            Status::Unreadable(_) => ("Edit manually".into(), theme.danger),
+            Status::Manual => ("Paste by hand".into(), muted),
         };
         let detail = match &state {
             Status::Outdated(other) => Some(format!("Points to {other}")),
@@ -2044,20 +2456,12 @@ impl McpPage {
 impl Render for McpPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.search.is_none() {
-            let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search servers"));
-            self._search = Some(cx.subscribe(&search, |this, _, e: &InputEvent, cx| {
-                if matches!(e, InputEvent::Change) {
-                    this.page = 0;
-                    cx.notify();
-                }
-            }));
-            self.search = Some(search);
+            self.make_search(window, cx);
         }
-        let query = self
-            .search
-            .as_ref()
-            .map(|s| s.read(cx).value().trim().to_lowercase())
-            .unwrap_or_default();
+        if std::mem::take(&mut self.refocus) {
+            window.focus(&self.page_focus, cx);
+        }
+        let query = self.query(cx);
         let overlay = match &self.sheet {
             Some(Sheet::Install(sheet)) => Some(self.render_install_sheet(sheet, cx)),
             Some(Sheet::SignIn(flow)) => Some(self.render_sign_in_sheet(flow, cx)),
@@ -2066,6 +2470,22 @@ impl Render for McpPage {
         div()
             .relative()
             .size_full()
+            .key_context("McpPage")
+            .track_focus(&self.page_focus)
+            .on_action(cx.listener(|this, _: &catalog::FocusSearch, window, cx| {
+                this.focus_search(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &catalog::SelectNext, window, cx| {
+                this.select(true, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &catalog::SelectPrevious, window, cx| {
+                    this.select(false, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &catalog::Confirm, window, cx| this.confirm(window, cx)),
+            )
             .bg(cx.theme().background)
             .child(
                 div().id("mcp-page").size_full().overflow_y_scroll().child(
@@ -2081,6 +2501,7 @@ impl Render for McpPage {
                 el.child(
                     div()
                         .id("mcp-sheet")
+                        .key_context("McpSheet")
                         .track_focus(&self.focus)
                         .absolute()
                         .inset_0()
@@ -2099,5 +2520,394 @@ impl Render for McpPage {
                         .child(sheet),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use gpui_kit::{
+        AppContext as _, Bounds, Entity, Modifiers, TestAppContext, VisualTestContext,
+        WindowBounds, WindowOptions, point, px, size,
+    };
+    use sawit_core::mcp_clients::{Client, Status, Target};
+
+    use super::McpPage;
+
+    fn target(client: Client, config: &Path) -> Target {
+        Target {
+            client,
+            profile: "default".into(),
+            config: config.to_path_buf(),
+            profile_dir: None,
+        }
+    }
+
+    /// The page in a window, with `targets` detected and `setup` applied, before any reload.
+    fn open(
+        cx: &mut TestAppContext,
+        targets: Vec<Target>,
+        setup: impl FnOnce(&mut McpPage),
+    ) -> (Entity<McpPage>, &mut VisualTestContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(crate::rt::Rt(sawit_core::rt::Runtime::start()));
+        });
+        // Installs and removals finish on the Tokio runtime's threads.
+        cx.executor().allow_parking();
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(1200.), px(900.)),
+            })),
+            ..Default::default()
+        };
+        let (window, page) = cx
+            .update(|cx| {
+                gpui_kit::open_window(options, cx, |_, cx| {
+                    cx.new(|cx| {
+                        let mut page = McpPage::blank(cx);
+                        page.targets = targets;
+                        page.loading = false;
+                        setup(&mut page);
+                        page
+                    })
+                })
+            })
+            .unwrap();
+        let cx = VisualTestContext::from_window(window, cx).into_mut();
+        cx.run_until_parked();
+        (page, cx)
+    }
+
+    fn click(cx: &mut VisualTestContext, selector: &'static str) {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} isn't drawn"));
+        cx.simulate_click(bounds.center(), Modifiers::default());
+        cx.run_until_parked();
+    }
+
+    /// Typing a Region works out the statuses from the configs the last detection read: it
+    /// doesn't read every client's config again, on the UI thread, for each character.
+    #[gpui_kit::test]
+    fn typing_a_region_reads_no_config(cx: &mut TestAppContext) {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".codex/config.toml");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config,
+            "[mcp_servers.aws]\nurl = \"https://aws-mcp.eu-west-1.api.aws/mcp\"\n",
+        )
+        .unwrap();
+        let codex = target(Client::Codex, &config);
+        let read = sawit_core::mcp_clients::read_entries(&codex);
+        let (page, cx) = open(cx, vec![codex], |page| page.entries = vec![read]);
+        // Since the detection, the file has changed (here: it no longer reads).
+        std::fs::write(&config, "[mcp_servers\n").unwrap();
+        page.update(cx, |page, cx| page.set_region("eu-west-1".into(), cx));
+        let aws = super::SERVERS.iter().position(|s| s.id == "aws").unwrap();
+        assert_eq!(
+            page.read_with(cx, |page, _| page.status.get(&(aws, 0)).cloned()),
+            Some(Status::Installed)
+        );
+    }
+
+    /// The AWS server installed in another Region than the page's default is installed there:
+    /// the page takes that Region, and the sheet doesn't offer to move it.
+    #[gpui_kit::test]
+    fn aws_in_another_region_is_installed_there(cx: &mut TestAppContext) {
+        let home = tempfile::tempdir().unwrap();
+        let codex = home.path().join(".codex/config.toml");
+        std::fs::create_dir_all(codex.parent().unwrap()).unwrap();
+        std::fs::write(
+            &codex,
+            "[mcp_servers.aws]\nurl = \"https://aws-mcp.eu-west-1.api.aws/mcp\"\n",
+        )
+        .unwrap();
+        let cursor = home.path().join(".cursor/mcp.json");
+        std::fs::create_dir_all(cursor.parent().unwrap()).unwrap();
+        let targets = vec![
+            target(Client::Codex, &codex),
+            target(Client::Cursor, &cursor),
+        ];
+        let (page, cx) = open(cx, Vec::new(), |_| {});
+        page.update(cx, |page, cx| {
+            let detected = super::Detected {
+                entries: targets
+                    .iter()
+                    .map(sawit_core::mcp_clients::read_entries)
+                    .collect(),
+                targets,
+                clis: Default::default(),
+                programs: Default::default(),
+                server_exists: true,
+            };
+            page.apply(detected, cx)
+        });
+        let aws = super::SERVERS.iter().position(|s| s.id == "aws").unwrap();
+        page.read_with(cx, |page, _| {
+            assert_eq!(page.region, "eu-west-1");
+            assert_eq!(page.status.get(&(aws, 0)), Some(&Status::Installed));
+        });
+        // Typed back to us-east-1, it's in another Region: not ticked for Install.
+        page.update(cx, |page, cx| page.set_region("us-east-1".into(), cx));
+        page.update_in(cx, |page, window, cx| page.open_install(aws, window, cx));
+        page.read_with(cx, |page, _| {
+            let Some(super::Sheet::Install(sheet)) = &page.sheet else {
+                panic!("no sheet")
+            };
+            assert!(sheet.selected.is_empty(), "{:?}", sheet.selected);
+        });
+    }
+
+    /// A client that only runs programs (Claude Desktop, …) reaches a remote server through
+    /// `npx mcp-remote`: without npx it isn't installed there, and Install leaves it out.
+    #[gpui_kit::test]
+    fn remote_servers_skip_bridge_only_clients_without_npx(cx: &mut TestAppContext) {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join("claude_desktop_config.json");
+        std::fs::write(&config, "{}").unwrap();
+        let desktop = target(Client::ClaudeDesktop, &config);
+        let read = sawit_core::mcp_clients::read_entries(&desktop);
+        let neon = super::SERVERS.iter().position(|s| s.id == "neon").unwrap();
+        let (page, cx) = open(cx, vec![desktop], |page| {
+            page.entries = vec![read];
+            page.recompute();
+        });
+        page.update_in(cx, |page, window, cx| {
+            page.open_install(neon, window, cx);
+            if let Some(super::Sheet::Install(sheet)) = &mut page.sheet {
+                sheet.selected.insert(0);
+            }
+            page.install_selected(cx);
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        cx.run_until_parked();
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), "{}");
+    }
+
+    /// A detection can change which client is at which place in the list while an install
+    /// runs (a client appeared, or one went): the result lands on the client it was for, and
+    /// a place past the end of the list is no client at all.
+    #[gpui_kit::test]
+    fn results_land_on_their_client_when_the_list_changes(cx: &mut TestAppContext) {
+        let home = tempfile::tempdir().unwrap();
+        let config = |name: &str| {
+            let path = home.path().join(name).join("mcp.json");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "{}").unwrap();
+            path
+        };
+        let (a, b) = (config("a"), config("b"));
+        let (page, cx) = open(cx, vec![target(Client::Cursor, &a)], |page| {
+            page.entries = vec![sawit_core::mcp_clients::read_entries(&target(
+                Client::Cursor,
+                &a,
+            ))];
+            page.recompute();
+            page.server_exists = true;
+        });
+        page.update(cx, |page, cx| {
+            page.act((0, 0), false, cx);
+            // Detect Again finds another client first.
+            let targets = vec![target(Client::Cursor, &b), target(Client::Cursor, &a)];
+            page.apply(
+                super::Detected {
+                    entries: targets
+                        .iter()
+                        .map(sawit_core::mcp_clients::read_entries)
+                        .collect(),
+                    targets,
+                    clis: Default::default(),
+                    programs: Default::default(),
+                    server_exists: true,
+                },
+                cx,
+            );
+            // And a place past the end of the list.
+            page.check_sign_ins(vec![7], cx);
+        });
+        let done = (0..50).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            cx.run_until_parked();
+            page.read_with(cx, |page, _| page.busy.is_empty())
+        });
+        assert!(done, "the install didn't finish");
+        page.read_with(cx, |page, _| {
+            assert_eq!(page.status.get(&(0, 1)), Some(&Status::Installed), "a");
+            assert_eq!(page.status.get(&(0, 0)), Some(&Status::NotInstalled), "b");
+        });
+    }
+
+    /// A detection that finds other clients closes a sheet opened on the old list: its rows
+    /// are places in that list, which now hold other clients or none.
+    #[gpui_kit::test]
+    fn a_detection_closes_a_sheet_on_the_old_list(cx: &mut TestAppContext) {
+        let home = tempfile::tempdir().unwrap();
+        let config = |name: &str| {
+            let path = home.path().join(name).join(".claude.json");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "{}").unwrap();
+            path
+        };
+        let (a, b) = (config("a"), config("b"));
+        let aws = super::SERVERS.iter().position(|s| s.id == "aws").unwrap();
+        let (page, cx) = open(
+            cx,
+            vec![
+                target(Client::ClaudeCode, &a),
+                target(Client::ClaudeCode, &b),
+            ],
+            |_| {},
+        );
+        page.update_in(cx, |page, window, cx| {
+            page.start_sign_in(vec![(aws, 1)], window, cx)
+        });
+        cx.run_until_parked();
+        page.update(cx, |page, cx| {
+            let targets = vec![target(Client::ClaudeCode, &a)];
+            page.apply(
+                super::Detected {
+                    entries: targets
+                        .iter()
+                        .map(sawit_core::mcp_clients::read_entries)
+                        .collect(),
+                    targets,
+                    clis: Default::default(),
+                    programs: Default::default(),
+                    server_exists: true,
+                },
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        assert!(page.read_with(cx, |page, _| page.sheet.is_none()));
+    }
+
+    /// A row's Uninstall (or Install) that fails for a client says so on the row, which is
+    /// where it was started: not only in the Manage sheet, which may never be opened.
+    #[gpui_kit::test]
+    fn a_failure_shows_on_the_servers_row(cx: &mut TestAppContext) {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".cursor/mcp.json");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        // Comments: Sawit won't rewrite it, so the change fails.
+        std::fs::write(&config, "// mine\n{\"mcpServers\": {}}\n").unwrap();
+        let (page, cx) = open(cx, vec![target(Client::Cursor, &config)], |page| {
+            page.server_exists = true;
+        });
+        assert!(cx.debug_bounds("mcp-row-error").is_none());
+        page.update(cx, |page, cx| page.act((0, 0), false, cx));
+        let failed = (0..50).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            cx.run_until_parked();
+            page.read_with(cx, |page, _| !page.errors.is_empty())
+        });
+        assert!(failed, "the change didn't fail");
+        assert!(
+            cx.debug_bounds("mcp-row-error").is_some(),
+            "the row doesn't say"
+        );
+    }
+
+    /// The search finds what the rows show, their tags too: "sign" finds the servers tagged
+    /// Sign-in, "api key" the one tagged API key.
+    #[test]
+    fn the_search_matches_the_tags() {
+        let at = |id: &str| super::SERVERS.iter().position(|s| s.id == id).unwrap();
+        assert!(McpPage::matches(at("aws"), "sign"));
+        assert!(McpPage::matches(at("epidemic-sound"), "api key"));
+        assert!(!McpPage::matches(at("exa"), "sign"));
+    }
+
+    /// The page works from the keyboard: ↩ in the search moves it to the first row, ↩ there
+    /// opens the server's sheet, ↩ in the sheet installs, Escape closes it and ↓ goes on down
+    /// the list.
+    #[gpui_kit::test]
+    fn the_page_works_from_the_keyboard(cx: &mut TestAppContext) {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".cursor/mcp.json");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(&config, "{}").unwrap();
+        let cursor = target(Client::Cursor, &config);
+        let read = sawit_core::mcp_clients::read_entries(&cursor);
+        let (page, cx) = open(cx, vec![cursor], |page| {
+            page.entries = vec![read];
+            page.recompute();
+            page.server_exists = true;
+        });
+        cx.update(|_, cx| crate::catalog::init(cx));
+        page.update_in(cx, |page, window, cx| page.focus_search(window, cx));
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        assert_eq!(page.read_with(cx, |page, _| page.cursor), Some(0));
+        cx.simulate_keystrokes("enter");
+        let sheet = |cx: &mut VisualTestContext| {
+            page.read_with(cx, |page, _| match &page.sheet {
+                Some(super::Sheet::Install(sheet)) => Some(sheet.server),
+                _ => None,
+            })
+        };
+        assert_eq!(sheet(cx), Some(0), "↩ didn't open Sawit's sheet");
+        page.update(cx, |page, _| {
+            if let Some(super::Sheet::Install(sheet)) = &mut page.sheet {
+                sheet.selected.insert(0);
+            }
+        });
+        cx.simulate_keystrokes("enter");
+        let installed = (0..50).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            cx.run_until_parked();
+            std::fs::read_to_string(&config).unwrap().contains("sawit")
+        });
+        assert!(installed, "↩ in the sheet didn't install");
+        cx.simulate_keystrokes("escape");
+        assert_eq!(sheet(cx), None);
+        cx.simulate_keystrokes("down");
+        assert_eq!(page.read_with(cx, |page, _| page.cursor), Some(1));
+    }
+
+    /// The sheet opens with every installed client ticked, so its Remove asks first, as the
+    /// row's trash does: one click must not take a server out of every client.
+    #[gpui_kit::test]
+    fn the_sheets_remove_asks_first(cx: &mut TestAppContext) {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".cursor/mcp.json");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config,
+            r#"{"mcpServers": {"sawit": {"command": "/x/sawit-mcp"}}}"#,
+        )
+        .unwrap();
+        let (page, cx) = open(cx, vec![target(Client::Cursor, &config)], |page| {
+            page.status.insert((0, 0), Status::Installed);
+        });
+        page.update_in(cx, |page, window, cx| page.open_install(0, window, cx));
+        cx.run_until_parked();
+
+        // The removal runs off the UI thread: give it the time it takes.
+        let has_sawit = |cx: &mut VisualTestContext| {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            cx.run_until_parked();
+            std::fs::read_to_string(&config).unwrap().contains("sawit")
+        };
+        let removed = |cx: &mut VisualTestContext| (0..50).any(|_| !has_sawit(cx));
+        click(cx, "mcp-sheet-remove");
+        assert!(has_sawit(cx), "removed without asking");
+        assert_eq!(
+            cx.pending_prompt(),
+            Some((
+                "Remove Sawit from 1 client?".to_string(),
+                "Its entry is removed from: Cursor. Restart those clients to drop it.".to_string()
+            ))
+        );
+        cx.simulate_prompt_answer("Cancel");
+        assert!(has_sawit(cx), "Cancel removed it");
+
+        click(cx, "mcp-sheet-remove");
+        cx.simulate_prompt_answer("Remove");
+        assert!(removed(cx), "Remove didn't remove it");
     }
 }

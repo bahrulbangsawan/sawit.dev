@@ -2,7 +2,8 @@
 //! wire contract"), run on a [`BoardDoc`] and answered as JSON.
 //!
 //! Every answer is `{ok: true, ...}` or `{ok: false, error}`, and an op never panics: a failure of
-//! the engine, or an op that is malformed, is an `error` the agent can read. The ops are `get`,
+//! the engine, or an op that is malformed, is an `error` the agent can read, and so is a bug that
+//! panics all the same ([`run_guarded`], spec D15). The ops are `get`,
 //! `add`, `update`, `delete`, `clear`, `replace`, `export_svg`, `export_png`, `command`,
 //! `commands`, `pointer`, `mermaid`, `key` and `type`; the others of the contract get their own
 //! answer, "<op> is not supported yet".
@@ -22,8 +23,9 @@
 //! Every other op that changes the document first ends the text the user is typing in on the
 //! canvas, as a click elsewhere does, unless it is a command that acts on that text
 //! ([`end_text_edit_before_op`], ruling R-TEXTEDIT): what was typed is an undo step of its own,
-//! and the op is one after it. While the user holds a drag on the canvas, such an op is refused
-//! instead and changes nothing ([`waits_for_the_drag`]): the drag's next move would take it back.
+//! and the op is one after it. While the user holds a drag on the canvas, or draws a path with the
+//! Pen, such an op is refused instead and changes nothing ([`waits_for_the_drag`]): the drag's
+//! next move would take it back, and the path's undo step would take it too.
 //!
 //! A canvas holds one document, and the view saves the one on show over the canvas's file, so no
 //! `command` op may leave another document open or on show. The ones that do that by name are
@@ -36,7 +38,16 @@
 //! Nor may a `command` op write over a canvas file. An engine command that writes where its `path`
 //! says (`file.export`, `variable.export`...: [`WRITES_TO_PATH`]) is refused, as the steps of a
 //! `command.batch` too, when `path` names a `.figcraft` or `.excalidraw` file or a copy Sawit keeps
-//! of one ([`is_canvas_file`]): with the app closed nothing else holds the board.
+//! of one ([`is_canvas_file`]): with the app closed nothing else holds the board. So is a batch
+//! step of one that takes its params from another step's result, which names a path only as the
+//! batch runs.
+//!
+//! Nor may it have the engine read a file that never ends. An engine command that reads the file
+//! its params name (`file.import`, `image.place`...: [`READS_FROM_PATH`]) reads it whole, as it
+//! finds it, on the canvas's UI thread: it is refused when that is a named pipe, a device such as
+//! `/dev/zero` (a cloned repository can link a file to one), or a file past
+//! [`crate::store::MAX_FILE`], and as a batch step when the file's name is taken from another
+//! step's result. `replace` checks the `.figcraft` file it loads the same way.
 //!
 //! It also holds the document's side of the commands Sawit carries out itself instead of the
 //! engine, which the canvas's menus and keys run ([`export_page`], [`frames_pdf`], [`copy_as`],
@@ -109,34 +120,80 @@ const WRITES_TO_PATH: &[&str] = &[
     "codeConnect.export",
 ];
 
+/// The engine's commands that read a file one of their params names, with those params: `path`,
+/// and `variables` when it is text that isn't JSON (the local variables JSON is then read from the
+/// file it names). The engine reads such a file whole, as it finds it (`file_access::read`): a
+/// named pipe blocks the read for ever, and a link to a device such as `/dev/zero`, which a cloned
+/// repository can hold, reads until the Mac runs out of memory, on the canvas's UI thread or in
+/// sawit-mcp. So the `command` op checks the file first ([`unreadable`]).
+///
+/// These are all of them at the pinned FigCraft revision, found by reading what reads in the
+/// engine: every read goes through `file_access`, and the other readers check that what they read
+/// is a file of a size they allow first (`read_capped`: `text.loadFont`, `codeConnect.import`, the
+/// images and variables beside an imported file; a library's `stat`; a plugin's `read_file`).
+/// `file.open` and `file.openRecent` are Sawit's own ([`HANDLED_BY_SAWIT`]), and `file.revert`
+/// reads the document's own file, which the canvas's document has none of.
+const READS_FROM_PATH: &[(&str, &[&str])] = &[
+    ("file.import", &["path", "variables"]),
+    ("file.recover", &["path"]),
+    ("image.place", &["path"]),
+    ("variable.import", &["variables"]),
+    ("collab.recoverFile", &["path"]),
+];
+
 /// The ends of the names of the files a canvas is kept in: the one it is saved to, and the old
 /// one that it was migrated from.
 const CANVAS_EXTENSIONS: [&str; 2] = [".figcraft", ".excalidraw"];
 
 /// What goes after that to name a copy Sawit keeps of a canvas file, or a file it writes one
-/// through: the backups of the store (`.bak` and `.lossy.bak`), and the files a save is staged in
-/// (`.tmp`, and `.<name>.sawit-tmp`, [`sawit_core::files::staging_file`]).
+/// through: the backups of the store (`.bak`, the newest, and `.lossy.bak`; the older ones are
+/// [`OLDER_BACKUP`]'s), and the files a save is staged in
+/// (`.tmp`, and `.<name>.sawit-tmp`, the name Sawit's saves were staged at before CANVAS-CORE-1).
 const CANVAS_COMPANIONS: [&str; 5] = ["", ".bak", ".lossy.bak", ".tmp", ".sawit-tmp"];
+
+/// What follows a canvas file's name in the names its saves are staged at now,
+/// `.<name>.sawit-tmp-<process>-<n>` ([`sawit_core::files::staging_file`]).
+const STAGED: &str = ".sawit-tmp-";
+
+/// What follows a canvas file's name in the names of its older backups, `<name>.bak.<n>`
+/// ([`crate::store::backup_file`]), before the number.
+const OLDER_BACKUP: &str = ".bak.";
 
 /// Whether `path` names a canvas file: a `.figcraft` or an `.excalidraw` file, or one of the
 /// copies and staging files that Sawit keeps beside one.
 ///
 /// Only the name at the end of `path` counts, in any case (the files of a Mac are not told apart
 /// by it), and the whole of its end: `canvas.figcraft.svg` is an SVG file, not a canvas. So an
-/// export to an image path is never refused.
+/// export to an image path is never refused. A staging file's name goes on after the canvas
+/// file's, with what makes it of one save alone.
 pub fn is_canvas_file(path: &Path) -> bool {
     let Some(name) = path.file_name() else {
         return false;
     };
     let name = name.to_string_lossy().to_lowercase();
+    let older_backup = |extension: &str| {
+        let numbered = name.trim_end_matches(|c: char| c.is_ascii_digit());
+        numbered.len() < name.len() && numbered.ends_with(&format!("{extension}{OLDER_BACKUP}"))
+    };
     CANVAS_EXTENSIONS.iter().any(|extension| {
         (CANVAS_COMPANIONS.iter())
             .any(|companion| name.ends_with(&format!("{extension}{companion}")))
+            || name.contains(&format!("{extension}{STAGED}"))
+            || older_backup(extension)
     })
 }
 
 /// The command that runs other commands as its steps.
 const BATCH: &str = "command.batch";
+
+/// The clipboard's commands ([`policy::CLIPBOARD`]) that change layers when the engine runs them:
+/// the `command` op ends the text being typed in before them ([`command_keeps_text_edit`]).
+const ENDS_TEXT_EDIT_IN_THE_ENGINE: [&str; 4] = [
+    "edit.cut",
+    "edit.paste",
+    "edit.pasteOver",
+    "edit.pasteReplace",
+];
 
 /// How far right of what the page holds the `mermaid` op puts a diagram that names no place.
 const MERMAID_GAP: f64 = 100.0;
@@ -170,7 +227,8 @@ const MERMAID_GAP: f64 = 100.0;
 ///   which [`excalidraw::import`] draws), or the `.figcraft` file at `path`. A `scene` wins over a
 ///   `path`. It runs in the canvas's own session, so the canvas stays what it is (a board, with
 ///   its file), and undo brings the old pages back. A scene that has no `elements`, and a file
-///   that can't be read, are errors that change nothing.
+///   that can't be read, are errors that change nothing; a file that is no regular file (a named
+///   pipe, a device) is one at once, unread ("replace: couldn't read <path>: ...").
 /// - `export_svg` and `export_png` take no parameters and answer `{ok, svg}` and
 ///   `{ok, png_base64}`: the whole page on show as one file, whatever is selected, at 1×
 ///   ([`export_page`]). The PNG is encoded as base64. Nothing in the document changes. A page with
@@ -178,9 +236,13 @@ const MERMAID_GAP: f64 = 100.0;
 /// - `command` (`{command, params?}`) runs engine command `command` and answers `{ok, result}`,
 ///   or the engine's own `error`. It refuses the commands Sawit handles itself, as the steps of a
 ///   `command.batch` too ("<id> is handled by Sawit"), and the commands that write a file where
-///   their `path` says when that is a canvas file ("<id> would overwrite a canvas file"). A command
-///   that would leave the canvas with another document open or on show is undone and answers
-///   "<id> would open or switch documents; the canvas keeps its one document".
+///   their `path` says when that is a canvas file ("<id> would overwrite a canvas file"), or, in a
+///   batch, is taken from another step's result ("<id> in a command.batch needs its params
+///   written out: ..."). So are the commands that read the file their params name, when that is
+///   no regular file of at most 4 GiB ("<id> can't read <path>: ..."), or, in a batch, is taken
+///   from another step's result. A command that would leave the canvas with another document
+///   open or on show is undone and answers "<id> would open or switch documents; the canvas
+///   keeps its one document".
 /// - `commands` answers `{ok, commands: [{id, label, params}]}`: the engine's commands that
 ///   `command` runs and that the canvas doesn't hide, with the parameters each documents.
 /// - `pointer` (`{kind, x, y, shift?, alt?, cmd?}`) sends the tools a press (`down`), a move with
@@ -206,13 +268,34 @@ const MERMAID_GAP: f64 = 100.0;
 ///
 /// While the user holds a drag on the canvas, every op that changes the document (`add`,
 /// `update`, `delete`, `clear`, `replace`, `mermaid` and `command`) answers
-/// "<op>: finish the drag on the canvas first" and changes nothing ([`waits_for_the_drag`]).
+/// "<op>: finish the drag on the canvas first" and changes nothing, and while the Pen draws a path
+/// "<op>: finish the path the Pen draws on the canvas first" ([`waits_for_the_drag`]).
 pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
+    run_guarded(board, op, run_unguarded)
+}
+
+/// Runs op `op` on `board` with `run`, and answers a panic in it as an error, `<op>: <what
+/// panicked>`, as the engine answers one in a command ([`guard::run`], spec D15, CANVAS-CORE-9).
+/// The app runs ops in the window's callbacks, where a panic can't unwind: it aborted the app with
+/// every tab. What an op changes in the document is done in groups that roll back a panic of their
+/// own ([`crate::doc::grouped`]); one outside them, in Sawit's own reading of the op, has changed
+/// nothing yet.
+fn run_guarded(
+    board: &mut BoardDoc,
+    op: &Value,
+    run: impl FnOnce(&mut BoardDoc, &Value) -> Value,
+) -> Value {
+    let name = op.get("op").and_then(Value::as_str).unwrap_or("op");
+    guard::run(name, || Ok(run(board, op))).unwrap_or_else(failure)
+}
+
+/// [`run`], without its guard against a panic.
+fn run_unguarded(board: &mut BoardDoc, op: &Value) -> Value {
     let name = op.get("op").and_then(Value::as_str);
     if let Some(name) = name
-        && waits_for_the_drag(board, name)
+        && let Some(wait) = waits_for_the_drag(board, name)
     {
-        return failure(format!("{name}: finish the drag on the canvas first"));
+        return failure(format!("{name}: {wait}"));
     }
     if let Some(name) = name
         && let Err(error) = end_text_edit_before_op(board, name, op)
@@ -250,18 +333,36 @@ const CHANGES_THE_DOCUMENT: [&str; 7] = [
     "add", "update", "delete", "clear", "replace", "mermaid", "command",
 ];
 
-/// Whether op `name` has to wait for the gesture under way on the canvas: it changes the
-/// document, and the user holds the button down there with a tool (a move, a resize, a shape
-/// being drawn, a marquee...), as the engine's own `tool.place` refuses to place mid-drag.
+/// What op `name` has to wait for on the canvas, if anything, said for its refusal: it changes
+/// the document, and the user holds the button down there with a tool (a move, a resize, a shape
+/// being drawn, a marquee...), as the engine's own `tool.place` refuses to place mid-drag; or a
+/// gesture is open with no button held, which only the user ends: the path the Pen draws, between
+/// its clicks, until Enter or Escape.
 ///
 /// A gesture keeps the document it began with, and each move of it builds the document again
 /// from that one (`Session::preview`), as an Escape puts that one back. So what an op did in
 /// between was gone at the next move, though the op had answered ok (Plan 8 final review I-1).
-/// Refused, the op changes nothing, and the agent can send it again once the button is up. The
-/// reads (`get`, `commands`, the exports) change nothing either, and the input of `pointer`, `key`
-/// and `type` meets the gesture as the mouse and the keyboard do, so they go through.
-fn waits_for_the_drag(board: &BoardDoc, name: &str) -> bool {
-    CHANGES_THE_DOCUMENT.contains(&name) && board.session.tool.busy()
+/// And while a gesture is open no command is an undo step of its own: an op between the Pen's
+/// clicks joined the path's step, and the ⌘Z after Enter took both away (CANVAS-CORE-8).
+/// Refused, the op changes nothing, and the agent can send it again once the gesture is over.
+/// The reads (`get`, `commands`, the exports) change nothing either, and the input of `pointer`,
+/// `key` and `type` meets the gesture as the mouse and the keyboard do, so they go through. The
+/// text being typed in is a gesture too, which the op ends first instead
+/// ([`end_text_edit_before_op`]).
+fn waits_for_the_drag(board: &BoardDoc, name: &str) -> Option<&'static str> {
+    if !CHANGES_THE_DOCUMENT.contains(&name) {
+        return None;
+    }
+    let session = &board.session;
+    if session.tool.busy() {
+        return Some("finish the drag on the canvas first");
+    }
+    let open = (session.ds()).is_ok_and(|ds| ds.interaction.is_some() && ds.text_edit.is_none());
+    match (open, session.tool.pen.is_some()) {
+        (false, _) => None,
+        (true, true) => Some("finish the path the Pen draws on the canvas first"),
+        (true, false) => Some("finish what is being drawn on the canvas first"),
+    }
 }
 
 /// Ends the text being typed in on the canvas before op `name` (`op`) changes the document, as the
@@ -276,8 +377,8 @@ fn waits_for_the_drag(board: &BoardDoc, name: &str) -> bool {
 /// were gone, though each answered ok, and the autosave wrote that (Plan 7 final review I-2).
 ///
 /// - `add`, `update`, `delete`, `clear`, `replace` and `mermaid` end the edit.
-/// - `command` ends it unless the command acts on the text being typed in
-///   ([`policy::keeps_text_edit`]: the Text menu's commands, copy and paste), or is a
+/// - `command` ends it unless the command acts on the text being typed in, or changes nothing
+///   ([`command_keeps_text_edit`]: the Text menu's commands, and a copy), or is a
 ///   `command.batch` whose every step does. A command refused up front runs nothing, and ends
 ///   nothing either ([`refused`]).
 /// - The reads (`get`, `commands`, the exports) leave the edit alone, and so does the input of
@@ -300,12 +401,19 @@ fn end_text_edit_before_op(board: &mut BoardDoc, name: &str, op: &Value) -> Resu
     }
 }
 
-/// Whether command `id`, with `params`, runs with the text being typed in still open: it acts on
-/// that text ([`policy::keeps_text_edit`]), or it is a `command.batch` whose every step does,
-/// however deeply batches are nested.
+/// Whether command `id`, with `params`, runs with the text being typed in still open, as the
+/// engine runs it: it acts on that text (the Text menu's commands, [`policy::keeps_text_edit`]),
+/// or it is a copy, which changes nothing, or it is a `command.batch` whose every step is one of
+/// these, however deeply batches are nested.
+///
+/// The canvas's keys and menus keep the edit open for a cut and the pastes too, because they send
+/// them to the text's characters. The engine acts on layers instead (CANVAS-CORE-2): its cut, and
+/// its paste to replace, delete the text being typed in without ending its edit, which left the
+/// "Edit text" gesture open for the next click to cancel, and its pastes joined the typing's undo
+/// step. They end the edit first.
 fn command_keeps_text_edit(id: &str, params: &Value) -> bool {
     if id != BATCH {
-        return policy::keeps_text_edit(id);
+        return policy::keeps_text_edit(id) && !ENDS_TEXT_EDIT_IN_THE_ENGINE.contains(&id);
     }
     let steps = params.get("commands").and_then(Value::as_array);
     steps.is_some_and(|steps| {
@@ -453,7 +561,7 @@ fn update(board: &mut BoardDoc, op: &Value) -> Value {
         Err(error) => return failure(format!("update: {error}")),
     };
     let (mut updated, mut missing, mut notes) = (0, Vec::new(), Vec::new());
-    let result = board.session.grouped("Update elements", |session| {
+    let result = crate::doc::grouped(&mut board.session, "Update elements", |session| {
         for (index, change) in changes.iter().enumerate() {
             let Some(layer) = layer_named(session.doc()?, &change.id) else {
                 missing.push(change.id.clone());
@@ -613,7 +721,7 @@ fn clear(board: &mut BoardDoc) -> Value {
     if layers.is_empty() {
         return json!({"ok": true});
     }
-    let cleared = board.session.grouped("Clear canvas", |session| {
+    let cleared = crate::doc::grouped(&mut board.session, "Clear canvas", |session| {
         session.execute("edit.delete", &json!({"ids": layers}))
     });
     match cleared {
@@ -648,6 +756,12 @@ struct Incoming {
 /// What the `replace` op `op` brings in: the scene it carries, else the file its `path` names
 /// (read here when it is an Excalidraw one). Anything that can't be taken is the reply's error,
 /// before the canvas is touched.
+///
+/// A `.figcraft` file is read by the engine's `file.import`, whole and as it finds it, so it is
+/// checked first as the canvas checks its own file ([`sawit_core::files::check_regular`]): a named
+/// pipe blocked the read for ever, and a link to a device such as `/dev/zero` read until the Mac
+/// ran out of memory, on the UI thread (CANVAS-CORE-6). Only a regular file of at most
+/// [`crate::store::MAX_FILE`] bytes is taken.
 fn incoming(op: &Value) -> Result<Incoming, String> {
     if let Some(scene) = op.get("scene").filter(|scene| !scene.is_null()) {
         return from_scene(scene).map_err(|error| format!("replace: {error}"));
@@ -660,10 +774,14 @@ fn incoming(op: &Value) -> Result<Incoming, String> {
     };
     let extension = Path::new(path).extension().and_then(OsStr::to_str);
     match extension.map(str::to_ascii_lowercase).as_deref() {
-        Some("figcraft") => Ok(Incoming {
-            import: json!({"path": path}),
-            notes: Vec::new(),
-        }),
+        Some("figcraft") => {
+            sawit_core::files::check_regular(Path::new(path), crate::store::MAX_FILE)
+                .map_err(|error| format!("replace: couldn't read {path}: {error}"))?;
+            Ok(Incoming {
+                import: json!({"path": path}),
+                notes: Vec::new(),
+            })
+        }
         Some("excalidraw") => {
             let scene = excalidraw::read_file(Path::new(path))
                 .map_err(|error| format!("replace: {error}"))?;
@@ -696,7 +814,7 @@ fn from_scene(scene: &Value) -> Result<Incoming, BoardError> {
 /// The canvas keeps its document, so it stays a board (a design file's frames come in as layers of
 /// one), keeps its file and what is saved of it, and undo brings the old pages back.
 fn replace_pages(board: &mut BoardDoc, import: &Value) -> Result<(), BoardError> {
-    board.session.grouped("Replace canvas", |session| {
+    crate::doc::grouped(&mut board.session, "Replace canvas", |session| {
         let old = session.doc()?.pages.clone();
         session.execute("file.import", import)?;
         for page in old {
@@ -809,8 +927,20 @@ enum Failed {
 
 /// Why the `command` op won't run `id` with `params`, if it won't. `id` itself, or a step of a
 /// `command.batch`, however deeply batches are nested, is one that Sawit handles
-/// ([`HANDLED_BY_SAWIT`]), or that would write over a canvas file ([`WRITES_TO_PATH`]).
+/// ([`HANDLED_BY_SAWIT`]), or that would write over a canvas file ([`WRITES_TO_PATH`]), or read a
+/// file that never ends ([`READS_FROM_PATH`]), or a step that writes where its params say and
+/// takes any of them from another step's result ([`refers_to_a_step`]), or reads where they say
+/// and takes that from one: what that names isn't known until the batch runs (CANVAS-CORE-7).
 fn refused(id: &str, params: &Value) -> Option<Refusal> {
+    refused_in(id, params, false)
+}
+
+/// [`refused`] for `id`, a step of a `command.batch` when `in_batch` says so. Such a step's params
+/// can be taken from another step's result as the batch runs: a writer's are then no text to
+/// check, and the step is refused. A command's own params, outside a batch, are never resolved.
+/// Nor are a nested batch's: the engine passes them on as written, and the nested batch puts its
+/// own steps' results in place as they run, so its steps are checked as the steps of a batch.
+fn refused_in(id: &str, params: &Value, in_batch: bool) -> Option<Refusal> {
     if let Some(handled) = handled(id) {
         return Some(Refusal::Handled(handled));
     }
@@ -818,14 +948,74 @@ fn refused(id: &str, params: &Value) -> Option<Refusal> {
         let steps = params.get("commands")?.as_array()?;
         return steps.iter().find_map(|step| {
             let id = step.get("command")?.as_str()?;
-            refused(id, step.get("params").unwrap_or(&Value::Null))
+            refused_in(id, step.get("params").unwrap_or(&Value::Null), true)
         });
+    }
+    if let Some((_, names)) = READS_FROM_PATH.iter().find(|(reader, _)| *reader == id) {
+        return unreadable(id, names, params, in_batch);
     }
     if !WRITES_TO_PATH.contains(&id) {
         return None;
     }
+    if in_batch && refers_to_a_step(params) {
+        return Some(Refusal::Unchecked(id.to_string()));
+    }
     let path = params.get("path")?.as_str()?;
     is_canvas_file(Path::new(path)).then(|| Refusal::Overwrites(id.to_string()))
+}
+
+/// Why `id`, a command that reads the file one of its params `names` names ([`READS_FROM_PATH`]),
+/// won't run with `params`, if it won't (as a step of a batch when `in_batch` says so):
+/// - in a batch, the params, or one of `names` in them, are taken from another step's result:
+///   what the step would read isn't known before the batch runs. Its other params may be taken
+///   so: an image placed from its bytes, in a frame that an earlier step made, reads no file;
+/// - a file named is no regular file (a named pipe, a device, a folder), or holds more than
+///   [`crate::store::MAX_FILE`] bytes ([`sawit_core::files::check_regular`], CANVAS-CORE-6).
+///
+/// A file that isn't there, or can't be opened, is the engine's to report, as it always was.
+fn unreadable(id: &str, names: &[&str], params: &Value, in_batch: bool) -> Option<Refusal> {
+    let named_by_a_step = is_a_reference(params)
+        || (names.iter()).any(|name| params.get(name).is_some_and(refers_to_a_step));
+    if in_batch && named_by_a_step {
+        return Some(Refusal::UncheckedRead(id.to_string()));
+    }
+    names.iter().find_map(|name| {
+        let path = params.get(name)?.as_str()?;
+        // Local variables JSON given as its text, not as a file's name.
+        if *name == "variables" && path.trim_start().starts_with('{') {
+            return None;
+        }
+        let error =
+            sawit_core::files::check_regular(Path::new(path), crate::store::MAX_FILE).err()?;
+        let refused = matches!(
+            error.kind(),
+            std::io::ErrorKind::InvalidInput | std::io::ErrorKind::FileTooLarge
+        );
+        refused.then(|| Refusal::Unreadable {
+            command: id.to_string(),
+            path: path.to_string(),
+            error: error.to_string(),
+        })
+    })
+}
+
+/// Whether `value` is a reference to another step's result, which FigCraft's `command.batch` puts
+/// in its place as it runs the step: `{"$step": n}` or `{"$ref": name}`, each with an optional
+/// `field`. Any object with either key is one.
+fn is_a_reference(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|map| map.contains_key("$step") || map.contains_key("$ref"))
+}
+
+/// Whether `params`, or anything in them, is a reference to another step's result
+/// ([`is_a_reference`]).
+fn refers_to_a_step(params: &Value) -> bool {
+    match params {
+        Value::Object(map) => is_a_reference(params) || map.values().any(refers_to_a_step),
+        Value::Array(items) => items.iter().any(refers_to_a_step),
+        _ => false,
+    }
 }
 
 /// Why a command op is refused before anything runs ([`refused`]).
@@ -837,6 +1027,28 @@ enum Refusal {
     /// The command, by its id, would write over a canvas file.
     #[error("{0} would overwrite a canvas file")]
     Overwrites(String),
+    /// A step of a batch that writes where its params say takes them from another step's result,
+    /// so whether it writes a canvas file isn't known before the batch runs.
+    #[error(
+        "{0} in a command.batch needs its params written out: taken from another step's result, \
+         what it writes can't be checked for a canvas file before the batch runs"
+    )]
+    Unchecked(String),
+    /// A step of a batch that reads the file its params name takes that name from another step's
+    /// result, so whether it is a file that can be read isn't known before the batch runs.
+    #[error(
+        "{0} in a command.batch needs its params written out: taken from another step's result, \
+         the file it reads can't be checked before the batch runs"
+    )]
+    UncheckedRead(String),
+    /// The command, by its id, would read the file at `path`, which is no regular file or is
+    /// past the most that is read from one file (`error`).
+    #[error("{command} can't read {path}: {error}")]
+    Unreadable {
+        command: String,
+        path: String,
+        error: String,
+    },
 }
 
 /// The documents a session holds, as a command op found them: their uids in order, and the uid of
@@ -895,7 +1107,7 @@ fn batch(board: &mut BoardDoc, params: &Value) -> Result<Value, Failed> {
     let before = Documents::of(&board.session);
     let label = figcraft_engine::params::string(params, "label").unwrap_or_else(|| "Batch".into());
     let mut switched = false;
-    let result = board.session.grouped(&label, |session| {
+    let result = crate::doc::grouped(&mut board.session, &label, |session| {
         let result = session.execute(BATCH, params)?;
         if Documents::of(session) != before {
             switched = true;
@@ -1021,23 +1233,32 @@ fn mermaid(board: &mut BoardDoc, op: &Value) -> Value {
 ///
 /// Rendering blocks, and the app answers ops on its UI thread, because the canvas answers
 /// synchronously: well under a millisecond for a typical diagram, about 60 ms the first time,
-/// while Pele loads, and at most 5 s a try, when `sawit_core::mermaid` stops a runaway diagram.
+/// while Pele loads, and at most 5 s, when `sawit_core::mermaid` stops a runaway diagram, which
+/// isn't tried a second time ([`second_try`]).
 fn draw_mermaid(board: &mut BoardDoc, source: &str, op: &Value) -> Result<Applied, String> {
     let palette = Palette::default();
     let diagram = match render(source, &palette) {
         Ok(diagram) => diagram,
-        // Double quotes trip up some diagram types, so a source that has them is tried once more
-        // with single ones, as Excalidraw's own Mermaid import does. A diagram that fails both is
-        // reported in the words of the first try.
-        Err(first) if source.contains('"') => {
-            render(&source.replace('"', "'"), &palette).map_err(|_| first)?
-        }
-        Err(first) => return Err(first),
+        // A diagram that fails both tries is reported in the words of the first.
+        Err(first) => match second_try(source, &first) {
+            Some(again) => render(&again, &palette).map_err(|_| first)?,
+            None => return Err(first),
+        },
     };
     let items = crate::mermaid::to_skeletons(&diagram)?;
     let (left, top, _, _) = skeleton::bounds(&items).ok_or("the diagram is empty")?;
     let (x, y) = diagram_corner(board, op).map_err(|error| error.to_string())?;
     skeleton::apply(board, &items, (x - left, y - top)).map_err(|error| error.to_string())
+}
+
+/// The Mermaid `source` to try again, after its first render failed with `error`: double quotes
+/// trip up some diagram types, so a source that has them is tried once more with single ones, as
+/// Excalidraw's own Mermaid import does. Not a diagram stopped for taking too long, which the
+/// second try took as long again: the window froze for twice the render's time limit, 10 s
+/// (CANVAS-CORE-10).
+fn second_try(source: &str, error: &str) -> Option<String> {
+    let again = source.contains('"') && !sawit_core::mermaid::took_too_long(error);
+    again.then(|| source.replace('"', "'"))
 }
 
 /// Where the `mermaid` op puts a diagram's top left corner: at the op's `x` and `y`. What it leaves
@@ -1264,7 +1485,9 @@ pub fn import_file(
     path: &Path,
     place: bool,
 ) -> Result<Vec<NodeId>, BoardError> {
-    let bytes = std::fs::read(path).map_err(|error| BoardError::Io(error.to_string()))?;
+    // A regular file only: a pipe or a device would never be read to its end (CANVAS-CORE-6).
+    let bytes = sawit_core::files::read_regular(path, crate::store::MAX_FILE)
+        .map_err(|error| BoardError::Io(error.to_string()))?;
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let svg =
         (Path::new(name.as_ref()).extension()).is_some_and(|ext| ext.eq_ignore_ascii_case("svg"));
@@ -1623,7 +1846,7 @@ mod tests {
     fn canvas_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         let folder = dir.join(".nyawit");
         std::fs::create_dir_all(&folder).unwrap();
-        let staging = sawit_core::files::staging_file(&folder.join("canvas.figcraft"));
+        let staging = sawit_core::files::staging_file(&folder.join("canvas.figcraft"), 0);
         let mut files: Vec<_> = [
             "canvas.figcraft",
             "canvas.excalidraw",
@@ -1657,6 +1880,11 @@ mod tests {
             "canvas.figcraft.lossy.bak",
             "canvas.figcraft.tmp",
             ".canvas.figcraft.sawit-tmp",
+            ".canvas.figcraft.sawit-tmp-412-3",
+            ".Design.FigCraft.sawit-tmp-1-0",
+            "canvas.figcraft.bak.1",
+            "canvas.figcraft.bak.4",
+            "Design.FIGCRAFT.BAK.12",
             "canvas.excalidraw.bak",
             "canvas.excalidraw.lossy.bak",
             "canvas.excalidraw.tmp",
@@ -1673,6 +1901,9 @@ mod tests {
             "notes.figcraftx",
             "canvas.bak",
             "canvas.tmp",
+            "canvas.figcraft.bak.",
+            "canvas.figcraft.bak.png",
+            "canvas.figcraft.bak.1.svg",
             "/project/.figcraft/page.png",
             "",
             "/",
@@ -1680,9 +1911,12 @@ mod tests {
         ] {
             assert!(!is_canvas_file(Path::new(name)), "{name}");
         }
-        // The file a save of the canvas is staged in, wherever it is.
-        let staging = sawit_core::files::staging_file(Path::new("/p/.nyawit/canvas.figcraft"));
-        assert!(is_canvas_file(&staging), "{}", staging.display());
+        // The files a save of the canvas is staged in, wherever it is.
+        for n in [0, 1, u64::MAX] {
+            let staging =
+                sawit_core::files::staging_file(Path::new("/p/.nyawit/canvas.figcraft"), n);
+            assert!(is_canvas_file(&staging), "{}", staging.display());
+        }
     }
 
     #[test]
@@ -1788,6 +2022,275 @@ mod tests {
         assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
         assert_eq!(board.session.undo_depth(), (0, 0));
         assert_eq!(std::fs::read(&canvas).unwrap(), was);
+    }
+
+    /// CANVAS-CORE-7: a step of a `command.batch` can take its params from an earlier step's
+    /// result (`{"$ref": name, "field": …}`, `{"$step": n}`), which the engine puts in place as the
+    /// batch runs. A writer's path taken so is no text to check before then, and went through: the
+    /// batch below wrote SVG over the canvas file. Such a writer is refused, and nothing runs.
+    #[test]
+    fn a_batch_writer_whose_path_comes_from_another_step_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let canvas = canvas_files(dir.path()).remove(0);
+        let was = std::fs::read(&canvas).unwrap();
+        let mut board = board();
+        send(&mut board, "board.sticky", json!({"x": 0, "y": 0}));
+        let before = board.doc().unwrap();
+        let by_name = json!({"$ref": "pages", "field": "0/name"});
+        let by_step = json!({"$step": 1, "field": "0/name"});
+        for params in [
+            json!({"path": by_name}),
+            json!({"path": by_step}),
+            json!({"$ref": "pages", "field": "0"}),
+            json!({"format": "svg", "path": [by_name]}),
+        ] {
+            let reply = send(
+                &mut board,
+                "command.batch",
+                json!({"commands": [
+                    {"command": "page.rename", "params": {"name": canvas}},
+                    {"command": "page.list", "as": "pages"},
+                    {"command": "file.exportSvg", "params": params},
+                ]}),
+            );
+            assert_eq!(reply["ok"], json!(false), "{params}: {reply}");
+            let error = reply["error"].as_str().unwrap();
+            assert!(
+                error.starts_with("file.exportSvg in a command.batch needs its params written out"),
+                "{params}: {error}"
+            );
+            assert_eq!(std::fs::read(&canvas).unwrap(), was, "{params}");
+        }
+        // So is such a writer in a nested batch, whose references are to the nested batch's own
+        // steps.
+        let reply = send(
+            &mut board,
+            "command.batch",
+            json!({"commands": [
+                {"command": "command.batch", "params": {"commands": [
+                    {"command": "page.rename", "params": {"name": canvas}},
+                    {"command": "page.list", "as": "pages"},
+                    {"command": "file.exportSvg", "params": {"path": by_name}},
+                ]}},
+            ]}),
+        );
+        let error = reply["error"].as_str().unwrap_or_default();
+        assert!(
+            error.starts_with("file.exportSvg in a command.batch needs its params written out"),
+            "{reply}"
+        );
+        assert_eq!(std::fs::read(&canvas).unwrap(), was);
+        // A nested batch's own params are passed on as written, never taken from a step: one that
+        // is a reference holds no steps, and the engine refuses it.
+        let reply = send(
+            &mut board,
+            "command.batch",
+            json!({"commands": [
+                {"command": "page.list", "as": "pages"},
+                {"command": "command.batch", "params": {"$ref": "pages", "field": "0"}},
+            ]}),
+        );
+        assert_eq!(reply["ok"], json!(false), "{reply}");
+        assert_eq!(std::fs::read(&canvas).unwrap(), was);
+        // Outside a batch nothing is taken from a step, so nothing is refused for it: a path that
+        // is no text writes nothing (the engine gives the export back instead).
+        let top = send(
+            &mut board,
+            "file.exportSvg",
+            json!({"path": {"$ref": "pages"}}),
+        );
+        assert_eq!(top["ok"], json!(true), "{top}");
+        assert!(top["result"]["data"].is_string(), "{top}");
+        assert_eq!(std::fs::read(&canvas).unwrap(), was);
+        // None of them changed the document.
+        assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
+        // A writer of a path written out, as a step's own text, still runs.
+        let svg = dir.path().join("page.svg");
+        let written = send(
+            &mut board,
+            "command.batch",
+            json!({"commands": [{"command": "file.exportSvg", "params": {"path": svg}}]}),
+        );
+        assert_eq!(written["ok"], json!(true), "{written}");
+        assert!(std::fs::read_to_string(&svg).unwrap().contains("<svg"));
+    }
+
+    /// A nested `command.batch` gets its params as written: the engine puts no other step's result
+    /// in them. The nested batch puts its own steps' results in place as they run, so one whose
+    /// steps refer to each other is an ordinary batch, and runs, as it does in FigCraft.
+    #[test]
+    fn a_nested_batch_whose_steps_refer_to_each_other_runs() {
+        let mut board = board();
+        let reply = send(
+            &mut board,
+            "command.batch",
+            json!({"commands": [
+                {"command": "command.batch", "params": {"commands": [
+                    {"command": "board.sticky", "params": {"x": 0, "y": 0}, "as": "inner"},
+                    {"command": "node.set", "params": {"id": {"$ref": "inner"}, "props": {"name": "renamed"}}},
+                ]}},
+            ]}),
+        );
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        let sticky = id_of(&reply["result"][0][0]["id"]).unwrap();
+        assert_eq!(board.doc().unwrap().node(sticky).unwrap().name, "renamed");
+    }
+
+    /// A 1 × 1 PNG, as base64.
+    const DOT: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+    /// The engine's commands that read the file a parameter names, each with its params naming
+    /// `path` there: every reader of `READS_FROM_PATH`, and each parameter it reads a file from.
+    fn reads_of(path: &std::path::Path) -> Vec<(&'static str, Value)> {
+        vec![
+            ("file.import", json!({"path": path})),
+            (
+                "file.import",
+                json!({"data": DOT, "name": "dot.png", "variables": path}),
+            ),
+            ("file.recover", json!({"path": path})),
+            ("image.place", json!({"path": path})),
+            ("variable.import", json!({"variables": path})),
+            (
+                "collab.recoverFile",
+                json!({"path": path, "session": 1, "client": 1, "seq": 1}),
+            ),
+        ]
+    }
+
+    /// The engine reads the file a command's params name whole, as it finds it, on the canvas's
+    /// UI thread (`file.import {path}`, `image.place {path}`, `variable.import {variables}`...): a
+    /// named pipe blocked it for ever, and a link to `/dev/zero` read until the Mac ran out of
+    /// memory, as `replace` did (CANVAS-CORE-6). Each is refused at once, as a command and as a
+    /// step of a batch, before anything runs; and so is a file past what is read from one file.
+    #[test]
+    fn a_command_that_reads_a_pipe_or_a_device_is_refused_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("pipe.png");
+        crate::store::pipe_at(&pipe);
+        let batched = |id: &str, params: &Value| {
+            json!({"op": "command", "command": "command.batch", "params": {"commands": [
+                {"command": "board.sticky", "params": {"x": 0, "y": 300}},
+                {"command": id, "params": params},
+            ]}})
+        };
+        let refused_at_once = |path: &std::path::Path, why: &str| {
+            let shown = path.display().to_string();
+            // Each is sent to a board of its own, and what failed is told all at once: each one
+            // that hangs is seen.
+            let failed: Vec<String> = reads_of(path)
+                .into_iter()
+                .flat_map(|(id, params)| {
+                    let alone = json!({"op": "command", "command": id, "params": params});
+                    [(id, alone), (id, batched(id, &params))]
+                })
+                .filter_map(|(id, op)| {
+                    let Some((reply, unchanged)) = on_a_board_of_its_own(op.clone()) else {
+                        return Some(format!("{op}: no answer within 5 s"));
+                    };
+                    let error = reply["error"].as_str().unwrap_or_default();
+                    let refused = error.starts_with(&format!("{id} can't read {shown}: {why}"));
+                    (!refused || !unchanged).then(|| format!("{op}: {reply}"))
+                })
+                .collect();
+            assert!(failed.is_empty(), "{}", failed.join("\n"));
+        };
+        // The pipe first: a device that never ends is read only once it is refused.
+        refused_at_once(&pipe, "not a regular file");
+        let zero = dir.path().join("zero.png");
+        std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+        refused_at_once(&zero, "not a regular file");
+        let big = dir.path().join("big.png");
+        let file = std::fs::File::create(&big).unwrap();
+        file.set_len(crate::store::MAX_FILE + 1).unwrap();
+        refused_at_once(&big, "it holds more than 4096 MB");
+
+        // A file that is one is read, and one that isn't there is the engine's to report.
+        let png = dir.path().join("dot.png");
+        std::fs::write(&png, STANDARD.decode(DOT).unwrap()).unwrap();
+        let mut board = board();
+        let placed = send(&mut board, "image.place", json!({"path": png}));
+        assert_eq!(placed["ok"], json!(true), "{placed}");
+        let missing = dir.path().join("missing.png");
+        let reply = send(&mut board, "image.place", json!({"path": missing}));
+        assert_eq!(reply["ok"], json!(false), "{reply}");
+        let error = reply["error"].as_str().unwrap();
+        assert!(!error.contains("can't read"), "{error}");
+    }
+
+    /// A step of a batch that reads a file can take the file's name from another step's result,
+    /// as a writer can take its path (CANVAS-CORE-7): that name can't be checked before the batch
+    /// runs, so the step is refused, and nothing runs. Its other params may come from a step: an
+    /// image placed from its bytes in a frame an earlier step made runs.
+    #[test]
+    fn a_batch_reader_whose_file_comes_from_another_step_is_refused() {
+        let mut board = design();
+        let before = board.doc().unwrap();
+        let by_name = json!({"$ref": "pages", "field": "0/name"});
+        let steps = [
+            ("file.import", json!({"path": by_name})),
+            (
+                "file.import",
+                json!({"data": DOT, "name": "dot.png", "variables": by_name}),
+            ),
+            ("file.recover", json!({"$ref": "pages", "field": "0"})),
+            ("image.place", json!({"path": [by_name]})),
+            ("variable.import", json!({"variables": by_name})),
+            (
+                "collab.recoverFile",
+                json!({"path": {"$step": 0, "field": "0/name"}}),
+            ),
+        ];
+        for (id, params) in steps {
+            let reply = send(
+                &mut board,
+                "command.batch",
+                json!({"commands": [
+                    {"command": "page.list", "as": "pages"},
+                    {"command": "command.batch", "params": {"commands": [
+                        {"command": "page.list", "as": "pages"},
+                        {"command": id, "params": params},
+                    ]}},
+                ]}),
+            );
+            let error = reply["error"].as_str().unwrap_or_default();
+            let expected = format!("{id} in a command.batch needs its params written out");
+            assert!(error.starts_with(&expected), "{params}: {reply}");
+        }
+        assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
+
+        let reply = send(
+            &mut board,
+            "command.batch",
+            json!({"commands": [
+                {"command": "node.create", "as": "frame",
+                 "params": {"type": "frame", "x": 0, "y": 0, "width": 100, "height": 100}},
+                {"command": "image.place", "params": {"data": DOT, "parent": {"$ref": "frame"}}},
+            ]}),
+        );
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        let frame = id_of(&reply["result"][0]["id"]).unwrap();
+        let image = id_of(&reply["result"][1]["id"]).unwrap();
+        assert_eq!(
+            board.doc().unwrap().node(image).unwrap().parent,
+            Some(frame)
+        );
+    }
+
+    #[test]
+    fn the_guarded_readers_are_engine_commands_that_nothing_else_refuses() {
+        for (id, _) in READS_FROM_PATH {
+            assert!(figcraft_engine::cmd::find_command(id).is_some(), "{id}");
+            assert!(!HANDLED_BY_SAWIT.contains(id), "{id} is refused already");
+            assert!(!WRITES_TO_PATH.contains(id), "{id} is a writer");
+        }
+        let mut readers: Vec<&str> = reads_of(std::path::Path::new("/x"))
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        readers.dedup();
+        let guarded: Vec<&str> = READS_FROM_PATH.iter().map(|(id, _)| *id).collect();
+        assert_eq!(readers, guarded);
     }
 
     /// `file.exportLayers` and `data.fill` write into a folder, naming each file after its layer
@@ -3011,6 +3514,55 @@ mod tests {
         assert_eq!(elements(&mut board).len(), 1);
     }
 
+    /// Runs `op` on a board with a sticky, on a thread of its own
+    /// ([`crate::store::within_seconds`]), and gives its reply, and whether the board's document is
+    /// still the one it had: `None` when it hadn't answered within 5 s.
+    fn on_a_board_of_its_own(op: Value) -> Option<(Value, bool)> {
+        crate::store::within_seconds(move || {
+            let mut board = board();
+            send(&mut board, "board.sticky", json!({"x": 0, "y": 0}));
+            let before = board.doc().unwrap();
+            let reply = run(&mut board, &op);
+            (reply, Arc::ptr_eq(&before, &board.doc().unwrap()))
+        })
+    }
+
+    /// CANVAS-CORE-6, for an agent's load (`canvas_load`): a `replace` of a `.figcraft` file has
+    /// the engine read the file `path` names, whole and as it finds it, on the canvas's UI thread
+    /// (with the app closed, in sawit-mcp, holding every other canvas call back). A named pipe
+    /// blocked it for ever, and a link a cloned repository holds to `/dev/zero` read until the Mac
+    /// ran out of memory. Both are refused at once, as when a canvas opens such a file, and the
+    /// canvas is as it was; an `.excalidraw` file is, as before.
+    #[test]
+    fn replace_of_a_pipe_or_a_device_is_refused_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("board.figcraft");
+        crate::store::pipe_at(&pipe);
+        let scene = dir.path().join("scene.excalidraw");
+        crate::store::pipe_at(&scene);
+        let refused_at_once = |paths: &[&std::path::Path]| {
+            let failed: Vec<String> = (paths.iter())
+                .filter_map(|path| {
+                    let shown = path.display().to_string();
+                    let replaced = on_a_board_of_its_own(json!({"op": "replace", "path": path}));
+                    let Some((reply, unchanged)) = replaced else {
+                        return Some(format!("{shown}: no answer within 5 s"));
+                    };
+                    let error = reply["error"].as_str().unwrap_or_default();
+                    let refused = error.starts_with(&format!("replace: couldn't read {shown}"))
+                        && error.contains("not a regular file");
+                    (!refused || !unchanged).then(|| format!("{shown}: {reply}"))
+                })
+                .collect();
+            assert!(failed.is_empty(), "{}", failed.join("\n"));
+        };
+        // The pipes first: a device that never ends is read only once they are refused.
+        refused_at_once(&[&pipe, &scene]);
+        let zero = dir.path().join("zero.figcraft");
+        std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+        refused_at_once(&[&zero]);
+    }
+
     /// The scene of the Excalidraw fixture: nine layers on the page, and an embed it leaves out.
     fn scene() -> Value {
         serde_json::from_str(include_str!(
@@ -3757,7 +4309,7 @@ mod tests {
     }
 
     /// Ruling R-TEXTEDIT for the command op: a command that acts on the text being typed in (the
-    /// Text menu's, copy and paste) runs inside the edit, which goes on, and so does a
+    /// Text menu's) or changes nothing (a copy) runs inside the edit, which goes on, and so does a
     /// `command.batch` of only such steps; a batch with any other step ends the edit first. A
     /// command refused up front runs nothing and ends nothing, and the reads and the input ops
     /// leave the edit as it is.
@@ -3787,6 +4339,54 @@ mod tests {
         assert_eq!(sticky_text(&board, note), "hi!");
     }
 
+    /// CANVAS-CORE-2 (ruling R-TEXTEDIT): the canvas's keys and menus send copy and paste to the
+    /// characters of the text being typed in, but the `command` op hands them to the engine, whose
+    /// cut and pastes act on layers. A cut, or a paste to replace, deleted the text being typed
+    /// without ending its edit: the "Edit text" gesture stayed open, and the user's next click on
+    /// a layer cancelled it, taking back the typing, the cut and every op since, though each had
+    /// answered ok. A paste joined the typing's undo step. Each now ends the typing first: it is
+    /// an undo step of its own, which the next click keeps, and the op is one after it.
+    #[test]
+    fn a_cut_or_a_paste_ends_the_typing_first() {
+        let cut = json!({"command": "edit.cut"});
+        let copy = json!({"command": "edit.copy"});
+        for op in [
+            cut.clone(),
+            json!({"command": "edit.pasteReplace"}),
+            json!({"command": "edit.paste"}),
+            json!({"command": "edit.pasteOver"}),
+            json!({"command": "command.batch", "params": {"commands": [copy, cut]}}),
+        ] {
+            let mut op = op;
+            op["op"] = json!("command");
+            // A rectangle on the page and on the clipboard, and a sticky being typed in.
+            let mut board = board();
+            let rectangle = json!([{"type": "rectangle", "x": 600, "y": 0, "width": 100,
+                "height": 100}]);
+            let added = ask(&mut board, json!({"op": "add", "elements": rectangle}));
+            send(&mut board, "edit.copy", json!({"ids": added["ids"]}));
+            let note = typing_in_a_new_sticky(&mut board);
+            textedit::insert(&mut board.session, "hi").unwrap();
+
+            ask(&mut board, op.clone());
+            assert!(
+                editing(&board) || !gesture_open(&board),
+                "{op}: the typing's gesture is open with no text being typed in"
+            );
+            // The user's next click, on the rectangle, takes nothing back.
+            let shown = board.doc().unwrap();
+            pointer_at(&mut board, "down", 650.0, 50.0);
+            pointer_at(&mut board, "up", 650.0, 50.0);
+            assert!(
+                *board.doc().unwrap() == *shown,
+                "{op}: the click took edits back"
+            );
+            // Undo takes back the op alone: the sticky is there, with what was typed.
+            send(&mut board, "edit.undo", json!({}));
+            assert_eq!(sticky_text(&board, note), "hi", "{op}");
+        }
+    }
+
     /// The middle of the box `get` gives `element`, on the page.
     fn middle(element: &Value) -> (f64, f64) {
         let [x, y, width, height] =
@@ -3800,6 +4400,79 @@ mod tests {
     /// so an op run inside it was taken back by the next move, or by an Escape, though it had
     /// answered ok. Reads still answer during the drag; once the button is up the op goes
     /// through, and what it drew stays through the next drag.
+    /// CANVAS-CORE-9: a panic while an op runs is the op's error, as a panic in an engine command
+    /// is, and the canvas goes on: in the app it unwound into the window's callbacks, which
+    /// aborted the app with every tab.
+    #[test]
+    fn a_panic_in_an_op_is_its_error() {
+        let mut board = board();
+        let op = json!({"op": "add", "elements": []});
+        let reply = run_guarded(&mut board, &op, |_, _| panic!("a bug in the op"));
+        assert_eq!(reply["ok"], json!(false), "{reply}");
+        let error = reply["error"].as_str().unwrap();
+        assert!(
+            error.starts_with("internal error in `add`: a bug in the op"),
+            "{error}"
+        );
+        let sticky = json!([{"type": "sticky", "x": 0, "y": 0}]);
+        ask(&mut board, json!({"op": "add", "elements": sticky}));
+        assert_eq!(elements(&mut board).len(), 1);
+    }
+
+    /// CANVAS-CORE-10: a Mermaid source with double quotes that fails is tried once more with
+    /// single ones, but not after its render was stopped for running past the time limit: the
+    /// second try froze the window as long again, 10 s in all.
+    #[test]
+    fn a_mermaid_render_stopped_for_time_is_not_tried_again() {
+        let quoted = r#"graph TD; A["a"] --> B"#;
+        assert_eq!(
+            second_try(quoted, "Parse error on line 1").as_deref(),
+            Some("graph TD; A['a'] --> B")
+        );
+        assert_eq!(
+            second_try("graph TD; A --> B", "Parse error on line 1"),
+            None
+        );
+        assert_eq!(
+            second_try(quoted, "The diagram can't be drawn: it took too long."),
+            None
+        );
+    }
+
+    /// CANVAS-CORE-8: between the Pen's clicks no button is held, but the path being drawn is an
+    /// open gesture, which only Enter (or Escape) ends. An agent's op ran inside it and joined
+    /// its undo step: the ⌘Z after Enter took the path and the agent's layers away together. Such
+    /// an op waits for the path, as one waits for a drag, and changes nothing; once the path is
+    /// ended it goes through, an undo step of its own.
+    #[test]
+    fn an_op_that_changes_the_document_waits_for_the_pens_path() {
+        let mut board = board();
+        send(&mut board, "tool.pen", json!({}));
+        pointer_at(&mut board, "down", 0.0, 0.0);
+        pointer_at(&mut board, "up", 0.0, 0.0);
+        pointer_at(&mut board, "down", 100.0, 0.0);
+        pointer_at(&mut board, "up", 100.0, 0.0);
+        assert!(board.session.tool.pen.is_some() && !board.session.tool.busy());
+        let held = board.doc().unwrap();
+        let rectangle = json!([{"type": "rectangle", "x": 400, "y": 0}]);
+        for op in [
+            json!({"op": "add", "elements": rectangle}),
+            json!({"op": "command", "command": "page.add"}),
+        ] {
+            let name = op["op"].as_str().unwrap();
+            let reply = run(&mut board, &op);
+            let error = format!("{name}: finish the path the Pen draws on the canvas first");
+            assert_eq!(reply, json!({"ok": false, "error": error}), "{op}");
+            assert!(Arc::ptr_eq(&board.doc().unwrap(), &held), "{op}");
+        }
+        assert!(press(&mut board, "Enter", json!({})));
+        assert!(board.session.tool.pen.is_none() && !gesture_open(&board));
+        let path = board.doc().unwrap();
+        ask(&mut board, json!({"op": "add", "elements": rectangle}));
+        send(&mut board, "edit.undo", json!({}));
+        assert!(*board.doc().unwrap() == *path, "the undo took the path too");
+    }
+
     #[test]
     fn an_op_that_changes_the_document_waits_for_the_drag_to_end() {
         let mut board = board();

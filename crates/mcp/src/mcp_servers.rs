@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
+use sawit_core::dev_tools::find_program;
 use sawit_core::mcp_catalog::{self, Auth, DEFAULT_AWS_REGION, SERVERS, Server};
 use sawit_core::mcp_clients::{self, Spec, Status, Target};
-use sawit_core::probe::find_in_path;
 
 use crate::{Sawit, blocking, fail, ok, tri};
 
@@ -25,7 +25,9 @@ pub struct ServerArgs {
         description = "Profile of Claude Code or Codex (default: \"default\"); see list_mcp_servers"
     )]
     pub profile: Option<String>,
-    #[schemars(description = "AWS region for servers whose URL has one (default us-east-1)")]
+    #[schemars(
+        description = "AWS Region for servers whose URL has one, like eu-west-1 (default: the one the client already has it in, else us-east-1)"
+    )]
     pub region: Option<String>,
 }
 
@@ -61,9 +63,12 @@ fn target_label(t: &Target) -> String {
     }
 }
 
-fn status_text(status: &Status) -> String {
+fn status_text(server: &Server, status: &Status) -> String {
     match status {
         Status::Installed => "installed".into(),
+        Status::Outdated(sig) if let Some(region) = server.region_in(sig) => {
+            format!("installed in region {region}")
+        }
         Status::Outdated(_) => "installed, pointing elsewhere (install again to update)".into(),
         Status::NotInstalled => "not installed".into(),
         Status::Unreadable(e) => format!("config unreadable: {e}"),
@@ -92,7 +97,26 @@ fn targets() -> Vec<Target> {
 }
 
 fn spec(server: &Server, region: &str) -> Spec {
-    server.spec(&own_server(), region, find_in_path)
+    server.spec(&own_server(), region, find_program)
+}
+
+/// The Region to install a regional server in: the one given, which must
+/// be an AWS Region (it goes into the URL's host), else the one the client
+/// already has it in, else the default.
+fn region_for(server: &Server, target: &Target, given: Option<&str>) -> Result<String, String> {
+    match given {
+        Some(region) if mcp_catalog::valid_region(region) => Ok(region.to_string()),
+        Some(region) => Err(format!(
+            "\"{region}\" isn't an AWS Region (like us-east-1 or eu-west-1)."
+        )),
+        None => Ok(
+            match mcp_clients::status(target, &spec(server, DEFAULT_AWS_REGION)) {
+                Status::Outdated(sig) => server.region_in(&sig),
+                _ => None,
+            }
+            .unwrap_or_else(|| DEFAULT_AWS_REGION.to_string()),
+        ),
+    }
 }
 
 fn pick(
@@ -140,7 +164,7 @@ impl Sawit {
                     if let Some(note) = server.note {
                         out.push(format!("  note: {note}"));
                     }
-                    if let Some(program) = server.missing_program(find_in_path) {
+                    if let Some(program) = server.missing_program(find_program) {
                         out.push(format!("  missing program: {program} is not installed"));
                     }
                     let spec = spec(server, DEFAULT_AWS_REGION);
@@ -148,7 +172,7 @@ impl Sawit {
                         .iter()
                         .filter_map(|t| match mcp_clients::status(t, &spec) {
                             Status::NotInstalled => None,
-                            s => Some(format!("{} ({})", target_label(t), status_text(&s))),
+                            s => Some(format!("{} ({})", target_label(t), status_text(server, &s))),
                         })
                         .collect();
                     out.push(format!(
@@ -169,8 +193,17 @@ impl Sawit {
 
     pub async fn install_mcp_server_tool(&self, a: ServerArgs) -> CallToolResult {
         let (server, target) = tri!(pick(&a.server, &a.client, a.profile.as_deref()));
-        let region = a.region.as_deref().unwrap_or(DEFAULT_AWS_REGION);
-        let spec = spec(server, region);
+        let region = tri!(region_for(server, &target, a.region.as_deref()));
+        if server.is_remote()
+            && mcp_clients::needs_bridge(target.client)
+            && find_program("npx").is_none()
+        {
+            return fail(format!(
+                "{} reaches remote servers only through npx (mcp-remote), and `npx` isn't installed. Install Node.js first (install_dev_tools with \"node\").",
+                target.client.name()
+            ));
+        }
+        let spec = spec(server, &region);
         if !target.client.editable() {
             return ok(format!(
                 "{} keeps its config in a format Sawit doesn't edit. Add this to {}:\n\n{}",
@@ -179,7 +212,7 @@ impl Sawit {
                 mcp_clients::snippet(&target, &spec)
             ));
         }
-        let cli = target.client.cli().and_then(find_in_path);
+        let cli = target.client.cli().and_then(find_program);
         if let Err(e) = mcp_clients::install(&target, &spec, cli.as_deref()).await {
             return fail(e.to_string());
         }
@@ -188,7 +221,7 @@ impl Sawit {
             server.id,
             target_label(&target),
             target.config.display(),
-            status_text(&mcp_clients::status(&target, &spec))
+            status_text(server, &mcp_clients::status(&target, &spec))
         );
         if let Some(auth) = auth_text(server.auth) {
             text.push_str(&format!(" It {auth}."));
@@ -212,7 +245,7 @@ impl Sawit {
                 target_label(&target)
             ));
         }
-        let cli = target.client.cli().and_then(find_in_path);
+        let cli = target.client.cli().and_then(find_program);
         match mcp_clients::uninstall(&target, server.id, cli.as_deref()).await {
             Ok(()) => ok(format!(
                 "Removed {} from {}.",
@@ -254,6 +287,39 @@ impl Sawit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An agent updating AWS without naming a Region keeps the one the
+    /// client has; one that isn't a Region never reaches the URL.
+    #[test]
+    fn the_region_is_kept_and_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.toml");
+        std::fs::write(
+            &config,
+            "[mcp_servers.aws]\nurl = \"https://aws-mcp.eu-west-1.api.aws/mcp\"\n",
+        )
+        .unwrap();
+        let codex = Target {
+            client: mcp_clients::Client::Codex,
+            profile: "default".into(),
+            config,
+            profile_dir: None,
+        };
+        let aws = mcp_catalog::get("aws").unwrap();
+        assert_eq!(region_for(aws, &codex, None).as_deref(), Ok("eu-west-1"));
+        assert_eq!(
+            region_for(aws, &codex, Some("ap-south-1")).as_deref(),
+            Ok("ap-south-1")
+        );
+        assert!(region_for(aws, &codex, Some("x.example.com/#")).is_err());
+        assert_eq!(
+            status_text(
+                aws,
+                &mcp_clients::status(&codex, &spec(aws, DEFAULT_AWS_REGION))
+            ),
+            "installed in region eu-west-1"
+        );
+    }
 
     #[test]
     fn client_names_match_loosely() {

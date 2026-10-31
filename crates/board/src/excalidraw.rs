@@ -179,10 +179,9 @@ pub fn to_board(name: &str, scene: &Value) -> Result<(BoardDoc, Vec<String>), Bo
     let doc = drawn.doc()?;
     drop(drawn);
     let doc = Arc::try_unwrap(doc).unwrap_or_else(|shared| (*shared).clone());
-    let board = BoardDoc {
-        session: Session::with_document(doc),
-    };
-    Ok((board, notes))
+    // As a file is opened: its state made inside a guard against a panic (CANVAS-CORE-9).
+    let session = figcraft_engine::guard::run("file.open", || Ok(Session::with_document(doc)))?;
+    Ok((BoardDoc { session }, notes))
 }
 
 /// The scene in the `.excalidraw` file at `path`. A file that can't be read, or isn't JSON, is an
@@ -212,10 +211,18 @@ pub fn read_file_or_blank(path: &Path) -> Result<Value, BoardError> {
     parse(path, &text)
 }
 
-/// The text of the file at `path`.
+/// The most an Excalidraw file may hold to be read: 1 GiB of JSON, images in it included.
+pub const MAX_SCENE: u64 = 1024 * 1024 * 1024;
+
+/// The text of the file at `path`. Only a regular file of at most [`MAX_SCENE`] bytes is read
+/// ([`sawit_core::files::read_regular`]): a named pipe or a device is refused at once
+/// (CANVAS-CORE-6).
 fn read_text(path: &Path) -> Result<String, BoardError> {
-    std::fs::read_to_string(path)
-        .map_err(|e| BoardError::Io(format!("couldn't read {}: {e}", path.display())))
+    let couldnt_read = |e: &dyn std::fmt::Display| {
+        BoardError::Io(format!("couldn't read {}: {e}", path.display()))
+    };
+    let bytes = sawit_core::files::read_regular(path, MAX_SCENE).map_err(|e| couldnt_read(&e))?;
+    String::from_utf8(bytes).map_err(|_| couldnt_read(&"stream did not contain valid UTF-8"))
 }
 
 /// The JSON in `text`, the text of the file at `path`, without the byte order mark in front.

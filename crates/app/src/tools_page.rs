@@ -24,7 +24,7 @@ use sawit_core::dev_tools::{
     uninstall, uninstall_command,
 };
 
-use crate::catalog::{self, Mark};
+use crate::catalog::{self, Mark, tilde};
 use crate::rt;
 
 /// Lines of installer output kept per tool.
@@ -124,6 +124,9 @@ impl EventEmitter<ToolsEvent> for ToolsPage {}
 
 pub struct ToolsPage {
     found: HashMap<&'static str, Found>,
+    /// Why the login shell couldn't say which tools it finds, when it
+    /// couldn't: `found` has only the tools at their usual places then.
+    problem: Option<String>,
     loading: bool,
     /// Latest released versions, by tool id.
     latest: HashMap<&'static str, String>,
@@ -144,7 +147,12 @@ pub struct ToolsPage {
     sort: Sort,
     /// The page of the list shown, from 0.
     page: usize,
-    /// Made on the first render, which has the window an input needs.
+    /// The search as the list last filtered by it.
+    last_query: String,
+    /// The row ↑ and ↓ select and ↩ acts on, by its place in the list.
+    cursor: Option<usize>,
+    focus: FocusHandle,
+    /// Made with the page when it has a window, else on the first render.
     search: Option<Entity<InputState>>,
     _search: Option<Subscription>,
 }
@@ -197,19 +205,84 @@ fn logo(id: &str, size: f32, cx: &App) -> AnyElement {
     }
 }
 
-/// `~/…` instead of the full home path.
-fn tilde(path: &std::path::Path) -> String {
-    let s = path.display().to_string();
-    match std::env::var("HOME") {
-        Ok(home) if s.starts_with(&home) => s.replacen(&home, "~", 1),
-        _ => s,
-    }
-}
-
 impl ToolsPage {
-    pub fn new(cx: &mut Context<Self>) -> Self {
-        let mut this = Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut this = Self::blank(cx);
+        this.make_search(window, cx);
+        this.refresh(cx);
+        this
+    }
+
+    /// The search field: typing filters, ↩ moves the keyboard to the first row.
+    fn make_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search tools"));
+        self._search = Some(cx.subscribe_in(
+            &search,
+            window,
+            |this, _, e: &InputEvent, window, cx| match e {
+                // Only when the text changed: the field also says so when it loses the
+                // keyboard.
+                InputEvent::Change if this.query(cx) != this.last_query => {
+                    this.last_query = this.query(cx);
+                    this.page = 0;
+                    this.cursor = None;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {
+                    this.cursor = None;
+                    this.select(true, window, cx);
+                }
+                _ => {}
+            },
+        ));
+        self.search = Some(search);
+    }
+
+    /// Gives the search field the keyboard, as opening the page does.
+    pub fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search.is_none() {
+            self.make_search(window, cx);
+        }
+        if let Some(search) = &self.search {
+            search.update(cx, |s, cx| s.focus(window, cx));
+        }
+    }
+
+    /// Selects the next (or previous) row, turning the list's page to it, and
+    /// gives the list the keyboard.
+    fn select(&mut self, down: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let len = self.shown(&self.query(cx)).len();
+        self.cursor = catalog::step(self.cursor, len, down);
+        if let Some(ix) = self.cursor {
+            self.page = ix / catalog::PER_PAGE;
+        }
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// ↩ on a row: what its main button does, when that's safe from one key: Install,
+    /// Upgrade, Retry, and taking it out of the queue. Never Reinstall, Stop or Uninstall.
+    fn confirm(&mut self, cx: &mut Context<Self>) {
+        let rows = self.shown(&self.query(cx));
+        let Some(&(_, tool)) = self.cursor.and_then(|ix| rows.get(ix)) else {
+            return;
+        };
+        let id = tool.id;
+        match self.states.get(id) {
+            Some(State::Queued { .. }) => self.dequeue(id, cx),
+            Some(State::Failed(_) | State::Skipped(_)) => self.enqueue(&[id], cx),
+            Some(State::Installing | State::Uninstalling) => {}
+            _ if self.newer(id).is_some() => self.upgrade(&[id], cx),
+            _ if !self.installed(id) && !self.busy(id) => self.enqueue(&[id], cx),
+            _ => {}
+        }
+    }
+
+    /// The page before anything is detected.
+    fn blank(cx: &mut Context<Self>) -> Self {
+        Self {
             found: HashMap::new(),
+            problem: None,
             loading: true,
             latest: HashMap::new(),
             upgrades: HashSet::new(),
@@ -225,11 +298,40 @@ impl ToolsPage {
             category: None,
             sort: Sort::Category,
             page: 0,
+            cursor: None,
+            last_query: String::new(),
+            focus: cx.focus_handle(),
             search: None,
             _search: None,
-        };
-        this.refresh(cx);
-        this
+        }
+    }
+
+    /// A page running `id`'s installer, for tests elsewhere.
+    #[cfg(test)]
+    pub(crate) fn installing(id: &'static str, cx: &mut Context<Self>) -> Self {
+        let mut page = Self::blank(cx);
+        page.running = Some((id, Job::Install));
+        page
+    }
+
+    /// What is running and waiting, when anything is: "Installing Bun, 2
+    /// more queued". Closing the tab stops it.
+    pub fn work(&self) -> Option<String> {
+        let running = self.running.as_ref().and_then(|(id, job)| {
+            let tool = find(id)?;
+            Some(match job {
+                Job::Install if self.upgrades.contains(id) => format!("Upgrading {}", tool.name),
+                Job::Install => format!("Installing {}", tool.name),
+                Job::Uninstall(_) => format!("Uninstalling {}", tool.name),
+            })
+        });
+        let queued = self.queue.len();
+        match (running, queued) {
+            (None, 0) => None,
+            (Some(running), 0) => Some(running),
+            (Some(running), n) => Some(format!("{running}, {n} more queued")),
+            (None, n) => Some(format!("{n} queued")),
+        }
     }
 
     /// Detects again and rereads the latest versions.
@@ -252,9 +354,10 @@ impl ToolsPage {
         self.loading = true;
         let rx = rt::spawn(cx, detect());
         cx.spawn(async move |this, cx| {
-            if let Ok(found) = rx.await {
+            if let Ok(detection) = rx.await {
                 let _ = this.update(cx, |this, cx| {
-                    this.found = found;
+                    this.found = detection.found;
+                    this.problem = detection.problem;
                     this.loading = false;
                     // Detection now agrees with these; the rest keep their
                     // optimistic or failed state.
@@ -695,10 +798,42 @@ impl ToolsPage {
                             .small()
                             .icon(Lucide::Download)
                             .label(format!("Install Missing ({})", missing.len()))
-                            .disabled(missing.is_empty() || self.loading)
+                            // Unknown which are missing: it could run installers over copies
+                            // that are there.
+                            .disabled(missing.is_empty() || self.loading || self.problem.is_some())
                             .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&missing, cx))),
                     ),
             )
+    }
+
+    /// Says when the login shell couldn't tell which tools are installed,
+    /// instead of a page of "Not installed".
+    fn render_problem(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let problem = self.problem.as_ref().filter(|_| !self.loading)?;
+        let warning = cx.theme().warning;
+        Some(
+            h_flex()
+                .px_4()
+                .py_2()
+                .gap_2()
+                .items_start()
+                .rounded(cx.theme().radius_lg)
+                .border_1()
+                .border_color(warning.opacity(0.35))
+                .bg(warning.opacity(0.08))
+                .text_sm()
+                .child(
+                    div()
+                        .pt(px(2.))
+                        .child(Icon::new(Lucide::TriangleAlert).small().text_color(warning)),
+                )
+                .child(div().flex_1().min_w_0().whitespace_normal().child(format!(
+                    "Couldn't ask your login shell which tools are installed ({problem}). Only tools in \
+                     their usual folders show as installed, so Install Missing is off until Detect Again \
+                     works."
+                )))
+                .into_any_element(),
+        )
     }
 
     /// Search, the filter tabs with their counts, category and sort.
@@ -737,6 +872,7 @@ impl ToolsPage {
                 cx.listener(|this, ix: &usize, _, cx| {
                     this.filter = Filter::ALL[*ix];
                     this.page = 0;
+                    this.cursor = None;
                     cx.notify();
                 }),
                 cx,
@@ -754,6 +890,7 @@ impl ToolsPage {
                         cx.listener(|this, ix: &usize, _, cx| {
                             this.category = ix.checked_sub(1).map(|ix| Category::ALL[ix]);
                             this.page = 0;
+                            this.cursor = None;
                             cx.notify();
                         }),
                     ))
@@ -766,6 +903,7 @@ impl ToolsPage {
                         cx.listener(|this, ix: &usize, _, cx| {
                             this.sort = Sort::ALL[*ix];
                             this.page = 0;
+                            this.cursor = None;
                             cx.notify();
                         }),
                     )),
@@ -922,7 +1060,13 @@ impl ToolsPage {
         )
     }
 
-    fn render_row(&self, ix: usize, tool: &'static Tool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_row(
+        &self,
+        ix: usize,
+        tool: &'static Tool,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let mono = theme.mono_font_family.clone();
@@ -1119,6 +1263,7 @@ impl ToolsPage {
             .border_color(cx.theme().border)
             .hover(|el| el.bg(cx.theme().list_hover))
             .when(running, |el| el.bg(cx.theme().list_hover))
+            .when(selected, |el| el.bg(cx.theme().list_active))
             .child(catalog::columns(
                 // Level with the middle of the tile.
                 Some(
@@ -1291,6 +1436,7 @@ impl ToolsPage {
                 }
                 cx.notify();
             }));
+        let selected = self.cursor.and_then(|c| rows.get(c)).map(|(_, t)| t.id);
         let (rows, page) = catalog::page_of(rows, self.page);
         let card = v_flex()
             .rounded(theme.radius_lg)
@@ -1318,7 +1464,10 @@ impl ToolsPage {
             "Tool",
             cx,
         ))
-        .children(rows.into_iter().map(|(ix, t)| self.render_row(ix, t, cx)))
+        .children(
+            rows.into_iter()
+                .map(|(ix, t)| self.render_row(ix, t, selected == Some(t.id), cx)),
+        )
         .child(catalog::pager(
             "tools-pages",
             page,
@@ -1326,6 +1475,7 @@ impl ToolsPage {
             if total == 1 { "tool" } else { "tools" },
             cx.listener(|this, page: &usize, _, cx| {
                 this.page = *page;
+                this.cursor = None;
                 cx.notify();
             }),
             cx,
@@ -1343,21 +1493,38 @@ impl ToolsPage {
     }
 }
 
+/// Closing the tab stops the installer that runs (and everything it started),
+/// rather than leaving it running unseen with nobody to show its end.
+impl Drop for ToolsPage {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            stop.abort();
+        }
+    }
+}
+
 impl Render for ToolsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.search.is_none() {
-            let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search tools"));
-            self._search = Some(cx.subscribe(&search, |this, _, e: &InputEvent, cx| {
-                if matches!(e, InputEvent::Change) {
-                    this.page = 0;
-                    cx.notify();
-                }
-            }));
-            self.search = Some(search);
+            self.make_search(window, cx);
         }
         let query = self.query(cx);
         div()
             .id("tools-page")
+            .key_context("ToolsPage")
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &catalog::FocusSearch, window, cx| {
+                this.focus_search(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &catalog::SelectNext, window, cx| {
+                this.select(true, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &catalog::SelectPrevious, window, cx| {
+                    this.select(false, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &catalog::Confirm, _, cx| this.confirm(cx)))
             .size_full()
             .overflow_y_scroll()
             .bg(cx.theme().background)
@@ -1366,10 +1533,104 @@ impl Render for ToolsPage {
                     .p_6()
                     .gap_4()
                     .child(self.render_header(cx))
+                    .children(self.render_problem(cx))
                     .child(self.render_toolbar(&query, cx))
                     .children(self.render_progress(cx))
                     .children(self.render_selection(cx))
                     .child(self.render_list(&query, cx)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::FutureExt as _;
+    use futures::future::{Aborted, abortable};
+    use gpui_kit::{AppContext as _, TestAppContext};
+    use sawit_core::dev_tools::find;
+
+    use super::{Job, State, ToolsPage};
+
+    /// Closing the Dev Tools tab drops the page: the installer it runs stops with it, instead
+    /// of running on unseen, its queue gone, while a reopened page offers to start it again.
+    #[gpui_kit::test]
+    fn closing_the_page_stops_its_installer(cx: &mut TestAppContext) {
+        let (run, stop) = abortable(futures::future::pending::<()>());
+        let page = cx.new(|cx| {
+            let mut page = ToolsPage::blank(cx);
+            page.running = Some(("bun", Job::Install));
+            page.queue.push_back((find("deno").unwrap(), Job::Install));
+            page.stop = Some(stop);
+            page
+        });
+        assert_eq!(
+            page.read_with(cx, |page, _| page.work()).as_deref(),
+            Some("Installing Bun, 1 more queued")
+        );
+        drop(page);
+        // The app lets go of a dropped page at the end of its next update.
+        cx.update(|_| {});
+        cx.run_until_parked();
+        assert_eq!(run.now_or_never(), Some(Err(Aborted)), "still running");
+    }
+
+    /// The list works from the keyboard: the search has it when the page opens, ↩ there moves
+    /// it to the first row, ↑ and ↓ select, ↩ runs the row's main action (here: taking a tool
+    /// out of the queue, which runs nothing), and ⌘F goes back to the search.
+    #[gpui_kit::test]
+    fn the_list_works_from_the_keyboard(cx: &mut TestAppContext) {
+        use gpui_kit::Focusable as _;
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::catalog::init(cx);
+        });
+        let (window, page) = cx
+            .update(|cx| {
+                gpui_kit::open_window(Default::default(), cx, |_, cx| {
+                    cx.new(|cx| {
+                        let mut page = ToolsPage::blank(cx);
+                        page.loading = false;
+                        page.states.insert("nvm", State::Queued { for_: None });
+                        page.queue.push_back((find("nvm").unwrap(), Job::Install));
+                        page
+                    })
+                })
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.update_window(window, |_, window, cx| {
+            page.update(cx, |page, cx| page.focus_search(window, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        // nvm, and Node.js, whose description names it.
+        cx.simulate_keystrokes(window, "n v m");
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, "enter");
+        cx.run_until_parked();
+        let state = |cx: &mut TestAppContext| {
+            page.read_with(cx, |page, _| (page.cursor, page.states.get("nvm").cloned()))
+        };
+        let queued = Some(State::Queued { for_: None });
+        assert_eq!(state(cx), (Some(0), queued.clone()), "↩ in the search");
+        cx.simulate_keystrokes(window, "down");
+        assert_eq!(state(cx), (Some(1), queued.clone()));
+        cx.simulate_keystrokes(window, "down up");
+        assert_eq!(state(cx), (Some(0), queued));
+        cx.simulate_keystrokes(window, "enter");
+        assert_eq!(
+            state(cx),
+            (Some(0), None),
+            "↩ didn't take it out of the queue"
+        );
+        cx.simulate_keystrokes(window, "cmd-f");
+        cx.run_until_parked();
+        let search = page.read_with(cx, |page, cx| {
+            page.search.as_ref().unwrap().focus_handle(cx)
+        });
+        cx.update_window(window, |_, window, _| {
+            assert!(search.is_focused(window), "⌘F")
+        })
+        .unwrap();
     }
 }

@@ -227,13 +227,19 @@ explained. A conflict on the same address can't be forced.
 - Each tool shows whether it's installed, its version and where it lives, and the exact command that installs it.
 - Search the list, narrow it with the **Installed**, **Updates** and **Not Installed** tabs or to one category, and
   sort it by category, by name or by what needs attention. It shows eight tools a page.
+- The keyboard starts in the search (⌘F goes back to it); ↩ there moves to the first tool, ↑ and ↓ select, and ↩
+  installs, upgrades or retries the selected one.
 - When npm or GitHub has a newer release, an installed tool shows `11.21.0 → 12.16.1` and an **Upgrade** button;
   **Upgrade All** upgrades every one of them. Upgrades use the tool's own command (`bun upgrade`, `uv self update`,
   `claude update`, …), or its install script again.
-- **Install** one, tick several and **Install Selected**, or **Install All Missing**. Each runs its official install
-  script in your login shell, one at a time, with prerequisites first (nvm before Node.js, uv before Python).
+- **Install** one, tick several and **Install N**, or **Install Missing (N)**. Each runs its official install
+  script in your login shell (zsh when that is fish, nu, PowerShell or tcsh, which can't run these scripts), one at
+  a time, with prerequisites first (nvm before Node.js, uv before Python). If the shell can't say which tools are
+  installed, the page says so instead of showing them as not installed.
 - Homebrew asks for your password, so it runs in the terminal. Open a new terminal tab afterwards so it sees the
   new `PATH`.
+- Closing the tab while something installs asks first, and stops it. One tool is installed, upgraded or removed at a
+  time, whether from this page, an agent or `sawit pasang`.
 - From the terminal: `sawit list tools`, `sawit pasang bun uv` and `sawit pupuk`.
 
 ### Browser
@@ -358,10 +364,14 @@ explained. A conflict on the same address can't be forced.
   profiles, Gemini CLI, Qwen Code, opencode, Amp, GitHub Copilot CLI, Cursor, Windsurf, Kiro, Goose, Crush and
   Claude Desktop), on this Mac and in the window's projects: `~/.claude/settings.json`, `.codex/config.toml`,
   `AGENTS.md`, … Each agent's files come highest priority first, saying where they apply (managed, project,
-  user, …) and what they hold.
+  user, …) and what they hold. Each other profile (`~/.claude-work`, a `CLAUDE_CONFIG_DIR` or `CODEX_HOME`
+  elsewhere) is a group of its own, "Claude Code · work": profiles are alternatives, not layers.
 - Search by file, path, description or agent. Click a file to edit it.
 - Right-click a file to reveal it in Finder, open it in its default app, duplicate it (`.zshrc copy`, a quick
   backup), copy its path, move it to the Trash or delete it. The Files tab's shortcuts work here too.
+- **Save Shell Files to GitHub** commits your own startup files to a private repository (`sawit-shell-config`). Each
+  save that would send a line that looks like a secret (an API key, a token, a password, in any shell's syntax)
+  names those lines and asks first.
 
 ### Tabs & layout
 
@@ -545,14 +555,22 @@ and `uninstall_mcp_server` take the name again as `confirm` (so does `remove_ins
 `confirm: true` because they run install scripts from the internet. Passwords never appear in a result.
 
 Click **MCP** in the title bar to install it, along with a catalog of other servers: AWS, Cloudflare, Neon, Postman,
-Figma, Mobbin, Exa and more. Search the catalog, narrow it with the **Installed**, **Not Installed** and
-**Needs Sign-In** tabs or by where a server runs (built in, remote, on this Mac), and sort it. Servers that need an
-account sign in through the client's own sign-in, which the page can start for Claude Code and Codex. The page
-finds the AI clients on this Mac: Claude Code (every
-profile, including `CLAUDE_CONFIG_DIR` folders), Codex (and `CODEX_HOME` profiles), Claude Desktop, Cursor,
-Windsurf, Gemini CLI, Zed, opencode and VS Code. It installs into each with one click and shows where each config
-lives. Claude Code and Codex are changed through their own CLI when it's installed. Other configs are edited in
-place, keeping other settings, key order and comments, with a one-time backup next to the original.
+Figma, Mobbin, Exa and more. Search the catalog, narrow it with the **Installed**, **Not Installed** and **Needs
+Sign-In** tabs or by where a server runs (built in, remote, on this Mac), and sort it. From the keyboard: ⌘F
+searches, ↩ in the search moves to the first server, ↑ and ↓ select, ↩ opens the server's sheet, and ↩ there
+installs. Servers that need an account sign in through the client's own sign-in, which the page can start for Claude
+Code and Codex. The page finds the AI clients on this Mac: Claude Code (every profile, including `CLAUDE_CONFIG_DIR`
+folders), Codex (and `CODEX_HOME` profiles), Claude Desktop, Cursor, Windsurf, Gemini CLI, Zed, opencode and VS
+Code. It installs into each with one click and shows where each config lives. The AWS server shows the Region your
+clients have it in, and an install in another Region reads as installed there. It finds `claude`, `codex` and `npx`
+where the Dev Tools page finds them (`~/.local/bin`, nvm's Node.js, …), not only on the PATH apps get. Claude Code
+and Codex are changed through their own CLI when it's installed. Apps such as Claude Desktop start without your
+shell's PATH, so their `npx` entries say which folder has `node`; clients that reach remote servers only through
+`npx` (Claude Desktop, LM Studio and others) say so when Node.js isn't installed. Other configs are edited in place,
+keeping other settings, their order and the file's indentation (a TOML file keeps its comments too; a JSON file with
+comments is left for you to edit, with the entry to paste), and each file is copied next to it (`.sawit-backup`)
+before every change. Updating an entry changes only where it points: what you added to it (Cline's auto-approved
+tools, `env`, timeouts, …) stays. **Remove from N** in a server's sheet asks first, like its row's trash button.
 
 To add it by hand:
 

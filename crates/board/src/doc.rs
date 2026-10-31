@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use figcraft_doc::Document;
-use figcraft_engine::{DocState, EngineError, Session, board};
+use figcraft_engine::{DocState, EngineError, Session, board, guard};
 use figcraft_format::FormatError;
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -92,6 +92,12 @@ impl BoardDoc {
     /// The board in `bytes`, with its version history and branches, and when it is read from the
     /// file at `file`, the images left in that file. The notes are
     /// [`BoardDoc::from_bytes_with_issues`]'s.
+    ///
+    /// The engine's own `file.open` makes the document's state (repairing what it must, linking
+    /// styles, binding paints) inside its guard against a panic; it is made here in one too
+    /// ([`guard::run`], spec D15, CANVAS-CORE-9): a file another app wrote that makes it panic is
+    /// an error the canvas shows, where the panic unwound into the window's callbacks and aborted
+    /// the app with every tab.
     fn load(bytes: &[u8], file: Option<&Path>) -> Result<(Self, Vec<String>), BoardError> {
         let loaded = figcraft_format::load_bytes_with_versions(bytes).map_err(format_error)?;
         let mut issues = loaded.issues;
@@ -102,12 +108,15 @@ impl BoardDoc {
                  them): saving over the file would drop them"
             ));
         }
-        let mut ds = DocState::new(loaded.doc, None)
-            .with_versions(loaded.versions)
-            .with_branches(loaded.branches);
-        if let Some(file) = file {
-            ds = ds.with_images_left_in_file(&file.to_string_lossy(), left_in_file);
-        }
+        let ds = guard::run("file.open", || {
+            let mut ds = DocState::new(loaded.doc, None)
+                .with_versions(loaded.versions)
+                .with_branches(loaded.branches);
+            if let Some(file) = file {
+                ds = ds.with_images_left_in_file(&file.to_string_lossy(), left_in_file);
+            }
+            Ok(ds)
+        })?;
         let mut session = Session::empty();
         session.docs.push(ds);
         Ok((Self { session }, issues))
@@ -115,16 +124,25 @@ impl BoardDoc {
 
     /// The document as a `.figcraft` archive, with its version history and branches, and without a
     /// thumbnail (a preview, not content). It is the document itself
-    /// ([`BoardDoc::document_itself`]), never a version shown in its place.
+    /// ([`BoardDoc::document_itself`]), never a version shown in its place. It records the page on
+    /// show, as FigCraft's own save does (`FileSnapshot::encode`), so the file opens on that page
+    /// again, here and in FigCraft (CANVAS-CORE-12).
     pub fn to_bytes(&self) -> Result<Vec<u8>, BoardError> {
         let ds = self.session.ds()?;
-        figcraft_format::save_bytes_with_history(
-            ds.document_itself(),
-            None,
-            &ds.versions,
-            &ds.branches,
-        )
-        .map_err(format_error)
+        let itself = ds.document_itself();
+        let on_show = Some(ds.page).filter(|page| itself.pages.contains(page));
+        let encode = |doc: &Document| {
+            figcraft_format::save_bytes_with_history(doc, None, &ds.versions, &ds.branches)
+                .map_err(format_error)
+        };
+        match on_show {
+            Some(page) if itself.current_page != Some(page) => {
+                let mut doc = (**itself).clone();
+                doc.current_page = Some(page);
+                encode(&doc)
+            }
+            _ => encode(itself),
+        }
     }
 
     /// Refuses a save over the file at `path` that would delete images the loader left in it,
@@ -180,6 +198,19 @@ impl BoardDoc {
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, BoardError> {
         Ok(self.session.execute(id, params)?)
     }
+}
+
+/// Runs `f` on `session` as one undo step called `label` ([`Session::grouped`]), with a panic in
+/// `f` caught as the engine catches one in a command ([`guard::run`], spec D15, CANVAS-CORE-9):
+/// the group fails, so what `f` did is rolled back and the document is as it was. Uncaught, the
+/// panic unwound through the group without rolling it back, and into the window's callbacks,
+/// which aborts the app with every tab.
+pub(crate) fn grouped<T>(
+    session: &mut Session,
+    label: &str,
+    f: impl FnOnce(&mut Session) -> Result<T, EngineError>,
+) -> Result<T, EngineError> {
+    session.grouped(label, |session| guard::run(label, || f(session)))
 }
 
 /// A `.figcraft` file of a board with a sticky "kept", and an image whose bytes are damaged: the
@@ -424,6 +455,49 @@ mod tests {
         // Read with no file, it has no file to save over.
         let (board, _) = BoardDoc::from_bytes_with_issues(&bytes).unwrap();
         assert!(board.refuse_dropping_images(path).is_ok());
+    }
+
+    /// CANVAS-CORE-12: a save records the page on show, as FigCraft's own does, so the file
+    /// opens on it again, here and in FigCraft. It opened on the page FigCraft last saved.
+    #[test]
+    fn a_save_keeps_the_page_on_show() {
+        let mut board = BoardDoc::new_board("Canvas").unwrap();
+        let first = board.session.ds().unwrap().page;
+        board.execute("page.add", &json!({})).unwrap();
+        let second = board.session.ds().unwrap().page;
+        assert_ne!(first, second, "page.add shows the new page");
+        let page_on_open = |board: &BoardDoc| {
+            let back = BoardDoc::from_bytes(&board.to_bytes().unwrap()).unwrap();
+            back.session.ds().unwrap().page
+        };
+        assert_eq!(page_on_open(&board), second);
+        board.execute("page.select", &json!({"id": first})).unwrap();
+        assert_eq!(page_on_open(&board), first);
+    }
+
+    /// CANVAS-CORE-9: a panic in what an op does inside its group (a bug in Sawit's code between
+    /// the engine's commands) is caught there: the group fails and rolls back, and the next edit
+    /// is the one undo step. Caught outside the group, the sticky made before the panic stayed, a
+    /// half-done op, and was an undo step too.
+    #[test]
+    fn a_panic_in_a_group_rolls_it_back_and_leaves_undo_whole() {
+        let mut board = BoardDoc::new_board("Canvas").unwrap();
+        let before = board.doc().unwrap();
+        let result: Result<(), EngineError> =
+            grouped(&mut board.session, "Add elements", |session| {
+                session.execute("board.sticky", &json!({"x": 0, "y": 0}))?;
+                panic!("a bug in the op");
+            });
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("a bug in the op"), "{error}");
+        assert!(
+            *board.doc().unwrap() == *before,
+            "the sticky made before stayed"
+        );
+        board
+            .execute("board.sticky", &json!({"x": 300, "y": 0}))
+            .unwrap();
+        assert_eq!(board.session.undo_depth(), (1, 0));
     }
 
     #[test]

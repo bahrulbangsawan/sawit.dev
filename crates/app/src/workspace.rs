@@ -993,11 +993,14 @@ impl Workspace {
                 pinned: t.pinned,
                 dirty: match &t.item {
                     PaneItem::File(e) => e.read(cx).dirty,
-                    // Annotation notes not yet copied or sent.
-                    PaneItem::Other { view, .. } => view
-                        .clone()
-                        .downcast::<BrowserView>()
-                        .is_ok_and(|b| b.read(cx).unsent_notes(cx) > 0),
+                    // Annotation notes not yet copied or sent; a Dev Tools tab that
+                    // installs something counts too: closing it stops that.
+                    PaneItem::Other { view, .. } => {
+                        view.clone()
+                            .downcast::<BrowserView>()
+                            .is_ok_and(|b| b.read(cx).unsent_notes(cx) > 0)
+                            || tools_work(&t.item, cx).is_some()
+                    }
                     PaneItem::Server => false,
                 },
             })
@@ -1005,8 +1008,8 @@ impl Workspace {
     }
 
     /// Closes tabs per `op` relative to `target`. Closing a single tab with
-    /// unsaved changes (or a browser with notes not yet sent) asks first; bulk
-    /// closes leave such tabs open.
+    /// unsaved changes (or a browser with notes not yet sent), or the Dev Tools
+    /// tab while it installs, asks first; bulk closes leave such tabs open.
     fn close(&mut self, op: CloseOp, target: usize, window: &mut Window, cx: &mut Context<Self>) {
         let closing = to_close(op, target, &self.flags(cx));
         if let [ix] = closing[..]
@@ -1022,6 +1025,12 @@ impl Workspace {
             && browser.read(cx).unsent_notes(cx) > 0
         {
             self.confirm_close_browser(browser, window, cx);
+            return;
+        }
+        if let [ix] = closing[..]
+            && let Some(work) = self.tabs.get(ix).and_then(|t| tools_work(&t.item, cx))
+        {
+            self.confirm_close_tools(work, window, cx);
             return;
         }
         self.remove_tabs(&closing, cx);
@@ -1050,6 +1059,32 @@ impl Workspace {
                         matches!(&t.item, PaneItem::Other { view, .. }
                             if view.clone().downcast::<BrowserView>().ok().as_ref() == Some(&browser))
                     }) {
+                        this.remove_tabs(&[ix], cx);
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Asks before closing the Dev Tools tab while it installs: closing it
+    /// stops the installer, and what's queued doesn't run.
+    fn confirm_close_tools(&mut self, work: String, window: &mut Window, cx: &mut Context<Self>) {
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            "Stop the Dev Tools installs?",
+            Some(&format!(
+                "{work}. Closing the tab stops it, and what's queued doesn't run."
+            )),
+            &["Stop and Close", "Cancel"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if matches!(answer.await, Ok(0)) {
+                let _ = this.update(cx, |this, cx| {
+                    if let Some(ix) = this.tabs.iter().position(
+                        |t| matches!(&t.item, PaneItem::Other { key, .. } if key.as_ref() == "tools"),
+                    ) {
                         this.remove_tabs(&[ix], cx);
                     }
                 });
@@ -1713,15 +1748,10 @@ impl Workspace {
                                 String::new()
                             }
                         ))
-                        .tooltip("Show Git")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.leave_welcome(PANEL_AND_TABS, cx);
-                            if !this.layout.sidebar {
-                                this.layout.toggle(Area::Sidebar);
-                            }
-                            this.sidebar = SidebarTab::Git;
-                            cx.notify();
-                        })),
+                        .tooltip_with_action("Show Git", &ShowGit, Some("Workspace"))
+                        .on_click(
+                            cx.listener(|this, _, _, cx| this.show_panel(SidebarTab::Git, cx)),
+                        ),
                 )
             })
             .child(div().flex_1())
@@ -2625,8 +2655,15 @@ impl Workspace {
         )
     }
 
-    /// Shows the MCP install page (one tab), with the tab area, which may be hidden.
-    fn open_mcp_page(&mut self, cx: &mut Context<Self>) {
+    /// Shows the MCP install page (one tab), with the tab area, which may be hidden, and the
+    /// keyboard in its search.
+    fn open_mcp_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_mcp_page(true, window, cx);
+    }
+
+    /// Shows the MCP page; `focus` gives its search the keyboard (not when an
+    /// agent opens it: the keyboard stays where the user has it).
+    fn show_mcp_page(&mut self, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_welcome(CENTER_ONLY, cx);
         self.show_center(cx);
         let key: SharedString = "mcp".into();
@@ -2636,8 +2673,17 @@ impl Workspace {
             .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
         {
             self.active = ix;
+            if focus
+                && let PaneItem::Other { view, .. } = &self.tabs[ix].item
+                && let Ok(page) = view.clone().downcast::<McpPage>()
+            {
+                page.update(cx, |page, cx| page.focus_search(window, cx));
+            }
         } else {
-            let view = cx.new(McpPage::new);
+            let view = cx.new(|cx| McpPage::new(window, cx));
+            if focus {
+                view.update(cx, |page, cx| page.focus_search(window, cx));
+            }
             self.push_tab(
                 PaneItem::Other {
                     view: view.into(),
@@ -2701,8 +2747,15 @@ impl Workspace {
         self.open_file(path, window, cx);
     }
 
-    /// Shows the Dev Tools install page (one tab), with the tab area, which may be hidden.
+    /// Shows the Dev Tools install page (one tab), with the tab area, which may be hidden, and
+    /// the keyboard in its search.
     fn open_tools_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_tools_page(true, window, cx);
+    }
+
+    /// Shows the Dev Tools page; `focus` gives its search the keyboard (not
+    /// when an agent opens it: the keyboard stays where the user has it).
+    fn show_tools_page(&mut self, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_welcome(CENTER_ONLY, cx);
         self.show_center(cx);
         let key: SharedString = "tools".into();
@@ -2712,8 +2765,18 @@ impl Workspace {
             .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
         {
             self.active = ix;
+            // The keyboard goes to its search, as for a new one.
+            if focus
+                && let PaneItem::Other { view, .. } = &self.tabs[ix].item
+                && let Ok(page) = view.clone().downcast::<ToolsPage>()
+            {
+                page.update(cx, |page, cx| page.focus_search(window, cx));
+            }
         } else {
-            let view = cx.new(ToolsPage::new);
+            let view = cx.new(|cx| ToolsPage::new(window, cx));
+            if focus {
+                view.update(cx, |page, cx| page.focus_search(window, cx));
+            }
             cx.subscribe_in(
                 &view,
                 window,
@@ -2907,11 +2970,13 @@ impl Workspace {
                             .icon(Lucide::Plug)
                             .label("MCP")
                             .tooltip_with_action(
-                                "Set Up the MCP Server for Claude, Codex and More",
+                                "Install MCP Servers into Claude, Codex and More",
                                 &OpenMcp,
                                 Some("Workspace"),
                             )
-                            .on_click(cx.listener(|this, _, _, cx| this.open_mcp_page(cx))),
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.open_mcp_page(window, cx)),
+                            ),
                     )
                     .child(
                         Button::new("open-keymap")
@@ -3135,7 +3200,7 @@ impl Render for Workspace {
             )
             .on_action(cx.listener(|this, _: &OpenCanvas, _, cx| this.show_canvas(cx)))
             .on_action(cx.listener(|this, _: &OpenDevTools, w, cx| this.open_tools_page(w, cx)))
-            .on_action(cx.listener(|this, _: &OpenMcp, _, cx| this.open_mcp_page(cx)))
+            .on_action(cx.listener(|this, _: &OpenMcp, w, cx| this.open_mcp_page(w, cx)))
             .on_action(cx.listener(|this, _: &OpenKeymapEditor, w, cx| {
                 this.show_center(cx);
                 this.open_keymap_editor(w, cx)
@@ -3232,6 +3297,18 @@ fn browser_key(root: Option<&Path>) -> SharedString {
     }
 }
 
+/// What the Dev Tools page in `item` runs and has queued, when it is that page
+/// and it runs something.
+fn tools_work(item: &PaneItem, cx: &App) -> Option<String> {
+    let PaneItem::Other { view, key, .. } = item else {
+        return None;
+    };
+    if key.as_ref() != "tools" {
+        return None;
+    }
+    view.clone().downcast::<ToolsPage>().ok()?.read(cx).work()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -3276,6 +3353,29 @@ mod tests {
             }
         }
         out + key
+    }
+
+    /// The Dev Tools tab counts as unsaved while it installs: closing it alone asks first
+    /// (closing stops the installer), and closing others or all leaves it open.
+    #[gpui_kit::test]
+    fn a_dev_tools_tab_that_installs_counts_as_unsaved(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::AppContext as _;
+        let busy = super::PaneItem::Other {
+            view: cx
+                .new(|cx| crate::tools_page::ToolsPage::installing("bun", cx))
+                .into(),
+            key: "tools".into(),
+            title: "Dev Tools".into(),
+            icon: gpui_kit::assets::IconName::Package,
+            file: None,
+        };
+        cx.update(|cx| {
+            assert_eq!(
+                super::tools_work(&busy, cx).as_deref(),
+                Some("Installing Bun")
+            );
+            assert_eq!(super::tools_work(&super::PaneItem::Server, cx), None);
+        });
     }
 
     #[test]

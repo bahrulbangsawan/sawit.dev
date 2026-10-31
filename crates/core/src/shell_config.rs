@@ -209,50 +209,118 @@ fn backup_files_in(configs: &[ShellConfig], home: &Path) -> Vec<(String, PathBuf
         .collect()
 }
 
-/// Lines that set what looks like a secret (`export OPENAI_API_KEY=sk-…`,
-/// fish's `set -gx GITHUB_TOKEN …`), as `line number, variable`. Values
-/// that only point at another variable or a command (`$(op read …)`) don't
-/// count.
+/// Lines that set what looks like a secret, as `line number, variable`: a
+/// name like `OPENAI_API_KEY`, `GITHUB_PAT` or `DB_PASSWORD`, or a value
+/// shaped like a known token (`sk-…`, `ghp_…`, `xoxb-…`, `AKIA…`), in the
+/// ways shells set variables ([`assignment`]). Values that only point at
+/// another variable or a command (`$(op read …)`) don't count.
 pub fn find_secrets(text: &str) -> Vec<(usize, String)> {
-    const HINTS: [&str; 6] = [
-        "TOKEN",
-        "SECRET",
-        "PASSWORD",
-        "PASSWD",
-        "API_KEY",
-        "PRIVATE_KEY",
-    ];
     let mut out = Vec::new();
     for (ix, line) in text.lines().enumerate() {
         let line = line.trim();
         if line.starts_with('#') {
             continue;
         }
-        let (name, value) = if let Some(rest) = line.strip_prefix("set ") {
-            // fish: set [-gxU…] NAME value
-            let mut words = rest.split_whitespace().skip_while(|w| w.starts_with('-'));
-            let Some(name) = words.next() else { continue };
-            (name, words.collect::<Vec<_>>().join(" "))
-        } else {
-            let line = line.strip_prefix("export ").unwrap_or(line);
-            let Some((name, value)) = line.split_once('=') else {
-                continue;
-            };
-            (name.trim(), value.trim().to_string())
+        let Some((name, value)) = assignment(line) else {
+            continue;
         };
         let valid = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-        let upper = name.to_ascii_uppercase();
-        let value = value.trim_matches(|c| c == '"' || c == '\'');
-        if valid
-            && HINTS.iter().any(|h| upper.contains(h))
-            && !value.is_empty()
-            && !value.starts_with('$')
-            && !value.starts_with('`')
-        {
+        let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
+        let reference = value.is_empty() || value.starts_with('$') || value.starts_with('`');
+        if valid && !reference && (secret_name(name) || secret_value(value)) {
             out.push((ix + 1, name.to_string()));
         }
     }
     out
+}
+
+/// The variable a line sets and its value, as shells write it: `NAME=value`
+/// alone or after `export`, `typeset -x`, `declare -x`, `local` or
+/// `readonly`; fish's `set -gx NAME value`; csh's `setenv NAME value`;
+/// `launchctl setenv NAME value`; PowerShell's `$env:NAME = "value"` and
+/// `[Environment]::SetEnvironmentVariable("NAME", "value", …)`.
+fn assignment(line: &str) -> Option<(&str, String)> {
+    fn words(rest: &str) -> Option<(&str, String)> {
+        let mut words = rest.split_whitespace().skip_while(|w| w.starts_with('-'));
+        let name = words.next()?;
+        Some((name, words.collect::<Vec<_>>().join(" ")))
+    }
+    for prefix in ["set ", "setenv ", "launchctl setenv "] {
+        if let Some(rest) = line.strip_prefix(prefix) {
+            return words(rest);
+        }
+    }
+    let lower = line.to_ascii_lowercase();
+    if lower.starts_with("$env:") {
+        let (name, value) = line[5..].split_once('=')?;
+        return Some((name.trim(), value.trim().to_string()));
+    }
+    for prefix in [
+        "[environment]::setenvironmentvariable(",
+        "[system.environment]::setenvironmentvariable(",
+    ] {
+        if lower.starts_with(prefix) {
+            let mut parts = line[prefix.len()..].splitn(3, ',');
+            let name = parts.next()?.trim().trim_matches(|c| c == '"' || c == '\'');
+            let value = parts.next()?.trim().trim_end_matches(')').trim();
+            return Some((name, value.to_string()));
+        }
+    }
+    let mut rest = line;
+    for keyword in ["export ", "typeset ", "declare ", "local ", "readonly "] {
+        if let Some(after) = rest.strip_prefix(keyword) {
+            rest = after.trim_start();
+            while rest.starts_with('-') {
+                rest = rest.split_once(char::is_whitespace)?.1.trim_start();
+            }
+            break;
+        }
+    }
+    let (name, value) = rest.split_once('=')?;
+    Some((name.trim(), value.trim().to_string()))
+}
+
+/// A variable name that holds a secret.
+fn secret_name(name: &str) -> bool {
+    const PARTS: [&str; 9] = [
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "PASSPHRASE",
+        "API_KEY",
+        "PRIVATE_KEY",
+        "ACCESS_KEY",
+        "CREDENTIAL",
+    ];
+    let upper = name.to_ascii_uppercase();
+    PARTS.iter().any(|p| upper.contains(p)) || upper.ends_with("_KEY") || upper.ends_with("_PAT")
+}
+
+/// A value shaped like a known kind of token or key.
+fn secret_value(value: &str) -> bool {
+    const PREFIXES: [&str; 17] = [
+        "sk-",
+        "ghp_",
+        "gho_",
+        "ghu_",
+        "ghs_",
+        "ghr_",
+        "github_pat_",
+        "xoxb-",
+        "xoxp-",
+        "xoxa-",
+        "xoxr-",
+        "glpat-",
+        "hf_",
+        "npm_",
+        "AIza",
+        "AKIA",
+        "ASIA",
+    ];
+    PREFIXES
+        .iter()
+        .any(|p| value.starts_with(p) && value.len() >= p.len() + 8 && !value.contains(' '))
 }
 
 /// What saving would do, worked out before anything is sent.
@@ -430,6 +498,45 @@ DB_PASSWORD='hunter2'
             .map(|(l, n)| format!("{l} {n}"))
             .collect();
         assert_eq!(found, ["2 OPENAI_API_KEY", "6 HF_TOKEN", "7 DB_PASSWORD"]);
+    }
+
+    #[test]
+    fn secrets_in_other_names_shells_and_shapes_are_found() {
+        let text = r#"export ANTHROPIC_KEY="sk-ant-api03-abcdefgh"
+export GITHUB_PAT=ghp_0123456789abcdef
+GOOGLE_CREDENTIALS='{"type": "service_account"}'
+typeset -x OPENAI_TOKEN=sk-proj-abcdefgh
+declare -x DB_PASSWORD=hunter2
+launchctl setenv NPM_TOKEN npm_abcdefghijkl
+setenv HF_TOKEN hf_abcdefghijkl
+$env:OPENAI_API_KEY = "sk-abcdefgh12345678"
+[Environment]::SetEnvironmentVariable("SLACK_SECRET", "xyz123", "User")
+export WEBHOOK=xoxb-1234-5678-abcdefgh
+export SOMETHING=AKIAABCDEFGHIJKLMNOP
+export KEYTIMEOUT=1
+export SSH_AUTH_SOCK=/private/tmp/agent.sock
+export EDITOR=vim
+"#;
+        let found: Vec<_> = find_secrets(text)
+            .into_iter()
+            .map(|(l, n)| format!("{l} {n}"))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                "1 ANTHROPIC_KEY",
+                "2 GITHUB_PAT",
+                "3 GOOGLE_CREDENTIALS",
+                "4 OPENAI_TOKEN",
+                "5 DB_PASSWORD",
+                "6 NPM_TOKEN",
+                "7 HF_TOKEN",
+                "8 OPENAI_API_KEY",
+                "9 SLACK_SECRET",
+                "10 WEBHOOK",
+                "11 SOMETHING",
+            ]
+        );
     }
 
     #[test]

@@ -529,17 +529,18 @@ mod tests {
             assert!(elements.contains(said), "no {said:?} in {elements}");
         }
         // The canvas tab opens only in the app. With the app closed a clear is saved at once, so
-        // nothing undoes it, and the save keeps the board it cleared beside the file (m1).
+        // nothing undoes it, and the save keeps the board it cleared beside the file (m1), and the
+        // ones before it (CANVAS-CORE-3).
         assert!(
             elements.contains("Opens the canvas tab when the app is running"),
             "{elements}"
         );
         let clear = tool("canvas_clear");
         assert!(
-            clear.contains("In the app the user can undo it")
-                && clear.contains(
-                    "with the app closed the cleared board is kept as canvas.figcraft.bak"
-                ),
+            clear.contains(
+                "The board it held is kept beside the canvas file as canvas.figcraft.bak"
+            ) && clear.contains("the 4 kept before it moving to .bak.1 to .bak.4")
+                && clear.contains("in the app the user can also undo it"),
             "{clear}"
         );
         let load = tool("canvas_load");
@@ -641,6 +642,7 @@ mod tests {
             "/p/Board.FigCraft",
             "/p/.nyawit/canvas.excalidraw",
             "/p/.nyawit/canvas.figcraft.bak",
+            "/p/.nyawit/canvas.figcraft.bak.3",
             "/p/.nyawit/canvas.figcraft.tmp",
         ] {
             assert_eq!(

@@ -276,6 +276,19 @@ impl Server {
         }
     }
 
+    /// The region an installed entry points at, read from its URL (or the
+    /// `mcp-remote` bridge's arguments, which hold it).
+    pub fn region_in(&self, signature: &str) -> Option<String> {
+        let Source::Http { url, .. } = self.source else {
+            return None;
+        };
+        let (before, after) = url.split_once("{region}")?;
+        let start = signature.find(before)? + before.len();
+        let len = signature[start..].find(after)?;
+        let region = &signature[start..start + len];
+        valid_region(region).then(|| region.to_string())
+    }
+
     /// The program a local server needs, when it isn't found.
     pub fn missing_program(&self, find: impl Fn(&str) -> Option<PathBuf>) -> Option<&'static str> {
         match self.source {
@@ -317,6 +330,25 @@ pub fn get(id: &str) -> Option<&'static Server> {
     SERVERS.iter().find(|s| s.id == id)
 }
 
+/// Whether `region` names an AWS Region (`us-east-1`, `ap-southeast-2`,
+/// `us-gov-west-1`): it goes into the server's host name, so nothing else
+/// may.
+pub fn valid_region(region: &str) -> bool {
+    let parts: Vec<&str> = region.split('-').collect();
+    let letters = |p: &&str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_lowercase());
+    match parts.as_slice() {
+        [area, middle @ .., number] => {
+            area.len() == 2
+                && letters(area)
+                && !middle.is_empty()
+                && middle.iter().all(letters)
+                && !number.is_empty()
+                && number.bytes().all(|b| b.is_ascii_digit())
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,6 +365,53 @@ mod tests {
             assert_eq!(spec.name, s.id);
             assert_eq!(spec.is_remote(), s.is_remote());
         }
+    }
+
+    #[test]
+    fn regions_are_checked_and_read_back() {
+        for ok in [
+            "us-east-1",
+            "eu-west-1",
+            "ap-southeast-2",
+            "us-gov-west-1",
+            "cn-north-1",
+        ] {
+            assert!(valid_region(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "eu west 1",
+            "x.example.com/#",
+            "us-east",
+            "useast-1",
+            "US-EAST-1",
+            "u-east-1",
+            "us--1",
+        ] {
+            assert!(!valid_region(bad), "{bad}");
+        }
+        let aws = get("aws").unwrap();
+        assert_eq!(
+            aws.region_in("https://aws-mcp.eu-west-1.api.aws/mcp")
+                .as_deref(),
+            Some("eu-west-1")
+        );
+        // Through the mcp-remote bridge.
+        assert_eq!(
+            aws.region_in(
+                "/opt/homebrew/bin/npx -y mcp-remote https://aws-mcp.ap-south-1.api.aws/mcp"
+            )
+            .as_deref(),
+            Some("ap-south-1")
+        );
+        assert_eq!(
+            aws.region_in("https://aws-mcp.x.example.com/#.api.aws/mcp"),
+            None
+        );
+        assert_eq!(
+            get("neon").unwrap().region_in("https://mcp.neon.tech/mcp"),
+            None
+        );
     }
 
     #[test]

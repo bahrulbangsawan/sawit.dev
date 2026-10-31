@@ -90,6 +90,71 @@ pub fn read_text(path: &Path) -> Result<TextFile> {
     }
 }
 
+/// The bytes of the regular file at `path` (a link is followed), read
+/// through one handle, which is checked before anything is read. Anything
+/// else is refused at once ([`std::io::ErrorKind::InvalidInput`]): a named
+/// pipe would block the read for ever, and a device such as `/dev/zero`
+/// never ends (a cloned repository can link a file to one). So is a file of
+/// more than `max` bytes ([`std::io::ErrorKind::FileTooLarge`]). A missing
+/// file is [`std::io::ErrorKind::NotFound`], as for [`std::fs::read`].
+pub fn read_regular(path: &Path, max: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
+
+    let (file, len) = open_regular(path, max)?;
+    let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
+    // A file that grew meanwhile is read only as far as `max`.
+    file.take(max.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max {
+        return Err(too_large(max));
+    }
+    Ok(bytes)
+}
+
+/// Checks the file at `path` as [`read_regular`] does before it reads, and
+/// reads nothing: `Ok` for a regular file (a link is followed) of at most
+/// `max` bytes, else the error `read_regular` gives. It is for a file that
+/// something else reads next, by its path, as FigCraft's engine reads the
+/// file its `file.import` names: a pipe or a device is told at once, as the
+/// open doesn't block. Something that replaces the file in between isn't
+/// caught, which only a process of the user's own could do.
+pub fn check_regular(path: &Path, max: u64) -> std::io::Result<()> {
+    open_regular(path, max).map(|_| ())
+}
+
+/// The file at `path` opened for reading, and its length, when it is a
+/// regular file of at most `max` bytes ([`read_regular`]).
+fn open_regular(path: &Path, max: u64) -> std::io::Result<(std::fs::File, u64)> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    // Opening a pipe for reading waits for a writer, unless it doesn't block.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file (a folder, a pipe, a socket or a device)",
+        ));
+    }
+    if meta.len() > max {
+        return Err(too_large(max));
+    }
+    Ok((file, meta.len()))
+}
+
+/// [`read_regular`]'s error for a file of more than `max` bytes.
+fn too_large(max: u64) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::FileTooLarge,
+        format!(
+            "it holds more than {} MB, more than is read from one file",
+            max / (1024 * 1024)
+        ),
+    )
+}
+
 /// Writes via a private temp file in the same directory + rename, keeping
 /// the original file's permissions. A symlink stays a symlink: its target is
 /// what gets replaced ([`write_atomic`]).
@@ -101,47 +166,105 @@ pub fn write_text_atomic(path: &Path, text: &str) -> Result<()> {
 /// or the new one, never part of either: to a private temp file in the same
 /// directory ([`staging_file`]), synced to disk, then renamed over the file.
 /// The file keeps its permissions (a new one gets 0644). A symlink stays a
-/// symlink: its target is what gets replaced.
+/// symlink: its target is what gets replaced. Nothing else is written through
+/// a link ([`replace_file`]).
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
+    use std::os::unix::fs::PermissionsExt as _;
 
     let path = match std::fs::symlink_metadata(path) {
         Ok(m) if m.file_type().is_symlink() => std::fs::canonicalize(path)?,
         _ => path.to_path_buf(),
     };
-    let tmp = staging_file(&path);
-    let result = (|| {
-        // Owner-only until the final permissions are applied.
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        let mode = std::fs::metadata(&path)
-            .map(|m| m.permissions())
-            .unwrap_or_else(|_| std::os::unix::fs::PermissionsExt::from_mode(0o644));
-        std::fs::set_permissions(&tmp, mode)?;
-        std::fs::rename(&tmp, &path)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    Ok(result?)
+    let mode = std::fs::metadata(&path)
+        .map(|m| m.permissions())
+        .unwrap_or_else(|_| std::fs::Permissions::from_mode(0o644));
+    replace_file(&path, bytes, mode)
 }
 
-/// Where [`write_atomic`] puts the bytes for the file at `path` (not a
-/// symlink) before they replace it: `.<name>.sawit-tmp` beside it.
-pub fn staging_file(path: &Path) -> PathBuf {
+/// Puts a file of `bytes`, with permissions `mode`, at `path` in place of
+/// whatever is there, as [`write_atomic`] writes: through a private temp file
+/// beside it, synced to disk, then renamed over `path`. A symlink at `path`
+/// is replaced, never written through, unlike [`write_atomic`]'s: for copies
+/// Sawit keeps beside a file (a canvas's backups), where a link can only have
+/// come from somewhere else, a cloned repository say.
+///
+/// The temp file has a name no other write uses ([`staging_file`]), and is
+/// made new, owner-only, and given `mode` through its own handle. So a file or
+/// a link already at one of those names (a cloned repository can hold one) is
+/// never truncated, followed or chmodded, and two writers of one file, in one
+/// process or two, never share a temp file. On failure it is removed, and
+/// `path` is as it was.
+pub fn replace_file(path: &Path, bytes: &[u8], mode: std::fs::Permissions) -> Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static STAGED: AtomicU64 = AtomicU64::new(0);
+    let names =
+        std::iter::repeat_with(|| staging_file(path, STAGED.fetch_add(1, Ordering::Relaxed)));
+    Ok(stage_and_rename(
+        path,
+        bytes,
+        mode,
+        names.take(STAGING_TRIES),
+    )?)
+}
+
+/// How many temp file names [`replace_file`] tries before it gives up: only a
+/// leftover of a process that had this one's id, or a name made on purpose,
+/// can be in the way of one.
+const STAGING_TRIES: usize = 3;
+
+/// [`replace_file`] staging the file at the first of `names` that is free.
+fn stage_and_rename(
+    path: &Path,
+    bytes: &[u8],
+    mode: std::fs::Permissions,
+    names: impl IntoIterator<Item = PathBuf>,
+) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    for tmp in names {
+        // Made new (`O_EXCL`, which never follows a link), owner-only until it is complete.
+        let made = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp);
+        let mut file = match made {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        };
+        let result = (|| {
+            file.write_all(bytes)?;
+            file.set_permissions(mode)?;
+            file.sync_all()?;
+            std::fs::rename(&tmp, path)
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        return result;
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!(
+            "no free name to write {} through beside it",
+            path.file_name().unwrap_or_default().to_string_lossy()
+        ),
+    ))
+}
+
+/// Where [`replace_file`] (and so [`write_atomic`]) can put the bytes for the
+/// file at `path` before they replace it: `.<name>.sawit-tmp-<process>-<n>`
+/// beside it, hidden, and of this process alone. Each write takes the next `n`.
+pub fn staging_file(path: &Path, n: u64) -> PathBuf {
     let dir = path.parent().unwrap_or(Path::new("."));
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    dir.join(format!(".{name}.sawit-tmp"))
+    dir.join(format!(".{name}.sawit-tmp-{}-{n}", std::process::id()))
 }
 
 /// Makes an empty file or folder; fails if something is already there.
@@ -617,6 +740,64 @@ mod tests {
         assert!(t.read_only_reason.unwrap().contains("MB"));
     }
 
+    /// CANVAS-CORE-6: only a regular file is read, and only up to `max`; anything else is
+    /// refused before it is read, and at once.
+    #[test]
+    fn read_regular_reads_files_and_refuses_the_rest() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("a.bin");
+        fs::write(&f, [1, 2, 3]).unwrap();
+        assert_eq!(read_regular(&f, 3).unwrap(), [1, 2, 3]);
+        let link = d.path().join("link");
+        std::os::unix::fs::symlink(&f, &link).unwrap();
+        assert_eq!(read_regular(&link, 3).unwrap(), [1, 2, 3]);
+        let kind = |path: &Path, max| read_regular(path, max).unwrap_err().kind();
+        assert_eq!(kind(&f, 2), std::io::ErrorKind::FileTooLarge);
+        assert_eq!(
+            kind(&d.path().join("none"), 9),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(kind(d.path(), 9), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            kind(Path::new("/dev/zero"), 9),
+            std::io::ErrorKind::InvalidInput
+        );
+        let pipe = d.path().join("pipe");
+        let made = std::process::Command::new("mkfifo").arg(&pipe).status();
+        assert!(made.unwrap().success());
+        assert_eq!(kind(&pipe, 9), std::io::ErrorKind::InvalidInput);
+    }
+
+    /// `check_regular` passes what `read_regular` reads, and refuses the rest as it does, at once
+    /// and reading nothing: for a file another reader opens next.
+    #[test]
+    fn check_regular_passes_what_read_regular_reads() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("a.bin");
+        fs::write(&f, [1, 2, 3]).unwrap();
+        let link = d.path().join("link");
+        std::os::unix::fs::symlink(&f, &link).unwrap();
+        assert!(check_regular(&f, 3).is_ok());
+        assert!(check_regular(&link, 3).is_ok());
+        let pipe = d.path().join("pipe");
+        let made = std::process::Command::new("mkfifo").arg(&pipe).status();
+        assert!(made.unwrap().success());
+        let zero = d.path().join("zero");
+        std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+        for (path, max) in [
+            (f.as_path(), 2),
+            (&d.path().join("none"), 9),
+            (d.path(), 9),
+            (&zero, 9),
+            (&pipe, 9),
+        ] {
+            let checked = check_regular(path, max).unwrap_err();
+            let read = read_regular(path, max).unwrap_err();
+            assert_eq!(checked.kind(), read.kind(), "{}", path.display());
+            assert_eq!(checked.to_string(), read.to_string(), "{}", path.display());
+        }
+    }
+
     #[test]
     fn write_is_atomic_and_preserves_permissions() {
         use std::os::unix::fs::PermissionsExt;
@@ -639,7 +820,11 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("board.figcraft");
-        assert_eq!(staging_file(&f), d.path().join(".board.figcraft.sawit-tmp"));
+        let pid = std::process::id();
+        assert_eq!(
+            staging_file(&f, 7),
+            d.path().join(format!(".board.figcraft.sawit-tmp-{pid}-7"))
+        );
         // Bytes that aren't text, to a new file, which gets the usual permissions.
         write_atomic(&f, &[0, 0xFF, 0xFE]).unwrap();
         assert_eq!(fs::read(&f).unwrap(), [0, 0xFF, 0xFE]);
@@ -647,10 +832,144 @@ mod tests {
             fs::metadata(&f).unwrap().permissions().mode() & 0o777,
             0o644
         );
-        // A folder where the staging file goes: the write fails, and the file is as it was.
-        fs::create_dir(staging_file(&f)).unwrap();
-        assert!(write_atomic(&f, b"new").is_err());
-        assert_eq!(fs::read(&f).unwrap(), [0, 0xFF, 0xFE]);
+        assert_eq!(names(d.path()), ["board.figcraft"], "a temp file was left");
+    }
+
+    /// CANVAS-CORE-1: the temp file is made new, at a name nothing is at. A file, a folder or a
+    /// link at a name is passed over, untouched, for the next; with every name taken the write
+    /// fails, and the file is as it was.
+    #[test]
+    fn staging_passes_over_a_name_that_is_taken() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("board.figcraft");
+        fs::write(&f, "old").unwrap();
+        let victim = d.path().join("victim");
+        fs::write(&victim, "the user's").unwrap();
+        let taken = ["link", "dangling", "folder"].map(|name| d.path().join(name));
+        symlink(&victim, &taken[0]).unwrap();
+        symlink(d.path().join("nothing"), &taken[1]).unwrap();
+        fs::create_dir(&taken[2]).unwrap();
+        let mode = fs::Permissions::from_mode(0o755);
+
+        let free = d.path().join("free");
+        let names = taken.iter().cloned().chain([free.clone()]);
+        stage_and_rename(&f, b"new", mode.clone(), names).unwrap();
+        assert_eq!(fs::read_to_string(&f).unwrap(), "new");
+        assert_eq!(
+            fs::metadata(&f).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        assert!(!free.exists(), "the temp file was renamed");
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "the user's");
+        let victim_mode = fs::metadata(&victim).unwrap().permissions().mode() & 0o777;
+        assert_eq!(victim_mode, 0o644);
+        assert!(!d.path().join("nothing").exists());
+
+        let error = stage_and_rename(&f, b"newer", mode, taken.iter().cloned()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists, "{error}");
+        assert_eq!(fs::read_to_string(&f).unwrap(), "new");
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "the user's");
+    }
+
+    /// CANVAS-CORE-1: a backup is put in place of a link at its name, which is never followed;
+    /// the canvas's own file, a link the user made, still is ([`write_atomic`]).
+    #[test]
+    fn replace_file_replaces_a_link_and_write_atomic_follows_one() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("target");
+        fs::write(&target, "target").unwrap();
+        let link = d.path().join("link");
+        symlink(&target, &link).unwrap();
+        replace_file(&link, b"copy", fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_file());
+        assert_eq!(fs::read_to_string(&link).unwrap(), "copy");
+        assert_eq!(
+            fs::metadata(&link).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "target");
+
+        let user_link = d.path().join("board");
+        symlink(&target, &user_link).unwrap();
+        write_atomic(&user_link, b"saved").unwrap();
+        assert!(
+            fs::symlink_metadata(&user_link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "saved");
+        assert_eq!(names(d.path()), ["board", "link", "target"]);
+    }
+
+    /// CANVAS-CORE-1: two threads saving one file, each through its own temp file, leave it
+    /// whole: one save or the other, never parts of both.
+    #[test]
+    fn two_writers_of_one_file_never_share_a_temp_file() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("canvas.figcraft");
+        let [a, b] = (*b"ab").map(|byte| vec![byte; 256 * 1024]);
+        std::thread::scope(|scope| {
+            for bytes in [&a, &b] {
+                let f = &f;
+                scope.spawn(move || {
+                    for _ in 0..20 {
+                        write_atomic(f, bytes).unwrap();
+                    }
+                });
+            }
+            for _ in 0..40 {
+                let now = fs::read(&f).unwrap_or_else(|_| a.clone());
+                assert!(now == a || now == b, "a mix of both saves");
+            }
+        });
+        assert_eq!(names(d.path()), ["canvas.figcraft"], "a temp file was left");
+    }
+
+    /// CANVAS-CORE-1: a cloned repository can hold a link where a save of one of its files was
+    /// staged (`.<name>.sawit-tmp`). A save never writes through it, nor makes what it names, nor
+    /// changes its permissions: the link to a hook, beside an executable README, made the hook
+    /// from the README's text, executable, and git ran it.
+    #[test]
+    fn a_save_never_writes_through_a_link_beside_the_file() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("README.md");
+        fs::write(&f, "old").unwrap();
+        fs::set_permissions(&f, fs::Permissions::from_mode(0o755)).unwrap();
+        let staged = d.path().join(".README.md.sawit-tmp");
+        // A file of the user's.
+        let victim = d.path().join("victim");
+        fs::write(&victim, "the user's").unwrap();
+        symlink(&victim, &staged).unwrap();
+        write_text_atomic(&f, "new").unwrap();
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "the user's");
+        let mode = fs::metadata(&victim).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644, "the link's target was made {mode:o}");
+        let saved = fs::symlink_metadata(&f).unwrap();
+        assert!(saved.file_type().is_file(), "the file became a link");
+        assert_eq!(fs::read_to_string(&f).unwrap(), "new");
+        assert_eq!(saved.permissions().mode() & 0o777, 0o755);
+        // A hook that isn't there yet.
+        let hooks = d.path().join("hooks");
+        fs::create_dir(&hooks).unwrap();
+        fs::remove_file(&staged).unwrap();
+        symlink(hooks.join("pre-commit"), &staged).unwrap();
+        write_text_atomic(&f, "newer").unwrap();
+        assert!(names(&hooks).is_empty(), "made {:?}", names(&hooks));
+        assert_eq!(fs::read_to_string(&f).unwrap(), "newer");
+    }
+
+    /// The names in `dir`, sorted.
+    fn names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
     }
 
     #[test]

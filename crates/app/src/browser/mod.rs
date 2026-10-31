@@ -2479,8 +2479,9 @@ mod tests {
     }
 
     /// I3: the browser's tab often goes off screen without a click, after a press in the page
-    /// gave its view GPUI's keyboard (KEYMAP-4): ⇧⌘J hides the tab area, a page that takes no
-    /// keyboard comes in front (⌃⌘M's MCP page), ⌃Tab, an agent's `app_activate_tab`. A view that
+    /// gave its view GPUI's keyboard (KEYMAP-4): ⇧⌘J hides the tab area, a page comes in front
+    /// without taking the keyboard (an agent's `app_open_page`), ⌃Tab, an agent's
+    /// `app_activate_tab`. A view that
     /// isn't drawn and still has the keyboard makes GPUI send the keys from the window's root,
     /// gpui-kit's `Root`, past every workspace shortcut, until a click: ⇧⌘J didn't bring the tab
     /// area back, ⌘W didn't close the page in front. The workspace takes the keyboard back
