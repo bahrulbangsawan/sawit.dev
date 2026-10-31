@@ -78,14 +78,17 @@ export function InstanceSwitch() {
 
 // The demo plays silently on a loop with no browser controls or context menu. A reader who asked for
 // reduced motion gets the poster until they press play, and the corner chip pauses it for everyone.
+// It starts from here, once React runs, not by autoplay: a video the browser started before then
+// played for readers who asked for reduced motion, and the chip, which only follows play and pause
+// events seen after hydration, offered Play on a playing video.
 export function DemoVideo() {
   const ref = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying] = useState(false)
   useEffect(() => {
     const v = ref.current
     if (!v) return
-    if (matchMedia('(prefers-reduced-motion: reduce)').matches) v.pause()
-    else v.play().catch(() => {})
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) v.play().catch(() => {})
+    setPlaying(!v.paused)
   }, [])
   const toggle = () => {
     const v = ref.current
@@ -101,14 +104,14 @@ export function DemoVideo() {
         poster="/media/demo-poster.jpg"
         width={1280}
         height={802}
-        autoPlay
         muted
         loop
         playsInline
         disablePictureInPicture
         disableRemotePlayback
         controlsList="nodownload nofullscreen noremoteplayback"
-        preload="auto"
+        // Only its size and first frame until it plays: none of it for a reader who never does.
+        preload="metadata"
         onContextMenu={(e) => e.preventDefault()}
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
