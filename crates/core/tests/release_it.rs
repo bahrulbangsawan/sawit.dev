@@ -635,3 +635,31 @@ fn a_rebuild_replaces_the_assets_of_a_release_that_exists() {
     );
     assert!(!calls.contains("release create"), "{calls}");
 }
+
+/// RELEASE-9: the release job's token can write to the repository. Each action it runs is
+/// pinned to a commit, since a tag can be moved to other code, and checkout doesn't leave the
+/// token in `.git/config`, where every build script and the cache action could read it.
+#[test]
+fn the_release_job_pins_its_actions_and_keeps_no_token_on_disk() {
+    let workflow = fs::read_to_string(checkout().join(".github/workflows/release.yml")).unwrap();
+    let mut actions = 0;
+    for line in workflow.lines() {
+        let Some(action) = line.trim().trim_start_matches("- ").strip_prefix("uses: ") else {
+            continue;
+        };
+        actions += 1;
+        let commit = action.split_once('@').map_or("", |(_, at)| at);
+        let commit = commit.split_whitespace().next().unwrap_or("");
+        assert!(
+            commit.len() == 40 && commit.chars().all(|c| c.is_ascii_hexdigit()),
+            "{action} isn't pinned to a commit"
+        );
+    }
+    assert!(actions >= 2, "{workflow}");
+    let checkout = workflow
+        .split("- uses: actions/checkout@")
+        .nth(1)
+        .expect("a checkout step");
+    let step = checkout.split("\n      - ").next().unwrap();
+    assert!(step.contains("persist-credentials: false"), "{step}");
+}

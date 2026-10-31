@@ -4,6 +4,11 @@
 # (workflow_dispatch) to rebuild an existing tag: a release the tag has
 # already gets the new zip and DMG in place of its old ones, and keeps its
 # notes.
+#
+# The token can write to the repository (contents: write, for the release),
+# so nothing keeps it longer than it must: checkout doesn't leave it in
+# .git/config for the build's scripts to read, and each action is pinned to a
+# commit, not to a tag that can be moved.
 name: Release
 
 on:
@@ -24,10 +29,11 @@ jobs:
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.tag || github.ref }}
-      - uses: Swatinem/rust-cache@v2
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build app
         run: scripts/bundle-macos.sh --zip --dmg
       - name: Release notes
