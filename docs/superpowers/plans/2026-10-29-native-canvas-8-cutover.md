@@ -406,8 +406,9 @@ Step 4: a copy of the real old board, `~/Library/Application Support/sawit/canva
 Step 6: the instance was stopped first (`/bin/kill $PID`, P8-C12). `cargo fmt --all -- --check` and
 `cargo clippy --workspace --all-targets -- -D warnings` are clean. `cargo test --workspace` passes:
 1309 passed, 9 ignored, 0 failed (sawit 264, sawit-board 632, sawit-core 324 + 23, sawit-mcp 54 +
-12). Their one other line is the `block 0.1.6` note. It is ready for the user's `/consolidate`, and
-nothing was pushed.
+12). Their one other line is the `block 0.1.6` note. It is ready for the user's `/consolidate` once
+the hand checks below pass and the user accepts the settle-budget miss (spec Risks). Nothing was
+pushed.
 
 Not failures, for the user:
 - README says the binary is "about 34 MB", in its introduction and under "Size & memory". It is now
@@ -418,7 +419,11 @@ Not failures, for the user:
 
 ##### Hand checks (pending — needs the user)
 
-Build and run the release app: `cargo build --release -p sawit` in a checkout of main, then
+Build and run the release app: `cargo build --release -p sawit` in a checkout of main. Make the
+scratch folders and a file for hand check 1 first:
+`mkdir -p <scratch>/home <scratch>/proj <scratch>/proj2 && echo hi > <scratch>/proj/notes.txt`.
+Sawit opens a path that isn't there as a file, in a window with no project, so without them both
+windows of hand check 8 would show one canvas, `<scratch>/home/canvas.figcraft`. Then run
 `SAWIT_HOME=<scratch>/home target/release/sawit --foreground <scratch>/proj`, and open the Canvas
 page (⌃⌘C). The scratch home keeps your own Sawit data out of it. Where a step uses the control
 socket, use `ctl` from Plan 1 Task 7's launch recipe. Checks 4 to 9 point at earlier plans' hand
@@ -430,8 +435,8 @@ anything. Record each answer under its number.
    one. Then click empty canvas, so it has the keyboard, and edit no text:
    - ⇧⌘↩ hides the tab bar, and the canvas fills the window. A second ⇧⌘↩ puts the layout back.
    - Maximize again, then press ⌘B: the sidebar and the tab bar come back.
-   - Open a file from the Files tab, go back to the canvas tab and maximize again, then press ⌃Tab:
-     the file's tab shows, with the tab bar.
+   - Open `notes.txt` from the Files tab, go back to the canvas tab and maximize again, then press
+     ⌃Tab: the file's tab shows, with the tab bar.
    Answer: ______
 2. **Panning the budget board** (P8-C13). Build it over the socket: run
    `ctl "{\"cmd\":\"canvas\",\"op\":{\"op\":\"command\",\"command\":\"board.template\",\"params\":{\"name\":\"$t\"}}}"`
@@ -460,9 +465,11 @@ anything. Record each answer under its number.
 7. **Menus, the palette and the sheet** (Step 5): Plan 6 hand checks 1–3 and 10. Then, with a
    sticky selected, open the palette (⌘K), type "dupl" and press Enter: the sticky is duplicated.
    Answer: ______
-8. **Copy and paste between two project canvases** (Step 5, Plan 2 hand check 12 (e)). Open a
+8. **Copy and paste between two project canvases** (Step 5, Plan 2 hand check 12 (e)). Open the
    second folder in a window of its own:
    `SAWIT_HOME=<scratch>/home target/release/sawit -n <scratch>/proj2`, and open its Canvas page.
+   Its canvas is `<scratch>/proj2/.nyawit/canvas.figcraft`, the first window's
+   `<scratch>/proj/.nyawit/canvas.figcraft`.
    In the first window's canvas, select a sticky and press ⌘C. Click the second window's canvas
    and press ⌘V: the sticky pastes there, and ⇧⌘V pastes it again. Answer: ______
 9. **Export** (Step 5): Plan 6 hand checks 6–8 and Plan 5 hand check 8. Answer: ______
