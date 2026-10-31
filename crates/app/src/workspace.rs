@@ -2271,6 +2271,24 @@ impl Workspace {
         )
     }
 
+    /// Tells each canvas whether its tab is on screen ([`BoardView::set_shown`]), as
+    /// [`Self::sync_browser`] tells the browser: the active tab, while the tab area shows. Each
+    /// render checks, because the layout and the active tab change in many places. A canvas taken
+    /// off screen ends what it held of the pointer, which nothing would hear the release of.
+    fn sync_boards(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let center = self.welcome.is_none() && self.layout.center;
+        for (ix, tab) in self.tabs.iter().enumerate() {
+            let PaneItem::Other { view, .. } = &tab.item else {
+                continue;
+            };
+            let Ok(board) = view.clone().downcast::<BoardView>() else {
+                continue;
+            };
+            let shown = center && ix == self.active;
+            board.update(cx, |board, cx| board.set_shown(shown, window, cx));
+        }
+    }
+
     /// Keeps the browser's native webview in step with what is on screen:
     /// it draws above GPUI, so it is hidden unless its tab is showing.
     fn sync_browser(&mut self, cx: &mut Context<Self>) {
@@ -2692,6 +2710,7 @@ impl Render for Workspace {
             self.focus.focus(window, cx);
         }
         self.sync_canvas_maximized();
+        self.sync_boards(window, cx);
         self.sync_browser(cx);
         v_flex()
             .key_context("Workspace")

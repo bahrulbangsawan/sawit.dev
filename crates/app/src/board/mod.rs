@@ -287,6 +287,9 @@ pub struct BoardView {
     /// The left button went down on the canvas and hasn't come up: its moves and its release go
     /// to the tools wherever the pointer is ([`events`]).
     dragging: bool,
+    /// Where the pointer was in the window, and the modifiers held, at the last pointer event the
+    /// tools had: where a drag cut off by the canvas going off screen ends ([`Self::set_shown`]).
+    pointer: (Point<Pixels>, Modifiers),
     /// Space is held down on the canvas, and no text is edited: a press of the left button pans
     /// instead of reaching the tools ([`events`]).
     space_held: bool,
@@ -355,6 +358,8 @@ pub struct BoardView {
     /// The context menu, the Actions palette and the keyboard-shortcuts sheet: which is open, and
     /// what each keeps between frames ([`menus`]).
     menus: menus::Menus,
+    /// The canvas's tab is on screen, as the workspace last said ([`Self::set_shown`]).
+    shown: bool,
     _frames: Task<()>,
     _quit: Subscription,
     _release: Subscription,
@@ -468,6 +473,7 @@ impl BoardView {
             fitted: false,
             bounds: Bounds::default(),
             dragging: false,
+            pointer: (Point::default(), Modifiers::default()),
             space_held: false,
             pan: None,
             keyboard_watch: None,
@@ -494,6 +500,7 @@ impl BoardView {
             design: design_panel::DesignPanel::default(),
             scrub: None,
             menus: menus::Menus::default(),
+            shown: true,
             _frames: frames,
             // ⌘Q quits without dropping the views: what isn't on disk yet is written first.
             _quit: cx.on_app_quit(|this, _| {
@@ -507,6 +514,27 @@ impl BoardView {
     /// The `.figcraft` file the canvas is bound to, and saves to.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The workspace shows the canvas's tab (`shown`), or no longer does: another tab is on top,
+    /// or the tab area is hidden. It says so each time it draws, for each canvas it has.
+    ///
+    /// Hidden, nothing paints the canvas, and the window's listeners that give a drag, a pan or a
+    /// label's scrub begun on it its moves and its release go with the paint. Each one held ends
+    /// then, kept, where the pointer was last ([`Self::let_go_of_the_pointer`], CANVAS-UI-8):
+    /// otherwise the tools stayed busy until the next press on the canvas, and refused every
+    /// agent's edit meanwhile ("finish the drag on the canvas first"). What it ended is saved as
+    /// any edit is, though no paint starts the autosave while the canvas is hidden.
+    pub fn set_shown(&mut self, shown: bool, _window: &mut Window, cx: &mut Context<Self>) {
+        if std::mem::replace(&mut self.shown, shown) == shown {
+            return;
+        }
+        if shown {
+            cx.notify();
+            return;
+        }
+        self.let_go_of_the_pointer(cx);
+        self.autosave(cx);
     }
 
     /// The document. `None` when the file couldn't be opened.
@@ -2922,6 +2950,59 @@ mod tests {
             assert_eq!((node.width, node.height), (50.0, 40.0));
             assert_eq!(board.session.undo_depth(), (1, 0));
         });
+    }
+
+    /// The workspace hides the canvas's tab, or shows it again, as its render does for each
+    /// canvas it has.
+    fn show(view: &Entity<BoardView>, shown: bool, cx: &mut VisualTestContext) {
+        cx.update(|window, cx| view.update(cx, |view, cx| view.set_shown(shown, window, cx)));
+        cx.run_until_parked();
+    }
+
+    /// CANVAS-UI-8: the canvas's tab is hidden mid-drag (⌃Tab with the button held, an agent
+    /// switching tabs), so nothing hears the drag's release any more. Hiding ends the drag where
+    /// it was, kept, and the pan held by the middle button: an agent's edit then goes through,
+    /// where it waited for "the drag on the canvas" to finish until the next press on it.
+    #[gpui_kit::test]
+    fn hiding_the_canvas_ends_a_drag_whose_release_it_will_never_hear(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("hidden-mid-drag");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        let tool = json!({"op": "command", "command": "tool.rectangle"});
+        run_op(&view, tool, &mut cx);
+        let (left, shift) = (
+            MouseButton::Left,
+            Modifiers {
+                shift: true,
+                ..Modifiers::default()
+            },
+        );
+        cx.simulate_mouse_down(point(px(100.), px(100.)), left, Modifiers::default());
+        // ⇧ held: a square, as wide as the move is: 50 × 50.
+        cx.simulate_mouse_move(point(px(150.), px(140.)), left, shift);
+        show(&view, false, &mut cx);
+        view.read_with(&cx, |view, _| {
+            assert!(!view.dragging);
+            assert!(!view.board().unwrap().session.tool.busy());
+        });
+        let reply = run_op(&view, sticky_op(), &mut cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        let [drawn, _] = layers(&view, &cx)[..] else {
+            panic!("layers {:?}", layers(&view, &cx))
+        };
+        view.read_with(&cx, |view, _| {
+            let board = view.board().unwrap();
+            let node = board.doc().unwrap().node(drawn).cloned().unwrap();
+            assert_eq!((node.width, node.height), (50.0, 50.0));
+            assert_eq!(board.session.undo_depth(), (2, 0));
+        });
+
+        // A pan by the middle button, away from the sticky and its context bar, hidden before
+        // its release.
+        show(&view, true, &mut cx);
+        cx.simulate_mouse_down(point(px(60.), px(100.)), MouseButton::Middle, shift);
+        assert!(view.read_with(&cx, |view, _| view.pan.is_some()));
+        show(&view, false, &mut cx);
+        assert!(view.read_with(&cx, |view, _| view.pan.is_none()));
     }
 
     #[gpui_kit::test]

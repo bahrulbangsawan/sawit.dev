@@ -1119,6 +1119,28 @@ mod tests {
         assert_eq!(prop(&view, ids[0], "x", &cx), json!(0.0));
     }
 
+    /// CANVAS-UI-8 for a label's scrub: the canvas's tab is hidden before the button comes up, so
+    /// nothing hears the release. Hiding ends the scrub, kept, as one undo step: the canvas's keys
+    /// work again (a scrub takes every key but Escape), and agents' edits are steps of their own.
+    #[gpui_kit::test]
+    fn hiding_the_canvas_ends_a_label_scrub_kept(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("label-hidden");
+        let path = tmp.0.join("design.figcraft");
+        let ids = design_file(&path, &[rectangle(0.0)]);
+        let (view, mut cx) = open_in_window(cx, &path, &ids);
+        let steps = undo_steps(&view, &cx);
+        let (left, none) = (MouseButton::Left, Modifiers::default());
+        let start = cx.debug_bounds("design-handle-x").unwrap().center();
+        cx.simulate_mouse_down(start, left, none);
+        cx.simulate_mouse_move(start + point(px(10.), px(0.)), left, none);
+        assert_eq!(prop(&view, ids[0], "x", &cx), json!(10.0));
+        cx.update(|window, cx| view.update(cx, |view, cx| view.set_shown(false, window, cx)));
+        assert!(view.read_with(&cx, |view, _| view.scrub.is_none()));
+        assert_eq!(gesture(&view, &cx), None);
+        assert_eq!(prop(&view, ids[0], "x", &cx), json!(10.0));
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+    }
+
     /// Ruling P5-C3: Escape during a label's scrub puts the value back, before the canvas can
     /// take the key.
     #[gpui_kit::test]
