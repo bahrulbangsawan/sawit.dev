@@ -538,7 +538,9 @@ finds the AI clients on this Mac: Claude Code (every
 profile, including `CLAUDE_CONFIG_DIR` folders), Codex (and `CODEX_HOME` profiles), Claude Desktop, Cursor,
 Windsurf, Gemini CLI, Zed, opencode and VS Code. It installs into each with one click and shows where each config
 lives. Claude Code and Codex are changed through their own CLI when it's installed. Other configs are edited in
-place, keeping other settings, key order and comments, with a one-time backup next to the original.
+place, keeping other settings, key order and comments, and each file is copied next to it (`.sawit-backup`) before
+every change. Updating an entry changes only where it points: what you added to it (Cline's auto-approved tools,
+`env`, timeouts, …) stays. **Remove from N** in a server's sheet asks first, like its row's trash button.
 
 To add it by hand:
 

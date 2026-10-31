@@ -288,11 +288,18 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 
 impl McpPage {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        let mut this = Self::blank(cx);
+        this.reload(cx);
+        this
+    }
+
+    /// The page before anything is detected.
+    fn blank(cx: &mut Context<Self>) -> Self {
         let server = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(|d| d.join("sawit-mcp")))
             .unwrap_or_else(|| PathBuf::from("sawit-mcp"));
-        let mut this = Self {
+        Self {
             server_exists: false,
             server,
             targets: Vec::new(),
@@ -314,9 +321,7 @@ impl McpPage {
             page: 0,
             search: None,
             _search: None,
-        };
-        this.reload(cx);
-        this
+        }
     }
 
     fn spec(&self, ix: usize) -> Spec {
@@ -612,23 +617,78 @@ impl McpPage {
         .detach();
     }
 
-    fn install_selected(&mut self, remove: bool, cx: &mut Context<Self>) {
+    /// Asks, then removes the sheet's server from the ticked clients, as the
+    /// row's trash does: the sheet opens with every installed client ticked.
+    fn confirm_remove_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(Sheet::Install(sheet)) = &self.sheet else {
             return;
         };
         let s = sheet.server;
-        let mut chosen: Vec<usize> = sheet.selected.iter().copied().collect();
-        chosen.sort();
-        for t in chosen {
-            let editable = self.targets[t].client.editable();
-            let todo = match self.status.get(&(s, t)) {
-                Some(Status::NotInstalled | Status::Outdated(_)) => !remove && editable,
-                Some(Status::Installed) => remove && editable,
-                _ => false,
-            };
-            if todo || (remove && matches!(self.status.get(&(s, t)), Some(Status::Outdated(_)))) {
-                self.act((s, t), remove, cx);
+        let targets = self.selected_for(true);
+        if targets.is_empty() {
+            return;
+        }
+        let names: Vec<String> = targets
+            .iter()
+            .map(|&t| target_label(&self.targets[t]))
+            .collect();
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!(
+                "Remove {} from {}?",
+                SERVERS[s].name,
+                plural(targets.len(), "client", "clients")
+            ),
+            Some(&format!(
+                "Its entry is removed from: {}. Restart those clients to drop it.",
+                names.join(", ")
+            )),
+            &["Remove", "Cancel"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if matches!(answer.await, Ok(0)) {
+                let _ = this.update(cx, |this, cx| {
+                    for t in targets {
+                        this.act((s, t), true, cx);
+                    }
+                });
             }
+        })
+        .detach();
+    }
+
+    /// The ticked clients the sheet's Install (or Remove) acts on.
+    fn selected_for(&self, remove: bool) -> Vec<usize> {
+        let Some(Sheet::Install(sheet)) = &self.sheet else {
+            return Vec::new();
+        };
+        let s = sheet.server;
+        let mut chosen: Vec<usize> = sheet
+            .selected
+            .iter()
+            .copied()
+            .filter(|&t| {
+                let editable = self.targets.get(t).is_some_and(|x| x.client.editable());
+                match self.status.get(&(s, t)) {
+                    Some(Status::NotInstalled) => !remove && editable,
+                    Some(Status::Outdated(_)) => editable,
+                    Some(Status::Installed) => remove && editable,
+                    _ => false,
+                }
+            })
+            .collect();
+        chosen.sort();
+        chosen
+    }
+
+    fn install_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(Sheet::Install(sheet)) = &self.sheet else {
+            return;
+        };
+        let s = sheet.server;
+        for t in self.selected_for(false) {
+            self.act((s, t), false, cx);
         }
     }
 
@@ -1529,25 +1589,25 @@ impl McpPage {
                     .child(div().flex_1())
                     .child(
                         Button::new("mcp-sheet-remove")
+                            .debug_selector(|| "mcp-sheet-remove".into())
                             .danger()
                             .outline()
                             .small()
                             .label(format!("Remove from {to_remove}"))
                             .disabled(to_remove == 0 || busy)
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.install_selected(true, cx)),
-                            ),
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.confirm_remove_selected(window, cx)
+                            })),
                     )
                     .child(
                         Button::new("mcp-sheet-install")
+                            .debug_selector(|| "mcp-sheet-install".into())
                             .primary()
                             .small()
                             .label(format!("Install to {to_install}"))
                             .loading(busy)
                             .disabled(to_install == 0 || busy || blocked)
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.install_selected(false, cx)),
-                            ),
+                            .on_click(cx.listener(|this, _, _, cx| this.install_selected(cx))),
                     ),
             )
             .into_any_element()
@@ -2099,5 +2159,111 @@ impl Render for McpPage {
                         .child(sheet),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use gpui_kit::{
+        AppContext as _, Bounds, Entity, Modifiers, TestAppContext, VisualTestContext,
+        WindowBounds, WindowOptions, point, px, size,
+    };
+    use sawit_core::mcp_clients::{Client, Status, Target};
+
+    use super::McpPage;
+
+    fn target(client: Client, config: &Path) -> Target {
+        Target {
+            client,
+            profile: "default".into(),
+            config: config.to_path_buf(),
+            profile_dir: None,
+        }
+    }
+
+    /// The page in a window, with `targets` detected and `setup` applied, before any reload.
+    fn open(
+        cx: &mut TestAppContext,
+        targets: Vec<Target>,
+        setup: impl FnOnce(&mut McpPage),
+    ) -> (Entity<McpPage>, &mut VisualTestContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(crate::rt::Rt(sawit_core::rt::Runtime::start()));
+        });
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(1200.), px(900.)),
+            })),
+            ..Default::default()
+        };
+        let (window, page) = cx
+            .update(|cx| {
+                gpui_kit::open_window(options, cx, |_, cx| {
+                    cx.new(|cx| {
+                        let mut page = McpPage::blank(cx);
+                        page.targets = targets;
+                        page.loading = false;
+                        setup(&mut page);
+                        page
+                    })
+                })
+            })
+            .unwrap();
+        let cx = VisualTestContext::from_window(window, cx).into_mut();
+        cx.run_until_parked();
+        (page, cx)
+    }
+
+    fn click(cx: &mut VisualTestContext, selector: &'static str) {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} isn't drawn"));
+        cx.simulate_click(bounds.center(), Modifiers::default());
+        cx.run_until_parked();
+    }
+
+    /// The sheet opens with every installed client ticked, so its Remove asks first, as the
+    /// row's trash does: one click must not take a server out of every client.
+    #[gpui_kit::test]
+    fn the_sheets_remove_asks_first(cx: &mut TestAppContext) {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".cursor/mcp.json");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config,
+            r#"{"mcpServers": {"sawit": {"command": "/x/sawit-mcp"}}}"#,
+        )
+        .unwrap();
+        let (page, cx) = open(cx, vec![target(Client::Cursor, &config)], |page| {
+            page.status.insert((0, 0), Status::Installed);
+        });
+        page.update_in(cx, |page, window, cx| page.open_install(0, window, cx));
+        cx.run_until_parked();
+
+        // The removal runs off the UI thread: give it the time it takes.
+        let has_sawit = |cx: &mut VisualTestContext| {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            cx.run_until_parked();
+            std::fs::read_to_string(&config).unwrap().contains("sawit")
+        };
+        click(cx, "mcp-sheet-remove");
+        assert!(has_sawit(cx), "removed without asking");
+        assert_eq!(
+            cx.pending_prompt(),
+            Some((
+                "Remove Sawit from 1 client?".to_string(),
+                "Its entry is removed from: Cursor. Restart those clients to drop it.".to_string()
+            ))
+        );
+        cx.simulate_prompt_answer("Cancel");
+        assert!(has_sawit(cx), "Cancel removed it");
+
+        click(cx, "mcp-sheet-remove");
+        cx.simulate_prompt_answer("Remove");
+        assert!(!has_sawit(cx), "Remove didn't remove it");
     }
 }

@@ -7,10 +7,12 @@
 //! Claude Code and Codex are changed through their own CLI when it is
 //! installed (they rewrite their config files while running); everything
 //! else, and those two without a CLI, by editing the config file in place —
-//! other settings, key order and TOML comments are kept, and the original is
-//! backed up once next to it. Remote servers are written in each client's
-//! own format; clients that only run local programs get the `mcp-remote`
-//! bridge.
+//! other settings, key order and TOML comments are kept, and the file is
+//! copied next to it before every change. Updating an entry changes only how
+//! the server is reached: the keys the user added to it (`autoApprove`,
+//! `env`, timeouts, …) stay, through the CLI too. Remote servers are written
+//! in each client's own format; clients that only run local programs get
+//! the `mcp-remote` bridge.
 
 use std::path::{Path, PathBuf};
 
@@ -685,7 +687,8 @@ pub fn status(target: &Target, spec: &Spec) -> Status {
     }
 }
 
-/// `<config>.sawit-backup`, written once before the first change.
+/// `<config>.sawit-backup`: the file as it was before Sawit's last change to
+/// it, written again before every change.
 pub fn backup_path(config: &Path) -> PathBuf {
     let mut name = config.file_name().unwrap_or_default().to_os_string();
     name.push(".sawit-backup");
@@ -696,11 +699,101 @@ fn write_config(config: &Path, text: &str) -> Result<()> {
     if let Some(dir) = config.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let backup = backup_path(config);
-    if config.exists() && !backup.exists() {
-        std::fs::copy(config, &backup)?;
+    if config.exists() {
+        std::fs::copy(config, backup_path(config))?;
     }
     write_text_atomic(config, text)
+}
+
+/// The keys of a JSON entry that say how a server is reached. Sawit writes
+/// them on every install. The rest of an entry (Cline's `autoApprove`,
+/// `disabled`, an `env` or `headers` the user added, a timeout, …) is the
+/// user's, and an update keeps it.
+const TRANSPORT_KEYS: [&str; 6] = ["type", "command", "args", "url", "httpUrl", "serverUrl"];
+
+/// What an install writes over `old`, the entry the config has. The
+/// transport keys come from `fresh`, and those `fresh` lacks go. Every other
+/// key stays as the user left it, `fresh` filling in only the missing ones;
+/// maps (`env`, `headers`) merge the same way, key by key. When the entry
+/// switches between a program and a URL, the other kind's map goes too.
+fn merge_entry(old: &Value, fresh: Value) -> Value {
+    let (Value::Object(old), Value::Object(fresh)) = (old, &fresh) else {
+        return fresh;
+    };
+    let program = |m: &Map<String, Value>| m.contains_key("command");
+    let mut out = old.clone();
+    if program(old) != program(fresh) {
+        out.shift_remove(if program(fresh) { "headers" } else { "env" });
+    }
+    for key in TRANSPORT_KEYS {
+        if !fresh.contains_key(key) {
+            out.shift_remove(key);
+        }
+    }
+    for (key, value) in fresh {
+        if TRANSPORT_KEYS.contains(&key.as_str()) {
+            // In place: the entry's keys keep their order.
+            out.insert(key.clone(), value.clone());
+        } else if let (Some(Value::Object(mine)), Value::Object(theirs)) = (out.get_mut(key), value)
+        {
+            for (k, v) in theirs {
+                if !mine.contains_key(k) {
+                    mine.insert(k.clone(), v.clone());
+                }
+            }
+        } else if !out.contains_key(key) {
+            out.insert(key.clone(), value.clone());
+        }
+    }
+    Value::Object(out)
+}
+
+/// Codex's keys for a program, and for a URL: an entry switching kinds
+/// drops the other kind's.
+const CODEX_PROGRAM_KEYS: [&str; 5] = ["command", "args", "env", "env_vars", "cwd"];
+const CODEX_URL_KEYS: [&str; 4] = [
+    "url",
+    "bearer_token_env_var",
+    "http_headers",
+    "env_http_headers",
+];
+
+/// Lays `spec` over Codex's `[mcp_servers.<name>]` table in place, like
+/// [`merge_entry`]: `command` and `args` (or `url`) are replaced, keeping
+/// their comments; the user's other keys, their order and comments stay.
+fn update_codex_table(table: &mut dyn toml_edit::TableLike, spec: &Spec) {
+    let (other_kind, owned): (&[&str], &[&str]) = match spec.transport {
+        Transport::Stdio { .. } => (&CODEX_URL_KEYS, &["command", "args"]),
+        Transport::Http { .. } => (&CODEX_PROGRAM_KEYS, &["url"]),
+    };
+    for key in other_kind {
+        table.remove(key);
+    }
+    for (key, item) in codex_table(spec).iter() {
+        if owned.contains(&key) {
+            match (table.get_mut(key), item) {
+                (Some(toml_edit::Item::Value(old)), toml_edit::Item::Value(new)) => {
+                    let decor = old.decor().clone();
+                    *old = new.clone();
+                    *old.decor_mut() = decor;
+                }
+                _ => {
+                    table.insert(key, item.clone());
+                }
+            }
+        } else if let (Some(mine), Some(theirs)) = (
+            table.get_mut(key).and_then(|i| i.as_table_like_mut()),
+            item.as_table_like(),
+        ) {
+            for (k, v) in theirs.iter() {
+                if !mine.contains_key(k) {
+                    mine.insert(k, v.clone());
+                }
+            }
+        } else if !table.contains_key(key) {
+            table.insert(key, item.clone());
+        }
+    }
 }
 
 fn manual(target: &Target, spec: &Spec, why: &str) -> CoreError {
@@ -745,7 +838,19 @@ fn codex_table(spec: &Spec) -> toml_edit::Table {
     table
 }
 
-/// Adds or updates the server by editing the config file.
+/// Codex's `[mcp_servers]` table, made when the config has none.
+fn codex_servers(doc: &mut toml_edit::DocumentMut) -> Option<&mut toml_edit::Table> {
+    doc.entry("mcp_servers")
+        .or_insert_with(|| {
+            let mut t = toml_edit::Table::new();
+            t.set_implicit(true);
+            toml_edit::Item::Table(t)
+        })
+        .as_table_mut()
+}
+
+/// Adds or updates the server by editing the config file. An update changes
+/// only how the server is reached ([`merge_entry`], [`update_codex_table`]).
 pub fn install_file(target: &Target, spec: &Spec) -> Result<()> {
     if !target.client.editable() {
         return Err(manual(target, spec, "YAML/script format"));
@@ -753,16 +858,17 @@ pub fn install_file(target: &Target, spec: &Spec) -> Result<()> {
     let legacy = spec.name == SERVER_NAME;
     if target.client == Client::Codex {
         let mut doc = read_toml(&target.config).map_err(|e| manual(target, spec, &e))?;
-        let servers = doc
-            .entry("mcp_servers")
-            .or_insert_with(|| {
-                let mut t = toml_edit::Table::new();
-                t.set_implicit(true);
-                toml_edit::Item::Table(t)
-            })
-            .as_table_mut()
+        let servers = codex_servers(&mut doc)
             .ok_or_else(|| manual(target, spec, "mcp_servers is not a table"))?;
-        servers[spec.name.as_str()] = toml_edit::Item::Table(codex_table(spec));
+        match servers
+            .get_mut(spec.name.as_str())
+            .and_then(|i| i.as_table_like_mut())
+        {
+            Some(table) => update_codex_table(table, spec),
+            None => {
+                servers.insert(&spec.name, toml_edit::Item::Table(codex_table(spec)));
+            }
+        }
         if legacy {
             servers.remove(LEGACY_SERVER_NAME);
         }
@@ -776,13 +882,21 @@ pub fn install_file(target: &Target, spec: &Spec) -> Result<()> {
     let Value::Object(servers) = servers else {
         return Err(manual(target, spec, &format!("{key} is not an object")));
     };
+    let value = match servers.get(&spec.name) {
+        Some(old) => merge_entry(old, value),
+        None => value,
+    };
     servers.insert(spec.name.clone(), value);
     if legacy {
         servers.remove(LEGACY_SERVER_NAME);
     }
+    write_json(&target.config, map)
+}
+
+fn write_json(config: &Path, map: Map<String, Value>) -> Result<()> {
     let text = serde_json::to_string_pretty(&Value::Object(map))
         .map_err(|e| CoreError::Config(e.to_string()))?;
-    write_config(&target.config, &format!("{text}\n"))
+    write_config(config, &format!("{text}\n"))
 }
 
 /// Removes the server entry (other servers and settings stay).
@@ -809,9 +923,7 @@ pub fn uninstall_file(target: &Target, name: &str) -> Result<()> {
     if let Some(Value::Object(servers)) = map.get_mut(servers_key(target.client)) {
         servers.remove(name);
     }
-    let text = serde_json::to_string_pretty(&Value::Object(map))
-        .map_err(|e| CoreError::Config(e.to_string()))?;
-    write_config(&target.config, &format!("{text}\n"))
+    write_json(&target.config, map)
 }
 
 fn yaml_list(items: &[String]) -> String {
@@ -965,12 +1077,132 @@ fn cli_error(target: &Target, out: &std::process::Output) -> CoreError {
     }
 }
 
+/// A server's entry as the config had it before a CLI update.
+#[derive(Debug, Clone)]
+enum SavedEntry {
+    Json(Value),
+    Toml(toml_edit::Item),
+}
+
+fn saved_entry(target: &Target, name: &str) -> Option<SavedEntry> {
+    if target.client == Client::Codex {
+        let doc = read_toml(&target.config).ok()?;
+        let item = doc.get("mcp_servers")?.get(name)?;
+        return Some(SavedEntry::Toml(item.clone()));
+    }
+    let map = read_json(&target.config).ok()??;
+    let value = map.get(servers_key(target.client))?.get(name)?;
+    Some(SavedEntry::Json(value.clone()))
+}
+
+/// Writes `saved` back as `name`'s entry when the config has none: a CLI
+/// update removes the entry before adding the new one, and when the add
+/// fails or is stopped the old one must not be lost.
+fn put_back(target: &Target, name: &str, saved: &SavedEntry) -> Result<()> {
+    match saved {
+        SavedEntry::Toml(item) => {
+            let mut doc = read_toml(&target.config).map_err(CoreError::Config)?;
+            let Some(servers) = codex_servers(&mut doc) else {
+                return Ok(());
+            };
+            if servers.contains_key(name) {
+                return Ok(());
+            }
+            servers.insert(name, item.clone());
+            write_config(&target.config, &doc.to_string())
+        }
+        SavedEntry::Json(value) => {
+            let mut map = read_json(&target.config)
+                .map_err(CoreError::Config)?
+                .unwrap_or_default();
+            let servers = map
+                .entry(servers_key(target.client))
+                .or_insert_with(|| Value::Object(Map::new()));
+            let Value::Object(servers) = servers else {
+                return Ok(());
+            };
+            if servers.contains_key(name) {
+                return Ok(());
+            }
+            servers.insert(name.to_string(), value.clone());
+            write_json(&target.config, map)
+        }
+    }
+}
+
+/// After a CLI update: the user's own keys of the entry it replaced, laid
+/// back over the one the CLI wrote, like an update by file does.
+fn keep_user_keys(target: &Target, spec: &Spec, saved: &SavedEntry) -> Result<()> {
+    match saved {
+        SavedEntry::Toml(item) => {
+            let mut doc = read_toml(&target.config).map_err(CoreError::Config)?;
+            let Some(servers) = doc
+                .get_mut("mcp_servers")
+                .and_then(|t| t.as_table_like_mut())
+            else {
+                return Ok(());
+            };
+            if !servers.contains_key(&spec.name) {
+                return Ok(());
+            }
+            let mut kept = item.clone();
+            let Some(table) = kept.as_table_like_mut() else {
+                return Ok(());
+            };
+            update_codex_table(table, spec);
+            servers.insert(&spec.name, kept);
+            write_config(&target.config, &doc.to_string())
+        }
+        SavedEntry::Json(old) => {
+            let Some(mut map) = read_json(&target.config).map_err(CoreError::Config)? else {
+                return Ok(());
+            };
+            let Some(Value::Object(servers)) = map.get_mut(servers_key(target.client)) else {
+                return Ok(());
+            };
+            let Some(now) = servers.get(&spec.name) else {
+                return Ok(());
+            };
+            let merged = merge_entry(old, now.clone());
+            if &merged == now {
+                return Ok(());
+            }
+            servers.insert(spec.name.clone(), merged);
+            write_json(&target.config, map)
+        }
+    }
+}
+
+/// Puts the saved entry back when dropped armed: a CLI update that fails,
+/// times out or is stopped (its future dropped) between `remove` and `add`.
+struct PutBack<'a> {
+    target: &'a Target,
+    name: &'a str,
+    saved: Option<SavedEntry>,
+}
+
+impl Drop for PutBack<'_> {
+    fn drop(&mut self) {
+        if let Some(saved) = self.saved.take() {
+            let _ = put_back(self.target, self.name, &saved);
+        }
+    }
+}
+
 /// Installs (or re-points) the server for `target`: through the client's
-/// CLI when `cli` is given and supported, else by editing the file.
+/// CLI when `cli` is given and supported, else by editing the file. The CLI
+/// can only remove an entry and add it again: the old entry comes back if
+/// the add fails or is stopped, and the user's own keys of it are kept.
 pub async fn install(target: &Target, spec: &Spec, cli: Option<&Path>) -> Result<()> {
     if let Some(cli) = cli
         && let Some(add) = cli_add(target, spec, cli)
     {
+        let saved = saved_entry(target, &spec.name);
+        let mut guard = PutBack {
+            target,
+            name: &spec.name,
+            saved: saved.clone(),
+        };
         if status(target, spec) != Status::NotInstalled
             && let Some(remove) = cli_remove(target, cli, &spec.name)
         {
@@ -979,6 +1211,11 @@ pub async fn install(target: &Target, spec: &Spec, cli: Option<&Path>) -> Result
         let out = run_cli(&add, CLI_TIMEOUT).await?;
         if !out.status.success() {
             return Err(cli_error(target, &out));
+        }
+        guard.saved = None;
+        if let Some(saved) = &saved {
+            // Best effort: the update itself worked.
+            let _ = keep_user_keys(target, spec, saved);
         }
         if spec.name == SERVER_NAME
             && has_legacy(target)
@@ -1113,11 +1350,16 @@ mod tests {
         let keys: Vec<_> = v.as_object().unwrap().keys().cloned().collect();
         assert_eq!(keys, ["numStartups", "projects", "mcpServers"]);
         assert_eq!(status(t, &Spec::sawit(server)), Status::Installed);
-        // Backed up once, before the first change.
+        // Backed up before the change.
         let backup = fs::read_to_string(backup_path(&t.config)).unwrap();
         assert_eq!(backup, r#"{"numStartups": 3, "projects": {}}"#);
+        // And again before the next one.
+        let installed = fs::read_to_string(&t.config).unwrap();
         install_file(t, &Spec::sawit(server)).unwrap();
-        assert_eq!(fs::read_to_string(backup_path(&t.config)).unwrap(), backup);
+        assert_eq!(
+            fs::read_to_string(backup_path(&t.config)).unwrap(),
+            installed
+        );
 
         // A different binary is reported, then replaced.
         let other = Path::new("/old/sawit-mcp");
@@ -1603,6 +1845,196 @@ mod tests {
             vec!["-y".into(), "rea-agents@6.3.0".into(), "mcp".into()],
         );
         assert_eq!(status(claude, &resolved), Status::Installed);
+    }
+
+    /// A Cline config whose Sawit entry points at an older build, with the
+    /// fields a user fills in after the install.
+    fn customised_cline(h: &tempfile::TempDir) -> Target {
+        let dir = h.path().join(".cline/data/settings");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("cline_mcp_settings.json"),
+            r#"{"mcpServers": {"sawit": {"command": "/old/sawit-mcp", "args": [], "disabled": false, "autoApprove": ["query", "list_instances"], "env": {"SAWIT_HOME": "/x"}, "timeout": 120}, "other": {"command": "y"}}}"#,
+        )
+        .unwrap();
+        find(&discover(h.path(), None), Client::Cline, "default").clone()
+    }
+
+    fn json_at(path: &Path) -> Value {
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn an_update_keeps_the_users_own_keys() {
+        let h = home();
+        let t = customised_cline(&h);
+        let server = Path::new("/Applications/Sawit.app/Contents/MacOS/sawit-mcp");
+        assert!(matches!(
+            status(&t, &Spec::sawit(server)),
+            Status::Outdated(_)
+        ));
+        install_file(&t, &Spec::sawit(server)).unwrap();
+        let v = json_at(&t.config);
+        let entry = &v["mcpServers"]["sawit"];
+        assert_eq!(entry["command"], server.display().to_string());
+        assert_eq!(entry["autoApprove"], json!(["query", "list_instances"]));
+        assert_eq!(entry["env"], json!({"SAWIT_HOME": "/x"}));
+        assert_eq!(entry["timeout"], 120);
+        assert_eq!(entry["disabled"], false);
+        // The entry keeps its place among the servers, and its keys their order.
+        let servers: Vec<_> = v["mcpServers"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(servers, ["sawit", "other"]);
+        let keys: Vec<_> = entry.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(
+            keys,
+            [
+                "command",
+                "args",
+                "disabled",
+                "autoApprove",
+                "env",
+                "timeout"
+            ]
+        );
+        assert_eq!(status(&t, &Spec::sawit(server)), Status::Installed);
+    }
+
+    #[test]
+    fn switching_between_a_program_and_a_url_drops_the_other_kinds_keys() {
+        let h = home();
+        let t = customised_cline(&h);
+        let spec = Spec::http("sawit", "https://sawit.dev/mcp").header("X-Team", "a");
+        install_file(&t, &spec).unwrap();
+        let entry = json_at(&t.config)["mcpServers"]["sawit"].clone();
+        assert_eq!(entry["url"], "https://sawit.dev/mcp");
+        assert_eq!(entry["type"], "streamableHttp");
+        assert_eq!(entry["headers"], json!({"X-Team": "a"}));
+        for gone in ["command", "args", "env"] {
+            assert!(entry.get(gone).is_none(), "{gone} stayed: {entry}");
+        }
+        assert_eq!(entry["autoApprove"], json!(["query", "list_instances"]));
+        assert_eq!(entry["timeout"], 120);
+    }
+
+    #[test]
+    fn a_codex_update_edits_the_table_in_place() {
+        let h = home();
+        let config = h.path().join(".codex/config.toml");
+        let original = "model = \"o3\"\n\n# Sawit, from the app\n[mcp_servers.sawit]\ncommand = \"/old/sawit-mcp\" # moved since\nargs = []\nstartup_timeout_sec = 20\ntool_timeout_sec = 90\nenabled = true\n\n[mcp_servers.sawit.env]\nSAWIT_HOME = \"/x\"\n";
+        fs::write(&config, original).unwrap();
+        let t = find(&discover(h.path(), None), Client::Codex, "default").clone();
+        install_file(&t, &Spec::sawit(Path::new("/new/sawit-mcp"))).unwrap();
+        let text = fs::read_to_string(&config).unwrap();
+        assert_eq!(
+            text,
+            original.replace("\"/old/sawit-mcp\"", "\"/new/sawit-mcp\""),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_backup_holds_the_file_as_it_was_before_the_last_change() {
+        let h = home();
+        let t = customised_cline(&h);
+        install_file(&t, &Spec::sawit(Path::new("/one/sawit-mcp"))).unwrap();
+        // The user ticks one more tool, then Sawit updates the entry again.
+        let edited = fs::read_to_string(&t.config).unwrap().replace(
+            "\"list_instances\"",
+            "\"list_instances\", \"describe_table\"",
+        );
+        fs::write(&t.config, &edited).unwrap();
+        install_file(&t, &Spec::sawit(Path::new("/two/sawit-mcp"))).unwrap();
+        assert_eq!(fs::read_to_string(backup_path(&t.config)).unwrap(), edited);
+    }
+
+    /// A stand-in for `claude` whose `mcp remove` writes `removed` to
+    /// `config` and whose `mcp add` runs `add`.
+    fn fake_cli(dir: &Path, config: &Path, removed: &str, add: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let cli = dir.join("claude");
+        fs::write(
+            &cli,
+            format!(
+                "#!/bin/sh\ncase \"$2\" in\n  remove) printf '%s' '{removed}' > '{}' ;;\n  add) {add} ;;\nesac\n",
+                config.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).unwrap();
+        cli
+    }
+
+    const CLAUDE_WITH_SAWIT: &str = r#"{"numStartups": 3, "mcpServers": {"sawit": {"type": "stdio", "command": "/old/sawit-mcp", "args": [], "env": {"SAWIT_HOME": "/x"}}}}"#;
+
+    #[tokio::test]
+    async fn a_failed_cli_update_puts_the_old_entry_back() {
+        let h = home();
+        let t = find(&discover(h.path(), None), Client::ClaudeCode, "work").clone();
+        fs::write(&t.config, CLAUDE_WITH_SAWIT).unwrap();
+        let cli = fake_cli(
+            h.path(),
+            &t.config,
+            r#"{"numStartups": 3, "mcpServers": {}}"#,
+            "echo boom >&2; exit 1",
+        );
+        let err = install(&t, &Spec::sawit(Path::new("/new/sawit-mcp")), Some(&cli))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("boom"), "{err}");
+        assert_eq!(
+            json_at(&t.config),
+            serde_json::from_str::<Value>(CLAUDE_WITH_SAWIT).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cli_update_stopped_halfway_puts_the_old_entry_back() {
+        let h = home();
+        let t = find(&discover(h.path(), None), Client::ClaudeCode, "work").clone();
+        fs::write(&t.config, CLAUDE_WITH_SAWIT).unwrap();
+        let cli = fake_cli(
+            h.path(),
+            &t.config,
+            r#"{"numStartups": 3, "mcpServers": {}}"#,
+            "exec sleep 30",
+        );
+        let spec = Spec::sawit(Path::new("/new/sawit-mcp"));
+        // Stop: the future is dropped while `mcp add` runs.
+        let stopped = tokio::time::timeout(
+            std::time::Duration::from_millis(1500),
+            install(&t, &spec, Some(&cli)),
+        )
+        .await;
+        assert!(stopped.is_err(), "the fake add didn't hang");
+        assert_eq!(
+            json_at(&t.config),
+            serde_json::from_str::<Value>(CLAUDE_WITH_SAWIT).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cli_update_keeps_the_users_own_keys() {
+        let h = home();
+        let t = find(&discover(h.path(), None), Client::ClaudeCode, "work").clone();
+        fs::write(&t.config, CLAUDE_WITH_SAWIT).unwrap();
+        let added = r#"{"numStartups": 3, "mcpServers": {"sawit": {"type": "stdio", "command": "/new/sawit-mcp", "args": [], "env": {}}}}"#;
+        let cli = fake_cli(
+            h.path(),
+            &t.config,
+            r#"{"numStartups": 3, "mcpServers": {}}"#,
+            &format!("printf '%s' '{added}' > '{}'", t.config.display()),
+        );
+        install(&t, &Spec::sawit(Path::new("/new/sawit-mcp")), Some(&cli))
+            .await
+            .unwrap();
+        let entry = json_at(&t.config)["mcpServers"]["sawit"].clone();
+        assert_eq!(entry["command"], "/new/sawit-mcp");
+        assert_eq!(entry["env"], json!({"SAWIT_HOME": "/x"}));
     }
 
     #[test]
