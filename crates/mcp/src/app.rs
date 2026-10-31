@@ -14,7 +14,7 @@ use sawit_board::{BoardDoc, ops};
 use sawit_core::app_control::{self, Command, InstanceAction, Page, Panel, Request};
 use serde_json::{Value, json};
 
-use crate::{Sawit, blocking, fail, ok};
+use crate::{Sawit, blocking, fail, ok, tri};
 
 /// Most commands answer at once; browser ops wait for the page (the app
 /// gives up after 30 s).
@@ -316,7 +316,7 @@ pub struct CanvasExportArgs {
     #[schemars(description = "svg (default) or png")]
     pub format: Option<String>,
     #[schemars(
-        description = "Where to write the file; default the project's .nyawit/exports folder (Sawit's cache folder outside a project)"
+        description = "Absolute path (or ~/…) to write the file to; default the project's .nyawit/exports folder (Sawit's cache folder outside a project)"
     )]
     pub output_path: Option<String>,
     pub project: Option<String>,
@@ -761,13 +761,6 @@ fn absolute_path(path: &str) -> String {
     crate::agent_path(path).to_string_lossy().into_owned()
 }
 
-/// The file `output_path` names for canvas_export, read as every tool that writes a file reads
-/// one: trimmed, with `~` expanded. The canvas-file guard checks this path, and it is the one
-/// written.
-fn named_export(output_path: &str) -> PathBuf {
-    crate::expand_home(output_path.trim())
-}
-
 /// Where an export goes when no path is given: the project's
 /// `.nyawit/exports/`, else `<cache>/canvas`.
 fn export_path(project: Option<&Path>, cache: &Path, ext: &str) -> PathBuf {
@@ -1161,18 +1154,18 @@ impl Sawit {
 
     #[tool(description = "Export the canvas as an SVG or PNG file")]
     async fn canvas_export(&self, Parameters(a): Parameters<CanvasExportArgs>) -> CallToolResult {
-        let png = match a.format.as_deref().unwrap_or("svg") {
-            "svg" => false,
+        let format = a.format.as_deref().map(str::trim).unwrap_or_default();
+        let png = match format.to_lowercase().as_str() {
+            "svg" | "" => false,
             "png" => true,
-            other => return fail(format!("Unknown format “{other}”: use svg or png.")),
+            _ => return fail(format!("Unknown format “{format}”: use svg or png.")),
         };
-        let named = a.output_path.as_deref().map(named_export);
-        // Nothing else holds the board when the app is closed: an export must never replace it.
-        if let Some(path) = &named
-            && let Err(e) = crate::refuse_canvas_file("canvas_export", path)
-        {
-            return fail(e);
-        }
+        // Read as every tool that writes a file reads its path (MCP-11): absolute, and never a
+        // canvas file, since nothing else holds the board when the app is closed.
+        let named = tri!(crate::output_path(
+            "canvas_export",
+            a.output_path.as_deref()
+        ));
         let op = json!({ "op": if png { "export_png" } else { "export_svg" } });
         let project = crate::project_dir(a.project.as_deref());
         let value = match self.canvas(a.project, op).await {
@@ -2715,6 +2708,51 @@ mod tests {
         }
     }
 
+    /// MCP-11: canvas_export writes where every tool that writes a file writes: an absolute path
+    /// (or `~/…`), or with none (or a blank one) the project's exports folder. A relative path was
+    /// written in sawit-mcp's folder and reported as given, and "PNG" was an unknown format.
+    #[tokio::test]
+    async fn canvas_export_reads_its_path_and_format_as_every_tool_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = dir.path().join("project");
+        write_board(&board_file(&project), 1);
+        let export = |format: &str, output_path: &str| CanvasExportArgs {
+            format: Some(format.into()),
+            output_path: Some(output_path.into()),
+            project: project_arg(&project),
+        };
+
+        // Through a file, so that nothing can be written under the crate whatever happens.
+        let refused = server
+            .canvas_export(Parameters(export("svg", "Cargo.toml/out.svg")))
+            .await;
+        assert_eq!(refused.is_error, Some(true), "{}", said(&refused));
+        assert!(
+            said(&refused).contains("must be absolute"),
+            "{}",
+            said(&refused)
+        );
+
+        for (format, name) in [("PNG", "page.png"), (" Svg ", "page.svg")] {
+            let out = dir.path().join(name);
+            let done = server
+                .canvas_export(Parameters(export(format, &out.display().to_string())))
+                .await;
+            assert_ne!(done.is_error, Some(true), "{format}: {}", said(&done));
+            assert!(!std::fs::read(&out).unwrap().is_empty());
+        }
+
+        let blank = server.canvas_export(Parameters(export("svg", "  "))).await;
+        assert_ne!(blank.is_error, Some(true), "{}", said(&blank));
+        let exports = project.join(".nyawit").join("exports");
+        assert!(
+            said(&blank).contains(&exports.display().to_string()),
+            "{}",
+            said(&blank)
+        );
+    }
+
     /// The SVG `canvas_export` writes, with no app running, for a canvas of one sticky that says
     /// `text`.
     async fn exported_sticky(text: &str) -> String {
@@ -2762,14 +2800,15 @@ mod tests {
     /// became part of the file's name.
     #[tokio::test]
     async fn an_export_path_is_read_as_every_tool_reads_one() {
+        let named = |path: &str| crate::output_path("canvas_export", Some(path)).unwrap();
         // `~`, without writing to the home folder: the path that is written is this one.
         if let Some(home) = std::env::var_os("HOME") {
             let home = Path::new(&home);
-            let named = named_export("~/Desktop/board.svg");
-            assert_eq!(named, home.join("Desktop").join("board.svg"));
-            assert_eq!(named_export(" ~/board.png \n"), home.join("board.png"));
+            let desktop = home.join("Desktop").join("board.svg");
+            assert_eq!(named("~/Desktop/board.svg"), Some(desktop));
+            assert_eq!(named(" ~/board.png \n"), Some(home.join("board.png")));
         }
-        assert_eq!(named_export(" /a/board.svg "), Path::new("/a/board.svg"));
+        assert_eq!(named(" /a/board.svg "), Some(PathBuf::from("/a/board.svg")));
 
         let dir = tempfile::tempdir().unwrap();
         let server = native(dir.path());
