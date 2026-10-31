@@ -192,11 +192,13 @@ const MERMAID_GAP: f64 = 100.0;
 ///   diagram's top left corner goes to `x`, `y`; what they leave out is 100 px right of what the
 ///   page holds and level with its top, or 0 on an empty page. Every error starts "mermaid: ".
 /// - `key` (`{key, shift?, alt?, cmd?, ctrl?}`) presses `key` on the canvas, with the modifier
-///   keys given held, as the keyboard does ([`input::route_key`]), and answers `{ok, handled}`:
-///   whether the canvas took the key. `key` is FigCraft's name for it: a letter or a digit,
-///   `Escape`, `Enter`, `Backspace`, `Delete`, `ArrowLeft`... The shortcut of a command Sawit
-///   carries out itself (save, export, import, copy as) is taken, though the op carries out
-///   nothing for it.
+///   keys given held, as the keyboard does with the canvas's default keys
+///   ([`input::route_default_key`]), and answers `{ok, handled}`: whether the canvas took the
+///   key. The default keys are Sawit's, not the user's keymap.json: a key Sawit keeps (⌘J, the
+///   terminal) or a command the canvas doesn't offer isn't the canvas's. `key` is FigCraft's name
+///   for it: a letter or a digit, `Escape`, `Enter`, `Backspace`, `Delete`, `ArrowLeft`... The
+///   shortcut of a command Sawit carries out itself (save, export, import, copy as) is taken,
+///   though the op carries out nothing for it.
 /// - `type` (`{text}`) types `text` into the text being edited, in place of its selection, as the
 ///   keyboard types it, and answers `{ok}`; the edit goes on. With no text edited it answers the
 ///   error "not editing text". A sticky or a text layer is edited once the pointer or a key
@@ -966,7 +968,7 @@ fn key(board: &mut BoardDoc, op: &Value) -> Value {
         cmd: held("cmd"),
         ctrl: held("ctrl"),
     };
-    let outcome = match input::route_key(board, key, mods) {
+    let outcome = match input::route_default_key(board, key, mods) {
         Ok(outcome) => outcome,
         Err(error) => return failure(error),
     };
@@ -3489,6 +3491,35 @@ mod tests {
         // The shortcut of a command Sawit carries out itself is the canvas's, though the op runs
         // nothing for it (⌘S, the save).
         assert!(press(&mut board, "s", json!({"cmd": true})));
+    }
+
+    /// The op presses the canvas's default keys as Sawit binds them, not FigCraft's raw keymap:
+    /// the keys Sawit keeps (⌘J toggles the terminal, ⌥⌘O adds a project) and the commands the
+    /// canvas doesn't offer (`/`, a live session's cursor chat) aren't the canvas's, as on the
+    /// keyboard, while its own keys still are.
+    #[test]
+    fn key_op_presses_the_canvas_default_keys() {
+        let mut board = board();
+        let made = send(&mut board, "board.sticky", json!({"x": 0, "y": 0}));
+        let note = figcraft_engine::params::id_of(&made["result"]["id"]).unwrap();
+        board.session.set_selection(vec![note]);
+        let before = board.doc().unwrap();
+        for (key, held) in [
+            ("j", json!({"cmd": true})),
+            ("o", json!({"alt": true, "cmd": true})),
+            ("/", json!({})),
+        ] {
+            let mut op = json!({"op": "key", "key": key});
+            for (modifier, on) in held.as_object().unwrap() {
+                op[modifier] = on.clone();
+            }
+            let reply = run(&mut board, &op);
+            assert_eq!(reply, json!({"ok": true, "handled": false}), "{op}");
+            assert!(board.session.ui_requests.is_empty(), "{op}");
+        }
+        assert_eq!(board.doc().unwrap(), before);
+        assert!(press(&mut board, "r", json!({})));
+        assert_eq!(board.session.tool.tool.id(), "rectangle");
     }
 
     #[test]
