@@ -525,7 +525,10 @@ impl BoardView {
     /// otherwise the tools stayed busy until the next press on the canvas, and refused every
     /// agent's edit meanwhile ("finish the drag on the canvas first"). What it ended is saved as
     /// any edit is, though no paint starts the autosave while the canvas is hidden.
-    pub fn set_shown(&mut self, shown: bool, _window: &mut Window, cx: &mut Context<Self>) {
+    ///
+    /// Hidden, it also lets go of what it keeps to draw its next frames ([`Self::let_go_of_frames`],
+    /// CANVAS-UI-9).
+    pub fn set_shown(&mut self, shown: bool, window: &mut Window, cx: &mut Context<Self>) {
         if std::mem::replace(&mut self.shown, shown) == shown {
             return;
         }
@@ -535,6 +538,27 @@ impl BoardView {
         }
         self.let_go_of_the_pointer(cx);
         self.autosave(cx);
+        self.let_go_of_frames(window);
+    }
+
+    /// The canvas went off screen, where it draws no frames: it lets go of what it keeps to draw
+    /// the next ones (CANVAS-UI-9). The textures of its newest frame and of those replaced since
+    /// its last paint leave the sprite atlas of `window`, where it was painted, and the render
+    /// thread forgets the render it kept ([`Worker::trim`]): each is as large as the canvas and
+    /// its overscan, at the screen's density. So the next render after the tab comes back is
+    /// drawn whole. The newest frame's image stays, so that the canvas shows at once when its tab
+    /// comes back, and that paint puts its texture back.
+    fn let_go_of_frames(&mut self, window: &mut Window) {
+        let painted_here = self.window == Some(window.window_handle());
+        let images = (self.frame.as_ref().map(|frame| frame.image.clone()))
+            .into_iter()
+            .chain(self.stale.drain(..));
+        for image in images {
+            if painted_here {
+                let _ = window.drop_image(image);
+            }
+        }
+        self.worker.trim();
     }
 
     /// The document. `None` when the file couldn't be opened.
@@ -1079,8 +1103,13 @@ impl BoardView {
     /// on show. One of another page (the page changed while it rendered) would never be painted:
     /// it is dropped, and the frame shown stays until the page's own comes.
     fn show_frame(&mut self, frame: Frame, cx: &mut Context<Self>) {
-        // Which request the frame answers, to follow a stutter from its request to its paint.
-        log::trace!("canvas frame of request {:016x}", frame.key);
+        // Which request the frame answers, to follow a stutter from its request to its paint, and
+        // whether it was drawn whole.
+        log::trace!(
+            "canvas frame of request {:016x} ({:?})",
+            frame.key,
+            frame.work
+        );
         let on_show = self.board().and_then(|board| board.session.ds().ok());
         if !on_show.is_some_and(|ds| frame.shows(ds.uid, ds.page)) {
             return;
@@ -2252,6 +2281,38 @@ mod tests {
         assert!(!in_atlas(cx, window, &first));
     }
 
+    /// CANVAS-UI-9: a canvas whose tab is hidden lets go of what it keeps to draw its next frames:
+    /// its frame's texture leaves the window's sprite atlas (and the render thread forgets the
+    /// render it kept, `worker::tests`). It keeps the frame's image itself, so that the canvas
+    /// shows at once when its tab comes back: that paint puts the texture back.
+    #[gpui_kit::test]
+    fn a_hidden_canvas_lets_go_of_its_frames_texture(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("hidden-frames");
+        cx.update(gpui_kit::init);
+        // The canvas's shortcuts are key bindings.
+        cx.update(init_keys);
+        let (window, view) = open_in_window(cx, &tmp.0.join("canvas.figcraft"));
+        let first = next_frame(cx, &view, None);
+        assert!(in_atlas(cx, window, &first));
+        let show = |shown: bool, cx: &mut TestAppContext| {
+            cx.update_window(window.into(), |_, window, cx| {
+                view.update(cx, |view, cx| view.set_shown(shown, window, cx));
+            })
+            .unwrap();
+        };
+        // The test window draws the canvas whether it is "shown" or not: nothing is drawn between
+        // the hide and the checks.
+        show(false, cx);
+        assert!(!in_atlas(cx, window, &first));
+        let kept = view.read_with(cx, |view, _| {
+            view.frame.as_ref().map(|frame| frame.image.clone())
+        });
+        assert!(kept.is_some_and(|kept| Arc::ptr_eq(&kept, &first)));
+        show(true, cx);
+        cx.run_until_parked();
+        assert!(in_atlas(cx, window, &first));
+    }
+
     /// The frame image the canvas's next paint would put on screen, as its prepaint works it out
     /// at the bounds of its last paint.
     fn painted_image(
@@ -2331,6 +2392,7 @@ mod tests {
             key: 0,
             uid,
             page: first_page,
+            work: figcraft_render::Work::Full,
         };
         view.update(cx, |view, cx| view.show_frame(late, cx));
         view.read_with(cx, |view, _| {
