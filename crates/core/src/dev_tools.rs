@@ -50,10 +50,11 @@ pub struct Tool {
     /// Where it lands when the installer doesn't put it on `PATH` (`~` is
     /// `$HOME`).
     pub also: &'static [&'static str],
-    /// Besides `also`, the folders the installer puts it in (its real path
-    /// when the command is a link), or with a leading `*` a part of that
-    /// real path. A copy found anywhere else was installed another way, and
-    /// `uninstall` isn't run on it.
+    /// Besides the `also` paths themselves, the folders (or files) the
+    /// installer puts it in, matched by the path found or, for a link, the
+    /// path it leads to; with a leading `*`, a part of that real path. A copy
+    /// found anywhere else was installed another way (Homebrew's cask of an
+    /// app, pyenv's Python), and `uninstall` isn't run on it.
     pub owns: &'static [&'static str],
     /// The install command, run by the login shell.
     pub install: &'static str,
@@ -397,7 +398,8 @@ rm -rf "$HOME/.local/share/cursor-agent""#,
         )
     },
     Tool {
-        owns: &["*/Cap.app/Contents/MacOS/"],
+        // Where its installer links the cap-cli of Cap.app.
+        owns: &["~/.local/bin/cap", "~/.cap/bin/cap"],
         uninstall: Some(
             r#"for shim in "$HOME/.local/bin/cap" "$HOME/.cap/bin/cap"; do
   case "$(readlink "$shim")" in */cap-cli*) rm -f "$shim" ;; esac
@@ -416,6 +418,8 @@ rm -rf "/Applications/Cap.app" "$HOME/Applications/Cap.app""#,
         )
     },
     Tool {
+        // Where its installer links the app's CLI.
+        owns: &["~/.local/bin/zed"],
         latest: Latest::GitHub("zed-industries/zed"),
         uninstall: Some(
             r#"rm -f "$HOME/.local/bin/zed"
@@ -949,11 +953,10 @@ fn uninstall_command_in(tool: &Tool, found: &Path, real: &Path, home: &Path) -> 
     {
         return Some(format!("npm uninstall -g {package}"));
     }
-    let ours = tool
-        .also
-        .iter()
-        .chain(tool.owns)
-        .any(|p| match p.strip_prefix('*') {
+    // An `also` path is the copy itself (an app bundle there may be
+    // Homebrew's cask, its CLI linked from elsewhere: not this one).
+    let ours = tool.also.iter().any(|p| expand_in(p, home) == found)
+        || tool.owns.iter().any(|p| match p.strip_prefix('*') {
             Some(part) => real_text.contains(part),
             None => {
                 let p = expand_in(p, home);
@@ -1290,6 +1293,17 @@ mod tests {
         assert_eq!(
             script("bun", "/Users/me/.bun/bin/bun", "/Users/me/.bun/bin/bun"),
             own("bun")
+        );
+        // Zed's CLI from its installer, and from Homebrew's cask, which links the same app.
+        let zed_cli = "/Applications/Zed.app/Contents/MacOS/cli";
+        assert_eq!(
+            script("zed", "/Users/me/.local/bin/zed", zed_cli),
+            own("zed")
+        );
+        assert_eq!(script("zed", "/opt/homebrew/bin/zed", zed_cli), None);
+        assert_eq!(
+            script("zed", "/Applications/Zed.app", "/Applications/Zed.app"),
+            own("zed")
         );
         // A Cellar folder whose name isn't a formula's isn't put in a command.
         assert_eq!(
