@@ -1,11 +1,28 @@
 //! Shared setup for the terminal's GPUI tests.
 
+use std::time::{Duration, Instant};
+
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Bounds, Entity, TestAppContext, WindowBounds,
     WindowOptions, px, size,
 };
 
 use super::TerminalPanel;
+
+/// How long a test waits on the real shells it starts. A shell takes a moment to start and
+/// to run what it's sent, and seconds when other test binaries run at once (as when several
+/// lanes run their gates), so the wait is generous: a test that passes stops waiting as soon
+/// as what it waits for happens.
+pub(super) const SHELLS: Duration = Duration::from_secs(30);
+
+/// Polls `ok` (the shells run on real threads) for up to [`SHELLS`].
+pub(super) fn wait_until(cx: &mut TestAppContext, what: &str, ok: impl Fn(&App) -> bool) {
+    let deadline = Instant::now() + SHELLS;
+    while !cx.update(|cx| ok(cx)) {
+        assert!(Instant::now() < deadline, "timed out waiting until {what}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
 
 /// Registers the actions and key bindings the terminal tests rely on.
 pub(super) fn init(cx: &mut App) {

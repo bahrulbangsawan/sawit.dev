@@ -967,7 +967,7 @@ mod tests {
 
     use super::super::TerminalPanel;
 
-    use super::super::testing::{focus_terminal, init, open_panel};
+    use super::super::testing::{SHELLS, focus_terminal, init, open_panel, wait_until};
     use super::super::view::FOLDER_TTL;
     use super::pane_menu_items;
 
@@ -978,21 +978,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir.canonicalize().unwrap()
-    }
-
-    /// How long a test waits on the real shells it starts. A shell takes a moment to start and
-    /// to run what it's sent, and seconds when other test binaries run at once (as when several
-    /// lanes run their gates), so the wait is generous: a test that passes stops waiting as soon
-    /// as what it waits for happens.
-    const SHELLS: Duration = Duration::from_secs(30);
-
-    /// Polls `ok` (the shells run on real threads) for up to [`SHELLS`].
-    fn wait_until(cx: &mut TestAppContext, what: &str, ok: impl Fn(&App) -> bool) {
-        let deadline = Instant::now() + SHELLS;
-        while !cx.update(|cx| ok(cx)) {
-            assert!(Instant::now() < deadline, "timed out waiting until {what}");
-            std::thread::sleep(Duration::from_millis(20));
-        }
     }
 
     /// Like `wait_until`, but lets the app handle what the shells sent

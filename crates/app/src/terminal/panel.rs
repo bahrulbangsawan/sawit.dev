@@ -1113,22 +1113,11 @@ mod paste_tests {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
-
-    use gpui_kit::{App, AppContext as _, TestAppContext};
+    use gpui_kit::{AppContext as _, TestAppContext};
     use sawit_core::terminal::run_bytes;
 
-    use super::super::testing::{focus_terminal, init, open_panel};
+    use super::super::testing::{focus_terminal, init, open_panel, wait_until};
     use super::JobTag;
-
-    /// Polls `ok` (the shells run on real threads) for up to five seconds.
-    fn wait_until(cx: &mut TestAppContext, what: &str, ok: impl Fn(&App) -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !cx.update(|cx| ok(cx)) {
-            assert!(Instant::now() < deadline, "timed out waiting until {what}");
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
 
     #[gpui_kit::test]
     fn a_paste_goes_to_the_focused_pane(cx: &mut TestAppContext) {
