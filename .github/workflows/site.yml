@@ -1,0 +1,50 @@
+# Builds the marketing site (site/) with the cf CLI on every pull request that touches it,
+# checks the build with a dry run, and deploys that same build to sawit.dev on pushes to main.
+# site/public/install.sh links to scripts/install.sh, so sawit.dev/install.sh redeploys when the script changes.
+# Needs the CLOUDFLARE_API_TOKEN repository secret (Workers Scripts edit, plus Workers Routes and
+# DNS edit on the sawit.dev zone). The account comes from site/cloudflare.config.ts.
+# Until the secret is set, a push to main still builds and checks the site, and skips the deploy
+# with a notice instead of failing.
+name: Site
+
+on:
+  pull_request:
+    paths: ["site/**", "scripts/install.sh", ".github/workflows/site.yml"]
+  push:
+    branches: [main]
+    paths: ["site/**", "scripts/install.sh", ".github/workflows/site.yml"]
+
+# One run at a time per branch, none cancelled: pushes to main deploy in the order they were made,
+# so an older build never replaces a newer one.
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: site
+    env:
+      CF_SEND_TELEMETRY: "false"
+      # Secrets can't be read in a step's `if`, so whether the token is set goes through env.
+      HAS_CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx cf build
+      - run: npx cf deploy --prebuilt --dry-run
+      - if: github.event_name == 'push' && env.HAS_CF_TOKEN != 'true'
+        run: echo "::notice title=sawit.dev not deployed::The CLOUDFLARE_API_TOKEN secret isn't set, so this build was checked but not deployed. Add the secret to deploy the site from main."
+      - if: github.event_name == 'push' && env.HAS_CF_TOKEN == 'true'
+        run: npx cf deploy --prebuilt
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

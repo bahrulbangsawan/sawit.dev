@@ -344,6 +344,21 @@ pub fn open_window(
     Some((handle, workspace))
 }
 
+/// Opens each file whose unsaved changes the app kept when it last quit without asking (the Dock's
+/// Quit, logging out, the install script's quit), in the window whose project holds it, with the
+/// changes back in it, unsaved ([`crate::editor::kept`]).
+pub fn restore_kept(cx: &mut App) {
+    let folder = crate::editor::kept::folder(cx);
+    for (from, kept) in crate::editor::kept::all(&folder) {
+        let Some((handle, workspace)) = window_for_file(&kept.path, cx) else {
+            continue;
+        };
+        let _ = handle.update(cx, |_, window, cx| {
+            workspace.update(cx, |w, cx| w.restore_kept(kept, from, window, cx))
+        });
+    }
+}
+
 /// Dock icon clicked with every window closed.
 pub fn reopen(cx: &mut App) {
     if workspaces(cx).is_empty() {
@@ -979,6 +994,29 @@ mod tests {
         assert_eq!(window("/code/shop/web"), Some("front"));
         assert_eq!(window("/code/other"), Some("back"));
         assert_eq!(window("/tmp/elsewhere"), None);
+    }
+
+    /// SITE-1: ⌘Q, the app's own Quit (as the menu's Quit Sawit sends it), asks to save a file
+    /// with unsaved changes first. It quit at once, and the changes were lost.
+    #[gpui_kit::test]
+    fn the_quit_key_asks_to_save_unsaved_changes(cx: &mut gpui_kit::TestAppContext) {
+        use crate::editor::testing::{open_editor, scratch_dir, type_into};
+        cx.update(|cx| {
+            crate::editor::testing::init(cx);
+            super::init(cx);
+        });
+        let path = scratch_dir("quit-key").join("notes.txt");
+        std::fs::write(&path, "on disk\n").unwrap();
+        let (window, editor) = open_editor(cx, &path);
+        type_into(cx, window, &editor, "typed ");
+
+        cx.simulate_keystrokes(window, "cmd-q");
+        cx.run_until_parked();
+        let (question, _) = cx.pending_prompt().expect("⌘Q asked nothing");
+        assert_eq!(question, "Save changes to notes.txt before quitting?");
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "on disk\n");
     }
 
     /// The app's key bindings, bound as `main` binds them, then taken as the keymap's defaults

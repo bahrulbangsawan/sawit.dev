@@ -72,12 +72,14 @@ On an Apple Silicon Mac, run:
 curl -fsSL https://raw.githubusercontent.com/bahrulbangsawan/sawit.dev/main/scripts/install.sh | sh
 ```
 
-This installs the latest release into `/Applications` (or `~/Applications`). Add `SAWIT_VERSION=v0.0.8` before `sh`
-to pick a version. After that, the app updates itself.
+This installs the latest release into `/Applications` (or `~/Applications`). To install a given release instead, add
+`SAWIT_VERSION=vX.Y.Z` (a tag from [Releases](https://github.com/bahrulbangsawan/sawit.dev/releases)) before `sh`.
+After that, the app updates itself.
 
 Sawit is not notarized yet, so if you open the `Sawit.dmg` from a browser download, macOS says it "could not verify
-Sawit is free of malware." Use the script above, or right-click **Sawit.app → Open** once, or run
-`xattr -dr com.apple.quarantine /Applications/Sawit.app`.
+Sawit is free of malware." Use the script above. Or open Sawit once, choose **Done**, then **Open Anyway** in
+**System Settings → Privacy & Security**, or run `xattr -dr com.apple.quarantine /Applications/Sawit.app`. Since
+macOS 15, right-click → **Open** no longer gets past the warning.
 
 ## Features
 
@@ -379,6 +381,10 @@ explained. A conflict on the same address can't be forced.
   Read-Only, and Pin Tab.
 - Bulk close leaves pinned and unsaved tabs alone. Closing an unsaved file
   asks for confirmation.
+- Quitting, closing a window and **Restart to Update** ask too, and offer to save every unsaved file first
+  (**Save All**, **Don't Save**, **Cancel**). A quit that can't ask (the Dock's Quit, logging out, the install script)
+  keeps the unsaved changes instead, and the next launch reopens those files with the changes back in, unsaved. If a
+  file changed on disk in the meantime, Sawit warns you that saving would overwrite it.
 - The instance tab can be closed, and it reappears when an instance is selected.
 - The sidebar, terminal, and tab area can be hidden or shown from the title bar buttons or
   with shortcuts (see below).
@@ -390,9 +396,10 @@ explained. A conflict on the same address can't be forced.
 - Click the version in the status bar for the **Changelog** page: the running version, update status,
   notes of a newer release, and the full history.
 - Sawit checks [GitHub Releases](https://github.com/bahrulbangsawan/sawit.dev/releases) on launch and
-  every 4 hours. New versions download in the background. Once ready, a **Restart to Update** button appears in the
-  title bar: the app quits, `Sawit.app` is replaced, and it reopens. It asks first while a terminal runs something,
-  since quitting ends it. Builds from `cargo` only open the releases page.
+  every hour. New versions download in the background. Once ready, a **Restart to Update** button appears in the
+  title bar: the app quits, `Sawit.app` is replaced, and it reopens. It asks first while a terminal runs something
+  or a file has unsaved changes, since quitting ends or closes them. A downloaded update also installs when you
+  quit. Builds from `cargo` only open the releases page.
 
 ## Keyboard shortcuts
 

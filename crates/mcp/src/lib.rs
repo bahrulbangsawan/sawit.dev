@@ -677,6 +677,49 @@ mod tests {
         }
     }
 
+    /// README and the sawit.dev site say how many tools agents get: every count they give is the
+    /// router's, so adding or removing a tool shows each place that counts them. The site said 110
+    /// while the server had 117 (SITE-5).
+    #[test]
+    fn the_readme_and_the_site_give_the_tool_count() {
+        let tools = Sawit::router().list_all().len();
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        // "117 tools", and the site's stat: "Tools for agents</dt>", then "<dd>117</dd>".
+        let counts = |text: &str| -> Vec<usize> {
+            let mut found = Vec::new();
+            for (at, _) in text.match_indices(" tools") {
+                let digits: String = text[..at]
+                    .chars()
+                    .rev()
+                    .take_while(char::is_ascii_digit)
+                    .collect();
+                if !digits.is_empty() {
+                    found.push(digits.chars().rev().collect::<String>().parse().unwrap());
+                }
+            }
+            for (at, _) in text.match_indices("Tools for agents</dt>") {
+                let rest = &text[at..];
+                let value = rest.find("<dd>").expect("the stat's value") + "<dd>".len();
+                let digits: String = rest[value..]
+                    .chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect();
+                found.push(digits.parse().expect("the stat is a number"));
+            }
+            found
+        };
+        for file in ["README.md", "site/src/routes/index.tsx"] {
+            let text = std::fs::read_to_string(repo.join(file))
+                .unwrap_or_else(|e| panic!("{file} can't be read: {e}"));
+            let found = counts(&text);
+            assert!(found.len() >= 2, "{file} gives the tool count {found:?}");
+            assert!(
+                found.iter().all(|&n| n == tools),
+                "{file} counts {found:?} tools; sawit-mcp has {tools}"
+            );
+        }
+    }
+
     /// MCP-15: every tool carries MCP's hints for the clients that act on them (letting a
     /// read-only tool through, asking before a destructive one): whether it only reads, whether
     /// it can destroy what was there, and whether it reaches past this Mac. No tool had any, so a
