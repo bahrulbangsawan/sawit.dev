@@ -240,9 +240,10 @@ explained. A conflict on the same address can't be forced.
 
 <img src="docs/media/browser.png" alt="Browser tab showing the acme-store demo shop on localhost:5173, with back, forward, reload, the address field and a Web Inspector button above the page" width="100%">
 
-- Click **Browser** in the title bar for a web browser tab (WebKit). With nothing typed, it opens the project's
-  running dev server. The toolbar has back, forward, reload, an address field (text that isn't a URL is searched),
-  the device menu, **Annotate**, **Design**, **Open in Default Browser** and the Web Inspector.
+- Click **Browser** in the title bar for the project's web browser tab (WebKit; each project has its own). With
+  nothing typed, it opens the project's running dev server. The toolbar has back, forward, reload, an address
+  field (text that isn't a URL is searched), the device menu, **Annotate**, **Design**, **Open in Default Browser**
+  and the Web Inspector.
 - Cookies and storage are kept per project, so being signed in to one app doesn't leak into another.
 - **Device sizes**: the device menu lays the page out as an iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop or
   Desktop, scaled to fit the tab. **Rotate** turns the device, and **Responsive** fills the tab again.
@@ -254,7 +255,7 @@ explained. A conflict on the same address can't be forced.
   as CSS, Tailwind or HTML. The panel also lists the page's colors, fonts and assets, and derives its design system:
   palette ramps, type scale, spacing, radius and shadows. **Export** writes `DESIGN.md`, DTCG tokens, a Tailwind v4
   theme, shadcn/ui variables, sample components and the assets to `.nyawit/design/<host>/` (with no project, to
-  `~/Downloads/sawit-design/<host>/`).
+  `~/Downloads/sawit-design/<host>/`); a dev server's folder keeps its port, as `localhost-5173`.
 - AI agents drive it through the `browser_*` MCP tools: open pages, read the page as an accessibility outline,
   click, type, pick options, press keys, scroll, wait for text, run JavaScript, and read the console, failed
   requests and screenshots. They can also set a device size, read your annotations, and inspect, read or export

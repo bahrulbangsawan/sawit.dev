@@ -97,9 +97,13 @@ Injected with `with_initialization_script` into every document:
 - Captures `console.*`, `error`, `unhandledrejection`, wraps `fetch` and
   `XMLHttpRequest`, observes `PerformanceObserver('resource')`, and hooks
   `history.pushState/replaceState`, `popstate`, `hashchange` for URL
-  changes. Each message goes over `window.ipc.postMessage` prefixed with a
-  per-webview random token held in a closure; the app drops messages
-  without it, so page scripts can't forge logs or results.
+  changes. Each message goes through the IPC handler's own `postMessage`
+  (taken before any page script runs, not wry's `window.ipc` shim)
+  prefixed with a per-webview random token held in a closure; the app
+  drops messages without it, so page scripts can't forge logs or results.
+  The agent is strict-mode code: JavaScriptCore answers
+  `Function.prototype.caller` for sloppy functions, so a page function the
+  agent calls would otherwise get the one that signs from its caller.
 - Defines `window.__sawitAgent` non-writable, non-configurable, with
   `run(op)` returning a JSON string (`{"ok":true,…}` /
   `{"ok":false,"error":…}`), synchronously, so results come back through

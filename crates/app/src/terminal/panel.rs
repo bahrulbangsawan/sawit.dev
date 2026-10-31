@@ -996,16 +996,22 @@ impl TerminalPanel {
         }
     }
 
-    /// The tab a paste may go to: the active one if the program in its
-    /// focused pane enabled bracketed paste, else the highest-numbered tab
-    /// whose focused pane did.
+    /// The tab a paste may go to, by the program in its focused pane, which must have
+    /// enabled bracketed paste: the agent's (a program, not a shell at its prompt), the
+    /// active tab first, else the highest-numbered; then a shell's, the same way.
     pub fn paste_target(&self, cx: &App) -> Option<usize> {
-        let accepts: Vec<bool> = self
+        let panes: Vec<FocusedPane> = self
             .tabs
             .iter()
-            .map(|t| focused(t, cx).accepts_paste())
+            .map(|t| {
+                let view = focused(t, cx);
+                FocusedPane {
+                    accepts: view.accepts_paste(),
+                    at_prompt: view.at_prompt(),
+                }
+            })
             .collect();
-        pick_paste_target(self.active, &accepts)
+        pick_paste_target(self.active, &panes)
     }
 
     /// Pastes `text` into the focused pane of tab `ix` (never pressing
@@ -1368,17 +1374,45 @@ fn ssh_command(launch: &Launch) -> Command {
     }
 }
 
-/// The tab to paste into: `active` if it accepts, else the last that does.
-fn pick_paste_target(active: usize, accepts: &[bool]) -> Option<usize> {
-    if accepts.get(active) == Some(&true) {
-        return Some(active);
-    }
-    accepts.iter().rposition(|&a| a)
+/// A tab's focused pane, as a paste sees it.
+#[derive(Clone, Copy, Debug)]
+struct FocusedPane {
+    /// Its program turned bracketed paste on.
+    accepts: bool,
+    /// A shell waiting at its prompt, not running a program.
+    at_prompt: bool,
+}
+
+/// The tab to paste into, by its focused pane: one running a program that takes a paste (the
+/// agent), `active` first, else the last; with none, a shell at its prompt the same way. A
+/// pane without the keyboard is never chosen.
+fn pick_paste_target(active: usize, panes: &[FocusedPane]) -> Option<usize> {
+    let pick = |wanted: &dyn Fn(&FocusedPane) -> bool| {
+        if panes.get(active).is_some_and(wanted) {
+            return Some(active);
+        }
+        panes.iter().rposition(wanted)
+    };
+    pick(&|p| p.accepts && !p.at_prompt).or_else(|| pick(&|p| p.accepts))
 }
 
 #[cfg(test)]
 mod helper_tests {
-    use super::{command_in, pick_paste_target};
+    use super::{FocusedPane, command_in, pick_paste_target};
+
+    /// A shell at its prompt, a program that takes a paste (Claude Code), and one that doesn't.
+    const SHELL: FocusedPane = FocusedPane {
+        accepts: true,
+        at_prompt: true,
+    };
+    const AGENT: FocusedPane = FocusedPane {
+        accepts: true,
+        at_prompt: false,
+    };
+    const BUSY: FocusedPane = FocusedPane {
+        accepts: false,
+        at_prompt: false,
+    };
 
     #[test]
     fn a_script_goes_back_to_its_folder_unless_its_shell_is_there() {
@@ -1402,10 +1436,28 @@ mod helper_tests {
 
     #[test]
     fn picks_active_else_highest_accepting() {
-        assert_eq!(pick_paste_target(1, &[true, false, true]), Some(2));
-        assert_eq!(pick_paste_target(0, &[true, false]), Some(0));
-        assert_eq!(pick_paste_target(0, &[false, false]), None);
+        assert_eq!(pick_paste_target(1, &[SHELL, BUSY, SHELL]), Some(2));
+        assert_eq!(pick_paste_target(0, &[SHELL, BUSY]), Some(0));
+        assert_eq!(pick_paste_target(0, &[BUSY, BUSY]), None);
         assert_eq!(pick_paste_target(0, &[]), None);
+    }
+
+    /// Annotations go to the terminal running an agent: a tab whose focused pane runs a
+    /// program that takes a paste comes before a shell at its prompt, even the active one.
+    #[test]
+    fn an_agent_comes_before_an_idle_shell() {
+        assert_eq!(pick_paste_target(0, &[SHELL, AGENT]), Some(1));
+        assert_eq!(pick_paste_target(1, &[AGENT, SHELL, BUSY]), Some(0));
+        assert_eq!(
+            pick_paste_target(2, &[AGENT, SHELL, AGENT]),
+            Some(2),
+            "the active one first"
+        );
+        assert_eq!(
+            pick_paste_target(1, &[AGENT, SHELL, AGENT]),
+            Some(2),
+            "else the last"
+        );
     }
 }
 

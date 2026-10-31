@@ -35,11 +35,12 @@ use sawit_core::annotations::{
 };
 use sawit_core::browser::{
     BrowserOp, ConsoleEntry, Logs, PageEvent, Target, ViewportMode, fit, normalize_address,
-    page_script, parse_ipc, resize_mode,
+    page_script, parse_ipc, resize_mode, search_url,
 };
 use sawit_core::probe;
 use serde_json::{Value, json};
 
+pub use annotate::notes_lost;
 use annotate::{AnnotateEvent, AnnotatePanel, group_order, padded_rect};
 use design::{DesignEvent, DesignPanel, Segment};
 use engine::{Engine, EngineEvent, EngineSpec, Frame};
@@ -85,6 +86,50 @@ fn pick_mode(panel: Panel, segment: Segment) -> PickMode {
         (Panel::Annotate, _) => PickMode::Annotate,
         (Panel::Design, Segment::Inspect) => PickMode::Inspect,
         (Panel::Design, _) => PickMode::Off,
+    }
+}
+
+/// Whether a pick the page reports (`mode` as it says) is one Sawit armed: the page can arm
+/// the picker itself, so a pick counts only in the mode armed, with its panel open.
+fn pick_wanted(panel: Option<Panel>, pick: PickMode, mode: &str) -> bool {
+    match mode {
+        "annotate" => panel == Some(Panel::Annotate) && pick == PickMode::Annotate,
+        "inspect" => panel == Some(Panel::Design) && pick == PickMode::Inspect,
+        _ => false,
+    }
+}
+
+/// A key an agent presses (`browser_press_key`) that Sawit answers instead of the page.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum OwnKey {
+    /// ⇧⌘.: toggles Annotate.
+    ToggleAnnotate,
+    /// Esc: stops picking, while picking.
+    Escape,
+}
+
+/// Whether `key` (`Meta+Shift+.`, as `browser_press_key` takes it) is ⇧⌘. or Esc. The page
+/// answers only the user's own ⇧⌘. and Esc while picking (a page can dispatch keys, and ⇧⌘.
+/// opens Annotate and arms the picker), so an agent's go to Sawit. `>` is ⇧. on the keyboard.
+fn own_key(key: &str) -> Option<OwnKey> {
+    let parts: Vec<String> = key
+        .split('+')
+        .map(|p| p.trim().to_ascii_lowercase())
+        .collect();
+    let (key, mods) = parts.split_last()?;
+    let meta = mods
+        .iter()
+        .any(|m| matches!(m.as_str(), "meta" | "cmd" | "command"));
+    let shift = mods.iter().any(|m| m == "shift");
+    let others = mods
+        .iter()
+        .any(|m| !matches!(m.as_str(), "meta" | "cmd" | "command" | "shift"));
+    match key.as_str() {
+        "." if meta && shift && !others => Some(OwnKey::ToggleAnnotate),
+        ">" if meta && !others => Some(OwnKey::ToggleAnnotate),
+        // As the picker takes it: any Esc.
+        "escape" | "esc" => Some(OwnKey::Escape),
+        _ => None,
     }
 }
 
@@ -187,6 +232,8 @@ pub struct BrowserView {
     design: design::flow::DesignFlow,
     /// Ops sent before the webview exists, in order.
     queued: Vec<(BrowserOp, oneshot::Sender<OpResult>)>,
+    /// Links to other apps the page opened: asked about one at a time.
+    external: ExternalGate,
     _ipc: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
@@ -286,6 +333,7 @@ impl BrowserView {
             to_view,
             design: Default::default(),
             queued: Vec::new(),
+            external: ExternalGate::default(),
             _ipc: ipc,
             _subscriptions: subscriptions,
         }
@@ -318,7 +366,7 @@ impl BrowserView {
 
     /// Opens `panel`, or closes it when it is the one open. Annotate arms
     /// element picking, Design inspecting (on its Inspect segment); closing disarms.
-    pub fn toggle_panel(&mut self, panel: Panel, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn toggle_panel(&mut self, panel: Panel, cx: &mut Context<Self>) {
         if self.panel == Some(panel) {
             self.panel = None;
             self.set_pick(PickMode::Off, cx);
@@ -333,12 +381,27 @@ impl BrowserView {
 
     /// ⇧⌘.: like the Annotate button, except that with Annotate open after Esc
     /// it picks again instead of closing.
-    fn annotate_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn annotate_key(&mut self, cx: &mut Context<Self>) {
         if self.panel == Some(Panel::Annotate) && self.pick == PickMode::Off {
             self.set_pick(PickMode::Annotate, cx);
         } else {
-            self.toggle_panel(Panel::Annotate, window, cx);
+            self.toggle_panel(Panel::Annotate, cx);
         }
+    }
+
+    /// An agent's ⇧⌘., or Esc while picking: does what the user's key does and answers
+    /// where that left the panel and the picker. `None` for a key that is the page's.
+    fn press_own_key(&mut self, key: &str, cx: &mut Context<Self>) -> Option<Value> {
+        match own_key(key)? {
+            OwnKey::ToggleAnnotate => self.annotate_key(cx),
+            OwnKey::Escape if self.pick != PickMode::Off => self.set_pick(PickMode::Off, cx),
+            OwnKey::Escape => return None,
+        }
+        Some(json!({
+            "pressed": key,
+            "panel": self.panel.map(Panel::as_str),
+            "picking": self.pick.as_str(),
+        }))
     }
 
     /// Arms (or disarms) picking on the page.
@@ -383,6 +446,11 @@ impl BrowserView {
     fn sync_markers(&self, cx: &App) {
         let markers = self.annotate.read(cx).markers_for(&self.current_url());
         drop(self.page_op(markers_op(&markers)));
+    }
+
+    /// Annotation notes that would be lost with the tab: not copied, sent or read by an agent.
+    pub fn unsent_notes(&self, cx: &App) -> usize {
+        self.annotate.read(cx).unsent(cx)
     }
 
     /// Shows `text` in the Annotate footer for a moment.
@@ -459,11 +527,16 @@ impl BrowserView {
             AnnotateEvent::Copy => {
                 if let Some(md) = self.annotations_markdown(cx) {
                     cx.write_to_clipboard(ClipboardItem::new_string(md));
-                    self.annotate.update(cx, |a, cx| a.set_note("Copied", cx));
+                    self.annotate.update(cx, |a, cx| {
+                        a.mark_sent(cx);
+                        a.set_note("Copied", cx);
+                    });
                 }
             }
             AnnotateEvent::Send => {
                 if let Some(md) = self.annotations_markdown(cx) {
+                    // Pasted, or copied when no terminal takes it: either way the user has them.
+                    self.annotate.update(cx, |a, cx| a.mark_sent(cx));
                     cx.emit(BrowserEvent::SendToTerminal(md));
                 }
             }
@@ -732,13 +805,30 @@ impl BrowserView {
             .unwrap_or_else(|| self.url.clone())
     }
 
+    /// The tab is opened again: a port clicked in Ports (`url`) opens there, the Browser
+    /// button (none) keeps the page.
+    pub fn show(&mut self, url: Option<&str>, cx: &mut Context<Self>) {
+        if let Some(url) = url {
+            self.navigate(url, cx);
+        }
+    }
+
+    /// Opens what the user typed (or an agent asked for).
     fn navigate(&mut self, typed: &str, cx: &mut Context<Self>) {
-        let url = normalize_address(typed);
+        // Opened by the user or an agent: the page's links to other apps may ask again.
+        self.external.reset();
+        self.load(address_url(typed), cx);
+    }
+
+    /// Loads `url` in the tab, as it is.
+    fn load(&mut self, url: String, cx: &mut Context<Self>) {
         self.navigated = true;
         self.loading = true;
         self.url = url.clone();
         if let Some(engine) = &self.engine {
-            engine.load_url(&url);
+            if let Err(e) = engine.load_url(&url) {
+                eprintln!("sawit: {e}");
+            }
             if self.visible {
                 engine.focus();
             }
@@ -751,6 +841,10 @@ impl BrowserView {
             FromPage::Event(PageEvent::Console(entry)) => self.logs.push_console(entry),
             FromPage::Event(PageEvent::Network(entry)) => self.logs.push_network(entry),
             FromPage::Event(PageEvent::Picked(pick)) => {
+                // A page can arm the picker itself: only picks Sawit asked for count.
+                if !pick_wanted(self.panel, self.pick, pick["mode"].as_str().unwrap_or("")) {
+                    return;
+                }
                 self.last_pick = pick["element"]["selector"].as_str().map(str::to_string);
                 if pick["mode"] == "annotate" {
                     match serde_json::from_value(pick["element"].clone()) {
@@ -767,14 +861,20 @@ impl BrowserView {
                     self.inspect_element(selector.to_string(), false, cx);
                 }
             }
-            // The page has the keyboard: it forwards ⇧⌘. and Esc.
+            // The page has the keyboard: it forwards the user's ⇧⌘. and Esc.
             FromPage::Event(PageEvent::Key(key)) => match key.as_str() {
-                "toggle-annotate" => self.annotate_key(window, cx),
+                "toggle-annotate" => self.annotate_key(cx),
                 "escape" => self.set_pick(PickMode::Off, cx),
                 _ => {}
             },
             FromPage::Event(PageEvent::Url(url)) => {
-                self.url = url;
+                // The page says the address changed; WebKit says what it is.
+                self.url = self
+                    .engine
+                    .as_ref()
+                    .and_then(|e| e.url())
+                    .filter(|u| !u.is_empty())
+                    .unwrap_or(url);
                 self.design_url_changed();
                 self.scan_if_design_open(cx);
                 self.show_address(window, cx);
@@ -820,9 +920,47 @@ impl BrowserView {
                 self.annotate.update(cx, |a, cx| a.set_current(&url, cx));
             }
             FromPage::Engine(EngineEvent::Title(title)) => self.title = title,
-            FromPage::Engine(EngineEvent::NewWindow(url)) => self.navigate(&url, cx),
+            FromPage::Engine(EngineEvent::NewWindow(url)) => {
+                match new_window_action(&url, &self.current_url()) {
+                    NewWindow::Ignore => {}
+                    NewWindow::Load(url) => self.load(url, cx),
+                    NewWindow::External(url) => self.open_external(url, window, cx),
+                }
+            }
+            FromPage::Engine(EngineEvent::External(url)) => self.open_external(url, window, cx),
             FromPage::Shoot { rect, reply } => self.shoot(rect, reply, cx),
         }
+    }
+
+    /// The page went to a link another app handles: asks the user before opening it, one
+    /// link at a time; after a "Cancel" the page asks no more until the user or an agent opens
+    /// a page.
+    fn open_external(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.external.ask() {
+            return;
+        }
+        let shown = match url.char_indices().nth(EXTERNAL_SHOWN) {
+            Some((i, _)) => format!("{}…", &url[..i]),
+            None => url.clone(),
+        };
+        let answer = window.prompt(
+            PromptLevel::Info,
+            "Open this link in another app?",
+            Some(&format!("The page asked to open {shown}")),
+            &["Open", "Cancel"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            let open = matches!(answer.await, Ok(0));
+            let _ = this.update(cx, |this, cx| {
+                this.external.answered(open);
+                if open {
+                    // NSWorkspace: no process to wait for.
+                    cx.open_url(&url);
+                }
+            });
+        })
+        .detach();
     }
 
     /// Puts the page's address in the field, unless the user is typing there.
@@ -847,6 +985,13 @@ impl BrowserView {
         let (tx, rx) = oneshot::channel();
         if let Some(e) = &self.error {
             let _ = tx.send(Err(format!("The browser couldn't start: {e}")));
+            return rx;
+        }
+        // Sawit's keys, not the page's (see `own_key`): no page needed.
+        if let BrowserOp::Press { key } = &op
+            && let Some(answer) = self.press_own_key(key, cx)
+        {
+            let _ = tx.send(Ok(answer));
             return rx;
         }
         if self.engine.is_none() {
@@ -945,12 +1090,20 @@ impl BrowserView {
                     return;
                 }
             },
+            BrowserOp::Evaluate { script } => {
+                evaluate(Rc::downgrade(&engine), script, reply);
+                return;
+            }
             BrowserOp::Annotations { clear } => {
                 let markdown = self.annotations_markdown(cx);
                 let count = self.annotate.read(cx).annotations(cx).len();
-                if clear {
-                    self.annotate.update(cx, |a, cx| a.clear(cx));
-                }
+                self.annotate.update(cx, |a, cx| {
+                    if clear {
+                        a.clear(cx);
+                    } else {
+                        a.mark_sent(cx);
+                    }
+                });
                 json!({ "markdown": markdown, "count": count })
             }
             BrowserOp::Inspect { target, format } => {
@@ -1146,8 +1299,8 @@ impl Render for BrowserView {
         v_flex()
             .key_context("Browser")
             .track_focus(&self.focus)
-            .on_action(cx.listener(|this, _: &ToggleAnnotate, window, cx| {
-                this.annotate_key(window, cx);
+            .on_action(cx.listener(|this, _: &ToggleAnnotate, _, cx| {
+                this.annotate_key(cx);
             }))
             .size_full()
             .child(self.toolbar(window, cx))
@@ -1221,6 +1374,17 @@ fn shot_width(
     }
 }
 
+/// What the address field (and an agent's navigate) loads for `typed`: its address when
+/// WebKit can read it, else a search for the text (`file://my host/x` isn't a URL).
+fn address_url(typed: &str) -> String {
+    let url = normalize_address(typed);
+    if engine::loadable(&url) {
+        url
+    } else {
+        search_url(typed)
+    }
+}
+
 fn new_token() -> String {
     use std::io::Read as _;
     let mut bytes = [0u8; 16];
@@ -1285,6 +1449,88 @@ fn save_screenshot(
     Ok(path)
 }
 
+/// What a page's request for a new window (`window.open`, a `target=_blank` link) does.
+#[derive(Debug, PartialEq)]
+enum NewWindow {
+    Ignore,
+    /// Opens in the tab.
+    Load(String),
+    /// A link another app handles: asked about.
+    External(String),
+}
+
+/// What to do with the URL WebKit gives for a new window, from the page at `current`. It is
+/// a URL already, so it isn't read as typed text: web pages load as they are; an empty or
+/// `about:` window (`window.open()`, then `w.location = …`) is left alone, since the tab has
+/// only one page; `data:` and `javascript:` are refused, as a page's own navigation to them
+/// is; a local file only from a local page, a `blob:` only from its own origin; any other
+/// scheme belongs to another app.
+fn new_window_action(url: &str, current: &str) -> NewWindow {
+    let url = url.trim();
+    let Some((scheme, rest)) = url.split_once(':').filter(|(s, _)| {
+        s.starts_with(|c: char| c.is_ascii_alphabetic())
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    }) else {
+        return NewWindow::Ignore;
+    };
+    let ok = match scheme.to_ascii_lowercase().as_str() {
+        "http" | "https" => true,
+        "blob" => origin(rest).is_some_and(|o| Some(o) == origin(current)),
+        "file" => current.to_ascii_lowercase().starts_with("file:"),
+        "about" | "data" | "javascript" => false,
+        _ => return NewWindow::External(url.to_string()),
+    };
+    if ok && engine::loadable(url) {
+        NewWindow::Load(url.to_string())
+    } else {
+        NewWindow::Ignore
+    }
+}
+
+/// An http(s) URL's `scheme://host:port`, lowercased.
+fn origin(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    Some(format!("{scheme}://{}", authority.to_ascii_lowercase()))
+}
+
+/// How much of a link to another app the prompt shows.
+const EXTERNAL_SHOWN: usize = 200;
+
+/// Asks about a page's links to other apps one at a time, and stops asking once the user
+/// says no, so a page can neither launch apps unasked nor pile up prompts.
+#[derive(Default)]
+struct ExternalGate {
+    asking: bool,
+    refused: bool,
+}
+
+impl ExternalGate {
+    /// Whether to ask about a link now; while asking, or after a "Cancel", it is dropped.
+    fn ask(&mut self) -> bool {
+        if self.asking || self.refused {
+            return false;
+        }
+        self.asking = true;
+        true
+    }
+
+    fn answered(&mut self, open: bool) {
+        self.asking = false;
+        self.refused = !open;
+    }
+
+    /// The user or an agent opened a page: its links may ask again.
+    fn reset(&mut self) {
+        self.refused = false;
+    }
+}
+
 /// Lets one screenshot at a time hide the overlay: `enter` returns `None`
 /// when it is free, else a receiver that fires on this shot's turn; every
 /// shot calls `leave` when done.
@@ -1343,10 +1589,51 @@ fn rect_op(target: &Target) -> Value {
     op
 }
 
+/// Runs an agent's `browser_evaluate` script: as a function body when only that form
+/// compiles (`evaluate_as_body` knows before WebKit compiles anything, whose `SyntaxError`
+/// would reach the page as an error of its own), else as an expression, and as a body when
+/// WebKit can't compile that either. WebKit compiles it (`evaluate_call`), so it runs on pages
+/// whose Content-Security-Policy forbids `eval`.
+fn evaluate(engine: std::rc::Weak<Engine>, script: String, reply: oneshot::Sender<OpResult>) {
+    let Some(first) = engine.upgrade() else {
+        let _ = reply.send(Err("The browser isn't open.".into()));
+        return;
+    };
+    let answer = |result: Result<Option<String>, String>| {
+        result.and_then(|text| agent_answer(text.as_deref().unwrap_or_default()))
+    };
+    let body = sawit_core::browser::evaluate_as_body(&script);
+    first.eval_text(
+        &sawit_core::browser::evaluate_call(&script, body),
+        move |result| match result {
+            Err(e) if !body && e.contains("SyntaxError") => match engine.upgrade() {
+                Some(engine) => engine.eval_text(
+                    &sawit_core::browser::evaluate_call(&script, true),
+                    move |result| {
+                        let _ = reply.send(answer(result));
+                    },
+                ),
+                None => {
+                    let _ = reply.send(Err("The browser was closed.".into()));
+                }
+            },
+            result => {
+                let _ = reply.send(answer(result));
+            }
+        },
+    );
+}
+
 /// The agent's answer as WebKit hands it over: its return value (a JSON
 /// string) serialized as JSON once more.
 fn agent_result(result: &str) -> OpResult {
     let text: String = serde_json::from_str(result).unwrap_or_default();
+    agent_answer(&text)
+}
+
+/// The agent's answer: `{"ok": true, …}`, or `{"ok": false, "error"}`; nothing when the page
+/// has no agent.
+fn agent_answer(text: &str) -> OpResult {
     if text.is_empty() {
         return Err(
             "The page isn't ready yet (it may still be loading, or isn't a web page). Try again after browser_wait_for."
@@ -1354,7 +1641,7 @@ fn agent_result(result: &str) -> OpResult {
         );
     }
     let mut value: Value =
-        serde_json::from_str(&text).map_err(|e| format!("The page sent a bad answer: {e}"))?;
+        serde_json::from_str(text).map_err(|e| format!("The page sent a bad answer: {e}"))?;
     if value.get("ok").and_then(Value::as_bool) != Some(true) {
         return Err(value
             .get("error")
@@ -1371,9 +1658,9 @@ fn agent_result(result: &str) -> OpResult {
 #[cfg(test)]
 mod tests {
     use super::{
-        Frame, Panel, PickMode, Segment, Target, ViewportMode, agent_call, agent_result, caption,
-        markers_op, new_token, overlay_op, page_frame, pick_mode, rearm_ops, rect_op, rotated,
-        shoot_ops, within,
+        AnnotateEvent, Frame, Panel, PickMode, Segment, Target, ViewportMode, agent_call,
+        agent_result, caption, markers_op, new_token, overlay_op, page_frame, pick_mode, rearm_ops,
+        rect_op, rotated, shoot_ops, within,
     };
     use serde_json::json;
 
@@ -1445,6 +1732,43 @@ mod tests {
         assert_eq!(op, json!({"ref": "e5", "op": "rect"}));
     }
 
+    /// Whatever is typed (or an agent asks for) is loaded as a URL WebKit reads, or searched:
+    /// wry unwraps the `NSURL` it makes of the address, so anything else aborted Sawit.
+    #[test]
+    fn every_address_is_one_webkit_reads() {
+        for typed in [
+            "localhost:3000:3000",
+            "http://localhost 3000",
+            "https://my site.com",
+            "https://foo:exa%7Cmple.com",
+            "https://::1",
+            "file://my host/x",
+            "file://a:1:2/x",
+            "about://a:1:2",
+            "localhost:5173",
+            "example.com/a b",
+            "https://example.com/a b",
+            "file:///tmp/a b.html",
+            "mailto:a@b.c",
+            "rust gpui",
+            "",
+        ] {
+            let url = super::address_url(typed);
+            assert!(super::engine::loadable(&url), "{typed} → {url}");
+        }
+        for bad in [
+            "https://localhost:3000:3000",
+            "https://my site.com",
+            "file://my host/x",
+        ] {
+            assert!(!super::engine::loadable(bad), "{bad}");
+        }
+        assert_eq!(
+            super::address_url("file://my host/x"),
+            sawit_core::browser::search_url("file://my host/x")
+        );
+    }
+
     #[test]
     fn tokens_are_random_hex() {
         let (a, b) = (new_token(), new_token());
@@ -1464,6 +1788,332 @@ mod tests {
             rearm_ops(PickMode::Inspect),
             vec![json!({"op": "pick", "mode": "inspect"})]
         );
+    }
+
+    /// `window.open()` and `target=_blank` links: web pages open in the tab as WebKit gives
+    /// them; a blank window (`window.open()`, then `w.location = …`) leaves the page alone;
+    /// links to other apps are asked about; a local file opens only from a local page, and a
+    /// page's own `blob:` only from that page.
+    #[test]
+    fn new_windows() {
+        use super::NewWindow::{External, Ignore, Load};
+        use super::new_window_action as act;
+        let page = "http://localhost:5173/cart";
+        let load = |u: &str| Load(u.to_string());
+        let ext = |u: &str| External(u.to_string());
+        for (url, want) in [
+            ("", Ignore),
+            ("about:blank", Ignore),
+            ("about:srcdoc", Ignore),
+            (
+                "https://accounts.example/login?next=/",
+                load("https://accounts.example/login?next=/"),
+            ),
+            ("http://localhost:5173/x", load("http://localhost:5173/x")),
+            ("mailto:a@b.c", ext("mailto:a@b.c")),
+            ("tel:+15551234", ext("tel:+15551234")),
+            ("slack://open?team=T1", ext("slack://open?team=T1")),
+            // `localhost:` is a scheme here, as WebKit read it: no app has it.
+            ("localhost:3000:3000", ext("localhost:3000:3000")),
+            ("file:///etc/hosts", Ignore),
+            ("data:text/html,<p>hi</p>", Ignore),
+            ("javascript:alert(1)", Ignore),
+            (
+                "blob:http://localhost:5173/9d2c",
+                load("blob:http://localhost:5173/9d2c"),
+            ),
+            ("blob:https://other.example/9d2c", Ignore),
+            ("https://my site.com", Ignore),
+        ] {
+            assert_eq!(act(url, page), want, "{url:?}");
+        }
+        assert_eq!(
+            act("file:///tmp/b.html", "file:///tmp/a.html"),
+            load("file:///tmp/b.html")
+        );
+    }
+
+    #[test]
+    fn links_to_other_apps_are_asked_about_one_at_a_time() {
+        let mut gate = super::ExternalGate::default();
+        assert!(gate.ask(), "the first link asks");
+        assert!(!gate.ask(), "a second, while asking, is dropped");
+        gate.answered(true);
+        assert!(gate.ask(), "after an Open, the next link asks");
+        gate.answered(false);
+        assert!(!gate.ask(), "after a Cancel, the page asks no more");
+        gate.reset();
+        assert!(gate.ask(), "until a page is opened");
+    }
+
+    /// A browser tab that is never drawn (so it has no webview), in a test window.
+    fn test_browser(
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> (
+        gpui_kit::Entity<super::BrowserView>,
+        &mut gpui_kit::VisualTestContext,
+    ) {
+        use gpui_kit::AppContext as _;
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::init(cx);
+        });
+        let cx = cx.add_empty_window();
+        let view =
+            cx.update(|window, cx| cx.new(|cx| super::BrowserView::new(None, None, window, cx)));
+        (view, cx)
+    }
+
+    /// What the engine reports, as the view gets it.
+    fn engine_event(
+        view: &gpui_kit::Entity<super::BrowserView>,
+        event: super::EngineEvent,
+        cx: &mut gpui_kit::VisualTestContext,
+    ) {
+        cx.update(|window, cx| {
+            view.update(cx, |b, cx| {
+                b.receive(super::FromPage::Engine(event), window, cx)
+            })
+        });
+        cx.run_until_parked();
+    }
+
+    /// A page script can arm the picker and click for itself (`__sawitAgent` is the page's to
+    /// call): a pick adds an annotation only while the user has Annotate open and picking.
+    #[gpui_kit::test]
+    fn picks_count_only_while_annotating(cx: &mut gpui_kit::TestAppContext) {
+        use sawit_core::browser::PageEvent;
+        let (view, cx) = test_browser(cx);
+        let pick = serde_json::json!({"mode": "annotate", "element": {
+            "selector": "#buy", "label": "button#buy", "tag": "button",
+            "rect": {"x": 1, "y": 1, "width": 40, "height": 20}}});
+        let picked = |cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|window, cx| {
+                view.update(cx, |b, cx| {
+                    b.receive(
+                        super::FromPage::Event(PageEvent::Picked(pick.clone())),
+                        window,
+                        cx,
+                    )
+                })
+            });
+            cx.run_until_parked();
+        };
+        let rows = |cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|_, cx| view.read(cx).annotate.read(cx).annotations(cx).len())
+        };
+        picked(cx);
+        assert_eq!(rows(cx), 0, "Annotate is closed");
+
+        cx.update(|_, cx| view.update(cx, |b, cx| b.toggle_panel(super::Panel::Annotate, cx)));
+        picked(cx);
+        assert_eq!(rows(cx), 1, "the user's pick");
+
+        // Esc stopped picking; the panel is still open.
+        cx.update(|_, cx| view.update(cx, |b, cx| b.set_pick(super::PickMode::Off, cx)));
+        picked(cx);
+        assert_eq!(rows(cx), 1, "picking is off");
+
+        // Design's Inspect picks are no annotations either.
+        cx.update(|_, cx| view.update(cx, |b, cx| b.toggle_panel(super::Panel::Design, cx)));
+        picked(cx);
+        assert_eq!(rows(cx), 1, "Design is open");
+    }
+
+    /// The page answers only the user's own ⇧⌘. (a page can dispatch one), so an agent's
+    /// `browser_press_key "Meta+Shift+."` is Sawit's to answer: it toggles Annotate as the
+    /// user's key does, before the page has loaded too. Esc while picking stops picking as
+    /// the user's does; other keys, and Esc while not picking, go to the page.
+    #[gpui_kit::test]
+    fn an_agents_shift_cmd_period_is_sawits_to_handle(cx: &mut gpui_kit::TestAppContext) {
+        use sawit_core::browser::BrowserOp;
+        let (view, cx) = test_browser(cx);
+        let press = |key: &str, cx: &mut gpui_kit::VisualTestContext| {
+            let mut answer = cx.update(|_, cx| {
+                view.update(cx, |b, cx| {
+                    b.apply(BrowserOp::Press { key: key.into() }, cx)
+                })
+            });
+            cx.run_until_parked();
+            answer.try_recv().ok().flatten()
+        };
+        let state = |cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|_, cx| {
+                let b = view.read(cx);
+                (b.panel(), b.pick)
+            })
+        };
+
+        let answer = press("Meta+Shift+.", cx);
+        assert_eq!(state(cx), (Some(Panel::Annotate), PickMode::Annotate));
+        assert_eq!(
+            answer,
+            Some(Ok(
+                json!({"pressed": "Meta+Shift+.", "panel": "annotate", "picking": "annotate"})
+            ))
+        );
+        press("Escape", cx);
+        assert_eq!(
+            state(cx),
+            (Some(Panel::Annotate), PickMode::Off),
+            "Esc stops picking"
+        );
+        press("Cmd+Shift+.", cx);
+        assert_eq!(
+            state(cx),
+            (Some(Panel::Annotate), PickMode::Annotate),
+            "picks again"
+        );
+        press("shift+meta+>", cx);
+        assert_eq!(state(cx), (None, PickMode::Off), "and closes");
+        // The page's: waits for it (this tab never loads one).
+        assert_eq!(press("Escape", cx), None);
+        assert_eq!(press("Meta+.", cx), None);
+        assert_eq!(state(cx), (None, PickMode::Off));
+    }
+
+    #[test]
+    fn sawits_own_keys() {
+        use super::{OwnKey, own_key};
+        for key in [
+            "Meta+Shift+.",
+            "Shift+Meta+.",
+            "cmd+shift+.",
+            "Command+Shift+>",
+            "Meta+>",
+            " Meta + Shift + . ",
+        ] {
+            assert_eq!(own_key(key), Some(OwnKey::ToggleAnnotate), "{key}");
+        }
+        for key in ["Escape", "esc", "Shift+Escape"] {
+            assert_eq!(own_key(key), Some(OwnKey::Escape), "{key}");
+        }
+        for key in [
+            ".",
+            "Meta+.",
+            "Shift+.",
+            "Ctrl+Meta+Shift+.",
+            "Meta+Alt+Shift+.",
+            "Meta+Shift+,",
+            "Meta+Shift+a",
+            "Enter",
+            "",
+        ] {
+            assert_eq!(own_key(key), None, "{key}");
+        }
+    }
+
+    /// A note typed on an annotation holds the tab open (closing it asks) until it is copied
+    /// or sent; a note typed after that holds it again.
+    #[gpui_kit::test]
+    fn unsent_notes_hold_the_tab(cx: &mut gpui_kit::TestAppContext) {
+        use sawit_core::browser::PageEvent;
+        let (view, cx) = test_browser(cx);
+        cx.update(|_, cx| view.update(cx, |b, cx| b.toggle_panel(super::Panel::Annotate, cx)));
+        let pick = serde_json::json!({"mode": "annotate", "element": {
+            "selector": "#buy", "label": "button#buy", "tag": "button",
+            "rect": {"x": 1, "y": 1, "width": 40, "height": 20}}});
+        cx.update(|window, cx| {
+            view.update(cx, |b, cx| {
+                b.receive(super::FromPage::Event(PageEvent::Picked(pick)), window, cx)
+            })
+        });
+        cx.run_until_parked();
+        let unsent = |cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|_, cx| view.read(cx).unsent_notes(cx))
+        };
+        assert_eq!(unsent(cx), 0, "a row with no note");
+        let note = |text: &str, cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|window, cx| {
+                let panel = view.read(cx).annotate.clone();
+                panel.update(cx, |p, cx| p.type_note(0, text, window, cx));
+            })
+        };
+        note("Make it blue", cx);
+        assert_eq!(unsent(cx), 1);
+        cx.update(|_, cx| view.update(cx, |b, cx| b.on_annotate(&AnnotateEvent::Copy, cx)));
+        assert_eq!(unsent(cx), 0, "copied");
+        note("Make it blue, and bigger", cx);
+        assert_eq!(unsent(cx), 1, "changed since");
+        cx.update(|_, cx| view.update(cx, |b, cx| b.on_annotate(&AnnotateEvent::Send, cx)));
+        assert_eq!(unsent(cx), 0, "sent");
+    }
+
+    /// A page's link to another app (a `mailto:`, or an iframe's `slack://` with no click)
+    /// opens only when the user says so, through the system (no process left behind); while
+    /// asked, and after a Cancel, the page's further links are dropped.
+    #[gpui_kit::test]
+    fn links_to_other_apps_open_only_when_the_user_agrees(cx: &mut gpui_kit::TestAppContext) {
+        use super::EngineEvent::External;
+        let (view, cx) = test_browser(cx);
+        engine_event(&view, External("mailto:a@b.c".into()), cx);
+        assert!(cx.has_pending_prompt(), "the user is asked");
+        assert_eq!(cx.opened_url(), None, "nothing opens unasked");
+        engine_event(&view, External("slack://open?team=T1".into()), cx);
+        cx.simulate_prompt_answer("Open");
+        cx.run_until_parked();
+        assert_eq!(cx.opened_url().as_deref(), Some("mailto:a@b.c"));
+        assert!(
+            !cx.has_pending_prompt(),
+            "the link sent while asking was dropped"
+        );
+
+        engine_event(&view, External("zoommtg://join?confno=1".into()), cx);
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        engine_event(&view, External("zoommtg://join?confno=2".into()), cx);
+        assert!(
+            !cx.has_pending_prompt(),
+            "after a Cancel the page asks no more"
+        );
+        assert_eq!(cx.opened_url().as_deref(), Some("mailto:a@b.c"));
+
+        cx.update(|_, cx| view.update(cx, |b, cx| b.navigate("example.com", cx)));
+        engine_event(&view, External("zoommtg://join?confno=3".into()), cx);
+        assert!(
+            cx.has_pending_prompt(),
+            "a page the user opened may ask again"
+        );
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+    }
+
+    /// A port clicked in Ports opens in the browser even when it is open already: it used to
+    /// come forward still on the page it had.
+    #[gpui_kit::test]
+    fn an_open_browser_goes_to_the_port_clicked(cx: &mut gpui_kit::TestAppContext) {
+        let (view, cx) = test_browser(cx);
+        let url =
+            |cx: &mut gpui_kit::VisualTestContext| cx.update(|_, cx| view.read(cx).url.clone());
+        cx.update(|_, cx| view.update(cx, |b, cx| b.show(Some("http://localhost:5173"), cx)));
+        assert_eq!(url(cx), "http://localhost:5173");
+        cx.update(|_, cx| view.update(cx, |b, cx| b.show(Some("http://localhost:3000"), cx)));
+        assert_eq!(url(cx), "http://localhost:3000");
+        // The Browser button: the page stays.
+        cx.update(|_, cx| view.update(cx, |b, cx| b.show(None, cx)));
+        assert_eq!(url(cx), "http://localhost:3000");
+    }
+
+    /// A blank new window (`window.open()`, from a timer) leaves the page under test as it is,
+    /// and a `mailto:` popup asks before Mail opens instead of loading `https://mailto:…`.
+    #[gpui_kit::test]
+    fn new_windows_leave_the_page_alone(cx: &mut gpui_kit::TestAppContext) {
+        use super::EngineEvent::NewWindow;
+        let (view, cx) = test_browser(cx);
+        cx.update(|_, cx| view.update(cx, |b, cx| b.navigate("localhost:5173/form", cx)));
+        let url =
+            |cx: &mut gpui_kit::VisualTestContext| cx.update(|_, cx| view.read(cx).url.clone());
+        assert_eq!(url(cx), "http://localhost:5173/form");
+        engine_event(&view, NewWindow(String::new()), cx);
+        assert_eq!(url(cx), "http://localhost:5173/form");
+        assert!(!cx.has_pending_prompt());
+        engine_event(&view, NewWindow("mailto:a@b.c".into()), cx);
+        assert_eq!(url(cx), "http://localhost:5173/form");
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        engine_event(&view, NewWindow("https://a.example/x".into()), cx);
+        assert_eq!(url(cx), "https://a.example/x");
     }
 
     #[test]

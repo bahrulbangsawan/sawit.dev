@@ -484,15 +484,17 @@ impl Sawit {
                 text: text.clone(),
                 selector: a.selector.clone(),
             };
-            // A page mid-load has no agent yet: keep waiting.
-            if let Ok(v) = self.browser(&a.project, op).await
-                && v["found"].as_bool() == Some(!gone)
-            {
-                return ok(format!(
-                    "Done after {} ms: {}",
-                    started.elapsed().as_millis(),
-                    v["url"].as_str().unwrap_or_default()
-                ));
+            // A page mid-load has no agent yet: keep waiting. No browser at all won't change.
+            match self.browser(&a.project, op).await {
+                Ok(v) if v["found"].as_bool() == Some(!gone) => {
+                    return ok(format!(
+                        "Done after {} ms: {}",
+                        started.elapsed().as_millis(),
+                        v["url"].as_str().unwrap_or_default()
+                    ));
+                }
+                Err(e) if e == sawit_core::browser::NOT_OPEN => return fail(e),
+                _ => {}
             }
             if Instant::now() >= deadline {
                 let what = match (&text, &a.selector) {
