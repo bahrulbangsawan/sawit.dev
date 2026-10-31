@@ -3281,8 +3281,9 @@ mod tests {
 
     /// The keymap editor doesn't offer to bind the commands the canvas has no use for, which get
     /// no key and stay off the shortcuts sheet: Dev Mode, the switch to prototyping, cursor chat,
-    /// F6's regions and the keyboard box selection. A key given to `select.area` would bring
-    /// back a box selection whose box the canvas never draws.
+    /// F6's regions, the keyboard box selection and the prototype player's Present and Preview
+    /// (CANVAS-UI-6). A key given to `select.area` would bring back a box selection whose box the
+    /// canvas never draws, and one given to Present or Preview a player it never shows.
     #[test]
     fn the_keymap_editor_offers_no_command_the_canvas_has_no_use_for() {
         let offered = offered_to_bind();
@@ -3297,8 +3298,26 @@ mod tests {
             "view.nextRegion",
             "view.previousRegion",
             "select.area",
+            "proto.present",
+            "proto.preview",
         ] {
             assert!(!offered.iter().any(|o| o == id), "{id} is offered");
+        }
+    }
+
+    /// CANVAS-UI-6: ⇧Space and ⌥⌘↩, FigCraft's Preview and Present, are no keys of the canvas,
+    /// which has no prototype player to show: on a board they only said, in a toast, that
+    /// prototypes aren't for boards, and on a design file the player's request went nowhere.
+    #[gpui_kit::test]
+    fn the_prototype_players_keys_do_nothing_on_the_canvas(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("prototype-keys");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        focus_canvas(&view, &mut cx);
+        for keys in ["shift-space", "alt-cmd-enter"] {
+            cx.simulate_keystrokes(keys);
+            cx.run_until_parked();
+            let toast = view.read_with(&cx, |view, _| view.toast.clone());
+            assert_eq!(toast, None, "{keys}");
         }
     }
 
