@@ -297,8 +297,9 @@ impl Server {
         }
     }
 
-    /// What to install. `find` looks a program up in `PATH`: GUI clients get
-    /// a minimal `PATH`, so commands are written as absolute paths when found.
+    /// What to install. `find` looks a program up in `PATH`: apps such as
+    /// Claude Desktop get a minimal `PATH`, so commands are written as
+    /// absolute paths when found.
     pub fn spec(
         &self,
         server: &Path,

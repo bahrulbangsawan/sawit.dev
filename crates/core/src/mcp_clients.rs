@@ -154,6 +154,15 @@ impl Client {
         }
     }
 
+    /// Whether it's an app that starts with launchd's `PATH`
+    /// (`/usr/bin:/bin:/usr/sbin:/sbin`) rather than the login shell's:
+    /// Claude Desktop and LM Studio. VS Code, its forks and extensions, and
+    /// Zed read the login shell's environment; agents run from a terminal
+    /// have its.
+    pub fn without_shell_path(self) -> bool {
+        matches!(self, Client::ClaudeDesktop | Client::LmStudio)
+    }
+
     /// Whether Sawit can edit the config (JSON/TOML). YAML and script
     /// configs get a snippet to paste instead.
     pub fn editable(self) -> bool {
@@ -396,8 +405,8 @@ pub struct Spec {
     pub name: String,
     pub transport: Transport,
     /// `npx` for the `mcp-remote` bridge, which clients without remote
-    /// support use. An absolute path when found: GUI clients get a minimal
-    /// `PATH`.
+    /// support use. An absolute path when found: apps such as Claude Desktop
+    /// get a minimal `PATH`.
     pub npx: String,
 }
 
@@ -549,9 +558,10 @@ pub fn entry(client: Client, spec: &Spec) -> (&'static str, Value) {
         return (key, v);
     }
     let (cmd, args, mut env) = spec.as_stdio();
-    // A GUI client starts with launchd's PATH: npx's `#!/usr/bin/env node`
-    // needs to be told where node is.
-    if client.category() == Category::Editor
+    // An app started with launchd's PATH: npx's `#!/usr/bin/env node` needs
+    // to be told where node is. Not the clients that have the login shell's
+    // PATH: `env` goes over it, and would hide the rest of it from the server.
+    if client.without_shell_path()
         && cmd == spec.npx
         && let Some(path) = node_path(&cmd)
         && !env.iter().any(|(k, _)| k == "PATH")
@@ -602,10 +612,10 @@ pub fn entry(client: Client, spec: &Spec) -> (&'static str, Value) {
     (key, v)
 }
 
-/// The `PATH` a GUI client must give `npx` at `program`, so that its
-/// `#!/usr/bin/env node` finds the node beside it (nvm's, Homebrew's):
-/// that folder, then the usual ones. `None` for a bare `npx`, or one in a
-/// folder launchd's PATH has.
+/// The `PATH` an app started with launchd's ([`Client::without_shell_path`])
+/// must give `npx` at `program`, so that its `#!/usr/bin/env node` finds the
+/// node beside it (nvm's, Homebrew's): that folder, then the usual ones.
+/// `None` for a bare `npx`, or one in a folder launchd's PATH has.
 fn node_path(program: &str) -> Option<String> {
     const USUAL: [&str; 6] = [
         "/usr/local/bin",
@@ -864,7 +874,9 @@ const TRANSPORT_KEYS: [&str; 6] = ["type", "command", "args", "url", "httpUrl", 
 /// transport keys come from `fresh`, and those `fresh` lacks go. Every other
 /// key stays as the user left it, `fresh` filling in only the missing ones;
 /// maps (`env`, `headers`) merge the same way, key by key. When the entry
-/// switches between a program and a URL, the other kind's map goes too.
+/// switches between a program and a URL, the other kind's map goes too. The
+/// `PATH` Sawit worked out for the old `npx` follows `fresh` too
+/// ([`follow_own_path`]).
 fn merge_entry(old: &Value, fresh: Value) -> Value {
     let (Value::Object(old), Value::Object(fresh)) = (old, &fresh) else {
         return fresh;
@@ -874,6 +886,7 @@ fn merge_entry(old: &Value, fresh: Value) -> Value {
     if program(old) != program(fresh) {
         out.shift_remove(if program(fresh) { "headers" } else { "env" });
     }
+    follow_own_path(old, &mut out, fresh);
     for key in TRANSPORT_KEYS {
         if !fresh.contains_key(key) {
             out.shift_remove(key);
@@ -895,6 +908,45 @@ fn merge_entry(old: &Value, fresh: Value) -> Value {
         }
     }
     Value::Object(out)
+}
+
+/// The `PATH` in `old`'s `env` (opencode's and Kilo's `environment`) that
+/// Sawit worked out for its `npx` ([`node_path`]) is Sawit's, not the user's:
+/// in `out` it becomes `fresh`'s, in place, or goes when `fresh` has none
+/// (after nvm moved on, the old folder may have no node left). A map only it
+/// filled goes with it. A `PATH` the user wrote stays theirs.
+fn follow_own_path(
+    old: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    fresh: &Map<String, Value>,
+) {
+    let program = match old.get("command") {
+        Some(Value::String(command)) => command.as_str(),
+        Some(Value::Array(command)) => command.first().and_then(Value::as_str).unwrap_or_default(),
+        _ => return,
+    };
+    let Some(own) = node_path(program) else {
+        return;
+    };
+    for key in ["env", "environment"] {
+        let Some(Value::Object(env)) = out.get_mut(key) else {
+            continue;
+        };
+        if env.get("PATH").and_then(Value::as_str) != Some(own.as_str()) {
+            continue;
+        }
+        match fresh.get(key).and_then(|map| map.get("PATH")) {
+            Some(path) => {
+                env.insert("PATH".into(), path.clone());
+            }
+            None => {
+                env.shift_remove("PATH");
+                if env.is_empty() && !fresh.contains_key(key) {
+                    out.shift_remove(key);
+                }
+            }
+        }
+    }
 }
 
 /// Codex's keys for a program, and for a URL: an entry switching kinds
@@ -1168,9 +1220,26 @@ pub struct CliCall {
 }
 
 pub(crate) fn cli_call(target: &Target, cli: &Path, args: Vec<String>) -> Option<CliCall> {
+    let node = crate::dev_tools::find_program("node");
+    let path = std::env::var_os("PATH");
+    cli_call_with(target, cli, args, node.as_deref(), path.as_deref())
+}
+
+/// [`cli_call`], given the `node` found and the app's `path`. A CLI
+/// installed with npm (`#!/usr/bin/env node`) runs with its own folder on
+/// `PATH`, where nvm keeps the node beside its global packages, then the
+/// folder of the node found (nvm's default, say), for one installed
+/// elsewhere: Claude Code's old `~/.claude/local`, `~/.npm-global/bin`.
+fn cli_call_with(
+    target: &Target,
+    cli: &Path,
+    args: Vec<String>,
+    node: Option<&Path>,
+    path: Option<&std::ffi::OsStr>,
+) -> Option<CliCall> {
     let var = target.client.profile_var()?;
     let mut env = vec![(var.to_string(), target.profile_dir.clone())];
-    if let Some(path) = path_with(cli.parent()) {
+    if let Some(path) = path_with(&[cli.parent(), node.and_then(Path::parent)], path) {
         env.push(("PATH".into(), Some(path)));
     }
     Some(CliCall {
@@ -1180,16 +1249,26 @@ pub(crate) fn cli_call(target: &Target, cli: &Path, args: Vec<String>) -> Option
     })
 }
 
-/// `PATH` with `dir` in front, when it isn't on it: a CLI installed with
-/// npm (`#!/usr/bin/env node`) then finds the node nvm keeps beside it.
-fn path_with(dir: Option<&Path>) -> Option<PathBuf> {
-    let dir = dir.filter(|d| d.is_absolute())?;
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    if std::env::split_paths(&path).any(|p| p == dir) {
+/// `path` with `dirs` in front, those it doesn't have. `None` when it has
+/// them all.
+fn path_with(dirs: &[Option<&Path>], path: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    let path: Vec<PathBuf> = path
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .collect();
+    let mut front: Vec<PathBuf> = Vec::new();
+    for dir in dirs.iter().flatten() {
+        if dir.is_absolute() && !path.iter().chain(&front).any(|p| p == dir) {
+            front.push(dir.to_path_buf());
+        }
+    }
+    if front.is_empty() {
         return None;
     }
-    let dirs = std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(&path));
-    std::env::join_paths(dirs).ok().map(PathBuf::from)
+    std::env::join_paths(front.into_iter().chain(path))
+        .ok()
+        .map(PathBuf::from)
 }
 
 pub fn cli_add(target: &Target, spec: &Spec, cli: &Path) -> Option<CliCall> {
@@ -2139,6 +2218,81 @@ mod tests {
         assert_eq!(status(&t, &Spec::sawit(server)), Status::Installed);
     }
 
+    /// CATALOG M1: the `env.PATH` Sawit writes is worked out from where `npx` is, so it's
+    /// Sawit's, not the user's. An update after nvm moved on (its default v20 → v22, then
+    /// `nvm uninstall 20`) points it at the new `npx`'s folder: it kept v20's, as the user's
+    /// own value, and `#!/usr/bin/env node` found no node, so the server couldn't start. It goes
+    /// when the new entry needs none; a `PATH` the user wrote stays.
+    #[test]
+    fn an_update_moves_the_path_sawit_wrote_for_npx() {
+        let h = home();
+        let t = find(&discover(h.path(), None), Client::ClaudeDesktop, "default").clone();
+        let npx = |version: &str| format!("/Users/me/.nvm/versions/node/{version}/bin/npx");
+        let bridge = |npx: &str| Spec::http("mobbin", "https://api.mobbin.com/mcp").with_npx(npx);
+        let mobbin = || json_at(&t.config)["mcpServers"]["mobbin"].clone();
+        install_file(&t, &bridge(&npx("v20.0.0"))).unwrap();
+        install_file(&t, &bridge(&npx("v22.11.0"))).unwrap();
+        assert_eq!(mobbin()["command"], npx("v22.11.0"));
+        assert_eq!(
+            mobbin()["env"],
+            json!({"PATH": node_path(&npx("v22.11.0")).unwrap()})
+        );
+
+        // An npx where launchd's PATH finds node needs none: Sawit's goes, and with it the
+        // `env` it alone filled.
+        install_file(&t, &bridge("/usr/bin/npx")).unwrap();
+        assert_eq!(mobbin()["command"], "/usr/bin/npx");
+        assert!(mobbin().get("env").is_none(), "{}", mobbin());
+
+        // A PATH the user wrote, and other keys beside it, stay theirs.
+        install_file(&t, &bridge(&npx("v20.0.0"))).unwrap();
+        let mut config = json_at(&t.config);
+        config["mcpServers"]["mobbin"]["env"] =
+            json!({"PATH": "/opt/mine/bin:/usr/bin:/bin", "DEBUG": "1"});
+        fs::write(&t.config, config.to_string()).unwrap();
+        install_file(&t, &bridge(&npx("v22.11.0"))).unwrap();
+        assert_eq!(
+            mobbin()["env"],
+            json!({"PATH": "/opt/mine/bin:/usr/bin:/bin", "DEBUG": "1"})
+        );
+
+        // Editors that have the shell's PATH no longer get one (CATALOG M2): what an earlier
+        // build wrote goes at their next update, in Cursor's `env` and in Kilo's `environment`
+        // (whose `command` holds the arguments too).
+        let args = ["-y", "rea-agents@6.3.0"];
+        let rea = |npx: &str| {
+            Spec::stdio("rea", npx, args.iter().map(|a| a.to_string()).collect()).with_npx(npx)
+        };
+        let old_path = node_path(&npx("v20.0.0")).unwrap();
+        fs::create_dir_all(h.path().join(".cursor")).unwrap();
+        fs::create_dir_all(h.path().join(".config/kilo")).unwrap();
+        let targets = discover(h.path(), None);
+        let cursor = find(&targets, Client::Cursor, "default");
+        fs::write(
+            &cursor.config,
+            json!({"mcpServers": {"rea": {"type": "stdio", "command": npx("v20.0.0"), "args": args, "env": {"PATH": old_path}}}})
+                .to_string(),
+        )
+        .unwrap();
+        install_file(cursor, &rea(&npx("v22.11.0"))).unwrap();
+        assert_eq!(
+            json_at(&cursor.config)["mcpServers"]["rea"],
+            json!({"type": "stdio", "command": npx("v22.11.0"), "args": args})
+        );
+        let kilo = find(&targets, Client::KiloCode, "default");
+        fs::write(
+            &kilo.config,
+            json!({"mcp": {"rea": {"type": "local", "command": [npx("v20.0.0"), args[0], args[1]], "enabled": true, "environment": {"PATH": old_path}}}})
+                .to_string(),
+        )
+        .unwrap();
+        install_file(kilo, &rea(&npx("v22.11.0"))).unwrap();
+        assert_eq!(
+            json_at(&kilo.config)["mcp"]["rea"],
+            json!({"type": "local", "command": [npx("v22.11.0"), args[0], args[1]], "enabled": true})
+        );
+    }
+
     #[test]
     fn switching_between_a_program_and_a_url_drops_the_other_kinds_keys() {
         let h = home();
@@ -2346,11 +2500,11 @@ mod tests {
         assert_eq!(v["mcpServers"]["two"]["command"], "/bin/two-149");
     }
 
-    /// GUI clients start with launchd's `PATH` (no Homebrew, no nvm), and
-    /// `npx` starts with `#!/usr/bin/env node`: their entries say where
-    /// `node` is. Agents run from a terminal keep its `PATH`.
+    /// Apps such as Claude Desktop start with launchd's `PATH` (no Homebrew,
+    /// no nvm), and `npx` starts with `#!/usr/bin/env node`: their entries say
+    /// where `node` is. Agents run from a terminal keep its `PATH`.
     #[test]
-    fn gui_clients_are_told_where_node_is() {
+    fn apps_started_by_launchd_are_told_where_node_is() {
         let npx = "/Users/me/.nvm/versions/node/v22.11.0/bin/npx";
         let bridge = Spec::http("mobbin", "https://api.mobbin.com/mcp").with_npx(npx);
         let path = "/Users/me/.nvm/versions/node/v22.11.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin";
@@ -2360,17 +2514,54 @@ mod tests {
         );
         let rea =
             Spec::stdio("rea", npx, vec!["-y".into(), "rea-agents@6.3.0".into()]).with_npx(npx);
-        assert_eq!(entry(Client::Cursor, &rea).1["env"]["PATH"], path);
+        assert_eq!(entry(Client::LmStudio, &rea).1["env"]["PATH"], path);
         // An agent run from a terminal: its own PATH.
         assert_eq!(entry(Client::ClaudeCode, &rea).1["env"], json!({}));
         // Not npx: nothing to add.
         let sawit = Spec::sawit(Path::new(
             "/Applications/Sawit.app/Contents/MacOS/sawit-mcp",
         ));
-        assert!(entry(Client::Cursor, &sawit).1.get("env").is_none());
+        assert!(entry(Client::ClaudeDesktop, &sawit).1.get("env").is_none());
         // npx in /usr/bin finds a node there.
         let system = Spec::http("x", "https://x.dev/mcp").with_npx("/usr/bin/npx");
         assert!(entry(Client::ClaudeDesktop, &system).1.get("env").is_none());
+    }
+
+    /// CATALOG M2: only apps that start with launchd's `PATH` (Claude Desktop, LM Studio) are
+    /// told where `node` is. VS Code, its forks and extensions, and Zed read the login shell's
+    /// environment and lay an entry's `env` over it: a `PATH` there hid `~/.cargo/bin`, pyenv's
+    /// shims and the rest of the user's from the server and what it starts.
+    #[test]
+    fn only_apps_without_the_shells_path_are_told_where_node_is() {
+        let npx = "/Users/me/.nvm/versions/node/v22.11.0/bin/npx";
+        let rea =
+            Spec::stdio("rea", npx, vec!["-y".into(), "rea-agents@6.3.0".into()]).with_npx(npx);
+        let bridge = Spec::http("x", "https://x.dev/mcp").with_npx(npx);
+        let path = |client, spec| {
+            let (_, v) = entry(client, spec);
+            ["env", "environment"]
+                .iter()
+                .find_map(|k| v.get(*k)?.get("PATH").cloned())
+        };
+        for client in [Client::ClaudeDesktop, Client::LmStudio] {
+            assert!(path(client, &rea).is_some(), "{client:?}");
+            assert!(path(client, &bridge).is_some(), "{client:?} (bridge)");
+        }
+        for client in [
+            Client::Cursor,
+            Client::Windsurf,
+            Client::VsCode,
+            Client::VsCodeInsiders,
+            Client::Zed,
+            Client::Antigravity,
+            Client::Trae,
+            Client::RooCode,
+            Client::KiloCode,
+            Client::Continue,
+        ] {
+            assert_eq!(path(client, &rea), None, "{client:?}");
+            assert_eq!(path(client, &bridge), None, "{client:?} (bridge)");
+        }
     }
 
     /// A client CLI installed with npm (`#!/usr/bin/env node`) runs with
@@ -2393,6 +2584,39 @@ mod tests {
             "{}",
             path.display()
         );
+    }
+
+    /// CATALOG M3: a CLI found outside nvm's folders whose `#!/usr/bin/env node` needs nvm's
+    /// node (Claude Code's old `~/.claude/local/claude`, `~/.npm-global/bin`, `~/.bun/bin`) runs
+    /// with that node's folder on `PATH` too. With only its own folder there, every install
+    /// through it failed ("env: node: No such file or directory"), and so did its sign-in checks.
+    #[tokio::test]
+    async fn a_cli_finds_the_node_nvm_keeps_elsewhere() {
+        use std::os::unix::fs::PermissionsExt;
+        let h = home();
+        let t = find(&discover(h.path(), None), Client::ClaudeCode, "default").clone();
+        let program = |path: &Path, text: &str| {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let cli = h.path().join(".claude/local/claude");
+        program(&cli, "#!/usr/bin/env node\n");
+        let node = h.path().join(".nvm/versions/node/v22.11.0/bin/node");
+        program(&node, "#!/bin/sh\necho \"node ran $2 $3\"\n");
+        // The PATH of an app opened from Finder: no nvm.
+        let path = std::ffi::OsString::from("/usr/bin:/bin");
+        let args = vec!["mcp".to_string(), "list".to_string()];
+        let call = cli_call_with(&t, &cli, args, Some(&node), Some(&path)).unwrap();
+        let out = run_cli(&call, std::time::Duration::from_secs(10))
+            .await
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "node ran mcp list\n");
     }
 
     #[test]

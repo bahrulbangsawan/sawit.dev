@@ -3,7 +3,8 @@
 //! quitting, Restart to Update and closing a window end every process in their terminals. So they
 //! ask first while one runs a command or an SSH session, and say which; shells waiting at their
 //! prompt don't count. They close every file too, so they also ask to save the files with unsaved
-//! changes first (SITE-1): one question covers both.
+//! changes first (SITE-1), and they stop what the Dev Tools pages install: one question covers
+//! all three.
 //!
 //! A quit that can't ask (the Dock's Quit, logging out, the install script's `quit app`) goes
 //! straight through: the file editors then keep their unsaved changes for the next launch
@@ -74,17 +75,30 @@ fn listed(names: &[String]) -> String {
     listed
 }
 
-/// The question's detail: what still runs, and that it would end.
-pub fn detail(running: &[String], ending: Ending) -> String {
-    let (what, them) = match running.len() {
-        1 => ("A terminal is".to_string(), "it"),
-        n => (format!("{n} terminals are"), "them"),
+/// The question's detail: what still runs (the terminals, by name, and what the Dev Tools pages
+/// do: `tools`, such as "Installing Bun, 2 more queued"), and that it would end.
+pub fn detail(running: &[String], tools: &[String], ending: Ending) -> String {
+    let mut detail = String::new();
+    if !running.is_empty() {
+        let what = match running.len() {
+            1 => "A terminal is".to_string(),
+            n => format!("{n} terminals are"),
+        };
+        detail.push_str(&format!("{what} still running: {}. ", listed(running)));
+    }
+    if !tools.is_empty() {
+        detail.push_str(&format!(
+            "Dev Tools is still running: {}. ",
+            tools.join("; ")
+        ));
+    }
+    let them = if running.len() + tools.len() == 1 {
+        "it"
+    } else {
+        "them"
     };
-    format!(
-        "{what} still running: {}. {} stops {them}.",
-        listed(running),
-        ending.doing()
-    )
+    detail.push_str(&format!("{} stops {them}.", ending.doing()));
+    detail
 }
 
 /// The question when files have unsaved changes: the file, or how many.
@@ -97,16 +111,21 @@ pub fn save_question(files: &[String], ending: Ending) -> String {
 }
 
 /// Its detail: the files when there are several, that unsaved changes are lost, and what still
-/// runs in the terminals.
-pub fn save_detail(files: &[String], running: &[String], ending: Ending) -> String {
+/// runs in the terminals and the Dev Tools pages.
+pub fn save_detail(
+    files: &[String],
+    running: &[String],
+    tools: &[String],
+    ending: Ending,
+) -> String {
     let mut detail = String::new();
     if files.len() > 1 {
         detail.push_str(&format!("{}. ", listed(files)));
     }
     detail.push_str("Your changes will be lost if you don't save them.");
-    if !running.is_empty() {
+    if !running.is_empty() || !tools.is_empty() {
         detail.push(' ');
-        detail.push_str(&self::detail(running, ending));
+        detail.push_str(&self::detail(running, tools, ending));
     }
     detail
 }
@@ -158,9 +177,10 @@ fn done_asking(window: AnyWindowHandle, cx: &mut App) {
 /// Puts the question in `window`, which comes forward with it: the window may be behind the one
 /// the user works in (only it runs something), and a sheet there is never seen. With `unsaved`
 /// files it asks to save them (Save, or Save All, Don't Save, Cancel), and says what still runs;
-/// else only what runs.
+/// else only what runs: the terminals' `running` and the Dev Tools pages' `tools`.
 fn ask(
     running: &[String],
+    tools: &[String],
     unsaved: &[Entity<FileEditor>],
     ending: Ending,
     window: &mut Window,
@@ -174,13 +194,13 @@ fn ask(
         let save = if files.len() == 1 { "Save" } else { "Save All" };
         (
             save_question(&files, ending),
-            save_detail(&files, running, ending),
+            save_detail(&files, running, tools, ending),
             vec![save, "Don't Save", "Cancel"],
         )
     } else {
         (
             ending.question().to_string(),
-            detail(running, ending),
+            detail(running, tools, ending),
             vec![ending.answer(), "Cancel"],
         )
     };
@@ -225,11 +245,11 @@ async fn settle(answer: Answer, unsaved: &[Entity<FileEditor>], cx: &mut AsyncAp
 }
 
 /// Runs `then` (which quits or restarts the app) when no terminal of
-/// `windows` runs anything and no file has unsaved changes, else once the
-/// user says so (and the files they chose to save are saved), asked in the
-/// first window with something running or unsaved (callers pass windows
-/// front to back), which comes forward with the question. Call it outside
-/// any window's update, which the question needs.
+/// `windows` runs anything, no file has unsaved changes and no Dev Tools page
+/// installs anything, else once the user says so (and the files they chose to
+/// save are saved), asked in the first window with something running or
+/// unsaved (callers pass windows front to back), which comes forward with the
+/// question. Call it outside any window's update, which the question needs.
 pub fn end_all(
     windows: Vec<(AnyWindowHandle, Entity<TerminalPanel>)>,
     ending: Ending,
@@ -237,18 +257,23 @@ pub fn end_all(
     then: impl FnOnce(&mut App) + 'static,
 ) {
     let unsaved = crate::editor::unsaved(cx);
+    let installs = crate::tools_page::at_work(cx);
     let mut running = Vec::new();
     let mut ask_in = None;
     for (handle, panel) in &windows {
         let names = panel.read(cx).running(cx);
         let has_unsaved = unsaved.iter().any(|(window, _)| window == handle);
-        if (!names.is_empty() || has_unsaved) && ask_in.is_none() {
+        let installing = installs.iter().any(|(window, _)| window == handle);
+        if (!names.is_empty() || has_unsaved || installing) && ask_in.is_none() {
             ask_in = Some(*handle);
         }
         running.extend(names);
     }
-    // Every Sawit window has a terminal dock; a window without one asks for its own files.
-    let ask_in = ask_in.or_else(|| unsaved.first().map(|(window, _)| *window));
+    // Every Sawit window has a terminal dock; a window without one asks for its own files and
+    // installs.
+    let ask_in = ask_in
+        .or_else(|| unsaved.first().map(|(window, _)| *window))
+        .or_else(|| installs.first().map(|(window, _)| *window));
     let Some(handle) = ask_in else {
         then(cx);
         return;
@@ -257,8 +282,9 @@ pub fn end_all(
         return;
     }
     let files: Vec<Entity<FileEditor>> = unsaved.into_iter().map(|(_, editor)| editor).collect();
+    let tools: Vec<String> = installs.into_iter().map(|(_, work)| work).collect();
     let Ok(answer) = handle.update(cx, |_, window, cx| {
-        ask(&running, &files, ending, window, cx)
+        ask(&running, &tools, &files, ending, window, cx)
     }) else {
         return;
     };
@@ -275,8 +301,10 @@ pub fn end_all(
 }
 
 /// Makes closing `window` ask first while `panel`'s terminals run
-/// something or a file in the window has unsaved changes; "Close Window",
-/// Don't Save, or Save once the files are saved, then closes it.
+/// something, a file in the window has unsaved changes or its Dev Tools page
+/// installs something (closing the window stops that, as closing the tab
+/// does); "Close Window", Don't Save, or Save once the files are saved, then
+/// closes it.
 ///
 /// A window has one should-close hook: a later `on_window_should_close`
 /// replaces this one. Anything else that must ask before the window closes
@@ -293,13 +321,18 @@ pub fn ask_before_closing(window: &mut Window, panel: WeakEntity<TerminalPanel>,
             .filter(|(window, _)| *window == handle)
             .map(|(_, editor)| editor)
             .collect();
-        if running.is_empty() && files.is_empty() {
+        let tools: Vec<String> = crate::tools_page::at_work(cx)
+            .into_iter()
+            .filter(|(window, _)| *window == handle)
+            .map(|(_, work)| work)
+            .collect();
+        if running.is_empty() && files.is_empty() && tools.is_empty() {
             return true;
         }
         if question_up(Some(&mut *window), cx) {
             return false;
         }
-        let answer = ask(&running, &files, Ending::CloseWindow, window, cx);
+        let answer = ask(&running, &tools, &files, Ending::CloseWindow, window, cx);
         cx.spawn(async move |cx| {
             let close = settle(answer.await, &files, cx).await;
             cx.update(|cx| {
@@ -329,18 +362,30 @@ mod tests {
     use super::{Ending, ask_before_closing, detail, end_all, save_detail, save_question};
     use crate::editor::FileEditor;
     use crate::editor::testing::{open_editor, scratch_dir, type_into, wait_until};
+    use crate::tools_page::ToolsPage;
 
     #[test]
     fn the_question_names_what_would_end() {
         assert_eq!(
-            detail(&["claude".into()], Ending::Quit),
+            detail(&["claude".into()], &[], Ending::Quit),
             "A terminal is still running: claude. Quitting stops it."
         );
         let many = ["claude", "dev", "prod (SSH)", "vim", "top", "htop"].map(String::from);
         assert_eq!(
-            detail(&many, Ending::CloseWindow),
+            detail(&many, &[], Ending::CloseWindow),
             "6 terminals are still running: claude, dev, prod (SSH), vim and 2 more. Closing the \
              window stops them."
+        );
+        // What the Dev Tools pages run, as each page says it (one page per window).
+        let tools = ["Installing Bun, 2 more queued", "Upgrading uv"].map(String::from);
+        assert_eq!(
+            detail(&[], &tools[..1], Ending::Restart),
+            "Dev Tools is still running: Installing Bun, 2 more queued. Restarting stops it."
+        );
+        assert_eq!(
+            detail(&[], &tools, Ending::Quit),
+            "Dev Tools is still running: Installing Bun, 2 more queued; Upgrading uv. Quitting \
+             stops them."
         );
     }
 
@@ -358,9 +403,19 @@ mod tests {
             "Save changes to 5 files before closing this window?"
         );
         assert_eq!(
-            save_detail(&files, &["dev".into(), "vim".into()], Ending::Quit),
+            save_detail(&files, &["dev".into(), "vim".into()], &[], Ending::Quit),
             "a.rs, b.rs, c.rs, d.rs and 1 more. Your changes will be lost if you don't save them. \
              2 terminals are still running: dev, vim. Quitting stops them."
+        );
+        assert_eq!(
+            save_detail(
+                &files[..1],
+                &[],
+                &["Installing Bun".into()],
+                Ending::CloseWindow
+            ),
+            "Your changes will be lost if you don't save them. Dev Tools is still running: \
+             Installing Bun. Closing the window stops it."
         );
     }
 
@@ -683,6 +738,73 @@ mod tests {
         cx.simulate_prompt_answer("Save");
         wait_until(cx, "the window closes", |cx| !cx.windows().contains(&w));
         assert_eq!(on_disk(&path), "typed on disk\n");
+    }
+
+    /// Final seams m4 (catalog M5): closing a window while its Dev Tools page installs asks
+    /// first, as closing that tab does: the page goes with the window, and the installer with
+    /// it. The window closed at once. Another window closes without asking. Quitting asks the
+    /// same way, in one question with what the terminals run; Cancel keeps everything, and the
+    /// answer goes on.
+    #[gpui_kit::test]
+    fn closing_or_quitting_asks_while_dev_tools_installs(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (other, other_panel) = open_panel(cx);
+        let (w, panel) = open_panel(cx);
+        for (window, panel) in [(other, &other_panel), (w, &panel)] {
+            cx.update_window(window, |_, window, cx| {
+                ask_before_closing(window, panel.downgrade(), cx)
+            })
+            .expect("the test window is open");
+            let shell = cx.update(|cx| panel.read(cx).tab(0).read(cx).focused_view().clone());
+            ready(cx, &shell);
+        }
+        let page = cx
+            .update_window(w, |_, window, cx| {
+                cx.new(|cx| ToolsPage::installing_in("bun", window, cx))
+            })
+            .expect("the test window is open");
+
+        let mut vcx = VisualTestContext::from_window(other, cx);
+        assert!(
+            vcx.simulate_close(),
+            "another window's install held this one"
+        );
+        assert!(!cx.has_pending_prompt());
+
+        let mut vcx = VisualTestContext::from_window(w, cx);
+        assert!(!vcx.simulate_close(), "the window closed without asking");
+        assert_eq!(
+            cx.pending_prompt(),
+            Some((
+                "Close this window?".to_string(),
+                "Dev Tools is still running: Installing Bun. Closing the window stops it."
+                    .to_string()
+            ))
+        );
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        assert!(cx.windows().contains(&w), "Cancel closed the window");
+
+        start_sleep(cx, &panel);
+        let quits = Rc::new(Cell::new(0));
+        try_quit(cx, w, &panel, &quits);
+        assert_eq!(
+            cx.pending_prompt(),
+            Some((
+                "Quit Sawit?".to_string(),
+                "A terminal is still running: sleep. Dev Tools is still running: Installing Bun. \
+                 Quitting stops them."
+                    .to_string()
+            ))
+        );
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        assert_eq!(quits.get(), 0, "Cancel quit");
+        try_quit(cx, w, &panel, &quits);
+        cx.simulate_prompt_answer("Quit");
+        cx.run_until_parked();
+        assert_eq!(quits.get(), 1);
+        drop(page);
     }
 
     /// Closing a window asks first while its terminals run something; Cancel keeps it open and

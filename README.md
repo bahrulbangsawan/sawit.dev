@@ -231,7 +231,8 @@ explained. A conflict on the same address can't be forced.
 - Search the list, narrow it with the **Installed**, **Updates** and **Not Installed** tabs or to one category, and
   sort it by category, by name or by what needs attention. It shows eight tools a page.
 - The keyboard starts in the search (⌘F goes back to it); ↩ there moves to the first tool, ↑ and ↓ select, and ↩
-  installs, upgrades or retries the selected one.
+  installs, upgrades or retries the selected one. It never removes anything: a failed uninstall's **Retry** asks
+  before it runs that uninstall again.
 - When npm or GitHub has a newer release, an installed tool shows `11.21.0 → 12.16.1` and an **Upgrade** button;
   **Upgrade All** upgrades every one of them. Upgrades use the tool's own command (`bun upgrade`, `uv self update`,
   `claude update`, …), or its install script again.
@@ -241,8 +242,8 @@ explained. A conflict on the same address can't be forced.
   installed, the page says so instead of showing them as not installed.
 - Homebrew asks for your password, so it runs in the terminal. Open a new terminal tab afterwards so it sees the
   new `PATH`.
-- Closing the tab while something installs asks first, and stops it. One tool is installed, upgraded or removed at a
-  time, whether from this page, an agent or `sawit pasang`.
+- Closing the tab or its window, quitting and **Restart to Update** ask first while something installs, and stop it.
+  One tool is installed, upgraded or removed at a time, whether from this page, an agent or `sawit pasang`.
 - From the terminal: `sawit list tools`, `sawit pasang bun uv` and `sawit pupuk`.
 
 ### Browser
@@ -398,9 +399,9 @@ explained. A conflict on the same address can't be forced.
   notes of a newer release, and the full history.
 - Sawit checks [GitHub Releases](https://github.com/bahrulbangsawan/sawit.dev/releases) on launch and
   every hour. New versions download in the background. Once ready, a **Restart to Update** button appears in the
-  title bar: the app quits, `Sawit.app` is replaced, and it reopens. It asks first while a terminal runs something
-  or a file has unsaved changes, since quitting ends or closes them. A downloaded update also installs when you
-  quit. Builds from `cargo` only open the releases page.
+  title bar: the app quits, `Sawit.app` is replaced, and it reopens. It asks first while a terminal runs something,
+  a file has unsaved changes or Dev Tools installs something, since quitting ends, closes or stops them. A downloaded
+  update also installs when you quit. Builds from `cargo` only open the releases page.
 
 ## Keyboard shortcuts
 
@@ -574,8 +575,9 @@ folders), Codex (and `CODEX_HOME` profiles), Claude Desktop, Cursor, Windsurf, G
 Code. It installs into each with one click and shows where each config lives. The AWS server shows the Region your
 clients have it in, and an install in another Region reads as installed there. It finds `claude`, `codex` and `npx`
 where the Dev Tools page finds them (`~/.local/bin`, nvm's Node.js, …), not only on the PATH apps get. Claude Code
-and Codex are changed through their own CLI when it's installed. Apps such as Claude Desktop start without your
-shell's PATH, so their `npx` entries say which folder has `node`; clients that reach remote servers only through
+and Codex are changed through their own CLI when it's installed. Claude Desktop and LM Studio start without your
+shell's PATH, so their `npx` entries say which folder has `node` (VS Code, Cursor, Zed and the like read your shell's
+PATH, and their entries leave it alone); clients that reach remote servers only through
 `npx` (Claude Desktop, LM Studio and others) say so when Node.js isn't installed. Other configs are edited in place,
 keeping other settings, their order and the file's indentation (a TOML file keeps its comments too; a JSON file with
 comments is left for you to edit, with the entry to paste), and each file is copied next to it (`.sawit-backup`)

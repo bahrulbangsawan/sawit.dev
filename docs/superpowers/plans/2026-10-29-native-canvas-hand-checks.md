@@ -1445,7 +1445,7 @@ hand checks only into their own reports, which aren't in the repository. They ar
 reviews added. No test can build a `Workspace` (P8-C8), so for the workspace wiring of those fixes these checks are
 the only cover: the canvas taking the keyboard, a canvas file renamed under its tab, the hand-offs from Files, one
 browser per project, where the quit question goes up, the center bar's scroll and the restore warning on screen.
-- There are **40 checks**. F-1 to F-5 and H-MCP-n are the reports' own numbers (H-MCP-n after the finding MCP-n it
+- There are **41 checks**. F-1 to F-5 and H-MCP-n are the reports' own numbers (H-MCP-n after the finding MCP-n it
   checks); H-CORE-n and H-UI-n are canvas core's and canvas UI's H-n; the others are numbered here.
 - The fixers drove some of them over the control socket before their lanes merged. Nobody has run them by hand.
 - Each starts from a fresh launch of the merged main, as under "Before you start", with start state A unless it
@@ -1627,7 +1627,7 @@ Answer: ______
 
 Answer: ______
 
-### Catalog: 3 checks
+### Catalog: 4 checks
 
 These read and write your own AI clients' config files, whatever `SAWIT_HOME` says: back them up first.
 
@@ -1650,6 +1650,17 @@ Answer: ______
 - With fish installed, put `SHELL=$(command -v fish)` in front of the recipe's launch line, and open Tools.
 - Look for: the tools you have are found, with their versions, as under zsh. If detection fails, a warning row
   names the shell, and Install Missing is off.
+
+Answer: ______
+
+**H-CAT-4. Closing the window, or quitting, while Dev Tools installs** (final seams m4).
+- Open Tools and start an install or a Reinstall that takes a few seconds (Bun's, say). While it runs, click the
+  window's close button.
+- Look for: "Close this window?" with "Dev Tools is still running: Installing Bun. Closing the window stops it."
+  Cancel: the window stays, and the install goes on.
+- Start another one, and press ⌘Q.
+- Look for: "Quit Sawit?" says the same. Quit: Sawit quits, and `pgrep -fl 'bun.sh/install'` lists nothing, so the
+  installer didn't run on alone. Stopped partway, the tool may need installing again.
 
 Answer: ______
 
