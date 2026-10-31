@@ -226,6 +226,9 @@ pub struct FilesPanel {
     /// A file change is running.
     busy: bool,
     disk: Disk,
+    /// Counts the folders shown ([`Self::forget_folder`]): work started for one that lands
+    /// once another is shown leaves that one alone.
+    folder: u64,
     edit: Option<Edit>,
     /// Why the last file operation failed.
     error: Option<String>,
@@ -258,6 +261,7 @@ impl FilesPanel {
             queue: VecDeque::new(),
             busy: false,
             disk: Disk::default(),
+            folder: 0,
             edit: None,
             error: None,
             focus: cx.focus_handle(),
@@ -303,10 +307,11 @@ impl FilesPanel {
         self.expanded.insert(root.clone());
         self.load(root.clone(), cx);
         let dir = root.clone();
+        let folder = self.folder;
         let rx = rt::spawn(cx, async move { sawit_core::git::discover(&dir).await });
         cx.spawn(async move |this, cx| {
             if let Ok(repo) = rx.await {
-                let _ = this.update(cx, |this, _| this.repo = repo);
+                let _ = this.update(cx, |this, _| this.found_repo(folder, repo));
             }
         })
         .detach();
@@ -320,6 +325,7 @@ impl FilesPanel {
     /// redo, a name being typed and the last error. No row of the next folder's tree would show
     /// the old selection or Cut, yet ⌫ (Trash), Rename and Paste would act on them.
     fn forget_folder(&mut self) {
+        self.folder += 1;
         self.expanded.clear();
         self.children.clear();
         self.scroll = UniformListScrollHandle::new();
@@ -335,6 +341,7 @@ impl FilesPanel {
     }
 
     fn load(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
+        let folder = self.folder;
         let rx = (self.disk.list)(vec![dir], cx);
         cx.spawn(async move |this, cx| {
             let Ok(listings) = rx.await else {
@@ -342,15 +349,25 @@ impl FilesPanel {
             };
             let _ = this.update(cx, |this, cx| {
                 for (dir, listing) in listings {
-                    this.listed(dir, listing, cx);
+                    this.listed(folder, dir, listing, cx);
                 }
             });
         })
         .detach();
     }
 
-    /// Shows what reading `dir` found.
-    fn listed(&mut self, dir: PathBuf, listing: Listing, cx: &mut Context<Self>) {
+    /// The repository of folder number `folder` ([`Self::folder`]) was looked up.
+    fn found_repo(&mut self, folder: u64, repo: Option<PathBuf>) {
+        if folder == self.folder {
+            self.repo = repo;
+        }
+    }
+
+    /// Shows what reading `dir`, of folder number `folder`, found.
+    fn listed(&mut self, folder: u64, dir: PathBuf, listing: Listing, cx: &mut Context<Self>) {
+        if folder != self.folder {
+            return;
+        }
         match listing {
             Ok(entries) => {
                 if self.root.as_ref() == Some(&dir) && self.root_error.take().is_some() {
@@ -814,16 +831,26 @@ impl FilesPanel {
         }
     }
 
+    /// The selected entry, if it is in the project folder shown. The commands that act on an
+    /// entry (Trash, Delete, Rename, Duplicate, Cut, Copy) never act on anything else: not on
+    /// the project folder, nor on something outside it.
+    fn selection(&self) -> Option<PathBuf> {
+        let root = self.root.as_ref()?;
+        self.selected
+            .clone()
+            .filter(|path| path.starts_with(root) && path != root)
+    }
+
     /// The selected entry, else the project folder.
     fn target(&self) -> Option<PathBuf> {
-        self.selected.clone().or_else(|| self.root.clone())
+        self.selection().or_else(|| self.root.clone())
     }
 
     /// What Trash moves: the selected entry, or nothing when none is selected. Never the project
     /// folder, which [`Self::target`] falls back to for the commands that show, open or copy a
     /// path: ⌫ in a tree with no selection would move the whole project to the Trash.
     fn trash_target(&self) -> Option<PathBuf> {
-        self.selected.clone()
+        self.selection()
     }
 
     /// The target if it is a folder, else the folder it is in.
@@ -857,7 +884,7 @@ impl FilesPanel {
     }
 
     fn start_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = self.selected.clone() else {
+        let Some(path) = self.selection() else {
             return;
         };
         let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
@@ -982,6 +1009,7 @@ impl FilesPanel {
     fn start(&mut self, op: Op, step: Step, cx: &mut Context<Self>) {
         self.busy = true;
         cx.notify();
+        let folder = self.folder;
         let rx = (self.disk.run)(op.clone(), cx);
         cx.spawn(async move |this, cx| {
             let outcome = rx
@@ -989,15 +1017,34 @@ impl FilesPanel {
                 .unwrap_or_else(|_| Err("The change stopped before it finished.".into()));
             let _ = this.update(cx, |this, cx| {
                 this.busy = false;
-                this.landed(op, step, outcome, cx);
+                this.landed(folder, op, step, outcome, cx);
                 this.next(cx);
             });
         })
         .detach();
     }
 
-    /// Takes `op`, run as `step`, once it has landed: keeps its undo (or redo), and shows it.
-    fn landed(&mut self, op: Op, step: Step, outcome: Outcome, cx: &mut Context<Self>) {
+    /// Takes `op`, run as `step` in folder number `folder`, once it has landed: keeps its undo
+    /// (or redo), and shows it.
+    fn landed(
+        &mut self,
+        folder: u64,
+        op: Op,
+        step: Step,
+        outcome: Outcome,
+        cx: &mut Context<Self>,
+    ) {
+        if folder != self.folder {
+            // Another folder is shown now. A move that happened is still told, for the tabs
+            // of what moved to follow it; the rest was that folder's.
+            if let (Ok(_), Some((from, to))) = (&outcome, op.moved()) {
+                cx.emit(FilesEvent::Moved {
+                    from: from.to_path_buf(),
+                    to: to.to_path_buf(),
+                });
+            }
+            return;
+        }
         match outcome {
             Ok(inverse) => {
                 match step {
@@ -1042,7 +1089,7 @@ impl FilesPanel {
     }
 
     fn pick(&mut self, cut: bool, cx: &mut Context<Self>) {
-        if let Some(path) = self.selected.clone() {
+        if let Some(path) = self.selection() {
             self.clip = Some(Clip { path, cut });
             cx.notify();
         }
@@ -1084,7 +1131,7 @@ impl FilesPanel {
     }
 
     fn duplicate(&mut self, cx: &mut Context<Self>) {
-        let Some(from) = self.selected.clone() else {
+        let Some(from) = self.selection() else {
             return;
         };
         let (Some(dir), Some(name)) = (from.parent(), from.file_name()) else {
@@ -1121,20 +1168,26 @@ impl FilesPanel {
                 .map(drop)
                 .map_err(|e| e.to_string())
         });
+        let folder = self.folder;
         cx.spawn(async move |this, cx| {
             if let Ok(Err(e)) = rx.await {
-                let _ = this.update(cx, |this, cx| {
-                    this.error = Some(e);
-                    cx.notify();
-                });
+                let _ = this.update(cx, |this, cx| this.failed(folder, e, cx));
             }
         })
         .detach();
     }
 
+    /// Shows why something done in folder number `folder` failed.
+    fn failed(&mut self, folder: u64, error: String, cx: &mut Context<Self>) {
+        if folder == self.folder {
+            self.error = Some(error);
+            cx.notify();
+        }
+    }
+
     /// Deletes the selected entry for good, after asking.
     fn delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = self.selected.clone() else {
+        let Some(path) = self.selection() else {
             return;
         };
         let name = path
@@ -1152,15 +1205,17 @@ impl FilesPanel {
             if !matches!(answer.await, Ok(0)) {
                 return;
             }
-            let Ok(rx) = this.update(cx, |_, cx| {
-                rt::spawn_blocking(cx, move || files::remove(&path).map_err(|e| e.to_string()))
+            let Ok((folder, rx)) = this.update(cx, |this, cx| {
+                let rx =
+                    rt::spawn_blocking(cx, move || files::remove(&path).map_err(|e| e.to_string()));
+                (this.folder, rx)
             }) else {
                 return;
             };
             let outcome = rx.await;
             let _ = this.update(cx, |this, cx| {
                 if let Ok(Err(e)) = outcome {
-                    this.error = Some(e);
+                    this.failed(folder, e, cx);
                 }
                 this.refresh(cx);
                 cx.notify();
@@ -1172,28 +1227,39 @@ impl FilesPanel {
     /// Opens every folder under the target folder (or the project).
     fn expand_all(&mut self, cx: &mut Context<Self>) {
         let Some(dir) = self
-            .selected
-            .clone()
+            .selection()
             .filter(|p| p.is_dir())
             .or_else(|| self.root.clone())
         else {
             return;
         };
         self.expand_to(&dir, cx);
+        let folder = self.folder;
         let rx = rt::spawn_blocking(cx, move || read_tree(dir));
         cx.spawn(async move |this, cx| {
             let Ok(tree) = rx.await else {
                 return;
             };
-            let _ = this.update(cx, |this, cx| {
-                for (dir, entries) in tree {
-                    this.expanded.insert(dir.clone());
-                    this.children.insert(dir, entries);
-                }
-                cx.notify();
-            });
+            let _ = this.update(cx, |this, cx| this.expanded_all(folder, tree, cx));
         })
         .detach();
+    }
+
+    /// Opens the folders Expand All read in folder number `folder`.
+    fn expanded_all(
+        &mut self,
+        folder: u64,
+        tree: Vec<(PathBuf, Vec<Entry>)>,
+        cx: &mut Context<Self>,
+    ) {
+        if folder != self.folder {
+            return;
+        }
+        for (dir, entries) in tree {
+            self.expanded.insert(dir.clone());
+            self.children.insert(dir, entries);
+        }
+        cx.notify();
     }
 
     fn collapse_all(&mut self, cx: &mut Context<Self>) {
@@ -1237,7 +1303,7 @@ mod tests {
     };
     use sawit_core::files::Entry;
 
-    use super::{Clip, Disk, FilesPanel, Op, Outcome, Request, Scratch, Trash};
+    use super::{Clip, Disk, FilesEvent, FilesPanel, Op, Outcome, Request, Scratch, Trash};
 
     /// A project the tree shows without reading it, at a path that can't exist: nothing in it is
     /// there, so a file change that did run would change nothing.
@@ -1345,6 +1411,100 @@ mod tests {
         cx.update(|cx| panel.update(cx, |p, _| p.selected = Some(path.to_path_buf())));
         let tree = cx.update(|cx| panel.read(cx).focus.clone());
         focus(cx, window, &tree);
+    }
+
+    /// The panel's events from now on, as text.
+    fn events(
+        panel: &Entity<FilesPanel>,
+        cx: &mut TestAppContext,
+    ) -> (Rc<RefCell<Vec<String>>>, Subscription) {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let subscription = cx.update(|cx| {
+            let seen = seen.clone();
+            cx.subscribe(panel, move |_, event: &FilesEvent, _| {
+                let name = |p: &Path| p.file_name().unwrap().to_string_lossy().into_owned();
+                seen.borrow_mut().push(match event {
+                    FilesEvent::OpenFile(path) => format!("open {}", name(path)),
+                    FilesEvent::Moved { from, to } => format!("moved {} {}", name(from), name(to)),
+                    FilesEvent::RootChanged(path) => format!("root {}", name(path)),
+                    FilesEvent::OpenTerminal(path) => format!("terminal {}", name(path)),
+                    FilesEvent::FindInFolder(path) => format!("find {}", name(path)),
+                    FilesEvent::ViewHistory(path) => format!("history {}", name(path)),
+                })
+            })
+        });
+        (seen, subscription)
+    }
+
+    /// Work started in one folder that lands once the panel shows another leaves that one alone
+    /// (FILES-3). A change's undo and selection, an error, Expand All's folders, a folder's
+    /// listing and the repository of the old folder all went to the new one: ⌫ and ⌘Z then
+    /// trashed the old folder's copy, unseen. A move that landed is still told, for the tabs of
+    /// what moved to follow it. A change asked for in the old folder doesn't run.
+    #[gpui_kit::test]
+    fn work_that_lands_after_a_folder_change_leaves_the_new_folder_alone(cx: &mut TestAppContext) {
+        let (_window, panel) = open_panel(cx, &["notes.txt", "src"]);
+        let changes = Changes::install(&panel, cx);
+        let (seen, _events) = events(&panel, cx);
+        let root = Path::new(ROOT);
+        let (notes, kept) = (root.join("notes.txt"), root.join("kept.txt"));
+        let old = cx.update(|cx| {
+            panel.update(cx, |p, cx| {
+                let rename = Op::Move {
+                    from: notes.clone(),
+                    to: kept.clone(),
+                };
+                p.request(Request::Do(rename), cx);
+                let duplicate = Op::Copy {
+                    from: notes.clone(),
+                    to: root.join("notes copy.txt"),
+                };
+                p.request(Request::Do(duplicate), cx);
+                let old = p.folder;
+                // What set_root does, but for reading the new folder.
+                p.forget_folder();
+                show(p, Path::new(OTHER_ROOT), &["readme.md"]);
+                old
+            })
+        });
+        let undo = Op::Move {
+            from: kept.clone(),
+            to: notes.clone(),
+        };
+        changes.land(0, Ok(undo), cx);
+        cx.update(|cx| {
+            panel.update(cx, |p, cx| {
+                p.found_repo(old, Some(root.to_path_buf()));
+                let entry = Entry {
+                    name: "lib.rs".into(),
+                    path: root.join("src/lib.rs"),
+                    is_dir: false,
+                };
+                p.listed(old, root.join("src"), Ok(vec![entry]), cx);
+                p.expanded_all(old, vec![(root.join("src"), Vec::new())], cx);
+                p.failed(old, "“notes.txt” couldn't be renamed.".into(), cx);
+            })
+        });
+
+        assert_eq!(changes.started().len(), 1, "the duplicate ran");
+        assert_eq!(*seen.borrow(), ["moved notes.txt kept.txt"]);
+        // Should the old folder's entry be selected all the same, nothing acts on it.
+        cx.update(|cx| {
+            panel.update(cx, |p, _| {
+                p.selected = Some(kept.clone());
+                assert_eq!((p.trash_target(), p.selection()), (None, None));
+                assert_eq!(p.target().as_deref(), Some(Path::new(OTHER_ROOT)));
+                p.selected = None;
+            })
+        });
+        cx.update(|cx| {
+            let p = panel.read(cx);
+            assert!(p.undo.is_empty() && p.redo.is_empty() && !p.busy);
+            assert_eq!((&p.selected, &p.error, &p.repo), (&None, &None, &None));
+            let other = Path::new(OTHER_ROOT).to_path_buf();
+            assert_eq!(p.expanded.iter().collect::<Vec<_>>(), [&other]);
+            assert_eq!(p.children.keys().collect::<Vec<_>>(), [&other]);
+        });
     }
 
     /// ⌘Z pressed while a change runs undoes that change, once it has landed (FILES-5). Changes
