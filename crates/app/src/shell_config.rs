@@ -26,6 +26,7 @@ use sawit_core::shell_config::{self, BACKUP_REPO, Saved, Scope, ShellConfig};
 use crate::files::ops::Op;
 use crate::files::{
     CopyPath, Delete, Duplicate, OpenInDefaultApp, OpenInTerminal, RevealInFinder, Trash,
+    TrashWithoutAsking,
 };
 use crate::rt;
 use crate::states::{Banner, Placeholder};
@@ -46,6 +47,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-d", Duplicate, ctx),
         KeyBinding::new("alt-cmd-c", CopyPath, ctx),
         KeyBinding::new("backspace", Trash, list),
+        KeyBinding::new("cmd-backspace", TrashWithoutAsking, list),
         KeyBinding::new("alt-cmd-backspace", Delete, ctx),
     ]);
 }
@@ -427,11 +429,26 @@ impl ShellConfigPanel {
         self.run(move || Op::Copy { from, to }.run().map(drop), cx);
     }
 
-    fn trash(&mut self, cx: &mut Context<Self>) {
+    /// Moves the selected file to the Trash, with `ask` once the user says so (⌫; ⌘⌫ doesn't
+    /// ask), as in the Files tab: nothing here undoes it.
+    fn trash(&mut self, ask: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(path) = self.selected_writable() else {
             return;
         };
-        self.run(move || Op::Trash(path).run().map(drop), cx);
+        if !ask {
+            self.run(move || Op::Trash(path).run().map(drop), cx);
+            return;
+        }
+        let detail = "You can put it back from the Trash in Finder.";
+        let answer = crate::files::ask_to_trash(&path, detail, window, cx);
+        cx.spawn(async move |this, cx| {
+            if answer.await == Ok(0) {
+                let _ = this.update(cx, |this, cx| {
+                    this.run(move || Op::Trash(path).run().map(drop), cx)
+                });
+            }
+        })
+        .detach();
     }
 
     /// Deletes the selected file for good, after asking.
@@ -736,7 +753,10 @@ impl Render for ShellConfigPanel {
                     ));
                 }
             }))
-            .on_action(cx.listener(|this, _: &Trash, _, cx| this.trash(cx)))
+            .on_action(cx.listener(|this, _: &Trash, w, cx| this.trash(true, w, cx)))
+            .on_action(cx.listener(|this, _: &TrashWithoutAsking, w, cx| {
+                this.trash(false, w, cx)
+            }))
             .on_action(cx.listener(|this, _: &Delete, w, cx| this.delete(w, cx)))
             .child(
                 h_flex()
@@ -934,5 +954,48 @@ mod tests {
         };
         assert_eq!(key(cx, &OpenConfig).as_deref(), Some("enter"));
         assert_eq!(key(cx, &Trash).as_deref(), Some("backspace"));
+    }
+
+    /// ⌫ asks before it moves a config file to the Trash, as in the Files tab (FILES-1): one
+    /// key meant for a text field moved `~/.zshrc` away without a word, and nothing here undoes
+    /// a Trash.
+    #[gpui_kit::test]
+    fn backspace_asks_before_moving_a_config_file_to_the_trash(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::files::init(cx);
+            super::init(cx);
+        });
+        let (window, panel) = cx.update(|cx| {
+            gpui_kit::open_window(Default::default(), cx, |window, cx| {
+                cx.new(|cx| ShellConfigPanel::new(window, cx))
+            })
+            .unwrap()
+        });
+        let zshrc = std::path::PathBuf::from("/sawit-test-no-such-home/.zshrc");
+        cx.update(|cx| {
+            panel.update(cx, |p, _| {
+                p.configs = vec![sawit_core::shell_config::ShellConfig {
+                    path: zshrc.clone(),
+                    shell: "zsh",
+                    note: "Interactive zsh",
+                    scope: sawit_core::shell_config::Scope::User,
+                    writable: true,
+                }];
+                p.selected = Some(zshrc.clone());
+            })
+        });
+        let list = cx.update(|cx| panel.read(cx).focus.clone());
+        cx.update_window(window, |_, window, cx| window.focus(&list, cx))
+            .unwrap();
+        cx.run_until_parked();
+
+        // A Trash this started would fail the test at once: no runtime is installed.
+        cx.simulate_keystrokes(window, "backspace");
+        let (question, _) = cx.pending_prompt().expect("⌫ asks");
+        assert_eq!(question, "Move “.zshrc” to the Trash?");
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        cx.update(|cx| assert_eq!(panel.read(cx).error, None));
     }
 }

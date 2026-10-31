@@ -30,6 +30,8 @@ pub struct FolderSearch {
     searched: Option<String>,
     loading: bool,
     error: Option<String>,
+    /// The number of the latest search started.
+    generation: u64,
     scroll: UniformListScrollHandle,
     _subscription: Subscription,
 }
@@ -55,39 +57,91 @@ impl FolderSearch {
             searched: None,
             loading: false,
             error: None,
+            generation: 0,
             scroll: UniformListScrollHandle::new(),
             _subscription: subscription,
         }
     }
 
     fn search(&mut self, cx: &mut Context<Self>) {
-        let text = self.query.read(cx).value().to_string();
-        if text.is_empty() {
+        let Some((generation, text)) = self.start(cx) else {
             return;
-        }
+        };
         let dir = self.dir.clone();
         let query = text.clone();
-        self.loading = true;
-        cx.notify();
         let rx = rt::spawn(cx, async move { find(&dir, &query, LIMIT).await });
         cx.spawn(async move |this, cx| {
             let Ok(result) = rx.await else {
                 return;
             };
-            let _ = this.update(cx, |this, cx| {
-                this.loading = false;
-                match result {
-                    Ok(hits) => {
-                        this.hits = hits;
-                        this.error = None;
-                    }
-                    Err(e) => this.error = Some(e.to_string()),
-                }
-                this.searched = Some(text);
-                cx.notify();
-            });
+            let _ = this.update(cx, |this, cx| this.finish(generation, text, result, cx));
         })
         .detach();
+    }
+
+    /// Follows its folder, or files it found, renamed or moved from `from` to `to`; the folder
+    /// where it is now, if it moved.
+    pub fn follow_move(
+        &mut self,
+        from: &Path,
+        to: &Path,
+        cx: &mut Context<Self>,
+    ) -> Option<PathBuf> {
+        let moved = |path: &Path| {
+            let rest = path.strip_prefix(from).ok()?;
+            Some(if rest.as_os_str().is_empty() {
+                to.to_path_buf()
+            } else {
+                to.join(rest)
+            })
+        };
+        for hit in &mut self.hits {
+            if let Some(path) = moved(&hit.path) {
+                hit.path = path;
+            }
+        }
+        let dir = moved(&self.dir);
+        if let Some(dir) = &dir {
+            self.dir = dir.clone();
+        }
+        cx.notify();
+        dir
+    }
+
+    /// Starts a search for the text typed: its number, and the text.
+    fn start(&mut self, cx: &mut Context<Self>) -> Option<(u64, String)> {
+        let text = self.query.read(cx).value().to_string();
+        if text.is_empty() {
+            return None;
+        }
+        self.generation += 1;
+        self.loading = true;
+        cx.notify();
+        Some((self.generation, text))
+    }
+
+    /// Shows what search `generation`, for `text`, found, unless a newer search was started
+    /// since: its reply decides, whichever lands first.
+    fn finish(
+        &mut self,
+        generation: u64,
+        text: String,
+        result: sawit_core::Result<Vec<Hit>>,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.generation {
+            return;
+        }
+        self.loading = false;
+        match result {
+            Ok(hits) => {
+                self.hits = hits;
+                self.error = None;
+            }
+            Err(e) => self.error = Some(e.to_string()),
+        }
+        self.searched = Some(text);
+        cx.notify();
     }
 
     fn render_hit(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -192,5 +246,57 @@ impl Render for FolderSearch {
                     }),
             )
             .child(div().flex_1().min_h_0().child(list))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use gpui_kit::{AppContext as _, TestAppContext};
+    use sawit_core::search::Hit;
+
+    use super::FolderSearch;
+
+    fn hit(name: &str) -> Hit {
+        Hit {
+            path: Path::new("/p").join(name),
+            line: 1,
+            text: name.into(),
+        }
+    }
+
+    /// The hits shown are the latest search's (FILES-11). Each reply used to replace the hits:
+    /// a slow search for a common word that answered after a quick one for a rarer word showed
+    /// its hits under the rarer word.
+    #[gpui_kit::test]
+    fn an_older_searchs_reply_never_replaces_a_newer_ones(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (window, search) = cx.update(|cx| {
+            gpui_kit::open_window(Default::default(), cx, |window, cx| {
+                cx.new(|cx| FolderSearch::new(PathBuf::from("/p"), window, cx))
+            })
+            .unwrap()
+        });
+        let start = |text: &'static str, cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| {
+                search.update(cx, |s, cx| {
+                    s.query.update(cx, |q, cx| q.set_value(text, window, cx));
+                    s.start(cx).unwrap()
+                })
+            })
+            .unwrap()
+        };
+        let common = start("common", cx);
+        let rare = start("rare", cx);
+        cx.update(|cx| {
+            search.update(cx, |s, cx| {
+                s.finish(rare.0, rare.1, Ok(vec![hit("rare.txt")]), cx);
+                s.finish(common.0, common.1, Ok(vec![hit("common.txt")]), cx);
+                assert_eq!(s.hits, [hit("rare.txt")]);
+                assert_eq!(s.searched.as_deref(), Some("rare"));
+                assert!(!s.loading && s.error.is_none());
+            })
+        });
     }
 }

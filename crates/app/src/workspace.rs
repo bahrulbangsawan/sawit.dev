@@ -2179,41 +2179,15 @@ impl Workspace {
     }
 
     /// Open tabs of a renamed or moved file (or of files in a moved folder)
-    /// follow it: a file editor's, and a canvas file's, whose canvas saves
-    /// there from now on ([`BoardView::rebind`], CANVAS-UI-3). A project's
-    /// canvas stays the project's, `.nyawit/canvas.figcraft` by definition.
+    /// follow it: a file editor's, a canvas file's, whose canvas saves
+    /// there from now on ([`BoardView::rebind`], CANVAS-UI-3), an image's, a
+    /// PDF's and a video's, and a Find in Folder tab its folder and the files it
+    /// found. A project's canvas stays the project's, `.nyawit/canvas.figcraft`
+    /// by definition. A History tab keeps the path it lists the commits of: git
+    /// knows them by that path until the move is committed.
     fn follow_move(&mut self, from: &Path, to: &Path, cx: &mut Context<Self>) {
         for tab in &mut self.tabs {
-            match &mut tab.item {
-                PaneItem::File(editor) => editor.update(cx, |e, cx| {
-                    if let Some(path) = moved_to(&e.path, from, to) {
-                        e.path = path;
-                        cx.notify();
-                    }
-                }),
-                PaneItem::Other {
-                    view,
-                    key,
-                    title,
-                    file,
-                    ..
-                } if key.starts_with("file\u{0}") => {
-                    let Ok(board) = view.clone().downcast::<BoardView>() else {
-                        continue;
-                    };
-                    let Some(path) = moved_to(board.read(cx).path(), from, to) else {
-                        continue;
-                    };
-                    board.update(cx, |board, cx| board.rebind(path.clone(), cx));
-                    *key = format!("file\u{0}{}", path.display()).into();
-                    *title = (path.file_name())
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_default()
-                        .into();
-                    *file = Some(path);
-                }
-                PaneItem::Other { .. } | PaneItem::Server => {}
-            }
+            follow_tab(&mut tab.item, from, to, cx);
         }
         cx.notify();
     }
@@ -2230,10 +2204,7 @@ impl Workspace {
                 query.update(cx, |s, cx| s.focus(window, cx));
             }
         } else {
-            let name = dir
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| dir.display().to_string());
+            let name = folder_name(&dir);
             let dir_for_group = dir.clone();
             let view = cx.new(|cx| FolderSearch::new(dir, window, cx));
             cx.subscribe_in(
@@ -3274,6 +3245,75 @@ impl Render for Workspace {
 fn cached(view: AnyView) -> AnyElement {
     view.cached(StyleRefinement::default().size_full())
         .into_any_element()
+}
+
+/// [`Workspace::follow_move`] for the tab showing `item`.
+fn follow_tab(item: &mut PaneItem, from: &Path, to: &Path, cx: &mut App) {
+    match item {
+        PaneItem::File(editor) => editor.update(cx, |e, cx| {
+            if let Some(path) = moved_to(&e.path, from, to) {
+                e.path = path;
+                cx.notify();
+            }
+        }),
+        PaneItem::Other {
+            view,
+            key,
+            title,
+            file,
+            ..
+        } if key.starts_with("file\u{0}") => {
+            let board = view.clone().downcast::<BoardView>().ok();
+            let shown = match &board {
+                Some(board) => board.read(cx).path().to_path_buf(),
+                None => file.clone().unwrap_or_default(),
+            };
+            let Some(path) = moved_to(&shown, from, to) else {
+                return;
+            };
+            if let Some(board) = board {
+                board.update(cx, |board, cx| board.rebind(path.clone(), cx));
+            } else if let Ok(image) = view.clone().downcast::<ImageView>() {
+                image.update(cx, |image, cx| image.follow(path.clone(), cx));
+            } else if let Ok(pdf) = view.clone().downcast::<PdfView>() {
+                pdf.update(cx, |pdf, cx| {
+                    pdf.path = path.clone();
+                    cx.notify();
+                });
+            } else if let Ok(video) = view.clone().downcast::<VideoView>() {
+                // Its player has the file open, wherever it goes.
+                video.update(cx, |video, cx| {
+                    video.path = path.clone();
+                    cx.notify();
+                });
+            }
+            *key = format!("file\u{0}{}", path.display()).into();
+            *title = (path.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+                .into();
+            *file = Some(path);
+        }
+        PaneItem::Other {
+            view, key, title, ..
+        } if key.starts_with("search\u{0}") => {
+            let Ok(search) = view.clone().downcast::<FolderSearch>() else {
+                return;
+            };
+            if let Some(dir) = search.update(cx, |search, cx| search.follow_move(from, to, cx)) {
+                *key = FolderSearch::key(&dir).into();
+                *title = format!("Search: {}", folder_name(&dir)).into();
+            }
+        }
+        PaneItem::Other { .. } | PaneItem::Server => {}
+    }
+}
+
+/// The name a folder's tabs show: its own, or its path for `/`.
+fn folder_name(dir: &Path) -> String {
+    dir.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| dir.display().to_string())
 }
 
 /// Where `path` is once `from` has been renamed or moved to `to`: `to` itself, or for a path in a

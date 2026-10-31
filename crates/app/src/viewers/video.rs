@@ -106,6 +106,12 @@ pub fn clock(seconds: f64) -> String {
     }
 }
 
+impl Focusable for VideoView {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
 impl VideoView {
     pub fn new(path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let seek = cx.new(|_| SliderState::new().min(0.).max(SEEK_STEPS).default_value(0.));

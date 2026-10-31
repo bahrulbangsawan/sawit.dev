@@ -96,9 +96,11 @@ impl GitStore {
         this
     }
 
-    /// Follows the folder open in the window.
+    /// Follows the folder open in the window. The same folder again (Try Again in the Files
+    /// tab) keeps what is known of it, and says so to those who follow the store.
     pub fn set_dir(&mut self, dir: Option<PathBuf>, cx: &mut Context<Self>) {
         if self.dir == dir {
+            cx.notify();
             return;
         }
         self.dir = dir;

@@ -87,8 +87,9 @@ pub struct FileEditor {
     diagrams: diagrams::Diagrams,
     /// Modification time of the file as last loaded or saved.
     disk_mtime: Option<SystemTime>,
-    /// Already told the user the file changed under unsaved edits.
-    warned_disk_change: bool,
+    /// What the user was told of the file on disk (it changed under unsaved edits, or went),
+    /// until it is saved, reloaded or back as it was.
+    disk_warning: Option<String>,
     /// 1-based line/column from `go_to` before the text finished loading.
     pending_cursor: Option<(u32, u32)>,
     /// Cursor line/column the toolbar last showed.
@@ -161,7 +162,7 @@ impl FileEditor {
             svg_image: None,
             diagrams: Default::default(),
             disk_mtime: None,
-            warned_disk_change: false,
+            disk_warning: None,
             pending_cursor: None,
             shown_cursor: None,
             focus: cx.focus_handle(),
@@ -204,29 +205,40 @@ impl FileEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if now == self.disk_mtime || self.state.is_none() {
+        if self.state.is_none() {
+            return;
+        }
+        if now == self.disk_mtime {
+            // Back as it was loaded or saved, as a file the Files tab put back from the Trash
+            // (⌘Z) is: what the user was told of it is out of date.
+            if now.is_some()
+                && let Some(warning) = self.disk_warning.take()
+            {
+                if self.notice.as_ref().is_some_and(|n| n.text == warning) {
+                    self.notice = None;
+                }
+                cx.notify();
+            }
             return;
         }
         let Some(now) = now else {
-            if !self.warned_disk_change {
-                self.warned_disk_change = true;
-                self.notice = Some(error(format!(
+            self.warn_disk(
+                format!(
                     "This file was deleted from disk. {} to save it again.",
                     press(&Save, window)
-                )));
-                cx.notify();
-            }
+                ),
+                cx,
+            );
             return;
         };
         if self.dirty {
-            if !self.warned_disk_change {
-                self.warned_disk_change = true;
-                self.notice = Some(error(format!(
+            self.warn_disk(
+                format!(
                     "This file changed on disk while you have unsaved changes. {} to overwrite the version on disk.",
                     press(&Save, window)
-                )));
-                cx.notify();
-            }
+                ),
+                cx,
+            );
             return;
         }
         // Clean buffer: take the new contents, like Zed does.
@@ -252,13 +264,22 @@ impl FileEditor {
                 this.refresh_diagrams(cx);
                 this.saved_text = file.text;
                 this.dirty = false;
-                this.warned_disk_change = false;
+                this.disk_warning = None;
                 this.flash("Reloaded because the file changed on disk.".into(), cx);
                 cx.emit(FileEditorEvent::Changed);
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// Tells the user `warning` of the file on disk, once until it is saved, reloaded or back.
+    fn warn_disk(&mut self, warning: String, cx: &mut Context<Self>) {
+        if self.disk_warning.is_none() {
+            self.notice = Some(error(warning.clone()));
+            self.disk_warning = Some(warning);
+            cx.notify();
+        }
     }
 
     pub fn title(&self) -> String {
@@ -348,6 +369,21 @@ impl FileEditor {
         self.watch_disk(window, cx);
     }
 
+    /// Gives this file the keyboard: its text once read, until then the editor itself, whose
+    /// text takes it when the read lands (as on any first open).
+    pub fn take_keyboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.state.clone() {
+            Some(state) => state.update(cx, |s, cx| s.focus(window, cx)),
+            None => window.focus(&self.focus, cx),
+        }
+    }
+
+    /// The keyboard of its text, once read.
+    #[cfg(test)]
+    pub(crate) fn text_focus(&self, cx: &App) -> Option<FocusHandle> {
+        self.state.as_ref().map(|s| s.focus_handle(cx))
+    }
+
     /// Puts the cursor on a 1-based line and column (clamped), now or once
     /// the file has loaded.
     pub fn go_to(&mut self, line: u32, column: u32, window: &mut Window, cx: &mut Context<Self>) {
@@ -424,7 +460,7 @@ impl FileEditor {
                         this.notice = None;
                         // Our own write is not an outside change.
                         this.disk_mtime = written;
-                        this.warned_disk_change = false;
+                        this.disk_warning = None;
                     }
                     Ok(Err(e)) => this.notice = Some(error(format!("Unable to save. {e}"))),
                     Err(_) => this.notice = Some(error("Unable to save. Try again.".into())),
@@ -818,6 +854,71 @@ mod tests {
     use super::{breadcrumb, resolve_image};
     use gpui_kit::{ImageSource, Resource, SharedUri};
     use std::path::Path;
+
+    /// A file moved away and put back where it was, as the Files tab's ⌫ and ⌘Z do, is no
+    /// longer said to be deleted. Its tab said "This file was deleted from disk" until the next
+    /// save: the file came back with the time it was loaded with, so nothing looked at it again,
+    /// and the notice asked for a save that wasn't needed.
+    #[gpui_kit::test]
+    fn a_file_put_back_where_it_was_is_no_longer_said_to_be_deleted(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::AppContext as _;
+
+        // The file is read and looked at on the runtime's real threads.
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(crate::rt::Rt(sawit_core::rt::Runtime::start()));
+        });
+        let dir = crate::files::Scratch::new("editor-put-back");
+        let (file, away) = (dir.0.join("notes.md"), dir.0.join("away.md"));
+        std::fs::write(&file, "notes\n").unwrap();
+        let path = file.clone();
+        let (_, editor) = cx.update(|cx| {
+            gpui_kit::open_window(Default::default(), cx, |window, cx| {
+                cx.new(|cx| super::FileEditor::open(path, None, window, cx))
+            })
+            .unwrap()
+        });
+        let notice = |cx: &mut gpui_kit::TestAppContext| {
+            cx.update(|cx| editor.read(cx).notice.as_ref().map(|n| n.text.clone()))
+        };
+        let wait =
+            |cx: &mut gpui_kit::TestAppContext, what: &str, ok: &dyn Fn(Option<String>) -> bool| {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+                loop {
+                    cx.run_until_parked();
+                    if ok(notice(cx)) {
+                        return;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "timed out waiting until {what}"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    cx.executor().advance_clock(super::DISK_POLL);
+                }
+            };
+        let loaded =
+            |cx: &mut gpui_kit::TestAppContext| cx.update(|cx| editor.read(cx).state.is_some());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !loaded(cx) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the file never loaded"
+            );
+            cx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        std::fs::rename(&file, &away).unwrap();
+        wait(cx, "the tab says the file was deleted", &|n| {
+            n.is_some_and(|n| n.contains("deleted"))
+        });
+        std::fs::rename(&away, &file).unwrap();
+        wait(cx, "the notice is gone", &|n| n.is_none());
+    }
 
     #[test]
     fn breadcrumb_is_relative_to_the_project() {

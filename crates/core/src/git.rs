@@ -105,6 +105,60 @@ pub async fn discover(dir: &Path) -> Option<PathBuf> {
         .filter(|p| !p.as_os_str().is_empty())
 }
 
+/// Adds `path`, a file or folder in the repository whose top folder is `repo`, to its
+/// `.gitignore`, or with `exclude` to its private `info/exclude`: one line, anchored at the top
+/// folder ([`crate::files::ignore_pattern`]). False when the line was there already.
+///
+/// A link is ignored as itself, not as what it leads to: git names the repository by its real
+/// path, so the links on the way to `path` are resolved (the tree may name the project through
+/// one, `/tmp` for `/private/tmp`), but not `path` itself. A name with a line break is refused,
+/// as it would make a second line, and spaces that end a name are kept.
+pub async fn ignore(repo: &Path, path: &Path, exclude: bool) -> Result<bool> {
+    let outside = || CoreError::Config("This isn't inside the repository.".into());
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(outside());
+    };
+    let real = std::fs::canonicalize(parent)
+        .unwrap_or_else(|_| parent.to_path_buf())
+        .join(name);
+    let rel = real.strip_prefix(repo).map_err(|_| outside())?;
+    if rel.as_os_str().is_empty() {
+        return Err(CoreError::Config(
+            "The repository's own folder can't be ignored.".into(),
+        ));
+    }
+    if rel.to_string_lossy().contains(['\n', '\r']) {
+        return Err(CoreError::Config(
+            "Its name has a line break, which a line of an ignore file can't hold.".into(),
+        ));
+    }
+    let is_dir = std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir());
+    let line = crate::files::ignore_pattern(rel, is_dir);
+    let file = if exclude {
+        git_path(repo, "info/exclude").await?
+    } else {
+        repo.join(".gitignore")
+    };
+    tokio::task::spawn_blocking(move || crate::files::add_ignore_line(&file, &line))
+        .await
+        .map_err(std::io::Error::other)?
+}
+
+/// Where the repository at `repo` keeps `path` of its git folder (`git rev-parse --git-path`).
+/// In a linked worktree or a submodule `.git` is a file naming the real folder, and some of its
+/// files, `info/exclude` among them, are shared by every worktree of the repository.
+pub async fn git_path(repo: &Path, path: &str) -> Result<PathBuf> {
+    let out = git_ok(
+        repo,
+        &["rev-parse", "--git-path", path],
+        None,
+        LOCAL_TIMEOUT,
+    )
+    .await?;
+    // Relative to `repo`, git's working folder here, unless it is absolute.
+    Ok(repo.join(out.trim_end_matches(['\n', '\r'])))
+}
+
 /// Makes `dir` a new repository with `main` as its first branch.
 pub async fn init(dir: &Path) -> Result<()> {
     git_ok(dir, &["init", "-q", "-b", "main"], None, LOCAL_TIMEOUT)
@@ -933,6 +987,139 @@ u UU N... 100644 100644 100644 100644 e f g conflict.rs\0\
             let s = status(repo).await.unwrap();
             discard(repo, &s.files[0]).await.unwrap();
             assert!(status(repo).await.unwrap().files.is_empty());
+        });
+    }
+
+    /// Runs `f` on a current-thread runtime, as the end-to-end test does.
+    fn block_on<T>(f: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(f)
+    }
+
+    /// A new repository in `dir`, with one commit so that a worktree can be added.
+    async fn scratch_repo(dir: &Path) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        git_ok(dir, &["init", "-q", "-b", "main"], None, LOCAL_TIMEOUT)
+            .await
+            .unwrap();
+        let config = ["-c", "user.name=Test", "-c", "user.email=t@example.com"];
+        let commit = [
+            "commit",
+            "-q",
+            "--allow-empty",
+            "--no-gpg-sign",
+            "-m",
+            "first",
+        ];
+        git_ok(
+            dir,
+            &[&config[..], &commit[..]].concat(),
+            None,
+            LOCAL_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        discover(dir).await.unwrap()
+    }
+
+    /// Whether git ignores `path` (relative to `repo`).
+    async fn ignored(repo: &Path, path: &str) -> bool {
+        git(repo, &["check-ignore", "-q", path], None, LOCAL_TIMEOUT)
+            .await
+            .unwrap()
+            .ok
+    }
+
+    /// Add to .git/info/exclude in a linked worktree (or a submodule), where `.git` is a file
+    /// naming the real folder, writes the exclude file git reads, which the worktrees share
+    /// (FILES-7). It used to read `<worktree>/.git/info/exclude` and fail with "Not a directory".
+    #[test]
+    fn excluding_in_a_linked_worktree_writes_the_exclude_file_git_reads() {
+        let d = tempfile::tempdir().unwrap();
+        block_on(async {
+            let main = scratch_repo(&d.path().join("main")).await;
+            let tree = d.path().join("tree");
+            git_ok(
+                &main,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    "tree",
+                    &tree.to_string_lossy(),
+                ],
+                None,
+                LOCAL_TIMEOUT,
+            )
+            .await
+            .unwrap();
+            assert!(tree.join(".git").is_file());
+            let tree = discover(&tree).await.unwrap();
+            std::fs::write(tree.join("build.log"), "").unwrap();
+
+            assert!(ignore(&tree, &tree.join("build.log"), true).await.unwrap());
+            let exclude = std::fs::read_to_string(main.join(".git/info/exclude")).unwrap();
+            assert!(exclude.lines().any(|l| l == "/build.log"), "{exclude}");
+            assert!(ignored(&tree, "build.log").await);
+        });
+    }
+
+    /// Add to .gitignore on a link ignores the link, not what it leads to (FILES-8): the line
+    /// is the link's path, without the trailing `/` that matches only folders. A name with a
+    /// line break would write a second, unanchored line, so it is refused; spaces that end a
+    /// name are kept, which git otherwise drops from a line.
+    #[test]
+    fn ignoring_a_link_ignores_the_link() {
+        let d = tempfile::tempdir().unwrap();
+        block_on(async {
+            let repo = scratch_repo(&d.path().join("repo")).await;
+            std::fs::create_dir_all(repo.join("releases/v2")).unwrap();
+            std::fs::write(repo.join("releases/v2/a.txt"), "").unwrap();
+            std::os::unix::fs::symlink("releases/v2", repo.join("current")).unwrap();
+
+            assert!(ignore(&repo, &repo.join("current"), false).await.unwrap());
+            let gitignore = std::fs::read_to_string(repo.join(".gitignore")).unwrap();
+            assert_eq!(gitignore, "/current\n");
+            assert!(ignored(&repo, "current").await);
+            assert!(!ignored(&repo, "releases/v2/a.txt").await);
+
+            let odd = repo.join("x\nsrc");
+            std::fs::write(&odd, "").unwrap();
+            let refused = ignore(&repo, &odd, false).await.unwrap_err();
+            assert!(refused.to_string().contains("line break"), "{refused}");
+            let spaced = repo.join("notes ");
+            std::fs::write(&spaced, "").unwrap();
+            assert!(ignore(&repo, &spaced, false).await.unwrap());
+            assert_eq!(
+                std::fs::read_to_string(repo.join(".gitignore")).unwrap(),
+                "/current\n/notes\\ \n"
+            );
+            assert!(ignored(&repo, "notes ").await);
+        });
+    }
+
+    /// A `.gitignore` that is a link isn't written through: a cloned repository could point it
+    /// at a file of the user's (`~/.zshrc`), and Add to .gitignore on a file it names
+    /// `$(…)` would add that command there. Git itself doesn't read a `.gitignore` that is a link.
+    #[test]
+    fn an_ignore_file_that_is_a_link_is_not_written_through() {
+        let d = tempfile::tempdir().unwrap();
+        block_on(async {
+            let repo = scratch_repo(&d.path().join("repo")).await;
+            let outside = d.path().join("zshrc");
+            std::fs::write(&outside, "export A=1\n").unwrap();
+            std::os::unix::fs::symlink(&outside, repo.join(".gitignore")).unwrap();
+            std::fs::write(repo.join("$(touch pwned)"), "").unwrap();
+
+            let refused = ignore(&repo, &repo.join("$(touch pwned)"), false)
+                .await
+                .unwrap_err();
+            assert!(refused.to_string().contains("link"), "{refused}");
+            assert_eq!(std::fs::read_to_string(&outside).unwrap(), "export A=1\n");
         });
     }
 }
