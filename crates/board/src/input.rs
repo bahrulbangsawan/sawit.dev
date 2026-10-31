@@ -198,8 +198,13 @@ pub fn route_unbound_key(
 /// Runs command `id` for a key binding of the app, as [`route_key`] runs it for its shortcut.
 /// `key` is the key that was pressed (a FigCraft key name, see [`key_name`]), if known.
 ///
-/// - While text is edited the command runs, but for copy and paste, which act on the text and come
-///   back as [`KeyOutcome::Ui`] for the caller ([`TEXT_CLIPBOARD`]).
+/// - While text is edited copy and paste act on the text, and come back as [`KeyOutcome::Ui`]
+///   for the caller ([`TEXT_CLIPBOARD`]). A command FigCraft's keymap has live while editing
+///   (bold, a new sticky, save) runs inside the edit, as its shortcut does. Any other command,
+///   which only a binding the user made runs here, ends the edit first, as the canvas's menus do
+///   ([`end_text_edit_before`], ruling R-TEXTEDIT): run inside the edit, Select none or a delete
+///   would leave the engine's "Edit text" gesture open, and the next click would take the typing
+///   back.
 /// - Otherwise the tools have the key first, as for a shortcut: in vector edit mode a letter picks
 ///   a vector tool, not the canvas's.
 /// - A hidden command, or one FigCraft doesn't have, is [`KeyOutcome::Unhandled`].
@@ -215,7 +220,11 @@ pub fn route_command(
         if TEXT_CLIPBOARD.contains(&id) {
             return Ok(KeyOutcome::Ui(id));
         }
-        return run(board, id);
+        if live_while_editing(id) {
+            return run(board, id);
+        }
+        end_text_edit_before(board, id)?;
+        return shortcut_command(board, id);
     }
     if let Some((key, mods)) = key {
         let (key, mods) = figcraft_key(key, mods);
@@ -243,6 +252,14 @@ pub fn command_id(id: &str) -> Option<&'static str> {
                 .map(|command| command.id),
         )
         .find(|known| *known == id)
+}
+
+/// Whether FigCraft's keymap has a shortcut for command `id` that is live while text is edited:
+/// the text styles, a new sticky, save, the shortcuts sheet.
+fn live_while_editing(id: &str) -> bool {
+    keymap::KEYS
+        .iter()
+        .any(|binding| binding.id == id && binding.context != Context::Canvas)
 }
 
 /// Runs command `id` for its shortcut on the canvas (not while text is edited): Escape and Enter's
@@ -1344,6 +1361,43 @@ mod tests {
         assert_eq!(layers(&board), [other]);
         assert_eq!(gesture(&board), None);
         assert_eq!(board.session.undo_depth(), (4, 0));
+        board.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(layers(&board), [note, other]);
+        assert_eq!(sticky_text(&board, note), "new");
+    }
+
+    /// Ruling R-TEXTEDIT for the keymap: a binding the user made can run any command while a
+    /// sticky is typed in. One FigCraft has live while editing runs inside the edit, which goes on;
+    /// copy acts on the text; any other ends the edit first, so a delete takes the whole sticky as
+    /// an undo step of its own, and it stays gone after a click on another sticky.
+    #[test]
+    fn a_bound_command_ends_the_text_edit_unless_it_acts_on_it() {
+        let mut board = board();
+        let note = sticky_at(&mut board, 0.0, "old");
+        let other = sticky_at(&mut board, 600.0, "B");
+        type_into(&mut board, note, "new");
+        let steps = board.session.undo_depth();
+        assert_eq!(
+            route_command(&mut board, "text.alignCenter", None),
+            Ok(KeyOutcome::Handled)
+        );
+        assert_eq!(
+            route_command(&mut board, "edit.copy", None),
+            Ok(KeyOutcome::Ui("edit.copy"))
+        );
+        assert!(editing(&board));
+        assert_eq!(gesture(&board).as_deref(), Some("Edit text"));
+        assert_eq!(board.session.undo_depth(), steps);
+        assert_eq!(
+            route_command(&mut board, "edit.delete", None),
+            Ok(KeyOutcome::Handled)
+        );
+        assert!(!editing(&board));
+        assert_eq!(layers(&board), [other]);
+        click(&mut board, 700.0, 100.0);
+        assert_eq!(layers(&board), [other]);
+        assert_eq!(gesture(&board), None);
+        assert_eq!(board.session.undo_depth(), (steps.0 + 2, 0));
         board.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(layers(&board), [note, other]);
         assert_eq!(sticky_text(&board, note), "new");

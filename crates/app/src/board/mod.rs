@@ -197,8 +197,8 @@ fn command_title(id: &str) -> &str {
 }
 
 /// The keymap editor's rows for the canvas commands no row of `rows` binds: those of FigCraft's
-/// shortcuts and menus that the canvas runs (not hidden, and not one Sawit has yet to do), so a
-/// key can be given to any of them.
+/// shortcuts and menus that the canvas runs or carries out itself (import, export, save and copy
+/// as, [`commands`]), but the hidden ones, so a key can be given to any of them.
 pub fn unbound_rows(rows: &[crate::keymap::Row]) -> Vec<crate::keymap::Row> {
     let bound: std::collections::HashSet<String> = rows
         .iter()
@@ -213,7 +213,7 @@ pub fn unbound_rows(rows: &[crate::keymap::Row]) -> Vec<crate::keymap::Row> {
         .iter()
         .map(|binding| binding.id)
         .chain(figcraft_engine::catalog::items().map(|item| item.id))
-        .filter(|id| !policy::is_hidden(id) && !policy::is_ui(id) && !bound.contains(*id))
+        .filter(|id| !policy::is_hidden(id) && !bound.contains(*id))
         .filter(|id| seen.insert(*id))
         .map(|id| crate::keymap::Row {
             source: crate::keymap::Source::Unbound,
@@ -712,7 +712,7 @@ impl BoardView {
             return;
         };
         let routed = input::route_unbound_key(board, &key, events::mods(keystroke.modifiers));
-        self.finish_key(routed, cx);
+        self.finish_key(routed, window, cx);
     }
 
     /// A [`Command`] binding fired while the canvas has the keyboard: one of FigCraft's shortcuts,
@@ -749,7 +749,7 @@ impl BoardView {
         };
         let key = pressed.as_ref().map(|(key, mods)| (key.as_str(), *mods));
         let routed = input::route_command(board, &command.id, key);
-        if !self.finish_key(routed, cx) {
+        if !self.finish_key(routed, window, cx) {
             cx.propagate();
         }
     }
@@ -757,11 +757,13 @@ impl BoardView {
     /// After a key or a command went to the canvas: carries out what the engine asked of it, then
     /// what the key came to. Whether the canvas used the key: if not, it goes on.
     ///
-    /// The shortcut of a command Sawit carries out itself runs here ([`Self::run_ui_command`]),
-    /// and a command the engine refuses says why, in a toast.
+    /// The shortcut of a command Sawit carries out itself is carried out here as its menu item is:
+    /// copy and paste ([`Self::run_clipboard`]), and import, save, export and copy as
+    /// ([`commands`], ruling P6-C2). A command the engine refuses says why, in a toast.
     fn finish_key(
         &mut self,
         routed: Result<KeyOutcome, BoardError>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         self.handle_ui_requests(Vec::new(), cx);
@@ -3224,6 +3226,108 @@ mod tests {
             let (on_canvas, pending) = resolve(cx, "cmd-c", &canvas_contexts(false));
             assert!(on_canvas.is_empty() && !pending, "{on_canvas:?}");
         });
+    }
+
+    /// The keymap editor offers the canvas's commands that have no key, those Sawit carries out
+    /// itself among them (export as SVG, copy as text), and a key the user gives one carries it
+    /// out as its menu item does.
+    #[gpui_kit::test]
+    fn a_key_the_user_gives_a_command_sawit_carries_out_runs_it(cx: &mut TestAppContext) {
+        let offered: Vec<String> = super::unbound_rows(&[])
+            .iter()
+            .filter_map(|row| {
+                let args: Value = serde_json::from_str(row.args.as_deref()?).ok()?;
+                Some(args["id"].as_str()?.to_string())
+            })
+            .collect();
+        for id in [
+            "file.exportSvg",
+            "file.exportFramesPdf",
+            "edit.copyAsText",
+            "edit.copyAsCss",
+            "edit.copyAsSvg",
+        ] {
+            assert!(offered.iter().any(|o| o == id), "{id} isn't offered");
+        }
+        let tmp = Scratch::new("bound-copy-as");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        cx.update(|_, cx| {
+            let copy_as_text = Box::new(Command {
+                id: "edit.copyAsText".into(),
+            });
+            let context = KeyBindingContextPredicate::parse(shortcuts::CANVAS_CONTEXT)
+                .ok()
+                .map(std::rc::Rc::new);
+            let binding = KeyBinding::load("ctrl-alt-c", copy_as_text, context, false, None, cx);
+            cx.bind_keys([binding.unwrap().with_meta(crate::keymap::USER)]);
+        });
+        let note = json!({"x": 0, "y": 0, "text": "Ship it"});
+        let sticky = json!({"op": "command", "command": "board.sticky", "params": note});
+        run_op(&view, sticky, &mut cx);
+        focus_canvas(&view, &mut cx);
+        cx.simulate_keystrokes("ctrl-alt-c");
+        let copied = cx.read_from_clipboard().and_then(|item| item.text());
+        assert_eq!(copied.as_deref(), Some("Ship it"));
+        let toast = view.read_with(&cx, |view, _| view.toast.clone());
+        assert_eq!(toast.as_deref(), Some("Copied as text"));
+    }
+
+    /// The canvas chrome's keys are rows of the keymap editor, bound as the app binds them: the
+    /// panels' toggles, Hide UI, the Actions palette and the shortcuts sheet are `board::Command`
+    /// bindings in the canvas's context (the sheet's while text is edited too), and ⇧⌘↩, which
+    /// Maximize says, is the workspace's.
+    #[gpui_kit::test]
+    fn the_canvas_chromes_keys_are_rows_of_the_keymap(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("keymap-rows");
+        cx.update(bind_app_keys);
+        let rows = cx.update(|cx| {
+            crate::keymap::init_at(tmp.0.join("keymap.json"), cx);
+            crate::keymap::store(cx).read(cx).rows(false, cx)
+        });
+        let has = |keys: &str, action: &str, id: Option<&str>, context: &str| {
+            let keys = crate::keymap::names::normalize_keystrokes(keys).unwrap();
+            let context = KeyBindingContextPredicate::parse(context)
+                .unwrap()
+                .to_string();
+            rows.iter().any(|row| {
+                let args = row
+                    .args
+                    .as_deref()
+                    .and_then(|a| serde_json::from_str(a).ok());
+                let same_id = match id {
+                    Some(id) => args.is_some_and(|args: Value| args["id"] == id),
+                    None => true,
+                };
+                row.keystrokes.as_ref() == keys
+                    && row.action.as_ref() == action
+                    && same_id
+                    && row.context.as_deref() == Some(context.as_str())
+            })
+        };
+        for (keys, id) in [
+            ("alt-1", "view.layers"),
+            ("alt-8", "view.design"),
+            ("cmd-|", "view.leftSidebar"),
+            ("cmd-\\", "view.toggleUi"),
+            ("cmd-k", "app.actions"),
+            ("cmd-/", "app.actions"),
+            ("ctrl-?", "help.shortcuts"),
+        ] {
+            let command = Some(id);
+            assert!(
+                has(keys, "board::Command", command, shortcuts::CANVAS_CONTEXT),
+                "{keys} {id}"
+            );
+        }
+        let sheet = Some("help.shortcuts");
+        assert!(has(
+            "ctrl-?",
+            "board::Command",
+            sheet,
+            shortcuts::TEXT_CONTEXT
+        ));
+        let maximize = "workspace::ToggleMaximizePane";
+        assert!(has("shift-cmd-enter", maximize, None, "Workspace"));
     }
 
     /// Gives the canvas the keyboard, as a press on it does.

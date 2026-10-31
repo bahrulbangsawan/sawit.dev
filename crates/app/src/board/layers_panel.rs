@@ -1320,6 +1320,8 @@ mod tests {
     fn open(cx: &mut TestAppContext, path: &Path) -> Entity<BoardView> {
         cx.executor().allow_parking();
         cx.update(gpui_kit::init);
+        // The canvas's shortcuts are key bindings.
+        cx.update(super::super::init_keys);
         cx.new(|cx| BoardView::open(path.to_path_buf(), cx))
     }
 
@@ -1332,6 +1334,8 @@ mod tests {
     ) -> (Entity<BoardView>, VisualTestContext) {
         cx.executor().allow_parking();
         cx.update(gpui_kit::init);
+        // The canvas's shortcuts are key bindings.
+        cx.update(super::super::init_keys);
         let path = path.to_path_buf();
         let window = cx.open_window(size(px(1000.), px(700.)), |_, cx| BoardView::open(path, cx));
         let view = window.root(cx).unwrap();
