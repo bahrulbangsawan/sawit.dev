@@ -4,7 +4,7 @@
 //! versions, and running an installer or upgrade while streaming its output.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -50,6 +50,11 @@ pub struct Tool {
     /// Where it lands when the installer doesn't put it on `PATH` (`~` is
     /// `$HOME`).
     pub also: &'static [&'static str],
+    /// Besides `also`, the folders the installer puts it in (its real path
+    /// when the command is a link), or with a leading `*` a part of that
+    /// real path. A copy found anywhere else was installed another way, and
+    /// `uninstall` isn't run on it.
+    pub owns: &'static [&'static str],
     /// The install command, run by the login shell.
     pub install: &'static str,
     /// The command that removes what `install` put in place, when there is
@@ -99,6 +104,7 @@ const fn tool(
         category,
         bin,
         also: &[],
+        owns: &[],
         install,
         uninstall: None,
         needs: &[],
@@ -128,6 +134,7 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        owns: &["~/.nvm"],
         uninstall: Some(r#"rm -rf "$NVM_DIR""#),
         also: &["~/.nvm/nvm.sh"],
         version: false,
@@ -141,6 +148,7 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        owns: &["~/Library/pnpm"],
         latest: Latest::Npm("pnpm"),
         upgrade: Some("pnpm self-update"),
         uninstall: Some(r#"rm -rf "$HOME/Library/pnpm""#),
@@ -185,6 +193,7 @@ rm -f "$HOME/.local/bin/uv" "$HOME/.local/bin/uvx""#,
         )
     },
     Tool {
+        owns: &["~/.nvm/versions/node"],
         uninstall: Some(
             r#"nvm deactivate >/dev/null 2>&1 || true
 nvm uninstall "$(nvm version default)"
@@ -201,6 +210,7 @@ nvm unalias default"#,
         )
     },
     Tool {
+        owns: &["~/.bun"],
         latest: Latest::GitHub("oven-sh/bun"),
         upgrade: Some("bun upgrade"),
         uninstall: Some(r#"rm -rf "$HOME/.bun""#),
@@ -215,6 +225,7 @@ nvm unalias default"#,
         )
     },
     Tool {
+        owns: &["~/.deno"],
         latest: Latest::GitHub("denoland/deno"),
         upgrade: Some("deno upgrade"),
         uninstall: Some(r#"rm -rf "$HOME/.deno""#),
@@ -229,6 +240,7 @@ nvm unalias default"#,
         )
     },
     Tool {
+        owns: &["~/.local/share/uv/python"],
         uninstall: Some("uv python uninstall --all"),
         needs: &["uv"],
         also: &["~/.local/bin/python3"],
@@ -242,6 +254,7 @@ nvm unalias default"#,
         )
     },
     Tool {
+        owns: &["~/.cargo/bin", "~/.rustup"],
         latest: Latest::GitHub("rust-lang/rust"),
         upgrade: Some("rustup update stable"),
         uninstall: Some("rustup self uninstall -y"),
@@ -256,6 +269,7 @@ nvm unalias default"#,
         )
     },
     Tool {
+        owns: &["~/.local/share/claude"],
         latest: Latest::Npm("@anthropic-ai/claude-code"),
         upgrade: Some("claude update"),
         uninstall: Some(
@@ -298,6 +312,7 @@ rm -rf "$HOME/.local/share/claude""#,
         )
     },
     Tool {
+        owns: &["~/.opencode"],
         latest: Latest::Npm("opencode-ai"),
         upgrade: Some("opencode upgrade"),
         uninstall: Some(r#"rm -rf "$HOME/.opencode""#),
@@ -312,6 +327,7 @@ rm -rf "$HOME/.local/share/claude""#,
         )
     },
     Tool {
+        owns: &["~/.amp"],
         latest: Latest::Npm("@sourcegraph/amp"),
         uninstall: Some(
             r#"rm -f "$HOME/.local/bin/amp"
@@ -328,6 +344,7 @@ rm -rf "$HOME/.amp""#,
         )
     },
     Tool {
+        owns: &["~/.local/share/cursor-agent"],
         uninstall: Some(
             r#"rm -f "$HOME/.local/bin/cursor-agent" "$HOME/.local/bin/agent"
 rm -rf "$HOME/.local/share/cursor-agent""#,
@@ -380,8 +397,11 @@ rm -rf "$HOME/.local/share/cursor-agent""#,
         )
     },
     Tool {
+        owns: &["*/Cap.app/Contents/MacOS/"],
         uninstall: Some(
-            r#"rm -f "$(command -v cap)"
+            r#"for shim in "$HOME/.local/bin/cap" "$HOME/.cap/bin/cap"; do
+  case "$(readlink "$shim")" in */cap-cli*) rm -f "$shim" ;; esac
+done
 rm -rf "/Applications/Cap.app" "$HOME/Applications/Cap.app""#,
         ),
         also: &["/Applications/Cap.app", "~/Applications/Cap.app"],
@@ -425,6 +445,7 @@ rm -rf "/Applications/Zed.app" "$HOME/Applications/Zed.app""#,
         )
     },
     Tool {
+        owns: &["~/.fly"],
         latest: Latest::GitHub("superfly/flyctl"),
         upgrade: Some("flyctl version upgrade"),
         uninstall: Some(r#"rm -rf "$HOME/.fly""#),
@@ -496,10 +517,24 @@ fn shell(login: Option<&str>) -> tokio::process::Command {
 }
 
 fn expand(path: &str) -> PathBuf {
+    expand_in(path, Path::new(&std::env::var("HOME").unwrap_or_default()))
+}
+
+fn expand_in(path: &str, home: &Path) -> PathBuf {
     match path.strip_prefix("~/") {
-        Some(rest) => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(rest),
+        Some(rest) => home.join(rest),
         None => PathBuf::from(path),
     }
+}
+
+/// Whether `cap` at `path` is Cap's CLI: its installer links it to
+/// `Cap.app/Contents/MacOS/cap-cli`. Capistrano's `cap` is a Ruby script.
+pub fn is_cap_cli(path: &Path) -> bool {
+    std::fs::canonicalize(path).is_ok_and(|real| {
+        real.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("cap-cli"))
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -594,6 +629,8 @@ async fn detect_as(login: Option<&str>) -> Detection {
         // `command -v` names functions and aliases without a slash.
         if let Some(t) = find(id)
             && path.starts_with('/')
+            // Another program by the same name (Capistrano's `cap`).
+            && (t.id != "cap" || is_cap_cli(Path::new(path)))
         {
             paths.insert(t.id, PathBuf::from(path));
         }
@@ -769,21 +806,17 @@ pub async fn run(tool: &Tool, command: &str, on_line: impl Fn(String) + Send + S
 }
 
 /// How to remove the copy of `tool` found at `found`: `brew uninstall`
-/// when Homebrew put it there, the tool's own command when its installer
-/// did (under the home folder, or at one of its known locations), and
-/// `None` for anything else, which Sawit leaves alone.
-pub fn uninstall_command(tool: &Tool, found: &std::path::Path) -> Option<String> {
+/// when Homebrew put it there, `npm uninstall -g` when npm did, the tool's
+/// own command when its installer did (at one of its known locations, or in
+/// the folders it installs to: [`Tool::owns`]), and `None` for anything
+/// else (pyenv's Python, Capistrano's `cap`, …), which Sawit leaves alone.
+pub fn uninstall_command(tool: &Tool, found: &Path) -> Option<String> {
     let real = std::fs::canonicalize(found).unwrap_or_else(|_| found.to_path_buf());
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
     uninstall_command_in(tool, found, &real, &home)
 }
 
-fn uninstall_command_in(
-    tool: &Tool,
-    found: &std::path::Path,
-    real: &std::path::Path,
-    home: &std::path::Path,
-) -> Option<String> {
+fn uninstall_command_in(tool: &Tool, found: &Path, real: &Path, home: &Path) -> Option<String> {
     let parts: Vec<_> = real
         .components()
         .map(|c| c.as_os_str().to_string_lossy())
@@ -792,11 +825,31 @@ fn uninstall_command_in(
         && let Some(ix) = parts.iter().position(|p| p == "Cellar")
         && let Some(formula) = parts.get(ix + 1)
     {
-        return Some(format!("brew uninstall {formula}"));
+        // A folder name, into a shell command: only a formula's.
+        let formula_like = formula
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "@._+-".contains(c));
+        return formula_like.then(|| format!("brew uninstall {formula}"));
     }
-    let ours = found.starts_with(home)
-        || real.starts_with(home)
-        || tool.also.iter().any(|p| expand(p) == found);
+    let real_text = real.to_string_lossy();
+    // An npm package installed globally: npm removes it.
+    if let Latest::Npm(package) = tool.latest
+        && tool.id != "npm"
+        && real_text.contains(&format!("/node_modules/{package}/"))
+    {
+        return Some(format!("npm uninstall -g {package}"));
+    }
+    let ours = tool
+        .also
+        .iter()
+        .chain(tool.owns)
+        .any(|p| match p.strip_prefix('*') {
+            Some(part) => real_text.contains(part),
+            None => {
+                let p = expand_in(p, home);
+                found.starts_with(&p) || real.starts_with(&p)
+            }
+        });
     ours.then_some(tool.uninstall).flatten().map(String::from)
 }
 
@@ -1015,6 +1068,91 @@ mod tests {
                 home
             )
             .is_some_and(|c| c.contains("uninstall.sh"))
+        );
+    }
+
+    /// "Under the home folder" isn't "put there by this tool's installer":
+    /// another manager's copy gets no removal script (or its own manager's),
+    /// never the catalog's, which would remove something else.
+    #[test]
+    fn uninstall_is_offered_only_for_the_copy_the_installer_made() {
+        let home = std::path::Path::new("/Users/me");
+        let p = std::path::Path::new;
+        let script = |id: &str, found: &str, real: &str| {
+            uninstall_command_in(find(id).unwrap(), p(found), p(real), home)
+        };
+        let own = |id: &str| find(id).unwrap().uninstall.map(String::from);
+        // pyenv's and asdf's shims: `uv python uninstall --all` would remove
+        // every uv Python and leave theirs.
+        for shim in [
+            "/Users/me/.pyenv/shims/python3",
+            "/Users/me/.asdf/shims/python3",
+        ] {
+            assert_eq!(script("python", shim, shim), None, "{shim}");
+        }
+        assert_eq!(
+            script(
+                "python",
+                "/Users/me/.local/bin/python3",
+                "/Users/me/.local/share/uv/python/cpython-3.13.2-macos-aarch64-none/bin/python3.13"
+            ),
+            own("python")
+        );
+        // Claude Code from npm: npm removes it, not the native installer's script.
+        let npm = "/Users/me/.nvm/versions/node/v22.11.0/lib/node_modules/@anthropic-ai/claude-code/cli.js";
+        assert_eq!(
+            script(
+                "claude-code",
+                "/Users/me/.nvm/versions/node/v22.11.0/bin/claude",
+                npm
+            )
+            .as_deref(),
+            Some("npm uninstall -g @anthropic-ai/claude-code")
+        );
+        assert_eq!(
+            script(
+                "claude-code",
+                "/Users/me/.local/bin/claude",
+                "/Users/me/.local/share/claude/versions/2.0.14"
+            ),
+            own("claude-code")
+        );
+        // Capistrano's `cap` isn't Cap's; Cap's own is a link into Cap.app.
+        let rbenv = "/Users/me/.rbenv/shims/cap";
+        assert_eq!(script("cap", rbenv, rbenv), None);
+        assert_eq!(
+            script(
+                "cap",
+                "/Users/me/.local/bin/cap",
+                "/Applications/Cap.app/Contents/MacOS/cap-cli"
+            ),
+            own("cap")
+        );
+        // Bun from npm, and omp from bun: not where their installers put them.
+        assert_eq!(
+            script(
+                "bun",
+                "/Users/me/.nvm/versions/node/v22.11.0/bin/bun",
+                "/Users/me/.nvm/versions/node/v22.11.0/lib/node_modules/bun/bin/bun.exe"
+            ),
+            None
+        );
+        assert_eq!(
+            script("omp", "/Users/me/.bun/bin/omp", "/Users/me/.bun/bin/omp"),
+            None
+        );
+        assert_eq!(
+            script("bun", "/Users/me/.bun/bin/bun", "/Users/me/.bun/bin/bun"),
+            own("bun")
+        );
+        // A Cellar folder whose name isn't a formula's isn't put in a command.
+        assert_eq!(
+            script(
+                "uv",
+                "/opt/homebrew/bin/uv",
+                "/opt/homebrew/Cellar/uv;touch${IFS}x/0.1/bin/uv"
+            ),
+            None
         );
     }
 
