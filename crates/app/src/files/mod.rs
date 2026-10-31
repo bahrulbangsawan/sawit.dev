@@ -192,7 +192,8 @@ enum Step {
 
 /// A file change asked for. Changes run one at a time, in the order asked
 /// ([`FilesPanel::request`]): ⌘Z pressed while a change runs undoes that change once it has
-/// landed, not the one before it.
+/// landed, not the one before it, and is skipped if that change fails
+/// ([`FilesPanel::skip_steps_behind`]).
 enum Request {
     Do(Op, After),
     /// Undoes the latest change undo holds when it starts.
@@ -1218,7 +1219,14 @@ impl FilesPanel {
                 if let Some(named) = after.named {
                     self.retype(named, window, cx);
                 }
-                self.error = Some(e);
+                let skipped = match step {
+                    Step::Do => self.skip_steps_behind(),
+                    Step::Undo | Step::Redo => None,
+                };
+                self.error = Some(match skipped {
+                    Some(note) => format!("{e}\n{note}"),
+                    None => e,
+                });
                 // An undo or redo that failed stays, to try again once what was in its way is
                 // dealt with ("… already exists here"). One whose file is gone never can.
                 let still = std::fs::symlink_metadata(op.source()).is_ok();
@@ -1231,6 +1239,33 @@ impl FilesPanel {
         }
         self.refresh(cx);
         cx.notify();
+    }
+
+    /// Drops the Undo and Redo asked for behind a change that failed, up to the next change
+    /// asked for: they were meant for it, and run now, they would undo or redo the change
+    /// before it instead (review-files M2). What was dropped, said for the error.
+    fn skip_steps_behind(&mut self) -> Option<&'static str> {
+        let (mut undo, mut redo) = (false, false);
+        while let Some(request) = self.queue.front() {
+            match request {
+                Request::Undo => undo = true,
+                Request::Redo => redo = true,
+                Request::Do(..) => break,
+            }
+            self.queue.pop_front();
+        }
+        match (undo, redo) {
+            (false, false) => None,
+            (true, false) => {
+                Some("The Undo asked for after it was skipped: nothing else was undone.")
+            }
+            (false, true) => {
+                Some("The Redo asked for after it was skipped: nothing else was redone.")
+            }
+            (true, true) => Some(
+                "The Undo and Redo asked for after it were skipped: nothing else was undone or redone.",
+            ),
+        }
     }
 
     fn pick(&mut self, cut: bool, cx: &mut Context<Self>) {
@@ -2044,6 +2079,87 @@ mod tests {
         };
         changes.land(2, Ok(restore.clone()), cx);
         assert_eq!(history(&panel, cx), (vec![renamed], vec![restore], false));
+    }
+
+    /// ⌘Z pressed while a change runs is that change's: when the change fails, the ⌘Z is
+    /// skipped, and the panel says so (review-files M2). It ran, and undid the change before
+    /// it, a rename here, without a word; a ⇧⌘Z waiting behind a failed change redid an older
+    /// one. A ⌘Z pressed after the next change is that one's, and still runs.
+    #[gpui_kit::test]
+    fn an_undo_behind_a_change_that_fails_is_skipped(cx: &mut TestAppContext) {
+        let dir = Scratch::new("an-undo-behind-a-failed-change");
+        let root = dir.0.as_path();
+        std::fs::create_dir(root.join("big")).unwrap();
+        std::fs::write(root.join("config.yml"), "").unwrap();
+        let (window, panel) = open_panel_at(cx, root, &["big", "config.yml"]);
+        let changes = Changes::install(&panel, cx);
+        let (yml, old) = (root.join("config.yml"), root.join("config.old.yml"));
+        let (big, copy) = (root.join("big"), root.join("big copy"));
+        let renamed = || Op::Move {
+            from: old.clone(),
+            to: yml.clone(),
+        };
+        let unrenamed = Op::Move {
+            from: yml.clone(),
+            to: old.clone(),
+        };
+        let copying = || Op::Copy {
+            from: big.clone(),
+            to: copy.clone(),
+        };
+        let denied = "“big” couldn't be copied: Permission denied (os error 13)";
+        let said = |cx: &mut TestAppContext| {
+            cx.update(|cx| panel.read(cx).error.clone())
+                .unwrap_or_default()
+        };
+
+        // A rename, landed: its undo is kept.
+        ask(cx, window, &panel, unrenamed.clone());
+        changes.land(0, Ok(renamed()), cx);
+
+        // ⌘D on the folder, then ⌘Z at once; the copy fails. The rename stays done.
+        select(cx, window, &panel, &big);
+        cx.simulate_keystrokes(window, "cmd-d cmd-z");
+        assert_eq!(changes.started()[1..], [copying()]);
+        changes.land(1, Err(denied.into()), cx);
+        assert_eq!(
+            changes.started()[2..],
+            [],
+            "the ⌘Z meant for the copy undid the rename"
+        );
+        assert_eq!(history(&panel, cx), (vec![renamed()], vec![], false));
+        let error = said(cx);
+        assert!(error.starts_with(denied), "{error}");
+        assert!(
+            error.contains("Undo") && error.contains("skipped"),
+            "{error}"
+        );
+
+        // The same for ⇧⌘Z: with the rename undone, it would redo the rename.
+        cx.simulate_keystrokes(window, "cmd-z");
+        assert_eq!(changes.started()[2..], [renamed()]);
+        changes.land(2, Ok(unrenamed.clone()), cx);
+        select(cx, window, &panel, &big);
+        cx.simulate_keystrokes(window, "cmd-d shift-cmd-z");
+        assert_eq!(changes.started()[3..], [copying()]);
+        changes.land(3, Err(denied.into()), cx);
+        assert_eq!(changes.started()[4..], [], "the ⇧⌘Z redid the rename");
+        assert_eq!(history(&panel, cx), (vec![], vec![unrenamed], false));
+        let error = said(cx);
+        assert!(
+            error.contains("Redo") && error.contains("skipped"),
+            "{error}"
+        );
+
+        // ⌘D ⌘Z ⌘D ⌘Z, and the first copy fails: its ⌘Z is skipped, and the second copy runs,
+        // then its own ⌘Z.
+        cx.simulate_keystrokes(window, "cmd-d cmd-z cmd-d cmd-z");
+        assert_eq!(changes.started()[4..], [copying()]);
+        changes.land(4, Err(denied.into()), cx);
+        assert_eq!(changes.started()[5..], [copying()]);
+        changes.land(5, Ok(Op::Trash(copy.clone())), cx);
+        assert_eq!(changes.started()[6..], [Op::Trash(copy)]);
+        assert_eq!(said(cx), "", "a change that lands clears the error");
     }
 
     /// ⌘D pressed twice on a folder that takes a while to copy makes two copies, as in Finder:
