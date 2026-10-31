@@ -1402,7 +1402,8 @@ second keyboard layout. Each starts from a fresh launch of the merged main with 
   Paste and Select All act on a Sawit text box too. An agent's click leaves your keyboard alone: run an agent (e.g.
   Claude Code) in a terminal, ask it to `browser_click` the page's field, then type: the keys go to the terminal.
   Do it again with another tab in front of the Browser: the keys still go to the terminal, and ⌘T and ⌘1 still
-  work. Answer:
+  work. Click in the page, press ⇧⌘J twice: the tab area hides and comes back. Click in the page, press ⌃⌘M, then
+  ⌘W: the MCP page closes. Answer:
 - **K-2 A German keyboard layout.** Add German in System Settings ▸ Keyboard and switch to it with Sawit running.
   On the canvas and in the Browser, ⌘< and ⇧⌘< cycle Sawit's windows (open a second one with ⇧⌘N). In the Browser,
   ⇧⌘. toggles Annotate with the toolbar focused, and the keymap editor shows Annotate's key as ⌘:. Switch back to
@@ -1422,3 +1423,6 @@ second keyboard layout. Each starts from a fresh launch of the merged main with 
   within a second change a binding in the keymap editor: it says the file changed and asks again, and your edit is
   kept. Make keymap.json a link to a file elsewhere (`ln -s`), change a binding in the editor: the link stays a
   link, and the file it points to has the change. Answer:
+- **K-8 Keys once what you typed in goes off screen.** Click in the terminal, then press ⌘J twice: the dock hides
+  and comes back. Click in a file editor's text, then press ⌃Tab twice: each press shows the next tab. Click in the
+  Git panel's commit message, press ⌘2, then ⌘3: Files shows, then Git again. Answer:

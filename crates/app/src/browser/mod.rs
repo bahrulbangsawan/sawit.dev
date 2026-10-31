@@ -801,10 +801,10 @@ impl BrowserView {
                 "escape" => self.set_pick(PickMode::Off, cx),
                 _ => {}
             },
-            // The user's press in the page gave it AppKit's keyboard: GPUI's follows.
-            // Never while the tab is hidden: nobody can press in a hidden page, and a
-            // view that isn't drawn mustn't hold GPUI's keyboard (keys would then go
-            // from the window's root, past the workspace's shortcuts).
+            // The user's press in the page gave it AppKit's keyboard: GPUI's follows. Never
+            // while the tab is hidden: nobody can press in a hidden page, and the keyboard
+            // would leave the terminal or field that has it for a view that isn't drawn, which
+            // the workspace then takes it from (`workspace::keyboard_falls_back_to`).
             FromPage::Event(PageEvent::Pressed) => {
                 if self.visible {
                     self.focus.focus(window, cx);
@@ -1058,7 +1058,11 @@ impl BrowserView {
     }
 
     /// Shows or hides the webview; it sits above GPUI's drawing, so it must
-    /// be hidden whenever another tab or pane takes its place.
+    /// be hidden whenever another tab or pane takes its place. Hidden, it gives
+    /// AppKit's keyboard back to the window. GPUI's, if the view or a field in it
+    /// had it (after a press in the page), goes to the workspace once the view is
+    /// no longer drawn (`workspace::keyboard_falls_back_to`). Shown again, the
+    /// page has neither until a click in it.
     pub fn set_visible(&mut self, visible: bool) {
         if self.visible == visible {
             return;
@@ -1782,7 +1786,9 @@ mod tests {
 
     /// A press reported while the tab is hidden leaves GPUI's keyboard where the user has it (the
     /// terminal, say): the user can't press in a hidden page, and a view that isn't drawn must
-    /// not hold the keyboard, or keys go from the window's root and ⌘W, ⌘T and ⌘1 stop working.
+    /// not take the keyboard: keys would go from the window's root, so that ⌘W, ⌘T and ⌘1 stop
+    /// working, until the workspace takes it back (`workspace::keyboard_falls_back_to`), and
+    /// then the terminal no longer has it.
     #[gpui_kit::test]
     fn a_press_in_a_hidden_page_leaves_the_keyboard(cx: &mut gpui_kit::TestAppContext) {
         cx.update(|cx| {
@@ -1812,5 +1818,199 @@ mod tests {
                 view.read(cx).focus.is_focused(window)
             )
         });
+    }
+
+    /// Where the keyboard is when the browser's tab goes off screen.
+    #[derive(Clone, Copy, Debug)]
+    enum Keyboard {
+        /// The workspace: a click in the page never moved GPUI's keyboard before KEYMAP-4.
+        Workspace,
+        /// The browser's view, after the user's press in the page.
+        Page,
+        /// The address field, while the user types an address.
+        Address,
+    }
+
+    /// I3: the browser's tab often goes off screen without a click, after a press in the page
+    /// gave its view GPUI's keyboard (KEYMAP-4): ⇧⌘J hides the tab area, a page that takes no
+    /// keyboard comes in front (⌃⌘M's MCP page), ⌃Tab, an agent's `app_activate_tab`. A view that
+    /// isn't drawn and still has the keyboard makes GPUI send the keys from the window's root,
+    /// gpui-kit's `Root`, past every workspace shortcut, until a click: ⇧⌘J didn't bring the tab
+    /// area back, ⌘W didn't close the page in front. The workspace takes the keyboard back
+    /// ([`crate::workspace::keyboard_falls_back_to`]), from the page and the address field alike.
+    ///
+    /// The workspace here is a stand-in, in a window as `cli::open_window` makes one (under
+    /// gpui-kit's `Root`): the workspace's keys and key context, its keyboard, `render`'s refocus
+    /// when nothing has the keyboard, the fallback `Workspace::new` registers, and the browser's
+    /// tab, told whether it shows as `sync_browser` tells it and drawn while it shows (its key
+    /// context, its view's keyboard, the address field). The webview itself needs a real window.
+    #[gpui_kit::test]
+    fn the_workspace_keys_work_once_the_browser_tab_is_hidden(cx: &mut gpui_kit::TestAppContext) {
+        use super::{BrowserView, FromPage};
+        use crate::workspace::{CloseActiveTab, OpenMcp, ToggleCenter};
+        use gpui_kit::component::input::Input;
+        use gpui_kit::prelude::*;
+        use gpui_kit::{
+            AnyWindowHandle, Entity, FocusHandle, Focusable as _, Subscription, TestAppContext,
+            Window, div,
+        };
+        use sawit_core::browser::PageEvent;
+
+        struct StandIn {
+            focus: FocusHandle,
+            browser: Entity<BrowserView>,
+            /// The tab area shows: ⇧⌘J toggles it.
+            area: bool,
+            /// Another tab is in front of the browser's: ⌃⌘M opens it, ⌘W closes it.
+            other_tab: bool,
+            toggles: usize,
+            closes: usize,
+            _keyboard: Subscription,
+        }
+        impl Render for StandIn {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                if window.focused(cx).is_none() {
+                    self.focus.focus(window, cx);
+                }
+                let shown = self.area && !self.other_tab;
+                self.browser.update(cx, |b, _| b.set_visible(shown));
+                let (view, address) = {
+                    let browser = self.browser.read(cx);
+                    (browser.focus.clone(), browser.address.clone())
+                };
+                div()
+                    .key_context("Workspace")
+                    .track_focus(&self.focus)
+                    .size_full()
+                    .on_action(cx.listener(|this, _: &ToggleCenter, _, cx| {
+                        this.area = !this.area;
+                        this.toggles += 1;
+                        cx.notify();
+                    }))
+                    .on_action(cx.listener(|this, _: &OpenMcp, _, cx| {
+                        this.other_tab = true;
+                        cx.notify();
+                    }))
+                    .on_action(cx.listener(|this, _: &CloseActiveTab, _, cx| {
+                        this.other_tab = false;
+                        this.closes += 1;
+                        cx.notify();
+                    }))
+                    .when(shown, |el| {
+                        el.child(
+                            div()
+                                .key_context("Browser")
+                                .track_focus(&view)
+                                .size_full()
+                                .child(Input::new(&address)),
+                        )
+                    })
+            }
+        }
+
+        /// A window with the stand-in, and the keyboard put where `keyboard` says.
+        fn open(keyboard: Keyboard, cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<StandIn>) {
+            let (window, workspace) = cx.update(|cx| {
+                gpui_kit::open_window(Default::default(), cx, |window, cx| {
+                    let browser = cx.new(|cx| BrowserView::new(None, None, window, cx));
+                    cx.new(|cx| {
+                        let focus = cx.focus_handle();
+                        let fallback =
+                            crate::workspace::keyboard_falls_back_to(focus.clone(), window, cx);
+                        StandIn {
+                            focus,
+                            browser,
+                            area: true,
+                            other_tab: false,
+                            toggles: 0,
+                            closes: 0,
+                            _keyboard: fallback,
+                        }
+                    })
+                })
+                .unwrap()
+            });
+            cx.update_window(window, |_, window, _| window.activate_window())
+                .unwrap();
+            cx.run_until_parked();
+            let browser = cx.update(|cx| workspace.read(cx).browser.clone());
+            let address = cx.update(|cx| browser.read(cx).address.clone());
+            cx.update_window(window, |_, window, cx| match keyboard {
+                Keyboard::Workspace => {}
+                Keyboard::Page => browser.update(cx, |b, cx| {
+                    b.receive(FromPage::Event(PageEvent::Pressed), window, cx)
+                }),
+                Keyboard::Address => address.update(cx, |a, cx| a.focus(window, cx)),
+            })
+            .unwrap();
+            cx.run_until_parked();
+            let placed = cx
+                .update_window(window, |_, window, cx| {
+                    let has = |focus: &FocusHandle| focus.is_focused(window);
+                    match keyboard {
+                        Keyboard::Workspace => has(&workspace.read(cx).focus),
+                        Keyboard::Page => has(&browser.read(cx).focus),
+                        Keyboard::Address => has(&address.read(cx).focus_handle(cx)),
+                    }
+                })
+                .unwrap();
+            assert!(placed, "the {keyboard:?} doesn't have the keyboard");
+            (window, workspace)
+        }
+        fn press(keys: &str, window: AnyWindowHandle, cx: &mut TestAppContext) {
+            cx.simulate_keystrokes(window, keys);
+            cx.run_until_parked();
+        }
+
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::workspace::init(cx);
+        });
+        let mut failed = Vec::new();
+        for keyboard in [Keyboard::Workspace, Keyboard::Page, Keyboard::Address] {
+            // ⇧⌘J three times: the tab area hides, shows and hides again. The keyboard is then
+            // the workspace's, not the hidden browser's.
+            let (window, workspace) = open(keyboard, cx);
+            for _ in 0..3 {
+                press("cmd-shift-j", window, cx);
+            }
+            let (toggles, area) =
+                cx.update(|cx| (workspace.read(cx).toggles, workspace.read(cx).area));
+            if (toggles, area) != (3, false) {
+                failed.push(format!(
+                    "{keyboard:?}: ⇧⌘J pressed 3 times toggled the tab area {toggles} times"
+                ));
+            }
+            let (workspace_has_it, browser_has_it) = cx
+                .update_window(window, |_, window, cx| {
+                    let browser = workspace.read(cx).browser.read(cx);
+                    (
+                        workspace.read(cx).focus.is_focused(window),
+                        browser.focus.contains_focused(window, cx)
+                            || browser.address.read(cx).focus_handle(cx).is_focused(window),
+                    )
+                })
+                .unwrap();
+            if !workspace_has_it || browser_has_it {
+                failed.push(format!(
+                    "{keyboard:?}: the workspace has the keyboard = {workspace_has_it}, \
+                     the hidden browser = {browser_has_it}"
+                ));
+            }
+
+            // ⌃⌘M puts the MCP page in front of the browser, and ⌘W closes it.
+            let (window, workspace) = open(keyboard, cx);
+            press("ctrl-cmd-m", window, cx);
+            press("cmd-w", window, cx);
+            let (closes, other_tab) =
+                cx.update(|cx| (workspace.read(cx).closes, workspace.read(cx).other_tab));
+            if (closes, other_tab) != (1, false) {
+                failed.push(format!(
+                    "{keyboard:?}: ⌘W after ⌃⌘M closed {closes} pages, \
+                     the MCP page still in front = {other_tab}"
+                ));
+            }
+        }
+        assert!(failed.is_empty(), "{}", failed.join("\n"));
     }
 }
