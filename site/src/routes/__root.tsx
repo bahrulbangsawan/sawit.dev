@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { HeadContent, Outlet, Scripts, createRootRoute } from '@tanstack/react-router'
 import appCss from '../styles.css?url'
-import { SIZE } from '../content'
+import { DESCRIPTION, SITE } from '../content'
 
 export const Route = createRootRoute({
   head: () => ({
@@ -9,14 +9,19 @@ export const Route = createRootRoute({
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       { title: 'Sawit — Postgres, an editor and a terminal for macOS' },
-      {
-        name: 'description',
-        content:
-          `Run local PostgreSQL without Docker, browse data, write SQL, edit code and open a terminal in one native macOS app of about ${SIZE}.`,
-      },
+      { name: 'description', content: DESCRIPTION },
       { name: 'theme-color', content: '#1b1d22' },
+      // Link previews. Crawlers want absolute URLs; each page adds its own og:url and canonical
+      // link, and a page's own og:title or og:description replaces these.
+      { property: 'og:type', content: 'website' },
+      { property: 'og:site_name', content: 'Sawit' },
       { property: 'og:title', content: 'Sawit' },
-      { property: 'og:image', content: '/media/welcome.jpg' },
+      { property: 'og:description', content: DESCRIPTION },
+      { property: 'og:image', content: `${SITE}/media/welcome.jpg` },
+      { property: 'og:image:width', content: '1600' },
+      { property: 'og:image:height', content: '1001' },
+      { property: 'og:image:alt', content: 'Sawit’s welcome screen: start actions, recent folders, PostgreSQL instances and database connections' },
+      { name: 'twitter:card', content: 'summary_large_image' },
     ],
     links: [
       { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' },

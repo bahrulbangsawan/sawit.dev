@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { Page } from '../components/chrome'
-import { DMG, REPO } from '../content'
+import { DMG, REPO, SITE } from '../content'
 import { type Changelog, parseChangelog } from '../changelog'
 
 const SOURCE = 'https://raw.githubusercontent.com/bahrulbangsawan/sawit.dev/main/CHANGELOG.md'
@@ -26,7 +26,11 @@ export const Route = createFileRoute('/changelog')({
     meta: [
       { title: 'Changelog — Sawit' },
       { name: 'description', content: 'Every change to Sawit, by version, read from CHANGELOG.md on GitHub.' },
+      { property: 'og:title', content: 'Changelog — Sawit' },
+      { property: 'og:description', content: 'Every change to Sawit, by version, read from CHANGELOG.md on GitHub.' },
+      { property: 'og:url', content: `${SITE}/changelog` },
     ],
+    links: [{ rel: 'canonical', href: `${SITE}/changelog` }],
   }),
   component: ChangelogPage,
 })

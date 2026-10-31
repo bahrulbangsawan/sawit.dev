@@ -4,6 +4,9 @@ export const DMG = `${REPO}/releases/latest/download/Sawit.dmg`
 export const INSTALL = 'curl -fsSL https://sawit.dev/install.sh | sh'
 // The release binary, as README's Size & memory measured it: change both together.
 export const SIZE = '58 MiB'
+// The site's address, for the absolute URLs link previews and canonical links need.
+export const SITE = 'https://sawit.dev'
+export const DESCRIPTION = `Run local PostgreSQL without Docker, browse data, write SQL, edit code and open a terminal in one native macOS app of about ${SIZE}.`
 
 // Capabilities, shortcuts and wording from the README; screenshots from docs/media.
 export const features = [

@@ -1,9 +1,16 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { Page } from '../components/chrome'
 import { COMMAND_ID, DemoVideo, InstallButton, InstanceSwitch } from '../components/interactive'
-import { DMG, INSTALL, REPO, SIZE, faq, features, menu } from '../content'
+import { DMG, INSTALL, REPO, SITE, SIZE, faq, features, menu } from '../content'
 
-export const Route = createFileRoute('/')({ component: Home })
+export const Route = createFileRoute('/')({
+  head: () => ({
+    meta: [{ property: 'og:url', content: `${SITE}/` }],
+    // www.sawit.dev serves the same pages: search engines keep the apex.
+    links: [{ rel: 'canonical', href: `${SITE}/` }],
+  }),
+  component: Home,
+})
 
 function Home() {
   return (
