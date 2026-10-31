@@ -5,8 +5,10 @@
 #      "chore(release): vX" and tags vX;
 #   2. once this push has finished, the release commit and tag are pushed
 #      too (a hook can't add commits to the push already under way), with
-#      any earlier release tag a failed push left behind (--follow-tags); a
-#      failure shows a notification;
+#      any earlier release tag a failed push left behind (--follow-tags).
+#      That push runs in the main working tree, with the common git folder,
+#      and logs there, so it doesn't depend on the worktree main was pushed
+#      from. A failure shows a notification;
 #   3. the tag starts .github/workflows/release.yml, which builds the app
 #      and publishes the GitHub Release the in-app updater reads.
 # The release is cut on HEAD, so main is pushed from a checkout of main. A
@@ -40,15 +42,24 @@ EOF
     exit 1
 fi
 
+# Before the release is cut: should this fail, the push stops with nothing changed.
+common=$(CDPATH='' cd "$(git rev-parse --git-common-dir)" && pwd -P)
+main_tree=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
+log=$common/sawit-release.log
 tag=$(scripts/release.sh)
 if [ -z "$tag" ]; then
     echo "pre-push: nothing new since the last release, so no release" >&2
     exit 0
 fi
 
-log="$(git rev-parse --absolute-git-dir)/sawit-release.log"
 echo "pre-push: release $tag created; the release commit and tag are pushed once this push finishes (log: $log)" >&2
-nohup sh -c '
+# Not from this checkout: a worktree main is pushed from may be removed as
+# soon as this push returns, and its git folder (the GIT_DIR git gives this
+# hook) with it. From the main working tree, which stays, with the common git
+# folder: a remote at a relative path is found there as a push of main from
+# the main checkout finds it.
+cd "${main_tree:-$common}"
+GIT_DIR=$common nohup sh -c '
     while kill -0 "$1" 2>/dev/null; do sleep 0.3; done
     if ! SAWIT_RELEASE_PUSH=1 git push --follow-tags "$2" main "$3"; then
         echo "pre-push: pushing release $3 failed. The next release push takes its tag along; to push it now: SAWIT_RELEASE_PUSH=1 git push --follow-tags $2 main"

@@ -435,6 +435,65 @@ fn a_release_tag_left_behind_goes_out_with_the_next_release() {
     repo.wait_for_remote_at("refs/tags/v0.0.8", &released);
 }
 
+/// Lanes move main with `git fetch . <lane>:main`, so main is checked out nowhere and is pushed
+/// from a worktree of its own, which is then removed. The release push the hook leaves running
+/// in the background ran in that worktree and logged in its git folder, so a worktree removed as
+/// soon as the push returned took the release with it: origin got main without its release
+/// commit and tag, and the log went too. Now that push runs in the main checkout, with the
+/// repository's common git folder, and logs there.
+#[test]
+fn a_release_pushed_from_a_worktree_lands_though_the_worktree_is_removed_at_once() {
+    let repo = Repo::new();
+    repo.commit("feat(app): a new thing");
+    repo.git(&["switch", "-q", "-c", "feat/other"]);
+    let worktree = repo.work.with_file_name("sawit-main");
+    let worktree = worktree.to_str().unwrap();
+    repo.git(&["worktree", "add", "-q", worktree, "main"]);
+    let push_then_remove = "git -C \"$1\" push origin main && git worktree remove \"$1\"";
+    let out = repo.run("sh", &["-c", push_then_remove, "sh", worktree], None);
+    let said = stderr(&out);
+    assert!(said.contains("release v0.0.8 created"), "{said}");
+    ok(out);
+    let tagged = repo.wait_for_remote("refs/tags/v0.0.8");
+    assert_eq!(repo.subject("main"), "chore(release): v0.0.8");
+    assert_eq!(repo.local("main").as_deref(), Some(tagged.as_str()));
+    repo.wait_for_remote_at("refs/heads/main", &tagged);
+    let log = repo.work.join(".git/sawit-release.log");
+    assert!(said.contains(&format!("log: {}", log.display())), "{said}");
+    repo.wait_for_log("v0.0.8");
+}
+
+/// The hook finds the repository's git folder with `cd`, which an exported `CDPATH` can send to
+/// another folder of that name; the hook then stopped the push after cutting the release. It
+/// leaves `CDPATH` out.
+#[test]
+fn an_exported_cdpath_leads_no_release_astray() {
+    let repo = Repo::new();
+    let decoy = repo.work.with_file_name("decoy");
+    fs::create_dir_all(decoy.join(".git")).unwrap();
+    repo.commit("feat(app): a new thing");
+    let out = repo.push_main(Some(("CDPATH", decoy.to_str().unwrap())));
+    let said = stderr(&out);
+    ok(out);
+    let log = repo.work.join(".git/sawit-release.log");
+    assert!(said.contains(&format!("log: {})", log.display())), "{said}");
+    let tagged = repo.wait_for_remote("refs/tags/v0.0.8");
+    repo.wait_for_remote_at("refs/heads/main", &tagged);
+}
+
+/// Git finds a remote at a relative path from the checkout it runs in. The release push the hook
+/// starts runs in the main checkout, which no `git worktree remove` takes away, so it finds the
+/// remote a push of main from there finds: run in the git folder, it found none.
+#[test]
+fn a_release_reaches_a_remote_at_a_relative_path() {
+    let repo = Repo::new();
+    repo.git(&["remote", "set-url", "origin", "../remote.git"]);
+    repo.commit("feat(app): a new thing");
+    ok(repo.push_main(None));
+    let tagged = repo.wait_for_remote("refs/tags/v0.0.8");
+    repo.wait_for_remote_at("refs/heads/main", &tagged);
+}
+
 /// The section release.sh wrote for `version` in CHANGELOG.md, without its heading line.
 fn section(changelog: &str, version: &str) -> String {
     let heading = format!("## [{version}]");

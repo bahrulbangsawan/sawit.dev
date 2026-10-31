@@ -229,8 +229,9 @@ Commit this as `docs: update README, screenshots and demo for <short summary>`.
    - With `core.hooksPath = .githooks`, the pre-push hook runs `scripts/release.sh`. It bumps the version in
      `Cargo.toml`/`Cargo.lock`, writes the new `CHANGELOG.md` section from the commit subjects, commits
      `chore(release): vX` and tags `vX`. A background job then pushes that commit and tag, with any earlier
-     release tag a failed push left behind (log: `$(git rev-parse --absolute-git-dir)/sawit-release.log`; a
-     failure shows a notification). Don't run `release.sh` yourself too, or the version is bumped twice.
+     release tag a failed push left behind (log: `$(git rev-parse --git-common-dir)/sawit-release.log`, the main
+     checkout's `.git/sawit-release.log` whichever worktree pushed; a failure shows a notification). Don't run
+     `release.sh` yourself too, or the version is bumped twice.
    - If `core.hooksPath` is not set: in the checkout of `main`, run `tag=$(scripts/release.sh)`, then
      `git push origin main && git push origin "$tag"`.
    - A `main` that reached origin without its release (pushed with the hook off, or with
@@ -238,7 +239,7 @@ Commit this as `docs: update README, screenshots and demo for <short summary>`.
      hook. Cut the release by hand in the checkout of `main` (`tag=$(scripts/release.sh)`), then push it with
      `SAWIT_RELEASE_PUSH=1 git push origin main "$tag"`.
 4. Wait for the release push to finish, then confirm:
-   - `cat "$(git rev-parse --absolute-git-dir)/sawit-release.log"` has no errors;
+   - `cat "$(git rev-parse --git-common-dir)/sawit-release.log"` has no errors;
    - `git log --oneline -3` shows `chore(release): vX` on top, and `git ls-remote --tags origin vX` lists the tag;
    - `git status -sb` shows `main` even with `origin/main`;
    - `head -20 CHANGELOG.md` shows the new section with sensible entries. If a line reads badly, the cause
