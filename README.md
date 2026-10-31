@@ -214,9 +214,10 @@ explained. A conflict on the same address can't be forced.
   (vim, Claude Code) uses the mouse.
 - New terminals start in the project folder. Shells idle at their prompt move to the first project you open in the
   window.
-- What an agent runs in the terminal (`terminal_run`, `app_run_script`, `app_ssh_connect`) never takes the keyboard:
-  its terminal comes forward unless you're typing in another one, and then it runs in the background. The agent is told
-  which terminal and pane it got, and its keys (`terminal_input`) go only to a terminal it names.
+- What an agent runs in the terminal (`terminal_run`, `app_run_script`, `app_ssh_connect`) never takes the keyboard,
+  and never goes into the shell you're typing in, even at its prompt: `terminal_run` then uses another idle shell or a
+  new tab. Its terminal comes forward unless you're typing in a terminal, and then it runs in the background. The agent
+  is told which terminal and pane it got, and its keys (`terminal_input`) go only to a terminal it names.
 - Terminals end with the app and with their window. So quitting, closing a window and **Restart to Update** ask
   first while a terminal runs a command or an SSH session, and name them. Shells waiting at their prompt don't count.
 

@@ -124,7 +124,8 @@ pub enum Command {
         tab: String,
     },
     /// Types `command` and Enter into a shell: a new one in `cwd` when given
-    /// or `new_tab`, else the active or newest idle shell.
+    /// or `new_tab`, else the active or newest idle shell, never the one the
+    /// user is typing in.
     TerminalRun {
         command: String,
         #[serde(default)]

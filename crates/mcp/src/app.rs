@@ -115,7 +115,9 @@ pub struct TerminalRunArgs {
         description = "Start a new shell in this folder: an absolute path, or ~/… (default: the project)"
     )]
     pub cwd: Option<String>,
-    #[schemars(description = "Use a new terminal tab instead of the active idle shell")]
+    #[schemars(
+        description = "Use a new terminal tab instead of an idle shell (the active one, unless the user is typing in it)"
+    )]
     #[serde(default)]
     pub new_tab: bool,
     #[schemars(
