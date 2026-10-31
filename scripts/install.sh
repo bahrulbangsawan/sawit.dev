@@ -6,6 +6,8 @@
 # block the ad-hoc signed app the way it does a browser-downloaded DMG.
 # Everything runs from `main`, called on the last line: piped into sh, a
 # download cut off midway runs nothing rather than half the steps.
+# Not in Sawit's own terminal: replacing Sawit means quitting it, which ends
+# that terminal and this script with it, so there it stops and says so.
 set -eu
 
 REPO=bahrulbangsawan/sawit.dev
@@ -38,6 +40,10 @@ main() {
     # `uname -m` says x86_64 under Rosetta, so ask the hardware instead.
     if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" != 1 ]; then
         die "Sawit needs an Apple Silicon Mac; there is no Intel build."
+    fi
+    # Sawit's terminals set TERM_PROGRAM=sawit.
+    if [ "${TERM_PROGRAM:-}" = sawit ] && pgrep -f "$APP" >/dev/null 2>&1; then
+        die "this is Sawit's own terminal, and installing quits Sawit, which would end this terminal and the install with it. Run the command from another terminal app, or let Sawit update itself: Restart to Update appears in its title bar once a new version has downloaded."
     fi
 
     if [ -n "${SAWIT_VERSION:-}" ]; then

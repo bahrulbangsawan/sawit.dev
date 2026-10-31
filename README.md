@@ -74,7 +74,8 @@ curl -fsSL https://raw.githubusercontent.com/bahrulbangsawan/sawit.dev/main/scri
 
 This installs the latest release into `/Applications` (or `~/Applications`). To install a given release instead, add
 `SAWIT_VERSION=vX.Y.Z` (a tag from [Releases](https://github.com/bahrulbangsawan/sawit.dev/releases)) before `sh`.
-After that, the app updates itself.
+After that, the app updates itself. A running Sawit is quit before it is replaced, so run the command from another
+terminal app: in Sawit's own terminal, the script stops and says so.
 
 Sawit is not notarized yet, so if you open the `Sawit.dmg` from a browser download, macOS says it "could not verify
 Sawit is free of malware." Use the script above. Or open Sawit once, choose **Done**, then **Open Anyway** in
