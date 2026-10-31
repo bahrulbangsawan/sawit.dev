@@ -13,7 +13,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::ssh::Launch;
 use sawit_core::terminal::{
-    Command, GridSize, PaneId, Session, SplitDir, default_shell, run_bytes,
+    Command, GridSize, PaneId, Session, SplitDir, default_shell, run_bytes, shell_quote,
 };
 
 use super::tab::{TabEvent, TerminalTab};
@@ -537,7 +537,9 @@ impl TerminalPanel {
     }
 
     /// Types `command` into the script's terminal: its idle pane when there
-    /// is one (a running one is only shown), else a new shell in `dir`.
+    /// is one (a running one is only shown), else a new shell in `dir`. The
+    /// old shell may have moved since, and the command is relative to the
+    /// script's folder, so it goes back to `dir` first.
     pub fn start_job(
         &mut self,
         tag: JobTag,
@@ -546,8 +548,14 @@ impl TerminalPanel {
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
-        let (ix, pane) = match self.job_panes(&tag.key, cx).last().copied() {
-            Some(found) => found,
+        let (ix, pane, command) = match self.job_panes(&tag.key, cx).last().copied() {
+            Some((ix, pane)) => {
+                let cwd = self.tabs[ix]
+                    .read(cx)
+                    .view(pane)
+                    .and_then(|v| v.read(cx).cwd());
+                (ix, pane, command_in(&dir, command, cwd))
+            }
             None => {
                 let cmd = Command {
                     cwd: Some(dir),
@@ -558,7 +566,7 @@ impl TerminalPanel {
                     return;
                 };
                 let pane = tab.read(cx).state.focused;
-                (self.insert(tab, cx), pane)
+                (self.insert(tab, cx), pane, command.to_string())
             }
         };
         self.active = ix;
@@ -568,7 +576,7 @@ impl TerminalPanel {
                 view.job = Some(tag);
                 if view.foreground_job().is_none() {
                     view.touched = true;
-                    view.write(run_bytes(command));
+                    view.write(run_bytes(&command));
                 }
             });
         }
@@ -1148,6 +1156,17 @@ fn shell_name() -> String {
         .unwrap_or_else(|| "shell".into())
 }
 
+/// `command` as typed into a shell whose folder is `cwd` (when known) to run
+/// in `dir`: as is when the shell is there, else after a `cd` there.
+fn command_in(dir: &Path, command: &str, cwd: Option<PathBuf>) -> String {
+    let real = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    if cwd.as_deref() == Some(real.as_path()) {
+        command.to_string()
+    } else {
+        format!("cd -- {} && {command}", shell_quote(dir))
+    }
+}
+
 /// Runs `launch` in the terminal.
 fn ssh_command(launch: &Launch) -> Command {
     Command {
@@ -1167,8 +1186,28 @@ fn pick_paste_target(active: usize, accepts: &[bool]) -> Option<usize> {
 }
 
 #[cfg(test)]
-mod paste_tests {
-    use super::pick_paste_target;
+mod helper_tests {
+    use super::{command_in, pick_paste_target};
+
+    #[test]
+    fn a_script_goes_back_to_its_folder_unless_its_shell_is_there() {
+        let dir = std::env::temp_dir().canonicalize().unwrap();
+        assert_eq!(
+            command_in(&dir, "make build", Some(dir.clone())),
+            "make build"
+        );
+        let moved = command_in(&dir, "make build", Some(dir.join("sub")));
+        assert_eq!(
+            moved,
+            format!("cd -- {} && make build", super::shell_quote(&dir))
+        );
+        assert_eq!(command_in(&dir, "make build", None), moved);
+        let spaced = std::path::Path::new("/tmp/my project");
+        assert_eq!(
+            command_in(spaced, "pnpm dev", None),
+            "cd -- '/tmp/my project' && pnpm dev"
+        );
+    }
 
     #[test]
     fn picks_active_else_highest_accepting() {
@@ -1185,7 +1224,7 @@ mod tests {
         AnyWindowHandle, AppContext as _, Entity, Modifiers, MouseButton, TestAppContext,
         VisualTestContext,
     };
-    use sawit_core::terminal::run_bytes;
+    use sawit_core::terminal::{run_bytes, shell_quote};
 
     use super::super::tab::TerminalTab;
     use super::super::testing::{focus_terminal, init, open_panel, scratch_dir, wait_until};
@@ -1489,6 +1528,61 @@ mod tests {
             view.read(cx).cwd().as_ref() == Some(&project)
         });
         let _ = std::fs::remove_dir_all(&project);
+    }
+
+    /// Running a script again types it into its old shell after a `cd` back to the script's
+    /// folder: its command is relative (`pnpm run dev`, `make build`) and the shell may have
+    /// moved since.
+    #[gpui_kit::test]
+    fn running_a_script_again_goes_back_to_its_folder(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        let home = scratch_dir("script-home");
+        let elsewhere = scratch_dir("script-elsewhere");
+        let start = |cx: &mut TestAppContext, command: &str| {
+            let tag = JobTag {
+                key: "build".into(),
+                name: "build".into(),
+            };
+            cx.update_window(w, |_, window, cx| {
+                panel.update(cx, |p, cx| {
+                    p.start_job(tag, home.clone(), command, Some(window), cx)
+                })
+            })
+            .expect("the test window is open");
+        };
+        start(cx, "printf 'sawit-%s\\n' first");
+        let job = cx.update(|cx| {
+            let p = panel.read(cx);
+            p.tab(p.active_index()).read(cx).focused_view().clone()
+        });
+        wait_until(cx, "the script ran in its folder", |cx| {
+            let v = job.read(cx);
+            v.text_tail(50).contains("sawit-first")
+                && v.at_prompt()
+                && v.cwd().as_ref() == Some(&home)
+        });
+        let cd = format!("cd {}", shell_quote(&elsewhere));
+        cx.update(|cx| job.read(cx).write(run_bytes(&cd)));
+        wait_until(cx, "the script's shell moved", |cx| {
+            let v = job.read(cx);
+            v.at_prompt() && v.cwd().as_ref() == Some(&elsewhere)
+        });
+
+        start(cx, "printf 'sawit-%s\\n' second");
+        wait_until(cx, "the script ran again", |cx| {
+            let v = job.read(cx);
+            v.text_tail(50).contains("sawit-second") && v.at_prompt()
+        });
+        cx.update(|cx| {
+            assert_eq!(
+                job.read(cx).cwd(),
+                Some(home.clone()),
+                "the script ran where its shell had gone"
+            )
+        });
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&elsewhere);
     }
 
     #[gpui_kit::test]
