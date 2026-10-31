@@ -154,6 +154,15 @@ impl Client {
         }
     }
 
+    /// Whether it's an app that starts with launchd's `PATH`
+    /// (`/usr/bin:/bin:/usr/sbin:/sbin`) rather than the login shell's:
+    /// Claude Desktop and LM Studio. VS Code, its forks and extensions, and
+    /// Zed read the login shell's environment; agents run from a terminal
+    /// have its.
+    pub fn without_shell_path(self) -> bool {
+        matches!(self, Client::ClaudeDesktop | Client::LmStudio)
+    }
+
     /// Whether Sawit can edit the config (JSON/TOML). YAML and script
     /// configs get a snippet to paste instead.
     pub fn editable(self) -> bool {
@@ -396,8 +405,8 @@ pub struct Spec {
     pub name: String,
     pub transport: Transport,
     /// `npx` for the `mcp-remote` bridge, which clients without remote
-    /// support use. An absolute path when found: GUI clients get a minimal
-    /// `PATH`.
+    /// support use. An absolute path when found: apps such as Claude Desktop
+    /// get a minimal `PATH`.
     pub npx: String,
 }
 
@@ -549,9 +558,10 @@ pub fn entry(client: Client, spec: &Spec) -> (&'static str, Value) {
         return (key, v);
     }
     let (cmd, args, mut env) = spec.as_stdio();
-    // A GUI client starts with launchd's PATH: npx's `#!/usr/bin/env node`
-    // needs to be told where node is.
-    if client.category() == Category::Editor
+    // An app started with launchd's PATH: npx's `#!/usr/bin/env node` needs
+    // to be told where node is. Not the clients that have the login shell's
+    // PATH: `env` goes over it, and would hide the rest of it from the server.
+    if client.without_shell_path()
         && cmd == spec.npx
         && let Some(path) = node_path(&cmd)
         && !env.iter().any(|(k, _)| k == "PATH")
@@ -602,10 +612,10 @@ pub fn entry(client: Client, spec: &Spec) -> (&'static str, Value) {
     (key, v)
 }
 
-/// The `PATH` a GUI client must give `npx` at `program`, so that its
-/// `#!/usr/bin/env node` finds the node beside it (nvm's, Homebrew's):
-/// that folder, then the usual ones. `None` for a bare `npx`, or one in a
-/// folder launchd's PATH has.
+/// The `PATH` an app started with launchd's ([`Client::without_shell_path`])
+/// must give `npx` at `program`, so that its `#!/usr/bin/env node` finds the
+/// node beside it (nvm's, Homebrew's): that folder, then the usual ones.
+/// `None` for a bare `npx`, or one in a folder launchd's PATH has.
 fn node_path(program: &str) -> Option<String> {
     const USUAL: [&str; 6] = [
         "/usr/local/bin",
@@ -2346,11 +2356,11 @@ mod tests {
         assert_eq!(v["mcpServers"]["two"]["command"], "/bin/two-149");
     }
 
-    /// GUI clients start with launchd's `PATH` (no Homebrew, no nvm), and
-    /// `npx` starts with `#!/usr/bin/env node`: their entries say where
-    /// `node` is. Agents run from a terminal keep its `PATH`.
+    /// Apps such as Claude Desktop start with launchd's `PATH` (no Homebrew,
+    /// no nvm), and `npx` starts with `#!/usr/bin/env node`: their entries say
+    /// where `node` is. Agents run from a terminal keep its `PATH`.
     #[test]
-    fn gui_clients_are_told_where_node_is() {
+    fn apps_started_by_launchd_are_told_where_node_is() {
         let npx = "/Users/me/.nvm/versions/node/v22.11.0/bin/npx";
         let bridge = Spec::http("mobbin", "https://api.mobbin.com/mcp").with_npx(npx);
         let path = "/Users/me/.nvm/versions/node/v22.11.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin";
@@ -2360,17 +2370,54 @@ mod tests {
         );
         let rea =
             Spec::stdio("rea", npx, vec!["-y".into(), "rea-agents@6.3.0".into()]).with_npx(npx);
-        assert_eq!(entry(Client::Cursor, &rea).1["env"]["PATH"], path);
+        assert_eq!(entry(Client::LmStudio, &rea).1["env"]["PATH"], path);
         // An agent run from a terminal: its own PATH.
         assert_eq!(entry(Client::ClaudeCode, &rea).1["env"], json!({}));
         // Not npx: nothing to add.
         let sawit = Spec::sawit(Path::new(
             "/Applications/Sawit.app/Contents/MacOS/sawit-mcp",
         ));
-        assert!(entry(Client::Cursor, &sawit).1.get("env").is_none());
+        assert!(entry(Client::ClaudeDesktop, &sawit).1.get("env").is_none());
         // npx in /usr/bin finds a node there.
         let system = Spec::http("x", "https://x.dev/mcp").with_npx("/usr/bin/npx");
         assert!(entry(Client::ClaudeDesktop, &system).1.get("env").is_none());
+    }
+
+    /// CATALOG M2: only apps that start with launchd's `PATH` (Claude Desktop, LM Studio) are
+    /// told where `node` is. VS Code, its forks and extensions, and Zed read the login shell's
+    /// environment and lay an entry's `env` over it: a `PATH` there hid `~/.cargo/bin`, pyenv's
+    /// shims and the rest of the user's from the server and what it starts.
+    #[test]
+    fn only_apps_without_the_shells_path_are_told_where_node_is() {
+        let npx = "/Users/me/.nvm/versions/node/v22.11.0/bin/npx";
+        let rea =
+            Spec::stdio("rea", npx, vec!["-y".into(), "rea-agents@6.3.0".into()]).with_npx(npx);
+        let bridge = Spec::http("x", "https://x.dev/mcp").with_npx(npx);
+        let path = |client, spec| {
+            let (_, v) = entry(client, spec);
+            ["env", "environment"]
+                .iter()
+                .find_map(|k| v.get(*k)?.get("PATH").cloned())
+        };
+        for client in [Client::ClaudeDesktop, Client::LmStudio] {
+            assert!(path(client, &rea).is_some(), "{client:?}");
+            assert!(path(client, &bridge).is_some(), "{client:?} (bridge)");
+        }
+        for client in [
+            Client::Cursor,
+            Client::Windsurf,
+            Client::VsCode,
+            Client::VsCodeInsiders,
+            Client::Zed,
+            Client::Antigravity,
+            Client::Trae,
+            Client::RooCode,
+            Client::KiloCode,
+            Client::Continue,
+        ] {
+            assert_eq!(path(client, &rea), None, "{client:?}");
+            assert_eq!(path(client, &bridge), None, "{client:?} (bridge)");
+        }
     }
 
     /// A client CLI installed with npm (`#!/usr/bin/env node`) runs with
