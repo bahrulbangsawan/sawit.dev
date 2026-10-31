@@ -95,7 +95,8 @@ pub struct FileEditor {
     state: Option<Entity<EditorState>>,
     saved_text: String,
     pub dirty: bool,
-    /// Set from the tab menu ("Make Tab Read-Only"): no edits, no saves.
+    /// Set from the tab menu ("Make Tab Read-Only"): no edits, and ⌘S doesn't save. Save in a
+    /// question that names the file still does ([`Self::save_task`]).
     pub read_only: bool,
     /// The user chose Don't Save for these changes as the app quit or restarted, so quitting
     /// doesn't keep them. The next edit clears it.
@@ -440,6 +441,12 @@ impl FileEditor {
         self.state.as_ref().map(|s| s.focus_handle(cx))
     }
 
+    /// The note under the toolbar, and whether it is a warning.
+    #[cfg(test)]
+    pub(crate) fn note(&self) -> Option<(&str, bool)> {
+        self.notice.as_ref().map(|n| (n.text.as_str(), n.error))
+    }
+
     /// Puts the cursor on a 1-based line and column (clamped), now or once
     /// the file has loaded.
     pub fn go_to(&mut self, line: u32, column: u32, window: &mut Window, cx: &mut Context<Self>) {
@@ -587,18 +594,23 @@ impl FileEditor {
         cx.notify();
     }
 
+    /// ⌘S: writes the buffer, unless the tab is read-only.
     fn save(&mut self, _: &Save, _: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         self.save_task(cx).detach();
     }
 
-    /// Writes the buffer; resolves to whether the file is now saved.
+    /// Writes the buffer; resolves to whether the file is now saved. A read-only tab is written
+    /// too: but for ⌘S, which keeps to the mark ([`Self::save`]), the callers are the user's
+    /// Save in a question that names this file (closing its tab, quitting, Restart to Update,
+    /// closing its window). That answer is the user's own: refused, it did nothing and said
+    /// nothing, and quitting looked stuck (site M1).
     pub fn save_task(&mut self, cx: &mut Context<Self>) -> Task<bool> {
         let Some(state) = &self.state else {
             return Task::ready(false);
         };
-        if self.read_only {
-            return Task::ready(!self.dirty);
-        }
         let text = state.read(cx).value().to_string();
         let path = self.path.clone();
         let to_write = text.clone();

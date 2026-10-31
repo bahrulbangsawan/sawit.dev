@@ -379,7 +379,8 @@ explained. A conflict on the same address can't be forced.
 ### Tabs & layout
 
 - Right-click a tab for Close, Close Others, Close Left/Right, Close Clean, Close All, Make Tab
-  Read-Only, and Pin Tab.
+  Read-Only, and Pin Tab. A read-only tab takes no typing and <kbd>⌘</kbd><kbd>S</kbd> doesn't save it, but
+  **Save** in the question on closing it or quitting does.
 - Bulk close leaves pinned and unsaved tabs alone. Closing an unsaved file
   asks for confirmation.
 - Quitting, closing a window and **Restart to Update** ask too, and offer to save every unsaved file first
