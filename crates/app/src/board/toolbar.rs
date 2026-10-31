@@ -160,16 +160,29 @@ pub(super) fn render_toolbar(
     let this = cx.entity().downgrade();
     let shown = shown(view);
     let picker = view.picker.clone();
+    // Each tool's keys, as the keymap binds them now.
+    let keys: Vec<Vec<Option<String>>> = (shown.groups.iter())
+        .map(|group| {
+            (group.tools.iter())
+                .map(|tool| super::command_keys(tool.command, cx))
+                .collect()
+        })
+        .collect();
     let theme = cx.theme();
     let line = theme.border;
     // The buttons, chevrons and lines, at their full size: the row never shrinks.
     let mut row = h_flex().flex_shrink_0().gap(px(2.));
-    for (i, group) in shown.groups.iter().enumerate() {
+    for (i, (group, keys)) in shown.groups.iter().zip(keys).enumerate() {
         if i > 0 {
             row = row.child(divider(line));
         }
-        for tool in &group.tools {
-            row = row.child(tool_button(tool, shown.active == Some(tool.tool), &this));
+        for (tool, keys) in group.tools.iter().zip(keys) {
+            row = row.child(tool_button(
+                tool,
+                keys,
+                shown.active == Some(tool.tool),
+                &this,
+            ));
         }
         if let Some(f) = group.flyout {
             let items = (shown.flyout.as_ref())
@@ -221,15 +234,20 @@ pub(super) fn render_toolbar(
 }
 
 /// The button of `tool`, marked while it is the `active` one. Its tooltip reads its label and
-/// key ("Sticky note  Q").
-fn tool_button(tool: &ToolButton, active: bool, view: &WeakEntity<BoardView>) -> Button {
+/// `keys`, the keymap's ("Sticky note  Q").
+fn tool_button(
+    tool: &ToolButton,
+    keys: Option<String>,
+    active: bool,
+    view: &WeakEntity<BoardView>,
+) -> Button {
     let command = tool.command;
     let view = view.clone();
     Button::new(command)
         .ghost()
         .icon(tool_icon(tool.icon))
         .selected(active)
-        .tooltip(with_keys(tool.label, tool.shortcut.clone()))
+        .tooltip(with_keys(tool.label, keys))
         .debug_selector(|| command.to_owned())
         .on_click(move |_, _, cx| {
             let _ = view.update(cx, |view, cx| view.choose(command, json!({}), cx));

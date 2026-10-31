@@ -10,7 +10,6 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::*;
 use sawit_board::design::{DesignSelection, Mixed, align};
-use sawit_board::menu::shortcut_label;
 use serde_json::json;
 
 use super::number_field::NumberField;
@@ -72,7 +71,7 @@ pub(super) fn render(
             .child(rotation)
             .child(div().flex_1())
             .into_any_element(),
-        align_buttons(sel.ids.len(), &this),
+        align_buttons(sel.ids.len(), &this, cx),
     ];
     section("position", "Position", Vec::new(), rows, cx)
 }
@@ -96,12 +95,16 @@ fn proportions_lock(sel: &Rc<DesignSelection>, view: &WeakEntity<BoardView>) -> 
 /// The align and distribute buttons for `count` selected layers, each with the engine's label
 /// and its keys as its tooltip. Distributing takes three layers or more: with fewer, its buttons
 /// are off, as the engine would do nothing.
-fn align_buttons(count: usize, view: &WeakEntity<BoardView>) -> AnyElement {
-    let buttons = ALIGNS.into_iter().map(|(command, icon)| {
+fn align_buttons(count: usize, view: &WeakEntity<BoardView>, cx: &mut App) -> AnyElement {
+    let keys: Vec<Option<String>> = ALIGNS
+        .into_iter()
+        .map(|(command, _)| super::super::command_keys(command, cx))
+        .collect();
+    let buttons = ALIGNS.into_iter().zip(keys).map(|((command, icon), keys)| {
         let view = view.clone();
         let label = find_command(command).map_or(command, |spec| spec.label);
         let distribute = command.starts_with("distribute.");
-        icon_button(command, icon, with_keys(label, shortcut_label(command)))
+        icon_button(command, icon, with_keys(label, keys))
             .disabled(distribute && count < 3)
             .debug_selector(move || format!("design-{command}"))
             .on_click(move |_, _, cx| {

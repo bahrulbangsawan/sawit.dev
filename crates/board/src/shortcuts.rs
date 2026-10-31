@@ -14,7 +14,9 @@
 //! Sawit keeps only while the canvas is not editing text (⌘B, ⌥⌘T, ⇧⌘↵) stay: they work then.
 //!
 //! The same keys are the app's key bindings of the canvas ([`key_bindings`]), which the keymap
-//! editor shows and changes. The sheet lists FigCraft's own keys, not the ones the user binds.
+//! editor shows and changes. The sheet here lists FigCraft's own keys; the app shows each row's
+//! keys as the keymap binds them now (its `board::command_keys_all`), and leaves out a row whose
+//! keys the user took out.
 
 use figcraft_engine::keymap::{self, Binding, Group, KEYS, Platform};
 
