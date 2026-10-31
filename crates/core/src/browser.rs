@@ -111,6 +111,14 @@ pub const MAX_NETWORK: usize = 300;
 /// What an agent's op that doesn't open the browser gets while the project has none open.
 pub const NOT_OPEN: &str = "The browser isn't open. Open a page with browser_navigate.";
 
+/// What a page op gets while the page has no agent to run it: it is still loading, or isn't a
+/// web page. Waiting for the page waits this out.
+pub const NOT_READY: &str = "The page isn't ready yet (it may still be loading, or isn't a web page). Try again after browser_wait_for.";
+
+/// How the error of a page op that WebKit couldn't hand to the page starts, the reason after it.
+/// Waiting for the page waits this out too.
+pub const UNREACHABLE: &str = "The page couldn't be reached";
+
 /// What the address field searches with when the text isn't a URL.
 const SEARCH: &str = "https://duckduckgo.com/?q=";
 

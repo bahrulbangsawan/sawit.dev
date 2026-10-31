@@ -272,6 +272,14 @@ fn screenshot_path(cache: &std::path::Path) -> PathBuf {
         .join(format!("screenshot-{stamp}.png"))
 }
 
+/// Whether `error`, a page op's, may go away by waiting for the page: the page has no agent to run
+/// the op yet while it loads, or WebKit couldn't hand the op to it just now. Nothing else does: no
+/// app running, no browser open, a selector that isn't one (MCP-9).
+fn waits_out(error: &str) -> bool {
+    use sawit_core::browser::{NOT_READY, UNREACHABLE};
+    error == NOT_READY || error.starts_with(UNREACHABLE)
+}
+
 impl Sawit {
     pub(crate) async fn browser(
         &self,
@@ -486,7 +494,6 @@ impl Sawit {
                 text: text.clone(),
                 selector: a.selector.clone(),
             };
-            // A page mid-load has no agent yet: keep waiting. No browser at all won't change.
             match self.browser(&a.project, op).await {
                 Ok(v) if v["found"].as_bool() == Some(!gone) => {
                     return ok(format!(
@@ -495,8 +502,11 @@ impl Sawit {
                         v["url"].as_str().unwrap_or_default()
                     ));
                 }
-                Err(e) if e == sawit_core::browser::NOT_OPEN => return fail(e),
-                _ => {}
+                // A page mid-load has no agent yet: keep waiting.
+                Ok(_) => {}
+                Err(e) if waits_out(&e) => {}
+                // No app, no browser, a selector that isn't one: waiting won't change them.
+                Err(e) => return fail(e),
             }
             if Instant::now() >= deadline {
                 let what = match (&text, &a.selector) {
@@ -766,6 +776,115 @@ mod tests {
         assert_ne!(taken.is_error, Some(true), "{}", said(&taken));
         assert_eq!(std::fs::read(&png).unwrap(), b"\x89PNG\r\n\x1a\n");
         assert!(said(&taken).ends_with(&format!("written to {}", png.display())));
+    }
+
+    /// A stand-in for the running app that answers its requests with `answers` in turn, the last
+    /// one again once they are used up.
+    fn fake_app_answering(
+        paths: &sawit_core::instances::AppPaths,
+        answers: Vec<Result<Value, String>>,
+    ) {
+        use std::io::{Read as _, Write as _};
+        std::fs::create_dir_all(&paths.root).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(paths.cli_socket()).unwrap();
+        std::thread::spawn(move || {
+            let mut answers = answers.into_iter().peekable();
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut bytes = Vec::new();
+                if stream.read_to_end(&mut bytes).is_err() || bytes.is_empty() {
+                    continue;
+                }
+                let answer = match answers.next() {
+                    Some(answer) if answers.peek().is_none() => {
+                        answers = vec![answer.clone()].into_iter().peekable();
+                        answer
+                    }
+                    Some(answer) => answer,
+                    None => break,
+                };
+                let line = match answer {
+                    Ok(value) => sawit_core::app_control::reply_ok(&value),
+                    Err(error) => sawit_core::app_control::reply_error(&error),
+                };
+                let _ = stream.write_all(format!("{line}\n").as_bytes());
+            }
+        });
+    }
+
+    /// MCP-9: browser_wait_for waits out only what waiting changes: a page that has no agent yet
+    /// while it loads. Any other answer comes back at once: with no app running, or a selector
+    /// that isn't one, it waited its whole timeout and then said it had timed out.
+    #[tokio::test]
+    async fn waiting_for_a_page_answers_what_waiting_wont_change_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = sawit_core::instances::AppPaths {
+            root: dir.path().join("home"),
+        };
+        let server = Sawit::new(paths.clone());
+        let wait = |selector: &str| {
+            Parameters(WaitArgs {
+                text: None,
+                text_gone: None,
+                selector: Some(selector.into()),
+                time_ms: None,
+                timeout_ms: Some(3_000),
+                project: None,
+            })
+        };
+        let said = |result: &CallToolResult| {
+            let texts = result.content.iter().filter_map(|c| c.as_text());
+            texts.map(|t| t.text.clone()).collect::<Vec<_>>().join("\n")
+        };
+
+        let started = Instant::now();
+        let no_app = server.browser_wait_for(wait("main")).await;
+        assert_eq!(no_app.is_error, Some(true));
+        assert!(
+            said(&no_app).contains("Sawit isn't running"),
+            "{}",
+            said(&no_app)
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(1_500),
+            "{:?}",
+            started.elapsed()
+        );
+
+        let not_a_selector = "“[[[” isn't a valid CSS selector.".to_string();
+        fake_app_answering(&paths, vec![Err(not_a_selector.clone())]);
+        let started = Instant::now();
+        let refused = server.browser_wait_for(wait("[[[")).await;
+        assert_eq!(said(&refused), not_a_selector);
+        assert!(
+            started.elapsed() < Duration::from_millis(1_500),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    /// A page that is loading has no agent to answer yet: browser_wait_for keeps asking.
+    #[tokio::test]
+    async fn waiting_for_a_page_waits_out_its_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = sawit_core::instances::AppPaths {
+            root: dir.path().join("home"),
+        };
+        let server = Sawit::new(paths.clone());
+        let loading = Err(sawit_core::browser::NOT_READY.to_string());
+        let found = Ok(json!({"found": true, "url": "http://localhost:5173/"}));
+        fake_app_answering(&paths, vec![loading.clone(), loading, found]);
+        let done = server
+            .browser_wait_for(Parameters(WaitArgs {
+                text: Some("Welcome".into()),
+                text_gone: None,
+                selector: None,
+                time_ms: None,
+                timeout_ms: Some(5_000),
+                project: None,
+            }))
+            .await;
+        assert_ne!(done.is_error, Some(true));
     }
 
     /// A screenshot never replaces a canvas file: the tool says so before it asks the app (none

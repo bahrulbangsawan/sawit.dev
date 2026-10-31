@@ -674,7 +674,8 @@ impl BrowserView {
         if let Err(e) = sent
             && let Some(tx) = tx.lock().ok().and_then(|mut t| t.take())
         {
-            let _ = tx.send(Err(format!("The page couldn't be reached: {e}")));
+            let unreachable = sawit_core::browser::UNREACHABLE;
+            let _ = tx.send(Err(format!("{unreachable}: {e}")));
         }
         rx
     }
@@ -1635,10 +1636,7 @@ fn agent_result(result: &str) -> OpResult {
 /// has no agent.
 fn agent_answer(text: &str) -> OpResult {
     if text.is_empty() {
-        return Err(
-            "The page isn't ready yet (it may still be loading, or isn't a web page). Try again after browser_wait_for."
-                .into(),
-        );
+        return Err(sawit_core::browser::NOT_READY.into());
     }
     let mut value: Value =
         serde_json::from_str(text).map_err(|e| format!("The page sent a bad answer: {e}"))?;
