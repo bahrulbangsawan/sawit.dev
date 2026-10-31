@@ -1,0 +1,76 @@
+{
+  "url": "https://example.dev/",
+  "title": "Example",
+  "viewport": [1280, 800],
+  "truncated": false,
+  "colors": [
+    { "value": "rgb(17, 24, 39)", "role": "text", "count": 120, "on_button": 0, "on_link": 0 },
+    { "value": "rgb(37, 99, 235)", "role": "background", "count": 6, "on_button": 6, "on_link": 0 },
+    { "value": "rgb(37, 99, 235)", "role": "text", "count": 14, "on_button": 0, "on_link": 14 },
+    { "value": "rgb(229, 231, 235)", "role": "border", "count": 30, "on_button": 0, "on_link": 0 },
+    { "value": "rgb(17, 24, 39)", "role": "fill", "count": 4, "on_button": 0, "on_link": 0 },
+    { "value": "rgb(17, 24, 39)", "role": "stroke", "count": 2, "on_button": 0, "on_link": 0 },
+    { "value": "rgba(0, 0, 0, 0.1)", "role": "shadow", "count": 8, "on_button": 0, "on_link": 0 },
+    { "value": "rgb(99, 102, 241)", "role": "gradient", "count": 1, "on_button": 0, "on_link": 0 }
+  ],
+  "texts": [
+    { "tag": "p", "in_main": true, "family": "Inter, \"Helvetica Neue\", sans-serif", "used_family": "Inter", "size": 16, "weight": 400, "line_height": 24, "letter_spacing": null, "color": "rgb(17, 24, 39)", "chars": 2400 },
+    { "tag": "button", "in_main": true, "family": "Inter, \"Helvetica Neue\", sans-serif", "used_family": "Inter", "size": 14, "weight": 600, "line_height": null, "letter_spacing": -0.14, "color": "rgb(255, 255, 255)", "chars": 40 },
+    { "tag": "code", "in_main": false, "family": "\"Unknown Mono\"", "used_family": null, "size": 13.5, "weight": 400, "line_height": 20, "letter_spacing": null, "color": "rgb(17, 24, 39)", "chars": 12 }
+  ],
+  "spacing": [[16, 80], [8, 60], [4, 20], [12.5, 2]],
+  "radii": [["8px", 20], ["9999px", 4], ["50%", 2]],
+  "shadows": [["rgba(0, 0, 0, 0.1) 0px 1px 3px 0px", 8]],
+  "body_background": "rgb(255, 255, 255)",
+  "focus_ring": "rgb(37, 99, 235)",
+  "font_faces": [
+    { "family": "Inter", "weight": "100 900", "style": "normal", "src": ["https://example.dev/fonts/inter.woff2"] }
+  ],
+  "variables": [["--brand", "#2563eb"], ["--radius", "8px"]],
+  "breakpoints": [640, 768, 1024],
+  "assets": [
+    { "kind": "image", "url": "https://example.dev/hero.jpg", "svg": null, "label": "Team at work", "width": 1600, "height": 900, "used_on": ["img.hero"], "logo": false },
+    { "kind": "svg", "url": "https://example.dev/logo.svg", "svg": null, "label": "logo", "width": 120, "height": 32, "used_on": ["header > a > img"], "logo": true },
+    { "kind": "icon", "url": null, "svg": "<svg viewBox=\"0 0 24 24\"><path d=\"M4 12h16\"></path></svg>", "label": "Menu", "width": 24, "height": 24, "used_on": ["button.menu > svg", "#close > svg"], "logo": false },
+    { "kind": "icon", "url": "https://example.dev/favicon.ico", "svg": null, "label": "favicon", "width": null, "height": null, "used_on": [], "logo": false },
+    { "kind": "video", "url": "https://example.dev/intro.mp4", "svg": null, "label": "intro.mp4", "width": 1280, "height": 720, "used_on": ["video"], "logo": false },
+    { "kind": "image", "url": "https://example.dev/intro.jpg", "svg": null, "label": "intro.mp4 poster", "width": null, "height": null, "used_on": ["video"], "logo": false },
+    { "kind": "lottie", "url": "https://example.dev/anim/lottie-wave.json", "svg": null, "label": "lottie-wave.json", "width": null, "height": null, "used_on": [], "logo": false }
+  ],
+  "components": [
+    {
+      "kind": "button",
+      "selector": "button.btn-primary",
+      "html": "<button class=\"btn-primary\" style=\"display: inline-flex; padding: 8px 16px; border-radius: 8px; background-color: rgb(37, 99, 235); color: rgb(255, 255, 255); font-family: Inter; font-size: 14px; font-weight: 600;\">Start</button>",
+      "style": {
+        "background": "rgb(37, 99, 235)",
+        "color": "rgb(255, 255, 255)",
+        "radius": "8px",
+        "padding": "8px 16px",
+        "font_family": "Inter, \"Helvetica Neue\", sans-serif",
+        "font_size": 14,
+        "font_weight": 600,
+        "height": 36,
+        "border": "0px none rgb(255, 255, 255)"
+      }
+    },
+    {
+      "kind": "link",
+      "selector": "main a:nth-of-type(2)",
+      "html": "<a href=\"/docs\" style=\"color: rgb(37, 99, 235);\">Docs</a>",
+      "style": {
+        "background": "rgba(0, 0, 0, 0)",
+        "color": "rgb(37, 99, 235)",
+        "radius": "0px",
+        "padding": "0px",
+        "font_family": "Inter, \"Helvetica Neue\", sans-serif",
+        "font_size": 16,
+        "font_weight": 400,
+        "height": 24,
+        "border": "0px none rgb(37, 99, 235)"
+      }
+    }
+  ],
+  "blocked_sheets": ["https://cdn.example.net/site.css"],
+  "manifest": "https://example.dev/site.webmanifest"
+}

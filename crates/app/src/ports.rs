@@ -26,6 +26,13 @@ const POLL: Duration = Duration::from_secs(3);
 /// How long stopped processes get to exit before "Force Stop" is offered.
 const GRACE: Duration = Duration::from_millis(1500);
 
+/// What the panel asks of the workspace.
+pub enum PortsEvent {
+    OpenInBrowser(String),
+}
+
+impl EventEmitter<PortsEvent> for PortsPanel {}
+
 pub struct PortsPanel {
     servers: Entity<ServerStore>,
     filter: Entity<InputState>,
@@ -241,11 +248,18 @@ impl PortsPanel {
                     .child(format!(":{port}"))
                     .tooltip(move |window, cx| {
                         gpui_kit::component::tooltip::Tooltip::new(format!(
-                            "Listening on {addr}:{port}. Click to open http://localhost:{port}"
+                            "Listening on {addr}:{port}. Click to open in Sawit's browser; ⌘-click for your default browser."
                         ))
                         .build(window, cx)
                     })
-                    .on_click(move |_, _, cx| cx.open_url(&format!("http://localhost:{port}")))
+                    .on_click(cx.listener(move |_, event: &ClickEvent, _, cx| {
+                        let url = format!("http://localhost:{port}");
+                        if event.modifiers().platform {
+                            cx.open_url(&url);
+                        } else {
+                            cx.emit(PortsEvent::OpenInBrowser(url));
+                        }
+                    }))
             }));
         // "my-app · node server.js · 612"
         let folder = j

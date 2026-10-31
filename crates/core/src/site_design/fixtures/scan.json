@@ -1,0 +1,61 @@
+{
+  "url": "https://www.apple.com/iphone/",
+  "title": "iPhone - Apple",
+  "viewport": [1440, 900],
+  "truncated": false,
+  "colors": [
+    { "value": "rgb(29, 29, 31)", "role": "text", "count": 300 },
+    { "value": "rgb(255, 255, 255)", "role": "background", "count": 200 },
+    { "value": "rgb(245, 245, 247)", "role": "background", "count": 40 },
+    { "value": "rgb(110, 110, 115)", "role": "text", "count": 60 },
+    { "value": "rgb(210, 210, 215)", "role": "border", "count": 50 },
+    { "value": "rgb(0, 113, 227)", "role": "background", "count": 14, "on_button": 12 },
+    { "value": "rgb(0, 102, 204)", "role": "text", "count": 31, "on_link": 31 },
+    { "value": "rgb(191, 72, 0)", "role": "text", "count": 6 },
+    { "value": "rgb(41, 163, 84)", "role": "text", "count": 3 }
+  ],
+  "texts": [
+    { "tag": "p", "in_main": true, "family": "\"SF Pro Text\", \"SF Pro Icons\", \"Helvetica Neue\", Helvetica, Arial, sans-serif", "used_family": "SF Pro Text", "size": 17, "weight": 400, "line_height": 25, "letter_spacing": -0.374, "color": "rgb(29, 29, 31)", "chars": 5000 },
+    { "tag": "h1", "in_main": true, "family": "\"SF Pro Display\", \"SF Pro Icons\", \"Helvetica Neue\", Helvetica, Arial, sans-serif", "used_family": "SF Pro Display", "size": 48, "weight": 600, "line_height": 52, "letter_spacing": -0.144, "color": "rgb(29, 29, 31)", "chars": 40 },
+    { "tag": "h2", "in_main": true, "family": "\"SF Pro Text\", \"SF Pro Icons\", \"Helvetica Neue\", Helvetica, Arial, sans-serif", "used_family": "SF Pro Text", "size": 40, "weight": 600, "line_height": 44, "letter_spacing": null, "color": "rgb(29, 29, 31)", "chars": 120 },
+    { "tag": "h3", "in_main": true, "family": "\"SF Pro Text\", \"SF Pro Icons\", \"Helvetica Neue\", Helvetica, Arial, sans-serif", "used_family": "SF Pro Text", "size": 28, "weight": 600, "line_height": 32, "letter_spacing": null, "color": "rgb(29, 29, 31)", "chars": 200 },
+    { "tag": "h4", "in_main": true, "family": "\"SF Pro Text\", \"SF Pro Icons\", \"Helvetica Neue\", Helvetica, Arial, sans-serif", "used_family": "SF Pro Text", "size": 21, "weight": 600, "line_height": 25, "letter_spacing": null, "color": "rgb(29, 29, 31)", "chars": 150 },
+    { "tag": "button", "in_main": true, "family": "\"SF Pro Text\", \"SF Pro Icons\", \"Helvetica Neue\", Helvetica, Arial, sans-serif", "used_family": "SF Pro Text", "size": 17, "weight": 400, "line_height": 20, "letter_spacing": null, "color": "rgb(255, 255, 255)", "chars": 300 },
+    { "tag": "small", "in_main": false, "family": "\"SF Pro Text\", \"SF Pro Icons\", \"Helvetica Neue\", Helvetica, Arial, sans-serif", "used_family": "SF Pro Text", "size": 12, "weight": 400, "line_height": 16, "letter_spacing": null, "color": "rgb(110, 110, 115)", "chars": 400 },
+    { "tag": "span", "in_main": true, "family": "\"SF Pro Text\", \"SF Pro Icons\", \"Helvetica Neue\", Helvetica, Arial, sans-serif", "used_family": "SF Pro Text", "size": 14, "weight": 400, "line_height": 20, "letter_spacing": null, "color": "rgb(110, 110, 115)", "chars": 800 },
+    { "tag": "div", "in_main": true, "family": "\"SF Pro Text\", \"SF Pro Icons\", \"Helvetica Neue\", Helvetica, Arial, sans-serif", "used_family": "SF Pro Text", "size": 21, "weight": 400, "line_height": 25, "letter_spacing": null, "color": "rgb(29, 29, 31)", "chars": 200 }
+  ],
+  "spacing": [[4, 50], [8, 80], [12, 40], [16, 120], [20, 30], [24, 60], [32, 25], [48, 15], [64, 10], [13, 3]],
+  "radii": [["8px", 30], ["980px", 12], ["18px", 20], ["12px", 15], ["50%", 5], ["4px", 3]],
+  "shadows": [
+    ["rgba(0, 0, 0, 0.04) 0px 1px 2px 0px", 20],
+    ["rgba(0, 0, 0, 0.08) 0px 2px 8px 0px", 10],
+    ["rgba(0, 0, 0, 0.16) 0px 8px 30px 0px", 4]
+  ],
+  "body_background": "rgb(255, 255, 255)",
+  "focus_ring": "rgb(0, 113, 227)",
+  "font_faces": [],
+  "variables": [["--sk-body-text-color", "rgb(29, 29, 31)"], ["--sk-body-background-color", "rgb(255, 255, 255)"]],
+  "breakpoints": [1068, 734],
+  "assets": [],
+  "components": [
+    {
+      "kind": "button",
+      "selector": "a.button.button-primary",
+      "html": "<a class=\"button button-primary\" href=\"/shop/buy-iphone\" style=\"background-color: rgb(0, 113, 227); color: rgb(255, 255, 255); border-radius: 980px; padding: 8px 16px;\">Buy</a>",
+      "style": {
+        "background": "rgb(0, 113, 227)",
+        "color": "rgb(255, 255, 255)",
+        "radius": "980px",
+        "padding": "8px 16px",
+        "font_family": "\"SF Pro Text\", \"SF Pro Icons\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "font_size": 17,
+        "font_weight": 400,
+        "height": 36,
+        "border": "0px none rgb(255, 255, 255)"
+      }
+    }
+  ],
+  "blocked_sheets": [],
+  "manifest": null
+}

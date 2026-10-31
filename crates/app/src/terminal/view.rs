@@ -183,13 +183,23 @@ impl TerminalView {
         self.session.modes()
     }
 
+    /// Pastes `text` as the program asked (bracketed when it enabled that).
+    pub(crate) fn paste(&mut self, text: &str) {
+        self.touched = true;
+        self.write(paste_bytes(text, self.modes()));
+    }
+
+    /// The program enabled bracketed paste, so a paste never runs as commands.
+    pub(crate) fn accepts_paste(&self) -> bool {
+        self.modes().bracketed_paste && !self.exited
+    }
+
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let ks = &event.keystroke;
         let m = &ks.modifiers;
         if m.platform && ks.key == "v" {
             if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                self.touched = true;
-                self.write(paste_bytes(&text, self.modes()));
+                self.paste(&text);
                 cx.notify();
             }
             cx.stop_propagation();

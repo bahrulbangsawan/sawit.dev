@@ -1,0 +1,24 @@
+{
+  "selector": "a.card-link",
+  "label": "a.card-link",
+  "rect": { "x": 24.5, "y": 310, "width": 320, "height": 180.25 },
+  "box": { "margin": [0, 0, 16, 0], "border": [1, 1, 1, 1], "padding": [12, 16, 12, 16] },
+  "typography": {
+    "family": "Inter, sans-serif",
+    "used_family": "Inter",
+    "size": 15,
+    "weight": 500,
+    "line_height": null,
+    "letter_spacing": 0.3,
+    "color": "rgb(17, 24, 39)",
+    "align": "start",
+    "transform": "none"
+  },
+  "background": { "color": "rgba(255, 255, 255, 0.5)", "image": null },
+  "border": { "color": "rgb(229, 231, 235)", "style": "solid", "width": [1, 1, 1, 1], "radius": "12px" },
+  "effects": { "shadow": "rgba(0, 0, 0, 0.1) 0px 1px 3px 0px", "opacity": 1, "transition": "all 0s ease 0s" },
+  "layout": { "display": "flex", "position": "relative", "gap": "8px", "flex_direction": "column", "justify": "normal", "align": "normal", "grid_template_columns": null },
+  "states": [["hover", [["background-color", "rgb(243, 244, 246)"]]], ["focus-visible", [["outline-color", "rgb(37, 99, 235)"], ["outline-width", "2px"]]]],
+  "effective_background": "rgb(250, 250, 251)",
+  "html": null
+}
