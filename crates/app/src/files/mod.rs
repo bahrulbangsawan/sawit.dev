@@ -290,7 +290,7 @@ pub struct FilesPanel {
 impl FilesPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
-        // The selected row is drawn brighter while the tree has the keyboard.
+        // The selected row is outlined while the tree has the keyboard.
         let shown_focus = vec![
             cx.on_focus_in(&focus, window, |_, _, cx| cx.notify()),
             cx.on_focus_out(&focus, window, |_, _, _, cx| cx.notify()),
@@ -620,6 +620,9 @@ impl FilesPanel {
             .pl(px(4. + depth as f32 * 12.))
             .pr_2()
             .gap_1()
+            // In line with the rows' outline.
+            .border_1()
+            .border_color(transparent_black())
             .child(div().w(px(14.)).flex_none())
             .child(icon)
             .children(self.edit.as_ref().map(|e| {
