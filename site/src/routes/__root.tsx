@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { HeadContent, Outlet, Scripts, createRootRoute } from '@tanstack/react-router'
 import appCss from '../styles.css?url'
+import { Page } from '../components/chrome'
 import { DESCRIPTION, SITE } from '../content'
 
 export const Route = createRootRoute({
@@ -36,7 +37,30 @@ export const Route = createRootRoute({
       <Outlet />
     </RootDocument>
   ),
+  // An address with no page still gets the site around its message, with the way back.
+  notFoundComponent: NotFound,
 })
+
+function NotFound() {
+  return (
+    <Page>
+      <header className="sec hero log-hero" id="top">
+        <div className="w">
+          <h1>Page not found</h1>
+          <p className="lead">There’s no page at this address.</p>
+          <div className="acts">
+            <a className="btn pri" href="/">
+              Go to the home page
+            </a>
+            <a className="btn" href="/changelog">
+              Read the changelog
+            </a>
+          </div>
+        </div>
+      </header>
+    </Page>
+  )
+}
 
 function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
   return (
