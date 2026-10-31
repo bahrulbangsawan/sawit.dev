@@ -1132,20 +1132,23 @@ impl Sawit {
             (None, Some(path)) if is_figcraft(&path) => {
                 json!({ "op": "replace", "path": absolute_path(&path) })
             }
+            // Read here, as an agent means the path (MCP-7): trimmed, `~` for the home folder,
+            // and from the agent's folder.
             (None, Some(path)) => {
+                let file = crate::agent_path(&path);
                 let text = match blocking({
-                    let path = path.clone();
-                    move || read_scene(Path::new(&path))
+                    let file = file.clone();
+                    move || read_scene(&file)
                 })
                 .await
                 {
                     Ok(Ok(text)) => text,
-                    Ok(Err(e)) => return fail(format!("Unable to read {path}: {e}")),
+                    Ok(Err(e)) => return fail(format!("Unable to read {}: {e}", file.display())),
                     Err(e) => return fail(e),
                 };
                 match serde_json::from_str::<Value>(&text) {
                     Ok(scene) => json!({ "op": "replace", "scene": scene }),
-                    Err(e) => return fail(format!("{path} isn't valid JSON: {e}")),
+                    Err(e) => return fail(format!("{} isn't valid JSON: {e}", file.display())),
                 }
             }
             (None, None) => return fail("Give a path or a scene."),
@@ -2121,6 +2124,42 @@ mod tests {
             (0..3).all(|n| texts.contains(&format!("note {n}"))),
             "{texts:?}"
         );
+    }
+
+    /// MCP-7: canvas_load reads an Excalidraw file's path as it reads a `.figcraft` file's:
+    /// trimmed, `~` for the home folder, and relative to the agent's folder. It read the path as
+    /// written: a space at its end, or `~/`, was "No such file or directory".
+    #[tokio::test]
+    async fn canvas_load_reads_an_import_path_as_it_reads_a_figcraft_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let old = dir.path().join("old.excalidraw");
+        std::fs::write(&old, OLD_BOARD).unwrap();
+        let load = |path: String| CanvasLoadArgs {
+            path: Some(path),
+            scene: None,
+            project: project_arg(&project),
+        };
+
+        let loaded = server
+            .canvas_load(Parameters(load(format!(" {} ", old.display()))))
+            .await;
+        assert_eq!(answer(&loaded)["elements"].as_array().unwrap().len(), 9);
+
+        if let Some(home) = std::env::var_os("HOME") {
+            let name = "sawit-test-no-such-board.excalidraw";
+            let missing = server
+                .canvas_load(Parameters(load(format!("~/{name}"))))
+                .await;
+            assert_eq!(missing.is_error, Some(true));
+            let expanded = Path::new(&home).join(name);
+            assert!(
+                said(&missing).contains(&expanded.display().to_string()),
+                "{}",
+                said(&missing)
+            );
+        }
     }
 
     #[tokio::test]

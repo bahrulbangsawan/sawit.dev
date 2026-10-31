@@ -170,6 +170,25 @@ pub(crate) fn existing_dir(dir: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// The file `output_path` names for `tool` to write, if it names one, read as every tool that
+/// writes a file reads it: trimmed (a blank one names none, and the tool picks its own file), `~`
+/// for the home folder, absolute, and never a canvas file ([`refuse_canvas_file`]). It is checked
+/// before anything is made, and it is the path written.
+pub(crate) fn output_path(
+    tool: &str,
+    output_path: Option<&str>,
+) -> Result<Option<PathBuf>, String> {
+    let Some(p) = output_path.map(str::trim).filter(|p| !p.is_empty()) else {
+        return Ok(None);
+    };
+    let path = expand_home(p);
+    if !path.is_absolute() {
+        return Err(format!("output_path “{p}” must be absolute."));
+    }
+    refuse_canvas_file(tool, &path)?;
+    Ok(Some(path))
+}
+
 /// Refuses `path`, a file an agent asked `tool` to write, when it is a canvas file: a `.figcraft`
 /// or `.excalidraw` file, or a copy Sawit keeps of one ([`sawit_board::ops::is_canvas_file`]).
 /// While the app is closed nothing else holds the board, so one mistaken path would replace it

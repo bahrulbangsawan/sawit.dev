@@ -158,7 +158,9 @@ pub struct ScreenshotArgs {
     )]
     pub reference: Option<String>,
     pub selector: Option<String>,
-    #[schemars(description = "Where to write the PNG; default Sawit's cache folder")]
+    #[schemars(
+        description = "Absolute path (or ~/…) to write the PNG to; default Sawit's cache folder"
+    )]
     pub output_path: Option<String>,
     pub project: Option<String>,
 }
@@ -519,11 +521,11 @@ impl Sawit {
         &self,
         Parameters(a): Parameters<ScreenshotArgs>,
     ) -> CallToolResult {
-        let path = a
-            .output_path
-            .map(|p| crate::expand_home(&p))
-            .unwrap_or_else(|| screenshot_path(&self.paths.cache_dir()));
-        tri!(crate::refuse_canvas_file("browser_screenshot", &path));
+        let named = tri!(crate::output_path(
+            "browser_screenshot",
+            a.output_path.as_deref()
+        ));
+        let path = named.unwrap_or_else(|| screenshot_path(&self.paths.cache_dir()));
         let op = BrowserOp::Screenshot {
             target: target(a.reference, a.selector),
         };
@@ -717,6 +719,53 @@ mod tests {
                 let _ = stream.write_all(line.as_bytes());
             }
         });
+    }
+
+    /// MCP-7: `output_path` is read as every tool that writes a file reads one: trimmed, `~` for
+    /// the home folder, and absolute. A space at its end became part of the file's name, and a
+    /// relative path was written in whatever folder sawit-mcp ran in.
+    #[tokio::test]
+    async fn a_screenshot_path_is_read_as_every_tool_reads_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = sawit_core::instances::AppPaths {
+            root: dir.path().join("home"),
+        };
+        let server = Sawit::new(paths.clone());
+        let shot = |output: String| {
+            Parameters(ScreenshotArgs {
+                reference: None,
+                selector: None,
+                output_path: Some(output),
+                project: None,
+            })
+        };
+        let said = |result: &CallToolResult| {
+            let texts = result.content.iter().filter_map(|c| c.as_text());
+            texts.map(|t| t.text.clone()).collect::<Vec<_>>().join("\n")
+        };
+
+        // Refused before the app is asked: none runs yet, and nothing is written.
+        let refused = server
+            .browser_screenshot(shot("shots/page.png".into()))
+            .await;
+        assert_eq!(refused.is_error, Some(true));
+        assert!(
+            said(&refused).contains("must be absolute"),
+            "{}",
+            said(&refused)
+        );
+
+        fake_app(
+            &paths,
+            json!({"png_base64": "iVBORw0KGgo=", "width": 1, "height": 1}),
+        );
+        let png = dir.path().join("page.png");
+        let taken = server
+            .browser_screenshot(shot(format!(" {}  ", png.display())))
+            .await;
+        assert_ne!(taken.is_error, Some(true), "{}", said(&taken));
+        assert_eq!(std::fs::read(&png).unwrap(), b"\x89PNG\r\n\x1a\n");
+        assert!(said(&taken).ends_with(&format!("written to {}", png.display())));
     }
 
     /// A screenshot never replaces a canvas file: the tool says so before it asks the app (none
