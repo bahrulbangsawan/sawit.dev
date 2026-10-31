@@ -277,7 +277,12 @@ pub fn init(cx: &mut App) {
 /// Sets the app's menus. Their shortcuts are the keymap's as it is now, so the keymap sets them
 /// again whenever it changes.
 pub fn set_menus(cx: &mut App) {
-    cx.set_menus([
+    cx.set_menus(menus());
+}
+
+/// The app's menus.
+fn menus() -> Vec<Menu> {
+    vec![
         Menu::new("Sawit").items([
             MenuItem::action("Keymap Editor", crate::keymap::OpenKeymapEditor),
             MenuItem::action("Open Keymap File", crate::keymap::OpenKeymapFile),
@@ -290,7 +295,7 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("New Window", NewWindow),
             MenuItem::action("Open Folder…", OpenFolder),
         ]),
-    ]);
+    ]
 }
 
 /// Opens a Sawit window, optionally with a project folder.
@@ -797,7 +802,73 @@ pub fn install_cli(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::bundle_of;
+    use gpui_kit::{KeyContext, MenuItem, OperatingSystem, TestAppContext};
     use std::path::Path;
+
+    /// The app's key bindings, bound as `main` binds them, then taken as the keymap's defaults
+    /// (with a keymap file of the test's own, which it never writes).
+    fn bind_like_the_app(cx: &mut gpui_kit::App, keymap_file: &Path) {
+        gpui_kit::init(cx);
+        crate::editor::init(cx);
+        crate::files::init(cx);
+        crate::shell_config::init(cx);
+        crate::db::init(cx);
+        crate::git::init(cx);
+        crate::workspace::init(cx);
+        crate::terminal::init(cx);
+        super::init(cx);
+        crate::keymap::init_at(keymap_file.to_path_buf(), cx);
+    }
+
+    /// A menu item carries the key of the first binding of its action that GPUI's macOS menu
+    /// builder finds in a Workspace > Pane > Editor focus, else of the first binding at all
+    /// (`find_or_first`), and AppKit runs the item for that key wherever the item's action is
+    /// handled: in Sawit, everywhere the workspace is. So each item's action has no binding, or
+    /// one that holds everywhere in a window. A key bound only in a view (the keymap editor's
+    /// ⌘E) would otherwise run the item from every other view, a web page's included.
+    #[gpui_kit::test]
+    fn menu_keys_hold_everywhere_in_a_window(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("sawit-menu-keys-{}", std::process::id()));
+        cx.update(|cx| bind_like_the_app(cx, &dir.join("keymap.json")));
+        let workspace = {
+            let mut workspace = KeyContext::new_with_defaults(OperatingSystem::Mac);
+            workspace.add("Workspace");
+            let mut pane = KeyContext::new_with_defaults(OperatingSystem::Mac);
+            pane.add("Pane");
+            let mut editor = KeyContext::new_with_defaults(OperatingSystem::Mac);
+            editor.add("Editor");
+            pane.extend(&editor);
+            workspace.extend(&pane);
+            vec![workspace]
+        };
+        cx.update(|cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            for menu in super::menus() {
+                for item in &menu.items {
+                    let MenuItem::Action { name, action, .. } = item else {
+                        continue;
+                    };
+                    let bindings: Vec<_> = keymap.bindings_for_action(action.as_ref()).collect();
+                    let everywhere = bindings
+                        .iter()
+                        .any(|b| b.predicate().is_none_or(|p| p.eval(&workspace)));
+                    assert!(
+                        bindings.is_empty() || everywhere,
+                        "{name}: {:?}",
+                        bindings
+                            .iter()
+                            .map(|b| (
+                                crate::keymap::names::unparse(b.keystrokes()),
+                                b.predicate().map(|p| p.to_string())
+                            ))
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn bundle_detection() {

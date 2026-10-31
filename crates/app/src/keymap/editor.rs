@@ -39,7 +39,11 @@ actions!(
         /// Finds bindings by their keys instead of their names.
         ToggleKeystrokeSearch,
         /// Moves the keyboard to the filter.
-        FocusFilter
+        FocusFilter,
+        /// Opens the keymap file in an editor tab, from the keymap editor. Its own action, so
+        /// that its key (⌘E) stays the editor's: the Sawit menu's Open Keymap File, which runs
+        /// `keymap::OpenKeymapFile`, would take a key bound to that as an app-wide shortcut.
+        EditInJson
     ]
 );
 
@@ -57,7 +61,7 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-n", CreateBinding, ctx),
         KeyBinding::new("alt-cmd-k", ToggleKeystrokeSearch, ctx),
         KeyBinding::new("cmd-f", FocusFilter, ctx),
-        KeyBinding::new("cmd-e", OpenKeymapFile, ctx),
+        KeyBinding::new("cmd-e", EditInJson, ctx),
     ]
 }
 
@@ -312,7 +316,7 @@ impl KeymapEditor {
                     .ghost()
                     .small()
                     .label("Edit in JSON")
-                    .tooltip_with_action("Open keymap.json", &OpenKeymapFile, Some(CONTEXT))
+                    .tooltip_with_action("Open keymap.json", &EditInJson, Some(CONTEXT))
                     .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenKeymapFile), cx)),
             )
             .child(
@@ -514,6 +518,9 @@ impl Render for KeymapEditor {
             .on_action(cx.listener(Self::create))
             .on_action(cx.listener(Self::toggle_keystroke_search))
             .on_action(cx.listener(Self::focus_filter))
+            .on_action(|_: &EditInJson, window, cx| {
+                window.dispatch_action(Box::new(OpenKeymapFile), cx)
+            })
             .child(self.render_toolbar(cx))
             .children(errors.into_iter().enumerate().map(|(ix, error)| {
                 div()
@@ -1527,6 +1534,8 @@ mod form_tests {
         editor: Entity<KeymapEditor>,
         shown: bool,
         closed: usize,
+        /// How many times keymap.json was asked for.
+        opened: usize,
     }
 
     impl gpui_kit::Render for Tabs {
@@ -1544,15 +1553,18 @@ mod form_tests {
                 .track_focus(&self.focus)
                 .size_full()
                 .on_action(cx.listener(|this, _: &CloseTab, _, _| this.closed += 1))
+                .on_action(
+                    cx.listener(|this, _: &crate::keymap::OpenKeymapFile, _, _| this.opened += 1),
+                )
                 .children(self.shown.then(|| self.editor.clone()))
         }
     }
 
-    /// A recorder whose tab is switched away while it has the keyboard lets go of it: the
-    /// window's keys (⌘W) work again instead of going into the hidden field.
-    #[gpui_kit::test]
-    fn a_hidden_recorder_lets_go_of_the_keyboard(cx: &mut TestAppContext) {
-        let scratch = Scratch::new("hidden-recorder");
+    /// The keymap editor in [`Tabs`], in an active window, with the app's ⌘W.
+    fn open_in_tabs(
+        cx: &mut TestAppContext,
+        scratch: &Scratch,
+    ) -> (AnyWindowHandle, Entity<Tabs>, Entity<KeymapEditor>) {
         cx.update(|cx| {
             gpui_kit::init(cx);
             cx.bind_keys([KeyBinding::new("cmd-w", CloseTab, Some("Workspace"))]);
@@ -1566,6 +1578,7 @@ mod form_tests {
                     editor,
                     shown: true,
                     closed: 0,
+                    opened: 0,
                 })
             })
             .unwrap()
@@ -1574,6 +1587,31 @@ mod form_tests {
             .unwrap();
         cx.run_until_parked();
         let editor = cx.update(|cx| tabs.read(cx).editor.clone());
+        (window, tabs, editor)
+    }
+
+    /// ⌘E in the keymap editor opens keymap.json, through the editor's own action: the Sawit
+    /// menu's Open Keymap File has no key.
+    #[gpui_kit::test]
+    fn cmd_e_in_the_editor_opens_the_keymap_file(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("cmd-e");
+        let (window, tabs, editor) = open_in_tabs(cx, &scratch);
+        cx.update_window(window, |_, window, cx| {
+            let focus = editor.read(cx).focus.clone();
+            window.focus(&focus, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, "cmd-e");
+        cx.update(|cx| assert_eq!(tabs.read(cx).opened, 1));
+    }
+
+    /// A recorder whose tab is switched away while it has the keyboard lets go of it: the
+    /// window's keys (⌘W) work again instead of going into the hidden field.
+    #[gpui_kit::test]
+    fn a_hidden_recorder_lets_go_of_the_keyboard(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("hidden-recorder");
+        let (window, tabs, editor) = open_in_tabs(cx, &scratch);
         cx.update_window(window, |_, window, cx| {
             editor.update(cx, |editor, cx| {
                 editor.toggle_keystroke_search(&super::ToggleKeystrokeSearch, window, cx)
