@@ -47,6 +47,9 @@ pub struct AgentConfig {
     pub note: &'static str,
     /// The open project it belongs to, for project files.
     pub project: Option<PathBuf>,
+    /// The profile it belongs to (`work` for `~/.claude-work`), for a
+    /// profile's own files; `None` for the default profile's and the rest.
+    pub profile: Option<String>,
     /// Saving it works without an admin password.
     pub writable: bool,
 }
@@ -515,21 +518,45 @@ const OTHERS: &[(Client, &[Entry])] = &[
 ];
 
 /// The config files that exist, by agent in [`Client::ALL`] order, each
-/// agent's highest priority first. `projects` are the open projects'
-/// folders; an agent's project files are listed only when the agent is
-/// installed (it has a file outside the projects).
+/// agent's highest priority first, then each of its other profiles' own
+/// files: profiles are alternatives, not layers. `projects` are the open
+/// projects' folders; an agent's project files are listed only when the
+/// agent is installed (it has a file outside the projects).
 pub fn detect(projects: &[PathBuf]) -> Vec<AgentConfig> {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return Vec::new();
     };
-    detect_in(&home, Path::new("/"), projects)
+    // The profiles the environment names, wherever they are.
+    let named: Vec<(Client, PathBuf)> = [
+        (Client::ClaudeCode, "CLAUDE_CONFIG_DIR"),
+        (Client::Codex, "CODEX_HOME"),
+    ]
+    .into_iter()
+    .filter_map(|(client, var)| {
+        let dir = std::env::var_os(var).filter(|d| !d.is_empty())?;
+        Some((client, PathBuf::from(dir)))
+    })
+    .collect();
+    detect_with(&home, Path::new("/"), projects, &named)
 }
 
 /// [`detect`] with the folders given, for tests. `root` stands in for `/`.
+#[cfg(test)]
 fn detect_in(home: &Path, root: &Path, projects: &[PathBuf]) -> Vec<AgentConfig> {
-    let claude = profile_dirs(home, ".claude");
-    let codex = profile_dirs(home, ".codex");
-    let mut agents: Vec<(Client, &[Entry], Vec<PathBuf>)> = vec![
+    detect_with(home, root, projects, &[])
+}
+
+/// [`detect`], with `named` the profile folders the environment names
+/// (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`).
+fn detect_with(
+    home: &Path,
+    root: &Path,
+    projects: &[PathBuf],
+    named: &[(Client, PathBuf)],
+) -> Vec<AgentConfig> {
+    let claude = profile_dirs(home, Client::ClaudeCode, ".claude", ".claude.json", named);
+    let codex = profile_dirs(home, Client::Codex, ".codex", "config.toml", named);
+    let mut agents: Vec<(Client, &[Entry], Vec<Profile>)> = vec![
         (Client::ClaudeCode, CLAUDE_CODE, claude),
         (Client::Codex, CODEX, codex),
     ];
@@ -538,9 +565,15 @@ fn detect_in(home: &Path, root: &Path, projects: &[PathBuf]) -> Vec<AgentConfig>
 
     let mut out = Vec::new();
     for (client, entries, dirs) in agents {
-        let mut found = Vec::new();
+        // The default profile's files (with the agent's managed, system and
+        // project ones), then each other profile's.
+        let mut groups: Vec<Vec<AgentConfig>> = vec![Vec::new()];
+        groups.extend(dirs.iter().filter(|(p, _)| p.is_some()).map(|_| Vec::new()));
         for &(layer, base, rel, note) in entries {
-            let mut add = |path: PathBuf, project: Option<&PathBuf>| {
+            let mut add = |group: usize,
+                           path: PathBuf,
+                           project: Option<&PathBuf>,
+                           profile: Option<&String>| {
                 // `~/.claude/.claude.json` is a profile's; the default
                 // profile keeps it in the home folder.
                 let path = match (client, rel) {
@@ -551,6 +584,7 @@ fn detect_in(home: &Path, root: &Path, projects: &[PathBuf]) -> Vec<AgentConfig>
                     }
                     _ => path,
                 };
+                let found = &mut groups[group];
                 if path.is_file() && !found.iter().any(|c: &AgentConfig| c.path == path) {
                     found.push(AgentConfig {
                         client,
@@ -559,46 +593,75 @@ fn detect_in(home: &Path, root: &Path, projects: &[PathBuf]) -> Vec<AgentConfig>
                         path,
                         note,
                         project: project.cloned(),
+                        profile: profile.cloned(),
                     });
                 }
             };
             match base {
-                Base::Root => add(root.join(rel.trim_start_matches('/')), None),
-                Base::Home => add(home.join(rel), None),
-                Base::Dir => dirs.iter().for_each(|d| add(d.join(rel), None)),
-                Base::Project => projects.iter().for_each(|p| add(p.join(rel), Some(p))),
+                Base::Root => add(0, root.join(rel.trim_start_matches('/')), None, None),
+                Base::Home => add(0, home.join(rel), None, None),
+                Base::Dir => {
+                    let mut group = 0;
+                    for (profile, dir) in &dirs {
+                        if profile.is_some() {
+                            group += 1;
+                        }
+                        add(group, dir.join(rel), None, profile.as_ref());
+                    }
+                }
+                Base::Project => projects
+                    .iter()
+                    .for_each(|p| add(0, p.join(rel), Some(p), None)),
             }
         }
-        if found.iter().any(|c| c.project.is_none()) {
-            found.sort_by_key(|c| c.layer);
-            out.extend(found);
+        let installed = groups[0].iter().any(|c| c.project.is_none())
+            || groups[1..].iter().any(|g| !g.is_empty());
+        if installed {
+            for mut found in groups {
+                found.sort_by_key(|c| c.layer);
+                out.extend(found);
+            }
         }
     }
     out
 }
 
-/// `~/<prefix>` and its profiles `~/<prefix>-<name>`, the folders a
-/// `CLAUDE_CONFIG_DIR` or `CODEX_HOME` points at; the default first.
-fn profile_dirs(home: &Path, prefix: &str) -> Vec<PathBuf> {
-    let mut profiles: Vec<PathBuf> = std::fs::read_dir(home)
-        .into_iter()
-        .flatten()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_str()
-                .and_then(|n| n.strip_prefix(prefix))
-                .is_some_and(|rest| rest.len() > 1 && rest.starts_with('-'))
-        })
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect();
-    profiles.sort();
+/// A profile's name (`None` for the default one) and its folder.
+type Profile = (Option<String>, PathBuf);
+
+/// `~/<prefix>` (the default profile, `None`) and the profiles: folders
+/// `~/<prefix>-<name>` the agent ran in (they hold its `marker` file, as
+/// the MCP page requires), and those `named` by the environment.
+fn profile_dirs(
+    home: &Path,
+    client: Client,
+    prefix: &str,
+    marker: &str,
+    named: &[(Client, PathBuf)],
+) -> Vec<Profile> {
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let mut dirs: Vec<Profile> = Vec::new();
     let default = home.join(prefix);
-    std::iter::once(default)
-        .filter(|d| d.is_dir())
-        .chain(profiles)
-        .collect()
+    if default.is_dir() {
+        dirs.push((None, default));
+    }
+    for (name, dir) in crate::mcp_clients::profiles(home, prefix, marker) {
+        dirs.push((Some(name), dir));
+    }
+    for (c, dir) in named {
+        if *c != client
+            || !dir.join(marker).exists()
+            || dirs.iter().any(|(_, d)| canonical(d) == canonical(dir))
+        {
+            continue;
+        }
+        let name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().trim_start_matches('.').to_string())
+            .unwrap_or_else(|| "profile".into());
+        dirs.push((Some(name), dir.clone()));
+    }
+    dirs
 }
 
 #[cfg(test)]
@@ -619,6 +682,7 @@ mod tests {
         touch(&home.join(".claude/settings.json"));
         touch(&home.join(".claude.json"));
         touch(&home.join(".claude-work/settings.json"));
+        touch(&home.join(".claude-work/.claude.json"));
         touch(&home.join(".codex/config.toml"));
         touch(&root.join("Library/Application Support/ClaudeCode/managed-settings.json"));
         touch(&project.join(".claude/settings.local.json"));
@@ -655,16 +719,63 @@ mod tests {
                     Layer::User,
                     home.join(".claude/settings.json")
                 ),
+                (Client::ClaudeCode, Layer::Global, home.join(".claude.json")),
+                // The work profile's own files, after the default's.
                 (
                     Client::ClaudeCode,
                     Layer::User,
                     home.join(".claude-work/settings.json")
                 ),
-                (Client::ClaudeCode, Layer::Global, home.join(".claude.json")),
+                (
+                    Client::ClaudeCode,
+                    Layer::Global,
+                    home.join(".claude-work/.claude.json")
+                ),
                 (Client::Codex, Layer::Project, project.join("AGENTS.md")),
                 (Client::Codex, Layer::User, home.join(".codex/config.toml")),
             ]
         );
         assert_eq!(found[1].project.as_ref(), Some(&project));
+    }
+
+    /// Profiles are the folders Claude Code or Codex ran in (they hold its state file), each
+    /// its own set of files, not one more layer of the default's; a profile outside the home
+    /// folder (`CLAUDE_CONFIG_DIR`) is one too.
+    #[test]
+    fn profiles_are_their_own_and_only_real_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let root = dir.path().join("root");
+        touch(&home.join(".claude/settings.json"));
+        touch(&home.join(".claude.json"));
+        touch(&home.join(".claude-work/settings.json"));
+        touch(&home.join(".claude-work/.claude.json"));
+        // A helper folder that happens to share the prefix: not a profile.
+        touch(&home.join(".claude-pool/settings.json"));
+        let elsewhere = dir.path().join("team/claude");
+        touch(&elsewhere.join("settings.json"));
+        touch(&elsewhere.join(".claude.json"));
+
+        let found = detect_with(
+            &home,
+            &root,
+            &[],
+            &[(Client::ClaudeCode, elsewhere.clone())],
+        );
+        let got: Vec<_> = found
+            .iter()
+            .map(|c| (c.profile.as_deref(), c.path.clone()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (None, home.join(".claude/settings.json")),
+                (None, home.join(".claude.json")),
+                (Some("work"), home.join(".claude-work/settings.json")),
+                (Some("work"), home.join(".claude-work/.claude.json")),
+                (Some("claude"), elsewhere.join("settings.json")),
+                (Some("claude"), elsewhere.join(".claude.json")),
+            ]
+        );
     }
 }

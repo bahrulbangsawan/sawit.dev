@@ -777,10 +777,16 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
         }
     }
     if what.shows(ListWhat::Tools) {
-        let (found, latest) = futures::join!(
+        let (detection, latest) = futures::join!(
             crate::dev_tools::detect(),
             crate::dev_tools::latest_versions()
         );
+        let found = detection.found;
+        if let Some(problem) = &detection.problem {
+            ink.warn(&format!(
+                "Shell login tidak menjawab ({problem}): hanya alat di tempat biasanya yang terdeteksi."
+            ));
+        }
         for category in crate::dev_tools::Category::ALL {
             ink.section(&format!("🧰 {}", category.title()));
             for t in crate::dev_tools::TOOLS
@@ -1225,7 +1231,17 @@ pub async fn pasang(args: PasangArgs) -> i32 {
         "🌱 Pasang Bibit (tools)",
         "skrip instal resmi tiap alat (curl … | sh). Prasyarat ditanam duluan",
     );
-    let found = dev_tools::detect().await;
+    let detection = dev_tools::detect().await;
+    if let Some(problem) = &detection.problem {
+        // Which tools are missing is unknown: don't run an installer over a
+        // copy that's there.
+        println!(
+            "  {} Shell login tidak menjawab ({problem}), jadi tak ada yang dipasang. Coba lagi.",
+            ink.red("✗")
+        );
+        return 1;
+    }
+    let found = detection.found;
     for id in args.tools.iter().filter(|t| found.contains_key(t.as_str())) {
         ink.empty(&format!("{id} sudah terpasang"));
     }
@@ -1297,7 +1313,13 @@ pub async fn pupuk(args: PupukArgs) -> i32 {
         "🧪 Pupuk Bibit (upgrade tools)",
         "perintah upgrade tiap alat, atau skrip instalnya lagi",
     );
-    let (found, latest) = futures::join!(dev_tools::detect(), dev_tools::latest_versions());
+    let (detection, latest) = futures::join!(dev_tools::detect(), dev_tools::latest_versions());
+    let found = detection.found;
+    if let Some(problem) = &detection.problem {
+        ink.warn(&format!(
+            "Shell login tidak menjawab ({problem}): hanya alat di tempat biasanya yang dicek."
+        ));
+    }
     let wanted: Vec<&str> = args.tools.iter().map(|t| t.as_str()).collect();
     let plan = dev_tools::upgrade_plan(&wanted, &found, &latest);
     for id in wanted

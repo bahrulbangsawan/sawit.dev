@@ -46,3 +46,5 @@ schemars = "1"
 [dev-dependencies]
 # Headless windows and simulated keystrokes for UI tests.
 gpui = { package = "gpui-pre", version = "=0.3.10", features = ["test-support"] }
+# Throwaway config files for the catalog pages' tests.
+tempfile = "3"

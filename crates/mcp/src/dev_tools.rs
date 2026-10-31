@@ -44,8 +44,14 @@ fn unknown(wanted: &[String]) -> Vec<&str> {
 
 impl Sawit {
     pub async fn list_dev_tools_tool(&self) -> CallToolResult {
-        let (found, latest) = tokio::join!(dev_tools::detect(), dev_tools::latest_versions());
+        let (detection, latest) = tokio::join!(dev_tools::detect(), dev_tools::latest_versions());
+        let found = detection.found;
         let mut out = Vec::new();
+        if let Some(problem) = &detection.problem {
+            out.push(format!(
+                "Note: the login shell couldn't say which tools it finds ({problem}). Only tools at their usual places show as installed; others may be installed too.\n"
+            ));
+        }
         for category in Category::ALL {
             out.push(category.title().to_string());
             for t in TOOLS.iter().filter(|t| t.category == category) {
@@ -98,7 +104,15 @@ impl Sawit {
                 bad.join(", ")
             ));
         }
-        let found = dev_tools::detect().await;
+        let detection = dev_tools::detect().await;
+        if let Some(problem) = &detection.problem {
+            // Which tools are missing is unknown: installing could run an
+            // installer over a copy that's there.
+            return fail(format!(
+                "Refused: the login shell couldn't say which tools are installed ({problem}), so nothing was run. Try again."
+            ));
+        }
+        let found = detection.found;
         let wanted: Vec<&str> = a.tools.iter().map(|t| t.as_str()).collect();
         let plan = dev_tools::plan(&wanted, &|id| found.contains_key(id));
         let mut out = Vec::new();
@@ -146,10 +160,16 @@ impl Sawit {
                 bad.join(", ")
             ));
         }
-        let (found, latest) = tokio::join!(dev_tools::detect(), dev_tools::latest_versions());
+        let (detection, latest) = tokio::join!(dev_tools::detect(), dev_tools::latest_versions());
+        let found = detection.found;
         let wanted: Vec<&str> = a.tools.iter().map(|t| t.as_str()).collect();
         let plan = dev_tools::upgrade_plan(&wanted, &found, &latest);
         let mut out = Vec::new();
+        if let Some(problem) = &detection.problem {
+            out.push(format!(
+                "Note: the login shell couldn't say which tools it finds ({problem}); only tools at their usual places were considered."
+            ));
+        }
         for id in wanted
             .iter()
             .filter(|id| !plan.iter().any(|t| t.id == **id))
