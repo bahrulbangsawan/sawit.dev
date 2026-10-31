@@ -980,9 +980,15 @@ mod tests {
         dir.canonicalize().unwrap()
     }
 
-    /// Polls `ok` (the shells run on real threads) for up to five seconds.
+    /// How long a test waits on the real shells it starts. A shell takes a moment to start and
+    /// to run what it's sent, and seconds when other test binaries run at once (as when several
+    /// lanes run their gates), so the wait is generous: a test that passes stops waiting as soon
+    /// as what it waits for happens.
+    const SHELLS: Duration = Duration::from_secs(30);
+
+    /// Polls `ok` (the shells run on real threads) for up to [`SHELLS`].
     fn wait_until(cx: &mut TestAppContext, what: &str, ok: impl Fn(&App) -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + SHELLS;
         while !cx.update(|cx| ok(cx)) {
             assert!(Instant::now() < deadline, "timed out waiting until {what}");
             std::thread::sleep(Duration::from_millis(20));
@@ -992,7 +998,7 @@ mod tests {
     /// Like `wait_until`, but lets the app handle what the shells sent
     /// (output, their exit) while it waits.
     fn run_until(cx: &mut TestAppContext, what: &str, ok: impl Fn(&App) -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + SHELLS;
         while !cx.update(|cx| ok(cx)) {
             assert!(Instant::now() < deadline, "timed out waiting until {what}");
             std::thread::sleep(Duration::from_millis(20));
@@ -1178,11 +1184,14 @@ mod tests {
         cx.update(|cx| view.read(cx).cd(&dir));
         // No more input: only the passing of time may bring the header up
         // to date. Time is the test clock's, moved one folder check at a
-        // time, with a moment between for the shell to run the `cd`.
-        let mut checks = 0;
+        // time, with a moment between for the shell to run the `cd`, for as
+        // long as a busy machine takes to run it.
+        let deadline = Instant::now() + SHELLS;
         while cx.update(|cx| view.read(cx).cached_folder()).as_ref() != Some(&dir) {
-            assert!(checks < 60, "the header still shows the old folder");
-            checks += 1;
+            assert!(
+                Instant::now() < deadline,
+                "the header still shows the old folder"
+            );
             std::thread::sleep(Duration::from_millis(20));
             cx.executor().advance_clock(FOLDER_TTL);
             cx.run_until_parked();
@@ -1200,7 +1209,7 @@ mod tests {
         let tab = cx.update(|cx| panel.read(cx).tab(0).clone());
         let renders = |cx: &mut TestAppContext| cx.update(|cx| tab.read(cx).renders);
         // Let the shells finish starting: half a second with no redraw.
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + SHELLS;
         let mut last = renders(cx);
         let mut quiet_since = Instant::now();
         while quiet_since.elapsed() < Duration::from_millis(500) {
