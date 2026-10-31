@@ -228,6 +228,53 @@ pub fn unbound_rows(rows: &[crate::keymap::Row]) -> Vec<crate::keymap::Row> {
         .collect()
 }
 
+/// `NoAction` on the canvas for each chord of `user` (the keymap file's bindings, bound after
+/// `defaults`) that starts with a key the canvas binds alone in `defaults`: bound after them, it
+/// keeps that key from waiting for the chord's next key (GPUI waits up to a second when a chord
+/// bound after a key's own binding goes on from it), as [`let_through`] does for the
+/// workspace's ⌘K chords. Such a chord then works everywhere but on the canvas, unless the user
+/// bound it on the canvas itself.
+pub fn let_through_chords<'a>(
+    defaults: &[KeyBinding],
+    user: impl IntoIterator<Item = &'a KeyBinding>,
+    cx: &App,
+) -> Vec<KeyBinding> {
+    let canvas = [
+        KeyContext::parse("Workspace").unwrap_or_default(),
+        KeyContext::parse("Board").unwrap_or_default(),
+    ];
+    let editing = [
+        KeyContext::parse("Workspace").unwrap_or_default(),
+        KeyContext::parse("Board BoardText").unwrap_or_default(),
+    ];
+    let on_canvas = |binding: &KeyBinding| {
+        binding
+            .predicate()
+            .is_some_and(|p| p.eval(&canvas) || p.eval(&editing))
+    };
+    let alone: Vec<&KeybindingKeystroke> = defaults
+        .iter()
+        .filter(|binding| binding.keystrokes().len() == 1 && on_canvas(binding))
+        .map(|binding| &binding.keystrokes()[0])
+        .collect();
+    let board = KeyBindingContextPredicate::parse("Board")
+        .ok()
+        .map(std::rc::Rc::new);
+    user.into_iter()
+        .filter(|chord| {
+            chord.keystrokes().len() > 1
+                && !is_no_action(chord.action())
+                && !is_unbind(chord.action())
+                && !on_canvas(chord)
+                && alone.contains(&&chord.keystrokes()[0])
+        })
+        .filter_map(|chord| {
+            let keys = crate::keymap::names::unparse(chord.keystrokes());
+            KeyBinding::load(&keys, Box::new(NoAction), board.clone(), false, None, cx).ok()
+        })
+        .collect()
+}
+
 /// The canvas's keys that stay off the app's bindings ([`bindings`]).
 fn let_through() -> Vec<KeyBinding> {
     let board = Some("Board");

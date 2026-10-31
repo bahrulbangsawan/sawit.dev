@@ -885,6 +885,41 @@ impl BindingForm {
         (same, elsewhere)
     }
 
+    /// The active bindings, in this context or anywhere, that the keys being recorded start
+    /// (`⌘K W (workspace: close all tabs)`), then those that start them: a key bound alone and a
+    /// chord on it either keep the key waiting for the chord's next key, or leave the chord out
+    /// of reach.
+    fn chord_clashes(&self, cx: &App) -> (Vec<String>, Vec<String>) {
+        let keys = self.keys.read(cx).keystrokes();
+        if keys.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+        let context = self.context.read(cx).value().trim().to_string();
+        let own = match &self.target {
+            FormTarget::Row(row) => Some(row.source),
+            FormTarget::New => None,
+        };
+        let rows = store(cx).read(cx).rows(false, cx);
+        let (mut longer, mut shorter) = (Vec::new(), Vec::new());
+        for row in rows
+            .iter()
+            .filter(|r| is_active(r) && Some(r.source) != own)
+        {
+            let row_context = row.context.as_deref().unwrap_or_default();
+            if !(row_context == context || row_context.is_empty() || context.is_empty()) {
+                continue;
+            }
+            let named = || format!("{} ({})", row.display, row.label);
+            if row.keystrokes.len() > keys.len() && starts_with_keys(&row.keystrokes, &keys) {
+                longer.push(named());
+            } else if keys.len() > row.keystrokes.len() && starts_with_keys(&keys, &row.keystrokes)
+            {
+                shorter.push(named());
+            }
+        }
+        (longer, shorter)
+    }
+
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.try_save(cx) {
             Ok(()) => {
@@ -978,6 +1013,7 @@ impl Render for BindingForm {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let (same, elsewhere) = self.clashes(cx);
+        let (longer, shorter) = self.chord_clashes(cx);
         let keys = self.keys.read(cx).keystrokes();
         let label = |text: &'static str| {
             div()
@@ -1099,6 +1135,25 @@ impl Render for BindingForm {
                         "{} is also bound to {} in this context. Both bindings stay, and this one runs: the binding saved last goes first.",
                         names::display_typed(&parse_keys(&keys)),
                         same.join(", ")
+                    ),
+                ))
+            })
+            .when(!longer.is_empty(), |el| {
+                el.child(Banner::info(
+                    "binding-starts-chords",
+                    format!(
+                        "{} also starts {} here. Bound alone, it runs at once, and those chords can no longer be typed here.",
+                        names::display_typed(&parse_keys(&keys)),
+                        longer.join(", ")
+                    ),
+                ))
+            })
+            .when(!shorter.is_empty(), |el| {
+                el.child(Banner::info(
+                    "binding-extends-keys",
+                    format!(
+                        "These keys start with {}, bound alone here: with this chord, those keys wait up to a second for the next key before they run.",
+                        shorter.join(", ")
                     ),
                 ))
             })
@@ -1635,5 +1690,36 @@ mod form_tests {
         cx.simulate_keystrokes(window, "cmd-w");
         assert_eq!(searched(cx), "cmd-k", "the hidden field took ⌘W");
         cx.update(|cx| assert_eq!(tabs.read(cx).closed, 1));
+    }
+
+    /// The form warns when the keys and another binding in the context are a chord and its first
+    /// keys: ⌘K bound alone beside ⌘K W, or ⌘J X beside ⌘J.
+    #[gpui_kit::test]
+    fn the_form_warns_of_a_chord_on_bound_keys(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("form-chords");
+        let (window, editor) = open(cx, &scratch);
+        cx.update_window(window, |_, window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.create(&super::CreateBinding, window, cx)
+            });
+            let form = editor.read(cx).form.clone().unwrap();
+            let (context, recorder) = {
+                let form = form.read(cx);
+                (form.context.clone(), form.keys.clone())
+            };
+            context.update(cx, |c, cx| c.set_value("Workspace", window, cx));
+            recorder.update(cx, |r, cx| r.set_keystrokes("cmd-k", cx));
+            let (longer, shorter) = form.read(cx).chord_clashes(cx);
+            assert_eq!(longer, ["⌘K W (keymap editor test: close all)"]);
+            assert!(shorter.is_empty(), "{shorter:?}");
+            recorder.update(cx, |r, cx| r.set_keystrokes("cmd-j x", cx));
+            let (longer, shorter) = form.read(cx).chord_clashes(cx);
+            assert!(longer.is_empty(), "{longer:?}");
+            assert_eq!(shorter, ["⌘J (keymap editor test: toggle dock)"]);
+            // Another context doesn't count.
+            context.update(cx, |c, cx| c.set_value("Editor", window, cx));
+            assert_eq!(form.read(cx).chord_clashes(cx), (Vec::new(), Vec::new()));
+        })
+        .unwrap();
     }
 }

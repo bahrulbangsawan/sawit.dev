@@ -277,8 +277,9 @@ explained. A conflict on the same address can't be forced.
 - **Menus and shortcuts**: the ≡ button opens the main menu, and a right-click opens the context menu.
   <kbd>⌘</kbd><kbd>K</kbd> (or <kbd>⌘</kbd><kbd>/</kbd>) opens the **Actions** palette, which finds any menu command
   by name, and <kbd>⌃</kbd><kbd>⇧</kbd><kbd>?</kbd> lists every shortcut. While the canvas has the keyboard,
-  <kbd>⌘</kbd><kbd>K</kbd> belongs to the palette, so the chords that start with it (the tab chords, and
-  <kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd> for the Keymap Editor) don't work there.
+  <kbd>⌘</kbd><kbd>K</kbd> belongs to the palette, so the chords that start with it (the tab chords,
+  <kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd> for the Keymap Editor, and any you add) don't work there. The
+  same goes for a chord you add that starts with another key the canvas uses alone.
 - **Where files live**: the project's canvas is `.nyawit/canvas.figcraft` in its folder. With no project it is
   `canvas.figcraft` in Sawit's data folder. Exports go to `.nyawit/exports/`, or to `exports/` in the data folder
   with no project or for a canvas file outside a project's `.nyawit/` (a `.figcraft` opened from the Files tab, say),
