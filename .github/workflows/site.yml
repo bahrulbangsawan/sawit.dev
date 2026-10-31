@@ -5,6 +5,10 @@
 # DNS edit on the sawit.dev zone). The account comes from site/cloudflare.config.ts.
 # Until the secret is set, a push to main still builds and checks the site, and skips the deploy
 # with a notice instead of failing.
+#
+# This job deploys the install.sh users pipe into sh, so it keeps as little power as it can: the
+# workflow's token can only read the repository, checkout doesn't leave it in .git/config for npm's
+# package scripts to read, and each action is pinned to a commit, not to a tag that can be moved.
 name: Site
 
 on:
@@ -13,6 +17,9 @@ on:
   push:
     branches: [main]
     paths: ["site/**", "scripts/install.sh", ".github/workflows/site.yml"]
+
+permissions:
+  contents: read
 
 # One run at a time per branch, none cancelled: pushes to main deploy in the order they were made,
 # so an older build never replaces a newer one.
@@ -32,8 +39,10 @@ jobs:
       # Secrets can't be read in a step's `if`, so whether the token is set goes through env.
       HAS_CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm

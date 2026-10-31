@@ -1031,32 +1031,73 @@ fn a_rebuild_replaces_the_assets_of_a_release_that_exists() {
     assert!(!calls.contains("release create"), "{calls}");
 }
 
-/// RELEASE-9: the release job's token can write to the repository. Each action it runs is
-/// pinned to a commit, since a tag can be moved to other code, and checkout doesn't leave the
-/// token in `.git/config`, where every build script and the cache action could read it.
+/// The step of a workflow whose `uses:` line is `lines[at]`: from its `- ` line to the next line
+/// indented no deeper than that dash.
+fn step_at(lines: &[&str], at: usize) -> String {
+    let indent = |line: &str| line.len() - line.trim_start().len();
+    let start = (0..=at)
+        .rev()
+        .find(|&i| lines[i].trim_start().starts_with("- "))
+        .expect("a step");
+    let dash = indent(lines[start]);
+    let end = (start + 1..lines.len())
+        .find(|&i| !lines[i].trim().is_empty() && indent(lines[i]) <= dash)
+        .unwrap_or(lines.len());
+    lines[start..end].join("\n")
+}
+
+/// RELEASE-9: a workflow's token reaches the repository, and its jobs hold more: the release
+/// job's token can write to the repository, and the site job deploys the `install.sh` users pipe
+/// into `sh`. So each workflow says what its token may do rather than taking the repository's
+/// default, pins each action it runs to a commit, since a tag can be moved to other code, and
+/// has checkout leave no token in `.git/config`, where every later step could read it. The
+/// site's workflow came later and had none of this.
 #[test]
-fn the_release_job_pins_its_actions_and_keeps_no_token_on_disk() {
-    let workflow = fs::read_to_string(checkout().join(".github/workflows/release.yml")).unwrap();
-    let mut actions = 0;
-    for line in workflow.lines() {
-        let Some(action) = line.trim().trim_start_matches("- ").strip_prefix("uses: ") else {
+fn every_workflow_pins_its_actions_and_keeps_no_token_on_disk() {
+    let mut checked = Vec::new();
+    for entry in fs::read_dir(checkout().join(".github/workflows")).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if !name.ends_with(".yml") && !name.ends_with(".yaml") {
             continue;
-        };
-        actions += 1;
-        let commit = action.split_once('@').map_or("", |(_, at)| at);
-        let commit = commit.split_whitespace().next().unwrap_or("");
+        }
+        let workflow = fs::read_to_string(&path).unwrap();
         assert!(
-            commit.len() == 40 && commit.chars().all(|c| c.is_ascii_hexdigit()),
-            "{action} isn't pinned to a commit"
+            workflow
+                .lines()
+                .any(|line| line.starts_with("permissions:")),
+            "{name} doesn't say what its token may do"
         );
+        let lines: Vec<&str> = workflow.lines().collect();
+        let mut checkouts = 0;
+        for (at, line) in lines.iter().enumerate() {
+            let Some(action) = line.trim().trim_start_matches("- ").strip_prefix("uses: ") else {
+                continue;
+            };
+            if action.starts_with("./") {
+                continue;
+            }
+            let commit = action.split_once('@').map_or("", |(_, at)| at);
+            let commit = commit.split_whitespace().next().unwrap_or("");
+            assert!(
+                commit.len() == 40 && commit.chars().all(|c| c.is_ascii_hexdigit()),
+                "{name}: {action} isn't pinned to a commit"
+            );
+            if action.starts_with("actions/checkout@") {
+                checkouts += 1;
+                let step = step_at(&lines, at);
+                assert!(
+                    step.contains("persist-credentials: false"),
+                    "{name}: checkout leaves the token on disk:\n{step}"
+                );
+            }
+        }
+        assert!(checkouts > 0, "{name} has no checkout step");
+        checked.push(name);
     }
-    assert!(actions >= 2, "{workflow}");
-    let checkout = workflow
-        .split("- uses: actions/checkout@")
-        .nth(1)
-        .expect("a checkout step");
-    let step = checkout.split("\n      - ").next().unwrap();
-    assert!(step.contains("persist-credentials: false"), "{step}");
+    for workflow in ["release.yml", "site.yml"] {
+        assert!(checked.iter().any(|name| name == workflow), "{checked:?}");
+    }
 }
 
 /// RELEASE-8: NOTICE goes into Sawit.app with the licence texts of what the binary carries. A
