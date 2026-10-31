@@ -16,7 +16,7 @@ mod engine;
 mod panel;
 mod toolbar;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -373,6 +373,11 @@ impl BrowserView {
             engine.focus_parent();
         }
         self.focus.focus(window, cx);
+    }
+
+    /// The project whose browser this is; `None` for the browser of no project.
+    pub fn project(&self) -> Option<&Path> {
+        self.project.as_deref()
     }
 
     pub fn panel(&self) -> Option<Panel> {

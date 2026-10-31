@@ -262,8 +262,9 @@ explained. A conflict on the same address can't be forced.
   Desktop, scaled to fit the tab. **Rotate** turns the device, and **Responsive** fills the tab again.
 - **Annotate** (<kbd>⇧</kbd><kbd>⌘</kbd><kbd>.</kbd>): click elements on the page and write what should change. Each
   note carries the element's selector, styles, a screenshot and, in a dev build, its source file. **Copy** the notes
-  as Markdown, or **Send to terminal** to paste them into Claude Code (or a shell) without pressing Enter; both can
-  add the page's console errors. Screenshots go to `.nyawit/annotations/`.
+  as Markdown, or **Send to terminal** to paste them into Claude Code (or a shell) without pressing Enter: the
+  project's own terminals first, never an SSH session. Both can add the page's console errors. Screenshots go to
+  `.nyawit/annotations/`.
 - **Design**: inspect any element (box model, typography, colors with contrast, hover and focus states) and copy it
   as CSS, Tailwind or HTML. The panel also lists the page's colors, fonts and assets, and derives its design system:
   palette ramps, type scale, spacing, radius and shadows. **Export** writes `DESIGN.md`, DTCG tokens, a Tailwind v4

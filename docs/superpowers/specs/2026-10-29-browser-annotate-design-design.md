@@ -65,7 +65,7 @@ clicking Export leaves a folder Claude can build a matching UI from.
 | D4 | Highlights, markers, the hover label and measurements are drawn in-page, in one closed shadow root on a `<sawit-overlay data-sawit-overlay>` host. The host is created on first use and appended to `<html>`, never `<body>`. It uses `pointer-events: none` except while picking. | Hover feedback has to sit on the page. Staying outside `<body>` avoids React hydration mismatches. A closed root keeps page CSS out. |
 | D5 | The agent snapshot, the design scan and the picker skip `[data-sawit-overlay]`. Every screenshot (agent, annotation, export) hides the overlay first and restores it after. | Anti-goal 1. |
 | D6 | Annotations are kept in `BrowserView` memory for the session, numbered per page URL. Screenshots go to `.nyawit/annotations/<yyyy-mm-dd>/<host>[-<port>]-<n>.png`, or Sawit's cache dir without a project. | Claude Code reads image files by path. `.nyawit/` is already git-ignored. |
-| D7 | Send to terminal pastes the markdown into a terminal tab, the agent's first (see the Annotate panel below; bracketed paste, via `sawit_core::terminal::paste_bytes`). It doesn't press Enter, so the user can add a line before submitting. It also shows and focuses that terminal. | Claude Code runs there. Not pressing Enter keeps the user in control. |
+| D7 | Send to terminal pastes the markdown into a terminal tab, the browser's project's agent first, never an SSH session (see the Annotate panel below; bracketed paste, via `sawit_core::terminal::paste_bytes`). It doesn't press Enter, so the user can add a line before submitting. It also shows and focuses that terminal. | Claude Code runs there. Not pressing Enter keeps the user in control. |
 | D8 | Exports go to `.nyawit/design/<host>/`, the host keeping a port that isn't its scheme's own (`localhost-5173`), so two dev servers don't share a folder. A re-export of the same host replaces that folder. Without a project they go to `~/Downloads/sawit-design/<host>/`. | Stable path for agents; regenerable from the site. |
 | D9 | Stylesheets the page can't read (cross-origin, `cssRules` throws) are fetched by Sawit with `/usr/bin/curl` (`Referer` = page URL). Their text goes back into the page, which parses it with a constructable `CSSStyleSheet`. Only text served as `text/css` goes back, and from this Mac or its network only to a page named as local (`localhost`, `*.local`, an address there) on that same host: the host asked for, where redirects ended and the address curl got the sheet from all count. | @font-face sources, `:root` custom properties, breakpoints and `:hover`/`:focus` rules often live in CDN sheets. curl matches `update.rs`; no new dependency. The page's scripts can read what goes back, so a page can't read the dev server or the LAN through Sawit. |
 | D10 | Assets are downloaded by Sawit with curl: `-q` (no `~/.curlrc`), `Referer` = page URL, Safari user agent, `--max-time 30`, no `--compressed` (so the caps count the bytes written), 6 at a time, 300 MB total per export, each download capped at the share of that it holds (at most 50 MB). What a download may fetch and keep follows where the page is, by the tab's own URL, never the page's word. A page on this Mac or its network downloads from any host. It is one when its host is named so (`localhost`, `*.localhost`, `*.local`, a loopback, private, link-local or shared address), or resolves only to such addresses when the download starts (`myapp.test` from Herd or Valet, `*.ddev.site`, `lvh.me`, a hosts-file name). A page on the web gets nothing from this Mac or its network: no host named so, where curl asked or where redirects ended, and no file from such an address. Through a proxy curl reports the proxy's address, so then the names decide (curl 8.7, macOS 15; with an older curl, a proxy on the local network leaves a web page's files out). `file://` assets are copied only for a `file://` page. `data:` URLs are decoded in Rust. `blob:` URLs aren't saved; they're listed as "Can't save blob: media (made by the page's scripts)". Inline SVG is saved from its markup. Icons listed in the web app manifest are found by fetching the manifest. A Save names a new file after those already in the folder (`logo-2.png`). Failures are listed with a reason, not fatal. | Hotlink-protected CDNs need the Referer. Caps keep a video-heavy site from filling the disk. Downloads reach only the disk, never the page, so a dev site keeps what its other local names serve it (Vite's `127.0.0.1:5173` for a `.test` page), and only a page on the web is kept from this Mac and its network. A web page whose name resolves here when the export starts counts as local; at worst that saves what its local hosts serve, which the page never sees. |
@@ -125,10 +125,13 @@ clicking Export leaves a folder Claude can build a matching UI from.
   first while a comment hasn't been copied, sent or read by an agent as it is now; Close Others
   and Close All leave such a tab open, as they do an unsaved file.
 - Send to terminal only pastes into a tab whose program accepts bracketed paste: Claude Code,
-  zsh, bash ≥ 5.1. A tab whose focused pane runs such a program (the agent) comes before one at a
-  shell prompt: the active tab if it has one, else the highest-numbered tab that does; then a
-  shell at its prompt the same way. Otherwise it copies instead and says "No terminal is ready for
-  a paste, so it was copied." This way pasted lines never run as shell commands.
+  zsh, bash ≥ 5.1. It never pastes into an SSH session: the remote shell turns bracketed paste on
+  too, but the notes are for an agent on this Mac. The browser's project's tabs come first: one
+  whose focused pane runs such a program (the agent), then one at a shell prompt. Then a tab in no
+  project the same way (its agent may work on any project), and last another project's. Among
+  equals, the active tab if it is one, else the highest-numbered. The browser of no project counts
+  every tab as its project's. Otherwise it copies instead and says "No terminal is ready for a
+  paste, so it was copied." This way pasted lines never run as shell commands.
 - Markers are numbered dots on the page for the current URL's annotations. They follow their
   elements on scroll and resize, and are re-attached when the user comes back to a URL and the
   selector still matches.
@@ -351,7 +354,8 @@ GPUI BrowserView (browser/mod.rs) ── toolbar.rs ── device menu, panel to
   details (selector, label, text, box, key styles, source hint, outerHTML ≤ 20 000 characters),
   so a pick needs no second round trip. `Hovered` carries only selector, label and box.
 - `BrowserView` emits `BrowserEvent::SendToTerminal(String)`. The workspace subscribes, shows the
-  terminal panel, pastes into the active terminal tab and focuses it.
+  terminal panel, pastes into the tab `TerminalPanel::paste_target` picks for the browser's
+  project (see the Annotate panel) and focuses it.
 - Scan budget: ≤ 6 000 elements visited (visible ones first, in document order), answer ≤ 2 MB.
   Over budget: partial with `"truncated": true`, shown as "Large page: scanned the first 6 000
   elements."

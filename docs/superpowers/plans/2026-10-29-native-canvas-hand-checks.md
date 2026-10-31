@@ -1501,6 +1501,11 @@ Answer: ______
   terminal.
 - Run `claude` in a third tab too. With tab 2 in front again, Send goes to the third tab, the last one running an
   agent; with tab 1 in front, to tab 1.
+- Open a second project with the title bar's + and run `claude` in a terminal tab of its group, in front. Back in
+  the first project's Browser, click Send. Look for: it goes to the first project's Claude Code, not the second's
+  (review-browser m1).
+- Connect to a saved SSH server from the SSH sidebar and leave its tab in front. Click Send. Look for: nothing is
+  pasted at the server's prompt; the notes go to the project's Claude Code.
 
 Answer: ______
 

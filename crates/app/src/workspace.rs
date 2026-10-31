@@ -2580,8 +2580,8 @@ impl Workspace {
         }
     }
 
-    /// Pastes annotations into the terminal running an agent; copies them
-    /// when no tab has bracketed paste on.
+    /// Pastes annotations into the terminal running an agent, the browser's project's first;
+    /// copies them when no tab has bracketed paste on.
     fn send_to_terminal(
         &mut self,
         browser: &Entity<BrowserView>,
@@ -2589,7 +2589,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let target = self.terminal.read(cx).paste_target(cx);
+        let project = browser.read(cx).project().map(Path::to_path_buf);
+        let target = self.terminal.read(cx).paste_target(project.as_deref(), cx);
         let sent = target.and_then(|ix| {
             if !self.layout.terminal {
                 self.layout.toggle(Area::Terminal);
