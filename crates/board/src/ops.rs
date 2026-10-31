@@ -22,7 +22,8 @@
 //! Every other op that changes the document first ends the text the user is typing in on the
 //! canvas, as a click elsewhere does, unless it is a command that acts on that text
 //! ([`end_text_edit_before_op`], ruling R-TEXTEDIT): what was typed is an undo step of its own,
-//! and the op is one after it.
+//! and the op is one after it. While the user holds a drag on the canvas, such an op is refused
+//! instead and changes nothing ([`waits_for_the_drag`]): the drag's next move would take it back.
 //!
 //! A canvas holds one document, and the view saves the one on show over the canvas's file, so no
 //! `command` op may leave another document open or on show. The ones that do that by name are
@@ -200,8 +201,17 @@ const MERMAID_GAP: f64 = 100.0;
 ///   keyboard types it, and answers `{ok}`; the edit goes on. With no text edited it answers the
 ///   error "not editing text". A sticky or a text layer is edited once the pointer or a key
 ///   starts it, as with a mouse and a keyboard: the sticky tool's click, a double-click, Enter.
+///
+/// While the user holds a drag on the canvas, every op that changes the document (`add`,
+/// `update`, `delete`, `clear`, `replace`, `mermaid` and `command`) answers
+/// "<op>: finish the drag on the canvas first" and changes nothing ([`waits_for_the_drag`]).
 pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
     let name = op.get("op").and_then(Value::as_str);
+    if let Some(name) = name
+        && waits_for_the_drag(board, name)
+    {
+        return failure(format!("{name}: finish the drag on the canvas first"));
+    }
     if let Some(name) = name
         && let Err(error) = end_text_edit_before_op(board, name, op)
     {
@@ -230,6 +240,26 @@ pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
 /// `{ok: false, error}`.
 fn failure(error: impl Display) -> Value {
     json!({"ok": false, "error": error.to_string()})
+}
+
+/// The ops that change the document, which wait for a drag on the canvas to end
+/// ([`waits_for_the_drag`]).
+const CHANGES_THE_DOCUMENT: [&str; 7] = [
+    "add", "update", "delete", "clear", "replace", "mermaid", "command",
+];
+
+/// Whether op `name` has to wait for the gesture under way on the canvas: it changes the
+/// document, and the user holds the button down there with a tool (a move, a resize, a shape
+/// being drawn, a marquee...), as the engine's own `tool.place` refuses to place mid-drag.
+///
+/// A gesture keeps the document it began with, and each move of it builds the document again
+/// from that one (`Session::preview`), as an Escape puts that one back. So what an op did in
+/// between was gone at the next move, though the op had answered ok (Plan 8 final review I-1).
+/// Refused, the op changes nothing, and the agent can send it again once the button is up. The
+/// reads (`get`, `commands`, the exports) change nothing either, and the input of `pointer`, `key`
+/// and `type` meets the gesture as the mouse and the keyboard do, so they go through.
+fn waits_for_the_drag(board: &BoardDoc, name: &str) -> bool {
+    CHANGES_THE_DOCUMENT.contains(&name) && board.session.tool.busy()
 }
 
 /// Ends the text being typed in on the canvas before op `name` (`op`) changes the document, as the
@@ -3724,6 +3754,81 @@ mod tests {
         ask(&mut board, batch);
         assert!(!editing(&board) && !gesture_open(&board));
         assert_eq!(sticky_text(&board, note), "hi!");
+    }
+
+    /// The middle of the box `get` gives `element`, on the page.
+    fn middle(element: &Value) -> (f64, f64) {
+        let [x, y, width, height] =
+            ["x", "y", "width", "height"].map(|key| element[key].as_f64().unwrap());
+        (x + width / 2.0, y + height / 2.0)
+    }
+
+    /// Plan 8 final review I-1 (the controller's FINAL.P8 ruling): while the user holds a drag on
+    /// the canvas, an op that changes the document is refused and changes nothing. Each move of
+    /// the drag builds the document again from the one the drag began with (`Session::preview`),
+    /// so an op run inside it was taken back by the next move, or by an Escape, though it had
+    /// answered ok. Reads still answer during the drag; once the button is up the op goes
+    /// through, and what it drew stays through the next drag.
+    #[test]
+    fn an_op_that_changes_the_document_waits_for_the_drag_to_end() {
+        let mut board = board();
+        let made = send(&mut board, "board.sticky", json!({"x": 0, "y": 0}));
+        let note = figcraft_engine::params::id_of(&made["result"]["id"]).unwrap();
+        let (x, y) = middle(&elements(&mut board)[0]);
+        // The Move tool presses on the sticky and drags it past the slop, and the button stays
+        // down.
+        pointer_at(&mut board, "down", x, y);
+        pointer_at(&mut board, "move", x + 40.0, y + 30.0);
+        assert!(board.session.tool.busy());
+        let held = board.doc().unwrap();
+        let steps = board.session.undo_depth();
+
+        let rectangle = json!([{"type": "rectangle", "x": 600, "y": 0}]);
+        for op in [
+            json!({"op": "add", "elements": rectangle}),
+            json!({"op": "update", "elements": [{"id": note.to_string(), "x": 300}]}),
+            json!({"op": "delete", "ids": [note.to_string()]}),
+            json!({"op": "clear"}),
+            json!({"op": "replace", "scene": scene()}),
+            json!({"op": "mermaid", "source": "graph TD; A-->B"}),
+            json!({"op": "command", "command": "board.sticky", "params": {"x": 900, "y": 0}}),
+        ] {
+            let name = op["op"].as_str().unwrap();
+            let error = format!("{name}: finish the drag on the canvas first");
+            assert_eq!(run(&mut board, &op), json!({"ok": false, "error": error}));
+            // The page is as the drag shows it, and the drag goes on.
+            assert!(Arc::ptr_eq(&board.doc().unwrap(), &held), "{op}");
+            assert!(board.session.tool.busy() && gesture_open(&board), "{op}");
+        }
+        // The reads answer.
+        assert_eq!(elements(&mut board).len(), 1);
+        ask(&mut board, json!({"op": "commands"}));
+        ask(&mut board, json!({"op": "export_svg"}));
+        assert_eq!(board.session.undo_depth(), steps);
+
+        // The drag ends as it would have: the sticky moved, in one undo step.
+        pointer_at(&mut board, "move", x + 60.0, y + 50.0);
+        pointer_at(&mut board, "up", x + 60.0, y + 50.0);
+        assert!(!board.session.tool.busy());
+        assert_eq!(board.session.undo_depth().0, steps.0 + 1);
+        let moved = elements(&mut board);
+        assert_eq!(moved.len(), 1, "{moved:?}");
+        assert_eq!(
+            (moved[0]["x"].clone(), moved[0]["y"].clone()),
+            (json!(60.0), json!(50.0))
+        );
+
+        // Then the op goes through, and the next drag keeps what it drew.
+        let added = ask(&mut board, json!({"op": "add", "elements": rectangle}));
+        let drawn = added["ids"][0].clone();
+        let (x, y) = middle(&moved[0]);
+        pointer_at(&mut board, "down", x, y);
+        pointer_at(&mut board, "move", x + 20.0, y + 20.0);
+        pointer_at(&mut board, "up", x + 20.0, y + 20.0);
+        let after = elements(&mut board);
+        assert_eq!(after.len(), 2, "{after:?}");
+        let kept = after.iter().find(|element| element["id"] == drawn);
+        assert_eq!(kept.map(|element| element["x"].clone()), Some(json!(600.0)));
     }
 
     /// A 100 × 100 rectangle on the board with its top left corner at (`x`, 0).

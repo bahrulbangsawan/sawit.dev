@@ -425,6 +425,10 @@ impl BoardView {
     /// An op that changes the document also ends the text being typed in on the canvas first,
     /// unless it is a command that acts on that text (`sawit_board::ops::run`, ruling
     /// R-TEXTEDIT): what was typed is an undo step of its own, and the next click keeps it.
+    /// While the user holds a drag on the canvas, such an op is refused instead, "<op>: finish
+    /// the drag on the canvas first", and changes nothing: the drag's next move would take it
+    /// back. No scrub is on then for it to end: the press that began the drag closed a colour
+    /// picker's, and a label's holds the same button.
     pub fn run_op(&mut self, op: &Value, cx: &mut Context<Self>) -> Value {
         if let Some(reply) = self.close_menus_for_op(op, cx) {
             return reply;
