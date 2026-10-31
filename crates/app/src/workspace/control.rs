@@ -20,6 +20,29 @@ pub enum Answer {
     Later(oneshot::Receiver<Result<Value, String>>),
 }
 
+/// Where an agent's browser op goes.
+#[derive(Debug, PartialEq)]
+enum BrowserRoute {
+    /// To the project's browser as it is.
+    Use,
+    /// To the project's browser, brought forward (or opened).
+    Show,
+    /// Nowhere: the project has no browser.
+    Closed,
+}
+
+/// Only opening a page, a screenshot or a device size brings the browser forward (`shows_tab`);
+/// other ops work with it in the background, and with none open they say so rather than open
+/// one over what the user is looking at.
+fn browser_route(open: bool, shown: bool, shows_tab: bool) -> BrowserRoute {
+    match (open, shows_tab) {
+        (true, false) => BrowserRoute::Use,
+        (true, true) if shown => BrowserRoute::Use,
+        (_, true) => BrowserRoute::Show,
+        (false, false) => BrowserRoute::Closed,
+    }
+}
+
 fn panel_name(tab: SidebarTab) -> &'static str {
     match tab {
         SidebarTab::Servers => "instances",
@@ -341,10 +364,11 @@ impl Workspace {
             Command::Browser { op } => {
                 let open = self.browser_tab(self.root(cx).as_deref()).map(|(_, b)| b);
                 let shown = open.is_some() && open == self.active_browser();
-                // Only opening a page or a screenshot brings the tab forward;
-                // other ops work with it in the background.
-                let browser = match open {
-                    Some(browser) if !op.shows_tab() || shown => browser,
+                let browser = match (browser_route(open.is_some(), shown, op.shows_tab()), open) {
+                    (BrowserRoute::Use, Some(browser)) => browser,
+                    (BrowserRoute::Closed, _) => {
+                        return Err(sawit_core::browser::NOT_OPEN.into());
+                    }
                     _ => self.open_browser(None, window, cx),
                 };
                 Ok(Answer::Later(browser.update(cx, |b, cx| b.apply(op, cx))))
@@ -513,5 +537,23 @@ impl Workspace {
             "tab": (!waiting).then_some(self.active),
             "connecting": waiting,
         })))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BrowserRoute, browser_route};
+
+    /// An agent's `browser_console` or `browser_annotations` with no browser open opened one
+    /// over the user's tab, to say "No annotations yet"; only ops that show a page open it.
+    #[test]
+    fn only_ops_that_show_a_page_open_the_browser() {
+        use BrowserRoute::{Closed, Show, Use};
+        // open, shown, shows_tab
+        assert_eq!(browser_route(true, false, false), Use, "in the background");
+        assert_eq!(browser_route(true, true, true), Use);
+        assert_eq!(browser_route(true, false, true), Show, "brought forward");
+        assert_eq!(browser_route(false, false, true), Show, "opened");
+        assert_eq!(browser_route(false, false, false), Closed);
     }
 }

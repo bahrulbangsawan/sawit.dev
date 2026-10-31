@@ -55,6 +55,9 @@ pub fn evaluate_call(script: &str, body: bool) -> String {
 pub const MAX_CONSOLE: usize = 500;
 pub const MAX_NETWORK: usize = 300;
 
+/// What an agent's op that doesn't open the browser gets while the project has none open.
+pub const NOT_OPEN: &str = "The browser isn't open. Open a page with browser_navigate.";
+
 /// What the address field searches with when the text isn't a URL.
 const SEARCH: &str = "https://duckduckgo.com/?q=";
 
