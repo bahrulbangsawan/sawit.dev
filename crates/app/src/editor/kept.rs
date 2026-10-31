@@ -175,7 +175,8 @@ mod quit_tests {
 
     /// Keeps `change` in `folder`, as a quit does, then does what the next launch does with it:
     /// opens its file in a window and hands the editor the change while the file loads. Waits
-    /// until it has loaded; the window, the editor, and the file that kept the change.
+    /// until it has loaded, or failed to; the window, the editor, and the file that kept the
+    /// change.
     fn relaunch(
         cx: &mut TestAppContext,
         folder: &Path,
@@ -199,9 +200,7 @@ mod quit_tests {
             })
             .expect("the test window opens")
         });
-        wait_until(cx, "the file has loaded", |cx| {
-            editor.read(cx).state.is_some()
-        });
+        wait_until(cx, "the file has loaded", |cx| !editor.read(cx).loading);
         (window, editor, from)
     }
 
@@ -366,6 +365,64 @@ mod quit_tests {
         let (text, warning) = note(cx, &editor);
         assert!(warning && text.contains("changed on disk"), "{text:?}");
         assert_eq!(std::fs::read_to_string(&other).unwrap(), "todo\n");
+    }
+
+    /// Site M3: the file can't be edited at the next launch (it is binary now, or can't be read),
+    /// so its kept changes can't be put back. They stay where they were kept, for a launch that
+    /// can, and the tab's note says where, as a warning, also when the changes reach a tab whose
+    /// file had already failed to load. They stayed there unseen, the tab opening again at every
+    /// launch.
+    #[gpui_kit::test]
+    fn kept_changes_for_a_file_that_cant_be_edited_say_where_they_are(cx: &mut TestAppContext) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (path, folder) = setup(cx, "uneditable");
+        std::fs::write(&path, b"binary\0now").unwrap();
+        let change = kept(&path, "typed on disk\n", Some("on disk\n"));
+        let (_, editor, from) = relaunch(cx, &folder, change);
+        let (text, warning) = note(cx, &editor);
+        assert!(warning, "not a warning: {text:?}");
+        assert!(text.starts_with("Binary or non-UTF-8 file."), "{text:?}");
+        assert!(text.contains(&from.display().to_string()), "{text:?}");
+        assert!(from.exists(), "the kept changes went");
+        assert_eq!(std::fs::read(&path).unwrap(), b"binary\0now");
+
+        // A file that can't be read at all.
+        let locked = path.with_file_name("locked.txt");
+        std::fs::write(&locked, "secret\n").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let change = kept(&locked, "typed secret\n", Some("secret\n"));
+        let (_, editor, from) = relaunch(cx, &folder, change);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let (text, warning) = note(cx, &editor);
+        assert!(warning, "not a warning: {text:?}");
+        assert!(text.starts_with("Unable to open this file."), "{text:?}");
+        assert!(text.contains(&from.display().to_string()), "{text:?}");
+        assert!(from.exists(), "the kept changes went");
+
+        // The file's tab was open already, and its file had failed to load, when the changes came.
+        let other = path.with_file_name("other.bin");
+        std::fs::write(&other, b"also\0binary").unwrap();
+        let change = kept(&other, "typed\n", Some("text\n"));
+        let from = keep(&folder, &change).unwrap();
+        let (w, open) = cx.update(|cx| {
+            let other = other.clone();
+            gpui_kit::open_window(WindowOptions::default(), cx, move |window, cx| {
+                cx.new(|cx| FileEditor::open(other, None, window, cx))
+            })
+            .expect("the test window opens")
+        });
+        wait_until(cx, "the file has loaded", |cx| !open.read(cx).loading);
+        cx.update_window(w, |_, window, cx| {
+            open.update(cx, |e, cx| e.restore(change, from.clone(), window, cx))
+        })
+        .expect("the test window is open");
+        let (text, warning) = note(cx, &open);
+        assert!(
+            warning && text.contains(&from.display().to_string()),
+            "{text:?}"
+        );
+        assert!(from.exists(), "the kept changes went");
     }
 
     /// Changes put back over a changed file and then saved, as the warning offers, or edited back

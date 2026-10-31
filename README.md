@@ -386,7 +386,8 @@ explained. A conflict on the same address can't be forced.
 - Quitting, closing a window and **Restart to Update** ask too, and offer to save every unsaved file first
   (**Save All**, **Don't Save**, **Cancel**). A quit that can't ask (the Dock's Quit, logging out, the install script)
   keeps the unsaved changes instead, and the next launch reopens those files with the changes back in, unsaved. If a
-  file changed on disk in the meantime, Sawit warns you that saving would overwrite it.
+  file changed on disk in the meantime, Sawit warns you that saving would overwrite it. If it can't be edited any more
+  (it became binary or unreadable, say), its tab says where the changes are kept.
 - The instance tab can be closed, and it reappears when an instance is selected.
 - The sidebar, terminal, and tab area can be hidden or shown from the title bar buttons or
   with shortcuts (see below).

@@ -110,6 +110,9 @@ pub struct FileEditor {
     /// nor reloaded since, a quit keeps the changes as made to the latter, so the next launch
     /// warns again.
     restored_over: Option<(String, Option<String>)>,
+    /// Why the file can't be edited here, as its load found (binary, too large, unreadable): its
+    /// note, before [`Self::cannot_edit`] adds to it.
+    unreadable: Option<Notice>,
     notice: Option<Notice>,
     loading: bool,
     formatting: bool,
@@ -166,9 +169,7 @@ impl FileEditor {
                         this.disk_mtime = modified;
                         this.loaded(file, window, cx)
                     }
-                    Ok(Err(e)) => {
-                        this.notice = Some(error(format!("Unable to open this file. {e}")))
-                    }
+                    Ok(Err(e)) => this.cannot_edit(error(format!("Unable to open this file. {e}"))),
                     Err(_) => {}
                 }
                 this.loading = false;
@@ -199,6 +200,7 @@ impl FileEditor {
             discarded: false,
             restoring: None,
             restored_over: None,
+            unreadable: None,
             notice: None,
             loading: true,
             formatting: false,
@@ -354,7 +356,7 @@ impl FileEditor {
 
     fn loaded(&mut self, file: TextFile, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(reason) = file.read_only_reason {
-            self.notice = Some(Notice {
+            self.cannot_edit(Notice {
                 text: reason,
                 error: false,
             });
@@ -491,7 +493,8 @@ impl FileEditor {
     /// buffer holds them, unsaved, now or once the file has loaded, and `from`, the file that kept
     /// them, goes once they're in. When the file on disk is no longer the text they were made to,
     /// the note warns that saving writes over it. A file that can't be edited (binary, too large,
-    /// unreadable) leaves `from` for the next launch to try again.
+    /// unreadable) leaves `from` for the next launch to try again, and its note says where the
+    /// changes are ([`Self::cannot_edit`]).
     pub fn restore(
         &mut self,
         kept: kept::Kept,
@@ -501,9 +504,33 @@ impl FileEditor {
     ) {
         if self.state.is_some() {
             self.put_back(kept, &from, window, cx);
-        } else {
-            self.restoring = Some((kept, from));
+            return;
         }
+        self.restoring = Some((kept, from));
+        // The file had already failed to load.
+        if let Some(why) = self.unreadable.clone() {
+            self.cannot_edit(why);
+            cx.notify();
+        }
+    }
+
+    /// Notes why the file can't be edited here (`why`, as its load found). Changes kept for it
+    /// when Sawit last quit can't be put back then, and stay where they were kept for the next
+    /// launch to try again ([`Self::restore`]): the note says where they are, as a warning. They
+    /// used to stay there unseen, the tab opening again at every launch (site M3).
+    fn cannot_edit(&mut self, why: Notice) {
+        self.notice = Some(match &self.restoring {
+            Some((_, from)) => {
+                let end = if why.text.ends_with('.') { " " } else { ". " };
+                error(format!(
+                    "{}{end}Sawit kept unsaved changes to this file when it last quit, and can't put them back here. They're in {}.",
+                    why.text,
+                    from.display()
+                ))
+            }
+            None => why.clone(),
+        });
+        self.unreadable = Some(why);
     }
 
     fn put_back(
