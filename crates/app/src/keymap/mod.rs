@@ -258,8 +258,8 @@ impl KeymapStore {
         Ok(())
     }
 
-    /// Adds a binding of `keystrokes` to `action` in `context`. Replaces the user's binding of
-    /// the same keystrokes in the same context.
+    /// Adds a binding of `keystrokes` to `action` in `context`, after the others there: it runs
+    /// first. Another binding of the same keystrokes stays ([`UserKeymap::add`]).
     pub fn add(
         &mut self,
         context: Option<&str>,
@@ -269,13 +269,14 @@ impl KeymapStore {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         self.write(cx, |user| {
-            user.set(context, keystrokes, Entry::action(action, args))
+            user.add(context, keystrokes, Entry::action(action, args))
         })
     }
 
     /// Changes the row `source` to bind `keystrokes` to `action` in `context`. A user's binding
     /// changes in the file; a default is turned off there (`zed::Unbind`) and the new binding
-    /// added, as Zed's keymap editor does.
+    /// added, as Zed's keymap editor does. No other binding changes, the user's own of the same
+    /// keys included.
     pub fn change(
         &mut self,
         source: Source,
@@ -288,8 +289,7 @@ impl KeymapStore {
         let entry = Entry::action(action, args);
         match source {
             Source::User(at) => self.write(cx, |user| {
-                user.remove(at);
-                user.set(context, keystrokes, entry);
+                user.replace(at, context, keystrokes, entry);
             }),
             Source::Default(ix) => {
                 let (default_context, default_keys, default_action) = self.default_parts(ix);
@@ -298,16 +298,15 @@ impl KeymapStore {
                         == names::normalize_keystrokes(keystrokes).as_deref();
                 self.write(cx, |user| {
                     // The same keys in the same context: the user's binding, which is later and
-                    // stronger, takes them, and an unbind under the same key would be replaced
-                    // by it anyway.
+                    // stronger, takes them.
                     if !same_place {
-                        user.set(
+                        user.add(
                             default_context.as_deref(),
                             &default_keys,
                             Entry::unbind(&default_action),
                         );
                     }
-                    user.set(context, keystrokes, entry);
+                    user.add(context, keystrokes, entry);
                 })
             }
             Source::Removed { .. } | Source::Unbound => {
@@ -326,7 +325,7 @@ impl KeymapStore {
             Source::Default(ix) => {
                 let (context, keys, action) = self.default_parts(ix);
                 self.write(cx, |user| {
-                    user.set(context.as_deref(), &keys, Entry::unbind(&action))
+                    user.add(context.as_deref(), &keys, Entry::unbind(&action))
                 })
             }
             Source::Unbound => Ok(()),
@@ -657,6 +656,152 @@ mod tests {
             );
             assert_eq!(store.read(cx).errors().count(), 1);
             assert!(!store.read(cx).can_write());
+        });
+    }
+
+    /// The rows on `keystrokes`: each action's name and where it comes from.
+    fn rows_on(store: &Entity<KeymapStore>, cx: &App, keystrokes: &str) -> Vec<(String, Source)> {
+        store
+            .read(cx)
+            .rows(false, cx)
+            .into_iter()
+            .filter(|row| row.keystrokes.as_ref() == keystrokes)
+            .map(|row| (row.action.to_string(), row.source))
+            .collect()
+    }
+
+    fn user_row(store: &Entity<KeymapStore>, cx: &App, keystrokes: &str, action: &str) -> Source {
+        rows_on(store, cx, keystrokes)
+            .into_iter()
+            .find(|(name, source)| name == action && matches!(source, Source::User(_)))
+            .map(|(_, source)| source)
+            .unwrap_or_else(|| panic!("a user row {keystrokes} {action}"))
+    }
+
+    /// Hand check PR2-1: a second binding of the same keys in the same context is added beside
+    /// the first, which the form's clash warning promises: both rows stay, and the one bound last
+    /// runs first.
+    #[gpui_kit::test]
+    fn two_bindings_of_the_same_keys_both_stay(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("same-keys");
+        let store = start(cx, &scratch);
+        cx.update(|cx| {
+            for action in ["keymap_test::CloseAll", "keymap_test::Other"] {
+                store
+                    .update(cx, |s, cx| {
+                        s.add(Some("Workspace"), "ctrl-alt-w", action, None, cx)
+                    })
+                    .unwrap();
+            }
+            let rows = rows_on(&store, cx, "ctrl-alt-w");
+            assert_eq!(rows.len(), 2, "{rows:?}");
+            assert_eq!(
+                runs(cx, "ctrl-alt-w"),
+                ["keymap_test::Other", "keymap_test::CloseAll"]
+            );
+        });
+    }
+
+    /// Removing a default (or changing its keys, `change`) turns off only the default: the
+    /// user's own binding of the same keys in the same context stays and still runs.
+    fn turn_off_a_default_the_user_rebound(cx: &mut TestAppContext, change: bool) {
+        let scratch = Scratch::new(if change { "keep-change" } else { "keep-remove" });
+        let store = start(cx, &scratch);
+        cx.update(|cx| {
+            store
+                .update(cx, |s, cx| {
+                    s.add(Some("Workspace"), "cmd-w", "keymap_test::Other", None, cx)
+                })
+                .unwrap();
+            let close = default_row(&store, cx, "keymap_test::Close");
+            store
+                .update(cx, |s, cx| {
+                    if change {
+                        s.change(
+                            close,
+                            Some("Workspace"),
+                            "cmd-e",
+                            "keymap_test::Close",
+                            None,
+                            cx,
+                        )
+                    } else {
+                        s.remove(close, cx)
+                    }
+                })
+                .unwrap();
+            assert_eq!(runs(cx, "cmd-w"), ["keymap_test::Other"]);
+            user_row(&store, cx, "cmd-w", "keymap_test::Other");
+            let on_cmd_w = rows_on(&store, cx, "cmd-w");
+            assert!(
+                on_cmd_w
+                    .iter()
+                    .any(|(name, source)| name == "keymap_test::Close"
+                        && matches!(source, Source::Removed { .. })),
+                "{on_cmd_w:?}"
+            );
+            if change {
+                assert_eq!(runs(cx, "cmd-e"), ["keymap_test::Close"]);
+            }
+        });
+    }
+
+    #[gpui_kit::test]
+    fn removing_a_default_keeps_the_users_binding_of_its_keys(cx: &mut TestAppContext) {
+        turn_off_a_default_the_user_rebound(cx, false);
+    }
+
+    #[gpui_kit::test]
+    fn changing_a_default_keeps_the_users_binding_of_its_keys(cx: &mut TestAppContext) {
+        turn_off_a_default_the_user_rebound(cx, true);
+    }
+
+    /// Changing a user's binding to keys another of the user's bindings has keeps the other one.
+    #[gpui_kit::test]
+    fn changing_a_binding_onto_anothers_keys_keeps_the_other(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("onto-another");
+        let store = start(cx, &scratch);
+        cx.update(|cx| {
+            store
+                .update(cx, |s, cx| {
+                    s.add(
+                        Some("Workspace"),
+                        "ctrl-alt-a",
+                        "keymap_test::CloseAll",
+                        None,
+                        cx,
+                    )
+                })
+                .unwrap();
+            store
+                .update(cx, |s, cx| {
+                    s.add(
+                        Some("Workspace"),
+                        "ctrl-alt-b",
+                        "keymap_test::Other",
+                        None,
+                        cx,
+                    )
+                })
+                .unwrap();
+            let first = user_row(&store, cx, "ctrl-alt-a", "keymap_test::CloseAll");
+            store
+                .update(cx, |s, cx| {
+                    s.change(
+                        first,
+                        Some("Workspace"),
+                        "ctrl-alt-b",
+                        "keymap_test::CloseAll",
+                        None,
+                        cx,
+                    )
+                })
+                .unwrap();
+            assert!(rows_on(&store, cx, "ctrl-alt-a").is_empty());
+            assert_eq!(
+                runs(cx, "ctrl-alt-b"),
+                ["keymap_test::CloseAll", "keymap_test::Other"]
+            );
         });
     }
 

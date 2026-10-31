@@ -4,7 +4,8 @@
 //!
 //! The filter finds an action by its name, its context or its keys; with keystroke search on it
 //! records keys instead, and finds the bindings that start with them. Bindings of the same keys in
-//! the same context are marked: only one of them runs.
+//! the same context are marked: only one of them runs. A change never removes another binding: a
+//! binding saved with keys another one has in its context goes after it, and runs first.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -1062,7 +1063,7 @@ impl Render for BindingForm {
                 el.child(Banner::info(
                     "binding-clash",
                     format!(
-                        "{} is also bound to {} in this context: only one of them runs.",
+                        "{} is also bound to {} in this context. Both bindings stay, and this one runs: the binding saved last goes first.",
                         names::display_typed(&parse_keys(&keys)),
                         same.join(", ")
                     ),
@@ -1274,5 +1275,93 @@ mod form_tests {
         });
         let text = std::fs::read_to_string(scratch.file()).unwrap();
         assert!(!text.contains("cmd-j ctrl-alt-j"), "{text}");
+    }
+
+    /// Creates a binding through the form, as Create Keybinding does: the action typed, the keys
+    /// recorded, the context written.
+    fn create(
+        cx: &mut TestAppContext,
+        window: AnyWindowHandle,
+        editor: &Entity<KeymapEditor>,
+        action: &str,
+        keys: &str,
+        context: &str,
+    ) {
+        cx.update_window(window, |_, window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.create(&super::CreateBinding, window, cx)
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(window, |_, window, cx| {
+            let form = editor.read(cx).form.clone().expect("the form is open");
+            let (action_field, context_field, recorder) = {
+                let form = form.read(cx);
+                (form.action.clone(), form.context.clone(), form.keys.clone())
+            };
+            action_field.update(cx, |a, cx| a.set_value(action.to_string(), window, cx));
+            context_field.update(cx, |c, cx| c.set_value(context.to_string(), window, cx));
+            let focus = recorder.read(cx).focus_handle().clone();
+            window.focus(&focus, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, keys);
+        save(cx, window, editor);
+    }
+
+    /// Hand check PR2-1: a second binding on ⌃⌥W in the same context, for another action. The
+    /// form warns of the clash, saving keeps both, and both rows show ⚠.
+    #[gpui_kit::test]
+    fn a_second_binding_of_the_same_keys_keeps_the_first(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("form-same-keys");
+        let (window, editor) = open(cx, &scratch);
+        create(
+            cx,
+            window,
+            &editor,
+            "keymap_editor_test::CloseAll",
+            "ctrl-alt-w",
+            "Workspace",
+        );
+        cx.update_window(window, |_, window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.create(&super::CreateBinding, window, cx)
+            });
+            let form = editor.read(cx).form.clone().unwrap();
+            let (context_field, recorder) = {
+                let form = form.read(cx);
+                (form.context.clone(), form.keys.clone())
+            };
+            context_field.update(cx, |c, cx| c.set_value("Workspace", window, cx));
+            recorder.update(cx, |r, cx| r.set_keystrokes("ctrl-alt-w", cx));
+            let (same, _) = form.read(cx).clashes(cx);
+            assert_eq!(same, ["keymap editor test: close all"]);
+            editor.update(cx, |editor, cx| editor.close_form(window, cx));
+        })
+        .unwrap();
+        create(
+            cx,
+            window,
+            &editor,
+            "keymap_editor_test::Other",
+            "ctrl-alt-w",
+            "Workspace",
+        );
+        cx.update(|cx| {
+            let editor = editor.read(cx);
+            let rows: Vec<_> = editor
+                .rows
+                .iter()
+                .filter(|row| row.keystrokes.as_ref() == "ctrl-alt-w")
+                .collect();
+            assert_eq!(rows.len(), 2, "{rows:?}");
+            assert!(rows.iter().all(|row| editor.row_conflicts(row)));
+            assert_eq!(
+                runs(cx, "ctrl-alt-w"),
+                ["keymap_editor_test::Other", "keymap_editor_test::CloseAll"]
+            );
+        });
     }
 }
