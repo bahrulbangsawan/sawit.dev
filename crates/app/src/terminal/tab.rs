@@ -1714,9 +1714,12 @@ mod tests {
         cx.update(init);
         let (w, panel) = open_panel(cx);
         cx.update_window(w, |_, window, cx| {
-            panel.update(cx, |p, cx| p.open_ssh(test_remote(), Some(window), cx))
+            panel.update(cx, |p, cx| {
+                p.open_ssh(test_remote(), super::super::Origin::User, window, cx)
+            })
         })
-        .unwrap();
+        .unwrap()
+        .expect("the session starts");
         cx.run_until_parked();
         let (ix, tab) = cx.update(|cx| {
             let p = panel.read(cx);
@@ -1756,9 +1759,12 @@ mod tests {
         cx.update(init);
         let (w, panel) = open_panel(cx);
         cx.update_window(w, |_, window, cx| {
-            panel.update(cx, |p, cx| p.open_ssh(test_remote(), Some(window), cx))
+            panel.update(cx, |p, cx| {
+                p.open_ssh(test_remote(), super::super::Origin::User, window, cx)
+            })
         })
-        .unwrap();
+        .unwrap()
+        .expect("the session starts");
         cx.run_until_parked();
         let tab = cx.update(|cx| {
             let p = panel.read(cx);
@@ -1803,9 +1809,12 @@ mod tests {
         cx.update(init);
         let (w, panel) = open_panel(cx);
         cx.update_window(w, |_, window, cx| {
-            panel.update(cx, |p, cx| p.open_ssh(test_remote(), Some(window), cx))
+            panel.update(cx, |p, cx| {
+                p.open_ssh(test_remote(), super::super::Origin::User, window, cx)
+            })
         })
-        .unwrap();
+        .unwrap()
+        .expect("the session starts");
         cx.run_until_parked();
         let (ix, tab) = cx.update(|cx| {
             let p = panel.read(cx);

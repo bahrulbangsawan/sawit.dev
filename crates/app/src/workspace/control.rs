@@ -164,7 +164,7 @@ impl Workspace {
             }
             Command::MaximizeTerminal => {
                 self.leave_welcome(Layout::default(), cx);
-                self.toggle_terminal_maximized(window, cx);
+                self.toggle_terminal_maximized(Origin::Agent, window, cx);
                 done(json!({ "maximized": self.layout == TERMINAL_ONLY }))
             }
             Command::OpenPage { page } => {
@@ -187,17 +187,18 @@ impl Workspace {
                 cwd,
                 new_tab,
             } => {
-                let tab = if cwd.is_some() || new_tab {
+                let (tab, pane) = if cwd.is_some() || new_tab {
                     self.leave_welcome(TERMINAL_ONLY, cx);
                     self.layout.terminal = true;
                     let dir = cwd.or_else(|| self.root(cx));
-                    self.terminal
-                        .update(cx, |t, cx| t.run_in_new(dir, &command, window, cx))?
+                    self.terminal.update(cx, |t, cx| {
+                        t.run_in_new(dir, &command, Origin::Agent, window, cx)
+                    })?
                 } else {
-                    self.run_in_terminal(&command, window, cx);
-                    self.terminal.read(cx).active_index()
+                    self.run_in_terminal(&command, Origin::Agent, window, cx)?
                 };
-                done(json!({ "terminal": tab }))
+                let pane = self.terminal.read(cx).pane_index(tab, pane, cx);
+                done(json!({ "terminal": tab, "pane": pane }))
             }
             Command::TerminalRead { tab, pane, lines } => {
                 let lines = lines.unwrap_or(READ_LINES).clamp(1, MAX_READ_LINES);
@@ -234,10 +235,17 @@ impl Workspace {
                 done(json!({ "scripts": scripts }))
             }
             Command::RunScript { name } => {
-                self.current()
+                let started = self
+                    .current()
                     .run_panel
                     .update(cx, |r, cx| r.start_named(&name, cx))?;
-                done(json!({ "started": name }))
+                done(match started {
+                    true => json!({ "started": name }),
+                    false => json!({
+                        "running": name,
+                        "note": "It was running already, so it wasn't started again. app_stop_script stops it.",
+                    }),
+                })
             }
             Command::StopScript { name } => {
                 self.current()
@@ -247,8 +255,9 @@ impl Workspace {
             }
             Command::SshConnect { host, new_session } => {
                 let key = self.ssh_key(&host, cx)?;
-                self.connect_ssh(key, new_session, window, cx);
-                done(json!({ "terminal": self.terminal.read(cx).active_index() }))
+                let (tab, pane) = self.connect_ssh(key, new_session, Origin::Agent, window, cx)?;
+                let pane = self.terminal.read(cx).pane_index(tab, pane, cx);
+                done(json!({ "terminal": tab, "pane": pane }))
             }
             Command::OpenTable {
                 connection,

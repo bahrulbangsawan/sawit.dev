@@ -24,6 +24,16 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(20);
 /// `terminal_run` waits at most this long for output.
 const MAX_WAIT: Duration = Duration::from_secs(120);
 
+/// How `terminal_run` names where its command ran, for later `terminal_read` and
+/// `terminal_input` calls.
+fn terminal_name(tab: Option<usize>, pane: Option<usize>) -> String {
+    match (tab, pane) {
+        (Some(tab), Some(pane)) => format!("Terminal {tab}, pane {pane}"),
+        (Some(tab), None) => format!("Terminal {tab}"),
+        _ => "Terminal".into(),
+    }
+}
+
 /// How long `terminal_run` waits before it reads the output: `wait_secs` (default 2), from 0 to
 /// [`MAX_WAIT`]. The number is bounded before it becomes a `Duration`, which panics on one too
 /// big for it or NaN, and a panic would leave the tool call without an answer.
@@ -759,17 +769,20 @@ impl Sawit {
             Ok(v) => v,
             Err(e) => return fail(e),
         };
+        // Where the command went: the tab and the pane in it, which needn't be the tab's
+        // focused pane (the app leaves the focus alone while the user types in a terminal).
         let tab = started["terminal"].as_u64().map(|t| t as usize);
+        let pane = started["pane"].as_u64().map(|p| p as usize);
         tokio::time::sleep(run_wait(a.wait_secs)).await;
         let read = Command::TerminalRead {
             tab,
-            pane: None,
+            pane,
             lines: Some(a.lines.unwrap_or(100)),
         };
         match self.app_call(a.project, read).await {
             Ok(v) => ok(format!(
-                "Terminal {}:\n{}",
-                tab.map(|t| t.to_string()).unwrap_or_default(),
+                "{}:\n{}",
+                terminal_name(tab, pane),
                 v["text"].as_str().unwrap_or_default()
             )),
             Err(e) => fail(e),
@@ -836,7 +849,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Open an interactive SSH session to a saved server or ~/.ssh/config host in Sawit's terminal (drive it with terminal_input / terminal_read)"
+        description = "Open an interactive SSH session to a saved server or ~/.ssh/config host in Sawit's terminal; returns its terminal and pane, to drive it with terminal_input / terminal_read"
     )]
     async fn app_ssh_connect(&self, Parameters(a): Parameters<SshConnectArgs>) -> CallToolResult {
         let command = Command::SshConnect {
@@ -1323,6 +1336,73 @@ mod tests {
             }
         });
         ops
+    }
+
+    /// A stand-in for the running app that answers any command, each with the next of `answers`.
+    /// The requests come out of the receiver.
+    fn fake_app_answering(paths: &AppPaths, answers: Vec<Value>) -> Receiver<Request> {
+        std::fs::create_dir_all(&paths.root).unwrap();
+        let listener = UnixListener::bind(paths.cli_socket()).unwrap();
+        let (asked, requests) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut answers = answers.into_iter();
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut bytes = Vec::new();
+                if stream.read_to_end(&mut bytes).is_err() || bytes.is_empty() {
+                    continue;
+                }
+                let Some(Ok(request)) = app_control::decode(&bytes) else {
+                    break;
+                };
+                let _ = asked.send(request);
+                let Some(answer) = answers.next() else { break };
+                let line = format!("{}\n", app_control::reply_ok(&answer));
+                let _ = stream.write_all(line.as_bytes());
+            }
+        });
+        requests
+    }
+
+    /// `terminal_run` reads back the pane the app says the command went to: it needn't be the
+    /// tab's focused pane, which the app leaves alone while the user types in a terminal.
+    #[tokio::test]
+    async fn terminal_run_reads_the_pane_it_ran_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let asked = fake_app_answering(
+            &server.paths,
+            vec![
+                json!({"terminal": 2, "pane": 1}),
+                json!({"text": "$ make test\nok"}),
+            ],
+        );
+        let ran = server
+            .terminal_run(Parameters(TerminalRunArgs {
+                command: "make test".into(),
+                cwd: None,
+                new_tab: false,
+                wait_secs: Some(0.0),
+                lines: None,
+                project: None,
+            }))
+            .await;
+        assert_eq!(said(&ran), "Terminal 2, pane 1:\n$ make test\nok");
+        let request = |asked: &Receiver<Request>| {
+            asked
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the app was asked")
+                .command
+        };
+        assert!(matches!(request(&asked), Command::TerminalRun { .. }));
+        assert_eq!(
+            request(&asked),
+            Command::TerminalRead {
+                tab: Some(2),
+                pane: Some(1),
+                lines: Some(100),
+            }
+        );
     }
 
     /// The next op the stand-in app was asked for. It is waited for, but not for ever: a tool that

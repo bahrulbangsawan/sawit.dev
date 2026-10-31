@@ -43,7 +43,7 @@ use crate::tab_groups::{group_header, group_stripe, project_name};
 use crate::tabs::{
     CloseOp, Slot, TabFlags, active_after, active_after_move, insert_index, to_close,
 };
-use crate::terminal::{TerminalPanel, ToggleMaximize};
+use crate::terminal::{Origin, TerminalPanel, ToggleMaximize};
 use crate::tools_page::{ToolsEvent, ToolsPage};
 use crate::update::{Updater, updater};
 use crate::viewers::{ImageView, PdfView, VideoView};
@@ -52,6 +52,7 @@ use sawit_board::store::{self, board_file};
 use sawit_core::files::{FileKind, classify};
 use sawit_core::instances::AppPaths;
 use sawit_core::recent::RecentProjects;
+use sawit_core::terminal::PaneId;
 use sawit_core::update::Version;
 
 mod control;
@@ -288,7 +289,7 @@ impl Workspace {
                 &terminal,
                 window,
                 |this, _, _: &ToggleMaximize, window, cx| {
-                    this.toggle_terminal_maximized(window, cx)
+                    this.toggle_terminal_maximized(Origin::User, window, cx)
                 },
             ),
             cx.observe_in(&db, window, |this, db, window, cx| {
@@ -345,7 +346,7 @@ impl Workspace {
                 window,
                 |this, _, event: &SshEvent, window, cx| match event {
                     SshEvent::Connect { key, new } => {
-                        this.connect_ssh(key.clone(), *new, window, cx)
+                        let _ = this.connect_ssh(key.clone(), *new, Origin::User, window, cx);
                     }
                     SshEvent::Edit(id) => this.open_ssh_host(id.clone(), window, cx),
                     SshEvent::OpenFile(path) => {
@@ -1214,7 +1215,7 @@ impl Workspace {
         if canvas_shown && !terminal_focused || self.canvas_maximized {
             self.toggle_canvas_maximized(cx);
         } else {
-            self.toggle_terminal_maximized(window, cx);
+            self.toggle_terminal_maximized(Origin::User, window, cx);
         }
     }
 
@@ -1697,12 +1698,12 @@ impl Workspace {
             self.layout.toggle(Area::Terminal);
         }
         match event {
-            RunEvent::Start(launches) => {
+            RunEvent::Start(launches, origin) => {
                 let last = launches.len().saturating_sub(1);
                 self.terminal.update(cx, |t, cx| {
                     for (i, l) in launches.iter().enumerate() {
-                        let window = (i == last).then_some(&mut *window);
-                        t.start_job(l.tag.clone(), l.dir.clone(), &l.command, window, cx);
+                        let show = (i == last).then_some(*origin);
+                        t.start_job(l.tag.clone(), l.dir.clone(), &l.command, show, window, cx);
                     }
                 });
             }
@@ -1714,15 +1715,25 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Types `commands` into this window's terminal, showing it if hidden.
-    pub fn run_in_terminal(&mut self, commands: &str, window: &mut Window, cx: &mut Context<Self>) {
+    /// Types `commands` into this window's terminal, showing the dock if
+    /// hidden; the terminal shows as `origin` allows. Returns the tab and
+    /// pane it typed into, or why no shell could start.
+    pub fn run_in_terminal(
+        &mut self,
+        commands: &str,
+        origin: Origin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(usize, PaneId), String> {
         self.leave_welcome(TERMINAL_ONLY, cx);
         if !self.layout.terminal {
             self.layout.toggle(Area::Terminal);
         }
-        self.terminal
-            .update(cx, |t, cx| t.run(commands, window, cx));
+        let ran = self
+            .terminal
+            .update(cx, |t, cx| t.run(commands, origin, window, cx));
         cx.notify();
+        ran
     }
 
     fn toggle_area(&mut self, area: Area, cx: &mut Context<Self>) {
@@ -1733,8 +1744,14 @@ impl Workspace {
     }
 
     /// Fills the window with the terminal, or puts back the layout it
-    /// replaced (everything, if that was terminal-only too).
-    fn toggle_terminal_maximized(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// replaced (everything, if that was terminal-only too). For the user
+    /// the terminal takes the keyboard; an agent leaves it where it is.
+    fn toggle_terminal_maximized(
+        &mut self,
+        origin: Origin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.canvas_maximized = false;
         if self.layout == TERMINAL_ONLY {
             self.layout = self.unmaximized.take().unwrap_or_default();
@@ -1742,7 +1759,9 @@ impl Workspace {
             self.unmaximized = Some(self.layout);
             self.layout = TERMINAL_ONLY;
         }
-        self.terminal.update(cx, |t, cx| t.focus_active(window, cx));
+        if origin == Origin::User {
+            self.terminal.update(cx, |t, cx| t.focus_active(window, cx));
+        }
         cx.notify();
     }
 
@@ -1778,32 +1797,46 @@ impl Workspace {
     }
 
     /// Shows a session to the server with `key` in the terminal dock: the
-    /// open one, unless `new` or there is none.
-    fn connect_ssh(&mut self, key: String, new: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// open one, unless `new` or there is none. It shows as `origin` allows.
+    /// Returns the session's tab and pane, or why there is none: when the
+    /// server's settings are incomplete, the user gets them in a tab.
+    fn connect_ssh(
+        &mut self,
+        key: String,
+        new: bool,
+        origin: Origin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(usize, PaneId), String> {
         self.leave_welcome(Layout::default(), cx);
         if !self.layout.terminal {
             self.layout.toggle(Area::Terminal);
         }
         if !new
-            && self
+            && let Some(found) = self
                 .terminal
-                .update(cx, |t, cx| t.focus_ssh(&key, window, cx))
+                .update(cx, |t, cx| t.focus_ssh(&key, origin, window, cx))
         {
             cx.notify();
-            return;
+            return Ok(found);
         }
-        match self.ssh_store.update(cx, |s, cx| s.remote(&key, cx)) {
+        let opened = match self.ssh_store.update(cx, |s, cx| s.remote(&key, cx)) {
             Ok(remote) => self
                 .terminal
-                .update(cx, |t, cx| t.open_ssh(remote, Some(window), cx)),
-            // Settings are incomplete: show them.
-            Err(_) => {
-                if let Some(id) = key.strip_prefix("ssh\u{0}") {
+                .update(cx, |t, cx| t.open_ssh(remote, origin, window, cx)),
+            Err(problem) => {
+                if origin == Origin::User
+                    && let Some(id) = key.strip_prefix("ssh\u{0}")
+                {
                     self.open_ssh_host(id.to_string(), window, cx);
                 }
+                Err(format!(
+                    "{problem} Fix the server's settings (update_ssh_host), then connect again."
+                ))
             }
-        }
+        };
         cx.notify();
+        opened
     }
 
     /// Opens a saved server's settings in its own tab (one per server).
@@ -1817,7 +1850,7 @@ impl Workspace {
                 &view,
                 window,
                 |this, _, SshHostEvent::Connect(key), window, cx| {
-                    this.connect_ssh(key.clone(), false, window, cx)
+                    let _ = this.connect_ssh(key.clone(), false, Origin::User, window, cx);
                 },
             )
             .detach();
@@ -2371,7 +2404,9 @@ impl Workspace {
                 &view,
                 window,
                 |this, _, e: &ToolsEvent, window, cx| match e {
-                    ToolsEvent::RunInTerminal(command) => this.run_in_terminal(command, window, cx),
+                    ToolsEvent::RunInTerminal(command) => {
+                        let _ = this.run_in_terminal(command, Origin::User, window, cx);
+                    }
                 },
             )
             .detach();

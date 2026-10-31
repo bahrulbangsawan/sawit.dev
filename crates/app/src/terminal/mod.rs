@@ -8,7 +8,7 @@ mod view;
 
 use gpui_kit::actions;
 
-pub use panel::{JobTag, Remote, TerminalPanel, ToggleMaximize};
+pub use panel::{JobTag, Origin, Remote, TerminalPanel, ToggleMaximize};
 
 actions!(
     terminal,

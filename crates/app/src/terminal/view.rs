@@ -302,6 +302,15 @@ impl TerminalView {
         self.session.foreground_job()
     }
 
+    /// The name of the command the shell is running (`vim`, `claude`).
+    #[cfg(test)]
+    pub fn foreground_name(&self) -> Option<String> {
+        if self.exited {
+            return None;
+        }
+        self.session.foreground_name()
+    }
+
     fn modes(&self) -> sawit_core::terminal::Modes {
         self.session.modes()
     }

@@ -21,7 +21,7 @@ use super::store::RunStore;
 use crate::ports::PortsPanel;
 use crate::rt;
 use crate::states::{Banner, Placeholder};
-use crate::terminal::{JobTag, TerminalPanel};
+use crate::terminal::{JobTag, Origin, TerminalPanel};
 
 /// How often running state is checked.
 const POLL: Duration = Duration::from_millis(500);
@@ -39,8 +39,9 @@ pub struct Launch {
 }
 
 pub enum RunEvent {
-    /// Start these terminals (a running one is only shown).
-    Start(Vec<Launch>),
+    /// Start these terminals (a running one is only shown), for whoever
+    /// asked.
+    Start(Vec<Launch>, Origin),
     /// Show the terminal of the script with this key.
     Show(String),
 }
@@ -379,10 +380,18 @@ impl RunPanel {
         }
     }
 
-    pub fn start_named(&mut self, name: &str, cx: &mut Context<Self>) -> Result<(), String> {
+    /// Starts the row called `name` for an agent. False when it was
+    /// running already: it isn't started twice, only shown.
+    pub fn start_named(&mut self, name: &str, cx: &mut Context<Self>) -> Result<bool, String> {
         let item = self.find(name, cx)?;
-        self.start(&item, cx);
-        Ok(())
+        let terminal = self.terminal.read(cx);
+        let running = item.keys().all(|k| {
+            terminal
+                .job_status(k, cx)
+                .is_some_and(|s| s.running.is_some())
+        });
+        self.start(&item, Origin::Agent, cx);
+        Ok(!running)
     }
 
     pub fn stop_named(&mut self, name: &str, cx: &mut Context<Self>) -> Result<(), String> {
@@ -391,8 +400,8 @@ impl RunPanel {
         Ok(())
     }
 
-    fn start(&mut self, item: &Item, cx: &mut Context<Self>) {
-        cx.emit(RunEvent::Start(item.launches.clone()));
+    fn start(&mut self, item: &Item, origin: Origin, cx: &mut Context<Self>) {
+        cx.emit(RunEvent::Start(item.launches.clone(), origin));
     }
 
     fn stop(&mut self, item: &Item, cx: &mut Context<Self>) {
@@ -437,7 +446,7 @@ impl RunPanel {
             }
             let _ = this.update(cx, |this, cx| {
                 this.restarting.remove(&first);
-                cx.emit(RunEvent::Start(launches));
+                cx.emit(RunEvent::Start(launches, Origin::User));
                 cx.notify();
             });
         })
@@ -828,7 +837,7 @@ impl RunPanel {
                                 let item = item.clone();
                                 move |this, _, _, cx| {
                                     cx.stop_propagation();
-                                    this.start(&item, cx)
+                                    this.start(&item, Origin::User, cx)
                                 }
                             }))
                     }),
