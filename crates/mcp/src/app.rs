@@ -54,7 +54,7 @@ pub struct OpenArgs {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct PanelArgs {
     #[schemars(
-        description = "instances, files, git, database, run, ports, network, prompts, ssh or shell_config"
+        description = "instances, files, git, database, run, ports, network, prompts, ssh or shell_config (Config Files)"
     )]
     pub panel: String,
     pub project: Option<String>,

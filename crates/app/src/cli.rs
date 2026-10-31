@@ -820,6 +820,31 @@ mod tests {
         crate::keymap::init_at(keymap_file.to_path_buf(), cx);
     }
 
+    /// The keymap editor shows each binding's action and context, and writes them into
+    /// keymap.json, where a later rename would break the user's binding: none of them still
+    /// calls the Config Files panel by its old name.
+    #[gpui_kit::test]
+    fn the_keymap_calls_config_files_by_its_name(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("sawit-config-names-{}", std::process::id()));
+        cx.update(|cx| bind_like_the_app(cx, &dir.join("keymap.json")));
+        cx.update(|cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let old: Vec<String> = keymap
+                .bindings()
+                .flat_map(|b| {
+                    [
+                        b.action().name().to_string(),
+                        b.predicate().map(|p| p.to_string()).unwrap_or_default(),
+                    ]
+                })
+                .filter(|name| name.contains("ShellConfig") || name.contains("shell_config"))
+                .collect();
+            assert!(old.is_empty(), "{old:?}");
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A menu item carries the key of the first binding of its action that GPUI's macOS menu
     /// builder finds in a Workspace > Pane > Editor focus, else of the first binding at all
     /// (`find_or_first`), and AppKit runs the item for that key wherever the item's action is

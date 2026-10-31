@@ -90,7 +90,7 @@ actions!(
         ShowPorts,
         ShowNetwork,
         ShowSsh,
-        ShowShellConfig,
+        ShowConfigFiles,
         ShowPrompts,
         OpenCanvas,
         OpenDevTools,
@@ -128,7 +128,7 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-6", ShowPorts, ctx),
         KeyBinding::new("cmd-7", ShowNetwork, ctx),
         KeyBinding::new("cmd-8", ShowSsh, ctx),
-        KeyBinding::new("cmd-9", ShowShellConfig, ctx),
+        KeyBinding::new("cmd-9", ShowConfigFiles, ctx),
         KeyBinding::new("cmd-0", ShowPrompts, ctx),
         KeyBinding::new("ctrl-cmd-]", NextProject, ctx),
         KeyBinding::new("ctrl-cmd-[", PreviousProject, ctx),
@@ -1125,7 +1125,7 @@ impl Workspace {
                 Lucide::FileTerminal.into(),
                 "Config Files",
                 SidebarTab::ShellConfig,
-                &ShowShellConfig,
+                &ShowConfigFiles,
             ),
             (
                 "side-prompts",
@@ -2771,7 +2771,7 @@ impl Render for Workspace {
                 }),
             )
             .on_action(cx.listener(|this, _: &ShowSsh, _, cx| this.show_panel(SidebarTab::Ssh, cx)))
-            .on_action(cx.listener(|this, _: &ShowShellConfig, _, cx| {
+            .on_action(cx.listener(|this, _: &ShowConfigFiles, _, cx| {
                 this.show_panel(SidebarTab::ShellConfig, cx)
             }))
             .on_action(

@@ -30,15 +30,15 @@ use crate::files::{
 use crate::rt;
 use crate::states::{Banner, Placeholder};
 
-actions!(shell_config, [OpenConfig]);
+actions!(config_files, [OpenConfig]);
 
 /// The Files panel's shortcuts for the same commands. ↩ and ⌫ act on the list only while the
 /// search box doesn't have the keyboard, like the keymap editor's table keys: the box passes on ↩,
 /// and ⌫ with nothing before the cursor, and they would open the selected file or move it to the
 /// Trash.
 pub fn init(cx: &mut App) {
-    let ctx = Some("ShellConfigPanel");
-    let list = Some("ShellConfigPanel && !Input");
+    let ctx = Some("ConfigFilesPanel");
+    let list = Some("ConfigFilesPanel && !Input");
     cx.bind_keys([
         KeyBinding::new("enter", OpenConfig, list),
         KeyBinding::new("alt-cmd-r", RevealInFinder, ctx),
@@ -672,7 +672,7 @@ impl Render for ShellConfigPanel {
         v_flex()
             .size_full()
             .bg(cx.theme().sidebar)
-            .key_context("ShellConfigPanel")
+            .key_context("ConfigFilesPanel")
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &OpenConfig, _, cx| {
                 if let Some(path) = this.selected.clone() {
@@ -815,7 +815,7 @@ mod tests {
             cx.observe_keystrokes(move |e, _, _| {
                 if let Some(action) = &e.action {
                     let name = action.name();
-                    if name.starts_with("files::") || name.starts_with("shell_config::") {
+                    if name.starts_with("files::") || name.starts_with("config_files::") {
                         ran.borrow_mut().push(name);
                     }
                 }
@@ -841,7 +841,7 @@ mod tests {
         focus(cx, list.clone());
         cx.simulate_keystrokes(window, "enter backspace");
         cx.run_until_parked();
-        assert_eq!(*ran.borrow(), ["shell_config::OpenConfig", "files::Trash"]);
+        assert_eq!(*ran.borrow(), ["config_files::OpenConfig", "files::Trash"]);
 
         // The right-click menu, which looks its keys up from the list, still shows them.
         let key = |cx: &mut TestAppContext, action: &dyn Action| {
