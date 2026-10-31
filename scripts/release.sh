@@ -82,5 +82,6 @@ fi
 
 git add Cargo.toml Cargo.lock CHANGELOG.md
 git commit --quiet --no-verify -m "chore(release): v$next" -- Cargo.toml Cargo.lock CHANGELOG.md
-git tag -a "v$next" -F "$notes"
+# whitespace, not the default strip, which would drop the "### Features" headings.
+git tag -a --cleanup=whitespace "v$next" -F "$notes"
 echo "v$next"

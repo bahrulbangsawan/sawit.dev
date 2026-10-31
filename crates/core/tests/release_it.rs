@@ -422,3 +422,21 @@ fn a_release_tag_left_behind_goes_out_with_the_next_release() {
         repo.release_log()
     );
 }
+
+/// RELEASE-10: `git tag` strips `#` lines from a message by default, so the tag's notes lost
+/// their Features and Fixes headings. Now the tag keeps the notes as CHANGELOG.md has them.
+#[test]
+fn the_release_tag_keeps_the_notes_headings() {
+    let repo = Repo::new();
+    repo.commit("feat(app): a new thing");
+    repo.commit("fix(db): an old bug");
+    assert_eq!(ok(repo.release(None)), "v0.0.8");
+    let tag = repo.git(&["cat-file", "-p", "v0.0.8"]);
+    let notes = tag.split_once("\n\n").expect("a tag message").1;
+    assert!(
+        notes.starts_with("### Features\n\n- **app**: a new thing"),
+        "{tag}"
+    );
+    assert!(notes.contains("### Fixes\n\n- **db**: an old bug"), "{tag}");
+    assert!(!notes.ends_with("\n\n"), "{tag:?}");
+}
