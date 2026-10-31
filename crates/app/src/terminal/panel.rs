@@ -1840,7 +1840,6 @@ mod tests {
         wait_until(cx, "the shell moved to the project", |cx| {
             view.read(cx).cwd().as_ref() == Some(&project)
         });
-        let _ = std::fs::remove_dir_all(&project);
     }
 
     /// Asserts that the active tab is drawn whole inside the strip, as the last frame drew them,
@@ -1916,10 +1915,6 @@ mod tests {
         });
         open_in(cx, &beta, 1);
         assert_active_in_view(cx, w, &panel, "a tab after a folded group");
-
-        for dir in [alpha, beta] {
-            let _ = std::fs::remove_dir_all(dir);
-        }
     }
 
     /// Running a script again types it into its old shell after a `cd` back to the script's
@@ -1974,8 +1969,6 @@ mod tests {
                 "the script ran where its shell had gone"
             )
         });
-        let _ = std::fs::remove_dir_all(&home);
-        let _ = std::fs::remove_dir_all(&elsewhere);
     }
 
     /// While the user types in a terminal (here into `cat`, standing in for Claude Code), an

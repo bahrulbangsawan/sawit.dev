@@ -26,6 +26,8 @@ mod states;
 mod tab_groups;
 mod tabs;
 mod terminal;
+#[cfg(test)]
+mod testing;
 mod theme;
 mod tools_page;
 mod update;
