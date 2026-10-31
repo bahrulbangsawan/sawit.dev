@@ -210,9 +210,10 @@ impl FileEditor {
         let Some(now) = now else {
             if !self.warned_disk_change {
                 self.warned_disk_change = true;
-                self.notice = Some(error(
-                    "This file was deleted from disk. Press ⌘S to save it again.".into(),
-                ));
+                self.notice = Some(error(format!(
+                    "This file was deleted from disk. {} to save it again.",
+                    press(&Save, window)
+                )));
                 cx.notify();
             }
             return;
@@ -220,10 +221,10 @@ impl FileEditor {
         if self.dirty {
             if !self.warned_disk_change {
                 self.warned_disk_change = true;
-                self.notice = Some(error(
-                    "This file changed on disk while you have unsaved changes. Press ⌘S to overwrite the version on disk."
-                        .into(),
-                ));
+                self.notice = Some(error(format!(
+                    "This file changed on disk while you have unsaved changes. {} to overwrite the version on disk.",
+                    press(&Save, window)
+                )));
                 cx.notify();
             }
             return;
@@ -598,7 +599,7 @@ impl FileEditor {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::WandSparkles)
-                            .tooltip("Format Document (⇧⌘I)")
+                            .tooltip_with_action("Format Document", &Format, Some("FileEditor"))
                             .loading(self.formatting)
                             .disabled(self.read_only)
                             .on_click(
@@ -718,6 +719,14 @@ fn breadcrumb(path: &Path, root: Option<&Path>) -> Vec<String> {
 
 fn mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+/// "Press ⌘S", with the keys that run `action` in the editor now, or "Save" when none does.
+fn press(action: &dyn Action, window: &Window) -> String {
+    match crate::keymap::keys_for(action, "FileEditor", window) {
+        keys if keys.is_empty() => "Save".into(),
+        keys => format!("Press {keys}"),
+    }
 }
 
 fn error(text: String) -> Notice {
