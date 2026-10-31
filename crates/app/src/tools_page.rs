@@ -20,8 +20,8 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::dev_tools::{
-    Category, Found, TOOLS, Tool, dependents, detect, find, is_newer, latest_versions, plan, run,
-    uninstall, uninstall_command,
+    Category, Detection, Found, TOOLS, Tool, dependents, detect, find, is_newer, latest_versions,
+    plan, run, uninstall, uninstall_command,
 };
 
 use crate::catalog::{self, Mark, tilde};
@@ -45,7 +45,9 @@ enum State {
     Removed,
     /// Stopped while it ran.
     Stopped,
-    Failed(String),
+    /// The run failed: why, and the job Retry runs again. `None` when there is none: a copy
+    /// installed another way, found after its uninstall worked.
+    Failed(String, Option<Job>),
     /// Not run because a prerequisite isn't installed.
     Skipped(&'static str),
     /// Handed to the terminal (it asks for a password).
@@ -261,7 +263,8 @@ impl ToolsPage {
     }
 
     /// ↩ on a row: what its main button does, when that's safe from one key: Install,
-    /// Upgrade, Retry, and taking it out of the queue. Never Reinstall, Stop or Uninstall.
+    /// Upgrade, Retry of an install or upgrade, and taking it out of the queue. Never
+    /// Reinstall, Stop, Uninstall or Retry of an uninstall.
     fn confirm(&mut self, cx: &mut Context<Self>) {
         let rows = self.shown(&self.query(cx));
         let Some(&(_, tool)) = self.cursor.and_then(|ix| rows.get(ix)) else {
@@ -270,8 +273,12 @@ impl ToolsPage {
         let id = tool.id;
         match self.states.get(id) {
             Some(State::Queued { .. }) => self.dequeue(id, cx),
-            Some(State::Failed(_) | State::Skipped(_)) => self.enqueue(&[id], cx),
-            Some(State::Installing | State::Uninstalling) => {}
+            Some(State::Failed(_, Some(Job::Install)) | State::Skipped(_)) => {
+                self.enqueue(&[id], cx)
+            }
+            // An uninstall that failed, or a copy found after it: not from one key, and never
+            // an install over the copy the user meant to remove.
+            Some(State::Failed(..) | State::Installing | State::Uninstalling) => {}
             _ if self.newer(id).is_some() => self.upgrade(&[id], cx),
             _ if !self.installed(id) && !self.busy(id) => self.enqueue(&[id], cx),
             _ => {}
@@ -355,33 +362,40 @@ impl ToolsPage {
         let rx = rt::spawn(cx, detect());
         cx.spawn(async move |this, cx| {
             if let Ok(detection) = rx.await {
-                let _ = this.update(cx, |this, cx| {
-                    this.found = detection.found;
-                    this.problem = detection.problem;
-                    this.loading = false;
-                    // Detection now agrees with these; the rest keep their
-                    // optimistic or failed state.
-                    for (id, s) in this.states.iter_mut() {
-                        if *s == State::Removed
-                            && let Some(f) = this.found.get(id)
-                        {
-                            *s = State::Failed(format!(
-                                "Still found at {}: that copy was installed another way (Homebrew, say).",
-                                tilde(&f.path)
-                            ));
-                        }
-                    }
-                    this.states.retain(|id, s| {
-                        let found = this.found.contains_key(id);
-                        !(found && matches!(s, State::Done | State::InTerminal | State::Skipped(_))
-                            || !found && *s == State::Removed)
-                    });
-                    this.selected.retain(|id| !this.found.contains_key(id));
-                    cx.notify();
-                });
+                let _ = this.update(cx, |this, cx| this.detected(detection, cx));
             }
         })
         .detach();
+        cx.notify();
+    }
+
+    /// What detection found.
+    fn detected(&mut self, detection: Detection, cx: &mut Context<Self>) {
+        self.found = detection.found;
+        self.problem = detection.problem;
+        self.loading = false;
+        // Detection now agrees with these; the rest keep their
+        // optimistic or failed state.
+        for (id, s) in self.states.iter_mut() {
+            if *s == State::Removed
+                && let Some(f) = self.found.get(id)
+            {
+                *s = State::Failed(
+                    format!(
+                        "Still found at {}: that copy was installed another way (Homebrew, say).",
+                        tilde(&f.path)
+                    ),
+                    None,
+                );
+            }
+        }
+        self.states.retain(|id, s| {
+            let found = self.found.contains_key(id);
+            // A copy "still found" that is gone now: detection agrees with the uninstall.
+            !(found && matches!(s, State::Done | State::InTerminal | State::Skipped(_))
+                || !found && matches!(s, State::Removed | State::Failed(_, None)))
+        });
+        self.selected.retain(|id| !self.found.contains_key(id));
         cx.notify();
     }
 
@@ -489,6 +503,18 @@ impl ToolsPage {
         let Some(command) = self.uninstall_command(tool) else {
             return;
         };
+        self.ask_uninstall(tool, command, window, cx);
+    }
+
+    /// Asks, then queues `command`, which removes `tool` (or hands it to the
+    /// terminal when it asks for a password).
+    fn ask_uninstall(
+        &mut self,
+        tool: &'static Tool,
+        command: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let needed_by: Vec<&str> = dependents(tool.id)
             .into_iter()
             .filter(|t| self.installed(t.id))
@@ -531,6 +557,23 @@ impl ToolsPage {
             }
         })
         .detach();
+    }
+
+    /// Retry: runs the job that failed again. An install or upgrade (or one
+    /// skipped for a missing prerequisite) is queued again; an uninstall asks
+    /// again, as the trash button does, then runs the same command. Never the
+    /// installer after an uninstall: that would put back what the user removes.
+    fn retry(&mut self, tool: &'static Tool, window: &mut Window, cx: &mut Context<Self>) {
+        match self.states.get(tool.id) {
+            Some(State::Failed(_, Some(Job::Uninstall(command)))) => {
+                let command = command.clone();
+                self.ask_uninstall(tool, command, window, cx);
+            }
+            Some(State::Failed(_, Some(Job::Install)) | State::Skipped(_)) => {
+                self.enqueue(&[tool.id], cx)
+            }
+            _ => {}
+        }
     }
 
     /// How to remove the copy detection found, if Sawit can.
@@ -633,7 +676,7 @@ impl ToolsPage {
                 self.expanded.remove(id);
             }
             Some(Err(e)) => {
-                self.states.insert(id, State::Failed(e));
+                self.states.insert(id, State::Failed(e, Some(job)));
                 self.expanded.insert(id);
             }
         }
@@ -1102,7 +1145,7 @@ impl ToolsPage {
                 "Stopped".into(),
                 theme.warning,
             ),
-            (Some(State::Failed(_)), _) => {
+            (Some(State::Failed(..)), _) => {
                 (Mark::Icon(Lucide::CircleX), "Failed".into(), theme.danger)
             }
             (Some(State::Skipped(need)), _) => (
@@ -1150,58 +1193,83 @@ impl ToolsPage {
             ),
         };
 
-        let action = match &state {
-            Some(State::Installing | State::Uninstalling) => Button::new(("tool-stop", ix))
-                .outline()
-                .small()
-                .icon(Lucide::CircleStop)
-                .label("Stop")
-                .tooltip(match state {
-                    Some(State::Installing) if upgrading => "Stop the Upgrade",
-                    Some(State::Installing) => "Stop the Installer",
-                    _ => "Stop the Uninstaller",
-                })
-                .on_click(cx.listener(|this, _, _, cx| this.stop_running(cx))),
-            Some(State::Queued { .. }) => Button::new(("tool-dequeue", ix))
-                .ghost()
-                .small()
-                .icon(Lucide::X)
-                .label("Cancel")
-                .tooltip("Take It Out of the Queue")
-                .on_click(cx.listener(move |this, _, _, cx| this.dequeue(id, cx))),
-            Some(State::Failed(_) | State::Skipped(_)) => Button::new(("tool-retry", ix))
+        let retry = || {
+            Button::new(("tool-retry", ix))
                 .primary()
                 .small()
                 .icon(Lucide::RotateCcw)
                 .label("Retry")
-                .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&[id], cx))),
-            _ if newer.is_some() => Button::new(("tool-upgrade", ix))
-                .primary()
-                .small()
-                .icon(Lucide::CircleArrowUp)
-                .label("Upgrade")
-                .tooltip(tool.upgrade_command())
-                .on_click(cx.listener(move |this, _, _, cx| this.upgrade(&[id], cx))),
-            _ if installed => Button::new(("tool-reinstall", ix))
-                .outline()
-                .small()
-                .icon(Lucide::RotateCw)
-                .label("Reinstall")
-                .tooltip("Run the Installer Again (Updates to the Latest Version)")
-                .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&[id], cx))),
-            _ if tool.interactive => Button::new(("tool-terminal", ix))
-                .primary()
-                .small()
-                .icon(Lucide::SquareTerminal)
-                .label("Install in Terminal")
-                .tooltip("Asks for Your Password, So It Runs in the Terminal")
-                .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&[id], cx))),
-            _ => Button::new(("tool-install", ix))
-                .primary()
-                .small()
-                .icon(Lucide::Download)
-                .label("Install")
-                .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&[id], cx))),
+        };
+        let action = match &state {
+            Some(State::Installing | State::Uninstalling) => Some(
+                Button::new(("tool-stop", ix))
+                    .outline()
+                    .small()
+                    .icon(Lucide::CircleStop)
+                    .label("Stop")
+                    .tooltip(match state {
+                        Some(State::Installing) if upgrading => "Stop the Upgrade",
+                        Some(State::Installing) => "Stop the Installer",
+                        _ => "Stop the Uninstaller",
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.stop_running(cx))),
+            ),
+            Some(State::Queued { .. }) => Some(
+                Button::new(("tool-dequeue", ix))
+                    .ghost()
+                    .small()
+                    .icon(Lucide::X)
+                    .label("Cancel")
+                    .tooltip("Take It Out of the Queue")
+                    .on_click(cx.listener(move |this, _, _, cx| this.dequeue(id, cx))),
+            ),
+            // A copy found after its uninstall worked: nothing to run again (the trash button
+            // offers that copy's removal when Sawit has one).
+            Some(State::Failed(_, None)) => None,
+            Some(State::Failed(_, Some(Job::Uninstall(_)))) => Some(
+                retry()
+                    .tooltip("Run the Uninstaller Again")
+                    .on_click(cx.listener(move |this, _, window, cx| this.retry(tool, window, cx))),
+            ),
+            Some(State::Failed(..) | State::Skipped(_)) => Some(
+                retry()
+                    .on_click(cx.listener(move |this, _, window, cx| this.retry(tool, window, cx))),
+            ),
+            _ if newer.is_some() => Some(
+                Button::new(("tool-upgrade", ix))
+                    .primary()
+                    .small()
+                    .icon(Lucide::CircleArrowUp)
+                    .label("Upgrade")
+                    .tooltip(tool.upgrade_command())
+                    .on_click(cx.listener(move |this, _, _, cx| this.upgrade(&[id], cx))),
+            ),
+            _ if installed => Some(
+                Button::new(("tool-reinstall", ix))
+                    .outline()
+                    .small()
+                    .icon(Lucide::RotateCw)
+                    .label("Reinstall")
+                    .tooltip("Run the Installer Again (Updates to the Latest Version)")
+                    .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&[id], cx))),
+            ),
+            _ if tool.interactive => Some(
+                Button::new(("tool-terminal", ix))
+                    .primary()
+                    .small()
+                    .icon(Lucide::SquareTerminal)
+                    .label("Install in Terminal")
+                    .tooltip("Asks for Your Password, So It Runs in the Terminal")
+                    .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&[id], cx))),
+            ),
+            _ => Some(
+                Button::new(("tool-install", ix))
+                    .primary()
+                    .small()
+                    .icon(Lucide::Download)
+                    .label("Install")
+                    .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&[id], cx))),
+            ),
         };
 
         let can_uninstall = installed && !busy && self.uninstall_command(tool).is_some();
@@ -1358,7 +1426,7 @@ impl ToolsPage {
                                 })),
                         )
                     })
-                    .child(action),
+                    .children(action),
             ))
             .when_some(last_line.filter(|_| !expanded), |el, line| {
                 el.child(
@@ -1373,7 +1441,7 @@ impl ToolsPage {
             })
             .when_some(
                 match &state {
-                    Some(State::Failed(e)) if !expanded => Some(e.clone()),
+                    Some(State::Failed(e, _)) if !expanded => Some(e.clone()),
                     _ => None,
                 },
                 |el, e| {
@@ -1546,10 +1614,150 @@ impl Render for ToolsPage {
 mod tests {
     use futures::FutureExt as _;
     use futures::future::{Aborted, abortable};
-    use gpui_kit::{AppContext as _, TestAppContext};
-    use sawit_core::dev_tools::find;
+    use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
+    use sawit_core::dev_tools::{Detection, Found, find};
 
     use super::{Job, State, ToolsPage};
+
+    /// Bun's own removal, as its row's trash button runs it.
+    fn remove_bun() -> Job {
+        Job::Uninstall(r#"rm -rf "$HOME/.bun""#.into())
+    }
+
+    /// A Dev Tools page in a window of its own, with Bun installed at `~/.bun`. The tests make
+    /// another tool's installer "run" before anything is queued, so nothing they queue starts and
+    /// no script runs here.
+    fn page_with_bun(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<ToolsPage>) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::catalog::init(cx);
+        });
+        cx.update(|cx| {
+            gpui_kit::open_window(Default::default(), cx, |_, cx| {
+                cx.new(|cx| {
+                    let mut page = ToolsPage::blank(cx);
+                    page.loading = false;
+                    page.found.insert(
+                        "bun",
+                        Found {
+                            path: "/Users/me/.bun/bin/bun".into(),
+                            version: Some("1.2.0".into()),
+                        },
+                    );
+                    page
+                })
+            })
+        })
+        .unwrap()
+    }
+
+    /// Puts ↩'s selection on Bun's row, with Deno's installer "running".
+    fn select_bun_while_another_runs(page: &mut ToolsPage) {
+        page.running = Some(("deno", Job::Install));
+        page.cursor = page.shown("").iter().position(|(_, t)| t.id == "bun");
+    }
+
+    fn queued(cx: &mut TestAppContext, page: &Entity<ToolsPage>) -> Vec<(&'static str, Job)> {
+        page.read_with(cx, |page, _| {
+            page.queue
+                .iter()
+                .map(|(tool, job)| (tool.id, job.clone()))
+                .collect()
+        })
+    }
+
+    /// Retry, as the row's button runs it.
+    fn retry_bun(cx: &mut TestAppContext, window: AnyWindowHandle, page: &Entity<ToolsPage>) {
+        let bun = find("bun").unwrap();
+        cx.update_window(window, |_, window, cx| {
+            page.update(cx, |page, cx| page.retry(bun, window, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+
+    /// CATALOG M4: after an uninstall fails, the row says Failed, and neither its Retry nor ↩
+    /// may run the tool's installer, a `curl | sh` over the copy the user tried to remove (both
+    /// queued an install). Retry asks again, as the trash button does, then runs the uninstall
+    /// that failed; ↩ leaves the row alone, since one key never removes anything.
+    #[gpui_kit::test]
+    fn retrying_a_failed_uninstall_never_runs_the_installer(cx: &mut TestAppContext) {
+        let (window, page) = page_with_bun(cx);
+        page.update(cx, |page, cx| {
+            page.running = Some(("bun", remove_bun()));
+            page.finish(
+                "bun",
+                remove_bun(),
+                Some(Err("Permission denied".into())),
+                cx,
+            );
+            select_bun_while_another_runs(page);
+            page.confirm(cx);
+        });
+        assert_eq!(queued(cx, &page), [], "↩ after the uninstall failed");
+
+        retry_bun(cx, window, &page);
+        assert_eq!(queued(cx, &page), [], "Retry ran something without asking");
+        assert_eq!(
+            cx.pending_prompt(),
+            Some((
+                "Uninstall Bun?".to_string(),
+                r#"Runs: rm -rf "$HOME/.bun""#.to_string()
+            )),
+            "Retry didn't ask to uninstall again"
+        );
+        cx.simulate_prompt_answer("Uninstall");
+        cx.run_until_parked();
+        assert_eq!(queued(cx, &page), [("bun", remove_bun())]);
+    }
+
+    /// An uninstall that worked, after which detection still finds a copy installed another way
+    /// (Homebrew's): the row says so, as Failed, and has nothing to run again. Retry and ↩ used
+    /// to queue the installer over that copy.
+    #[gpui_kit::test]
+    fn a_copy_found_after_its_uninstall_is_never_installed_over(cx: &mut TestAppContext) {
+        let (window, page) = page_with_bun(cx);
+        page.update(cx, |page, cx| {
+            page.running = Some(("bun", remove_bun()));
+            page.finish("bun", remove_bun(), Some(Ok(())), cx);
+            let homebrew = Found {
+                path: "/opt/homebrew/bin/bun".into(),
+                version: Some("1.2.0".into()),
+            };
+            page.detected(
+                Detection {
+                    found: [("bun", homebrew)].into(),
+                    problem: None,
+                },
+                cx,
+            );
+            assert!(
+                matches!(page.states.get("bun"), Some(State::Failed(..))),
+                "{:?}",
+                page.states.get("bun")
+            );
+            select_bun_while_another_runs(page);
+            page.confirm(cx);
+        });
+        assert_eq!(queued(cx, &page), [], "↩ on the copy still found");
+        retry_bun(cx, window, &page);
+        assert!(!cx.has_pending_prompt());
+        assert_eq!(queued(cx, &page), [], "Retry on the copy still found");
+        // Once that copy is gone too, the row is a missing tool's again, with Install.
+        page.update(cx, |page, cx| {
+            page.detected(
+                Detection {
+                    found: Default::default(),
+                    problem: None,
+                },
+                cx,
+            )
+        });
+        assert_eq!(
+            page.read_with(cx, |page, _| page.states.get("bun").cloned()),
+            None
+        );
+    }
 
     /// Closing the Dev Tools tab drops the page: the installer it runs stops with it, instead
     /// of running on unseen, its queue gone, while a reopened page offers to start it again.

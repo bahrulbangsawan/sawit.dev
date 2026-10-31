@@ -231,7 +231,8 @@ explained. A conflict on the same address can't be forced.
 - Search the list, narrow it with the **Installed**, **Updates** and **Not Installed** tabs or to one category, and
   sort it by category, by name or by what needs attention. It shows eight tools a page.
 - The keyboard starts in the search (⌘F goes back to it); ↩ there moves to the first tool, ↑ and ↓ select, and ↩
-  installs, upgrades or retries the selected one.
+  installs, upgrades or retries the selected one. It never removes anything: a failed uninstall's **Retry** asks
+  before it runs that uninstall again.
 - When npm or GitHub has a newer release, an installed tool shows `11.21.0 → 12.16.1` and an **Upgrade** button;
   **Upgrade All** upgrades every one of them. Upgrades use the tool's own command (`bun upgrade`, `uv self update`,
   `claude update`, …), or its install script again.
