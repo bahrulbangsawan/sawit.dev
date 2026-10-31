@@ -505,6 +505,44 @@ fn a_release_reaches_a_remote_at_a_relative_path() {
     repo.wait_for_remote_at("refs/heads/main", &tagged);
 }
 
+/// A release push that never landed (one that failed, or one an older hook ran in a worktree
+/// removed under it) leaves origin with main but not its release commit and tag. Pushing main
+/// again sent the release commit, but with nothing new to release, the hook left the tag behind:
+/// that version got no GitHub release until the next release took its tag along. Now the tag
+/// goes out with that push.
+#[test]
+fn a_release_left_behind_goes_out_when_main_is_pushed_again() {
+    let repo = Repo::new();
+    repo.commit("feat(app): a new thing");
+    ok(repo.push_main(Some(("SAWIT_SKIP_RELEASE", "1"))));
+    assert_eq!(ok(repo.release(None)), "v0.0.8");
+    let released = repo.local("main").unwrap();
+    let out = repo.push_main(None);
+    let said = stderr(&out);
+    assert!(
+        said.contains("nothing new since the last release"),
+        "{said}"
+    );
+    ok(out);
+    repo.wait_for_remote_at("refs/tags/v0.0.8", &released);
+    assert_eq!(repo.remote("refs/heads/main"), Some(released));
+}
+
+/// Git runs the hook for `git push --dry-run` too, and doesn't tell it. A tag left behind
+/// follows only a push of main that went through, so a dry run sends nothing.
+#[test]
+fn a_dry_run_of_main_sends_no_release_tag_left_behind() {
+    let repo = Repo::new();
+    repo.commit("feat(app): a new thing");
+    ok(repo.push_main(Some(("SAWIT_SKIP_RELEASE", "1"))));
+    let pushed = repo.remote("refs/heads/main");
+    assert_eq!(ok(repo.release(None)), "v0.0.8");
+    ok(repo.run("git", &["push", "--dry-run", "origin", "main"], None));
+    repo.wait_for_log("did not go out");
+    assert_eq!(repo.remote("refs/heads/main"), pushed);
+    assert_eq!(repo.remote("refs/tags/v0.0.8"), None);
+}
+
 /// The refusal's steps get run as printed, by agents too, from wherever `git push` was typed.
 /// They named the worktree `../sawit-main`, which from a folder inside the checkout put it
 /// inside the checkout, and they removed it straight after the push. Now they name it by its

@@ -239,6 +239,8 @@ Commit this as `docs: update README, screenshots and demo for <short summary>`.
      `SAWIT_SKIP_RELEASE=1`) isn't released by pushing it again: that push is "Everything up-to-date" and runs no
      hook. Cut the release by hand in the checkout of `main` (`tag=$(scripts/release.sh)`), then push it with
      `SAWIT_RELEASE_PUSH=1 git push origin main "$tag"`.
+   - A release whose background push failed: the log says why, and how to push it. Pushing `main` again from
+     the checkout of `main` takes the release commit and tag along too, while origin's `main` lacks that commit.
 4. Wait for the release push to finish, then confirm:
    - `cat "$(git rev-parse --git-common-dir)/sawit-release.log"` has no errors;
    - `git log --oneline -3` shows `chore(release): vX` on top, and `git ls-remote --tags origin vX` lists the tag;
