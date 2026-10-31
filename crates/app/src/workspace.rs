@@ -484,9 +484,12 @@ impl Workspace {
 
     pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let kind = classify(&path);
-        // Canvas files open on a canvas (spec D14).
+        // Canvas files open on a canvas (spec D14), which takes the keyboard, as a file editor
+        // does once its file has loaded (CANVAS-UI-2).
         if matches!(kind, FileKind::Figcraft | FileKind::Excalidraw) {
-            self.open_board_file(path, kind, cx);
+            if let Some(board) = self.open_board_file(path, kind, cx) {
+                board.update(cx, |board, cx| board.take_keyboard(cx));
+            }
             return;
         }
         let viewer = match kind {
@@ -555,17 +558,22 @@ impl Workspace {
     /// A file has one canvas in the window, whichever of its two names opens it, because two
     /// canvases of one file would each save over the other's edits. A project's canvas file is
     /// that project's canvas tab ([`Self::open_canvas_of`]); any other file's tab is keyed by the
-    /// `.figcraft` file it is bound to, and shown again when the file is opened again.
-    fn open_board_file(&mut self, path: PathBuf, kind: FileKind, cx: &mut Context<Self>) {
+    /// `.figcraft` file it is bound to, and shown again when the file is opened again. The canvas
+    /// shown.
+    fn open_board_file(
+        &mut self,
+        path: PathBuf,
+        kind: FileKind,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<BoardView>> {
         let file = store::bound_file(&path);
         let roots: Vec<Option<PathBuf>> = self.projects.iter().map(|p| p.root(cx)).collect();
         if let Some(root) = canvas_project(&file, roots, &AppPaths::default_macos().root) {
-            self.open_canvas_of(root, cx);
-            return;
+            return self.open_canvas_of(root, cx);
         }
-        if let Some((ix, _)) = self.board_tab(&file, cx) {
+        if let Some((ix, board)) = self.board_tab(&file, cx) {
             self.activate_tab(ix, cx);
-            return;
+            return Some(board);
         }
         let view = cx.new(|cx| match kind {
             FileKind::Excalidraw => BoardView::import(path, cx),
@@ -583,7 +591,7 @@ impl Workspace {
         let group = self.group_of(&file, cx);
         self.push_tab(
             PaneItem::Other {
-                view: view.into(),
+                view: view.clone().into(),
                 key: format!("file\u{0}{}", file.display()).into(),
                 title,
                 icon: crate::board::ICON,
@@ -593,6 +601,7 @@ impl Workspace {
             cx,
         );
         cx.notify();
+        Some(view)
     }
 
     /// The tab of the canvas bound to the `.figcraft` file `file` ([`BoardView::path`]), and the
@@ -662,6 +671,24 @@ impl Workspace {
             },
         );
         self.activate_tab(at, cx);
+    }
+
+    /// Shows the tab at `ix` as the user's click on it or ⌃Tab does ([`Self::activate_tab`]): a
+    /// canvas's takes the keyboard too, as the canvas the user went to ([`BoardView::take_keyboard`],
+    /// CANVAS-UI-2).
+    fn show_tab(&mut self, ix: usize, cx: &mut Context<Self>) {
+        self.activate_tab(ix, cx);
+        if let Some(board) = self.board_at(ix) {
+            board.update(cx, |board, cx| board.take_keyboard(cx));
+        }
+    }
+
+    /// The canvas of the tab at `ix`, if it is a canvas's.
+    fn board_at(&self, ix: usize) -> Option<Entity<BoardView>> {
+        let PaneItem::Other { view, .. } = &self.tabs.get(ix)?.item else {
+            return None;
+        };
+        view.clone().downcast::<BoardView>().ok()
     }
 
     /// Shows the tab at `ix`, unfolding its group and switching to its
@@ -1175,7 +1202,7 @@ impl Workspace {
         if len > 1 {
             let ix = (self.active as isize + step).rem_euclid(len) as usize;
             self.show_center(cx);
-            self.activate_tab(ix, cx);
+            self.show_tab(ix, cx);
         }
     }
 
@@ -1368,7 +1395,7 @@ impl Workspace {
                             }))
                     })
                     .when_some(color, |el, color| el.child(group_stripe(color, active)))
-                    .on_click(cx.listener(move |this, _, _, cx| this.activate_tab(ix, cx)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.show_tab(ix, cx)))
                     .context_menu(move |menu, window, cx| {
                         Self::tab_menu(
                             weak.clone(),
@@ -2095,6 +2122,16 @@ impl Workspace {
         self.open_canvas_of(root, cx)
     }
 
+    /// Opens the active project's canvas as the user's ⌃⌘C and the title bar's Canvas button do:
+    /// with the keyboard ([`BoardView::take_keyboard`], CANVAS-UI-2). An agent's canvas op and
+    /// `app_open_page canvas` open it without ([`Self::open_canvas`]), leaving the keyboard where
+    /// the user has it.
+    fn show_canvas(&mut self, cx: &mut Context<Self>) {
+        if let Some(board) = self.open_canvas(cx) {
+            board.update(cx, |board, cx| board.take_keyboard(cx));
+        }
+    }
+
     /// Opens the canvas of the project at `root`, or the app-wide one for `None`, as
     /// [`Self::open_canvas`] opens the active project's. A canvas whose file is open in a canvas
     /// file's tab already (opened before its project was in this window) is that tab: two
@@ -2274,18 +2311,19 @@ impl Workspace {
     /// Tells each canvas whether its tab is on screen ([`BoardView::set_shown`]), as
     /// [`Self::sync_browser`] tells the browser: the active tab, while the tab area shows. Each
     /// render checks, because the layout and the active tab change in many places. A canvas taken
-    /// off screen ends what it held of the pointer, which nothing would hear the release of.
+    /// off screen ends what it held of the pointer, which nothing would hear the release of, and
+    /// gives the keyboard, if it had it, to the workspace, which a canvas shown again takes it
+    /// back from. Those going off screen are told first, so that the one coming on screen finds
+    /// the keyboard where they left it, whatever their order.
     fn sync_boards(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let center = self.welcome.is_none() && self.layout.center;
-        for (ix, tab) in self.tabs.iter().enumerate() {
-            let PaneItem::Other { view, .. } = &tab.item else {
-                continue;
-            };
-            let Ok(board) = view.clone().downcast::<BoardView>() else {
-                continue;
-            };
-            let shown = center && ix == self.active;
-            board.update(cx, |board, cx| board.set_shown(shown, window, cx));
+        let home = self.focus.clone();
+        let mut boards: Vec<(Entity<BoardView>, bool)> = (0..self.tabs.len())
+            .filter_map(|ix| Some((self.board_at(ix)?, center && ix == self.active)))
+            .collect();
+        boards.sort_by_key(|(_, shown)| *shown);
+        for (board, shown) in boards {
+            board.update(cx, |board, cx| board.set_shown(shown, &home, window, cx));
         }
     }
 
@@ -2545,9 +2583,7 @@ impl Workspace {
                                 &OpenCanvas,
                                 Some("Workspace"),
                             )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.open_canvas(cx);
-                            })),
+                            .on_click(cx.listener(|this, _, _, cx| this.show_canvas(cx))),
                     )
                     .child(
                         Button::new("open-browser")
@@ -2794,9 +2830,7 @@ impl Render for Workspace {
                     this.show_panel(SidebarTab::Prompts, cx)
                 }),
             )
-            .on_action(cx.listener(|this, _: &OpenCanvas, _, cx| {
-                this.open_canvas(cx);
-            }))
+            .on_action(cx.listener(|this, _: &OpenCanvas, _, cx| this.show_canvas(cx)))
             .on_action(cx.listener(|this, _: &OpenDevTools, w, cx| this.open_tools_page(w, cx)))
             .on_action(cx.listener(|this, _: &OpenMcp, _, cx| this.open_mcp_page(cx)))
             .on_action(cx.listener(|this, _: &OpenKeymapEditor, w, cx| {

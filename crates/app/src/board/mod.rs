@@ -360,6 +360,13 @@ pub struct BoardView {
     menus: menus::Menus,
     /// The canvas's tab is on screen, as the workspace last said ([`Self::set_shown`]).
     shown: bool,
+    /// The canvas takes the keyboard with the next frame it is drawn in
+    /// ([`Self::take_keyboard`]).
+    wants_keyboard: bool,
+    /// The canvas had the keyboard when its tab went off screen, and gave it to the workspace:
+    /// shown again, it takes it back, unless something else took it meanwhile
+    /// ([`Self::set_shown`]).
+    gave_keyboard: bool,
     _frames: Task<()>,
     _quit: Subscription,
     _release: Subscription,
@@ -501,6 +508,8 @@ impl BoardView {
             scrub: None,
             menus: menus::Menus::default(),
             shown: true,
+            wants_keyboard: false,
+            gave_keyboard: false,
             _frames: frames,
             // ⌘Q quits without dropping the views: what isn't on disk yet is written first.
             _quit: cx.on_app_quit(|this, _| {
@@ -516,6 +525,19 @@ impl BoardView {
         &self.path
     }
 
+    /// The canvas takes the keyboard with the next frame it is drawn in, as the canvas the user
+    /// went to (CANVAS-UI-2): the workspace asks for it on the user's ways in, ⌃⌘C and the title
+    /// bar's Canvas button, a canvas file opened, a click on the canvas's tab and ⌃Tab, as the
+    /// Excalidraw canvas's webview took the keyboard each time it came on screen. Until then the
+    /// canvas's keys went to whatever had the keyboard: a terminal pane's shell, or the Files
+    /// tree, whose ⌫ moves the selected file to the Trash. The keyboard goes to the palette, the
+    /// shortcuts sheet or the context menu instead, when one is open over the canvas. A canvas
+    /// taken off screen before that frame takes nothing ([`Self::set_shown`]).
+    pub fn take_keyboard(&mut self, cx: &mut Context<Self>) {
+        self.wants_keyboard = true;
+        cx.notify();
+    }
+
     /// The workspace shows the canvas's tab (`shown`), or no longer does: another tab is on top,
     /// or the tab area is hidden. It says so each time it draws, for each canvas it has.
     ///
@@ -527,14 +549,30 @@ impl BoardView {
     /// any edit is, though no paint starts the autosave while the canvas is hidden.
     ///
     /// Hidden, it also lets go of what it keeps to draw its next frames ([`Self::let_go_of_frames`],
-    /// CANVAS-UI-9).
-    pub fn set_shown(&mut self, shown: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// CANVAS-UI-9). And it gives the keyboard, if it or a field in it has it, to `home`, the
+    /// workspace (CANVAS-UI-2): a keyboard left on what isn't drawn sends the keys nowhere, the
+    /// app's own (⌃Tab, ⌘W) too. Shown again, it takes the keyboard back if `home` still has it.
+    pub fn set_shown(
+        &mut self,
+        shown: bool,
+        home: &FocusHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if std::mem::replace(&mut self.shown, shown) == shown {
             return;
         }
         if shown {
+            if std::mem::take(&mut self.gave_keyboard) && home.is_focused(window) {
+                self.wants_keyboard = true;
+            }
             cx.notify();
             return;
+        }
+        self.wants_keyboard = false;
+        if self.focus.is_focused(window) || self.focus.contains_focused(window, cx) {
+            window.focus(home, cx);
+            self.gave_keyboard = true;
         }
         self.let_go_of_the_pointer(cx);
         self.autosave(cx);
@@ -1291,12 +1329,19 @@ impl Focusable for BoardView {
 
 impl Render for BoardView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Asked for by the user's way in: the keyboard comes with this frame, which draws the
+        // canvas (a canvas that can't be opened has nothing to take it).
+        let take_keyboard = std::mem::take(&mut self.wants_keyboard);
         if let Err(error) = &self.board {
             return Placeholder::error("The canvas couldn't be opened.")
                 .detail(error.clone())
                 .into_any_element();
         }
         self.watch_keyboard(window, cx);
+        if take_keyboard {
+            let to = self.menu_keyboard().unwrap_or_else(|| self.focus.clone());
+            window.focus(&to, cx);
+        }
         let chrome = self.settle_chrome();
         // The keys the canvas takes while it edits text are bound in a context of their own.
         let key_context = if self.editing_text() {
@@ -1616,10 +1661,10 @@ mod tests {
     use gpui_kit::component::{Theme, ThemeMode};
     use gpui_kit::{
         App, AppContext as _, AssetSource as _, Bounds, Context, Entity, EntityInputHandler as _,
-        KeyBinding, KeyBindingContextPredicate, KeyContext, KeyDownEvent, KeyUpEvent, Keystroke,
-        Modifiers, MouseButton, MouseDownEvent, MouseExitEvent, MouseUpEvent, OperatingSystem,
-        PinchEvent, Pixels, PlatformInput, RenderImage, ScrollDelta, ScrollEvent, TestAppContext,
-        Unbind, VisualTestContext, Window, WindowHandle, point, px, size,
+        FocusHandle, KeyBinding, KeyBindingContextPredicate, KeyContext, KeyDownEvent, KeyUpEvent,
+        Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseExitEvent, MouseUpEvent,
+        OperatingSystem, PinchEvent, Pixels, PlatformInput, RenderImage, ScrollDelta, ScrollEvent,
+        TestAppContext, Unbind, VisualTestContext, Window, WindowHandle, point, px, size,
     };
     use sawit_board::overlay::{self, Composition, Shape};
     use sawit_board::policy::SAWIT_WINS;
@@ -2296,7 +2341,8 @@ mod tests {
         assert!(in_atlas(cx, window, &first));
         let show = |shown: bool, cx: &mut TestAppContext| {
             cx.update_window(window.into(), |_, window, cx| {
-                view.update(cx, |view, cx| view.set_shown(shown, window, cx));
+                let home = cx.focus_handle();
+                view.update(cx, |view, cx| view.set_shown(shown, &home, window, cx));
             })
             .unwrap();
         };
@@ -3017,7 +3063,10 @@ mod tests {
     /// The workspace hides the canvas's tab, or shows it again, as its render does for each
     /// canvas it has.
     fn show(view: &Entity<BoardView>, shown: bool, cx: &mut VisualTestContext) {
-        cx.update(|window, cx| view.update(cx, |view, cx| view.set_shown(shown, window, cx)));
+        cx.update(|window, cx| {
+            let home = cx.focus_handle();
+            view.update(cx, |view, cx| view.set_shown(shown, &home, window, cx));
+        });
         cx.run_until_parked();
     }
 
@@ -3564,6 +3613,80 @@ mod tests {
             assert_eq!(ds.text_edit.as_ref().map(|edit| edit.id), Some(text));
             assert!(board.session.ui_requests.is_empty());
         });
+    }
+
+    /// The id of the tool the canvas's pointer events go to.
+    fn tool_id(view: &Entity<BoardView>, cx: &TestAppContext) -> &'static str {
+        view.read_with(cx, |view, _| view.board().unwrap().session.tool.tool.id())
+    }
+
+    /// Whether the canvas itself has the keyboard.
+    fn has_keyboard(view: &Entity<BoardView>, cx: &mut VisualTestContext) -> bool {
+        cx.update(|window, cx| view.read(cx).focus.is_focused(window))
+    }
+
+    /// Gives the keyboard to something else than the canvas, as a terminal pane or the Files tree
+    /// has it, and returns that.
+    fn keyboard_elsewhere(cx: &mut VisualTestContext) -> FocusHandle {
+        cx.update(|window, cx| {
+            let elsewhere = cx.focus_handle();
+            window.focus(&elsewhere, cx);
+            elsewhere
+        })
+    }
+
+    /// CANVAS-UI-2: the canvas the user goes to (⌃⌘C, the title bar's Canvas button, a canvas
+    /// file opened, a click on its tab, ⌃Tab) takes the keyboard with the next frame it is drawn
+    /// in, as the Excalidraw canvas's webview did each time it came on screen: the workspace asks
+    /// it to ([`BoardView::take_keyboard`]). Before, its keys went to whatever had the keyboard,
+    /// and R typed into the shell of the terminal pane that had it.
+    #[gpui_kit::test]
+    fn a_canvas_asked_to_take_the_keyboard_has_it_with_the_next_frame(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("take-keyboard");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        keyboard_elsewhere(&mut cx);
+        cx.simulate_keystrokes("r");
+        assert_eq!(tool_id(&view, &cx), "move");
+        view.update(&mut cx, |view, cx| view.take_keyboard(cx));
+        cx.run_until_parked();
+        assert!(has_keyboard(&view, &mut cx));
+        cx.simulate_keystrokes("r");
+        assert_eq!(tool_id(&view, &cx), "rectangle");
+    }
+
+    /// CANVAS-UI-2: a canvas whose tab goes off screen with the keyboard gives it to the
+    /// workspace (`home`), so that the app's keys (⌃Tab, ⌘W) still work: a focus left on what
+    /// isn't drawn sends the keys nowhere. Shown again, it takes the keyboard back, unless
+    /// something else took it meanwhile.
+    #[gpui_kit::test]
+    fn a_hidden_canvas_gives_the_keyboard_back_and_takes_it_again(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("keyboard-home");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        let home = cx.update(|_, cx| cx.focus_handle());
+        let shown = |shown: bool, cx: &mut VisualTestContext| {
+            cx.update(|window, cx| {
+                view.update(cx, |view, cx| view.set_shown(shown, &home, window, cx));
+            });
+            cx.run_until_parked();
+        };
+        focus_canvas(&view, &mut cx);
+        shown(false, &mut cx);
+        assert!(cx.update(|window, _| home.is_focused(window)));
+        shown(true, &mut cx);
+        assert!(has_keyboard(&view, &mut cx));
+
+        // Hidden with the keyboard, then the keyboard goes elsewhere: shown again, the canvas
+        // leaves it there.
+        shown(false, &mut cx);
+        let elsewhere = keyboard_elsewhere(&mut cx);
+        shown(true, &mut cx);
+        assert!(!has_keyboard(&view, &mut cx));
+        assert!(cx.update(|window, _| elsewhere.is_focused(window)));
+        // Hidden without the keyboard: shown again, it doesn't take it either.
+        shown(false, &mut cx);
+        cx.update(|window, cx| window.focus(&home, cx));
+        shown(true, &mut cx);
+        assert!(!has_keyboard(&view, &mut cx));
     }
 
     #[gpui_kit::test]

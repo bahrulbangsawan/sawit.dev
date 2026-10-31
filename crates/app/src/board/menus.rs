@@ -122,6 +122,19 @@ impl Menus {
     }
 }
 
+impl BoardView {
+    /// The keyboard of the palette, the shortcuts sheet or the context menu open over the canvas,
+    /// if one is and has been drawn: what takes the keyboard in the canvas's place when the user
+    /// comes back to it ([`BoardView::take_keyboard`]).
+    pub(super) fn menu_keyboard(&self) -> Option<FocusHandle> {
+        let menus = &self.menus;
+        let palette = (menus.palette.as_ref()).map(|palette| palette.keyboard.clone());
+        let sheet = (menus.sheet.as_ref()).map(|sheet| sheet.focus.clone());
+        let context_menu = (menus.context_menu.as_ref()).map(|menu| menu.keyboard.clone());
+        palette.or(sheet).or(context_menu)
+    }
+}
+
 impl Palette {
     /// The commands that match the query, best first: [`PALETTE_RESULTS`] at most.
     fn matches(&self, cx: &App) -> Vec<ActionItem> {

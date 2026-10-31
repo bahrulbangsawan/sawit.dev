@@ -1134,7 +1134,10 @@ mod tests {
         cx.simulate_mouse_down(start, left, none);
         cx.simulate_mouse_move(start + point(px(10.), px(0.)), left, none);
         assert_eq!(prop(&view, ids[0], "x", &cx), json!(10.0));
-        cx.update(|window, cx| view.update(cx, |view, cx| view.set_shown(false, window, cx)));
+        cx.update(|window, cx| {
+            let home = cx.focus_handle();
+            view.update(cx, |view, cx| view.set_shown(false, &home, window, cx));
+        });
         assert!(view.read_with(&cx, |view, _| view.scrub.is_none()));
         assert_eq!(gesture(&view, &cx), None);
         assert_eq!(prop(&view, ids[0], "x", &cx), json!(10.0));
