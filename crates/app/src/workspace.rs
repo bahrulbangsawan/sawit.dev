@@ -1598,15 +1598,10 @@ impl Workspace {
                                 String::new()
                             }
                         ))
-                        .tooltip("Show Git")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.leave_welcome(PANEL_AND_TABS, cx);
-                            if !this.layout.sidebar {
-                                this.layout.toggle(Area::Sidebar);
-                            }
-                            this.sidebar = SidebarTab::Git;
-                            cx.notify();
-                        })),
+                        .tooltip_with_action("Show Git", &ShowGit, Some("Workspace"))
+                        .on_click(
+                            cx.listener(|this, _, _, cx| this.show_panel(SidebarTab::Git, cx)),
+                        ),
                 )
             })
             .child(div().flex_1())
