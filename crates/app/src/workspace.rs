@@ -2464,6 +2464,12 @@ impl Workspace {
 
     /// Shows the MCP install page (one tab), with the keyboard in its search.
     fn open_mcp_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_mcp_page(true, window, cx);
+    }
+
+    /// Shows the MCP page; `focus` gives its search the keyboard (not when an
+    /// agent opens it: the keyboard stays where the user has it).
+    fn show_mcp_page(&mut self, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_welcome(CENTER_ONLY, cx);
         let key: SharedString = "mcp".into();
         if let Some(ix) = self
@@ -2472,14 +2478,17 @@ impl Workspace {
             .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
         {
             self.active = ix;
-            if let PaneItem::Other { view, .. } = &self.tabs[ix].item
+            if focus
+                && let PaneItem::Other { view, .. } = &self.tabs[ix].item
                 && let Ok(page) = view.clone().downcast::<McpPage>()
             {
                 page.update(cx, |page, cx| page.focus_search(window, cx));
             }
         } else {
             let view = cx.new(|cx| McpPage::new(window, cx));
-            view.update(cx, |page, cx| page.focus_search(window, cx));
+            if focus {
+                view.update(cx, |page, cx| page.focus_search(window, cx));
+            }
             self.push_tab(
                 PaneItem::Other {
                     view: view.into(),
@@ -2543,6 +2552,12 @@ impl Workspace {
 
     /// Shows the Dev Tools install page (one tab), with the keyboard in its search.
     fn open_tools_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_tools_page(true, window, cx);
+    }
+
+    /// Shows the Dev Tools page; `focus` gives its search the keyboard (not
+    /// when an agent opens it: the keyboard stays where the user has it).
+    fn show_tools_page(&mut self, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_welcome(CENTER_ONLY, cx);
         let key: SharedString = "tools".into();
         if let Some(ix) = self
@@ -2552,14 +2567,17 @@ impl Workspace {
         {
             self.active = ix;
             // The keyboard goes to its search, as for a new one.
-            if let PaneItem::Other { view, .. } = &self.tabs[ix].item
+            if focus
+                && let PaneItem::Other { view, .. } = &self.tabs[ix].item
                 && let Ok(page) = view.clone().downcast::<ToolsPage>()
             {
                 page.update(cx, |page, cx| page.focus_search(window, cx));
             }
         } else {
             let view = cx.new(|cx| ToolsPage::new(window, cx));
-            view.update(cx, |page, cx| page.focus_search(window, cx));
+            if focus {
+                view.update(cx, |page, cx| page.focus_search(window, cx));
+            }
             cx.subscribe_in(
                 &view,
                 window,

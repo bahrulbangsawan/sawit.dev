@@ -408,8 +408,9 @@ impl Workspace {
                 self.open_canvas(cx);
             }
             Page::Browser => self.open_browser(None, window, cx),
-            Page::Mcp => self.open_mcp_page(window, cx),
-            Page::Tools => self.open_tools_page(window, cx),
+            // An agent's: the keyboard stays where the user has it.
+            Page::Mcp => self.show_mcp_page(false, window, cx),
+            Page::Tools => self.show_tools_page(false, window, cx),
             Page::Changelog => {
                 self.show_center(cx);
                 self.open_changelog_page(cx)
