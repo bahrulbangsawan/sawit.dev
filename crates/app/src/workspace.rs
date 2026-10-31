@@ -1464,7 +1464,8 @@ impl Workspace {
         cached(view)
     }
 
-    /// The view the tab at `ix` shows: what tells it apart from a tab that takes its place.
+    /// The view the tab at `ix` shows: what tells it apart from a tab that takes its place. The
+    /// tab bar's scroll and the keyboard's give-back ([`Shown`]) both go by it.
     fn tab_view(&self, ix: usize) -> Option<EntityId> {
         Some(match &self.tabs.get(ix)?.item {
             PaneItem::Server => self.server_detail.entity_id(),
@@ -2666,18 +2667,13 @@ impl Workspace {
 
     /// What the workspace shows now ([`Shown`]).
     fn shown(&self) -> Shown {
-        let front = self.tabs.get(self.active).map(|tab| match &tab.item {
-            PaneItem::Server => self.server_detail.entity_id(),
-            PaneItem::File(editor) => editor.entity_id(),
-            PaneItem::Other { view, .. } => view.entity_id(),
-        });
         (
             self.welcome.is_some(),
             self.layout,
             self.canvas_maximized,
             self.project,
             self.sidebar,
-            front,
+            self.tab_view(self.active),
         )
     }
 
