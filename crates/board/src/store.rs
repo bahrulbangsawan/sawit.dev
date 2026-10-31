@@ -81,7 +81,7 @@ pub fn open_with_issues(path: &Path) -> Result<(BoardDoc, Vec<String>), BoardErr
     let (board, issues) = BoardDoc::from_file_bytes(&bytes, path)?;
     if !issues.is_empty() {
         let bak = lossy_backup(path);
-        std::fs::write(&bak, &bytes).map_err(|e| {
+        keep_copy(&bak, &bytes, path).map_err(|e| {
             BoardError::Io(format!(
                 "couldn't keep a copy of {} at {} before opening it: {e}",
                 path.display(),
@@ -90,6 +90,16 @@ pub fn open_with_issues(path: &Path) -> Result<(BoardDoc, Vec<String>), BoardErr
         })?;
     }
     Ok((board, issues))
+}
+
+/// Keeps `bytes`, what the canvas file `of` holds, as the copy at `bak`, with the file's
+/// permissions: in place of whatever is at `bak`, a link included, which is never written through
+/// ([`files::replace_file`], CANVAS-CORE-1). A cloned repository can hold a link there to any
+/// file of the user's.
+fn keep_copy(bak: &Path, bytes: &[u8], of: &Path) -> Result<(), sawit_core::CoreError> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mode = std::fs::metadata(of).map_or(0o644, |meta| meta.permissions().mode() & 0o777);
+    files::replace_file(bak, bytes, std::fs::Permissions::from_mode(mode))
 }
 
 /// What the canvas file `path`, which isn't there, opens as: the old canvas beside it imported,
@@ -487,7 +497,7 @@ fn keep_backup_before_emptying(path: &Path) -> Result<(), String> {
         return Ok(());
     }
     let bak = sibling(path, ".bak");
-    std::fs::write(&bak, old).map_err(|e| {
+    keep_copy(&bak, &old, path).map_err(|e| {
         format!(
             "the canvas already there couldn't be copied to {}: {e}",
             bak.display()
@@ -1290,20 +1300,27 @@ mod tests {
 
     #[test]
     fn a_save_goes_through_a_temporary_file() {
+        use std::os::unix::fs::PermissionsExt as _;
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let folder = dir.path().join("boards");
+        std::fs::create_dir(&folder).unwrap();
+        let path = folder.join("canvas.figcraft");
         let writer = Writer::spawn();
         writer.save(path.clone(), bytes_with(&["old"]), false);
         writer.flush();
-        // A folder where the temporary file should be: writing it fails, and the canvas is
-        // untouched. Written straight to the file, the save would have gone through.
-        std::fs::create_dir(files::staging_file(&path)).unwrap();
+        // A folder nothing can be made in, around a canvas file that can be written: the
+        // temporary file can't be made, so the save fails, and the canvas is untouched. Written
+        // straight to the file, the save would have gone through.
+        let mode = |mode| std::fs::Permissions::from_mode(mode);
+        std::fs::set_permissions(&folder, mode(0o555)).unwrap();
         writer.save(path.clone(), bytes_with(&["new"]), false);
         writer.flush();
+        std::fs::set_permissions(&folder, mode(0o755)).unwrap();
         assert!(writer.last_error().is_some());
         let board = open(&path).unwrap();
         assert!(has_text(&board, "old"));
         assert!(!has_text(&board, "new"));
+        assert_eq!(names(&folder), ["canvas.figcraft"]);
     }
 
     #[test]
@@ -1331,6 +1348,65 @@ mod tests {
         // Nothing is left beside either of them.
         assert_eq!(names(dir.path()), ["boards", "plan.figcraft"]);
         assert_eq!(names(&elsewhere), ["plan.figcraft"]);
+    }
+
+    /// CANVAS-CORE-1: a cloned repository can hold links at the names the canvas writes beside its
+    /// file: its backups (`.lossy.bak`, `.bak`) and where a save was staged
+    /// (`.canvas.figcraft.sawit-tmp`), to any file of the user's (`~/.zshrc`). Opening the file
+    /// with notes, emptying it and saving it never write through them: each link is replaced by
+    /// the file, or left alone, and what it names stays as it was.
+    #[test]
+    fn the_canvas_never_writes_through_a_link_beside_its_file() {
+        use std::os::unix::fs::symlink;
+        let dir = tempdir().unwrap();
+        let folder = dir.path().join(".nyawit");
+        std::fs::create_dir(&folder).unwrap();
+        let path = folder.join("canvas.figcraft");
+        let original = file_with_a_damaged_image();
+        std::fs::write(&path, &original).unwrap();
+        let victim = |name: &str| {
+            let victim = dir.path().join(name);
+            std::fs::write(&victim, format!("{name} of the user's")).unwrap();
+            victim
+        };
+        let (lossy, bak) = (victim("lossy"), victim("bak"));
+        symlink(&lossy, lossy_backup(&path)).unwrap();
+        symlink(&bak, sibling(&path, ".bak")).unwrap();
+        // A link to a file that isn't there yet, by a relative path, as git checks one out.
+        symlink("../hook", folder.join(".canvas.figcraft.sawit-tmp")).unwrap();
+
+        // Opened with notes, the original is kept in place of the link.
+        let (_, issues) = open_with_issues(&path).unwrap();
+        assert!(!issues.is_empty());
+        assert_eq!(std::fs::read(lossy_backup(&path)).unwrap(), original);
+        let kept = std::fs::symlink_metadata(lossy_backup(&path)).unwrap();
+        assert!(kept.file_type().is_file(), "the backup is still a link");
+        // Saved, then emptied.
+        let writer = Writer::spawn();
+        let edited = bytes_with(&["edited"]);
+        writer.save(path.clone(), edited.clone(), false);
+        writer.flush();
+        assert_eq!(writer.last_error(), None);
+        writer.save(path.clone(), blank(), true);
+        writer.flush();
+        assert_eq!(writer.last_error(), None);
+        assert_eq!(std::fs::read(sibling(&path, ".bak")).unwrap(), edited);
+        let kept = std::fs::symlink_metadata(sibling(&path, ".bak")).unwrap();
+        assert!(kept.file_type().is_file(), "the backup is still a link");
+        assert!(
+            std::fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_file()
+        );
+        assert!(is_empty(&open(&path).unwrap().doc().unwrap()));
+        // What the links named is as it was, and nothing was made where one pointed.
+        assert_eq!(
+            std::fs::read_to_string(&lossy).unwrap(),
+            "lossy of the user's"
+        );
+        assert_eq!(std::fs::read_to_string(&bak).unwrap(), "bak of the user's");
+        assert!(!dir.path().join("hook").exists());
     }
 
     #[test]

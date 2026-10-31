@@ -115,15 +115,20 @@ const CANVAS_EXTENSIONS: [&str; 2] = [".figcraft", ".excalidraw"];
 
 /// What goes after that to name a copy Sawit keeps of a canvas file, or a file it writes one
 /// through: the backups of the store (`.bak` and `.lossy.bak`), and the files a save is staged in
-/// (`.tmp`, and `.<name>.sawit-tmp`, [`sawit_core::files::staging_file`]).
+/// (`.tmp`, and `.<name>.sawit-tmp`, the name Sawit's saves were staged at before CANVAS-CORE-1).
 const CANVAS_COMPANIONS: [&str; 5] = ["", ".bak", ".lossy.bak", ".tmp", ".sawit-tmp"];
+
+/// What follows a canvas file's name in the names its saves are staged at now,
+/// `.<name>.sawit-tmp-<process>-<n>` ([`sawit_core::files::staging_file`]).
+const STAGED: &str = ".sawit-tmp-";
 
 /// Whether `path` names a canvas file: a `.figcraft` or an `.excalidraw` file, or one of the
 /// copies and staging files that Sawit keeps beside one.
 ///
 /// Only the name at the end of `path` counts, in any case (the files of a Mac are not told apart
 /// by it), and the whole of its end: `canvas.figcraft.svg` is an SVG file, not a canvas. So an
-/// export to an image path is never refused.
+/// export to an image path is never refused. A staging file's name goes on after the canvas
+/// file's, with what makes it of one save alone.
 pub fn is_canvas_file(path: &Path) -> bool {
     let Some(name) = path.file_name() else {
         return false;
@@ -132,6 +137,7 @@ pub fn is_canvas_file(path: &Path) -> bool {
     CANVAS_EXTENSIONS.iter().any(|extension| {
         (CANVAS_COMPANIONS.iter())
             .any(|companion| name.ends_with(&format!("{extension}{companion}")))
+            || name.contains(&format!("{extension}{STAGED}"))
     })
 }
 
@@ -1621,7 +1627,7 @@ mod tests {
     fn canvas_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         let folder = dir.join(".nyawit");
         std::fs::create_dir_all(&folder).unwrap();
-        let staging = sawit_core::files::staging_file(&folder.join("canvas.figcraft"));
+        let staging = sawit_core::files::staging_file(&folder.join("canvas.figcraft"), 0);
         let mut files: Vec<_> = [
             "canvas.figcraft",
             "canvas.excalidraw",
@@ -1655,6 +1661,8 @@ mod tests {
             "canvas.figcraft.lossy.bak",
             "canvas.figcraft.tmp",
             ".canvas.figcraft.sawit-tmp",
+            ".canvas.figcraft.sawit-tmp-412-3",
+            ".Design.FigCraft.sawit-tmp-1-0",
             "canvas.excalidraw.bak",
             "canvas.excalidraw.lossy.bak",
             "canvas.excalidraw.tmp",
@@ -1678,9 +1686,12 @@ mod tests {
         ] {
             assert!(!is_canvas_file(Path::new(name)), "{name}");
         }
-        // The file a save of the canvas is staged in, wherever it is.
-        let staging = sawit_core::files::staging_file(Path::new("/p/.nyawit/canvas.figcraft"));
-        assert!(is_canvas_file(&staging), "{}", staging.display());
+        // The files a save of the canvas is staged in, wherever it is.
+        for n in [0, 1, u64::MAX] {
+            let staging =
+                sawit_core::files::staging_file(Path::new("/p/.nyawit/canvas.figcraft"), n);
+            assert!(is_canvas_file(&staging), "{}", staging.display());
+        }
     }
 
     #[test]

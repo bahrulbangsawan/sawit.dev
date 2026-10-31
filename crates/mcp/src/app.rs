@@ -619,21 +619,29 @@ fn run_and_save(
     }
 }
 
-/// Copies the canvas file at `file`, which a `replace` is about to save over, to `<file>.bak`. With
-/// no file there (an old canvas imported, which stays as it is) there is nothing to keep. When the
-/// copy can't be made the error says why, and the replace must not be saved.
+/// Copies the canvas file at `file`, which a `replace` is about to save over, to `<file>.bak`, in
+/// place of whatever is there: a link there is replaced, never written through
+/// ([`sawit_core::files::replace_file`], CANVAS-CORE-1). With no file there (an old canvas
+/// imported, which stays as it is) there is nothing to keep. When the copy can't be made the error
+/// says why, and the replace must not be saved.
 fn keep_replaced_canvas(file: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt as _;
     let mut bak = file.as_os_str().to_owned();
     bak.push(".bak");
     let bak = PathBuf::from(bak);
-    match std::fs::copy(file, &bak) {
-        Ok(_) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !file.exists() => Ok(()),
-        Err(e) => Err(format!(
+    let failed = |e: &dyn std::fmt::Display| {
+        format!(
             "The canvas wasn't replaced: it couldn't be copied to {} first: {e}",
             bak.display()
-        )),
-    }
+        )
+    };
+    let (bytes, meta) = match std::fs::read(file).and_then(|b| Ok((b, std::fs::metadata(file)?))) {
+        Ok(read) => read,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !file.exists() => return Ok(()),
+        Err(e) => return Err(failed(&e)),
+    };
+    let mode = std::fs::Permissions::from_mode(meta.permissions().mode() & 0o777);
+    sawit_core::files::replace_file(&bak, &bytes, mode).map_err(|e| failed(&e))
 }
 
 /// Whether `path` names a `.figcraft` file.
@@ -1880,6 +1888,43 @@ mod tests {
         let loaded = server.canvas_load(Parameters(load(&other))).await;
         assert_eq!(answer(&loaded)["elements"].as_array().unwrap().len(), 1);
         assert!(!bak.exists());
+    }
+
+    /// CANVAS-CORE-1: a cloned project can hold a link at `canvas.figcraft.bak` to any file of
+    /// the user's. A load with Sawit closed keeps the canvas it replaces in place of the link,
+    /// never through it.
+    #[tokio::test]
+    async fn an_offline_load_never_writes_through_a_link_at_the_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let file = board_file(&project);
+        let bak = file.with_extension("figcraft.bak");
+        write_board(&file, 2);
+        let replaced = std::fs::read(&file).unwrap();
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "the user's").unwrap();
+        std::os::unix::fs::symlink(&victim, &bak).unwrap();
+        let other = dir.path().join("other.figcraft");
+        write_board(&other, 1);
+
+        let loaded = server
+            .canvas_load(Parameters(CanvasLoadArgs {
+                path: Some(other.display().to_string()),
+                scene: None,
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_ne!(loaded.is_error, Some(true), "{}", said(&loaded));
+        assert_eq!(layers_in(&file).len(), 1);
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "the user's");
+        assert!(
+            std::fs::symlink_metadata(&bak)
+                .unwrap()
+                .file_type()
+                .is_file()
+        );
+        assert_eq!(std::fs::read(&bak).unwrap(), replaced);
     }
 
     #[test]

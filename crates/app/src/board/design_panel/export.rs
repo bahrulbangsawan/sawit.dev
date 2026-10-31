@@ -237,7 +237,7 @@ impl BoardView {
     ///   folder (ruling P5-C12).
     /// - A file is named after its layer, `<name>.<ext>`, with `@<scale>x` before the extension
     ///   for pixels at another scale than 1×, and a number after the name when the name is taken
-    ///   (`nyawit::unique`).
+    ///   (`nyawit::unique`), or a link is there (`nyawit::write_unique`).
     /// - Every export is made before any file is written: a layer the engine can't export (one
     ///   that paints nothing) is the error, and no file is written.
     ///
@@ -298,9 +298,11 @@ impl BoardView {
         made.map_err(|error| BoardError::Io(format!("{}: {error}", folder.display())))?;
         let mut written = Vec::with_capacity(files.len());
         for (name, bytes) in files {
-            let path = nyawit::unique(&folder, &name);
-            std::fs::write(&path, bytes)
-                .map_err(|error| BoardError::Io(format!("{}: {error}", path.display())))?;
+            // Made new, at a name nothing is at: never through a link a cloned project holds
+            // there (CANVAS-CORE-1).
+            let path = nyawit::write_unique(&folder, &name, &bytes).map_err(|error| {
+                BoardError::Io(format!("{}: {error}", folder.join(&name).display()))
+            })?;
             written.push(path);
         }
         Ok(written)
@@ -497,6 +499,31 @@ mod tests {
         assert_eq!(again, [exports.join("Card-2.png")]);
         // Exporting changes nothing in the file.
         assert_eq!(undo_steps(&view, cx), 0);
+    }
+
+    /// CANVAS-CORE-1: a cloned project's `.nyawit/exports/` can hold a link, named as an export
+    /// would be, to a file that isn't there yet, anywhere. The export takes a name of its own
+    /// beside it, and makes nothing where the link points.
+    #[gpui_kit::test]
+    fn an_export_never_makes_a_file_through_a_link(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("export-link");
+        let project = tmp.0.join("proj");
+        let (path, ids) = project_canvas(&project, |design| vec![card(design, "Card", 0.0)]);
+        let exports = project.join(".nyawit").join("exports");
+        std::fs::create_dir_all(&exports).unwrap();
+        let elsewhere = tmp.0.join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(elsewhere.join("made"), exports.join("Card.png")).unwrap();
+        let view = open(cx, &path, &ids);
+        let written = view
+            .update(cx, |view, cx| view.export_selection(cx))
+            .unwrap();
+        assert_eq!(written, [exports.join("Card-2.png")]);
+        assert!(std::fs::read(&written[0]).unwrap().starts_with(b"\x89PNG"));
+        assert!(
+            std::fs::read_dir(&elsewhere).unwrap().next().is_none(),
+            "the link's target was made"
+        );
     }
 
     /// A layer's own settings make its files, a format and a scale each; with nothing selected,
