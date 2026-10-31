@@ -906,6 +906,9 @@ impl BindingForm {
                 store.add(context, &keystrokes, &action, args, cx)
             }),
             FormTarget::Row(row) => {
+                if !store.read(cx).is_current(row, cx) {
+                    return Err("keymap.json has changed since this form opened. Cancel, then edit the binding again.".into());
+                }
                 if let Source::Default(ix) = row.source
                     && row.args.is_none()
                 {
@@ -1443,5 +1446,34 @@ mod form_tests {
                     .any(|(_, source)| matches!(source, super::Source::Default(_)))
             );
         });
+    }
+
+    /// A form opened before keymap.json changed on disk never changes another binding: the
+    /// place in the file its row came from may hold another binding now.
+    #[gpui_kit::test]
+    fn a_form_opened_before_the_file_changed_changes_nothing_else(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("form-stale");
+        std::fs::create_dir_all(&scratch.0).unwrap();
+        std::fs::write(
+            scratch.file(),
+            r#"[{"context": "Workspace", "bindings": {"ctrl-alt-a": "keymap_editor_test::Other"}}]"#,
+        )
+        .unwrap();
+        let (window, editor) = open(cx, &scratch);
+        edit(cx, window, &editor, "keymap_editor_test::Other");
+        // Another program writes the file, and the editor reads it (its look once a second).
+        let by_hand = r#"[{"context": "Workspace", "bindings": {"ctrl-alt-z": "keymap_editor_test::ToggleDock"}}]"#;
+        std::fs::write(scratch.file(), by_hand).unwrap();
+        cx.update(|cx| crate::keymap::store(cx).update(cx, |s, cx| s.reload(cx)));
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, "ctrl-alt-q");
+        save(cx, window, &editor);
+        cx.update(|cx| {
+            let form = editor.read(cx).form.clone().expect("the form stays open");
+            assert!(form.read(cx).error.is_some());
+            assert_eq!(runs(cx, "ctrl-alt-z"), ["keymap_editor_test::ToggleDock"]);
+            assert!(runs(cx, "ctrl-alt-q").is_empty());
+        });
+        assert_eq!(std::fs::read_to_string(scratch.file()).unwrap(), by_hand);
     }
 }

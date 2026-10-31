@@ -237,12 +237,25 @@ impl KeymapStore {
         crate::cli::set_menus(cx);
     }
 
-    /// Writes the file with `change` made to it, then binds the keys anew.
+    /// Writes the file with `change` made to it, then binds the keys anew. The file is read
+    /// first when it changed since the store last read it (another program saved it less than
+    /// a [`FILE_POLL`] ago): when that changes anything, nothing is written, and the change must
+    /// be asked for again against the file as it is now.
     fn write(
         &mut self,
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut UserKeymap),
     ) -> Result<(), String> {
+        if mtime(&self.path) != self.mtime {
+            let before = self.user.clone();
+            self.reload(cx);
+            if self.file_error.is_none() && self.user != before {
+                return Err(
+                    "keymap.json was changed outside the editor, which has read it again. Make the change again."
+                        .into(),
+                );
+            }
+        }
         if let Some(error) = &self.file_error {
             return Err(format!("Fix keymap.json first. {error}"));
         }
@@ -367,6 +380,18 @@ impl KeymapStore {
             names::unparse(binding.keystrokes()),
             binding.action().name().to_string(),
         )
+    }
+
+    /// Whether `row`, as the editor read it, is still a row of the keymap: the place in the file
+    /// a user's row came from may hold another binding once the file has changed.
+    pub fn is_current(&self, row: &Row, cx: &App) -> bool {
+        self.rows(false, cx).iter().any(|r| {
+            r.source == row.source
+                && r.action == row.action
+                && r.args == row.args
+                && r.keystrokes == row.keystrokes
+                && r.context == row.context
+        })
     }
 
     /// Creates the file, with a few lines on how to write it, if there is none.
@@ -505,14 +530,16 @@ fn mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-/// Writes `text` to `path` through a file beside it, so a crash never leaves half a keymap.
+/// Writes `text` to `path` through a file beside it, so a crash never leaves half a keymap. A
+/// `path` that is a link (to a dotfiles folder) stays one: the file it points to is written.
 fn write_atomically(path: &Path, text: &str) -> std::io::Result<()> {
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path)
+    std::fs::rename(&tmp, &path)
 }
 
 #[cfg(test)]
@@ -870,6 +897,113 @@ mod tests {
             let source = default_row(&store, cx, "keymap_test::CloseAll");
             assert!(matches!(source, Source::Default(_)), "{source:?}");
         });
+    }
+
+    /// Writes `text` to the keymap file as another program would, with a modification time the
+    /// store can't have seen.
+    fn edit_by_hand(scratch: &Scratch, text: &str) {
+        std::fs::create_dir_all(&scratch.0).unwrap();
+        std::fs::write(scratch.file(), text).unwrap();
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(scratch.file())
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+    }
+
+    /// A change made in the editor before its once-a-second look at the file never writes over
+    /// what another program saved there meanwhile: the store reads the file again and asks for
+    /// the change again, with the file as it is now.
+    #[gpui_kit::test]
+    fn an_edit_on_disk_is_never_written_over(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("edited-on-disk");
+        let store = start(cx, &scratch);
+        cx.update(|cx| {
+            store
+                .update(cx, |s, cx| {
+                    s.add(
+                        Some("Workspace"),
+                        "ctrl-alt-a",
+                        "keymap_test::Other",
+                        None,
+                        cx,
+                    )
+                })
+                .unwrap();
+        });
+        let by_hand =
+            r#"[{"context": "Workspace", "bindings": {"ctrl-alt-h": "keymap_test::Other"}}]"#;
+        edit_by_hand(&scratch, by_hand);
+        cx.update(|cx| {
+            let result = store.update(cx, |s, cx| {
+                s.add(
+                    Some("Workspace"),
+                    "ctrl-alt-b",
+                    "keymap_test::CloseAll",
+                    None,
+                    cx,
+                )
+            });
+            assert!(result.is_err(), "{result:?}");
+            // The store has read the hand edit, and binds it.
+            assert_eq!(runs(cx, "ctrl-alt-h"), ["keymap_test::Other"]);
+            assert!(runs(cx, "ctrl-alt-a").is_empty());
+        });
+        assert_eq!(std::fs::read_to_string(scratch.file()).unwrap(), by_hand);
+        // Asked again, the change goes in beside the hand edit.
+        cx.update(|cx| {
+            store
+                .update(cx, |s, cx| {
+                    s.add(
+                        Some("Workspace"),
+                        "ctrl-alt-b",
+                        "keymap_test::CloseAll",
+                        None,
+                        cx,
+                    )
+                })
+                .unwrap();
+            assert_eq!(runs(cx, "ctrl-alt-h"), ["keymap_test::Other"]);
+            assert_eq!(runs(cx, "ctrl-alt-b"), ["keymap_test::CloseAll"]);
+        });
+    }
+
+    /// A keymap.json that is a link (to a dotfiles folder) stays a link: the editor writes the
+    /// file it points to.
+    #[gpui_kit::test]
+    fn a_linked_keymap_file_stays_a_link(cx: &mut TestAppContext) {
+        let scratch = Scratch::new("linked");
+        let dotfiles = scratch.0.join("dotfiles");
+        std::fs::create_dir_all(&dotfiles).unwrap();
+        let target = dotfiles.join("sawit-keymap.json");
+        std::fs::write(&target, "[]").unwrap();
+        std::os::unix::fs::symlink(&target, scratch.file()).unwrap();
+        let store = start(cx, &scratch);
+        cx.update(|cx| {
+            store
+                .update(cx, |s, cx| {
+                    s.add(
+                        Some("Workspace"),
+                        "ctrl-alt-l",
+                        "keymap_test::Other",
+                        None,
+                        cx,
+                    )
+                })
+                .unwrap();
+        });
+        let link = std::fs::symlink_metadata(scratch.file()).unwrap();
+        assert!(
+            link.file_type().is_symlink(),
+            "keymap.json is no longer a link"
+        );
+        assert!(
+            std::fs::read_to_string(&target)
+                .unwrap()
+                .contains("ctrl-alt-l")
+        );
     }
 
     #[gpui_kit::test]
