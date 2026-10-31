@@ -208,7 +208,7 @@ pub struct OpenPromptArgs {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasElementsArgs {
     #[schemars(
-        description = "Element skeletons, e.g. {\"type\":\"rectangle\",\"id\":\"a\",\"x\":0,\"y\":0,\"width\":160,\"height\":60,\"label\":{\"text\":\"API\"}}, {\"type\":\"arrow\",\"x\":160,\"y\":30,\"start\":{\"id\":\"a\"},\"end\":{\"id\":\"b\"}}, {\"type\":\"text\",\"x\":0,\"y\":-40,\"text\":\"Title\"}. Types: rectangle, ellipse, diamond, sticky, text, arrow, line, frame"
+        description = "Element skeletons, e.g. {\"type\":\"rectangle\",\"id\":\"a\",\"x\":0,\"y\":0,\"width\":160,\"height\":60,\"label\":{\"text\":\"API\"}}, {\"type\":\"arrow\",\"x\":160,\"y\":30,\"start\":{\"id\":\"a\"},\"end\":{\"id\":\"b\"}}, {\"type\":\"text\",\"x\":0,\"y\":-40,\"text\":\"Title\"}. Types: rectangle, ellipse, diamond, sticky, text, arrow, line, frame. With no colour given, shapes and stickies are sticky yellow (#FFE78A): pass backgroundColor for another, \"transparent\" for no fill. A line through more than two points is drawn as ink, #1E1E1E unless strokeColor names another. Arrows and lines run straight"
     )]
     pub elements: Vec<Value>,
     pub project: Option<String>,
@@ -909,7 +909,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Draw on Sawit's canvas: add shapes, stickies, labels, text and arrows (arrows bind to shapes by id). Opens the canvas tab"
+        description = "Draw on Sawit's canvas: add shapes, stickies, labels, text and arrows (arrows bind to shapes by id). Shapes and stickies with no backgroundColor come in sticky yellow. Opens the canvas tab when the app is running"
     )]
     async fn canvas_add_elements(
         &self,
@@ -960,7 +960,9 @@ impl Sawit {
         }
     }
 
-    #[tool(description = "Clear the whole canvas (the user can undo in the app)")]
+    #[tool(
+        description = "Clear the whole canvas. In the app the user can undo it; with the app closed the cleared board is kept as canvas.figcraft.bak beside the canvas file"
+    )]
     async fn canvas_clear(&self, Parameters(a): Parameters<WindowArgs>) -> CallToolResult {
         match self.canvas(a.project, json!({ "op": "clear" })).await {
             Ok(v) => ok(pretty(&v)),

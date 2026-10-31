@@ -475,6 +475,51 @@ mod tests {
                 .contains("Types: rectangle, ellipse, diamond, sticky, text, arrow, line, frame"),
             "{elements}"
         );
+        // It says what a skeleton with no colour comes in (Plan 8 final review P-2): the colours
+        // a board draws it in, as `get` reads them back, and connectors that run straight
+        // (sawit-board's skeleton tests pin the routing itself).
+        let mut board = sawit_board::BoardDoc::new_board("Canvas").unwrap();
+        let bare = serde_json::json!([
+            {"type": "rectangle", "x": 0, "y": 0},
+            {"type": "sticky", "x": 300, "y": 0},
+            {"type": "line", "x": 0, "y": 300, "points": [[0, 0], [50, 40], [100, 0]]},
+        ]);
+        let added = sawit_board::ops::run(
+            &mut board,
+            &serde_json::json!({"op": "add", "elements": bare}),
+        );
+        assert_eq!(added["ok"], true, "{added}");
+        let drawn = sawit_board::ops::run(&mut board, &serde_json::json!({"op": "get"}));
+        let colour = |n: usize| drawn["elements"][n]["color"].as_str().unwrap().to_string();
+        let (shape, sticky, ink) = (colour(0), colour(1), colour(2));
+        assert_eq!(drawn["elements"][2]["type"], "ink", "{drawn}");
+        assert_eq!(shape, sticky);
+        for said in [
+            "Shapes and stickies with no backgroundColor come in sticky yellow",
+            &format!("shapes and stickies are sticky yellow ({shape})"),
+            "pass backgroundColor for another",
+            "for no fill",
+            &format!(
+                "A line through more than two points is drawn as ink, {ink} unless strokeColor"
+            ),
+            "Arrows and lines run straight",
+        ] {
+            assert!(elements.contains(said), "no {said:?} in {elements}");
+        }
+        // The canvas tab opens only in the app. With the app closed a clear is saved at once, so
+        // nothing undoes it, and the save keeps the board it cleared beside the file (m1).
+        assert!(
+            elements.contains("Opens the canvas tab when the app is running"),
+            "{elements}"
+        );
+        let clear = tool("canvas_clear");
+        assert!(
+            clear.contains("In the app the user can undo it")
+                && clear.contains(
+                    "with the app closed the cleared board is kept as canvas.figcraft.bak"
+                ),
+            "{clear}"
+        );
         let load = tool("canvas_load");
         assert!(
             load.contains(
