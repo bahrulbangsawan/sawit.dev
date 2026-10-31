@@ -187,6 +187,8 @@ pub struct BrowserView {
     design: design::flow::DesignFlow,
     /// Ops sent before the webview exists, in order.
     queued: Vec<(BrowserOp, oneshot::Sender<OpResult>)>,
+    /// Links to other apps the page opened: asked about one at a time.
+    external: ExternalGate,
     _ipc: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
@@ -286,6 +288,7 @@ impl BrowserView {
             to_view,
             design: Default::default(),
             queued: Vec::new(),
+            external: ExternalGate::default(),
             _ipc: ipc,
             _subscriptions: subscriptions,
         }
@@ -734,6 +737,8 @@ impl BrowserView {
 
     fn navigate(&mut self, typed: &str, cx: &mut Context<Self>) {
         let url = address_url(typed);
+        // Opened by the user or an agent: the page's links to other apps may ask again.
+        self.external.reset();
         self.navigated = true;
         self.loading = true;
         self.url = url.clone();
@@ -823,8 +828,40 @@ impl BrowserView {
             }
             FromPage::Engine(EngineEvent::Title(title)) => self.title = title,
             FromPage::Engine(EngineEvent::NewWindow(url)) => self.navigate(&url, cx),
+            FromPage::Engine(EngineEvent::External(url)) => self.open_external(url, window, cx),
             FromPage::Shoot { rect, reply } => self.shoot(rect, reply, cx),
         }
+    }
+
+    /// The page went to a link another app handles: asks the user before opening it, one
+    /// link at a time; after a "Cancel" the page asks no more until the user or an agent opens
+    /// a page.
+    fn open_external(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.external.ask() {
+            return;
+        }
+        let shown = match url.char_indices().nth(EXTERNAL_SHOWN) {
+            Some((i, _)) => format!("{}…", &url[..i]),
+            None => url.clone(),
+        };
+        let answer = window.prompt(
+            PromptLevel::Info,
+            "Open this link in another app?",
+            Some(&format!("The page asked to open {shown}")),
+            &["Open", "Cancel"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            let open = matches!(answer.await, Ok(0));
+            let _ = this.update(cx, |this, cx| {
+                this.external.answered(open);
+                if open {
+                    // NSWorkspace: no process to wait for.
+                    cx.open_url(&url);
+                }
+            });
+        })
+        .detach();
     }
 
     /// Puts the page's address in the field, unless the user is typing there.
@@ -1298,6 +1335,38 @@ fn save_screenshot(
     Ok(path)
 }
 
+/// How much of a link to another app the prompt shows.
+const EXTERNAL_SHOWN: usize = 200;
+
+/// Asks about a page's links to other apps one at a time, and stops asking once the user
+/// says no, so a page can neither launch apps unasked nor pile up prompts.
+#[derive(Default)]
+struct ExternalGate {
+    asking: bool,
+    refused: bool,
+}
+
+impl ExternalGate {
+    /// Whether to ask about a link now; while asking, or after a "Cancel", it is dropped.
+    fn ask(&mut self) -> bool {
+        if self.asking || self.refused {
+            return false;
+        }
+        self.asking = true;
+        true
+    }
+
+    fn answered(&mut self, open: bool) {
+        self.asking = false;
+        self.refused = !open;
+    }
+
+    /// The user or an agent opened a page: its links may ask again.
+    fn reset(&mut self) {
+        self.refused = false;
+    }
+}
+
 /// Lets one screenshot at a time hide the overlay: `enter` returns `None`
 /// when it is free, else a receiver that fires on this shot's turn; every
 /// shot calls `leave` when done.
@@ -1514,6 +1583,90 @@ mod tests {
             rearm_ops(PickMode::Inspect),
             vec![json!({"op": "pick", "mode": "inspect"})]
         );
+    }
+
+    #[test]
+    fn links_to_other_apps_are_asked_about_one_at_a_time() {
+        let mut gate = super::ExternalGate::default();
+        assert!(gate.ask(), "the first link asks");
+        assert!(!gate.ask(), "a second, while asking, is dropped");
+        gate.answered(true);
+        assert!(gate.ask(), "after an Open, the next link asks");
+        gate.answered(false);
+        assert!(!gate.ask(), "after a Cancel, the page asks no more");
+        gate.reset();
+        assert!(gate.ask(), "until a page is opened");
+    }
+
+    /// A browser tab that is never drawn (so it has no webview), in a test window.
+    fn test_browser(
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> (
+        gpui_kit::Entity<super::BrowserView>,
+        &mut gpui_kit::VisualTestContext,
+    ) {
+        use gpui_kit::AppContext as _;
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::init(cx);
+        });
+        let cx = cx.add_empty_window();
+        let view =
+            cx.update(|window, cx| cx.new(|cx| super::BrowserView::new(None, None, window, cx)));
+        (view, cx)
+    }
+
+    /// What the engine reports, as the view gets it.
+    fn engine_event(
+        view: &gpui_kit::Entity<super::BrowserView>,
+        event: super::EngineEvent,
+        cx: &mut gpui_kit::VisualTestContext,
+    ) {
+        cx.update(|window, cx| {
+            view.update(cx, |b, cx| {
+                b.receive(super::FromPage::Engine(event), window, cx)
+            })
+        });
+        cx.run_until_parked();
+    }
+
+    /// A page's link to another app (a `mailto:`, or an iframe's `slack://` with no click)
+    /// opens only when the user says so, through the system (no process left behind); while
+    /// asked, and after a Cancel, the page's further links are dropped.
+    #[gpui_kit::test]
+    fn links_to_other_apps_open_only_when_the_user_agrees(cx: &mut gpui_kit::TestAppContext) {
+        use super::EngineEvent::External;
+        let (view, cx) = test_browser(cx);
+        engine_event(&view, External("mailto:a@b.c".into()), cx);
+        assert!(cx.has_pending_prompt(), "the user is asked");
+        assert_eq!(cx.opened_url(), None, "nothing opens unasked");
+        engine_event(&view, External("slack://open?team=T1".into()), cx);
+        cx.simulate_prompt_answer("Open");
+        cx.run_until_parked();
+        assert_eq!(cx.opened_url().as_deref(), Some("mailto:a@b.c"));
+        assert!(
+            !cx.has_pending_prompt(),
+            "the link sent while asking was dropped"
+        );
+
+        engine_event(&view, External("zoommtg://join?confno=1".into()), cx);
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        engine_event(&view, External("zoommtg://join?confno=2".into()), cx);
+        assert!(
+            !cx.has_pending_prompt(),
+            "after a Cancel the page asks no more"
+        );
+        assert_eq!(cx.opened_url().as_deref(), Some("mailto:a@b.c"));
+
+        cx.update(|_, cx| view.update(cx, |b, cx| b.navigate("example.com", cx)));
+        engine_event(&view, External("zoommtg://join?confno=3".into()), cx);
+        assert!(
+            cx.has_pending_prompt(),
+            "a page the user opened may ask again"
+        );
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
     }
 
     #[test]

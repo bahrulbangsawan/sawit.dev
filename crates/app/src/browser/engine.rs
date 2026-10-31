@@ -38,6 +38,9 @@ pub enum EngineEvent {
     Title(String),
     /// A link asked for a new window: it opens in the tab instead.
     NewWindow(String),
+    /// The page (or a frame in it) went to a link another app handles
+    /// (`mailto:`, `slack://…`).
+    External(String),
 }
 
 pub struct Engine {
@@ -53,6 +56,7 @@ impl Engine {
         let ipc = on_event.clone();
         let loads = on_event.clone();
         let titles = on_event.clone();
+        let external = on_event.clone();
         let opens = on_event;
         // wry unwraps the `NSURL` it makes of the address.
         let url = if loadable(&spec.url) {
@@ -69,14 +73,7 @@ impl Engine {
                 loads(EngineEvent::Load { started, url });
             })
             .with_document_title_changed_handler(move |title| titles(EngineEvent::Title(title)))
-            .with_navigation_handler(|url| {
-                if is_web(&url) {
-                    return true;
-                }
-                // mailto:, tel:, app links: the system's handler.
-                let _ = std::process::Command::new("open").arg(&url).spawn();
-                false
-            })
+            .with_navigation_handler(move |url| navigation(&url, &external))
             .with_new_window_req_handler(move |url, _| {
                 opens(EngineEvent::NewWindow(url));
                 NewWindowResponse::Deny
@@ -230,6 +227,18 @@ pub fn loadable(url: &str) -> bool {
     NSURL::URLWithString(&NSString::from_str(url)).is_some()
 }
 
+/// Whether a navigation goes ahead in the tab: web pages do. A link another app handles
+/// (`mailto:`, `slack://…`) is handed to the tab, which asks before opening it: WebKit asks
+/// for every frame's navigations, with no word of a click, so a page could otherwise
+/// launch any app with arguments of its choosing.
+fn navigation(url: &str, send: &impl Fn(EngineEvent)) -> bool {
+    if is_web(url) {
+        return true;
+    }
+    send(EngineEvent::External(url.to_string()));
+    false
+}
+
 fn is_web(url: &str) -> bool {
     ["http:", "https:", "about:", "data:", "blob:", "file:"]
         .iter()
@@ -264,12 +273,38 @@ fn at_1x(png: Vec<u8>, width: u32) -> Result<(Vec<u8>, u32, u32), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{at_1x, is_web};
+    use super::{EngineEvent, at_1x, is_web, navigation};
 
     #[test]
     fn web_schemes_stay_in_the_tab() {
         assert!(is_web("https://a.dev") && is_web("about:blank") && is_web("file:///x"));
         assert!(!is_web("mailto:a@b.c") && !is_web("slack://open"));
+    }
+
+    /// A page, or a frame it adds with no click, can't launch another app: a link to one is
+    /// handed to the tab to ask about, never opened from here.
+    #[test]
+    fn links_to_other_apps_are_handed_over_not_opened() {
+        let sent = std::cell::RefCell::new(Vec::new());
+        let send = |e: EngineEvent| sent.borrow_mut().push(e);
+        // A scheme no app handles: opening it launches nothing.
+        let link = "sawit-test-no-handler://x?i=1";
+        assert!(!navigation(link, &send));
+        assert!(
+            matches!(&sent.borrow()[..], [EngineEvent::External(u)] if u == link),
+            "the tab is told"
+        );
+        sent.borrow_mut().clear();
+        for web in [
+            "https://a.dev",
+            "about:blank",
+            "data:text/html,x",
+            "blob:https://a.dev/1",
+            "file:///x",
+        ] {
+            assert!(navigation(web, &send), "{web}");
+        }
+        assert!(sent.borrow().is_empty());
     }
 
     #[test]
