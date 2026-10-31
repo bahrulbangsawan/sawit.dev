@@ -468,7 +468,9 @@ impl McpPage {
     /// catalog server which servers are signed in.
     fn check_sign_ins(&mut self, targets: Vec<usize>, cx: &mut Context<Self>) {
         for t in targets {
-            let target = self.targets[t].clone();
+            let Some(target) = self.targets.get(t).cloned() else {
+                continue;
+            };
             let Some(cli) = self.cli_for(target.client) else {
                 continue;
             };
@@ -549,6 +551,8 @@ impl McpPage {
             }
         });
         self.stops.insert(pair, stop);
+        // The client, not its place in the list: a detection can move it.
+        let id = (target.client, target.config.clone());
         let rx = rt::spawn(cx, async move {
             // `None` when it was stopped; the config is read again either way.
             let result = run.await.ok();
@@ -559,6 +563,15 @@ impl McpPage {
                 let _ = this.update(cx, |this, cx| {
                     this.busy.remove(&pair);
                     this.stops.remove(&pair);
+                    let Some(t) = this
+                        .targets
+                        .iter()
+                        .position(|x| x.client == id.0 && x.config == id.1)
+                    else {
+                        cx.notify();
+                        return;
+                    };
+                    let pair = (s, t);
                     match result {
                         Some(Err(e)) => {
                             this.errors.insert(pair, e.to_string());
@@ -846,7 +859,9 @@ impl McpPage {
         let Some(&(s, t)) = flow.queue.get(flow.pos) else {
             return;
         };
-        let target = self.targets[t].clone();
+        let Some(target) = self.targets.get(t).cloned() else {
+            return;
+        };
         let cli = self.cli_for(target.client);
         let started = cli
             .and_then(|cli| login_call(&target, &cli, SERVERS[s].id))
@@ -1074,8 +1089,15 @@ impl McpPage {
                                     .ghost()
                                     .small()
                                     .icon(Lucide::RefreshCw)
-                                    .tooltip("Detect Again")
+                                    .tooltip(if self.busy.is_empty() {
+                                        "Detect Again"
+                                    } else {
+                                        "Detect Again When the Installs Finish"
+                                    })
                                     .loading(self.loading)
+                                    // A detection can reorder the clients under a running
+                                    // install.
+                                    .disabled(!self.busy.is_empty())
                                     .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
                             )
                             .when(pending > 0, |el| {
@@ -2485,6 +2507,59 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(300));
         cx.run_until_parked();
         assert_eq!(std::fs::read_to_string(&config).unwrap(), "{}");
+    }
+
+    /// A detection can change which client is at which place in the list while an install
+    /// runs (a client appeared, or one went): the result lands on the client it was for, and
+    /// a place past the end of the list is no client at all.
+    #[gpui_kit::test]
+    fn results_land_on_their_client_when_the_list_changes(cx: &mut TestAppContext) {
+        let home = tempfile::tempdir().unwrap();
+        let config = |name: &str| {
+            let path = home.path().join(name).join("mcp.json");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "{}").unwrap();
+            path
+        };
+        let (a, b) = (config("a"), config("b"));
+        let (page, cx) = open(cx, vec![target(Client::Cursor, &a)], |page| {
+            page.entries = vec![sawit_core::mcp_clients::read_entries(&target(
+                Client::Cursor,
+                &a,
+            ))];
+            page.recompute();
+            page.server_exists = true;
+        });
+        page.update(cx, |page, cx| {
+            page.act((0, 0), false, cx);
+            // Detect Again finds another client first.
+            let targets = vec![target(Client::Cursor, &b), target(Client::Cursor, &a)];
+            page.apply(
+                super::Detected {
+                    entries: targets
+                        .iter()
+                        .map(sawit_core::mcp_clients::read_entries)
+                        .collect(),
+                    targets,
+                    clis: Default::default(),
+                    programs: Default::default(),
+                    server_exists: true,
+                },
+                cx,
+            );
+            // And a place past the end of the list.
+            page.check_sign_ins(vec![7], cx);
+        });
+        let done = (0..50).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            cx.run_until_parked();
+            page.read_with(cx, |page, _| page.busy.is_empty())
+        });
+        assert!(done, "the install didn't finish");
+        page.read_with(cx, |page, _| {
+            assert_eq!(page.status.get(&(0, 1)), Some(&Status::Installed), "a");
+            assert_eq!(page.status.get(&(0, 0)), Some(&Status::NotInstalled), "b");
+        });
     }
 
     /// The sheet opens with every installed client ticked, so its Remove asks first, as the
