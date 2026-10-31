@@ -2188,7 +2188,7 @@ impl Workspace {
             self.activate_tab(ix, cx);
             return Some(board);
         }
-        let view = cx.new(|cx| BoardView::open(file, cx));
+        let view = cx.new(|cx| BoardView::open(file.clone(), cx));
         cx.subscribe(&view, |this, _, _: &ToggleCanvasMaximize, cx| {
             this.toggle_canvas_maximized(cx)
         })
@@ -2201,7 +2201,8 @@ impl Workspace {
                 key,
                 title: crate::board::TITLE.into(),
                 icon: crate::board::ICON,
-                file: None,
+                // The file it shows, for `sawit --wait` on it (CANVAS-UI-7) and app_state.
+                file: Some(file),
             },
             root,
             cx,

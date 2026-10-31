@@ -740,12 +740,21 @@ fn check_waiters(cx: &mut App) {
         .flat_map(|(_, w)| w.read(cx).open_files(cx))
         .collect();
     cx.default_global::<Windows>().waiters.retain_mut(|w| {
-        let waiting = w.files.iter().any(|f| open.contains(f));
+        let waiting = still_open(&w.files, &open);
         if !waiting {
             reply(&mut w.stream, REPLY_DONE);
         }
         waiting
     });
+}
+
+/// Whether a `--wait` on `files` waits on: one of them is in `open`, the files the windows' tabs
+/// show, itself or, for an `.excalidraw` file, as the `.figcraft` file beside it that its canvas
+/// is bound to and its tab shows (CANVAS-UI-7).
+fn still_open(files: &[PathBuf], open: &HashSet<PathBuf>) -> bool {
+    files
+        .iter()
+        .any(|file| open.contains(file) || open.contains(&sawit_board::store::bound_file(file)))
 }
 
 /// Links `/usr/local/bin/sawit` to this app (menu and title bar), asking
@@ -800,8 +809,36 @@ pub fn install_cli(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::bundle_of;
-    use std::path::Path;
+    use super::{bundle_of, still_open};
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+
+    /// CANVAS-UI-7: `sawit --wait` on a canvas file waits while its canvas is open: an
+    /// `.excalidraw` file's canvas is bound to the `.figcraft` file beside it, which its tab
+    /// shows, and a project's canvas file is shown by the project's canvas tab. It answered "done"
+    /// at the first change of the window.
+    #[test]
+    fn a_wait_on_a_canvas_file_lasts_while_its_canvas_is_open() {
+        let open: HashSet<PathBuf> = [
+            PathBuf::from("/p/sketch.figcraft"),
+            PathBuf::from("/p/.nyawit/canvas.figcraft"),
+            PathBuf::from("/p/notes.md"),
+        ]
+        .into();
+        let waits = |file: &str| still_open(&[PathBuf::from(file)], &open);
+        assert!(waits("/p/sketch.excalidraw"));
+        assert!(waits("/p/sketch.figcraft"));
+        assert!(waits("/p/.nyawit/canvas.figcraft"));
+        assert!(waits("/p/notes.md"));
+        assert!(!waits("/p/other.excalidraw"));
+        assert!(!waits("/p/notes.txt"));
+        // Waiting on several, one of them open is enough.
+        let files = [
+            PathBuf::from("/p/gone.md"),
+            PathBuf::from("/p/sketch.excalidraw"),
+        ];
+        assert!(still_open(&files, &open));
+    }
 
     #[test]
     fn bundle_detection() {
