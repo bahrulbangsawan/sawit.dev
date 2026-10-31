@@ -2,9 +2,10 @@
 //! makes each push of main a release, and `scripts/release.sh`, which cuts it. Each test gets a
 //! clone of a small workspace, released at v0.0.7 and pushed to a bare `origin`, both in a
 //! temporary folder, with the hook and the script as they are in this checkout. `cargo` and
-//! `osascript` are stand-ins first on the `PATH`; git reads no global or system config. Also the
-//! workflows that build and publish, and `scripts/install.sh`, which installs a release, run
-//! with stand-ins only (see [`run_installer`]).
+//! `osascript` are stand-ins first on the `PATH`; git reads no global or system config. Also here:
+//! release.yml's Publish step, run against a stand-in `gh` ([`publish`]); every workflow, read for
+//! how it keeps its token; and `scripts/install.sh`, which installs a release, run with nothing but
+//! stand-ins on its `PATH` ([`run_installer`]).
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
