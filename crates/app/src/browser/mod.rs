@@ -735,10 +735,15 @@ impl BrowserView {
             .unwrap_or_else(|| self.url.clone())
     }
 
+    /// Opens what the user typed (or an agent asked for).
     fn navigate(&mut self, typed: &str, cx: &mut Context<Self>) {
-        let url = address_url(typed);
         // Opened by the user or an agent: the page's links to other apps may ask again.
         self.external.reset();
+        self.load(address_url(typed), cx);
+    }
+
+    /// Loads `url` in the tab, as it is.
+    fn load(&mut self, url: String, cx: &mut Context<Self>) {
         self.navigated = true;
         self.loading = true;
         self.url = url.clone();
@@ -827,7 +832,13 @@ impl BrowserView {
                 self.annotate.update(cx, |a, cx| a.set_current(&url, cx));
             }
             FromPage::Engine(EngineEvent::Title(title)) => self.title = title,
-            FromPage::Engine(EngineEvent::NewWindow(url)) => self.navigate(&url, cx),
+            FromPage::Engine(EngineEvent::NewWindow(url)) => {
+                match new_window_action(&url, &self.current_url()) {
+                    NewWindow::Ignore => {}
+                    NewWindow::Load(url) => self.load(url, cx),
+                    NewWindow::External(url) => self.open_external(url, window, cx),
+                }
+            }
             FromPage::Engine(EngineEvent::External(url)) => self.open_external(url, window, cx),
             FromPage::Shoot { rect, reply } => self.shoot(rect, reply, cx),
         }
@@ -1335,6 +1346,56 @@ fn save_screenshot(
     Ok(path)
 }
 
+/// What a page's request for a new window (`window.open`, a `target=_blank` link) does.
+#[derive(Debug, PartialEq)]
+enum NewWindow {
+    Ignore,
+    /// Opens in the tab.
+    Load(String),
+    /// A link another app handles: asked about.
+    External(String),
+}
+
+/// What to do with the URL WebKit gives for a new window, from the page at `current`. It is
+/// a URL already, so it isn't read as typed text: web pages load as they are; an empty or
+/// `about:` window (`window.open()`, then `w.location = …`) is left alone, since the tab has
+/// only one page; `data:` and `javascript:` are refused, as a page's own navigation to them
+/// is; a local file only from a local page, a `blob:` only from its own origin; any other
+/// scheme belongs to another app.
+fn new_window_action(url: &str, current: &str) -> NewWindow {
+    let url = url.trim();
+    let Some((scheme, rest)) = url.split_once(':').filter(|(s, _)| {
+        s.starts_with(|c: char| c.is_ascii_alphabetic())
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    }) else {
+        return NewWindow::Ignore;
+    };
+    let ok = match scheme.to_ascii_lowercase().as_str() {
+        "http" | "https" => true,
+        "blob" => origin(rest).is_some_and(|o| Some(o) == origin(current)),
+        "file" => current.to_ascii_lowercase().starts_with("file:"),
+        "about" | "data" | "javascript" => false,
+        _ => return NewWindow::External(url.to_string()),
+    };
+    if ok && engine::loadable(url) {
+        NewWindow::Load(url.to_string())
+    } else {
+        NewWindow::Ignore
+    }
+}
+
+/// An http(s) URL's `scheme://host:port`, lowercased.
+fn origin(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    Some(format!("{scheme}://{}", authority.to_ascii_lowercase()))
+}
+
 /// How much of a link to another app the prompt shows.
 const EXTERNAL_SHOWN: usize = 200;
 
@@ -1585,6 +1646,49 @@ mod tests {
         );
     }
 
+    /// `window.open()` and `target=_blank` links: web pages open in the tab as WebKit gives
+    /// them; a blank window (`window.open()`, then `w.location = …`) leaves the page alone;
+    /// links to other apps are asked about; a local file opens only from a local page, and a
+    /// page's own `blob:` only from that page.
+    #[test]
+    fn new_windows() {
+        use super::NewWindow::{External, Ignore, Load};
+        use super::new_window_action as act;
+        let page = "http://localhost:5173/cart";
+        let load = |u: &str| Load(u.to_string());
+        let ext = |u: &str| External(u.to_string());
+        for (url, want) in [
+            ("", Ignore),
+            ("about:blank", Ignore),
+            ("about:srcdoc", Ignore),
+            (
+                "https://accounts.example/login?next=/",
+                load("https://accounts.example/login?next=/"),
+            ),
+            ("http://localhost:5173/x", load("http://localhost:5173/x")),
+            ("mailto:a@b.c", ext("mailto:a@b.c")),
+            ("tel:+15551234", ext("tel:+15551234")),
+            ("slack://open?team=T1", ext("slack://open?team=T1")),
+            // `localhost:` is a scheme here, as WebKit read it: no app has it.
+            ("localhost:3000:3000", ext("localhost:3000:3000")),
+            ("file:///etc/hosts", Ignore),
+            ("data:text/html,<p>hi</p>", Ignore),
+            ("javascript:alert(1)", Ignore),
+            (
+                "blob:http://localhost:5173/9d2c",
+                load("blob:http://localhost:5173/9d2c"),
+            ),
+            ("blob:https://other.example/9d2c", Ignore),
+            ("https://my site.com", Ignore),
+        ] {
+            assert_eq!(act(url, page), want, "{url:?}");
+        }
+        assert_eq!(
+            act("file:///tmp/b.html", "file:///tmp/a.html"),
+            load("file:///tmp/b.html")
+        );
+    }
+
     #[test]
     fn links_to_other_apps_are_asked_about_one_at_a_time() {
         let mut gate = super::ExternalGate::default();
@@ -1667,6 +1771,28 @@ mod tests {
         );
         cx.simulate_prompt_answer("Cancel");
         cx.run_until_parked();
+    }
+
+    /// A blank new window (`window.open()`, from a timer) leaves the page under test as it is,
+    /// and a `mailto:` popup asks before Mail opens instead of loading `https://mailto:…`.
+    #[gpui_kit::test]
+    fn new_windows_leave_the_page_alone(cx: &mut gpui_kit::TestAppContext) {
+        use super::EngineEvent::NewWindow;
+        let (view, cx) = test_browser(cx);
+        cx.update(|_, cx| view.update(cx, |b, cx| b.navigate("localhost:5173/form", cx)));
+        let url =
+            |cx: &mut gpui_kit::VisualTestContext| cx.update(|_, cx| view.read(cx).url.clone());
+        assert_eq!(url(cx), "http://localhost:5173/form");
+        engine_event(&view, NewWindow(String::new()), cx);
+        assert_eq!(url(cx), "http://localhost:5173/form");
+        assert!(!cx.has_pending_prompt());
+        engine_event(&view, NewWindow("mailto:a@b.c".into()), cx);
+        assert_eq!(url(cx), "http://localhost:5173/form");
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        engine_event(&view, NewWindow("https://a.example/x".into()), cx);
+        assert_eq!(url(cx), "https://a.example/x");
     }
 
     #[test]

@@ -36,7 +36,8 @@ pub enum EngineEvent {
         url: String,
     },
     Title(String),
-    /// A link asked for a new window: it opens in the tab instead.
+    /// The page asked for a new window (`window.open`, a `target=_blank` link): web
+    /// pages open in the tab instead (`new_window_action`).
     NewWindow(String),
     /// The page (or a frame in it) went to a link another app handles
     /// (`mailto:`, `slack://…`).
