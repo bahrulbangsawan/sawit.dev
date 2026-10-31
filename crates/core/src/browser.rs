@@ -37,8 +37,7 @@ pub fn page_script(token: &str) -> String {
 /// The script that runs an agent's `browser_evaluate` script on the page: an expression,
 /// or (`body`) a function body that uses `return`. WebKit compiles the script with this
 /// call, and the page agent only runs it: compiled by the agent (`new Function`), it failed
-/// on pages whose Content-Security-Policy forbids `eval`. Try the expression first, and the
-/// body when that is a `SyntaxError`.
+/// on pages whose Content-Security-Policy forbids `eval`. [`evaluate_as_body`] picks the form.
 pub fn evaluate_call(script: &str, body: bool) -> String {
     // On its own line: a script ending in a `//` comment still closes.
     let function = if body {
@@ -49,6 +48,60 @@ pub fn evaluate_call(script: &str, body: bool) -> String {
     format!(
         "(() => {{ const a = window.__sawitAgent; return a ? a.run({{ op: \"evaluate\", fn: {function} }}) : \"\"; }})()"
     )
+}
+
+/// Whether an agent's `browser_evaluate` script goes to WebKit as a function body at once:
+/// its expression form ([`evaluate_call`]) doesn't compile and its body form does. WebKit
+/// reports a failed compile to the page as an uncaught `SyntaxError` of the page's own (in
+/// its console, to `window.onerror`, in the notes' console errors), so the form is picked
+/// here first, by QuickJS compiling each call without running it. `false` when the
+/// expression compiles, and when neither does (a real error, or syntax QuickJS lacks):
+/// WebKit then tries the expression, and the body after its `SyntaxError`.
+pub fn evaluate_as_body(script: &str) -> bool {
+    let Ok(rt) = rquickjs::Runtime::new() else {
+        return false;
+    };
+    rt.set_memory_limit(COMPILE_MEMORY);
+    let Ok(cx) = rquickjs::Context::full(&rt) else {
+        return false;
+    };
+    cx.with(|cx| {
+        !compiles(&cx, &evaluate_call(script, false)) && compiles(&cx, &evaluate_call(script, true))
+    })
+}
+
+/// What compiling an agent's script may take; past it, the script counts as not compiling.
+const COMPILE_MEMORY: usize = 64 << 20;
+
+/// Whether `source` compiles as a script, the way WebKit compiles one (sloppy mode). Nothing
+/// in it runs: the text is an agent's, and could close any wrapper put around it.
+fn compiles(cx: &rquickjs::Ctx<'_>, source: &str) -> bool {
+    use rquickjs::qjs;
+
+    let Ok(text) = std::ffi::CString::new(source) else {
+        return false;
+    };
+    let flags = (qjs::JS_EVAL_TYPE_GLOBAL | qjs::JS_EVAL_FLAG_COMPILE_ONLY) as i32;
+    let ctx = cx.as_raw().as_ptr();
+    // SAFETY: `ctx` is the live context `cx` borrows. `JS_Eval` reads `input[input_len]`,
+    // which is the NUL `CString` ends with. It returns an owned value, the compiled script
+    // or the exception marker; the script, or the exception taken from the context, is freed
+    // here once, so the runtime is left holding nothing.
+    unsafe {
+        let compiled = qjs::JS_Eval(
+            ctx,
+            text.as_ptr(),
+            text.as_bytes().len() as _,
+            c"evaluate".as_ptr(),
+            flags,
+        );
+        if qjs::JS_IsException(compiled) {
+            qjs::JS_FreeValue(ctx, qjs::JS_GetException(ctx));
+            return false;
+        }
+        qjs::JS_FreeValue(ctx, compiled);
+        true
+    }
 }
 
 /// Console messages and requests kept per browser tab, newest last.
@@ -1573,6 +1626,68 @@ mod tests {
         );
         // A throw is the script's error.
         assert_eq!(run(evaluate_call("null.x", false))["ok"], json!(false));
+    }
+
+    /// `browser_evaluate` picks its form before WebKit compiles anything. WebKit reports a
+    /// compile's `SyntaxError` to the page as an error of its own (the page's console,
+    /// `window.onerror`, the notes' console errors), so trying the expression there first left
+    /// one behind for every script written as a function body.
+    #[test]
+    fn evaluate_picks_its_form_before_webkit_compiles() {
+        // An expression, as WebKit tried first, also when it reads as a body too.
+        for script in [
+            "document.title",
+            "1 // c",
+            "({a: 1})",
+            "{a: 1}",
+            "x = 5",
+            "async () => (await fetch('/a')).status",
+            "`${location.host}/a`",
+            "/a+/.test(document.title)",
+            "010",
+        ] {
+            assert!(!evaluate_as_body(script), "{script}");
+        }
+        // A function body, at once.
+        for script in [
+            "return 1",
+            "const t = 1; return t",
+            "document.title;",
+            "if (!document.body) return null\nreturn document.body.innerText // the text",
+            "with (document) return title",
+            "for (const a of document.links) a.remove()",
+        ] {
+            assert!(evaluate_as_body(script), "{script}");
+        }
+        // Neither compiles here (a real error, or syntax QuickJS lacks): WebKit says, trying the
+        // expression first.
+        for script in ["1 +", "return (", "}", "a\0b"] {
+            assert!(!evaluate_as_body(script), "{script:?}");
+        }
+    }
+
+    /// The agent's script is only compiled here, never run: it could close the wrapper and run
+    /// anything (loop forever) in Sawit's own QuickJS.
+    #[test]
+    fn evaluate_forms_are_compiled_not_run() {
+        let rt = rquickjs::Runtime::new().unwrap();
+        let cx = rquickjs::Context::full(&rt).unwrap();
+        cx.with(|cx| {
+            let ran = || {
+                !cx.eval::<rquickjs::Value, _>("globalThis.ran")
+                    .unwrap()
+                    .is_undefined()
+            };
+            assert!(compiles(&cx, "globalThis.ran = true"));
+            assert!(!ran());
+            assert!(compiles(&cx, "globalThis.ran = true; while (true) {}"));
+            assert!(!ran());
+            // Compiled as WebKit compiles a script: sloppy-mode code.
+            assert!(compiles(&cx, "with (document) title"));
+            // A failed compile leaves nothing pending.
+            assert!(!compiles(&cx, "1 +"));
+            assert!(!cx.has_exception());
+        });
     }
 
     #[test]

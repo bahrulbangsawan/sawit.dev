@@ -1589,9 +1589,11 @@ fn rect_op(target: &Target) -> Value {
     op
 }
 
-/// Runs an agent's `browser_evaluate` script: as an expression, else (when that doesn't
-/// parse) as a function body. WebKit compiles it (`evaluate_call`), so it runs on pages whose
-/// Content-Security-Policy forbids `eval`.
+/// Runs an agent's `browser_evaluate` script: as a function body when only that form
+/// compiles (`evaluate_as_body` knows before WebKit compiles anything, whose `SyntaxError`
+/// would reach the page as an error of its own), else as an expression, and as a body when
+/// WebKit can't compile that either. WebKit compiles it (`evaluate_call`), so it runs on pages
+/// whose Content-Security-Policy forbids `eval`.
 fn evaluate(engine: std::rc::Weak<Engine>, script: String, reply: oneshot::Sender<OpResult>) {
     let Some(first) = engine.upgrade() else {
         let _ = reply.send(Err("The browser isn't open.".into()));
@@ -1600,10 +1602,11 @@ fn evaluate(engine: std::rc::Weak<Engine>, script: String, reply: oneshot::Sende
     let answer = |result: Result<Option<String>, String>| {
         result.and_then(|text| agent_answer(text.as_deref().unwrap_or_default()))
     };
+    let body = sawit_core::browser::evaluate_as_body(&script);
     first.eval_text(
-        &sawit_core::browser::evaluate_call(&script, false),
+        &sawit_core::browser::evaluate_call(&script, body),
         move |result| match result {
-            Err(e) if e.contains("SyntaxError") => match engine.upgrade() {
+            Err(e) if !body && e.contains("SyntaxError") => match engine.upgrade() {
                 Some(engine) => engine.eval_text(
                     &sawit_core::browser::evaluate_call(&script, true),
                     move |result| {
