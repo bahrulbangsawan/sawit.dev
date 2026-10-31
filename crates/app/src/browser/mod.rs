@@ -53,14 +53,13 @@ pub const TITLE: &str = "Browser";
 
 actions!(browser, [ToggleAnnotate]);
 
-/// ⌘⇧. toggles Annotate while Sawit has the keyboard; with the page focused
-/// the overlay posts a `key` message instead.
+/// ⇧⌘. toggles Annotate while Sawit has the keyboard; with the page focused
+/// the overlay posts a `key` message instead. A Mac reports ⇧⌘. as `cmd->`
+/// (Shift off, the character it types), so that is what is bound, as the
+/// canvas binds its shifted keys; `cmd-shift-.` would never match. The keymap
+/// editor and the tooltip write `cmd->` as ⇧⌘. (`keymap::names`).
 pub fn init(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new(
-        "cmd-shift-.",
-        ToggleAnnotate,
-        Some("Browser"),
-    )]);
+    cx.bind_keys([KeyBinding::new("cmd->", ToggleAnnotate, Some("Browser"))]);
 }
 
 /// The side panel's modes; one at a time.
@@ -172,7 +171,7 @@ pub struct BrowserView {
     last_pick: Option<String>,
     /// Responsive, or a device size (kept per tab).
     viewport: ViewportMode,
-    /// Keeps the "Browser" key context on the dispatch path (⌘⇧.).
+    /// Keeps the "Browser" key context on the dispatch path (⇧⌘.).
     focus: FocusHandle,
     panel: Option<Panel>,
     annotate: Entity<AnnotatePanel>,
@@ -305,7 +304,7 @@ impl BrowserView {
         })
     }
 
-    /// Gives the keyboard to the view (not the page), so ⌘⇧. reaches it.
+    /// Gives the keyboard to the view (not the page), so ⇧⌘. reaches it.
     fn take_keyboard(&self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(engine) = &self.engine {
             engine.focus_parent();
@@ -332,7 +331,7 @@ impl BrowserView {
         cx.notify();
     }
 
-    /// ⌘⇧.: like the Annotate button, except that with Annotate open after Esc
+    /// ⇧⌘.: like the Annotate button, except that with Annotate open after Esc
     /// it picks again instead of closing.
     fn annotate_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.panel == Some(Panel::Annotate) && self.pick == PickMode::Off {
@@ -768,7 +767,7 @@ impl BrowserView {
                     self.inspect_element(selector.to_string(), false, cx);
                 }
             }
-            // The page has the keyboard: it forwards ⌘⇧. and Esc.
+            // The page has the keyboard: it forwards ⇧⌘. and Esc.
             FromPage::Event(PageEvent::Key(key)) => match key.as_str() {
                 "toggle-annotate" => self.annotate_key(window, cx),
                 "escape" => self.set_pick(PickMode::Off, cx),
@@ -1582,11 +1581,72 @@ mod tests {
         let off = || Box::new(Unbind("browser::ToggleAnnotate".into()));
         assert_eq!(tooltip(cx).as_ref(), "Annotate (⇧⌘.)");
 
-        bind("cmd-shift-.", off(), cx);
+        bind("cmd->", off(), cx);
         bind("ctrl-alt-a", Box::new(super::ToggleAnnotate), cx);
         assert_eq!(tooltip(cx).as_ref(), "Annotate (⌃⌥A)");
 
         bind("ctrl-alt-a", off(), cx);
         assert_eq!(tooltip(cx).as_ref(), "Annotate");
+    }
+
+    /// ⇧⌘. toggles Annotate while Sawit's side of the tab has the keyboard: the Annotate and
+    /// Design buttons and a click in the side panel give it to the view, and every pick to the
+    /// new note's text box. A Mac reports ⇧⌘. as `cmd->` (gpui's macOS `parse_keystroke` turns
+    /// Shift off for a shifted symbol), so that is the key pressed here, in the workspace with
+    /// every key the workspace and the text boxes bind.
+    #[gpui_kit::test]
+    fn shift_cmd_period_toggles_annotate_from_sawits_side(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::component::input::{Input, InputState};
+        use gpui_kit::prelude::*;
+        use gpui_kit::{Entity, FocusHandle, Focusable as _, VisualTestContext, Window, div};
+
+        /// The browser tab's key context in the workspace's, with a note's text box, counting
+        /// the toggles it gets.
+        struct BrowserSide {
+            focus: FocusHandle,
+            note: Entity<InputState>,
+            toggles: usize,
+        }
+        impl Render for BrowserSide {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let browser = div()
+                    .key_context("Browser")
+                    .track_focus(&self.focus)
+                    .on_action(cx.listener(|this, _: &super::ToggleAnnotate, _, _| {
+                        this.toggles += 1;
+                    }))
+                    .size_full()
+                    .child(Input::new(&self.note));
+                div().key_context("Workspace").size_full().child(browser)
+            }
+        }
+
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::workspace::init(cx);
+        });
+        let (view, cx) = cx.add_window_view(|window, cx| BrowserSide {
+            focus: cx.focus_handle(),
+            note: cx.new(|cx| InputState::new(window, cx)),
+            toggles: 0,
+        });
+        let toggles = |cx: &mut VisualTestContext| cx.update(|_, cx| view.read(cx).toggles);
+
+        // The view has the keyboard (the toolbar's buttons, a click in the panel).
+        cx.update(|window, cx| {
+            let focus = view.read(cx).focus.clone();
+            window.focus(&focus, cx);
+        });
+        cx.simulate_keystrokes("cmd->");
+        assert_eq!(toggles(cx), 1, "⇧⌘. as a Mac sends it toggles Annotate");
+        cx.simulate_keystrokes("cmd->");
+        assert_eq!(toggles(cx), 2, "and toggles it back");
+
+        // A note's text box has it (after a pick).
+        let note = cx.update(|_, cx| view.read(cx).note.clone());
+        cx.update(|window, cx| note.update(cx, |note, cx| note.focus(window, cx)));
+        assert!(cx.update(|window, cx| note.read(cx).focus_handle(cx).is_focused(window)));
+        cx.simulate_keystrokes("cmd->");
+        assert_eq!(toggles(cx), 3, "from the note's text box too");
     }
 }
