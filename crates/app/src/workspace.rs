@@ -2703,6 +2703,13 @@ impl Workspace {
     /// Shows the keymap editor (one tab), with the tab area, which may be hidden, and the
     /// keyboard.
     fn open_keymap_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_keymap_editor(true, window, cx);
+    }
+
+    /// Shows the keymap editor; `focus` gives it the keyboard. Not when an agent opens it: the
+    /// keyboard stays where the user has it, as for the Dev Tools and MCP pages. There, a ⌫
+    /// meant for the terminal would remove the selected binding from keymap.json.
+    fn show_keymap_editor(&mut self, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_welcome(CENTER_ONLY, cx);
         self.show_center(cx);
         let key: SharedString = "keymap".into();
@@ -2712,14 +2719,17 @@ impl Workspace {
             .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
         {
             self.active = ix;
-            if let PaneItem::Other { view, .. } = &self.tabs[ix].item
+            if focus
+                && let PaneItem::Other { view, .. } = &self.tabs[ix].item
                 && let Ok(editor) = view.clone().downcast::<KeymapEditor>()
             {
                 window.focus(&editor.focus_handle(cx), cx);
             }
         } else {
             let view = cx.new(|cx| KeymapEditor::new(window, cx));
-            window.focus(&view.focus_handle(cx), cx);
+            if focus {
+                window.focus(&view.focus_handle(cx), cx);
+            }
             self.push_tab(
                 PaneItem::Other {
                     view: view.into(),

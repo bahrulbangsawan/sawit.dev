@@ -1093,6 +1093,15 @@ There are 26 questions. They come from the ledger lines that leave a decision or
 - The run sent this to the controller for Plan 7's final review, and no ruling was recorded.
 - The terminal has since answered it for itself: an agent's terminal commands never take the keyboard, don't
   switch away from a terminal you're typing in, and never go into the shell you're typing in (H-TERM-5).
+- So have the pages an agent opens with `app_open_page`: Dev Tools and MCP (CATALOG-15), and the Keymap Editor,
+  where a ⌫ meant for the terminal removed the selected binding from `keymap.json` (final-seams m2).
+- One route still takes it, on purpose for now: `app_open` of a canvas file (`.figcraft`, `.excalidraw`) gives
+  that canvas the keyboard, from an agent too, also when its tab was open already and is only shown again
+  (review-canvas-ui m2). Typing in a terminal pane then goes to the canvas, where letters pick tools and ⌫
+  deletes the selection, until you click back. It is kept because a canvas file opened from Files or with
+  `sawit` should take the keyboard (CANVAS-UI-2), and the control socket's `open` runs the CLI's own open.
+  Narrowing it to the user's routes is a flag from `cli::handle` for the socket's `open`: a few lines. Decide it
+  with the rest of this question.
 - Source: P4:112.
 
 **Q14. Agent shapes with no `backgroundColor`: sticky yellow, or no fill?** (P7-1)

@@ -473,10 +473,8 @@ impl Workspace {
                 self.show_center(cx);
                 self.show_server_tab();
             }
-            Page::Keymap => {
-                self.show_center(cx);
-                self.open_keymap_editor(window, cx)
-            }
+            // An agent's too: a ⌫ meant for the terminal would remove the selected binding.
+            Page::Keymap => self.show_keymap_editor(false, window, cx),
         }
         Ok(())
     }
