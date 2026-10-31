@@ -187,7 +187,8 @@ opens and again after each navigation. A spinner shows while scanning.
   **Save** per row and **Save all**, with **Include videos** off by default; files go to the
   export folder's `assets/`. Labels come from alt, aria-label, title, or the file name. An image
   or SVG inside a link to `/` in the header, or with "logo" in its class, alt or file name, is
-  labelled "logo". Icons: `link[rel~=icon]`, `apple-touch-icon`, `mask-icon`, manifest icons, and
+  labelled "logo". The header is `header` or `[role=banner]`; on a page with neither, it is the
+  first `nav` in document order that isn't inside `main`, `aside`, `article` or `footer`. Icons: `link[rel~=icon]`, `apple-touch-icon`, `mask-icon`, manifest icons, and
   inline SVGs ≤ 48 px.
 - **System:** the derived tokens:
   - Palette: primary, secondary, accent, neutral as 50–950 ramps, plus semantic colors.

@@ -1,0 +1,8 @@
+{
+  "font_faces": [
+    { "family": "Inter", "weight": "normal", "style": "italic", "src": ["https://cdn.example.net/inter-italic.woff2", "data:font/woff2;base64,AAAA"] }
+  ],
+  "variables": [["--brand", "#2563eb"]],
+  "breakpoints": [480, 1280],
+  "focus_ring": null
+}

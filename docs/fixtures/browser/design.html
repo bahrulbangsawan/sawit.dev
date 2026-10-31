@@ -1,0 +1,68 @@
+<!doctype html>
+<!-- Fixture for the browser design end-to-end check (docs/superpowers/plans/2026-10-29-browser-preview-3-design.md, Task 11).
+     fonts/fixture.ttf is git-ignored: cp "/System/Library/Fonts/Supplemental/Courier New.ttf" docs/fixtures/browser/fonts/fixture.ttf -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Design · fixture</title>
+    <link rel="icon" href="favicon.svg" />
+    <style>
+      @font-face { font-family: "Fixture Sans"; src: url(fonts/fixture.ttf); }
+      :root { --brand-blue: #0071e3; }
+      body { margin: 0; background: #ffffff; color: #1d1d1f; font: 17px/1.47 "Fixture Sans", sans-serif; }
+      header { padding: 12px 24px; }
+      main { padding: 24px; }
+      .muted { background: #f5f5f7; color: #6e6e73; padding: 24px; }
+      hr { border: 0; border-top: 1px solid #d2d2d7; }
+      input { border: 1px solid #d2d2d7; border-radius: 8px; padding: 8px 12px; font: inherit; }
+      .btn-primary { background: #0071e3; color: #ffffff; border: 0; border-radius: 980px; padding: 8px 16px; font-size: 17px; font-weight: 400; font-family: inherit; }
+      .btn-primary:hover { background: #0077ed; }
+      .btn-secondary { background: transparent; color: #0071e3; border: 1px solid #0071e3; border-radius: 980px; padding: 8px 16px; font-size: 17px; font-family: inherit; }
+      a { color: #0066cc; }
+      header nav { display: inline-block; margin-left: 16px; }
+      header nav a { color: #1d1d1f; text-decoration: none; margin-right: 12px; }
+      .badge { color: #bf4800; font-size: 12px; }
+      .success { color: #29a354; }
+      .card { max-width: 360px; border-radius: 18px; box-shadow: rgba(0,0,0,.08) 0 2px 8px; padding: 24px; margin: 24px 0; }
+      .hero-bg { background: url(hero.png); height: 40px; }
+      @media (min-width: 734px) { main { padding: 32px; } }
+      @media (min-width: 1068px) { main { padding: 48px; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <a href="/"><svg aria-label="Logo" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#1d1d1f" /></svg></a>
+      <nav><a href="#store">Store</a><a href="#mac">Mac</a></nav>
+    </header>
+    <main>
+      <h1>Design fixture</h1>
+      <p>A page with the parts a design scan looks for: colors, type, buttons, a card and assets.</p>
+      <p>Body copy is set in Fixture Sans at 17px with a 1.47 line height.</p>
+      <p>Links, badges and the success note are the accent colors.</p>
+      <p>
+        <a href="#one">One</a> · <a href="#two">Two</a> · <a href="#three">Three</a> ·
+        <a href="#four">Four</a> · <a href="#five">Five</a>
+      </p>
+      <p><span class="badge">New</span> <span class="badge">Hot</span> <span class="success">Saved</span></p>
+      <p>
+        <button class="btn-primary">Buy</button>
+        <button class="btn-primary">Learn more</button>
+        <button class="btn-primary">Order</button>
+        <button class="btn-secondary">Cancel</button>
+      </p>
+      <hr />
+      <p><input type="text" placeholder="Email" /></p>
+      <hr />
+      <div class="card">
+        <h3>Card title</h3>
+        <p>Card body text.</p>
+      </div>
+      <img src="hero.png" alt="Hero photo" width="40" height="40" />
+      <div class="hero-bg"></div>
+      <section class="muted">
+        <p>Muted section text.</p>
+      </section>
+    </main>
+  </body>
+</html>

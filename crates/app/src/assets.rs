@@ -131,7 +131,11 @@ gpui_kit::assets::icon_assets!(
         LockOpen,
         Group,
         Component,
-        Diamond
+        Diamond,
+        // The browser's device menu (src/browser/toolbar.rs).
+        Smartphone,
+        // The browser's Annotate panel (src/browser/annotate.rs).
+        Camera
     ]
 );
 
