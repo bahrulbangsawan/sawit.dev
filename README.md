@@ -41,7 +41,7 @@
 
 Sawit is built for local development with PostgreSQL. This work usually needs Docker Desktop,
 a database client, an editor, a terminal, and a few command-line tools as separate apps. In Sawit
-they all live in a single Rust binary of about **34 MB** that uses **about 67 MB of memory** when idle.
+they all live in a single Rust binary of about **58 MiB** (see [Size & memory](#size--memory)).
 The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (the "One Dark" palette).
 
 <p align="center">
@@ -582,8 +582,10 @@ crates/core   sawit-core — no GPUI, tested with plain cargo test
   app_control, update, cli    control socket for agents, self-update, the sawit command
   kebun                  sawit <db>, list, bakar, panen, backup, tanam, pasang, pupuk (no app needed)
   rt                     Tokio runtime on its own thread
+crates/board  sawit-board — the canvas's document logic around the FigCraft engine; no GPUI, tested with
+              plain cargo test (its GPUI views are in crates/app/src/board)
 crates/app    sawit — GPUI UI only (draws & forwards input)
-crates/mcp    sawit-mcp — stdio MCP server on top of core
+crates/mcp    sawit-mcp — stdio MCP server on top of core and board
 ```
 
 <details>
@@ -611,14 +613,20 @@ crates/mcp    sawit-mcp — stdio MCP server on top of core
 
 ## Size & memory
 
-Measured on an Apple Silicon MacBook (macOS 26.6), release build (`lto = "fat"`, `strip`):
+Measured on an Apple Silicon MacBook (M3, macOS 26.6) on 2026-10-31, release build (`lto = "fat"`, `strip`):
 
 | | |
 |---|---|
-| `sawit` | 34 MB (single file, no JVM/Chromium/Node runtime; includes the MCP server, reached as `sawit-mcp` through a symlink) |
+| `sawit` | 57.6 MiB (single file, no JVM/Chromium/Node runtime; includes the MCP server, reached as `sawit-mcp` through a symlink, and the FigCraft canvas engine with its Inter fonts) |
+| Memory with a large canvas board open (776 layers) | RSS 532 MiB |
+| Clean release build | 10 min 13 s, on a busy machine |
+
+Measured before the native canvas, and not measured again since:
+
+| | |
+|---|---|
 | `Sawit.app` installed · DMG · update zip | 33 MB · 13.5 MB · 17.3 MB |
 | Idle memory (1 window, 1 terminal tab, 10 seconds after launch) | RSS 85 MB · physical footprint 67 MB (peak 115 MB during startup) |
-| Clean release build | About 4 minutes |
 
 Figures for other apps are not listed because they have not been measured on the same machine.
 
@@ -640,4 +648,5 @@ Figures for other apps are not listed because they have not been measured on the
   SIL Open Font License 1.1. See [`NOTICE`](NOTICE).
 
 <sub>Screenshots and video in `docs/media/` were recorded from a release build with demo data (separate `SAWIT_HOME`,
-Homebrew PostgreSQL 16).</sub>
+Homebrew PostgreSQL 16). The canvas screenshot and the end of the demo show the Excalidraw canvas that the native
+canvas replaced.</sub>
