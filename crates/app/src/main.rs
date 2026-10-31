@@ -35,7 +35,7 @@ mod workspace;
 use sawit_core::rt::Runtime;
 
 /// GUI apps launched from Finder get a minimal PATH; adopt the login shell's
-/// so docker, brew, herdr and friends are found (as Zed does).
+/// so docker, brew and friends are found (as Zed does).
 ///
 /// Asking the login shell takes 0.3–1.5 s with a heavy shell config, and
 /// PATH must be set before any other thread exists. So the answer is cached:

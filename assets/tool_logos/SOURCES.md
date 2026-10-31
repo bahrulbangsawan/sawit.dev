@@ -8,4 +8,4 @@ trademarks belong to their owners).
 - factory-color.svg: https://factory.ai/favicon.svg
 
 Claude Code, Codex, OpenCode, Amp, Cursor, Kiro, Gemini CLI and Zed reuse
-assets/agent_logos; herdr reuses assets/logo/herdr.svg.
+assets/agent_logos.

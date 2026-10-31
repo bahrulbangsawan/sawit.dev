@@ -2572,7 +2572,7 @@ impl Workspace {
                 toggle(
                     "toggle-terminal",
                     Lucide::PanelBottom,
-                    "Terminal / herdr",
+                    "Terminal",
                     &ToggleTerminal,
                     l.terminal,
                 )
