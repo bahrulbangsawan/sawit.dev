@@ -1,7 +1,8 @@
 //! The canvas's render thread. It draws the page with FigCraft's [`Retained`] renderer, which
 //! re-renders only what changed since its last frame, and hands each frame to the UI as a GPUI
 //! image. The newest request wins: one made while another waits replaces it, so the thread never
-//! works through a backlog of views the canvas has already left.
+//! works through a backlog of views the canvas has already left. A canvas whose tab is hidden
+//! has the thread forget the render it keeps ([`Worker::trim`]), a page's worth of pixels.
 
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -9,7 +10,7 @@ use std::time::Instant;
 
 use figcraft_doc::color::ColorProfile;
 use figcraft_doc::{Document, NodeId};
-use figcraft_render::{Options, Pixmap, Retained, View, retained};
+use figcraft_render::{Options, Pixmap, Retained, View, Work, retained};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use gpui_kit::RenderImage;
 use sawit_board::view::{self, screen_rgb, to_bgra};
@@ -55,6 +56,9 @@ pub struct Frame {
     /// What the image is of: the [`Job::uid`] and [`Job::page`] of that request.
     pub uid: u64,
     pub page: NodeId,
+    /// What the render took: the whole page, or only what changed since the render the thread
+    /// kept ([`Retained`]).
+    pub work: Work,
 }
 
 impl Frame {
@@ -96,6 +100,14 @@ impl Worker {
     pub fn request(&self, job: Job) {
         self.slot.put(job);
     }
+
+    /// Has the thread forget the render it keeps to build the next one on, once it is done with
+    /// what is asked of it now: a canvas whose tab is hidden draws no frames, and that render is
+    /// a page's worth of pixels (CANVAS-UI-9). The next render is then drawn whole. A job asked
+    /// for after this, the canvas being shown again, keeps the render instead.
+    pub fn trim(&self) {
+        self.slot.trim();
+    }
 }
 
 impl Drop for Worker {
@@ -115,30 +127,55 @@ struct Slot {
 #[derive(Default)]
 struct Waiting {
     job: Option<Job>,
+    /// The thread is to forget the render it keeps ([`Worker::trim`]).
+    trim: bool,
     /// The worker has dropped: the thread is to end.
     closed: bool,
 }
 
+/// What the thread is asked to do next.
+enum Asked {
+    Render(Box<Job>),
+    /// Forget the render kept ([`Worker::trim`]).
+    Trim,
+}
+
 impl Slot {
-    /// Makes `job` the one waiting, in place of any job that was.
+    /// Makes `job` the one waiting, in place of any job that was. A trim asked for before it is
+    /// off: the canvas draws again, and its next frames build on the render kept.
     fn put(&self, job: Job) {
-        let replaced = self.lock().job.replace(job);
+        let replaced = {
+            let mut state = self.lock();
+            state.trim = false;
+            state.job.replace(job)
+        };
         self.changed.notify_one();
         // Outside the lock: the last hold on an old document may be a large free.
         drop(replaced);
     }
 
-    /// Waits for a job and takes it. `None` once the slot is closed: no more jobs come.
-    fn take(&self) -> Option<Job> {
+    /// Asks the thread to forget the render it keeps, after the job waiting, if any.
+    fn trim(&self) {
+        self.lock().trim = true;
+        self.changed.notify_one();
+    }
+
+    /// Waits for something to do and takes it: the job waiting first, then a trim. `None` once
+    /// the slot is closed: nothing more comes.
+    fn take(&self) -> Option<Asked> {
         let state = self.lock();
         let mut state = self
             .changed
-            .wait_while(state, |s| s.job.is_none() && !s.closed)
+            .wait_while(state, |s| s.job.is_none() && !s.trim && !s.closed)
             .unwrap_or_else(PoisonError::into_inner);
         if state.closed {
             return None;
         }
-        state.job.take()
+        if let Some(job) = state.job.take() {
+            return Some(Asked::Render(Box::new(job)));
+        }
+        state.trim = false;
+        Some(Asked::Trim)
     }
 
     /// Ends the thread's wait for good, and drops the job waiting, if any.
@@ -160,10 +197,17 @@ impl Slot {
 }
 
 /// The thread: renders each job it takes from `slot` and sends the frame, until the worker drops
-/// or the frames' receiver does (nobody shows them any more).
+/// or the frames' receiver does (nobody shows them any more). A trim forgets the render kept.
 fn run(slot: &Slot, frames: &UnboundedSender<Frame>) {
     let mut retained = Retained::default();
-    while let Some(job) = slot.take() {
+    while let Some(asked) = slot.take() {
+        let job = match asked {
+            Asked::Render(job) => job,
+            Asked::Trim => {
+                retained.clear();
+                continue;
+            }
+        };
         let Some(frame) = render(&mut retained, &job) else {
             continue;
         };
@@ -181,11 +225,11 @@ fn render(retained: &mut Retained, job: &Job) -> Option<Frame> {
     let coarse = job
         .pixels
         .and_then(|pixels| view::pixel_view(&job.view, pixels));
-    let (drawn, (width, height), bgra) = guarded(retained, |retained| {
+    let (drawn, (width, height), bgra, work) = guarded(retained, |retained| {
         let asked = coarse.as_ref().unwrap_or(&job.view);
-        let (drawn, pixmap, _) = retained.render(&job.doc, job.page, asked, &job.opts)?;
+        let (drawn, pixmap, work) = retained.render(&job.doc, job.page, asked, &job.opts)?;
         let bgra = screen_bgra(pixmap, job.doc.color_profile, job.page_rgb, job.proof);
-        Some((drawn, (pixmap.width(), pixmap.height()), bgra))
+        Some((drawn, (pixmap.width(), pixmap.height()), bgra, work))
     })?;
     let (shown, (width, height), bgra) = match coarse {
         Some(_) => {
@@ -210,6 +254,7 @@ fn render(retained: &mut Retained, job: &Job) -> Option<Frame> {
         key: job.key,
         uid: job.uid,
         page: job.page,
+        work,
     })
 }
 
@@ -399,8 +444,55 @@ mod tests {
         }
         let waiting = slot.lock().job.as_ref().map(|job| job.key);
         assert_eq!(waiting, Some(3));
-        assert_eq!(slot.take().map(|job| job.key), Some(3));
+        assert_eq!(key_of(slot.take()), Some(3));
         assert!(slot.lock().job.is_none());
+    }
+
+    /// The key of the job `asked` renders, if it is one.
+    fn key_of(asked: Option<Asked>) -> Option<u64> {
+        match asked {
+            Some(Asked::Render(job)) => Some(job.key),
+            Some(Asked::Trim) | None => None,
+        }
+    }
+
+    /// CANVAS-UI-9: a trim waits for the job waiting, and a job asked for after it calls it off,
+    /// the canvas being shown again.
+    #[test]
+    fn a_trim_comes_after_the_job_waiting_and_a_later_job_calls_it_off() {
+        let (doc, page) = board_with_a_sticky();
+        let slot = Slot::default();
+        slot.put(job(&doc, page, 1));
+        slot.trim();
+        assert_eq!(key_of(slot.take()), Some(1));
+        assert!(matches!(slot.take(), Some(Asked::Trim)));
+        assert!(!slot.lock().trim);
+
+        slot.trim();
+        slot.put(job(&doc, page, 2));
+        assert_eq!(key_of(slot.take()), Some(2));
+        assert!(!slot.lock().trim);
+    }
+
+    /// CANVAS-UI-9: a trim has the thread forget the render it keeps, so the next one is drawn
+    /// whole, where it would have built on it.
+    #[test]
+    fn a_trim_has_the_next_render_drawn_whole() {
+        let (doc, page) = board_with_a_sticky();
+        let (worker, mut frames) = Worker::spawn();
+        worker.request(job(&doc, page, 1));
+        assert_eq!(next_frame(&mut frames).expect("a frame").work, Work::Full);
+        worker.request(job(&doc, page, 2));
+        assert_eq!(next_frame(&mut frames).expect("a frame").work, Work::Reused);
+        worker.trim();
+        // The thread takes the trim before the next job is asked for, which would call it off.
+        let deadline = Instant::now() + TIMEOUT;
+        while worker.slot.lock().trim {
+            assert!(Instant::now() < deadline, "the thread didn't take the trim");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        worker.request(job(&doc, page, 3));
+        assert_eq!(next_frame(&mut frames).expect("a frame").work, Work::Full);
     }
 
     #[test]

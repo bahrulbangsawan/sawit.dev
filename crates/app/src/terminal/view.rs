@@ -73,6 +73,9 @@ pub enum TerminalEvent {
     Exited,
     /// A right-click asked for the pane menu, at this window position.
     MenuRequested(Point<Pixels>),
+    /// The terminal took the keyboard without a click on its pane (files
+    /// were dropped on it), so its tab should focus its pane.
+    Focused,
 }
 
 /// Where a right-click goes.
@@ -283,12 +286,28 @@ impl TerminalView {
         self.shell && !self.exited && self.session.at_prompt()
     }
 
+    /// A plain shell waiting at its prompt: what commands from elsewhere (an agent's, a
+    /// preview's Run) may be typed into, and what follows the first project's folder. A Run
+    /// panel script's terminal is a shell too, waiting at its prompt between runs, but it
+    /// stays the script's: what runs there is read as the script running.
+    pub fn idle_shell(&self) -> bool {
+        self.at_prompt() && self.remote.is_none() && self.job.is_none()
+    }
+
     /// The command the shell is running, by process group.
     pub fn foreground_job(&self) -> Option<u32> {
         if self.exited {
             return None;
         }
         self.session.foreground_job()
+    }
+
+    /// The name of the command the shell is running (`vim`, `claude`).
+    pub fn foreground_name(&self) -> Option<String> {
+        if self.exited {
+            return None;
+        }
+        self.session.foreground_name()
     }
 
     fn modes(&self) -> sawit_core::terminal::Modes {
@@ -406,6 +425,7 @@ impl TerminalView {
         self.touched = true;
         self.write(drop_bytes(paths, self.modes()));
         self.focus(window, cx);
+        cx.emit(TerminalEvent::Focused);
         cx.notify();
     }
 

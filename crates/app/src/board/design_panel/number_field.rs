@@ -474,11 +474,16 @@ impl BoardView {
     /// scrub, as part of its undo step, and an Escape would take it back with the scrub. A press
     /// on the canvas applies it before the tools have the press, for the same reason
     /// ([`BoardView::on_left_down`]).
+    ///
+    /// A name being typed in a row of the layers panel, a layer's or a page's, is kept first, for
+    /// the same reason: its field too hears only after the next frame that it lost the keyboard,
+    /// and the gesture or the scrub begun meanwhile took the name back (CANVAS-UI-1).
     pub(in crate::board) fn commit_focused_field(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.keep_typed_name(cx);
         let typed: Vec<SharedString> = (self.design.fields.iter())
             .filter(|(_, field)| {
                 field.editing.is_some() || field.input.focus_handle(cx).is_focused(window)

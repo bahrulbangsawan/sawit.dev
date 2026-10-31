@@ -4,6 +4,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
@@ -13,7 +14,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::ssh::Launch;
 use sawit_core::terminal::{
-    Command, GridSize, PaneId, Session, SplitDir, default_shell, run_bytes,
+    Command, GridSize, PaneId, Session, SplitDir, default_shell, run_bytes, shell_quote,
 };
 
 use super::tab::{TabEvent, TerminalTab};
@@ -37,10 +38,22 @@ pub struct TerminalPanel {
     pub maximized: bool,
     /// The window the panel last drew in, for acting on a tab's requests.
     window: Option<AnyWindowHandle>,
+    /// How to reach an SSH server as its settings are now, by its key (the
+    /// workspace's saved servers). Without it a session reconnects as it
+    /// first connected.
+    remotes: Option<RemoteSource>,
+    /// New terminals fail to start, as when the shell can't be run (for
+    /// tests: under a multiplexer every spawn goes through `env`, which
+    /// always starts).
+    #[cfg(test)]
+    fail_spawns: bool,
 }
 
 /// Asks the workspace to fill the window with the panel, or to restore.
 pub struct ToggleMaximize;
+
+/// How to connect to the SSH server with a key, as its settings are now.
+type RemoteSource = Rc<dyn Fn(&str, &mut App) -> Result<Remote, String>>;
 
 /// An SSH session's server.
 #[derive(Clone)]
@@ -57,6 +70,19 @@ pub struct Remote {
 pub struct JobTag {
     pub key: String,
     pub name: String,
+}
+
+/// Who asked for a terminal to be used, which decides what it may do to
+/// the dock and the keyboard.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Origin {
+    /// The user, with a click or a key: the terminal shows and takes the
+    /// keyboard (Homebrew's install waits there for a password).
+    User,
+    /// An agent, over the control socket. The terminal shows only when the
+    /// user isn't typing in another terminal, and the keyboard stays where
+    /// it is: what the user types next mustn't land in a shell.
+    Agent,
 }
 
 /// What a script's terminal is doing.
@@ -79,6 +105,9 @@ impl TerminalPanel {
             error: None,
             maximized: false,
             window: None,
+            remotes: None,
+            #[cfg(test)]
+            fail_spawns: false,
         };
         panel.open(Command::default(), &shell_name(), None, None, cx);
         panel
@@ -110,11 +139,7 @@ impl TerminalPanel {
         if let Some(dir) = self.cwd.clone().filter(|_| first) {
             let idle: Vec<(usize, PaneId, bool)> = self
                 .all_panes(cx)
-                .filter(|(_, _, v)| {
-                    // `ssh` itself is "at the prompt"; the folder is local anyway.
-                    let v = v.read(cx);
-                    v.remote.is_none() && v.job.is_none() && v.at_prompt()
-                })
+                .filter(|(_, _, v)| v.read(cx).idle_shell())
                 .map(|(ix, pane, v)| (ix, pane, v.read(cx).touched))
                 .collect();
             for (ix, pane, touched) in idle {
@@ -169,6 +194,16 @@ impl TerminalPanel {
         at
     }
 
+    /// Adds a tab at its group's end without changing which tab is active;
+    /// returns its index.
+    fn add_tab(&mut self, tab: Entity<TerminalTab>, cx: &App) -> usize {
+        let at = self.insert(tab, cx);
+        if self.tabs.len() > 1 && at <= self.active {
+            self.active += 1;
+        }
+        at
+    }
+
     /// Puts every tab back in group order, keeping the active one.
     fn regroup(&mut self, cx: &App) {
         let active = self.tabs.get(self.active).cloned();
@@ -180,9 +215,22 @@ impl TerminalPanel {
             .unwrap_or(0);
     }
 
-    /// Moves the tab at `ix` into `group` (or out of any).
-    fn move_to_group(&mut self, ix: usize, group: Option<PathBuf>, cx: &mut Context<Self>) {
-        if let Some(tab) = self.tabs.get(ix) {
+    /// Where `tab` is in the strip, while it is open. The strip's buttons and menus look
+    /// their tab up when used, since tabs open and close under them (an agent's, a script's).
+    fn index_of(&self, tab: &WeakEntity<TerminalTab>) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|t| t.entity_id() == tab.entity_id())
+    }
+
+    /// Moves `tab` into `group` (or out of any).
+    fn move_to_group(
+        &mut self,
+        tab: &WeakEntity<TerminalTab>,
+        group: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(tab) = tab.upgrade() {
             tab.update(cx, |t, _| t.group = group);
             self.regroup(cx);
             cx.notify();
@@ -211,16 +259,20 @@ impl TerminalPanel {
         self.open(cmd, &shell_name(), None, Some(window), cx);
     }
 
-    /// Opens a new session to `remote` in its own tab.
+    /// Opens a new session to `remote` in its own tab, shown as `origin`
+    /// allows; returns where, or why it couldn't start.
     pub fn open_ssh(
         &mut self,
         remote: Remote,
-        window: Option<&mut Window>,
+        origin: Origin,
+        window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Result<(usize, PaneId), String> {
         sawit_core::ssh::ensure_ssh_dir();
         let name = remote.name.clone();
-        self.open(ssh_command(&remote.launch), &name, Some(remote), window, cx);
+        let (ix, pane) = self.open_tab(ssh_command(&remote.launch), &name, Some(remote), cx)?;
+        self.reveal(ix, pane, origin, window, cx);
+        Ok((ix, pane))
     }
 
     /// Every pane of every tab: the tab's index, the pane and its terminal,
@@ -244,6 +296,38 @@ impl TerminalPanel {
         cx.notify();
     }
 
+    /// Shows `pane` of the tab at `ix`, where something was just started
+    /// or typed, as `origin` allows: for the user, it shows and takes the
+    /// keyboard. For an agent it shows, without the keyboard, unless the
+    /// user is typing in a terminal; then nothing changes on screen.
+    fn reveal(
+        &mut self,
+        ix: usize,
+        pane: PaneId,
+        origin: Origin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match origin {
+            Origin::User => self.show_pane(ix, pane, window, cx),
+            Origin::Agent if self.has_focus(window, cx) => cx.notify(),
+            Origin::Agent => {
+                self.active = ix;
+                self.tabs[ix].update(cx, |t, _| t.state.focus(pane));
+                cx.notify();
+            }
+        }
+    }
+
+    /// The position of `pane` in the tab at `ix`, as `app_state` lists it.
+    pub fn pane_index(&self, ix: usize, pane: PaneId, cx: &App) -> Option<usize> {
+        self.tabs
+            .get(ix)?
+            .read(cx)
+            .views()
+            .position(|(id, _)| id == pane)
+    }
+
     /// Live panes in sessions to the server with `key`.
     fn ssh_panes(&self, key: &str, cx: &App) -> Vec<(usize, PaneId)> {
         self.all_panes(cx)
@@ -260,19 +344,33 @@ impl TerminalPanel {
         self.ssh_panes(key, cx).len()
     }
 
-    /// Shows the newest live session to `key`, in whichever pane it is;
-    /// false when there is none.
-    pub fn focus_ssh(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some((ix, pane)) = self.ssh_panes(key, cx).last().copied() else {
-            return false;
-        };
-        self.show_pane(ix, pane, window, cx);
-        true
+    /// Shows the newest live session to `key`, in whichever pane it is, as
+    /// `origin` allows; `None` when there is none.
+    pub fn focus_ssh(
+        &mut self,
+        key: &str,
+        origin: Origin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(usize, PaneId)> {
+        let (ix, pane) = self.ssh_panes(key, cx).last().copied()?;
+        self.reveal(ix, pane, origin, window, cx);
+        Some((ix, pane))
+    }
+
+    /// Where SSH sessions get the server's settings when they reconnect.
+    pub fn set_remote_source(
+        &mut self,
+        source: impl Fn(&str, &mut App) -> Result<Remote, String> + 'static,
+    ) {
+        self.remotes = Some(Rc::new(source));
     }
 
     /// Connects the ended SSH session in `pane` of the tab at `ix` again,
-    /// in place, and focuses it. The tab's other panes are left alone, and
-    /// so is a session that has not ended (a second click on Reconnect).
+    /// in place, and focuses it, with the server's settings as they are now
+    /// (fixed since, or with a password saved since). The tab's other panes
+    /// are left alone, and so is a session that has not ended (a second
+    /// click on Reconnect).
     pub(super) fn reconnect(
         &mut self,
         ix: usize,
@@ -283,7 +381,7 @@ impl TerminalPanel {
         let Some(tab) = self.tabs.get(ix).cloned() else {
             return;
         };
-        let Some(remote) = tab
+        let Some(old) = tab
             .read(cx)
             .view(pane)
             .map(|v| v.read(cx))
@@ -291,6 +389,17 @@ impl TerminalPanel {
             .and_then(|v| v.remote.clone())
         else {
             return;
+        };
+        let remote = match self.remotes.clone() {
+            Some(source) => match source(&old.key, cx) {
+                Ok(remote) => remote,
+                Err(e) => {
+                    self.error = Some(format!("Unable to reconnect to {}. {e}", old.name));
+                    cx.notify();
+                    return;
+                }
+            },
+            None => old,
         };
         let name = remote.name.clone();
         if let Some(view) = self.spawn_view(ssh_command(&remote.launch), &name, Some(remote), cx) {
@@ -305,9 +414,17 @@ impl TerminalPanel {
     /// focused pane if its shell is at its prompt, else the newest pane in
     /// any tab whose shell is, else a new shell tab. A shell running a
     /// program (an agent, an editor, `cat`) is left alone: the program would
-    /// get the command line and the Enter.
-    pub fn run(&mut self, commands: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let idle = |v: &Entity<TerminalView>| v.read(cx).at_prompt();
+    /// get the command line and the Enter. So is a Run panel script's shell,
+    /// even between runs. The pane shows as `origin` allows. Returns the tab
+    /// and pane it typed into, or why no shell could start.
+    pub fn run(
+        &mut self,
+        commands: &str,
+        origin: Origin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(usize, PaneId), String> {
+        let idle = |v: &Entity<TerminalView>| v.read(cx).idle_shell();
         let in_active = self.tabs.get(self.active).and_then(|t| {
             let t = t.read(cx);
             idle(t.focused_view()).then_some((self.active, t.state.focused))
@@ -320,13 +437,7 @@ impl TerminalPanel {
         });
         let (ix, pane) = match target {
             Some(found) => found,
-            None => {
-                self.open_shell(None, cx);
-                if self.error.is_some() {
-                    return;
-                }
-                (self.active, self.tabs[self.active].read(cx).state.focused)
-            }
+            None => self.open_tab(Command::default(), &shell_name(), None, cx)?,
         };
         if let Some(view) = self.tabs[ix].read(cx).view(pane).cloned() {
             view.update(cx, |view, _| {
@@ -334,7 +445,8 @@ impl TerminalPanel {
                 view.write(run_bytes(commands));
             });
         }
-        self.show_pane(ix, pane, window, cx);
+        self.reveal(ix, pane, origin, window, cx);
+        Ok((ix, pane))
     }
 
     /// Every tab, for `sawit-mcp`: the tab's own fields describe its focused
@@ -416,8 +528,31 @@ impl TerminalPanel {
         }
     }
 
-    /// The pane's last `lines` lines of output (the active tab's focused
-    /// pane by default).
+    /// The pane an agent reads or types into: the one at position `pane`
+    /// of the tab at `tab`. With no tab, the active tab's, by default its
+    /// focused pane: the one the user has in front. A named tab that is
+    /// split needs its pane named too, as its focused pane may be the one
+    /// the user types in while the agent's command runs in another.
+    fn target(
+        &self,
+        tab: Option<usize>,
+        pane: Option<usize>,
+        cx: &App,
+    ) -> Result<(usize, Entity<TerminalView>), String> {
+        let ix = self.tab_ix(tab)?;
+        let panes = self.tabs[ix].read(cx).views().count();
+        if tab.is_some() && pane.is_none() && panes > 1 {
+            return Err(format!(
+                "Terminal {ix} is split into {panes} panes: name the pane, 0 to {} (app_state \
+                 lists them).",
+                panes - 1
+            ));
+        }
+        let (_, view) = self.pane_of(ix, pane, cx)?;
+        Ok((ix, view))
+    }
+
+    /// The pane's last `lines` lines of output (see [`Self::target`]).
     pub fn text(
         &self,
         tab: Option<usize>,
@@ -425,12 +560,12 @@ impl TerminalPanel {
         lines: usize,
         cx: &App,
     ) -> Result<String, String> {
-        let ix = self.tab_ix(tab)?;
-        let (_, view) = self.pane_of(ix, pane, cx)?;
+        let (_, view) = self.target(tab, pane, cx)?;
         Ok(view.read(cx).text_tail(lines))
     }
 
-    /// Sends raw input to a pane (the active tab's focused one by default).
+    /// Sends raw input to a pane (see [`Self::target`]). The pane counts
+    /// as used from then on, as when the user types there.
     pub fn input(
         &mut self,
         tab: Option<usize>,
@@ -438,13 +573,14 @@ impl TerminalPanel {
         bytes: Vec<u8>,
         cx: &mut Context<Self>,
     ) -> Result<usize, String> {
-        let ix = self.tab_ix(tab)?;
-        let (_, view) = self.pane_of(ix, pane, cx)?;
-        let view = view.read(cx);
-        if view.exited {
+        let (ix, view) = self.target(tab, pane, cx)?;
+        if view.read(cx).exited {
             return Err(format!("Terminal {ix} has exited."));
         }
-        view.write(bytes);
+        view.update(cx, |view, _| {
+            view.touched = true;
+            view.write(bytes);
+        });
         cx.notify();
         Ok(ix)
     }
@@ -472,32 +608,33 @@ impl TerminalPanel {
         Ok(())
     }
 
-    /// Runs `commands` in a new shell tab started in `dir`; returns its index.
+    /// Runs `commands` in a new shell tab started in `dir`, shown as
+    /// `origin` allows; returns the tab and its pane.
     pub fn run_in_new(
         &mut self,
         dir: Option<PathBuf>,
         commands: &str,
+        origin: Origin,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Result<usize, String> {
+    ) -> Result<(usize, PaneId), String> {
         let cmd = Command {
             cwd: dir,
             ..Command::default()
         };
-        self.open(cmd, &shell_name(), None, Some(window), cx);
-        if let Some(e) = &self.error {
-            return Err(e.clone());
+        let (ix, pane) = self.open_tab(cmd, &shell_name(), None, cx)?;
+        if let Some(view) = self.tabs[ix].read(cx).view(pane).cloned() {
+            view.update(cx, |view, _| {
+                view.touched = true;
+                view.write(run_bytes(commands));
+            });
         }
-        let ix = self.active;
-        let view = self.tabs[ix].read(cx).focused_view().clone();
-        view.update(cx, |view, _| {
-            view.touched = true;
-            view.write(run_bytes(commands));
-        });
-        Ok(ix)
+        self.reveal(ix, pane, origin, window, cx);
+        Ok((ix, pane))
     }
 
-    /// The index of the tab `run` typed into last.
+    /// The index of the active tab, the one the dock shows (for tests).
+    #[cfg(test)]
     pub fn active_index(&self) -> usize {
         self.active
     }
@@ -523,46 +660,66 @@ impl TerminalPanel {
         })
     }
 
+    /// Where the script with `key` runs, its newest live terminal, as
+    /// `app_state` lists it: the tab's index and the pane's place in it.
+    pub fn job_terminal(&self, key: &str, cx: &App) -> Option<(usize, usize)> {
+        let (ix, pane) = *self.job_panes(key, cx).last()?;
+        Some((ix, self.pane_index(ix, pane, cx)?))
+    }
+
     /// Types `command` into the script's terminal: its idle pane when there
-    /// is one (a running one is only shown), else a new shell in `dir`.
+    /// is one (a running one is only shown), else a new shell in `dir`. The
+    /// old shell may have moved since, and the command is relative to the
+    /// script's folder, so it goes back to `dir` first. With `show`, the
+    /// terminal shows as that origin allows (one of several started together
+    /// passes `None`). Returns the tab and pane, or why no shell could start
+    /// (the dock shows it too).
     pub fn start_job(
         &mut self,
         tag: JobTag,
         dir: PathBuf,
         command: &str,
-        window: Option<&mut Window>,
+        show: Option<Origin>,
+        window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        let (ix, pane) = match self.job_panes(&tag.key, cx).last().copied() {
-            Some(found) => found,
+    ) -> Result<(usize, PaneId), String> {
+        let (ix, pane, command) = match self.job_panes(&tag.key, cx).last().copied() {
+            Some((ix, pane)) => {
+                let cwd = self.tabs[ix]
+                    .read(cx)
+                    .view(pane)
+                    .and_then(|v| v.read(cx).cwd());
+                (ix, pane, command_in(&dir, command, cwd))
+            }
             None => {
                 let cmd = Command {
                     cwd: Some(dir),
                     ..Command::default()
                 };
-                let Some(tab) = self.spawn(cmd, &tag.name, None, cx) else {
-                    cx.notify();
-                    return;
+                let (ix, pane) = match self.open_tab(cmd, &tag.name, None, cx) {
+                    Ok(opened) => opened,
+                    Err(e) => {
+                        cx.notify();
+                        return Err(e);
+                    }
                 };
-                let pane = tab.read(cx).state.focused;
-                (self.insert(tab, cx), pane)
+                (ix, pane, command.to_string())
             }
         };
-        self.active = ix;
-        self.tabs[ix].update(cx, |t, _| t.state.focus(pane));
         if let Some(view) = self.tabs[ix].read(cx).view(pane).cloned() {
             view.update(cx, |view, _| {
                 view.job = Some(tag);
                 if view.foreground_job().is_none() {
                     view.touched = true;
-                    view.write(run_bytes(command));
+                    view.write(run_bytes(&command));
                 }
             });
         }
-        if let Some(window) = window {
-            self.focus_active(window, cx);
+        if let Some(origin) = show {
+            self.reveal(ix, pane, origin, window, cx);
         }
         cx.notify();
+        Ok((ix, pane))
     }
 
     /// Interrupts (Ctrl-C) whatever the script's terminals are running.
@@ -587,6 +744,8 @@ impl TerminalPanel {
         true
     }
 
+    /// Starts `cmd` in a new tab and makes it the active one, giving it the
+    /// keyboard when there is a `window`.
     fn open(
         &mut self,
         cmd: Command,
@@ -595,13 +754,32 @@ impl TerminalPanel {
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
-        if let Some(tab) = self.spawn(cmd, title, remote, cx) {
-            self.active = self.insert(tab.clone(), cx);
+        if let Ok((ix, _)) = self.open_tab(cmd, title, remote, cx) {
+            self.active = ix;
             if let Some(window) = window {
-                tab.update(cx, |t, cx| t.focus(window, cx));
+                self.focus_active(window, cx);
             }
         }
         cx.notify();
+    }
+
+    /// Starts `cmd` in a new tab, leaving the active tab as it is; returns
+    /// where, or why it couldn't start (also shown in the panel).
+    fn open_tab(
+        &mut self,
+        cmd: Command,
+        title: &str,
+        remote: Option<Remote>,
+        cx: &mut Context<Self>,
+    ) -> Result<(usize, PaneId), String> {
+        let Some(tab) = self.spawn(cmd, title, remote, cx) else {
+            return Err(self
+                .error
+                .clone()
+                .unwrap_or_else(|| "Unable to open a terminal.".into()));
+        };
+        let pane = tab.read(cx).state.focused;
+        Ok((self.add_tab(tab, cx), pane))
     }
 
     /// Starts `cmd` in the panel's directory (else `$HOME`) in a new tab,
@@ -643,6 +821,11 @@ impl TerminalPanel {
             cell_height: 17,
         };
         let shell = cmd.program.is_empty();
+        #[cfg(test)]
+        if self.fail_spawns {
+            self.error = Some("Failed to spawn command: the shell can't be run.".into());
+            return None;
+        }
         match Session::spawn(cmd, size) {
             Ok((session, events)) => {
                 let title = title.to_string();
@@ -682,11 +865,34 @@ impl TerminalPanel {
         cx.notify();
     }
 
+    /// Closes the tab at `ix`. The active tab stays the active one; when it is the one that
+    /// closes, the tab that takes its place is (or the new last one).
     fn close(&mut self, ix: usize, cx: &mut Context<Self>) {
         if ix < self.tabs.len() {
             self.tabs.remove(ix);
+            if ix < self.active {
+                self.active -= 1;
+            }
             self.active = self.active.min(self.tabs.len().saturating_sub(1));
             cx.notify();
+        }
+    }
+
+    /// Closes `tab` for the user (the strip's ×, the tab's menu). When the keyboard was in it
+    /// (`had_keyboard`), the tab shown next takes it; otherwise it stays where it is.
+    fn close_for_user(
+        &mut self,
+        tab: &WeakEntity<TerminalTab>,
+        had_keyboard: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ix) = self.index_of(tab) else {
+            return;
+        };
+        self.close(ix, cx);
+        if had_keyboard {
+            self.focus_active(window, cx);
         }
     }
 
@@ -746,6 +952,35 @@ impl TerminalPanel {
     #[cfg(test)]
     pub fn tab(&self, ix: usize) -> &Entity<TerminalTab> {
         &self.tabs[ix]
+    }
+
+    /// What still runs in the terminals, one name per pane: a command in
+    /// the foreground (by the pane's name, its script's, else the program's)
+    /// and a live SSH session. Shells at their prompt, a script's terminal
+    /// between runs and ended sessions don't count. These end when the app
+    /// quits, or with their window.
+    pub fn running(&self, cx: &App) -> Vec<String> {
+        let mut running = Vec::new();
+        for tab in &self.tabs {
+            let t = tab.read(cx);
+            for (pane, view) in t.views() {
+                let v = view.read(cx);
+                if v.exited {
+                    continue;
+                }
+                let named = t.state.panes.get(&pane).and_then(|m| m.name.clone());
+                if v.remote.is_some() {
+                    running.push(format!("{} (SSH)", t.pane_label(pane, v)));
+                } else if v.foreground_job().is_some() {
+                    let name = named
+                        .or_else(|| v.job.as_ref().map(|j| j.name.clone()))
+                        .or_else(|| v.foreground_name())
+                        .unwrap_or_else(|| v.title.to_string());
+                    running.push(name);
+                }
+            }
+        }
+        running
     }
 
     /// A terminal tab has the keyboard.
@@ -869,6 +1104,7 @@ impl Render for TerminalPanel {
                 .cloned()
                 .collect();
             let weak = weak.clone();
+            let this_tab = tab.downgrade();
             let grouped = group.is_some();
             // A one-pane tab is renamed in its label.
             let rename = (!t.state.is_split())
@@ -914,6 +1150,7 @@ impl Render for TerminalPanel {
                 };
                 h_flex()
                     .id(("term-tab", ix))
+                    .debug_selector(move || format!("term-tab-{ix}"))
                     .relative()
                     .flex_none()
                     .h_full()
@@ -942,23 +1179,48 @@ impl Render for TerminalPanel {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::X)
-                            .on_click(cx.listener(move |this, _, _, cx| this.close(ix, cx))),
+                            .debug_selector(move || format!("close-term-{ix}"))
+                            .on_click(cx.listener({
+                                let tab = this_tab.clone();
+                                move |this, _, window, cx| {
+                                    // The tab under the × would activate itself next.
+                                    cx.stop_propagation();
+                                    let had_keyboard = tab
+                                        .upgrade()
+                                        .is_some_and(|t| t.read(cx).has_focus(window, cx));
+                                    this.close_for_user(&tab, had_keyboard, window, cx)
+                                }
+                            })),
                     )
                     .when_some(color, |el, color| el.child(group_stripe(color, active)))
-                    .on_click(cx.listener(move |this, _, window, cx| this.activate(ix, window, cx)))
+                    .on_click(cx.listener({
+                        let tab = this_tab.clone();
+                        move |this, _, window, cx| {
+                            if let Some(ix) = this.index_of(&tab) {
+                                this.activate(ix, window, cx)
+                            }
+                        }
+                    }))
                     .context_menu(move |menu, window, cx| {
+                        // The menu has the keyboard from here on: whether the tab had it
+                        // before decides where it goes when the tab closes.
+                        let had_keyboard = this_tab
+                            .upgrade()
+                            .is_some_and(|t| t.read(cx).has_focus(window, cx));
                         let move_weak = weak.clone();
+                        let move_tab = this_tab.clone();
                         let others = others.clone();
                         let menu = menu.when(!others.is_empty(), |menu| {
                             menu.submenu("Move to Project", window, cx, move |mut menu, _, _| {
                                 for root in &others {
                                     let weak = move_weak.clone();
+                                    let tab = move_tab.clone();
                                     let to = root.clone();
                                     menu =
                                         menu.item(PopupMenuItem::new(project_name(root)).on_click(
                                             move |_, _, cx| {
                                                 let _ = weak.update(cx, |t, cx| {
-                                                    t.move_to_group(ix, Some(to.clone()), cx)
+                                                    t.move_to_group(&tab, Some(to.clone()), cx)
                                                 });
                                             },
                                         ));
@@ -967,18 +1229,23 @@ impl Render for TerminalPanel {
                             })
                         });
                         let ungroup = weak.clone();
+                        let ungroup_tab = this_tab.clone();
                         let close = weak.clone();
+                        let close_tab = this_tab.clone();
                         menu.when(grouped, |menu| {
                             menu.item(PopupMenuItem::new("Remove from Group").on_click(
                                 move |_, _, cx| {
-                                    let _ =
-                                        ungroup.update(cx, |t, cx| t.move_to_group(ix, None, cx));
+                                    let _ = ungroup.update(cx, |t, cx| {
+                                        t.move_to_group(&ungroup_tab, None, cx)
+                                    });
                                 },
                             ))
                         })
                         .separator()
-                        .item(PopupMenuItem::new("Close").on_click(move |_, _, cx| {
-                            let _ = close.update(cx, |t, cx| t.close(ix, cx));
+                        .item(PopupMenuItem::new("Close").on_click(move |_, window, cx| {
+                            let _ = close.update(cx, |t, cx| {
+                                t.close_for_user(&close_tab, had_keyboard, window, cx)
+                            });
                         }))
                     })
                     .into_any_element()
@@ -1080,6 +1347,17 @@ fn shell_name() -> String {
         .unwrap_or_else(|| "shell".into())
 }
 
+/// `command` as typed into a shell whose folder is `cwd` (when known) to run
+/// in `dir`: as is when the shell is there, else after a `cd` there.
+fn command_in(dir: &Path, command: &str, cwd: Option<PathBuf>) -> String {
+    let real = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    if cwd.as_deref() == Some(real.as_path()) {
+        command.to_string()
+    } else {
+        format!("cd -- {} && {command}", shell_quote(dir))
+    }
+}
+
 /// Runs `launch` in the terminal.
 fn ssh_command(launch: &Launch) -> Command {
     Command {
@@ -1099,8 +1377,28 @@ fn pick_paste_target(active: usize, accepts: &[bool]) -> Option<usize> {
 }
 
 #[cfg(test)]
-mod paste_tests {
-    use super::pick_paste_target;
+mod helper_tests {
+    use super::{command_in, pick_paste_target};
+
+    #[test]
+    fn a_script_goes_back_to_its_folder_unless_its_shell_is_there() {
+        let dir = std::env::temp_dir().canonicalize().unwrap();
+        assert_eq!(
+            command_in(&dir, "make build", Some(dir.clone())),
+            "make build"
+        );
+        let moved = command_in(&dir, "make build", Some(dir.join("sub")));
+        assert_eq!(
+            moved,
+            format!("cd -- {} && make build", super::shell_quote(&dir))
+        );
+        assert_eq!(command_in(&dir, "make build", None), moved);
+        let spaced = std::path::Path::new("/tmp/my project");
+        assert_eq!(
+            command_in(spaced, "pnpm dev", None),
+            "cd -- '/tmp/my project' && pnpm dev"
+        );
+    }
 
     #[test]
     fn picks_active_else_highest_accepting() {
@@ -1113,11 +1411,759 @@ mod paste_tests {
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::{AppContext as _, TestAppContext};
-    use sawit_core::terminal::run_bytes;
+    use gpui_kit::{
+        AnyWindowHandle, AppContext as _, Entity, Modifiers, MouseButton, TestAppContext,
+        VisualTestContext,
+    };
+    use sawit_core::terminal::{run_bytes, shell_quote};
 
-    use super::super::testing::{focus_terminal, init, open_panel, wait_until};
-    use super::JobTag;
+    use super::super::tab::TerminalTab;
+    use super::super::testing::{
+        focus_terminal, init, open_panel, ready, scratch_dir, start, start_cat, wait_until,
+    };
+    use super::{JobTag, Origin, TerminalPanel};
+
+    /// The active tab.
+    fn active(cx: &mut TestAppContext, panel: &Entity<TerminalPanel>) -> Entity<TerminalTab> {
+        cx.update(|cx| {
+            let p = panel.read(cx);
+            p.tab(p.active_index()).clone()
+        })
+    }
+
+    /// Opens `n` more shell tabs; the last one opened is the active one.
+    fn open_tabs(cx: &mut TestAppContext, panel: &Entity<TerminalPanel>, n: usize) {
+        for _ in 0..n {
+            cx.update(|cx| panel.update(cx, |p, cx| p.open_shell(None, cx)));
+        }
+        cx.run_until_parked();
+    }
+
+    /// Makes tab `ix` the active one with the keyboard, as a click on it does.
+    fn click_tab(
+        cx: &mut TestAppContext,
+        w: AnyWindowHandle,
+        panel: &Entity<TerminalPanel>,
+        ix: usize,
+    ) {
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.activate(ix, window, cx))
+        })
+        .expect("the test window is open");
+        cx.run_until_parked();
+    }
+
+    /// Whether a pane of `tab` has the keyboard.
+    fn has_keyboard(
+        cx: &mut TestAppContext,
+        w: AnyWindowHandle,
+        tab: &Entity<TerminalTab>,
+    ) -> bool {
+        cx.update_window(w, |_, window, cx| tab.read(cx).has_focus(window, cx))
+            .expect("the test window is open")
+    }
+
+    /// A debug selector made at run time: tests only, so leaking it is fine.
+    fn selector(text: String) -> &'static str {
+        Box::leak(text.into_boxed_str())
+    }
+
+    /// Clicks the × of tab `ix` in the strip.
+    fn click_close(cx: &mut TestAppContext, w: AnyWindowHandle, ix: usize) {
+        let mut vcx = VisualTestContext::from_window(w, cx);
+        vcx.run_until_parked();
+        let at = vcx
+            .debug_bounds(selector(format!("close-term-{ix}")))
+            .unwrap_or_else(|| panic!("tab {ix}'s × isn't drawn"))
+            .center();
+        vcx.simulate_click(at, Modifiers::default());
+        vcx.run_until_parked();
+    }
+
+    /// The × of the active, rightmost tab closes it and the tab left of it shows, with the
+    /// keyboard the closed tab had. The tab's own click must not run too: it would make the
+    /// closed tab's index (now past the end) the active one, and the dock would say "No
+    /// terminals open" while a tab is left.
+    #[gpui_kit::test]
+    fn the_close_button_of_the_last_tab_shows_the_one_left(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        let first = active(cx, &panel);
+        open_tabs(cx, &panel, 1);
+        click_tab(cx, w, &panel, 1);
+        click_close(cx, w, 1);
+        cx.update(|cx| {
+            let p = panel.read(cx);
+            assert_eq!(p.tab_count(), 1);
+            assert_eq!(p.active_index(), 0, "the active tab is past the end");
+            assert!(
+                p.text(None, None, 5, cx).is_ok(),
+                "reading the active tab fails"
+            );
+        });
+        assert!(
+            has_keyboard(cx, w, &first),
+            "the keyboard didn't go to the tab left"
+        );
+    }
+
+    /// The × of a tab in the background closes only that tab, on either side of the active
+    /// one: the active tab stays, and so does the keyboard.
+    #[gpui_kit::test]
+    fn the_close_button_of_a_background_tab_keeps_the_active_one(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        open_tabs(cx, &panel, 3);
+        // [A, B*, C, D], B with the keyboard.
+        click_tab(cx, w, &panel, 1);
+        let b = active(cx, &panel);
+        for (ix, closing) in [
+            (2, "C, right of B"),
+            (0, "A, left of B"),
+            (1, "D, the last"),
+        ] {
+            click_close(cx, w, ix);
+            assert!(active(cx, &panel) == b, "closing {closing} switched tabs");
+            assert!(
+                has_keyboard(cx, w, &b),
+                "closing {closing} took the keyboard"
+            );
+        }
+        cx.update(|cx| assert_eq!(panel.read(cx).tab_count(), 1));
+    }
+
+    /// The × of the active tab while it has the keyboard hands the keyboard to the tab that
+    /// takes its place.
+    #[gpui_kit::test]
+    fn the_close_button_of_the_typing_tab_hands_on_the_keyboard(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        open_tabs(cx, &panel, 1);
+        // [A*, B], A with the keyboard.
+        click_tab(cx, w, &panel, 0);
+        let b = cx.update(|cx| panel.read(cx).tab(1).clone());
+        click_close(cx, w, 0);
+        assert!(active(cx, &panel) == b);
+        assert!(has_keyboard(cx, w, &b), "the keyboard went nowhere");
+    }
+
+    /// A tab's menu acts on the tab it was opened for, even when the strip changes while it is
+    /// open: here an agent closes a tab left of it, and the menu's Close still closes its tab,
+    /// not the one that moved into its place.
+    #[gpui_kit::test]
+    fn a_tabs_menu_closes_the_tab_it_was_opened_for(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        open_tabs(cx, &panel, 3);
+        let [a, b, c, d] = cx.update(|cx| {
+            let p = panel.read(cx);
+            [0, 1, 2, 3].map(|ix| p.tab(ix).clone())
+        });
+        // Right-click B in the strip.
+        let mut vcx = VisualTestContext::from_window(w, cx);
+        vcx.run_until_parked();
+        let at = vcx
+            .debug_bounds("term-tab-1")
+            .expect("tab 1 is drawn")
+            .center();
+        vcx.simulate_mouse_down(at, MouseButton::Right, Modifiers::default());
+        vcx.simulate_mouse_up(at, MouseButton::Right, Modifiers::default());
+        vcx.run_until_parked();
+        // An agent closes A while the menu is open.
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.close_tab(0, None, window, cx))
+        })
+        .expect("the test window is open")
+        .expect("tab 0 closes");
+        cx.run_until_parked();
+        // The menu's last item is Close.
+        cx.simulate_keystrokes(w, "up enter");
+        cx.run_until_parked();
+        let left: Vec<Entity<TerminalTab>> = cx.update(|cx| {
+            let p = panel.read(cx);
+            (0..p.tab_count()).map(|ix| p.tab(ix).clone()).collect()
+        });
+        assert!(!left.contains(&a));
+        assert!(!left.contains(&b), "the menu's Close didn't close its tab");
+        assert_eq!(left, [c.clone(), d], "the menu's Close closed another tab");
+
+        // [C, D*] with the keyboard in D: closing D from its menu hands the keyboard to C.
+        click_tab(cx, w, &panel, 1);
+        let mut vcx = VisualTestContext::from_window(w, cx);
+        vcx.run_until_parked();
+        let at = vcx
+            .debug_bounds("term-tab-1")
+            .expect("tab 1 is drawn")
+            .center();
+        vcx.simulate_mouse_down(at, MouseButton::Right, Modifiers::default());
+        vcx.simulate_mouse_up(at, MouseButton::Right, Modifiers::default());
+        vcx.run_until_parked();
+        cx.simulate_keystrokes(w, "up enter");
+        cx.run_until_parked();
+        assert!(active(cx, &panel) == c);
+        assert!(has_keyboard(cx, w, &c), "the keyboard went nowhere");
+    }
+
+    /// Closing a tab left of the active one keeps the active tab (and the keyboard in it), as
+    /// when an agent's `terminal_close` tidies up while the user types in a later tab.
+    #[gpui_kit::test]
+    fn closing_a_tab_left_of_the_active_one_keeps_it(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        open_tabs(cx, &panel, 3);
+        // [A, B, C*, D], C with the keyboard.
+        click_tab(cx, w, &panel, 2);
+        let c = active(cx, &panel);
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.close_tab(0, None, window, cx))
+        })
+        .expect("the test window is open")
+        .expect("tab 0 closes");
+        cx.run_until_parked();
+        cx.update(|cx| assert_eq!(panel.read(cx).tab_count(), 3));
+        assert!(active(cx, &panel) == c, "the active tab moved off C");
+        assert!(has_keyboard(cx, w, &c));
+    }
+
+    /// `run` never types into a Run panel script's terminal, even once the script has ended
+    /// and its shell waits at its prompt: the script would then read as running again, and
+    /// its Stop would interrupt the other command.
+    #[gpui_kit::test]
+    fn run_leaves_a_finished_scripts_shell_alone(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        let shell = cx.update(|cx| panel.read(cx).tab(0).read(cx).focused_view().clone());
+        ready(cx, &shell);
+        let tag = JobTag {
+            key: "build".into(),
+            name: "build".into(),
+        };
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| {
+                p.start_job(
+                    tag,
+                    std::env::temp_dir(),
+                    "printf 'sawit-%s\\n' built",
+                    Some(Origin::User),
+                    window,
+                    cx,
+                )
+            })
+        })
+        .expect("the test window is open")
+        .expect("the script starts");
+        let job = cx.update(|cx| {
+            let p = panel.read(cx);
+            p.tab(p.active_index()).read(cx).focused_view().clone()
+        });
+        wait_until(cx, "the script ran and its shell is at its prompt", |cx| {
+            let v = job.read(cx);
+            v.text_tail(50).contains("sawit-built") && v.at_prompt()
+        });
+
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| {
+                p.run("printf 'sawit-%s\\n' other", Origin::User, window, cx)
+            })
+        })
+        .expect("the test window is open")
+        .expect("a shell runs it");
+        wait_until(cx, "the command ran", |cx| {
+            let ran =
+                |v: &Entity<super::TerminalView>| v.read(cx).text_tail(50).contains("sawit-other");
+            ran(&shell) || ran(&job)
+        });
+        cx.update(|cx| {
+            assert!(
+                !job.read(cx).text_tail(50).contains("sawit-other"),
+                "the command went into the script's terminal"
+            );
+            assert!(shell.read(cx).text_tail(50).contains("sawit-other"));
+            let status = panel
+                .read(cx)
+                .job_status("build", cx)
+                .expect("the script's tab");
+            assert_eq!(status.running, None, "the script reads as running");
+        });
+    }
+
+    /// Commands an agent types (`terminal_input`) mark the shell as used, so opening the
+    /// window's first project moves it there with a `cd` instead of replacing it.
+    #[gpui_kit::test]
+    fn an_agents_input_keeps_its_shell_when_the_first_project_opens(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (_w, panel) = open_panel(cx);
+        let view = cx.update(|cx| panel.read(cx).tab(0).read(cx).focused_view().clone());
+        wait_until(cx, "the shell is at its prompt", |cx| {
+            view.read(cx).at_prompt()
+        });
+        cx.update(|cx| {
+            panel.update(cx, |p, cx| {
+                p.input(Some(0), None, run_bytes("printf 'sawit-%s\\n' typed"), cx)
+            })
+        })
+        .expect("the shell takes input");
+        wait_until(cx, "the shell ran what the agent typed", |cx| {
+            let v = view.read(cx);
+            v.text_tail(50).contains("sawit-typed") && v.at_prompt()
+        });
+        let project = scratch_dir("agent-input-project");
+        cx.update(|cx| {
+            panel.update(cx, |p, cx| {
+                p.set_projects(vec![project.clone()], Some(project.clone()), cx)
+            })
+        });
+        cx.update(|cx| {
+            let tab = panel.read(cx).tab(0).read(cx);
+            assert!(
+                *tab.focused_view() == view,
+                "the shell the agent used was replaced"
+            );
+        });
+        wait_until(cx, "the shell moved to the project", |cx| {
+            view.read(cx).cwd().as_ref() == Some(&project)
+        });
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    /// Running a script again types it into its old shell after a `cd` back to the script's
+    /// folder: its command is relative (`pnpm run dev`, `make build`) and the shell may have
+    /// moved since.
+    #[gpui_kit::test]
+    fn running_a_script_again_goes_back_to_its_folder(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        let home = scratch_dir("script-home");
+        let elsewhere = scratch_dir("script-elsewhere");
+        let start = |cx: &mut TestAppContext, command: &str| {
+            let tag = JobTag {
+                key: "build".into(),
+                name: "build".into(),
+            };
+            cx.update_window(w, |_, window, cx| {
+                panel.update(cx, |p, cx| {
+                    p.start_job(tag, home.clone(), command, Some(Origin::User), window, cx)
+                })
+            })
+            .expect("the test window is open")
+            .expect("the script starts");
+        };
+        start(cx, "printf 'sawit-%s\\n' first");
+        let job = cx.update(|cx| {
+            let p = panel.read(cx);
+            p.tab(p.active_index()).read(cx).focused_view().clone()
+        });
+        wait_until(cx, "the script ran in its folder", |cx| {
+            let v = job.read(cx);
+            v.text_tail(50).contains("sawit-first")
+                && v.at_prompt()
+                && v.cwd().as_ref() == Some(&home)
+        });
+        let cd = format!("cd {}", shell_quote(&elsewhere));
+        cx.update(|cx| job.read(cx).write(run_bytes(&cd)));
+        wait_until(cx, "the script's shell moved", |cx| {
+            let v = job.read(cx);
+            v.at_prompt() && v.cwd().as_ref() == Some(&elsewhere)
+        });
+
+        start(cx, "printf 'sawit-%s\\n' second");
+        wait_until(cx, "the script ran again", |cx| {
+            let v = job.read(cx);
+            v.text_tail(50).contains("sawit-second") && v.at_prompt()
+        });
+        cx.update(|cx| {
+            assert_eq!(
+                job.read(cx).cwd(),
+                Some(home.clone()),
+                "the script ran where its shell had gone"
+            )
+        });
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&elsewhere);
+    }
+
+    /// While the user types in a terminal (here into `cat`, standing in for Claude Code), an
+    /// agent's command runs in another shell without switching tabs or taking the keyboard:
+    /// the rest of what the user types still goes where they were typing.
+    #[gpui_kit::test]
+    fn an_agents_command_leaves_the_typing_user_alone(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        open_tabs(cx, &panel, 1);
+        click_tab(cx, w, &panel, 0);
+        let (user, other) = cx.update(|cx| {
+            let p = panel.read(cx);
+            (p.tab(0).clone(), p.tab(1).read(cx).focused_view().clone())
+        });
+        let typing = cx.update(|cx| user.read(cx).focused_view().clone());
+        ready(cx, &typing);
+        ready(cx, &other);
+        start_cat(cx, &typing);
+
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| {
+                p.run("printf 'sawit-%s\\n' agent", Origin::Agent, window, cx)
+            })
+        })
+        .expect("the test window is open")
+        .expect("a shell runs it");
+        cx.run_until_parked();
+        wait_until(cx, "the agent's command ran in the other shell", |cx| {
+            other.read(cx).text_tail(50).contains("sawit-agent")
+        });
+        assert!(active(cx, &panel) == user, "the agent switched tabs");
+        assert!(has_keyboard(cx, w, &user), "the agent took the keyboard");
+        cx.simulate_keystrokes(w, "x y x y");
+        wait_until(cx, "the user's keys reach cat", |cx| {
+            typing.read(cx).text_tail(50).contains("xyxy")
+        });
+        cx.update(|cx| assert!(!other.read(cx).text_tail(50).contains("xyxy")));
+    }
+
+    /// With the keyboard outside the terminal (an editor, say), an agent's command shows the
+    /// tab it runs in but leaves the keyboard where it is.
+    #[gpui_kit::test]
+    fn an_agents_command_shows_its_tab_but_leaves_the_keyboard(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        open_tabs(cx, &panel, 1);
+        let target = cx.update(|cx| panel.read(cx).tab(0).clone());
+        let shell = cx.update(|cx| target.read(cx).focused_view().clone());
+        // Tab 1 is active and busy, so the command goes to tab 0.
+        let busy = cx.update(|cx| panel.read(cx).tab(1).read(cx).focused_view().clone());
+        ready(cx, &shell);
+        ready(cx, &busy);
+        start_cat(cx, &busy);
+        // The keyboard is elsewhere in the window.
+        let editor = cx.update(|cx| cx.focus_handle());
+        cx.update_window(w, |_, window, cx| window.focus(&editor, cx))
+            .expect("the test window is open");
+
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| {
+                p.run("printf 'sawit-%s\\n' agent", Origin::Agent, window, cx)
+            })
+        })
+        .expect("the test window is open")
+        .expect("a shell runs it");
+        cx.run_until_parked();
+        wait_until(cx, "the agent's command ran", |cx| {
+            shell.read(cx).text_tail(50).contains("sawit-agent")
+        });
+        assert!(
+            active(cx, &panel) == target,
+            "the tab it runs in isn't shown"
+        );
+        let kept = cx
+            .update_window(w, |_, window, _| editor.is_focused(window))
+            .expect("the test window is open");
+        assert!(kept, "the agent took the keyboard");
+    }
+
+    /// An agent's new terminal (terminal_run with new_tab, a Run panel script, an SSH
+    /// session) opens beside the tab the user types in, without switching to it or taking the
+    /// keyboard.
+    #[gpui_kit::test]
+    fn an_agents_new_terminals_open_behind_the_typing_user(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        let user = active(cx, &panel);
+        let check = |cx: &mut TestAppContext, what: &str| {
+            cx.run_until_parked();
+            assert!(active(cx, &panel) == user, "{what} switched tabs");
+            assert!(has_keyboard(cx, w, &user), "{what} took the keyboard");
+        };
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| {
+                p.run_in_new(None, "true", Origin::Agent, window, cx)
+            })
+        })
+        .expect("the test window is open")
+        .expect("a new shell opens");
+        check(cx, "a new tab");
+        let tag = JobTag {
+            key: "dev".into(),
+            name: "dev".into(),
+        };
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| {
+                p.start_job(
+                    tag,
+                    std::env::temp_dir(),
+                    "true",
+                    Some(Origin::Agent),
+                    window,
+                    cx,
+                )
+            })
+        })
+        .expect("the test window is open")
+        .expect("the script starts");
+        check(cx, "a script");
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| {
+                p.open_ssh(test_remote(), Origin::Agent, window, cx)
+            })
+        })
+        .expect("the test window is open")
+        .expect("the session starts");
+        check(cx, "an SSH session");
+        cx.update(|cx| assert_eq!(panel.read(cx).tab_count(), 4));
+    }
+
+    /// When no shell can start for a command, `run` says why instead of naming a terminal: an
+    /// agent would otherwise read the terminal that was active (cat's) as its command's output.
+    #[gpui_kit::test]
+    fn run_says_when_no_shell_can_start(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        let busy = cx.update(|cx| panel.read(cx).tab(0).read(cx).focused_view().clone());
+        ready(cx, &busy);
+        start_cat(cx, &busy);
+        cx.update(|cx| panel.update(cx, |p, _| p.fail_spawns = true));
+
+        let ran = cx
+            .update_window(w, |_, window, cx| {
+                panel.update(cx, |p, cx| {
+                    p.run("printf 'sawit-%s\\n' lost", Origin::Agent, window, cx)
+                })
+            })
+            .expect("the test window is open");
+        assert!(ran.is_err(), "run named terminal {ran:?}");
+        cx.update(|cx| assert_eq!(panel.read(cx).tab_count(), 1));
+        cx.update(|cx| assert!(!busy.read(cx).text_tail(50).contains("lost")));
+    }
+
+    /// The pane `run` typed into, by its place in the tab (as app_state lists panes), is what
+    /// `terminal_run` reports and reads back, rather than the tab's focused pane.
+    #[gpui_kit::test]
+    fn run_names_the_pane_it_typed_into(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let (first, second) = cx.update(|cx| {
+            let tab = panel.read(cx).tab(0).read(cx);
+            let panes = tab.state.layout.panes();
+            (
+                tab.view(panes[0]).unwrap().clone(),
+                tab.view(panes[1]).unwrap().clone(),
+            )
+        });
+        ready(cx, &first);
+        ready(cx, &second);
+        // The user types in the second pane, busy with cat; the agent's command goes to the
+        // first, which doesn't take the tab's focus while the user types.
+        start_cat(cx, &second);
+        let (ix, pane) = cx
+            .update_window(w, |_, window, cx| {
+                panel.update(cx, |p, cx| {
+                    p.run("printf 'sawit-%s\\n' here", Origin::Agent, window, cx)
+                })
+            })
+            .expect("the test window is open")
+            .expect("a shell runs it");
+        cx.update(|cx| {
+            let p = panel.read(cx);
+            assert_eq!((ix, p.pane_index(ix, pane, cx)), (0, Some(0)));
+            assert_ne!(
+                p.tab(0).read(cx).state.focused,
+                pane,
+                "the agent took the focus"
+            );
+        });
+        wait_until(cx, "the command ran in the first pane", |cx| {
+            panel
+                .read(cx)
+                .text(Some(0), Some(0), 50, cx)
+                .is_ok_and(|t| t.contains("sawit-here"))
+        });
+    }
+
+    /// While the user types in one pane of a split tab (into `cat`, standing in for Claude Code)
+    /// and an agent's command runs in the other, the tab's focused pane is the user's. So keys and
+    /// reads for that tab must name their pane: a ctrl-c meant for the agent's command would
+    /// otherwise interrupt the user's program. Named, it stops the agent's command, and `cat`
+    /// keeps running.
+    #[gpui_kit::test]
+    fn a_split_tab_takes_keys_only_for_a_named_pane(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let (agents, users) = cx.update(|cx| {
+            let tab = panel.read(cx).tab(0).read(cx);
+            let panes = tab.state.layout.panes();
+            (
+                tab.view(panes[0]).unwrap().clone(),
+                tab.view(panes[1]).unwrap().clone(),
+            )
+        });
+        ready(cx, &agents);
+        ready(cx, &users);
+        start_cat(cx, &users);
+        let (ix, pane) = cx
+            .update_window(w, |_, window, cx| {
+                panel.update(cx, |p, cx| p.run("sleep 30", Origin::Agent, window, cx))
+            })
+            .expect("the test window is open")
+            .expect("a shell runs it");
+        let pane = cx.update(|cx| panel.read(cx).pane_index(ix, pane, cx));
+        assert_eq!((ix, pane), (0, Some(0)), "the command went elsewhere");
+        wait_until(cx, "the agent's sleep runs", |cx| {
+            agents.read(cx).foreground_name().as_deref() == Some("sleep")
+        });
+
+        let interrupt = |cx: &mut TestAppContext, pane: Option<usize>| {
+            cx.update(|cx| panel.update(cx, |p, cx| p.input(Some(0), pane, vec![0x03], cx)))
+        };
+        let sent = interrupt(cx, None);
+        assert!(
+            sent.as_ref().is_err_and(|e| e.contains("pane")),
+            "keys went to the split tab's focused pane: {sent:?}"
+        );
+        let read = cx.update(|cx| panel.read(cx).text(Some(0), None, 10, cx));
+        assert!(
+            read.as_ref().is_err_and(|e| e.contains("pane")),
+            "the split tab's focused pane was read: {read:?}"
+        );
+
+        interrupt(cx, Some(0)).expect("the agent's pane takes the keys");
+        wait_until(cx, "the agent's sleep stops", |cx| {
+            agents.read(cx).at_prompt()
+        });
+        cx.update(|cx| {
+            assert_eq!(
+                users.read(cx).foreground_name().as_deref(),
+                Some("cat"),
+                "the user's program was interrupted"
+            )
+        });
+    }
+
+    /// A script an agent starts while the user types in a terminal opens behind it, and says where
+    /// it runs: app_run_script names that terminal, which the agent's terminal_read and
+    /// terminal_input need, since the terminal in front is still the user's. A script whose shell
+    /// can't start says why instead.
+    #[gpui_kit::test]
+    fn an_agents_script_says_where_it_runs(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        let user = active(cx, &panel);
+        let typing = cx.update(|cx| user.read(cx).focused_view().clone());
+        ready(cx, &typing);
+        start_cat(cx, &typing);
+        let start = |cx: &mut TestAppContext, key: &str| {
+            let tag = JobTag {
+                key: key.into(),
+                name: key.into(),
+            };
+            cx.update_window(w, |_, window, cx| {
+                panel.update(cx, |p, cx| {
+                    p.start_job(
+                        tag,
+                        std::env::temp_dir(),
+                        "sleep 30",
+                        Some(Origin::Agent),
+                        window,
+                        cx,
+                    )
+                })
+            })
+            .expect("the test window is open")
+        };
+
+        let (ix, pane) = start(cx, "dev").expect("the script starts");
+        assert!(active(cx, &panel) == user, "the script came in front");
+        cx.update(|cx| {
+            let p = panel.read(cx);
+            assert_eq!(p.pane_index(ix, pane, cx), Some(0));
+            assert_eq!(p.job_terminal("dev", cx), Some((ix, 0)));
+        });
+        let script = cx.update(|cx| panel.read(cx).tab(ix).read(cx).focused_view().clone());
+        wait_until(cx, "the script runs", |cx| {
+            script.read(cx).foreground_name().as_deref() == Some("sleep")
+        });
+        cx.update(|cx| panel.update(cx, |p, cx| p.input(Some(ix), Some(0), vec![0x03], cx)))
+            .expect("the script's terminal takes the keys");
+        wait_until(cx, "the script stops", |cx| script.read(cx).at_prompt());
+        cx.update(|cx| {
+            assert_eq!(typing.read(cx).foreground_name().as_deref(), Some("cat"));
+        });
+
+        cx.update(|cx| panel.update(cx, |p, _| p.fail_spawns = true));
+        let failed = start(cx, "build");
+        assert!(
+            failed.is_err(),
+            "a script with no shell started: {failed:?}"
+        );
+        cx.update(|cx| assert_eq!(panel.read(cx).job_terminal("build", cx), None));
+    }
+
+    /// What quitting or closing the window would end: commands in the foreground and live SSH
+    /// sessions. Shells at their prompt and a script's terminal between runs don't count.
+    #[gpui_kit::test]
+    fn running_lists_what_would_end_with_the_app(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        let shell = cx.update(|cx| panel.read(cx).tab(0).read(cx).focused_view().clone());
+        ready(cx, &shell);
+        let tag = JobTag {
+            key: "build".into(),
+            name: "build".into(),
+        };
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| {
+                p.start_job(
+                    tag,
+                    std::env::temp_dir(),
+                    "printf 'sawit-%s\\n' built",
+                    Some(Origin::User),
+                    window,
+                    cx,
+                )
+            })
+        })
+        .expect("the test window is open")
+        .expect("the script starts");
+        let job = active(cx, &panel);
+        let job = cx.update(|cx| job.read(cx).focused_view().clone());
+        wait_until(cx, "the script ran", |cx| {
+            let v = job.read(cx);
+            v.text_tail(50).contains("sawit-built") && v.at_prompt()
+        });
+        let running = |cx: &mut TestAppContext| cx.update(|cx| panel.read(cx).running(cx));
+        assert_eq!(running(cx), Vec::<String>::new());
+
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| {
+                p.open_ssh(test_remote(), Origin::User, window, cx)
+            })
+        })
+        .expect("the test window is open")
+        .expect("the session starts");
+        assert_eq!(running(cx), ["test (SSH)"]);
+
+        start(cx, &shell, "sleep 30", "sleep");
+        assert_eq!(running(cx), ["sleep", "test (SSH)"]);
+    }
+
+    /// A stand-in SSH server: a session that ends once it reads a line.
+    fn test_remote() -> super::Remote {
+        super::Remote {
+            key: "test".into(),
+            name: "test".into(),
+            launch: sawit_core::ssh::Launch {
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), "read line".into()],
+                env: Vec::new(),
+            },
+        }
+    }
 
     #[gpui_kit::test]
     fn a_paste_goes_to_the_focused_pane(cx: &mut TestAppContext) {
@@ -1167,10 +2213,18 @@ mod tests {
         };
         cx.update_window(w, |_, window, cx| {
             panel.update(cx, |p, cx| {
-                p.start_job(tag, std::env::temp_dir(), "true", Some(window), cx)
+                p.start_job(
+                    tag,
+                    std::env::temp_dir(),
+                    "true",
+                    Some(Origin::User),
+                    window,
+                    cx,
+                )
             })
         })
-        .expect("the test window is open");
+        .expect("the test window is open")
+        .expect("the script starts");
         cx.run_until_parked();
         focus_terminal(cx, w, &panel);
         cx.simulate_keystrokes(w, "cmd-d");
@@ -1236,9 +2290,10 @@ mod tests {
         let (w, panel) = open_panel(cx);
         let run = |cx: &mut TestAppContext, commands: &str| {
             cx.update_window(w, |_, window, cx| {
-                panel.update(cx, |p, cx| p.run(commands, window, cx))
+                panel.update(cx, |p, cx| p.run(commands, Origin::User, window, cx))
             })
-            .expect("the test window is open");
+            .expect("the test window is open")
+            .expect("a shell runs it");
         };
         let first = cx.update(|cx| panel.read(cx).tab(0).read(cx).focused_view().clone());
         wait_until(cx, "the shell is at its prompt", |cx| {

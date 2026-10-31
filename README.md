@@ -201,7 +201,8 @@ explained. A conflict on the same address can't be forced.
 - Bottom dock with tabs. Each tab opens a login shell or an SSH session.
 - Each tab can hold split panes. <kbd>⌘D</kbd> splits right, <kbd>⇧⌘D</kbd> splits down, and <kbd>⌥⌘</kbd> + an arrow
   key moves between panes. <kbd>⇧⌘↩</kbd> zooms the focused pane of a split (and maximizes the dock when the tab has
-  one pane). Panes never shrink below 20 columns by 4 rows.
+  one pane). Splitting and dragging a divider stop at 20 columns by 4 rows; shrinking the dock or the window can still
+  make panes smaller.
 - Right-click a pane (or Shift+right-click, even while a program uses the mouse) for the pane menu: Rename pane,
   Split right, Split down, Zoom, Send right-clicks to pane, and Close pane.
 - The **Maximize Terminal** button fills the window with the terminal; click it again to restore the layout you had.
@@ -209,7 +210,13 @@ explained. A conflict on the same address can't be forced.
   and resize.
 - Drag to select text; it's copied when you release the mouse. Shift+drag selects even while a program
   (vim, Claude Code) uses the mouse.
-- New terminals start in the project folder. Shells idle at their prompt follow when you open another project.
+- New terminals start in the project folder. Shells idle at their prompt move to the first project you open in the
+  window.
+- What an agent runs in the terminal (`terminal_run`, `app_run_script`, `app_ssh_connect`) never takes the keyboard:
+  its terminal comes forward unless you're typing in another one, and then it runs in the background. The agent is told
+  which terminal and pane it got, and its keys (`terminal_input`) go only to a terminal it names.
+- Terminals end with the app and with their window. So quitting, closing a window and **Restart to Update** ask
+  first while a terminal runs a command or an SSH session, and name them. Shells waiting at their prompt don't count.
 
 ### Dev tools
 
@@ -373,8 +380,8 @@ explained. A conflict on the same address can't be forced.
   notes of a newer release, and the full history.
 - Sawit checks [GitHub Releases](https://github.com/bahrulbangsawan/sawit.dev/releases) on launch and
   every 4 hours. New versions download in the background. Once ready, a **Restart to Update** button appears in the
-  title bar: the app quits, `Sawit.app` is replaced, and it reopens. Builds from `cargo` only
-  open the releases page.
+  title bar: the app quits, `Sawit.app` is replaced, and it reopens. It asks first while a terminal runs something,
+  since quitting ends it. Builds from `cargo` only open the releases page.
 
 ## Keyboard shortcuts
 
@@ -509,7 +516,8 @@ sawit pupuk bun -y                           # upgrade one tool without asking
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
 The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 117 tools work **without the app**,
-except the app-control ones, which drive the running app (`launch_app` starts it).
+except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
+the agent's project open (or the one `project` names), else the frontmost window.
 
 | Area | Tools |
 |---|---|
@@ -527,7 +535,7 @@ except the app-control ones, which drive the running app (`launch_app` starts it
 | Dev tools | `list_dev_tools` (with newer releases), `install_dev_tools`, `upgrade_dev_tools` |
 | MCP servers | `list_mcp_servers`, `install_mcp_server`, `uninstall_mcp_server` |
 | App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, changelog, git_graph, github, instance, keymap), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
-| Terminal (app running) | `terminal_run`, `terminal_read`, `terminal_input`, `terminal_close` (read, input and close can address one `pane` of a split tab) |
+| Terminal (app running) | `terminal_run`, `terminal_read`, `terminal_input`, `terminal_close` (`terminal_run`, `app_run_script` and `app_ssh_connect` return the tab and `pane` they used; `terminal_input` needs the tab, and a split tab needs its pane) |
 | Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (what the user annotated), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`) |
 | Canvas | `canvas_get`, `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear`, `canvas_load`, `canvas_export`, `canvas_command` (any command of the canvas engine, by id), `canvas_commands` (lists them; pass a `filter` to see what each takes). All of them work on the saved canvas file when the app is closed |
 
@@ -697,6 +705,9 @@ Figures for other apps are not listed because they have not been measured on the
 - With transaction-mode poolers, session settings (`SET`) are not guaranteed to persist. The table browser still only
   runs `SELECT`.
 - Schema diagrams show tables only; views have no keys to relate.
+- Commands typed into a shell for you (Run in Terminal, a preview's Run, an agent's `terminal_run`) go to a shell
+  waiting at its prompt. Sawit can't tell that prompt from a question the shell asks itself, such as `read`, zsh's
+  `rm *` confirmation or a plugin's update prompt while a new shell starts: the command then answers the question.
 
 ## Credits
 

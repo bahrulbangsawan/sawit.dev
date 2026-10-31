@@ -1,5 +1,6 @@
 //! Shared setup for the terminal's GPUI tests.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui_kit::{
@@ -7,7 +8,10 @@ use gpui_kit::{
     WindowOptions, px, size,
 };
 
+use sawit_core::terminal::run_bytes;
+
 use super::TerminalPanel;
+use super::view::TerminalView;
 
 /// How long a test waits on the real shells it starts. A shell takes a moment to start and
 /// to run what it's sent, and seconds when other test binaries run at once (as when several
@@ -22,6 +26,42 @@ pub(super) fn wait_until(cx: &mut TestAppContext, what: &str, ok: impl Fn(&App) 
         assert!(Instant::now() < deadline, "timed out waiting until {what}");
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// Waits until `view`'s shell has finished starting and waits at its prompt. Its rc files can
+/// run programs in the foreground while it starts, with the shell briefly "at its prompt"
+/// between them, so this waits for a command typed after the start to have run. Each call
+/// waits for a word of its own.
+pub(super) fn ready(cx: &mut TestAppContext, view: &Entity<TerminalView>) {
+    static READY: AtomicUsize = AtomicUsize::new(0);
+    let n = READY.fetch_add(1, Ordering::Relaxed);
+    let line = run_bytes(&format!("printf 'sawit-%s\\n' ready-{n}"));
+    cx.update(|cx| view.read(cx).write(line));
+    let word = format!("sawit-ready-{n}");
+    wait_until(cx, "the shell is ready", |cx| {
+        let v = view.read(cx);
+        v.text_tail(50).contains(&word) && v.at_prompt()
+    });
+}
+
+/// Runs `command` in `view`'s ready shell and waits until `program` runs in the foreground:
+/// itself, not the moment of the shell's fork before it (whose process is still the shell).
+pub(super) fn start(
+    cx: &mut TestAppContext,
+    view: &Entity<TerminalView>,
+    command: &str,
+    program: &str,
+) {
+    cx.update(|cx| view.read(cx).write(run_bytes(command)));
+    wait_until(cx, &format!("{program} runs"), |cx| {
+        view.read(cx).foreground_name().as_deref() == Some(program)
+    });
+}
+
+/// Starts `cat` in `view`'s ready shell (standing in for a program the user works in, such as
+/// Claude Code) and waits until it runs in the foreground.
+pub(super) fn start_cat(cx: &mut TestAppContext, view: &Entity<TerminalView>) {
+    start(cx, view, "cat", "cat");
 }
 
 /// Registers the actions and key bindings the terminal tests rely on.
@@ -48,6 +88,15 @@ pub(super) fn open_panel(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<Te
     });
     cx.run_until_parked();
     opened
+}
+
+/// A fresh, empty folder under the temp dir, by its real path (what a
+/// process's cwd reports).
+pub(super) fn scratch_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("sawit-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.canonicalize().unwrap()
 }
 
 /// Gives the keyboard to the active tab's focused pane, so simulated keys

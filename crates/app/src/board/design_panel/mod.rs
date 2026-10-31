@@ -1119,6 +1119,31 @@ mod tests {
         assert_eq!(prop(&view, ids[0], "x", &cx), json!(0.0));
     }
 
+    /// CANVAS-UI-8 for a label's scrub: the canvas's tab is hidden before the button comes up, so
+    /// nothing hears the release. Hiding ends the scrub, kept, as one undo step: the canvas's keys
+    /// work again (a scrub takes every key but Escape), and agents' edits are steps of their own.
+    #[gpui_kit::test]
+    fn hiding_the_canvas_ends_a_label_scrub_kept(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("label-hidden");
+        let path = tmp.0.join("design.figcraft");
+        let ids = design_file(&path, &[rectangle(0.0)]);
+        let (view, mut cx) = open_in_window(cx, &path, &ids);
+        let steps = undo_steps(&view, &cx);
+        let (left, none) = (MouseButton::Left, Modifiers::default());
+        let start = cx.debug_bounds("design-handle-x").unwrap().center();
+        cx.simulate_mouse_down(start, left, none);
+        cx.simulate_mouse_move(start + point(px(10.), px(0.)), left, none);
+        assert_eq!(prop(&view, ids[0], "x", &cx), json!(10.0));
+        cx.update(|window, cx| {
+            let home = cx.focus_handle();
+            view.update(cx, |view, cx| view.set_shown(false, &home, window, cx));
+        });
+        assert!(view.read_with(&cx, |view, _| view.scrub.is_none()));
+        assert_eq!(gesture(&view, &cx), None);
+        assert_eq!(prop(&view, ids[0], "x", &cx), json!(10.0));
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+    }
+
     /// Ruling P5-C3: Escape during a label's scrub puts the value back, before the canvas can
     /// take the key.
     #[gpui_kit::test]
@@ -1417,6 +1442,35 @@ mod tests {
         assert_eq!(value("layout", &cx), Mixed::Absent);
         assert!(drawn(&mut cx, "design-layout-add"));
         assert!(!drawn(&mut cx, "design-align-grid"));
+    }
+
+    /// CANVAS-UI-5, ruling R-TEXTEDIT from the Auto layout section: Add auto layout while a text
+    /// is edited, with a frame among the selection, ends the editing first, as one undo step, and
+    /// is a step of its own. Run inside the open edit, it made no undo step, and the edit stayed
+    /// open over a selection it no longer had.
+    #[gpui_kit::test]
+    fn add_auto_layout_ends_the_text_being_edited_first(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("auto-layout-typing");
+        let path = tmp.0.join("design.figcraft");
+        let mut design = Design::new();
+        let (frame, _) = frame_with_a_child(&mut design, 0.0);
+        let text = design.make(json!({"type": "text", "text": "Hi", "x": 400, "y": 0}));
+        design.save(&path);
+        let (view, mut cx) = open_in_window(cx, &path, &[text]);
+        let steps = undo_steps(&view, &cx);
+        edit_text(&view, text, &mut cx);
+        cx.simulate_input("!");
+        // The frame joins the selection while the text is still edited.
+        select(&view, &[frame], &mut cx);
+        assert!(editing(&view, &cx));
+        click(&mut cx, "design-layout-add");
+        assert!(!editing(&view, &cx));
+        assert_eq!(gesture(&view, &cx), None);
+        let added = panel_value(&view, &[frame], "layout", &cx);
+        assert!(matches!(added, Mixed::Same(_)), "{added:?}");
+        assert_eq!(undo_steps(&view, &cx), steps + 2);
+        let toast = view.read_with(&cx, |view, _| view.toast.clone());
+        assert_eq!(toast, None);
     }
 
     /// The Appearance section: the eye (ruling P5-C17), each corner's radius on its own, and the

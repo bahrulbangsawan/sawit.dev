@@ -21,14 +21,38 @@ use super::store::RunStore;
 use crate::ports::PortsPanel;
 use crate::rt;
 use crate::states::{Banner, Placeholder};
-use crate::terminal::{JobTag, TerminalPanel};
+use crate::terminal::{JobTag, Origin, TerminalPanel};
 
 /// How often running state is checked.
 const POLL: Duration = Duration::from_millis(500);
 /// Scripts are read again every this many polls (files may have changed).
 const RESCAN_EVERY: u32 = 10;
-/// How long a restart waits for the old command to exit.
-const RESTART_WAIT: Duration = Duration::from_secs(5);
+/// How often a restart looks whether the old command has exited.
+const RESTART_POLL: Duration = Duration::from_millis(100);
+
+/// Calls `then` on `this` once `busy` says its old run has stopped, looking
+/// every [`RESTART_POLL`] however long that takes: a dev server's shutdown
+/// hooks, `docker compose` stopping its containers. Starting again before
+/// would only show the old run's terminal. Nothing happens once `this` is
+/// gone.
+fn once_stopped<T: 'static>(
+    busy: impl Fn(&T, &App) -> bool + 'static,
+    then: impl FnOnce(&mut T, &mut Context<T>) + 'static,
+    cx: &mut Context<T>,
+) -> Task<()> {
+    cx.spawn(async move |this, cx| {
+        loop {
+            cx.background_executor().timer(RESTART_POLL).await;
+            let Ok(busy) = this.read_with(cx, |this, cx| busy(this, cx)) else {
+                return;
+            };
+            if !busy {
+                break;
+            }
+        }
+        let _ = this.update(cx, then);
+    })
+}
 
 /// One terminal to start: what to type, where, under which tab.
 #[derive(Clone)]
@@ -39,8 +63,9 @@ pub struct Launch {
 }
 
 pub enum RunEvent {
-    /// Start these terminals (a running one is only shown).
-    Start(Vec<Launch>),
+    /// Start these terminals (a running one is only shown), for whoever
+    /// asked.
+    Start(Vec<Launch>, Origin),
     /// Show the terminal of the script with this key.
     Show(String),
 }
@@ -379,10 +404,18 @@ impl RunPanel {
         }
     }
 
-    pub fn start_named(&mut self, name: &str, cx: &mut Context<Self>) -> Result<(), String> {
+    /// The terminals the row called `name` starts, for an agent (the
+    /// workspace starts them, to say where they run), and whether they all
+    /// run already: they then aren't started twice, only shown.
+    pub fn launches_named(&self, name: &str, cx: &App) -> Result<(Vec<Launch>, bool), String> {
         let item = self.find(name, cx)?;
-        self.start(&item, cx);
-        Ok(())
+        let terminal = self.terminal.read(cx);
+        let running = item.keys().all(|k| {
+            terminal
+                .job_status(k, cx)
+                .is_some_and(|s| s.running.is_some())
+        });
+        Ok((item.launches, running))
     }
 
     pub fn stop_named(&mut self, name: &str, cx: &mut Context<Self>) -> Result<(), String> {
@@ -391,8 +424,8 @@ impl RunPanel {
         Ok(())
     }
 
-    fn start(&mut self, item: &Item, cx: &mut Context<Self>) {
-        cx.emit(RunEvent::Start(item.launches.clone()));
+    fn start(&mut self, item: &Item, origin: Origin, cx: &mut Context<Self>) {
+        cx.emit(RunEvent::Start(item.launches.clone(), origin));
     }
 
     fn stop(&mut self, item: &Item, cx: &mut Context<Self>) {
@@ -405,6 +438,7 @@ impl RunPanel {
     }
 
     /// Stops the item, waits for its commands to exit, then starts it again.
+    /// Its Restart button spins meanwhile; Stop interrupts the old run again.
     fn restart(&mut self, item: &Item, cx: &mut Context<Self>) {
         let Some(first) = item.keys().next().map(str::to_string) else {
             return;
@@ -415,32 +449,22 @@ impl RunPanel {
         self.stop(item, cx);
         let keys: Vec<String> = item.keys().map(str::to_string).collect();
         let launches = item.launches.clone();
-        cx.spawn(async move |this, cx| {
-            let started = std::time::Instant::now();
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(100))
-                    .await;
-                let Ok(busy) = this.update(cx, |this, cx| {
-                    let terminal = this.terminal.read(cx);
-                    keys.iter().any(|k| {
-                        terminal
-                            .job_status(k, cx)
-                            .is_some_and(|s| s.running.is_some())
-                    })
-                }) else {
-                    return;
-                };
-                if !busy || started.elapsed() > RESTART_WAIT {
-                    break;
-                }
-            }
-            let _ = this.update(cx, |this, cx| {
+        once_stopped(
+            move |this: &Self, cx| {
+                let terminal = this.terminal.read(cx);
+                keys.iter().any(|k| {
+                    terminal
+                        .job_status(k, cx)
+                        .is_some_and(|s| s.running.is_some())
+                })
+            },
+            move |this, cx| {
                 this.restarting.remove(&first);
-                cx.emit(RunEvent::Start(launches));
+                cx.emit(RunEvent::Start(launches, Origin::User));
                 cx.notify();
-            });
-        })
+            },
+            cx,
+        )
         .detach();
         cx.notify();
     }
@@ -791,7 +815,11 @@ impl RunPanel {
                                 .xsmall()
                                 .icon(Lucide::RotateCcw)
                                 .loading(restarting)
-                                .tooltip("Restart")
+                                .tooltip(if restarting {
+                                    "Restarting once it has stopped"
+                                } else {
+                                    "Restart"
+                                })
                                 .on_click(cx.listener({
                                     let item = item.clone();
                                     move |this, _, _, cx| {
@@ -828,7 +856,7 @@ impl RunPanel {
                                 let item = item.clone();
                                 move |this, _, _, cx| {
                                     cx.stop_propagation();
-                                    this.start(&item, cx)
+                                    this.start(&item, Origin::User, cx)
                                 }
                             }))
                     }),
@@ -1184,5 +1212,45 @@ impl Render for RunPanel {
                         })
                     }),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::{AppContext as _, TestAppContext};
+
+    use super::{Duration, RESTART_POLL, once_stopped};
+
+    /// A script's terminal, as a restart sees it.
+    struct Job {
+        busy: bool,
+        started: u32,
+    }
+
+    /// A restart starts the script again once its old run has stopped, however long the
+    /// shutdown takes (a dev server's hooks, `docker compose` stopping its containers), and
+    /// never while the old run still runs: the new one would only show the old one's terminal.
+    #[gpui_kit::test]
+    fn a_restart_waits_for_the_old_run_however_long_it_takes(cx: &mut TestAppContext) {
+        let job = cx.new(|_| Job {
+            busy: true,
+            started: 0,
+        });
+        job.update(cx, |_, cx| {
+            once_stopped(|j: &Job, _| j.busy, |j, _| j.started += 1, cx).detach()
+        });
+        for _ in 0..60 {
+            cx.executor().advance_clock(Duration::from_secs(1));
+            cx.run_until_parked();
+        }
+        assert_eq!(
+            job.read_with(cx, |j, _| j.started),
+            0,
+            "it started again while the old run still ran"
+        );
+        job.update(cx, |j, _| j.busy = false);
+        cx.executor().advance_clock(RESTART_POLL);
+        cx.run_until_parked();
+        assert_eq!(job.read_with(cx, |j, _| j.started), 1);
     }
 }

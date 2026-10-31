@@ -33,9 +33,10 @@ const MAX_KEYS: usize = 2;
 /// window (toolbar, layers, canvas, properties), which Sawit's chrome does not have, and
 /// FigCraft's keyboard box selection (`select.area`, ⌥Space or F8): it raises a `selectArea`
 /// request for a box that the arrows move and Enter selects with, and the canvas never draws that
-/// box. The sheet does not advertise them, they get no key binding ([`key_bindings`]), and the
-/// keymap editor doesn't offer them to bind ([`is_offered`]): only a binding written into the
-/// keymap file by hand reaches one.
+/// box. So is the Prototype group, Present (⌥⌘↩) and Preview (⇧Space): they ask for FigCraft's
+/// prototype player, which the canvas doesn't show (CANVAS-UI-6). The sheet does not advertise
+/// them, they get no key binding ([`key_bindings`]), and the keymap editor doesn't offer them to
+/// bind ([`is_offered`]): only a binding written into the keymap file by hand reaches one.
 const NOT_OFFERED: &[&str] = &[
     "view.devMode",
     "view.designPrototype",
@@ -43,6 +44,8 @@ const NOT_OFFERED: &[&str] = &[
     "view.nextRegion",
     "view.previousRegion",
     "select.area",
+    "proto.present",
+    "proto.preview",
 ];
 
 /// Whether the canvas offers command `id` to the keyboard: the policy doesn't hide it
@@ -505,5 +508,37 @@ mod tests {
         // Copy acts on the text being edited.
         assert!(has("cmd-c", "edit.copy", TEXT_CONTEXT));
         assert!(has("cmd-c", "edit.copy", CANVAS_CONTEXT));
+    }
+
+    /// CANVAS-UI-6: the Prototype group's commands, Present (⌥⌘↩) and Preview (⇧Space), open
+    /// FigCraft's prototype player, which the canvas can't show: it drops the player's requests,
+    /// or says "no frame to present". The sheet leaves the group out, and so do the key bindings
+    /// and the keymap editor. Any command a FigCraft bump adds to the group is held to it too.
+    #[test]
+    fn the_prototype_players_commands_get_no_key() {
+        let prototype: Vec<&str> = KEYS
+            .iter()
+            .filter(|binding| binding.group == Group::Prototype)
+            .map(|binding| binding.id)
+            .collect();
+        assert!(prototype.contains(&"proto.present"), "{prototype:?}");
+        assert!(prototype.contains(&"proto.preview"), "{prototype:?}");
+        let bindings = key_bindings();
+        for id in prototype {
+            assert!(!is_offered(id), "{id} is offered");
+            assert!(
+                bindings.iter().all(|binding| binding.id != id),
+                "{id} has a key"
+            );
+        }
+        // ⇧Space and ⌥⌘↩ are no keys of the canvas.
+        for keystroke in ["shift-space", "alt-cmd-enter"] {
+            assert!(
+                bindings
+                    .iter()
+                    .all(|binding| binding.keystroke != keystroke),
+                "{keystroke} is bound"
+            );
+        }
     }
 }

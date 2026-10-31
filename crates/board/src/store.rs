@@ -192,6 +192,9 @@ impl Stamp {
 pub struct Writer {
     tx: Sender<Msg>,
     error: Arc<Mutex<Option<String>>>,
+    /// What a save that wrote a guarded file again where it had gone left to say
+    /// ([`Writer::take_notice`]).
+    notice: Arc<Mutex<Option<String>>>,
     /// The files guarded against saving over another app's or window's changes, with the stamp
     /// of each as the canvas last read or wrote it ([`Writer::guard`]).
     stamps: Arc<Stamps>,
@@ -223,12 +226,13 @@ impl Writer {
     pub fn spawn() -> Self {
         let (tx, rx) = mpsc::channel();
         let error = Arc::new(Mutex::new(None));
+        let notice = Arc::new(Mutex::new(None));
         let stamps = Arc::new(Stamps::default());
         let started = std::thread::Builder::new()
             .name("canvas-save".into())
             .spawn({
-                let (error, stamps) = (error.clone(), stamps.clone());
-                move || run(&rx, &error, &stamps)
+                let (error, notice, stamps) = (error.clone(), notice.clone(), stamps.clone());
+                move || run(&rx, &error, &notice, &stamps)
             });
         let thread = match started {
             Ok(thread) => Some(thread),
@@ -241,6 +245,7 @@ impl Writer {
         Self {
             tx,
             error,
+            notice,
             stamps,
             thread,
         }
@@ -279,6 +284,17 @@ impl Writer {
         lock(&self.stamps).insert(path, read);
     }
 
+    /// The guarded file at `from` was renamed or moved to `to`: saves to `to` are guarded from
+    /// now on with the stamp held of it at `from`, as the canvas last read or wrote it, which the
+    /// move kept ([`Writer::guard`]). Call it once nothing queued for `from` is still to be written
+    /// ([`Writer::flush`]).
+    pub fn follow(&self, from: &Path, to: PathBuf) {
+        let mut stamps = lock(&self.stamps);
+        if let Some(held) = stamps.remove(from) {
+            stamps.insert(to, held);
+        }
+    }
+
     /// Waits until everything queued so far is on disk or has failed ([`Writer::last_error`]).
     pub fn flush(&self) {
         let (ack, done) = mpsc::channel();
@@ -293,6 +309,15 @@ impl Writer {
     /// was made. A later save that goes through clears it; a [`Writer::flush`] alone does not.
     pub fn last_error(&self) -> Option<String> {
         lock(&self.error).clone()
+    }
+
+    /// Takes the note a save left when it wrote a guarded file again where it had gone: the file
+    /// the canvas read or wrote was no longer there (moved, renamed, put in the Trash or deleted
+    /// without the canvas being told), so the save made it again, as FigCraft's own save does,
+    /// rather than lose the edits ([`Writer::guard`]). A sentence for a toast, so that this isn't
+    /// silent (CANVAS-UI-3). `None` when no save did since the last time.
+    pub fn take_notice(&self) -> Option<String> {
+        lock(&self.notice).take()
     }
 }
 
@@ -330,8 +355,14 @@ impl Batch {
 }
 
 /// The writer thread: take everything queued, write the newest save of each path, then answer
-/// whoever waits.
-fn run(rx: &Receiver<Msg>, error: &Mutex<Option<String>>, stamps: &Stamps) {
+/// whoever waits. A save that wrote a guarded file again where it had gone leaves its note in
+/// `notice`.
+fn run(
+    rx: &Receiver<Msg>,
+    error: &Mutex<Option<String>>,
+    notice: &Mutex<Option<String>>,
+    stamps: &Stamps,
+) {
     while let Ok(first) = rx.recv() {
         let mut batch = Batch::default();
         batch.add(first);
@@ -342,8 +373,10 @@ fn run(rx: &Receiver<Msg>, error: &Mutex<Option<String>>, stamps: &Stamps) {
         if !batch.saves.is_empty() {
             let mut failure = None;
             for save in &batch.saves {
-                if let Err(e) = write(save, stamps) {
-                    failure = Some(e);
+                match write(save, stamps) {
+                    Ok(Some(note)) => *lock(notice) = Some(note),
+                    Ok(None) => {}
+                    Err(e) => failure = Some(e),
                 }
             }
             *lock(error) = failure;
@@ -360,15 +393,18 @@ fn run(rx: &Receiver<Msg>, error: &Mutex<Option<String>>, stamps: &Stamps) {
 /// Writes one save. On failure the error is a sentence for the user.
 ///
 /// A save of a guarded file ([`Writer::guard`]) is refused right before its write when the file
-/// changed since the stamp held of it. Once written, the file's new stamp is the one held.
-fn write(save: &Save, stamps: &Stamps) -> Result<(), String> {
+/// changed since the stamp held of it. Once written, the file's new stamp is the one held. When
+/// it had gone (the writer held a stamp of it, and nothing is there now), the save makes it
+/// again, and gives a note that says so ([`Writer::take_notice`]).
+fn write(save: &Save, stamps: &Stamps) -> Result<Option<String>, String> {
     let path = &save.path;
     let failed = |why: String| format!("The canvas couldn't be saved to {}: {why}", path.display());
+    let guarded = lock(stamps).get(path).copied();
+    let gone = matches!(guarded, Some(Some(_))) && Stamp::of(path).is_none();
     make_folder(path).map_err(|e| failed(e.to_string()))?;
     if save.empty {
         keep_backup_before_emptying(path).map_err(failed)?;
     }
-    let guarded = lock(stamps).get(path).copied();
     if let Some(Some(held)) = guarded {
         refuse_overwriting_changes(path, held)?;
     }
@@ -378,7 +414,18 @@ fn write(save: &Save, stamps: &Stamps) -> Result<(), String> {
         // it was read.
         lock(stamps).insert(path.clone(), Stamp::of(path));
     }
-    Ok(())
+    Ok(gone.then(|| written_again(path)))
+}
+
+/// The note of a save that wrote the guarded file at `path` again where it had gone.
+fn written_again(path: &Path) -> String {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let folder = path.parent().unwrap_or(path);
+    format!(
+        "{name} was no longer in {} (moved, renamed or deleted since it was opened or saved \
+         here), so the canvas saved it there again. Close its tab if the file was meant to go.",
+        folder.display()
+    )
 }
 
 /// Refuses a save over the file at `path` when something else wrote to it since the canvas read
@@ -1416,6 +1463,69 @@ mod tests {
         assert!(has_text(&open(&gone).unwrap(), "saved"));
     }
 
+    /// CANVAS-UI-3: a guarded file that went from where the canvas read or wrote it (moved,
+    /// renamed, put in the Trash or deleted elsewhere) is written there again, as FigCraft's rule
+    /// has it, but not silently: the writer leaves a note for the canvas to show, once.
+    #[test]
+    fn a_guarded_file_written_again_where_it_had_gone_leaves_a_note() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("canvas.figcraft");
+        std::fs::write(&path, bytes_with(&["read"])).unwrap();
+        let writer = Writer::spawn();
+        writer.guard(path.clone(), Stamp::of(&path));
+        writer.save(path.clone(), bytes_with(&["one"]), false);
+        writer.flush();
+        assert_eq!(writer.take_notice(), None);
+
+        std::fs::remove_file(&path).unwrap();
+        writer.save(path.clone(), bytes_with(&["two"]), false);
+        writer.flush();
+        assert_eq!(writer.last_error(), None);
+        assert!(has_text(&open(&path).unwrap(), "two"));
+        let note = writer.take_notice().expect("no note");
+        assert!(
+            note.starts_with("canvas.figcraft was no longer in ")
+                && note.contains("saved it there again"),
+            "{note}"
+        );
+        assert_eq!(writer.take_notice(), None);
+        // The next save of the file it wrote is a plain one.
+        writer.save(path.clone(), bytes_with(&["three"]), false);
+        writer.flush();
+        assert_eq!(writer.take_notice(), None);
+
+        // A file that wasn't there when the canvas opened, which its first save makes, is no
+        // file that went: no note.
+        let new = dir.path().join("new.figcraft");
+        writer.guard(new.clone(), Stamp::of(&new));
+        writer.save(new.clone(), bytes_with(&["new"]), false);
+        writer.flush();
+        assert_eq!(writer.take_notice(), None);
+    }
+
+    /// CANVAS-UI-3: the guard of a renamed or moved file follows it, with the stamp the canvas
+    /// held: another app's write to it, at its new place, is still not saved over.
+    #[test]
+    fn a_guard_follows_its_file_to_its_new_place() {
+        let dir = tempdir().unwrap();
+        let (from, to) = (dir.path().join("a.figcraft"), dir.path().join("b.figcraft"));
+        std::fs::write(&from, bytes_with(&["read"])).unwrap();
+        let writer = Writer::spawn();
+        writer.guard(from.clone(), Stamp::of(&from));
+        std::fs::rename(&from, &to).unwrap();
+        writer.follow(&from, to.clone());
+        writer.save(to.clone(), bytes_with(&["mine"]), false);
+        writer.flush();
+        assert_eq!(writer.last_error(), None);
+        assert!(has_text(&open(&to).unwrap(), "mine"));
+        let theirs = bytes_with(&["theirs", "and more"]);
+        std::fs::write(&to, &theirs).unwrap();
+        writer.save(to.clone(), bytes_with(&["mine", "again"]), false);
+        writer.flush();
+        assert!(writer.last_error().is_some());
+        assert_eq!(std::fs::read(&to).unwrap(), theirs);
+    }
+
     #[test]
     fn a_writer_whose_thread_is_gone_reports_saves_and_does_not_hang_on_flush() {
         let (tx, rx) = mpsc::channel();
@@ -1423,6 +1533,7 @@ mod tests {
         let writer = Writer {
             tx,
             error: Arc::default(),
+            notice: Arc::default(),
             stamps: Arc::default(),
             thread: None,
         };

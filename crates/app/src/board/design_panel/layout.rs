@@ -168,9 +168,14 @@ fn add_and_remove(sel: &Rc<DesignSelection>, view: &WeakEntity<BoardView>) -> Ve
 impl BoardView {
     /// Gives the frames of `sel` that have no auto layout one ([`add_layout`]), as one undo step.
     /// The engine selects the frames it gave one; the selection is the user's, so it goes back to
-    /// what it was, the frames that had a layout already among it.
+    /// what it was, the frames that had a layout already among it. A text being typed in on the
+    /// canvas ends first, as before any edit of the panel ([`BoardView::end_text_edit`], ruling
+    /// R-TEXTEDIT, CANVAS-UI-5).
     fn add_auto_layout(&mut self, sel: &DesignSelection, cx: &mut Context<Self>) {
         let edit = add_layout(sel);
+        if !self.end_text_edit(Some(edit.command), cx) {
+            return;
+        }
         self.run(
             |board| {
                 let selection = board.session.selection();

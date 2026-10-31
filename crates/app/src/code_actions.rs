@@ -11,6 +11,7 @@ use gpui_kit::*;
 use sawit_core::terminal::{is_shell_lang, shell_commands};
 
 use crate::cli::workspace_for;
+use crate::terminal::Origin;
 
 /// For `TextView::code_block_actions`.
 pub fn code_block_actions(block: &CodeBlock, _: &mut Window, cx: &mut App) -> AnyElement {
@@ -40,7 +41,9 @@ pub fn code_block_actions(block: &CodeBlock, _: &mut Window, cx: &mut App) -> An
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         if let Some(workspace) = workspace_for(window.window_handle(), cx) {
-                            workspace.update(cx, |w, cx| w.run_in_terminal(&commands, window, cx));
+                            workspace.update(cx, |w, cx| {
+                                let _ = w.run_in_terminal(&commands, Origin::User, window, cx);
+                            });
                         }
                     }),
             )

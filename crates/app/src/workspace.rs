@@ -34,7 +34,7 @@ use crate::mcp_page::McpPage;
 use crate::network::NetworkPanel;
 use crate::ports::{PortsEvent, PortsPanel};
 use crate::prompts::{PromptStore, PromptStoreEvent, PromptView, PromptsEvent, PromptsPanel};
-use crate::run::{RunEvent, RunPanel, RunStore};
+use crate::run::{Launch, RunEvent, RunPanel, RunStore};
 use crate::servers::{ServerDetail, ServerList, ServerStore, ShowServerTab};
 use crate::shell_config::{ShellConfigEvent, ShellConfigPanel};
 use crate::ssh::{SshEvent, SshHostEvent, SshHostView, SshPanel, SshStore, SshStoreEvent};
@@ -43,7 +43,7 @@ use crate::tab_groups::{group_header, group_stripe, project_name};
 use crate::tabs::{
     CloseOp, Slot, TabFlags, active_after, active_after_move, insert_index, to_close,
 };
-use crate::terminal::{TerminalPanel, ToggleMaximize};
+use crate::terminal::{Origin, TerminalPanel, ToggleMaximize};
 use crate::tools_page::{ToolsEvent, ToolsPage};
 use crate::update::{Updater, updater};
 use crate::viewers::{ImageView, PdfView, VideoView};
@@ -52,6 +52,7 @@ use sawit_board::store::{self, board_file};
 use sawit_core::files::{FileKind, classify};
 use sawit_core::instances::AppPaths;
 use sawit_core::recent::RecentProjects;
+use sawit_core::terminal::PaneId;
 use sawit_core::update::Version;
 
 mod control;
@@ -272,6 +273,16 @@ impl Workspace {
         let network_panel = cx.new(|cx| NetworkPanel::new(window, cx));
         let ssh_store = cx.new(SshStore::new);
         let ssh_panel = cx.new(|cx| SshPanel::new(ssh_store.clone(), terminal.clone(), window, cx));
+        // Closing the window ends its terminals: ask while one runs something.
+        crate::terminal::ask_before_closing(window, terminal.downgrade(), cx);
+        // SSH sessions reconnect with their server's settings as they are now.
+        let saved_servers = ssh_store.downgrade();
+        terminal.update(cx, |t, _| {
+            t.set_remote_source(move |key, cx| {
+                let store = saved_servers.upgrade().ok_or("Sawit is closing.")?;
+                store.update(cx, |s, cx| s.remote(key, cx))
+            })
+        });
         let shell_config_panel = cx.new(|cx| ShellConfigPanel::new(window, cx));
         let cli_status = cli_status(cx);
         let updater = updater(cx);
@@ -306,7 +317,7 @@ impl Workspace {
                 &terminal,
                 window,
                 |this, _, _: &ToggleMaximize, window, cx| {
-                    this.toggle_terminal_maximized(window, cx)
+                    this.toggle_terminal_maximized(Origin::User, window, cx)
                 },
             ),
             cx.observe_in(&db, window, |this, db, window, cx| {
@@ -363,7 +374,7 @@ impl Workspace {
                 window,
                 |this, _, event: &SshEvent, window, cx| match event {
                     SshEvent::Connect { key, new } => {
-                        this.connect_ssh(key.clone(), *new, window, cx)
+                        let _ = this.connect_ssh(key.clone(), *new, Origin::User, window, cx);
                     }
                     SshEvent::Edit(id) => this.open_ssh_host(id.clone(), window, cx),
                     SshEvent::OpenFile(path) => {
@@ -467,6 +478,11 @@ impl Workspace {
         self.current().root(cx)
     }
 
+    /// The window's terminal dock.
+    pub fn terminal(&self) -> &Entity<TerminalPanel> {
+        &self.terminal
+    }
+
     /// Files shown in tabs (editors and viewers), for `sawit --wait`.
     pub fn open_files(&self, cx: &App) -> Vec<PathBuf> {
         self.tabs
@@ -502,9 +518,12 @@ impl Workspace {
 
     pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let kind = classify(&path);
-        // Canvas files open on a canvas (spec D14).
+        // Canvas files open on a canvas (spec D14), which takes the keyboard, as a file editor
+        // does once its file has loaded (CANVAS-UI-2).
         if matches!(kind, FileKind::Figcraft | FileKind::Excalidraw) {
-            self.open_board_file(path, kind, cx);
+            if let Some(board) = self.open_board_file(path, kind, cx) {
+                board.update(cx, |board, cx| board.take_keyboard(cx));
+            }
             return;
         }
         let viewer = match kind {
@@ -573,17 +592,22 @@ impl Workspace {
     /// A file has one canvas in the window, whichever of its two names opens it, because two
     /// canvases of one file would each save over the other's edits. A project's canvas file is
     /// that project's canvas tab ([`Self::open_canvas_of`]); any other file's tab is keyed by the
-    /// `.figcraft` file it is bound to, and shown again when the file is opened again.
-    fn open_board_file(&mut self, path: PathBuf, kind: FileKind, cx: &mut Context<Self>) {
+    /// `.figcraft` file it is bound to, and shown again when the file is opened again. The canvas
+    /// shown.
+    fn open_board_file(
+        &mut self,
+        path: PathBuf,
+        kind: FileKind,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<BoardView>> {
         let file = store::bound_file(&path);
         let roots: Vec<Option<PathBuf>> = self.projects.iter().map(|p| p.root(cx)).collect();
         if let Some(root) = canvas_project(&file, roots, &AppPaths::default_macos().root) {
-            self.open_canvas_of(root, cx);
-            return;
+            return self.open_canvas_of(root, cx);
         }
-        if let Some((ix, _)) = self.board_tab(&file, cx) {
+        if let Some((ix, board)) = self.board_tab(&file, cx) {
             self.activate_tab(ix, cx);
-            return;
+            return Some(board);
         }
         let view = cx.new(|cx| match kind {
             FileKind::Excalidraw => BoardView::import(path, cx),
@@ -601,7 +625,7 @@ impl Workspace {
         let group = self.group_of(&file, cx);
         self.push_tab(
             PaneItem::Other {
-                view: view.into(),
+                view: view.clone().into(),
                 key: format!("file\u{0}{}", file.display()).into(),
                 title,
                 icon: crate::board::ICON,
@@ -611,17 +635,19 @@ impl Workspace {
             cx,
         );
         cx.notify();
+        Some(view)
     }
 
     /// The tab of the canvas bound to the `.figcraft` file `file` ([`BoardView::path`]), and the
-    /// canvas, whatever opened it: a project's canvas tab, or a canvas file's.
+    /// canvas, whatever opened it: a project's canvas tab, or a canvas file's. Named through a
+    /// link or as written, it is one file ([`same_canvas_file`]).
     fn board_tab(&self, file: &Path, cx: &App) -> Option<(usize, Entity<BoardView>)> {
         self.tabs.iter().enumerate().find_map(|(ix, tab)| {
             let PaneItem::Other { view, .. } = &tab.item else {
                 return None;
             };
             let board = view.clone().downcast::<BoardView>().ok()?;
-            (board.read(cx).path() == file).then_some((ix, board))
+            same_canvas_file(board.read(cx).path(), file).then_some((ix, board))
         })
     }
 
@@ -680,6 +706,24 @@ impl Workspace {
             },
         );
         self.activate_tab(at, cx);
+    }
+
+    /// Shows the tab at `ix` as the user's click on it or ⌃Tab does ([`Self::activate_tab`]): a
+    /// canvas's takes the keyboard too, as the canvas the user went to ([`BoardView::take_keyboard`],
+    /// CANVAS-UI-2).
+    fn show_tab(&mut self, ix: usize, cx: &mut Context<Self>) {
+        self.activate_tab(ix, cx);
+        if let Some(board) = self.board_at(ix) {
+            board.update(cx, |board, cx| board.take_keyboard(cx));
+        }
+    }
+
+    /// The canvas of the tab at `ix`, if it is a canvas's.
+    fn board_at(&self, ix: usize) -> Option<Entity<BoardView>> {
+        let PaneItem::Other { view, .. } = &self.tabs.get(ix)?.item else {
+            return None;
+        };
+        view.clone().downcast::<BoardView>().ok()
     }
 
     /// Shows the tab at `ix`, unfolding its group and switching to its
@@ -1193,7 +1237,7 @@ impl Workspace {
         if len > 1 {
             let ix = (self.active as isize + step).rem_euclid(len) as usize;
             self.show_center(cx);
-            self.activate_tab(ix, cx);
+            self.show_tab(ix, cx);
         }
     }
 
@@ -1232,7 +1276,7 @@ impl Workspace {
         if canvas_shown && !terminal_focused || self.canvas_maximized {
             self.toggle_canvas_maximized(cx);
         } else {
-            self.toggle_terminal_maximized(window, cx);
+            self.toggle_terminal_maximized(Origin::User, window, cx);
         }
     }
 
@@ -1386,7 +1430,7 @@ impl Workspace {
                             }))
                     })
                     .when_some(color, |el, color| el.child(group_stripe(color, active)))
-                    .on_click(cx.listener(move |this, _, _, cx| this.activate_tab(ix, cx)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.show_tab(ix, cx)))
                     .context_menu(move |menu, window, cx| {
                         Self::tab_menu(
                             weak.clone(),
@@ -1715,14 +1759,9 @@ impl Workspace {
             self.layout.toggle(Area::Terminal);
         }
         match event {
-            RunEvent::Start(launches) => {
-                let last = launches.len().saturating_sub(1);
-                self.terminal.update(cx, |t, cx| {
-                    for (i, l) in launches.iter().enumerate() {
-                        let window = (i == last).then_some(&mut *window);
-                        t.start_job(l.tag.clone(), l.dir.clone(), &l.command, window, cx);
-                    }
-                });
+            // A terminal that can't start says why in the dock.
+            RunEvent::Start(launches, origin) => {
+                let _ = self.start_scripts(launches, *origin, window, cx);
             }
             RunEvent::Show(key) => {
                 self.terminal
@@ -1732,15 +1771,54 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Types `commands` into this window's terminal, showing it if hidden.
-    pub fn run_in_terminal(&mut self, commands: &str, window: &mut Window, cx: &mut Context<Self>) {
+    /// Starts the terminals of a Run panel row (a running one is only
+    /// shown), showing the dock if hidden; the last one shows as `origin`
+    /// allows. Returns why the first that couldn't start didn't, once the
+    /// others have started.
+    fn start_scripts(
+        &mut self,
+        launches: &[Launch],
+        origin: Origin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if !self.layout.terminal {
+            self.layout.toggle(Area::Terminal);
+        }
+        let last = launches.len().saturating_sub(1);
+        let started: Vec<_> = self.terminal.update(cx, |t, cx| {
+            launches
+                .iter()
+                .enumerate()
+                .map(|(i, l)| {
+                    let show = (i == last).then_some(origin);
+                    t.start_job(l.tag.clone(), l.dir.clone(), &l.command, show, window, cx)
+                })
+                .collect()
+        });
+        cx.notify();
+        started.into_iter().try_for_each(|s| s.map(drop))
+    }
+
+    /// Types `commands` into this window's terminal, showing the dock if
+    /// hidden; the terminal shows as `origin` allows. Returns the tab and
+    /// pane it typed into, or why no shell could start.
+    pub fn run_in_terminal(
+        &mut self,
+        commands: &str,
+        origin: Origin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(usize, PaneId), String> {
         self.leave_welcome(TERMINAL_ONLY, cx);
         if !self.layout.terminal {
             self.layout.toggle(Area::Terminal);
         }
-        self.terminal
-            .update(cx, |t, cx| t.run(commands, window, cx));
+        let ran = self
+            .terminal
+            .update(cx, |t, cx| t.run(commands, origin, window, cx));
         cx.notify();
+        ran
     }
 
     fn toggle_area(&mut self, area: Area, cx: &mut Context<Self>) {
@@ -1751,8 +1829,14 @@ impl Workspace {
     }
 
     /// Fills the window with the terminal, or puts back the layout it
-    /// replaced (everything, if that was terminal-only too).
-    fn toggle_terminal_maximized(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// replaced (everything, if that was terminal-only too). For the user
+    /// the terminal takes the keyboard; an agent leaves it where it is.
+    fn toggle_terminal_maximized(
+        &mut self,
+        origin: Origin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.canvas_maximized = false;
         if self.layout == TERMINAL_ONLY {
             self.layout = self.unmaximized.take().unwrap_or_default();
@@ -1760,7 +1844,9 @@ impl Workspace {
             self.unmaximized = Some(self.layout);
             self.layout = TERMINAL_ONLY;
         }
-        self.terminal.update(cx, |t, cx| t.focus_active(window, cx));
+        if origin == Origin::User {
+            self.terminal.update(cx, |t, cx| t.focus_active(window, cx));
+        }
         cx.notify();
     }
 
@@ -1796,32 +1882,46 @@ impl Workspace {
     }
 
     /// Shows a session to the server with `key` in the terminal dock: the
-    /// open one, unless `new` or there is none.
-    fn connect_ssh(&mut self, key: String, new: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// open one, unless `new` or there is none. It shows as `origin` allows.
+    /// Returns the session's tab and pane, or why there is none: when the
+    /// server's settings are incomplete, the user gets them in a tab.
+    fn connect_ssh(
+        &mut self,
+        key: String,
+        new: bool,
+        origin: Origin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(usize, PaneId), String> {
         self.leave_welcome(Layout::default(), cx);
         if !self.layout.terminal {
             self.layout.toggle(Area::Terminal);
         }
         if !new
-            && self
+            && let Some(found) = self
                 .terminal
-                .update(cx, |t, cx| t.focus_ssh(&key, window, cx))
+                .update(cx, |t, cx| t.focus_ssh(&key, origin, window, cx))
         {
             cx.notify();
-            return;
+            return Ok(found);
         }
-        match self.ssh_store.update(cx, |s, cx| s.remote(&key, cx)) {
+        let opened = match self.ssh_store.update(cx, |s, cx| s.remote(&key, cx)) {
             Ok(remote) => self
                 .terminal
-                .update(cx, |t, cx| t.open_ssh(remote, Some(window), cx)),
-            // Settings are incomplete: show them.
-            Err(_) => {
-                if let Some(id) = key.strip_prefix("ssh\u{0}") {
+                .update(cx, |t, cx| t.open_ssh(remote, origin, window, cx)),
+            Err(problem) => {
+                if origin == Origin::User
+                    && let Some(id) = key.strip_prefix("ssh\u{0}")
+                {
                     self.open_ssh_host(id.to_string(), window, cx);
                 }
+                Err(format!(
+                    "{problem} Fix the server's settings (update_ssh_host), then connect again."
+                ))
             }
-        }
+        };
         cx.notify();
+        opened
     }
 
     /// Opens a saved server's settings in its own tab (one per server).
@@ -1835,7 +1935,7 @@ impl Workspace {
                 &view,
                 window,
                 |this, _, SshHostEvent::Connect(key), window, cx| {
-                    this.connect_ssh(key.clone(), false, window, cx)
+                    let _ = this.connect_ssh(key.clone(), false, Origin::User, window, cx);
                 },
             )
             .detach();
@@ -1890,20 +1990,40 @@ impl Workspace {
     }
 
     /// Open tabs of a renamed or moved file (or of files in a moved folder)
-    /// follow it.
+    /// follow it: a file editor's, and a canvas file's, whose canvas saves
+    /// there from now on ([`BoardView::rebind`], CANVAS-UI-3). A project's
+    /// canvas stays the project's, `.nyawit/canvas.figcraft` by definition.
     fn follow_move(&mut self, from: &Path, to: &Path, cx: &mut Context<Self>) {
-        for tab in &self.tabs {
-            if let PaneItem::File(editor) = &tab.item {
-                editor.update(cx, |e, cx| {
-                    if let Ok(rest) = e.path.strip_prefix(from) {
-                        e.path = if rest.as_os_str().is_empty() {
-                            to.to_path_buf()
-                        } else {
-                            to.join(rest)
-                        };
+        for tab in &mut self.tabs {
+            match &mut tab.item {
+                PaneItem::File(editor) => editor.update(cx, |e, cx| {
+                    if let Some(path) = moved_to(&e.path, from, to) {
+                        e.path = path;
                         cx.notify();
                     }
-                });
+                }),
+                PaneItem::Other {
+                    view,
+                    key,
+                    title,
+                    file,
+                    ..
+                } if key.starts_with("file\u{0}") => {
+                    let Ok(board) = view.clone().downcast::<BoardView>() else {
+                        continue;
+                    };
+                    let Some(path) = moved_to(board.read(cx).path(), from, to) else {
+                        continue;
+                    };
+                    board.update(cx, |board, cx| board.rebind(path.clone(), cx));
+                    *key = format!("file\u{0}{}", path.display()).into();
+                    *title = (path.file_name())
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                        .into();
+                    *file = Some(path);
+                }
+                PaneItem::Other { .. } | PaneItem::Server => {}
             }
         }
         cx.notify();
@@ -2113,6 +2233,16 @@ impl Workspace {
         self.open_canvas_of(root, cx)
     }
 
+    /// Opens the active project's canvas as the user's ⌃⌘C and the title bar's Canvas button do:
+    /// with the keyboard ([`BoardView::take_keyboard`], CANVAS-UI-2). An agent's canvas op and
+    /// `app_open_page canvas` open it without ([`Self::open_canvas`]), leaving the keyboard where
+    /// the user has it.
+    fn show_canvas(&mut self, cx: &mut Context<Self>) {
+        if let Some(board) = self.open_canvas(cx) {
+            board.update(cx, |board, cx| board.take_keyboard(cx));
+        }
+    }
+
     /// Opens the canvas of the project at `root`, or the app-wide one for `None`, as
     /// [`Self::open_canvas`] opens the active project's. A canvas whose file is open in a canvas
     /// file's tab already (opened before its project was in this window) is that tab: two
@@ -2148,7 +2278,7 @@ impl Workspace {
             self.activate_tab(ix, cx);
             return Some(board);
         }
-        let view = cx.new(|cx| BoardView::open(file, cx));
+        let view = cx.new(|cx| BoardView::open(file.clone(), cx));
         cx.subscribe(&view, |this, _, _: &ToggleCanvasMaximize, cx| {
             this.toggle_canvas_maximized(cx)
         })
@@ -2161,7 +2291,8 @@ impl Workspace {
                 key,
                 title: crate::board::TITLE.into(),
                 icon: crate::board::ICON,
-                file: None,
+                // The file it shows, for `sawit --wait` on it (CANVAS-UI-7) and app_state.
+                file: Some(file),
             },
             root,
             cx,
@@ -2289,6 +2420,25 @@ impl Workspace {
         )
     }
 
+    /// Tells each canvas whether its tab is on screen ([`BoardView::set_shown`]), as
+    /// [`Self::sync_browser`] tells the browser: the active tab, while the tab area shows. Each
+    /// render checks, because the layout and the active tab change in many places. A canvas taken
+    /// off screen ends what it held of the pointer, which nothing would hear the release of, and
+    /// gives the keyboard, if it had it, to the workspace, which a canvas shown again takes it
+    /// back from. Those going off screen are told first, so that the one coming on screen finds
+    /// the keyboard where they left it, whatever their order.
+    fn sync_boards(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let center = self.welcome.is_none() && self.layout.center;
+        let home = self.focus.clone();
+        let mut boards: Vec<(Entity<BoardView>, bool)> = (0..self.tabs.len())
+            .filter_map(|ix| Some((self.board_at(ix)?, center && ix == self.active)))
+            .collect();
+        boards.sort_by_key(|(_, shown)| *shown);
+        for (board, shown) in boards {
+            board.update(cx, |board, cx| board.set_shown(shown, &home, window, cx));
+        }
+    }
+
     /// Keeps the browser's native webview in step with what is on screen:
     /// it draws above GPUI, so it is hidden unless its tab is showing.
     fn sync_browser(&mut self, cx: &mut Context<Self>) {
@@ -2393,7 +2543,9 @@ impl Workspace {
                 &view,
                 window,
                 |this, _, e: &ToolsEvent, window, cx| match e {
-                    ToolsEvent::RunInTerminal(command) => this.run_in_terminal(command, window, cx),
+                    ToolsEvent::RunInTerminal(command) => {
+                        let _ = this.run_in_terminal(command, Origin::User, window, cx);
+                    }
                 },
             )
             .detach();
@@ -2530,11 +2682,7 @@ impl Workspace {
                         &InstallUpdate,
                         Some("Workspace"),
                     )
-                    .on_click(
-                        cx.listener(|this, _, _, cx| {
-                            this.updater.update(cx, |u, cx| u.restart(cx))
-                        }),
-                    )
+                    .on_click(|_, _, cx| crate::update::restart(cx))
             }))
             .child(
                 group()
@@ -2549,9 +2697,7 @@ impl Workspace {
                                 &OpenCanvas,
                                 Some("Workspace"),
                             )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.open_canvas(cx);
-                            })),
+                            .on_click(cx.listener(|this, _, _, cx| this.show_canvas(cx))),
                     )
                     .child(
                         Button::new("open-browser")
@@ -2714,6 +2860,7 @@ impl Render for Workspace {
             self.focus.focus(window, cx);
         }
         self.sync_canvas_maximized();
+        self.sync_boards(window, cx);
         self.sync_browser(cx);
         v_flex()
             .key_context("Workspace")
@@ -2797,9 +2944,7 @@ impl Render for Workspace {
                     this.show_panel(SidebarTab::Prompts, cx)
                 }),
             )
-            .on_action(cx.listener(|this, _: &OpenCanvas, _, cx| {
-                this.open_canvas(cx);
-            }))
+            .on_action(cx.listener(|this, _: &OpenCanvas, _, cx| this.show_canvas(cx)))
             .on_action(cx.listener(|this, _: &OpenDevTools, w, cx| this.open_tools_page(w, cx)))
             .on_action(cx.listener(|this, _: &OpenMcp, _, cx| this.open_mcp_page(cx)))
             .on_action(cx.listener(|this, _: &OpenKeymapEditor, w, cx| {
@@ -2815,7 +2960,7 @@ impl Render for Workspace {
                 // Installs a pending update, else checks for one and shows
                 // the changelog page, where the result appears.
                 if this.updater.read(cx).pending().is_some() {
-                    this.updater.update(cx, |u, cx| u.restart(cx));
+                    crate::update::restart(cx);
                 } else {
                     this.updater.update(cx, |u, cx| u.check(cx));
                     this.show_center(cx);
@@ -2855,9 +3000,21 @@ fn cached(view: AnyView) -> AnyElement {
         .into_any_element()
 }
 
+/// Where `path` is once `from` has been renamed or moved to `to`: `to` itself, or for a path in a
+/// moved folder its place in `to`. `None` when the move left it where it was.
+fn moved_to(path: &Path, from: &Path, to: &Path) -> Option<PathBuf> {
+    let rest = path.strip_prefix(from).ok()?;
+    Some(if rest.as_os_str().is_empty() {
+        to.to_path_buf()
+    } else {
+        to.join(rest)
+    })
+}
+
 /// The project that `file` is the canvas file of (spec D5), among `roots`, the folders of the
 /// window's projects: `Some` of its folder as `roots` has it, which is `None` for a project with no
-/// folder (its canvas is the app's own, in `app_root`). `None` when it is no project's.
+/// folder (its canvas is the app's own, in `app_root`). `None` when it is no project's. Named
+/// through a link or as written, it is one file ([`same_canvas_file`]).
 fn canvas_project(
     file: &Path,
     roots: impl IntoIterator<Item = Option<PathBuf>>,
@@ -2865,7 +3022,17 @@ fn canvas_project(
 ) -> Option<Option<PathBuf>> {
     roots
         .into_iter()
-        .find(|root| board_file(root.as_deref(), app_root) == file)
+        .find(|root| same_canvas_file(&board_file(root.as_deref(), app_root), file))
+}
+
+/// Whether `a` and `b` name one canvas file: as written, or through the links on their way, the
+/// file there yet or not (CANVAS-UI-4). An agent's `app_open` passes its path as given, where the
+/// CLI's paths and the projects' folders are resolved: `/tmp/p/x.figcraft` is
+/// `/private/tmp/p/x.figcraft` on macOS. Two canvases of one file would each save over the
+/// other's edits.
+fn same_canvas_file(a: &Path, b: &Path) -> bool {
+    use sawit_core::files::resolve;
+    a == b || resolve(a) == resolve(b)
 }
 
 #[cfg(test)]
@@ -2875,7 +3042,9 @@ mod tests {
 
     use gpui_kit::Modifiers;
 
-    use super::{CENTER_ONLY, bindings, canvas_project, settle_canvas_fill, toggle_canvas_fill};
+    use super::{
+        CENTER_ONLY, bindings, canvas_project, moved_to, settle_canvas_fill, toggle_canvas_fill,
+    };
     use crate::layout::{Area, Layout};
 
     /// A keystroke written as `ctrl-alt-shift-cmd-key`.
@@ -2913,6 +3082,62 @@ mod tests {
         let app_canvas = Path::new("/support/sawit/canvas.figcraft");
         let folders = [Some(PathBuf::from("/work/a"))];
         assert_eq!(canvas_project(app_canvas, folders, app), None);
+    }
+
+    /// A renamed or moved file, and the files of a moved folder, are where the move put them:
+    /// the tabs of file editors and of canvas files follow them there (CANVAS-UI-3).
+    #[test]
+    fn a_moved_path_is_found_where_the_move_put_it() {
+        let (from, to) = (Path::new("/p/sub"), Path::new("/p/moved"));
+        let moved = |path: &str| moved_to(Path::new(path), from, to);
+        assert_eq!(moved("/p/sub"), Some(PathBuf::from("/p/moved")));
+        assert_eq!(
+            moved("/p/sub/a.figcraft"),
+            Some(PathBuf::from("/p/moved/a.figcraft"))
+        );
+        assert_eq!(
+            moved("/p/sub/deeper/b.figcraft"),
+            Some(PathBuf::from("/p/moved/deeper/b.figcraft"))
+        );
+        // Beside it, or with a name that only starts the same: where it was.
+        assert_eq!(moved("/p/other.figcraft"), None);
+        assert_eq!(moved("/p/sub2/a.figcraft"), None);
+        assert_eq!(moved("/p"), None);
+    }
+
+    /// CANVAS-UI-4: a project's canvas file named through a link (an agent's `app_open` of
+    /// `/tmp/p/.nyawit/canvas.figcraft` for the project at `/private/tmp/p`, `/tmp` being a link
+    /// on macOS) is that project's canvas still, whether `.nyawit/` is there yet or not: one
+    /// canvas per file. Compared as written, it was a file of its own, and a second canvas of it
+    /// opened in a tab, whose saves the first one's refused.
+    #[test]
+    fn a_projects_canvas_file_named_through_a_link_is_that_projects_canvas() {
+        let scratch = std::env::temp_dir().join(format!(
+            "sawit-workspace-{}-canvas-link",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let project = scratch.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let link = scratch.join("link");
+        std::os::unix::fs::symlink(&project, &link).unwrap();
+        let app = Path::new("/support/sawit");
+        let roots = || vec![Some(project.clone()), None];
+        let aliased = link.join(".nyawit").join("canvas.figcraft");
+        assert_eq!(
+            canvas_project(&aliased, roots(), app),
+            Some(Some(project.clone()))
+        );
+        std::fs::create_dir_all(project.join(".nyawit")).unwrap();
+        std::fs::write(project.join(".nyawit/canvas.figcraft"), b"").unwrap();
+        assert_eq!(
+            canvas_project(&aliased, roots(), app),
+            Some(Some(project.clone()))
+        );
+        // Another file through the link is still one of its own.
+        let other = link.join(".nyawit").join("sketch.figcraft");
+        assert_eq!(canvas_project(&other, roots(), app), None);
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     #[test]

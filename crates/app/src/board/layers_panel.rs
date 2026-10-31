@@ -526,8 +526,12 @@ impl BoardView {
         cx.notify();
     }
 
-    /// Ends the rename going on, if any, keeping what was typed: another one starts.
-    fn keep_typed_name(&mut self, cx: &mut Context<Self>) {
+    /// Ends the rename going on, if any, keeping what was typed: another one starts, or a press
+    /// on the canvas or a scrub of the Design panel is about to open a gesture that would take
+    /// the name into it ([`BoardView::commit_focused_field`]). Its field leaves with it, and with
+    /// the field its subscription, so the loss of the keyboard it hears after the next frame
+    /// keeps nothing twice.
+    pub(super) fn keep_typed_name(&mut self, cx: &mut Context<Self>) {
         if let Some(field) = self.layers.field.take() {
             let typed = field.input.read(cx).value().to_string();
             self.finish_rename(field.target, &typed, cx);
@@ -2241,6 +2245,175 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(selection(&view, &cx), [other]);
         assert_eq!(reads(&view, note, &cx), "new");
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+        assert_eq!(toast(&view, &cx), None);
+    }
+
+    /// A design file with two 50 × 50 rectangles: Card at (0, 0) and Other at (200, 0).
+    fn card_and_other(path: &Path) -> (NodeId, NodeId) {
+        let mut doc = Document::new("Design");
+        let page = doc.first_page().unwrap();
+        let card = add(&mut doc, page, NodeKind::Rectangle, "Card");
+        let other = doc
+            .create(page, NodeKind::Rectangle, "Other", 200.0, 0.0, 50.0, 50.0)
+            .unwrap();
+        write(path, doc);
+        (card, other)
+    }
+
+    /// Double-clicks layer `id`'s row and types "Hero" in it, with no Enter: typed, and not kept
+    /// yet.
+    fn type_hero_in_the_row(view: &Entity<BoardView>, id: NodeId, cx: &mut VisualTestContext) {
+        let at = middle(cx, row(id));
+        double_click(cx, at);
+        assert_eq!(view.read_with(cx, |view, _| view.renaming), Some(id));
+        cx.simulate_keystrokes("H e r o");
+        assert_eq!(name_of(view, id, cx), "Card");
+    }
+
+    /// The labels of the canvas file's last undo steps, the next one first.
+    fn undo_labels(view: &Entity<BoardView>, cx: &TestAppContext) -> Vec<String> {
+        view.read_with(cx, |view, _| view.board().unwrap().session.undo_labels(4))
+    }
+
+    /// CANVAS-UI-1, the Design panel's final review I1 for the layers panel: a name typed in a
+    /// row, then a press on a layer on the canvas, with no Enter. The name is kept before the
+    /// press reaches the tools, as an undo step of its own. The field hears that it lost the
+    /// keyboard only in the frame drawn after the press, inside the move the press opened, and a
+    /// click's release (a move that didn't move is cancelled) took the name back with it.
+    #[gpui_kit::test]
+    fn a_name_typed_then_a_click_on_a_layer_stays(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("layers-typed-then-click");
+        let path = tmp.0.join("design.figcraft");
+        let (card, other) = card_and_other(&path);
+        let (view, mut cx) = open_in_window(cx, &path);
+        let steps = undo_steps(&view, &cx);
+        let (left, none) = (MouseButton::Left, Modifiers::default());
+        // A click on the layer being renamed.
+        type_hero_in_the_row(&view, card, &mut cx);
+        let at = middle_of(&view, card, &cx);
+        cx.simulate_mouse_down(at, left, none);
+        cx.run_until_parked();
+        cx.simulate_mouse_up(at, left, none);
+        cx.run_until_parked();
+        assert_eq!(name_of(&view, card, &cx), "Hero");
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+        assert_eq!(undo_labels(&view, &cx)[0], "Rename");
+        assert!(!drawn(&mut cx, "layers-rename"));
+        // A click on another layer.
+        change(&view, &mut cx, |view, cx| {
+            view.rename_layer(card, "Card", cx)
+        });
+        let steps = undo_steps(&view, &cx);
+        type_hero_in_the_row(&view, card, &mut cx);
+        let at = middle_of(&view, other, &cx);
+        cx.simulate_mouse_down(at, left, none);
+        cx.run_until_parked();
+        cx.simulate_mouse_up(at, left, none);
+        cx.run_until_parked();
+        assert_eq!(name_of(&view, card, &cx), "Hero");
+        assert_eq!(selection(&view, &cx), [other]);
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+        assert_eq!(toast(&view, &cx), None);
+    }
+
+    /// CANVAS-UI-1, with a drag: the press that starts it keeps the typed name first, and the
+    /// drag's preview, rebuilt from the document as the press found it, keeps it too. The move and
+    /// the name are an undo step each.
+    #[gpui_kit::test]
+    fn a_name_typed_then_a_drag_on_a_layer_stays(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("layers-typed-then-drag");
+        let path = tmp.0.join("design.figcraft");
+        let (card, _) = card_and_other(&path);
+        let (view, mut cx) = open_in_window(cx, &path);
+        let steps = undo_steps(&view, &cx);
+        type_hero_in_the_row(&view, card, &mut cx);
+        let (left, none) = (MouseButton::Left, Modifiers::default());
+        let at = middle_of(&view, card, &cx);
+        let x = |cx: &VisualTestContext| {
+            view.read_with(cx, |view, _| {
+                let doc = view.board().unwrap().doc().unwrap();
+                doc.world_bounds(card).unwrap().x0
+            })
+        };
+        let before = x(&cx);
+        cx.simulate_mouse_down(at, left, none);
+        cx.run_until_parked();
+        for dx in [10., 20., 30., 40.] {
+            cx.simulate_mouse_move(at + point(px(dx), px(0.)), left, none);
+        }
+        cx.simulate_mouse_up(at + point(px(40.), px(0.)), left, none);
+        cx.run_until_parked();
+        assert_eq!(name_of(&view, card, &cx), "Hero");
+        assert!(x(&cx) > before, "the drag didn't move the layer");
+        assert_eq!(undo_steps(&view, &cx), steps + 2);
+        assert_eq!(undo_labels(&view, &cx)[..2], ["Move", "Rename"]);
+    }
+
+    /// CANVAS-UI-1 for a page: a page's name typed in its row, then a click on a layer.
+    #[gpui_kit::test]
+    fn a_page_name_typed_then_a_click_on_a_layer_stays(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("layers-page-typed-then-click");
+        let path = tmp.0.join("design.figcraft");
+        let (card, _) = card_and_other(&path);
+        let (view, mut cx) = open_in_window(cx, &path);
+        let (_, page) = pages(&view, &cx);
+        let steps = undo_steps(&view, &cx);
+        let at = middle(&mut cx, selector(format!("layers-page-{}", page.0)));
+        double_click(&mut cx, at);
+        let renaming = view.read_with(&cx, |view, _| view.layers.renaming_page);
+        assert_eq!(renaming, Some(page));
+        cx.simulate_keystrokes("C o v e r");
+        let (left, none) = (MouseButton::Left, Modifiers::default());
+        let at = middle_of(&view, card, &cx);
+        cx.simulate_mouse_down(at, left, none);
+        cx.run_until_parked();
+        cx.simulate_mouse_up(at, left, none);
+        cx.run_until_parked();
+        assert_eq!(name_of(&view, page, &cx), "Cover");
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+    }
+
+    /// CANVAS-UI-1 for the Design panel's scrubs: a name typed in a row, then a scrub that is put
+    /// back with Escape, of a label's drag or of a colour picker. The name is kept before the
+    /// scrub begins, as an undo step of its own, which the Escape doesn't take back.
+    #[gpui_kit::test]
+    fn a_name_typed_then_a_scrub_put_back_stays(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("layers-typed-then-scrub");
+        let path = tmp.0.join("design.figcraft");
+        let (card, _) = card_and_other(&path);
+        let (view, mut cx) = open_in_window(cx, &path);
+        change(&view, &mut cx, |view, _| {
+            let params = json!({"ids": [card], "props": {"fills": ["#D9D9D9"]}});
+            view.board_mut()
+                .unwrap()
+                .execute("node.set", &params)
+                .unwrap();
+        });
+        let steps = undo_steps(&view, &cx);
+        // A label's drag, put back.
+        type_hero_in_the_row(&view, card, &mut cx);
+        let (left, none) = (MouseButton::Left, Modifiers::default());
+        let start = cx.debug_bounds("design-handle-x").unwrap().center();
+        cx.simulate_mouse_down(start, left, none);
+        cx.run_until_parked();
+        cx.simulate_mouse_move(start + point(px(10.), px(0.)), left, none);
+        cx.simulate_keystrokes("escape");
+        cx.simulate_mouse_up(start + point(px(10.), px(0.)), left, none);
+        cx.run_until_parked();
+        assert_eq!(name_of(&view, card, &cx), "Hero");
+        assert_eq!(undo_steps(&view, &cx), steps + 1);
+        // A colour picker, put back.
+        change(&view, &mut cx, |view, cx| {
+            view.rename_layer(card, "Card", cx)
+        });
+        let steps = undo_steps(&view, &cx);
+        type_hero_in_the_row(&view, card, &mut cx);
+        click(&mut cx, "design-fills-0-swatch");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!(name_of(&view, card, &cx), "Hero");
         assert_eq!(undo_steps(&view, &cx), steps + 1);
         assert_eq!(toast(&view, &cx), None);
     }

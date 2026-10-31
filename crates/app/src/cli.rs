@@ -27,6 +27,7 @@ use sawit_core::kebun;
 use sawit_core::probe::find_in_path;
 
 use crate::rt;
+use crate::terminal::TerminalPanel;
 use crate::workspace::{Answer, Workspace};
 
 actions!(sawit, [InstallCli, Quit, NewWindow, OpenFolder]);
@@ -255,7 +256,8 @@ pub fn init(cx: &mut App) {
     });
     cx.set_global(GlobalCliStatus(status));
     cx.on_action(|_: &InstallCli, cx| install_cli(cx));
-    cx.on_action(|_: &Quit, cx| cx.quit());
+    // The question goes up outside the window update a key press runs in.
+    cx.on_action(|_: &Quit, cx| cx.defer(quit));
     cx.on_action(|_: &NewWindow, cx| {
         if let Some((handle, _)) = open_window(None, cx) {
             let _ = handle.update(cx, |_, window, _| window.activate_window());
@@ -347,6 +349,24 @@ pub fn reopen(cx: &mut App) {
     if workspaces(cx).is_empty() {
         open_window(None, cx);
     }
+}
+
+/// Quits Sawit. Quitting ends every terminal, so it asks first while one
+/// runs something.
+fn quit(cx: &mut App) {
+    let windows = terminal_panels(cx);
+    crate::terminal::end_all(windows, crate::terminal::Ending::Quit, cx, |cx| cx.quit());
+}
+
+/// Every window's terminal dock, front to back.
+pub fn terminal_panels(cx: &App) -> Vec<(AnyWindowHandle, Entity<TerminalPanel>)> {
+    let stack = cx.window_stack().unwrap_or_default();
+    let mut spaces = workspaces(cx);
+    spaces.sort_by_key(|(h, _)| stack.iter().position(|s| s == h).unwrap_or(usize::MAX));
+    spaces
+        .into_iter()
+        .map(|(h, w)| (h, w.read(cx).terminal().clone()))
+        .collect()
 }
 
 /// Live windows, in the order they were opened.
@@ -585,9 +605,13 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
             if !path.is_absolute() {
                 return Err(format!("{} isn't an absolute path.", path.display()));
             }
+            // Through the links on its way, as the CLI resolves its own paths and the projects'
+            // folders are: `/tmp/p` is `/private/tmp/p` on macOS. Else a file of a project is
+            // routed to no project's window, and a project's canvas file opens a second canvas of
+            // it (CANVAS-UI-4).
             let request = OpenRequest {
                 targets: vec![Target {
-                    path: path.clone(),
+                    path: sawit_core::files::resolve(&path),
                     line,
                     column,
                 }],
@@ -599,22 +623,26 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
         }
         _ => {}
     }
-    let (handle, workspace) = match &request.project {
-        Some(project) => workspaces(cx)
-            .into_iter()
-            .filter_map(|(h, w)| {
-                let root = crate::tabs::project_of(&w.read(cx).roots(cx), project)?;
-                Some((root.components().count(), (h, w)))
-            })
-            .max_by_key(|(depth, _)| *depth)
-            .map(|(_, found)| found)
-            .ok_or_else(|| {
-                format!(
-                    "No Sawit window has {} open. Open it with app_open first.",
-                    project.display()
-                )
-            })?,
-        None => frontmost(cx)
+    let spaces = workspaces(cx);
+    let roots: Vec<(usize, Vec<PathBuf>)> = spaces
+        .iter()
+        .enumerate()
+        .map(|(ix, (_, w))| (ix, w.read(cx).roots(cx)))
+        .collect();
+    let holding = |path: &Path| window_holding(&roots, path).map(|ix| spaces[ix].clone());
+    let (handle, workspace) = match (&request.project, &request.agent_folder) {
+        (Some(project), _) => holding(project).ok_or_else(|| {
+            format!(
+                "No Sawit window has {} open. Open it with app_open first.",
+                project.display()
+            )
+        })?,
+        // No project named: the window the agent's own folder is open in,
+        // else the frontmost one.
+        (None, folder) => folder
+            .as_deref()
+            .and_then(holding)
+            .or_else(|| frontmost(cx))
             .or_else(|| open_window(None, cx))
             .ok_or("Unable to open a Sawit window.")?,
     };
@@ -636,6 +664,19 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
         cx.activate(true);
     }
     Ok(answer)
+}
+
+/// The window whose project holds `path`, from each window's project
+/// folders: the one with the deepest such project (the last when two tie).
+fn window_holding<H: Clone>(windows: &[(H, Vec<PathBuf>)], path: &Path) -> Option<H> {
+    windows
+        .iter()
+        .filter_map(|(window, roots)| {
+            let root = crate::tabs::project_of(roots, path)?;
+            Some((root.components().count(), window))
+        })
+        .max_by_key(|(depth, _)| *depth)
+        .map(|(_, window)| window.clone())
 }
 
 /// Asks for a folder, then opens it with [`open_folder_in`].
@@ -752,12 +793,21 @@ fn check_waiters(cx: &mut App) {
         .flat_map(|(_, w)| w.read(cx).open_files(cx))
         .collect();
     cx.default_global::<Windows>().waiters.retain_mut(|w| {
-        let waiting = w.files.iter().any(|f| open.contains(f));
+        let waiting = still_open(&w.files, &open);
         if !waiting {
             reply(&mut w.stream, REPLY_DONE);
         }
         waiting
     });
+}
+
+/// Whether a `--wait` on `files` waits on: one of them is in `open`, the files the windows' tabs
+/// show, itself or, for an `.excalidraw` file, as the `.figcraft` file beside it that its canvas
+/// is bound to and its tab shows (CANVAS-UI-7).
+fn still_open(files: &[PathBuf], open: &HashSet<PathBuf>) -> bool {
+    files
+        .iter()
+        .any(|file| open.contains(file) || open.contains(&sawit_board::store::bound_file(file)))
 }
 
 /// Links `/usr/local/bin/sawit` to this app (menu and title bar), asking
@@ -812,9 +862,55 @@ pub fn install_cli(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::bundle_of;
+    use super::{bundle_of, still_open, window_holding};
     use gpui_kit::{KeyContext, MenuItem, OperatingSystem, OsAction, TestAppContext};
-    use std::path::Path;
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+
+    /// CANVAS-UI-7: `sawit --wait` on a canvas file waits while its canvas is open: an
+    /// `.excalidraw` file's canvas is bound to the `.figcraft` file beside it, which its tab
+    /// shows, and a project's canvas file is shown by the project's canvas tab. It answered "done"
+    /// at the first change of the window.
+    #[test]
+    fn a_wait_on_a_canvas_file_lasts_while_its_canvas_is_open() {
+        let open: HashSet<PathBuf> = [
+            PathBuf::from("/p/sketch.figcraft"),
+            PathBuf::from("/p/.nyawit/canvas.figcraft"),
+            PathBuf::from("/p/notes.md"),
+        ]
+        .into();
+        let waits = |file: &str| still_open(&[PathBuf::from(file)], &open);
+        assert!(waits("/p/sketch.excalidraw"));
+        assert!(waits("/p/sketch.figcraft"));
+        assert!(waits("/p/.nyawit/canvas.figcraft"));
+        assert!(waits("/p/notes.md"));
+        assert!(!waits("/p/other.excalidraw"));
+        assert!(!waits("/p/notes.txt"));
+        // Waiting on several, one of them open is enough.
+        let files = [
+            PathBuf::from("/p/gone.md"),
+            PathBuf::from("/p/sketch.excalidraw"),
+        ];
+        assert!(still_open(&files, &open));
+    }
+
+    /// Control commands go to the window whose project holds the folder asked about (a project
+    /// named, or the agent's own folder): the deepest project wins.
+    #[test]
+    fn a_folder_goes_to_the_window_with_its_deepest_project() {
+        let windows = vec![
+            ("front", vec![PathBuf::from("/code/shop")]),
+            (
+                "back",
+                vec![PathBuf::from("/code"), PathBuf::from("/code/api")],
+            ),
+        ];
+        let window = |path: &str| window_holding(&windows, Path::new(path));
+        assert_eq!(window("/code/api/src"), Some("back"));
+        assert_eq!(window("/code/shop/web"), Some("front"));
+        assert_eq!(window("/code/other"), Some("back"));
+        assert_eq!(window("/tmp/elsewhere"), None);
+    }
 
     /// The app's key bindings, bound as `main` binds them, then taken as the keymap's defaults
     /// (with a keymap file of the test's own, which it never writes).

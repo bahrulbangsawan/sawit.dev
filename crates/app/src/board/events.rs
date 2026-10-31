@@ -6,7 +6,9 @@
 //! Until the button comes up, its moves go to the tools wherever the
 //! pointer is, off the canvas or out of the window too, and its release ends the gesture there:
 //! listeners on the whole window, registered with each paint ([`track_drags`]), see those events
-//! where the canvas can't. Without a button the pointer hovers, and leaving the canvas tells the
+//! where the canvas can't. A canvas taken off screen before the release, which those listeners
+//! then never see, ends the gesture where the pointer was last
+//! ([`BoardView::let_go_of_the_pointer`]). Without a button the pointer hovers, and leaving the canvas tells the
 //! engine that nothing there is hovered any more. The right button ends the text being typed in,
 //! as a press outside it does, then selects what is under the pointer, as FigCraft's canvas does,
 //! and opens the context menu there ([`super::menus`]).
@@ -52,11 +54,12 @@ impl BoardView {
     /// ([`BoardView::end_colour_scrub`]), so that what the press starts (a move, a resize, a pen's
     /// point) is a gesture of its own.
     ///
-    /// A value typed in a field of the Design panel, and not yet applied, is applied first, as an
-    /// undo step of its own ([`BoardView::commit_focused_field`], final review I1). The field
-    /// hears that it lost the keyboard only in the next frame, after the press has opened the
-    /// tools' gesture: applied then, the value would join that gesture, and a click's release
-    /// (which cancels a move that didn't move) or a drag's preview would take it back.
+    /// A value typed in a field of the Design panel, or a name typed in a row of the layers panel,
+    /// and not yet applied, is applied first, as an undo step of its own
+    /// ([`BoardView::commit_focused_field`], final review I1, CANVAS-UI-1). The field hears that
+    /// it lost the keyboard only in the next frame, after the press has opened the tools'
+    /// gesture: applied then, the value would join that gesture, and a click's release (which
+    /// cancels a move that didn't move) or a drag's preview would take it back.
     pub(super) fn on_left_down(
         &mut self,
         event: &MouseDownEvent,
@@ -254,6 +257,24 @@ impl BoardView {
         }
     }
 
+    /// The canvas went off screen ([`BoardView::set_shown`]), and with its paint went the
+    /// window's listeners that give a drag, a pan or a label's scrub begun on it its moves and its
+    /// release ([`track_drags`], `design_panel::track_scrub`). Each one held ends now, kept: a
+    /// drag where the pointer was last, with the modifiers held then, as a press on the canvas
+    /// ends a drag whose release never came ([`BoardView::on_left_down`]); a pan where it is; a
+    /// label's scrub at the value it set. Space no longer arms a pan either.
+    pub(super) fn let_go_of_the_pointer(&mut self, cx: &mut Context<Self>) {
+        let (position, modifiers) = self.pointer;
+        self.end_drag(position, modifiers, cx);
+        if self.pan.take().is_some() {
+            cx.notify();
+        }
+        if self.scrubbing_label() {
+            self.scrub_end(true, cx);
+        }
+        self.let_go_of_space(cx);
+    }
+
     /// The left button came up at `position` in the window, wherever that is: the drag on, if
     /// any, ends there, once. Released off the canvas, it leaves nothing hovered on it either.
     fn end_drag(&mut self, position: Point<Pixels>, modifiers: Modifiers, cx: &mut Context<Self>) {
@@ -289,6 +310,7 @@ impl BoardView {
         cx: &mut Context<Self>,
         to_tools: fn(&mut BoardDoc, &PointerEvent) -> Result<Vec<UiRequest>, BoardError>,
     ) {
+        self.pointer = (position, modifiers);
         let local = position - self.bounds.origin;
         let local = (f64::from(local.x), f64::from(local.y));
         let Some(board) = self.board_mut() else {

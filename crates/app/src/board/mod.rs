@@ -430,6 +430,9 @@ pub struct BoardView {
     /// The left button went down on the canvas and hasn't come up: its moves and its release go
     /// to the tools wherever the pointer is ([`events`]).
     dragging: bool,
+    /// Where the pointer was in the window, and the modifiers held, at the last pointer event the
+    /// tools had: where a drag cut off by the canvas going off screen ends ([`Self::set_shown`]).
+    pointer: (Point<Pixels>, Modifiers),
     /// Space is held down on the canvas, and no text is edited: a press of the left button pans
     /// instead of reaching the tools ([`events`]).
     space_held: bool,
@@ -498,6 +501,15 @@ pub struct BoardView {
     /// The context menu, the Actions palette and the keyboard-shortcuts sheet: which is open, and
     /// what each keeps between frames ([`menus`]).
     menus: menus::Menus,
+    /// The canvas's tab is on screen, as the workspace last said ([`Self::set_shown`]).
+    shown: bool,
+    /// The canvas takes the keyboard with the next frame it is drawn in
+    /// ([`Self::take_keyboard`]).
+    wants_keyboard: bool,
+    /// The canvas had the keyboard when its tab went off screen, and gave it to the workspace:
+    /// shown again, it takes it back, unless something else took it meanwhile
+    /// ([`Self::set_shown`]).
+    gave_keyboard: bool,
     _frames: Task<()>,
     _quit: Subscription,
     _release: Subscription,
@@ -611,6 +623,7 @@ impl BoardView {
             fitted: false,
             bounds: Bounds::default(),
             dragging: false,
+            pointer: (Point::default(), Modifiers::default()),
             space_held: false,
             pan: None,
             keyboard_watch: None,
@@ -637,6 +650,9 @@ impl BoardView {
             design: design_panel::DesignPanel::default(),
             scrub: None,
             menus: menus::Menus::default(),
+            shown: true,
+            wants_keyboard: false,
+            gave_keyboard: false,
             _frames: frames,
             // ⌘Q quits without dropping the views: what isn't on disk yet is written first.
             _quit: cx.on_app_quit(|this, _| {
@@ -650,6 +666,108 @@ impl BoardView {
     /// The `.figcraft` file the canvas is bound to, and saves to.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The canvas's file was renamed or moved to `path`, its folder with it perhaps, as the Files
+    /// panel renames and moves files: the canvas follows the file, as a file editor's tab does,
+    /// and saves there from now on (CANVAS-UI-3). Before, it went on saving at the old path, which
+    /// made the file again there: the board forked into two files, and the renamed one lacked
+    /// every edit made since.
+    ///
+    /// A save handed to the writer before is written first, where it was going. When that was
+    /// after the move, it made the old file again, with the newest document, and the file at
+    /// `path` is an older save: the canvas then saves the document at `path` too, guarded from the
+    /// file there now. Otherwise the guard against another app's changes moves with the file
+    /// ([`Writer::follow`]).
+    pub fn rebind(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if path == self.path {
+            return;
+        }
+        self.writer.flush();
+        if Stamp::of(&self.path).is_some() {
+            self.writer.guard(path.clone(), Stamp::of(&path));
+            self.saved = None;
+            self.pending = None;
+        } else {
+            self.writer.follow(&self.path, path.clone());
+        }
+        self.path = path;
+        self.autosave(cx);
+        cx.notify();
+    }
+
+    /// The canvas takes the keyboard with the next frame it is drawn in, as the canvas the user
+    /// went to (CANVAS-UI-2): the workspace asks for it on the user's ways in, ⌃⌘C and the title
+    /// bar's Canvas button, a canvas file opened, a click on the canvas's tab and ⌃Tab, as the
+    /// Excalidraw canvas's webview took the keyboard each time it came on screen. Until then the
+    /// canvas's keys went to whatever had the keyboard: a terminal pane's shell, or the Files
+    /// tree, whose ⌫ moves the selected file to the Trash. The keyboard goes to the palette, the
+    /// shortcuts sheet or the context menu instead, when one is open over the canvas. A canvas
+    /// taken off screen before that frame takes nothing ([`Self::set_shown`]).
+    pub fn take_keyboard(&mut self, cx: &mut Context<Self>) {
+        self.wants_keyboard = true;
+        cx.notify();
+    }
+
+    /// The workspace shows the canvas's tab (`shown`), or no longer does: another tab is on top,
+    /// or the tab area is hidden. It says so each time it draws, for each canvas it has.
+    ///
+    /// Hidden, nothing paints the canvas, and the window's listeners that give a drag, a pan or a
+    /// label's scrub begun on it its moves and its release go with the paint. Each one held ends
+    /// then, kept, where the pointer was last ([`Self::let_go_of_the_pointer`], CANVAS-UI-8):
+    /// otherwise the tools stayed busy until the next press on the canvas, and refused every
+    /// agent's edit meanwhile ("finish the drag on the canvas first"). What it ended is saved as
+    /// any edit is, though no paint starts the autosave while the canvas is hidden.
+    ///
+    /// Hidden, it also lets go of what it keeps to draw its next frames ([`Self::let_go_of_frames`],
+    /// CANVAS-UI-9). And it gives the keyboard, if it or a field in it has it, to `home`, the
+    /// workspace (CANVAS-UI-2): a keyboard left on what isn't drawn sends the keys nowhere, the
+    /// app's own (⌃Tab, ⌘W) too. Shown again, it takes the keyboard back if `home` still has it.
+    pub fn set_shown(
+        &mut self,
+        shown: bool,
+        home: &FocusHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if std::mem::replace(&mut self.shown, shown) == shown {
+            return;
+        }
+        if shown {
+            if std::mem::take(&mut self.gave_keyboard) && home.is_focused(window) {
+                self.wants_keyboard = true;
+            }
+            cx.notify();
+            return;
+        }
+        self.wants_keyboard = false;
+        if self.focus.is_focused(window) || self.focus.contains_focused(window, cx) {
+            window.focus(home, cx);
+            self.gave_keyboard = true;
+        }
+        self.let_go_of_the_pointer(cx);
+        self.autosave(cx);
+        self.let_go_of_frames(window);
+    }
+
+    /// The canvas went off screen, where it draws no frames: it lets go of what it keeps to draw
+    /// the next ones (CANVAS-UI-9). The textures of its newest frame and of those replaced since
+    /// its last paint leave the sprite atlas of `window`, where it was painted, and the render
+    /// thread forgets the render it kept ([`Worker::trim`]): each is as large as the canvas and
+    /// its overscan, at the screen's density. So the next render after the tab comes back is
+    /// drawn whole. The newest frame's image stays, so that the canvas shows at once when its tab
+    /// comes back, and that paint puts its texture back.
+    fn let_go_of_frames(&mut self, window: &mut Window) {
+        let painted_here = self.window == Some(window.window_handle());
+        let images = (self.frame.as_ref().map(|frame| frame.image.clone()))
+            .into_iter()
+            .chain(self.stale.drain(..));
+        for image in images {
+            if painted_here {
+                let _ = window.drop_image(image);
+            }
+        }
+        self.worker.trim();
     }
 
     /// The document. `None` when the file couldn't be opened.
@@ -1096,24 +1214,29 @@ impl BoardView {
     /// Saves the document now if it isn't the one in the file, and waits until it is on disk.
     /// When that fails, or the save is refused (it would delete images the file holds, or replace
     /// what another app or window wrote to it since), the error is logged, and the next flush or
-    /// edit tries again; the writer's [`Writer::last_error`] still says why a write failed.
+    /// edit tries again; the writer's [`Writer::last_error`] still says why a write failed. So is
+    /// the note of a save that wrote the file again where it had gone ([`Writer::take_notice`]).
     pub fn flush(&mut self) {
-        if let Err(err) = self.save_now() {
-            log::warn!("the canvas couldn't be saved: {err}");
+        match self.save_now() {
+            Ok(Some(notice)) => log::info!("{notice}"),
+            Ok(None) => {}
+            Err(err) => log::warn!("the canvas couldn't be saved: {err}"),
         }
     }
 
     /// [`Self::flush`], with why the document isn't on disk as the error, a sentence for a toast:
-    /// what File ▸ Save (⌘S) does ([`commands`]).
-    fn save_now(&mut self) -> Result<(), String> {
+    /// what File ▸ Save (⌘S) does ([`commands`]). On success, the note of a save that wrote the
+    /// file again where it had gone, if one did.
+    fn save_now(&mut self) -> Result<Option<String>, String> {
         let queued = self.queue_save();
         self.writer.flush();
         let written = self.writer.last_error();
+        let notice = self.writer.take_notice();
         if written.is_some() {
             self.saved = None;
         }
         queued.map_err(|err| err.to_string())?;
-        written.map_or(Ok(()), Err)
+        written.map_or(Ok(notice), Err)
     }
 
     /// Hands the document to the writer if it isn't the one saved last. The document handed
@@ -1143,7 +1266,9 @@ impl BoardView {
     /// After a frame: when the document isn't the one saved, saves it once the canvas has been
     /// still for [`SAVE_DELAY`]. Every new document (each edit makes one) starts the wait over,
     /// so a drag is saved once it ends. A failed or refused save shows its error as a toast: the
-    /// queue's refusal (images the file holds) or the writer's (the file changed on disk).
+    /// queue's refusal (images the file holds) or the writer's (the file changed on disk). So
+    /// does a save that wrote the file again where it had gone (moved, renamed, put in the Trash
+    /// or deleted without the canvas following it), which used to be silent (CANVAS-UI-3).
     fn autosave(&mut self, cx: &mut Context<Self>) {
         let Some(doc) = self.board().and_then(|board| board.document_itself().ok()) else {
             return;
@@ -1165,10 +1290,10 @@ impl BoardView {
                 return;
             };
             // The write is waited for off the UI thread.
-            let error = cx
+            let (error, notice) = cx
                 .background_spawn(async move {
                     writer.flush();
-                    writer.last_error()
+                    (writer.last_error(), writer.take_notice())
                 })
                 .await;
             if let Some(error) = error {
@@ -1179,6 +1304,8 @@ impl BoardView {
                     }
                     this.show_toast(error, cx);
                 });
+            } else if let Some(notice) = notice {
+                let _ = this.update(cx, |this, cx| this.show_toast(notice, cx));
             }
         }));
     }
@@ -1194,8 +1321,13 @@ impl BoardView {
     /// on show. One of another page (the page changed while it rendered) would never be painted:
     /// it is dropped, and the frame shown stays until the page's own comes.
     fn show_frame(&mut self, frame: Frame, cx: &mut Context<Self>) {
-        // Which request the frame answers, to follow a stutter from its request to its paint.
-        log::trace!("canvas frame of request {:016x}", frame.key);
+        // Which request the frame answers, to follow a stutter from its request to its paint, and
+        // whether it was drawn whole.
+        log::trace!(
+            "canvas frame of request {:016x} ({:?})",
+            frame.key,
+            frame.work
+        );
         let on_show = self.board().and_then(|board| board.session.ds().ok());
         if !on_show.is_some_and(|ds| frame.shows(ds.uid, ds.page)) {
             return;
@@ -1377,12 +1509,19 @@ impl Focusable for BoardView {
 
 impl Render for BoardView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Asked for by the user's way in: the keyboard comes with this frame, which draws the
+        // canvas (a canvas that can't be opened has nothing to take it).
+        let take_keyboard = std::mem::take(&mut self.wants_keyboard);
         if let Err(error) = &self.board {
             return Placeholder::error("The canvas couldn't be opened.")
                 .detail(error.clone())
                 .into_any_element();
         }
         self.watch_keyboard(window, cx);
+        if take_keyboard {
+            let to = self.menu_keyboard().unwrap_or_else(|| self.focus.clone());
+            window.focus(&to, cx);
+        }
         let chrome = self.settle_chrome();
         // The keys the canvas takes while it edits text are bound in a context of their own.
         let key_context = if self.editing_text() {
@@ -1702,10 +1841,10 @@ mod tests {
     use gpui_kit::component::{Theme, ThemeMode};
     use gpui_kit::{
         App, AppContext as _, AssetSource as _, Bounds, Context, Entity, EntityInputHandler as _,
-        KeyBinding, KeyBindingContextPredicate, KeyContext, KeyDownEvent, KeyUpEvent, Keystroke,
-        Modifiers, MouseButton, MouseDownEvent, MouseExitEvent, MouseUpEvent, OperatingSystem,
-        PinchEvent, Pixels, PlatformInput, RenderImage, ScrollDelta, ScrollEvent, TestAppContext,
-        Unbind, VisualTestContext, Window, WindowHandle, point, px, size,
+        FocusHandle, KeyBinding, KeyBindingContextPredicate, KeyContext, KeyDownEvent, KeyUpEvent,
+        Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseExitEvent, MouseUpEvent,
+        OperatingSystem, PinchEvent, Pixels, PlatformInput, RenderImage, ScrollDelta, ScrollEvent,
+        TestAppContext, Unbind, VisualTestContext, Window, WindowHandle, point, px, size,
     };
     use sawit_board::overlay::{self, Composition, Shape};
     use sawit_board::policy::SAWIT_WINS;
@@ -2340,6 +2479,131 @@ mod tests {
         }
     }
 
+    /// The path of the canvas's file.
+    fn bound_to(view: &Entity<BoardView>, cx: &TestAppContext) -> PathBuf {
+        view.read_with(cx, |view, _| view.path().to_path_buf())
+    }
+
+    /// CANVAS-UI-3: the Files panel renames a canvas's file, and the workspace has the canvas
+    /// follow it ([`BoardView::rebind`]). Its edits are saved under the new name, and the old one
+    /// doesn't come back. Before, the canvas went on saving at the old path: the board forked
+    /// into two files, and the renamed one lacked every edit made since.
+    #[gpui_kit::test]
+    fn a_canvas_follows_its_file_when_it_is_renamed(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("renamed-under-canvas");
+        let (a, b) = (tmp.0.join("a.figcraft"), tmp.0.join("b.figcraft"));
+        write_board(&a, &board_with(&["mine"]));
+        let view = open(cx, &a);
+        std::fs::rename(&a, &b).unwrap();
+        view.update(cx, |view, cx| view.rebind(b.clone(), cx));
+        assert_eq!(bound_to(&view, cx), b);
+        add_sticky(&view, cx);
+        cx.executor().advance_clock(SAVE_DELAY * 2);
+        cx.run_until_parked();
+        view.update(cx, |view, _| view.flush());
+        assert_eq!(names(&tmp.0), ["b.figcraft"]);
+        assert_eq!(saved_layers(&b), 2);
+        assert_eq!(view.read_with(cx, |view, _| view.toast.clone()), None);
+        // Closing the tab writes nothing at the old name either.
+        add_sticky(&view, cx);
+        drop(view);
+        cx.update(|_| {});
+        assert_eq!(names(&tmp.0), ["b.figcraft"]);
+        assert_eq!(saved_layers(&b), 3);
+    }
+
+    /// CANVAS-UI-3 for a folder: the folder that holds the canvas's file is moved, and the canvas
+    /// follows the file into it. The guard against another app's changes goes with the file: a
+    /// write made to it after the move is still not saved over.
+    #[gpui_kit::test]
+    fn a_canvas_follows_its_file_when_its_folder_moves(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("folder-moved-under-canvas");
+        let (sub, moved) = (tmp.0.join("sub"), tmp.0.join("moved"));
+        std::fs::create_dir_all(&sub).unwrap();
+        write_board(&sub.join("a.figcraft"), &board_with(&["mine"]));
+        let view = open(cx, &sub.join("a.figcraft"));
+        std::fs::rename(&sub, &moved).unwrap();
+        let file = moved.join("a.figcraft");
+        view.update(cx, |view, cx| view.rebind(file.clone(), cx));
+        add_sticky(&view, cx);
+        view.update(cx, |view, _| view.flush());
+        assert_eq!(names(&tmp.0), ["moved"]);
+        assert_eq!(saved_layers(&file), 2);
+
+        // Another app writes the file where it is now: the canvas's next save is refused.
+        let theirs = write_board(&file, &board_with(&["theirs", "and more", "still more"]));
+        add_sticky(&view, cx);
+        view.update(cx, |view, _| view.flush());
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            theirs,
+            "the file was saved over"
+        );
+    }
+
+    /// CANVAS-UI-3, a file that went without the canvas being told: moved to the Trash, deleted,
+    /// or renamed or moved by another app. The next save writes it there again, as FigCraft's own
+    /// save does, rather than lose the edits, and says so in a toast: before, the Trash was
+    /// silently undone. The same for a project's `.nyawit/` deleted under its canvas.
+    #[gpui_kit::test]
+    fn a_canvas_whose_file_went_saves_it_again_and_says_so(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("file-went");
+        let a = tmp.0.join("a.figcraft");
+        write_board(&a, &board_with(&["mine"]));
+        let view = open(cx, &a);
+        std::fs::remove_file(&a).unwrap();
+        // Nothing changed: nothing is written.
+        cx.executor().advance_clock(SAVE_DELAY * 2);
+        cx.run_until_parked();
+        assert!(!a.exists());
+        let reply = run_op(&view, sticky_op(), cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        cx.executor().advance_clock(SAVE_DELAY * 2);
+        cx.run_until_parked();
+        assert_eq!(saved_layers(&a), 2);
+        let toast = view.read_with(cx, |view, _| view.toast.clone()).unwrap();
+        assert!(
+            toast.starts_with("a.figcraft was no longer in ")
+                && toast.contains("saved it there again"),
+            "{toast}"
+        );
+
+        // A project's canvas whose `.nyawit/` was deleted.
+        let nyawit = tmp.0.join(".nyawit");
+        let canvas = nyawit.join("canvas.figcraft");
+        std::fs::create_dir_all(&nyawit).unwrap();
+        write_board(&canvas, &board_with(&["mine"]));
+        let view = open(cx, &canvas);
+        std::fs::remove_dir_all(&nyawit).unwrap();
+        run_op(&view, sticky_op(), cx);
+        cx.executor().advance_clock(SAVE_DELAY * 2);
+        cx.run_until_parked();
+        assert_eq!(saved_layers(&canvas), 2);
+        let toast = view.read_with(cx, |view, _| view.toast.clone()).unwrap();
+        assert!(
+            toast.starts_with("canvas.figcraft was no longer in "),
+            "{toast}"
+        );
+    }
+
+    /// CANVAS-UI-3, a save under way when the file was renamed: written after the rename, it
+    /// made the old file again, with the newest document, and the renamed file has an older one.
+    /// The canvas, bound to the new name, saves the newest document there too.
+    #[gpui_kit::test]
+    fn a_save_that_lands_after_the_rename_reaches_the_new_name_too(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("rename-mid-save");
+        let (a, b) = (tmp.0.join("a.figcraft"), tmp.0.join("b.figcraft"));
+        let older = write_board(&a, &board_with(&["mine"]));
+        let view = open(cx, &a);
+        add_sticky(&view, cx);
+        view.update(cx, |view, _| view.flush());
+        // As if the rename came first: `b` is the file as it was, `a` the save written after.
+        std::fs::write(&b, &older).unwrap();
+        view.update(cx, |view, cx| view.rebind(b.clone(), cx));
+        view.update(cx, |view, _| view.flush());
+        assert_eq!(saved_layers(&b), 2);
+    }
+
     #[gpui_kit::test]
     fn frames_are_painted_and_replaced_ones_leave_the_atlas(cx: &mut TestAppContext) {
         let tmp = Scratch::new("frames");
@@ -2365,6 +2629,39 @@ mod tests {
         let second = next_frame(cx, &view, Some(&first));
         assert!(in_atlas(cx, window, &second));
         assert!(!in_atlas(cx, window, &first));
+    }
+
+    /// CANVAS-UI-9: a canvas whose tab is hidden lets go of what it keeps to draw its next frames:
+    /// its frame's texture leaves the window's sprite atlas (and the render thread forgets the
+    /// render it kept, `worker::tests`). It keeps the frame's image itself, so that the canvas
+    /// shows at once when its tab comes back: that paint puts the texture back.
+    #[gpui_kit::test]
+    fn a_hidden_canvas_lets_go_of_its_frames_texture(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("hidden-frames");
+        cx.update(gpui_kit::init);
+        // The canvas's shortcuts are key bindings.
+        cx.update(init_keys);
+        let (window, view) = open_in_window(cx, &tmp.0.join("canvas.figcraft"));
+        let first = next_frame(cx, &view, None);
+        assert!(in_atlas(cx, window, &first));
+        let show = |shown: bool, cx: &mut TestAppContext| {
+            cx.update_window(window.into(), |_, window, cx| {
+                let home = cx.focus_handle();
+                view.update(cx, |view, cx| view.set_shown(shown, &home, window, cx));
+            })
+            .unwrap();
+        };
+        // The test window draws the canvas whether it is "shown" or not: nothing is drawn between
+        // the hide and the checks.
+        show(false, cx);
+        assert!(!in_atlas(cx, window, &first));
+        let kept = view.read_with(cx, |view, _| {
+            view.frame.as_ref().map(|frame| frame.image.clone())
+        });
+        assert!(kept.is_some_and(|kept| Arc::ptr_eq(&kept, &first)));
+        show(true, cx);
+        cx.run_until_parked();
+        assert!(in_atlas(cx, window, &first));
     }
 
     /// The frame image the canvas's next paint would put on screen, as its prepaint works it out
@@ -2446,6 +2743,7 @@ mod tests {
             key: 0,
             uid,
             page: first_page,
+            work: figcraft_render::Work::Full,
         };
         view.update(cx, |view, cx| view.show_frame(late, cx));
         view.read_with(cx, |view, _| {
@@ -3067,6 +3365,62 @@ mod tests {
         });
     }
 
+    /// The workspace hides the canvas's tab, or shows it again, as its render does for each
+    /// canvas it has.
+    fn show(view: &Entity<BoardView>, shown: bool, cx: &mut VisualTestContext) {
+        cx.update(|window, cx| {
+            let home = cx.focus_handle();
+            view.update(cx, |view, cx| view.set_shown(shown, &home, window, cx));
+        });
+        cx.run_until_parked();
+    }
+
+    /// CANVAS-UI-8: the canvas's tab is hidden mid-drag (⌃Tab with the button held, an agent
+    /// switching tabs), so nothing hears the drag's release any more. Hiding ends the drag where
+    /// it was, kept, and the pan held by the middle button: an agent's edit then goes through,
+    /// where it waited for "the drag on the canvas" to finish until the next press on it.
+    #[gpui_kit::test]
+    fn hiding_the_canvas_ends_a_drag_whose_release_it_will_never_hear(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("hidden-mid-drag");
+        let (view, mut cx) = painted_canvas(cx, &tmp);
+        let tool = json!({"op": "command", "command": "tool.rectangle"});
+        run_op(&view, tool, &mut cx);
+        let (left, shift) = (
+            MouseButton::Left,
+            Modifiers {
+                shift: true,
+                ..Modifiers::default()
+            },
+        );
+        cx.simulate_mouse_down(point(px(100.), px(100.)), left, Modifiers::default());
+        // ⇧ held: a square, as wide as the move is: 50 × 50.
+        cx.simulate_mouse_move(point(px(150.), px(140.)), left, shift);
+        show(&view, false, &mut cx);
+        view.read_with(&cx, |view, _| {
+            assert!(!view.dragging);
+            assert!(!view.board().unwrap().session.tool.busy());
+        });
+        let reply = run_op(&view, sticky_op(), &mut cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        let [drawn, _] = layers(&view, &cx)[..] else {
+            panic!("layers {:?}", layers(&view, &cx))
+        };
+        view.read_with(&cx, |view, _| {
+            let board = view.board().unwrap();
+            let node = board.doc().unwrap().node(drawn).cloned().unwrap();
+            assert_eq!((node.width, node.height), (50.0, 50.0));
+            assert_eq!(board.session.undo_depth(), (2, 0));
+        });
+
+        // A pan by the middle button, away from the sticky and its context bar, hidden before
+        // its release.
+        show(&view, true, &mut cx);
+        cx.simulate_mouse_down(point(px(60.), px(100.)), MouseButton::Middle, shift);
+        assert!(view.read_with(&cx, |view, _| view.pan.is_some()));
+        show(&view, false, &mut cx);
+        assert!(view.read_with(&cx, |view, _| view.pan.is_none()));
+    }
+
     #[gpui_kit::test]
     fn a_double_click_types_in_a_sticky(cx: &mut TestAppContext) {
         let tmp = Scratch::new("double-click");
@@ -3424,8 +3778,9 @@ mod tests {
 
     /// The keymap editor doesn't offer to bind the commands the canvas has no use for, which get
     /// no key and stay off the shortcuts sheet: Dev Mode, the switch to prototyping, cursor chat,
-    /// F6's regions and the keyboard box selection. A key given to `select.area` would bring
-    /// back a box selection whose box the canvas never draws.
+    /// F6's regions, the keyboard box selection and the prototype player's Present and Preview
+    /// (CANVAS-UI-6). A key given to `select.area` would bring back a box selection whose box the
+    /// canvas never draws, and one given to Present or Preview a player it never shows.
     #[test]
     fn the_keymap_editor_offers_no_command_the_canvas_has_no_use_for() {
         let offered = offered_to_bind();
@@ -3440,8 +3795,26 @@ mod tests {
             "view.nextRegion",
             "view.previousRegion",
             "select.area",
+            "proto.present",
+            "proto.preview",
         ] {
             assert!(!offered.iter().any(|o| o == id), "{id} is offered");
+        }
+    }
+
+    /// CANVAS-UI-6: ⇧Space and ⌥⌘↩, FigCraft's Preview and Present, are no keys of the canvas,
+    /// which has no prototype player to show: on a board they only said, in a toast, that
+    /// prototypes aren't for boards, and on a design file the player's request went nowhere.
+    #[gpui_kit::test]
+    fn the_prototype_players_keys_do_nothing_on_the_canvas(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("prototype-keys");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        focus_canvas(&view, &mut cx);
+        for keys in ["shift-space", "alt-cmd-enter"] {
+            cx.simulate_keystrokes(keys);
+            cx.run_until_parked();
+            let toast = view.read_with(&cx, |view, _| view.toast.clone());
+            assert_eq!(toast, None, "{keys}");
         }
     }
 
@@ -3545,6 +3918,80 @@ mod tests {
             assert_eq!(ds.text_edit.as_ref().map(|edit| edit.id), Some(text));
             assert!(board.session.ui_requests.is_empty());
         });
+    }
+
+    /// The id of the tool the canvas's pointer events go to.
+    fn tool_id(view: &Entity<BoardView>, cx: &TestAppContext) -> &'static str {
+        view.read_with(cx, |view, _| view.board().unwrap().session.tool.tool.id())
+    }
+
+    /// Whether the canvas itself has the keyboard.
+    fn has_keyboard(view: &Entity<BoardView>, cx: &mut VisualTestContext) -> bool {
+        cx.update(|window, cx| view.read(cx).focus.is_focused(window))
+    }
+
+    /// Gives the keyboard to something else than the canvas, as a terminal pane or the Files tree
+    /// has it, and returns that.
+    fn keyboard_elsewhere(cx: &mut VisualTestContext) -> FocusHandle {
+        cx.update(|window, cx| {
+            let elsewhere = cx.focus_handle();
+            window.focus(&elsewhere, cx);
+            elsewhere
+        })
+    }
+
+    /// CANVAS-UI-2: the canvas the user goes to (⌃⌘C, the title bar's Canvas button, a canvas
+    /// file opened, a click on its tab, ⌃Tab) takes the keyboard with the next frame it is drawn
+    /// in, as the Excalidraw canvas's webview did each time it came on screen: the workspace asks
+    /// it to ([`BoardView::take_keyboard`]). Before, its keys went to whatever had the keyboard,
+    /// and R typed into the shell of the terminal pane that had it.
+    #[gpui_kit::test]
+    fn a_canvas_asked_to_take_the_keyboard_has_it_with_the_next_frame(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("take-keyboard");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        keyboard_elsewhere(&mut cx);
+        cx.simulate_keystrokes("r");
+        assert_eq!(tool_id(&view, &cx), "move");
+        view.update(&mut cx, |view, cx| view.take_keyboard(cx));
+        cx.run_until_parked();
+        assert!(has_keyboard(&view, &mut cx));
+        cx.simulate_keystrokes("r");
+        assert_eq!(tool_id(&view, &cx), "rectangle");
+    }
+
+    /// CANVAS-UI-2: a canvas whose tab goes off screen with the keyboard gives it to the
+    /// workspace (`home`), so that the app's keys (⌃Tab, ⌘W) still work: a focus left on what
+    /// isn't drawn sends the keys nowhere. Shown again, it takes the keyboard back, unless
+    /// something else took it meanwhile.
+    #[gpui_kit::test]
+    fn a_hidden_canvas_gives_the_keyboard_back_and_takes_it_again(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("keyboard-home");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        let home = cx.update(|_, cx| cx.focus_handle());
+        let shown = |shown: bool, cx: &mut VisualTestContext| {
+            cx.update(|window, cx| {
+                view.update(cx, |view, cx| view.set_shown(shown, &home, window, cx));
+            });
+            cx.run_until_parked();
+        };
+        focus_canvas(&view, &mut cx);
+        shown(false, &mut cx);
+        assert!(cx.update(|window, _| home.is_focused(window)));
+        shown(true, &mut cx);
+        assert!(has_keyboard(&view, &mut cx));
+
+        // Hidden with the keyboard, then the keyboard goes elsewhere: shown again, the canvas
+        // leaves it there.
+        shown(false, &mut cx);
+        let elsewhere = keyboard_elsewhere(&mut cx);
+        shown(true, &mut cx);
+        assert!(!has_keyboard(&view, &mut cx));
+        assert!(cx.update(|window, _| elsewhere.is_focused(window)));
+        // Hidden without the keyboard: shown again, it doesn't take it either.
+        shown(false, &mut cx);
+        cx.update(|window, cx| window.focus(&home, cx));
+        shown(true, &mut cx);
+        assert!(!has_keyboard(&view, &mut cx));
     }
 
     #[gpui_kit::test]
