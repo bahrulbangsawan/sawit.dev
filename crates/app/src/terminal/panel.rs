@@ -180,9 +180,22 @@ impl TerminalPanel {
             .unwrap_or(0);
     }
 
-    /// Moves the tab at `ix` into `group` (or out of any).
-    fn move_to_group(&mut self, ix: usize, group: Option<PathBuf>, cx: &mut Context<Self>) {
-        if let Some(tab) = self.tabs.get(ix) {
+    /// Where `tab` is in the strip, while it is open. The strip's buttons and menus look
+    /// their tab up when used, since tabs open and close under them (an agent's, a script's).
+    fn index_of(&self, tab: &WeakEntity<TerminalTab>) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|t| t.entity_id() == tab.entity_id())
+    }
+
+    /// Moves `tab` into `group` (or out of any).
+    fn move_to_group(
+        &mut self,
+        tab: &WeakEntity<TerminalTab>,
+        group: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(tab) = tab.upgrade() {
             tab.update(cx, |t, _| t.group = group);
             self.regroup(cx);
             cx.notify();
@@ -695,13 +708,18 @@ impl TerminalPanel {
         }
     }
 
-    /// Closes the tab at `ix` for the user (the strip's ×): when the keyboard was in it, the
-    /// tab shown next takes it, and otherwise the keyboard stays where it is.
-    fn close_for_user(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.get(ix) else {
+    /// Closes `tab` for the user (the strip's ×, the tab's menu). When the keyboard was in it
+    /// (`had_keyboard`), the tab shown next takes it; otherwise it stays where it is.
+    fn close_for_user(
+        &mut self,
+        tab: &WeakEntity<TerminalTab>,
+        had_keyboard: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ix) = self.index_of(tab) else {
             return;
         };
-        let had_keyboard = tab.read(cx).has_focus(window, cx);
         self.close(ix, cx);
         if had_keyboard {
             self.focus_active(window, cx);
@@ -887,6 +905,7 @@ impl Render for TerminalPanel {
                 .cloned()
                 .collect();
             let weak = weak.clone();
+            let this_tab = tab.downgrade();
             let grouped = group.is_some();
             // A one-pane tab is renamed in its label.
             let rename = (!t.state.is_split())
@@ -932,6 +951,7 @@ impl Render for TerminalPanel {
                 };
                 h_flex()
                     .id(("term-tab", ix))
+                    .debug_selector(move || format!("term-tab-{ix}"))
                     .relative()
                     .flex_none()
                     .h_full()
@@ -961,27 +981,47 @@ impl Render for TerminalPanel {
                             .xsmall()
                             .icon(Lucide::X)
                             .debug_selector(move || format!("close-term-{ix}"))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                // The tab under the × would activate itself next.
-                                cx.stop_propagation();
-                                this.close_for_user(ix, window, cx)
+                            .on_click(cx.listener({
+                                let tab = this_tab.clone();
+                                move |this, _, window, cx| {
+                                    // The tab under the × would activate itself next.
+                                    cx.stop_propagation();
+                                    let had_keyboard = tab
+                                        .upgrade()
+                                        .is_some_and(|t| t.read(cx).has_focus(window, cx));
+                                    this.close_for_user(&tab, had_keyboard, window, cx)
+                                }
                             })),
                     )
                     .when_some(color, |el, color| el.child(group_stripe(color, active)))
-                    .on_click(cx.listener(move |this, _, window, cx| this.activate(ix, window, cx)))
+                    .on_click(cx.listener({
+                        let tab = this_tab.clone();
+                        move |this, _, window, cx| {
+                            if let Some(ix) = this.index_of(&tab) {
+                                this.activate(ix, window, cx)
+                            }
+                        }
+                    }))
                     .context_menu(move |menu, window, cx| {
+                        // The menu has the keyboard from here on: whether the tab had it
+                        // before decides where it goes when the tab closes.
+                        let had_keyboard = this_tab
+                            .upgrade()
+                            .is_some_and(|t| t.read(cx).has_focus(window, cx));
                         let move_weak = weak.clone();
+                        let move_tab = this_tab.clone();
                         let others = others.clone();
                         let menu = menu.when(!others.is_empty(), |menu| {
                             menu.submenu("Move to Project", window, cx, move |mut menu, _, _| {
                                 for root in &others {
                                     let weak = move_weak.clone();
+                                    let tab = move_tab.clone();
                                     let to = root.clone();
                                     menu =
                                         menu.item(PopupMenuItem::new(project_name(root)).on_click(
                                             move |_, _, cx| {
                                                 let _ = weak.update(cx, |t, cx| {
-                                                    t.move_to_group(ix, Some(to.clone()), cx)
+                                                    t.move_to_group(&tab, Some(to.clone()), cx)
                                                 });
                                             },
                                         ));
@@ -990,18 +1030,23 @@ impl Render for TerminalPanel {
                             })
                         });
                         let ungroup = weak.clone();
+                        let ungroup_tab = this_tab.clone();
                         let close = weak.clone();
+                        let close_tab = this_tab.clone();
                         menu.when(grouped, |menu| {
                             menu.item(PopupMenuItem::new("Remove from Group").on_click(
                                 move |_, _, cx| {
-                                    let _ =
-                                        ungroup.update(cx, |t, cx| t.move_to_group(ix, None, cx));
+                                    let _ = ungroup.update(cx, |t, cx| {
+                                        t.move_to_group(&ungroup_tab, None, cx)
+                                    });
                                 },
                             ))
                         })
                         .separator()
-                        .item(PopupMenuItem::new("Close").on_click(move |_, _, cx| {
-                            let _ = close.update(cx, |t, cx| t.close(ix, cx));
+                        .item(PopupMenuItem::new("Close").on_click(move |_, window, cx| {
+                            let _ = close.update(cx, |t, cx| {
+                                t.close_for_user(&close_tab, had_keyboard, window, cx)
+                            });
                         }))
                     })
                     .into_any_element()
@@ -1137,7 +1182,8 @@ mod paste_tests {
 #[cfg(test)]
 mod tests {
     use gpui_kit::{
-        AnyWindowHandle, AppContext as _, Entity, Modifiers, TestAppContext, VisualTestContext,
+        AnyWindowHandle, AppContext as _, Entity, Modifiers, MouseButton, TestAppContext,
+        VisualTestContext,
     };
     use sawit_core::terminal::run_bytes;
 
@@ -1267,6 +1313,63 @@ mod tests {
         click_close(cx, w, 0);
         assert!(active(cx, &panel) == b);
         assert!(has_keyboard(cx, w, &b), "the keyboard went nowhere");
+    }
+
+    /// A tab's menu acts on the tab it was opened for, even when the strip changes while it is
+    /// open: here an agent closes a tab left of it, and the menu's Close still closes its tab,
+    /// not the one that moved into its place.
+    #[gpui_kit::test]
+    fn a_tabs_menu_closes_the_tab_it_was_opened_for(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        open_tabs(cx, &panel, 3);
+        let [a, b, c, d] = cx.update(|cx| {
+            let p = panel.read(cx);
+            [0, 1, 2, 3].map(|ix| p.tab(ix).clone())
+        });
+        // Right-click B in the strip.
+        let mut vcx = VisualTestContext::from_window(w, cx);
+        vcx.run_until_parked();
+        let at = vcx
+            .debug_bounds("term-tab-1")
+            .expect("tab 1 is drawn")
+            .center();
+        vcx.simulate_mouse_down(at, MouseButton::Right, Modifiers::default());
+        vcx.simulate_mouse_up(at, MouseButton::Right, Modifiers::default());
+        vcx.run_until_parked();
+        // An agent closes A while the menu is open.
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.close_tab(0, None, window, cx))
+        })
+        .expect("the test window is open")
+        .expect("tab 0 closes");
+        cx.run_until_parked();
+        // The menu's last item is Close.
+        cx.simulate_keystrokes(w, "up enter");
+        cx.run_until_parked();
+        let left: Vec<Entity<TerminalTab>> = cx.update(|cx| {
+            let p = panel.read(cx);
+            (0..p.tab_count()).map(|ix| p.tab(ix).clone()).collect()
+        });
+        assert!(!left.contains(&a));
+        assert!(!left.contains(&b), "the menu's Close didn't close its tab");
+        assert_eq!(left, [c.clone(), d], "the menu's Close closed another tab");
+
+        // [C, D*] with the keyboard in D: closing D from its menu hands the keyboard to C.
+        click_tab(cx, w, &panel, 1);
+        let mut vcx = VisualTestContext::from_window(w, cx);
+        vcx.run_until_parked();
+        let at = vcx
+            .debug_bounds("term-tab-1")
+            .expect("tab 1 is drawn")
+            .center();
+        vcx.simulate_mouse_down(at, MouseButton::Right, Modifiers::default());
+        vcx.simulate_mouse_up(at, MouseButton::Right, Modifiers::default());
+        vcx.run_until_parked();
+        cx.simulate_keystrokes(w, "up enter");
+        cx.run_until_parked();
+        assert!(active(cx, &panel) == c);
+        assert!(has_keyboard(cx, w, &c), "the keyboard went nowhere");
     }
 
     /// Closing a tab left of the active one keeps the active tab (and the keyboard in it), as
