@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -375,7 +375,8 @@ impl Sawit {
     async fn canvas(&self, project: Option<String>, op: Value) -> Result<Value, String> {
         if !app_control::is_running(&self.paths) {
             let file = self.canvas_board_file(project.as_deref())?;
-            return blocking(move || headless(&file, &op)).await?;
+            let lock = self.paths.root.join(CANVAS_LOCK);
+            return blocking(move || headless(&file, &lock, &op)).await?;
         }
         op_reply(self.app_call(project, Command::Canvas { op }).await?)
     }
@@ -538,13 +539,73 @@ fn command_list(reply: &Value, filter: Option<&str>) -> String {
 
 /// The stored canvas is opened, changed and saved by one call after another: two at once (an
 /// agent's parallel tool calls) would each open the file as it was, and the later save would drop
-/// the work of the earlier. This keeps one process's calls apart; another process's (a second
-/// agent's `sawit-mcp`) are kept from it by the stamp each save checks ([`headless`]).
+/// the work of the earlier. This keeps one process's calls apart; the lock in Sawit's folder
+/// ([`lock_stored_canvas`]) keeps them from another process's (a second agent's `sawit-mcp`).
 static STORED_CANVAS: Mutex<()> = Mutex::new(());
 
 fn take_turn() -> MutexGuard<'static, ()> {
     // A call that panicked has left the file whole (it is written by rename), so the next may go on.
     STORED_CANVAS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The file in Sawit's own folder that a `sawit-mcp` holds locked while one of its calls opens,
+/// changes and saves a stored canvas ([`lock_stored_canvas`]).
+const CANVAS_LOCK: &str = "mcp-canvas.lock";
+/// How long a call waits for another process's call on the stored canvas to end.
+const CANVAS_LOCK_WAIT: Duration = Duration::from_secs(60);
+/// How many times a call reads the stored canvas and runs its op, when something that doesn't
+/// take turns (Sawit as it starts, another program) saved the file while the call ran.
+const CANVAS_ATTEMPTS: usize = 3;
+
+/// Takes the lock that keeps the canvas calls of every `sawit-mcp` of one Sawit home apart
+/// (MCP-1): a call holds it from the moment it stamps the file until its save is on disk, so no
+/// other agent's call reads, saves or checks the file in between. The stamp alone couldn't do
+/// that: two calls could each check it before either wrote, and the later save then dropped the
+/// earlier one's edit though that call had answered ok.
+///
+/// The lock is `flock`'s, on the file `lock` ([`CANVAS_LOCK`] in Sawit's folder, which every
+/// agent's `sawit-mcp` shares): let go when the returned file is dropped, and by the system when
+/// the process ends however it ends, so a crash never leaves the canvas locked. A call waits
+/// [`CANVAS_LOCK_WAIT`] at most. A link at the lock's name is not followed.
+fn lock_stored_canvas(lock: &Path) -> Result<std::fs::File, String> {
+    let failed = |e: &dyn std::fmt::Display| {
+        format!(
+            "The canvas wasn't touched: its lock {} couldn't be taken: {e}",
+            lock.display()
+        )
+    };
+    if let Some(dir) = lock.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| failed(&e))?;
+    }
+    if std::fs::symlink_metadata(lock).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return Err(failed(&"it is a link"));
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock)
+        .map_err(|e| failed(&e))?;
+    let deadline = Instant::now() + CANVAS_LOCK_WAIT;
+    let mut pause = Duration::from_millis(1);
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(Duration::from_millis(10));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(format!(
+                    "Another agent's canvas call has run for over {} s, so this one stopped \
+                     waiting for it and changed nothing. Call it again.",
+                    CANVAS_LOCK_WAIT.as_secs()
+                ));
+            }
+            Err(std::fs::TryLockError::Error(e)) => return Err(failed(&e)),
+        }
+    }
 }
 
 /// Runs canvas op `op` on the canvas stored in `file` while no app is running, as the app would run
@@ -561,17 +622,59 @@ fn take_turn() -> MutexGuard<'static, ()> {
 ///   canvas, and a `.nyawit/` made with its `.gitignore`), with the file's version history and
 ///   branches, and never over what the save would lose: images the loader left in the file, or
 ///   what something else wrote to the file since this call read it.
-fn headless(file: &Path, op: &Value) -> Result<Value, String> {
+/// - Calls take turns: this process's by [`take_turn`], every `sawit-mcp`'s by the lock `lock`
+///   ([`lock_stored_canvas`]), held from the read to the save. So an answer is true: ok when the
+///   edit is on disk, an error when nothing was saved.
+fn headless(file: &Path, lock: &Path, op: &Value) -> Result<Value, String> {
     let _turn = take_turn();
+    headless_turn(file, lock, op)
+}
+
+/// One call's turn at the stored canvas in `file`: what [`headless`] does once this process's
+/// other calls are out of the way. It holds the lock `lock`, which keeps other processes' calls
+/// out, for the whole turn.
+fn headless_turn(file: &Path, lock: &Path, op: &Value) -> Result<Value, String> {
+    let _held = lock_stored_canvas(lock)?;
     // The fonts the app's text has: Sawit's own (Inter), then the system's, which no app is
     // scanning here, so they are read the first time text is laid out.
     sawit_board::fonts::register();
     sawit_board::scan_system_fonts_on_demand();
-    // Stamped before it is read, as the app stamps a canvas file it opens: a save made in between
-    // by another process makes this call's save refuse, rather than drop that save's edit.
-    let read = Stamp::of(file);
-    let mut board = store::open(file).map_err(|e| format!("{}: {e}", file.display()))?;
-    run_and_save(&mut board, file, read, op)
+    edit_stored(file, op, || {})
+}
+
+/// Reads the canvas stored in `file`, runs `op` on it and saves it ([`run_and_save`]).
+///
+/// Every `sawit-mcp` takes turns ([`lock_stored_canvas`]), but Sawit as it starts, or another
+/// program, may still save the file while a call runs: then the call's save is refused (its edit
+/// would drop theirs), and it starts again from what is on disk now, up to [`CANVAS_ATTEMPTS`]
+/// times, so the agent's op goes through on top of theirs. When the file changed every time, the
+/// call saved nothing, and its error says so in words for an agent. `between` runs after each
+/// read, before the op: a test writes the file there.
+fn edit_stored(file: &Path, op: &Value, mut between: impl FnMut()) -> Result<Value, String> {
+    let mut attempt = 1;
+    loop {
+        // Stamped before it is read, as the app stamps a canvas file it opens: a save made in
+        // between by something else makes this call's save refuse, rather than drop its edit.
+        let read = Stamp::of(file);
+        let mut board = store::open(file).map_err(|e| format!("{}: {e}", file.display()))?;
+        between();
+        match run_and_save(&mut board, file, read, op) {
+            Err(_) if Stamp::of(file) != read && attempt < CANVAS_ATTEMPTS => attempt += 1,
+            Err(_) if Stamp::of(file) != read => return Err(changed_while_running(file)),
+            done => return done,
+        }
+    }
+}
+
+/// The error of a call on the canvas stored in `file` that saved nothing, because something else
+/// saved the file each time the call read it.
+fn changed_while_running(file: &Path) -> String {
+    format!(
+        "Nothing was saved: something else (Sawit as it opened, or another program) saved {} \
+         while this call ran, each of the {CANVAS_ATTEMPTS} times it read it. Call it again; \
+         canvas_get shows the canvas as it is now.",
+        file.display()
+    )
 }
 
 /// Runs `op` on `board`, read from `file` when the file had stamp `read` ([`Stamp::of`], `None`
@@ -1922,6 +2025,143 @@ mod tests {
         let mut board = store::open(&file).unwrap();
         run_and_save(&mut board, &file, read, &sticky).unwrap();
         assert_eq!(layers_in(&file).len(), 3);
+    }
+
+    /// The texts of the stickies and other text layers on the canvas stored in `file`.
+    fn texts_in(file: &Path) -> std::collections::HashSet<String> {
+        let layers = layers_in(file);
+        let texts = layers.iter().filter_map(|layer| layer["text"].as_str());
+        texts.map(str::to_string).collect()
+    }
+
+    /// MCP-1: two agents' `sawit-mcp` processes edit one canvas while Sawit is closed. Each call's
+    /// answer must say what happened to its edit: ok when it is on the canvas, an error when it
+    /// isn't. Their saves raced: a call answered ok while the other's save went over its edit,
+    /// and an error while its edit was the one on disk. Threads stand in for the processes here,
+    /// each taking only the turns that hold across processes ([`headless_turn`]).
+    #[test]
+    fn agents_in_two_processes_get_true_answers_and_lose_no_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = board_file(&project_in(dir.path()));
+        let lock = dir.path().join("home").join(CANVAS_LOCK);
+        let (writers, calls) = (4, 12);
+        let answers: Vec<(String, Result<Value, String>)> = std::thread::scope(|scope| {
+            let running: Vec<_> = (0..writers)
+                .map(|writer| {
+                    let (file, lock) = (&file, &lock);
+                    scope.spawn(move || {
+                        (0..calls)
+                            .map(|call| {
+                                let text = format!("w{writer}-n{call}");
+                                let sticky = json!({"type": "sticky", "x": call * 250, "y": writer * 250, "text": text});
+                                let op = json!({"op": "add", "elements": [sticky]});
+                                (text, headless_turn(file, lock, &op))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            running
+                .into_iter()
+                .flat_map(|writer| writer.join().unwrap())
+                .collect()
+        });
+
+        let on_canvas = texts_in(&file);
+        let mut lies = Vec::new();
+        for (text, answer) in &answers {
+            match answer {
+                Ok(_) if !on_canvas.contains(text) => lies.push(format!("{text}: ok, not saved")),
+                Err(e) if on_canvas.contains(text) => lies.push(format!("{text}: saved, yet {e}")),
+                _ => {}
+            }
+        }
+        assert!(lies.is_empty(), "{} wrong answers: {lies:#?}", lies.len());
+        // Taking turns, no call has anything to refuse.
+        let failed: Vec<_> = answers.iter().filter(|(_, a)| a.is_err()).collect();
+        assert!(
+            failed.is_empty(),
+            "{} calls failed: {failed:#?}",
+            failed.len()
+        );
+        assert_eq!(on_canvas.len(), writers * calls);
+    }
+
+    /// MCP-1: something that takes no turns (Sawit as it starts, another program) saves the
+    /// stored canvas while a call runs. The call's save would drop that edit, so it is refused,
+    /// and the call runs again on what is on disk now: both edits land, and the answer is ok.
+    /// When the file changes every time, nothing of the call's is saved, and the error tells the
+    /// agent what to do, not to close a tab it doesn't have.
+    #[test]
+    fn a_call_runs_again_on_a_canvas_saved_under_it_and_says_when_it_gave_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = board_file(&project_in(dir.path()));
+        write_board(&file, 1);
+        let sticky = |text: &str| json!({"op": "add", "elements": [{"type": "sticky", "x": 600, "y": 0, "text": text}]});
+        // Another program's save: the board with one more sticky.
+        let save_theirs = |text: &str| {
+            let mut board = store::open(&file).unwrap();
+            let reply = ops::run(&mut board, &sticky(text));
+            assert_eq!(reply["ok"], true, "{reply}");
+            std::fs::write(&file, board.to_bytes().unwrap()).unwrap();
+        };
+
+        let mut reads = 0;
+        let once = edit_stored(&file, &sticky("ours"), || {
+            reads += 1;
+            if reads == 1 {
+                save_theirs("theirs");
+            }
+        });
+        assert!(once.is_ok(), "{once:?}");
+        assert_eq!(reads, 2);
+        let texts = texts_in(&file);
+        assert!(
+            texts.contains("ours") && texts.contains("theirs"),
+            "{texts:?}"
+        );
+
+        let mut reads = 0;
+        let every_time = edit_stored(&file, &sticky("never"), || {
+            reads += 1;
+            save_theirs(&format!("theirs {reads}"));
+        });
+        let error = every_time.unwrap_err();
+        assert_eq!(reads, CANVAS_ATTEMPTS);
+        assert!(error.starts_with("Nothing was saved"), "{error}");
+        assert!(error.contains("Call it again"), "{error}");
+        assert!(!error.contains("tab"), "{error}");
+        let texts = texts_in(&file);
+        assert!(!texts.contains("never"), "{texts:?}");
+        assert!(
+            texts.contains(&format!("theirs {CANVAS_ATTEMPTS}")),
+            "{texts:?}"
+        );
+    }
+
+    /// The canvas lock is let go when a call ends, and a link at its name is never followed.
+    #[test]
+    fn the_canvas_lock_is_let_go_and_never_taken_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir.path().join("home").join(CANVAS_LOCK);
+        let held = lock_stored_canvas(&lock).unwrap();
+        // Held, another open file of it can't have it: as another process couldn't.
+        let other = std::fs::File::open(&lock).unwrap();
+        assert!(matches!(
+            other.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        drop(held);
+        other.try_lock().unwrap();
+        drop(other);
+
+        std::fs::remove_file(&lock).unwrap();
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "the user's").unwrap();
+        std::os::unix::fs::symlink(&victim, &lock).unwrap();
+        let refused = lock_stored_canvas(&lock).unwrap_err();
+        assert!(refused.contains("it is a link"), "{refused}");
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "the user's");
     }
 
     /// Plan 7 final review T5-6: with Sawit closed every call opens the canvas afresh, so a load
