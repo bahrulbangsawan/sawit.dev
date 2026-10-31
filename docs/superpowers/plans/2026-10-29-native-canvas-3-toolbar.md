@@ -346,7 +346,7 @@ gave the canvas 1040 × 675 pt. Pointer ops take page points.
     picker places one, and so does `board.template` from any client of the control socket, as this
     check's own b01 did.
   - Nothing else is known to have used this instance's socket. It was the per-`SAWIT_HOME`
-    fallback `/tmp/sawit-rulisme-945615192beed5f.sock`, which sawit-mcp and the `sawit` CLI never
+    fallback `/tmp/sawit-$USER-945615192beed5f.sock`, which sawit-mcp and the `sawit` CLI never
     use without that `SAWIT_HOME` (`AppPaths::default_macos` and `cli_socket`,
     crates/core/src/instances.rs:20-28, :62-72). No other live check ran then: the run's others
     ended at 06:12 (Plan 1) and 17:26 (Plan 2), and FINAL.P2's began at 19:00.
