@@ -1,6 +1,8 @@
 //! The browser tab: a WKWebView laid over the tab below a GPUI toolbar (back,
-//! forward, reload, address, Web Inspector), placed and hidden like the
-//! canvas's (see `canvas.rs`). Cookies and storage are kept per project.
+//! forward, reload, address, Web Inspector). It draws above GPUI, so it is
+//! placed on the space under the toolbar each time that is laid out, and
+//! hidden whenever another tab or pane takes its place
+//! (`Workspace::sync_browser`). Cookies and storage are kept per project.
 //!
 //! Agents drive it through [`BrowserView::apply`] (`sawit-mcp`'s `browser_*`
 //! tools): navigation, state, logs and screenshots are answered here; the
