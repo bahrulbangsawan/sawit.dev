@@ -745,6 +745,14 @@ impl BrowserView {
             .unwrap_or_else(|| self.url.clone())
     }
 
+    /// The tab is opened again: a port clicked in Ports (`url`) opens there, the Browser
+    /// button (none) keeps the page.
+    pub fn show(&mut self, url: Option<&str>, cx: &mut Context<Self>) {
+        if let Some(url) = url {
+            self.navigate(url, cx);
+        }
+    }
+
     /// Opens what the user typed (or an agent asked for).
     fn navigate(&mut self, typed: &str, cx: &mut Context<Self>) {
         // Opened by the user or an agent: the page's links to other apps may ask again.
@@ -1881,6 +1889,22 @@ mod tests {
         );
         cx.simulate_prompt_answer("Cancel");
         cx.run_until_parked();
+    }
+
+    /// A port clicked in Ports opens in the browser even when it is open already: it used to
+    /// come forward still on the page it had.
+    #[gpui_kit::test]
+    fn an_open_browser_goes_to_the_port_clicked(cx: &mut gpui_kit::TestAppContext) {
+        let (view, cx) = test_browser(cx);
+        let url =
+            |cx: &mut gpui_kit::VisualTestContext| cx.update(|_, cx| view.read(cx).url.clone());
+        cx.update(|_, cx| view.update(cx, |b, cx| b.show(Some("http://localhost:5173"), cx)));
+        assert_eq!(url(cx), "http://localhost:5173");
+        cx.update(|_, cx| view.update(cx, |b, cx| b.show(Some("http://localhost:3000"), cx)));
+        assert_eq!(url(cx), "http://localhost:3000");
+        // The Browser button: the page stays.
+        cx.update(|_, cx| view.update(cx, |b, cx| b.show(None, cx)));
+        assert_eq!(url(cx), "http://localhost:3000");
     }
 
     /// A blank new window (`window.open()`, from a timer) leaves the page under test as it is,

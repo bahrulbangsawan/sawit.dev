@@ -2185,7 +2185,7 @@ impl Workspace {
     }
 
     /// Opens the browser (one tab), at `url` when given; an open browser
-    /// becomes the active tab and keeps its page.
+    /// becomes the active tab, and goes to `url` when one is given.
     pub(crate) fn open_browser(
         &mut self,
         url: Option<String>,
@@ -2203,6 +2203,9 @@ impl Workspace {
             .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
         {
             self.active = ix;
+            if let Some(browser) = self.browser.as_ref().and_then(|b| b.upgrade()) {
+                browser.update(cx, |b, cx| b.show(url.as_deref(), cx));
+            }
         } else {
             let project = self.root(cx);
             let view = cx.new(|cx| BrowserView::new(project, url, window, cx));
