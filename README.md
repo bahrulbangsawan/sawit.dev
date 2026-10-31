@@ -214,9 +214,10 @@ explained. A conflict on the same address can't be forced.
   (vim, Claude Code) uses the mouse.
 - New terminals start in the project folder. Shells idle at their prompt move to the first project you open in the
   window.
-- What an agent runs in the terminal (`terminal_run`, `app_run_script`, `app_ssh_connect`) never takes the keyboard:
-  its terminal comes forward unless you're typing in another one, and then it runs in the background. The agent is told
-  which terminal and pane it got, and its keys (`terminal_input`) go only to a terminal it names.
+- What an agent runs in the terminal (`terminal_run`, `app_run_script`, `app_ssh_connect`) never takes the keyboard,
+  and never goes into the shell you're typing in, even at its prompt: `terminal_run` then uses another idle shell or a
+  new tab. Its terminal comes forward unless you're typing in a terminal, and then it runs in the background. The agent
+  is told which terminal and pane it got, and its keys (`terminal_input`) go only to a terminal it names.
 - Terminals end with the app and with their window. So quitting, closing a window and **Restart to Update** ask
   first while a terminal runs a command or an SSH session, and name them. Shells waiting at their prompt don't count.
 
@@ -633,8 +634,9 @@ worktree run its own checkout's hook):
 1. `git push` of `main`, from a checkout of `main`, runs `.githooks/pre-push` → `scripts/release.sh`: the
    version in `Cargo.toml` is bumped (the first release stays 0.0.1), a new `CHANGELOG.md` section is written
    from commit messages (grouped as `feat`/`fix`/`perf`/other; `docs`, `test`, `chore`, `ci`, `build`, `style`
-   and `refactor` commits are left out unless they are all there is), then a `chore(release): vX` commit and a
-   `vX` tag are created. `scripts/release.sh --dry-run` prints that section without changing anything.
+   and `refactor` commits, and any with a `docs` or `site` scope (the sawit.dev website, which deploys on its
+   own), are left out unless they are all there is), then a `chore(release): vX` commit and a `vX` tag are
+   created. `scripts/release.sh --dry-run` prints that section without changing anything.
 2. After that push finishes, the release commit and tag are pushed too, in the background, with any earlier
    release tag a failed push left behind. A push of `main` with nothing new to release takes such a tag along
    as well. The log is the main checkout's `.git/sawit-release.log`, whichever worktree pushed

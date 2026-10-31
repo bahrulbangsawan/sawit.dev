@@ -153,12 +153,14 @@ For each user-facing change:
 Group the changes into a few logical commits (one feature or fix each) rather than one huge commit. The
 subject of every `feat`, `fix` and `perf` commit (and of any without a type) becomes a changelog line through
 `scripts/release.sh`, which the GitHub release, the updater and the in-app Changelog show; `docs`, `test`,
-`chore`, `ci`, `build`, `style` and `refactor` subjects, and a `docs` scope, are left out unless they are all
-there is. So:
+`chore`, `ci`, `build`, `style` and `refactor` subjects, and a `docs` or `site` scope, are left out unless they
+are all there is. So:
 
 - Use Conventional Commits: `feat:`, `fix:`, `perf:`, `docs:`, `refactor:`, `chore:` (optionally with a scope:
   `feat(db): …`). Give internal work (plans, records, tests, merge reconciliations) a type that stays out of the
   notes.
+- Give work on the sawit.dev website (`site/`) the `site` scope (`fix(site): …`). The site deploys on its own,
+  so its commits stay out of the app's notes.
 - Write the subject as a short, lowercase, user-facing sentence, like the existing CHANGELOG.md entries.
 - Never write a `chore(release):` commit by hand, and leave the `version` in `Cargo.toml` and the
   `CHANGELOG.md` sections alone. The release step owns them, and `release.sh` refuses to run while those

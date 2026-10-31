@@ -424,8 +424,11 @@ impl TerminalPanel {
     /// any tab whose shell is, else a new shell tab. A shell running a
     /// program (an agent, an editor, `cat`) is left alone: the program would
     /// get the command line and the Enter. So is a Run panel script's shell,
-    /// even between runs. The pane shows as `origin` allows. Returns the tab
-    /// and pane it typed into, or why no shell could start.
+    /// even between runs, and, for an agent, the shell the user is typing
+    /// in: the command would join the line they haven't sent yet, or run in
+    /// front of them and take their next keys. The pane shows as `origin`
+    /// allows. Returns the tab and pane it typed into, or why no shell could
+    /// start.
     pub fn run(
         &mut self,
         commands: &str,
@@ -433,14 +436,21 @@ impl TerminalPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(usize, PaneId), String> {
-        let idle = |v: &Entity<TerminalView>| v.read(cx).idle_shell();
+        let typing = match origin {
+            Origin::Agent => self.typing_pane(window, cx),
+            Origin::User => None,
+        };
+        let usable = |ix: usize, pane: PaneId, v: &Entity<TerminalView>| {
+            v.read(cx).idle_shell() && typing != Some((ix, pane))
+        };
         let in_active = self.tabs.get(self.active).and_then(|t| {
             let t = t.read(cx);
-            idle(t.focused_view()).then_some((self.active, t.state.focused))
+            let pane = t.state.focused;
+            usable(self.active, pane, t.focused_view()).then_some((self.active, pane))
         });
         let target = in_active.or_else(|| {
             self.all_panes(cx)
-                .filter(|(_, _, v)| idle(v))
+                .filter(|&(ix, pane, v)| usable(ix, pane, v))
                 .map(|(ix, pane, _)| (ix, pane))
                 .last()
         });
@@ -456,6 +466,14 @@ impl TerminalPanel {
         }
         self.reveal(ix, pane, origin, window, cx);
         Ok((ix, pane))
+    }
+
+    /// The pane the user is typing in: the one with the keyboard, while a
+    /// terminal has it.
+    fn typing_pane(&self, window: &Window, cx: &App) -> Option<(usize, PaneId)> {
+        self.all_panes(cx)
+            .find(|(_, _, v)| v.focus_handle(cx).contains_focused(window, cx))
+            .map(|(ix, pane, _)| (ix, pane))
     }
 
     /// Every tab, for `sawit-mcp`: the tab's own fields describe its focused
@@ -1996,6 +2014,73 @@ mod tests {
             typing.read(cx).text_tail(50).contains("xyxy")
         });
         cx.update(|cx| assert!(!other.read(cx).text_tail(50).contains("xyxy")));
+    }
+
+    /// While the user types at a shell's prompt, a line they haven't sent yet, an agent's command
+    /// runs in another idle shell, else in a new tab behind theirs, and never in the user's: there
+    /// it would join their half-typed line and run with it on the agent's Enter, or, at an empty
+    /// prompt, run in front of them and take their next keys. Their line stays, and runs as typed.
+    #[gpui_kit::test]
+    fn an_agents_command_never_types_into_the_shell_the_user_types_in(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        let user = active(cx, &panel);
+        let typing = cx.update(|cx| user.read(cx).focused_view().clone());
+        ready(cx, &typing);
+        cx.simulate_keystrokes(w, "e c h o space x y x y");
+        wait_until(cx, "the user's line shows what they typed", |cx| {
+            typing.read(cx).text_tail(5).contains("echo xyxy")
+        });
+        let agent = |cx: &mut TestAppContext, word: &str| {
+            let command = format!("printf 'sawit-%s\\n' {word}");
+            cx.update_window(w, |_, window, cx| {
+                panel.update(cx, |p, cx| p.run(&command, Origin::Agent, window, cx))
+            })
+            .expect("the test window is open")
+            .expect("a shell runs it")
+        };
+
+        // The user's shell is the only one, so the command gets a tab of its own.
+        let (ix, pane) = agent(cx, "agent-first");
+        assert_ne!(
+            ix, 0,
+            "the agent's command went into the shell the user types in"
+        );
+        let shell = cx
+            .update(|cx| panel.read(cx).tab(ix).read(cx).view(pane).cloned())
+            .expect("the agent's pane");
+        wait_until(cx, "the agent's command ran, and its shell is idle", |cx| {
+            let v = shell.read(cx);
+            v.text_tail(50).contains("sawit-agent-first") && v.idle_shell()
+        });
+        // That shell is idle now, and takes the next command: no third tab.
+        assert_eq!(
+            agent(cx, "agent-second"),
+            (ix, pane),
+            "the next command didn't go to the idle shell"
+        );
+        wait_until(cx, "the next command ran", |cx| {
+            shell.read(cx).text_tail(50).contains("sawit-agent-second")
+        });
+        cx.update(|cx| assert_eq!(panel.read(cx).tab_count(), 2));
+        assert!(active(cx, &panel) == user, "the agent switched tabs");
+        assert!(has_keyboard(cx, w, &user), "the agent took the keyboard");
+        cx.update(|cx| {
+            assert!(
+                !typing.read(cx).text_tail(50).contains("agent"),
+                "the agent's text reached the user's shell"
+            )
+        });
+
+        cx.simulate_keystrokes(w, "enter");
+        wait_until(cx, "the user's line ran as typed", |cx| {
+            typing
+                .read(cx)
+                .text_tail(50)
+                .lines()
+                .any(|l| l.trim_end() == "xyxy")
+        });
     }
 
     /// With the keyboard outside the terminal (an editor, say), an agent's command shows the

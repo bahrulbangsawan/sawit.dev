@@ -49,9 +49,10 @@ if git rev-parse -q --verify "refs/tags/v$next" >/dev/null; then
 fi
 
 # The notes go to the GitHub release, the updater and the in-app Changelog,
-# so they list what users get: docs, tests, refactors and build, CI and chore
-# work (by type, or a docs scope) are left out, unless that is all there is.
-listed=$(echo "$subjects" | grep -Ev '^(docs|test|chore|ci|build|style|refactor)(\(|!?:)|^[a-z]+\(docs\)!?:' || true)
+# so they list what users get in the app: docs, tests, refactors and build,
+# CI and chore work (by type, or a docs scope) and the sawit.dev website (a
+# site scope: it deploys on its own) are left out, unless that is all there is.
+listed=$(echo "$subjects" | grep -Ev '^(docs|test|chore|ci|build|style|refactor)(\(|!?:)|^[a-z]+\((docs|site)\)!?:' || true)
 [ -n "$listed" ] || listed=$subjects
 
 notes=$(mktemp)

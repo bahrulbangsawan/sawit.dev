@@ -605,10 +605,15 @@ fn the_release_tag_keeps_the_notes_headings() {
 /// RELEASE-5: the notes go to the GitHub release, the updater and the in-app Changelog, so they
 /// list what users get. Docs, tests, refactors and build, CI and chore work (by type, or a docs
 /// scope) are left out; before, every subject was listed, plan records and test fixes included.
+/// So is the sawit.dev website (a site scope), which deploys on its own and isn't in the app: its
+/// `feat(site)` and `fix(site)` commits read as app features and fixes in v0.0.8's notes.
 #[test]
 fn the_notes_list_what_users_get_and_leave_out_internal_work() {
     let repo = Repo::new();
     for subject in [
+        "feat(site): the sawit.dev website",
+        "fix(site): the landing page's copy button",
+        "fix(site)!: a new address for the changelog page",
         "feat(app): a new thing",
         "fix(db): an old bug",
         "perf: a faster start",
@@ -645,6 +650,9 @@ fn the_notes_list_what_users_get_and_leave_out_internal_work() {
         "actions",
         "rustfmt",
         "wording",
+        "website",
+        "copy button",
+        "changelog page",
     ] {
         assert!(!notes.contains(left_out), "{left_out:?} is in {notes}");
     }

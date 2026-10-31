@@ -1091,8 +1091,8 @@ There are 26 questions. They come from the ledger lines that leave a decision or
 - The same question applies to the Actions palette and the context menu.
 - The follow-up starts the field without the keyboard unless the canvas had it: a few lines and one test.
 - The run sent this to the controller for Plan 7's final review, and no ruling was recorded.
-- The terminal has since answered it for itself: an agent's terminal commands never take the keyboard, and don't
-  switch away from a terminal you're typing in.
+- The terminal has since answered it for itself: an agent's terminal commands never take the keyboard, don't
+  switch away from a terminal you're typing in, and never go into the shell you're typing in (H-TERM-5).
 - Source: P4:112.
 
 **Q14. Agent shapes with no `backgroundColor`: sticky yellow, or no fill?** (P7-1)
@@ -1437,3 +1437,408 @@ second keyboard layout. Each starts from a fresh launch of the merged main with 
   dock hides, the next tab shows, the dock comes back with the terminal's keyboard. In the Keymap Editor, turn
   on Search by Keystroke, click another tab, then the Keymap Editor's tab again, and press ⌃Tab: the next tab
   shows (the search field doesn't record until a click in it). Answer:
+
+## Added by the hunt (2026-11-01)
+
+The hunt's other lanes (browser, canvas core, canvas UI, catalog, files, MCP, terminal, site and smoke) wrote their
+hand checks only into their own reports, which aren't in the repository. They are copied here, with the steps their
+reviews added. No test can build a `Workspace` (P8-C8), so for the workspace wiring of those fixes these checks are
+the only cover: the canvas taking the keyboard, a canvas file renamed under its tab, the hand-offs from Files, one
+browser per project, where the quit question goes up, the center bar's scroll and the restore warning on screen.
+- There are **40 checks**. F-1 to F-5 and H-MCP-n are the reports' own numbers (H-MCP-n after the finding MCP-n it
+  checks); H-CORE-n and H-UI-n are canvas core's and canvas UI's H-n; the others are numbered here.
+- The fixers drove some of them over the control socket before their lanes merged. Nobody has run them by hand.
+- Each starts from a fresh launch of the merged main, as under "Before you start", with start state A unless it
+  says otherwise. A debug build is enough.
+- Where a check asks an agent for a tool call, point the agent's Sawit MCP server at this build with the same
+  `SAWIT_HOME`, as Plan 7's set-up and P8-10 say.
+- A step that says "until … is fixed" checks a finding still open on main when this was written. Say what you see.
+- A few checks touch your real files: the catalog's AI client configs, Config Files' shell files and the install
+  script's Sawit.app. Each says so.
+
+### Browser: 6 checks
+
+Start: A, with the fixtures served as for PR #3 (`python3 -m http.server 8765 -d docs/fixtures/browser` from a
+checkout of main), and `localhost:8765/annotate.html` open in the Browser.
+
+**H-BR-1. A link to another app asks first** (BROWSER-2).
+- Make a page with a mail link, serve it, and open `localhost:8766/mail.html`:
+
+  ```bash
+  mkdir -p "$S/web" && echo '<a href="mailto:me@example.com">Mail me</a>' > "$S/web/mail.html"
+  python3 -m http.server 8766 -d "$S/web"
+  ```
+- Click the link. Look for: "Open this link in another app?", naming `mailto:me@example.com`. Open hands it to
+  Mail, as a new message to that address.
+- Click it again and choose Cancel, then click it once more. Look for: nothing opens and nothing asks. Open the page
+  again from the address bar: the link asks again.
+
+Answer: ______
+
+**H-BR-2. Clear and close with a note not yet sent** (BROWSER-10).
+- Turn on Annotate (⇧⌘.), pick the Submit order button and type a note.
+- Click Clear. Look for: "Clear the annotations?"; Cancel keeps the note.
+- Press ⌘W on the Browser tab. Look for: "Close the browser with its annotations?"; Cancel keeps it. The tab menu's
+  Close Others and Close All leave it open, and the × on the title bar's project chip asks too.
+- Click Copy, then Clear, then press ⌘W. Look for: neither asks.
+
+Answer: ______
+
+**H-BR-3. One Browser tab per project** (BROWSER-8).
+- Open a second project in the window with the title bar's + (Open Another Project in This Window). Click Browser in
+  the title bar in each project, and open `annotate.html` in one and `form.html` in the other.
+- Look for: each project's group has its own Browser tab. Switch between the two, and from each to another tab and
+  back: only the tab in front shows its page, and no page shows over another tab.
+- Export from each (Design, then Export in System). Look for: each export goes to its own project's
+  `.nyawit/design/`.
+
+Answer: ______
+
+**H-BR-4. Send to terminal goes to the agent** (BROWSER-12, and review-browser-r2 §4's composition check).
+- Run `claude` in terminal tab 1. Open tab 2, leave it at its zsh prompt and in front. In the Annotate panel, add a
+  note and click Send to terminal.
+- Look for: the notes paste into Claude Code in tab 1, not into zsh, without Enter, and the footer names that
+  terminal.
+- Run `claude` in a third tab too. With tab 2 in front again, Send goes to the third tab, the last one running an
+  agent; with tab 1 in front, to tab 1.
+
+Answer: ______
+
+**H-BR-5. A real pick** (BROWSER-4).
+- Click the page, press ⇧⌘. and click the Submit order button with the mouse.
+- Look for: the pick works as PR3-1 (a) says: an outline and a label while you hover, a numbered marker, and a new
+  row that takes the keyboard. The picker now answers only real input (`isTrusted`), which your clicks and keys are.
+
+Answer: ______
+
+**H-BR-6. Quitting with a note not yet sent and a terminal running** (review-browser-r2 §4's composition check).
+- With a note not yet sent and `sleep 600` running in a terminal, press ⌘Q.
+- Look for: the question names only the terminal ("A terminal is still running: sleep. Quitting stops it."), not
+  the notes. Cancel keeps both. The window's close button asks the same way. Quitting drops the notes, as the
+  browser spec's D6 says, while closing the Browser tab or its project still asks about them (H-BR-2).
+
+Answer: ______
+
+### Canvas core: 5 checks
+
+`$EX` below is start state B's example board:
+
+```bash
+EX=~/.cargo/git/checkouts/figcraft-bc55fa7002b5fc9c/0971d09/examples/ridgeline-app.figcraft
+```
+
+**H-CORE-1. A canvas file overwritten under its tab** (CORE-4).
+- Copy `$EX` to `$S/proj/it.figcraft`. Open it from Files, draw a shape and close the tab, so that it is saved.
+  Copy `$EX` to `$S/proj/other.figcraft` too.
+- Open `it.figcraft` again. Overwrite it from a terminal (`cp "$S/proj/other.figcraft" "$S/proj/it.figcraft"`),
+  then draw: a toast appears. Close the tab with ⌘W.
+- Look for: Files shows `it (unsaved <date>).figcraft` beside the file, holding the drawing.
+- Do it again, quitting with ⌘Q instead of ⌘W.
+
+Answer: ______
+
+**H-CORE-2. Two windows with no project** (CORE-5).
+- Open two windows with no project (⇧⌘N, then Continue Without a Project) while the scratch home has no
+  `canvas.figcraft` yet, and open the canvas (⌃⌘C) in both.
+- Draw in the first, then in the second.
+- Look for: the second toasts "a file was made on disk at its place…", and the first's drawing stays in the file.
+
+Answer: ______
+
+**H-CORE-3. An agent's op while the Pen draws** (CORE-8).
+- Start: B. Pick the Pen and click twice on the canvas. Ask an agent for `canvas_add_elements`.
+- Look for: the call is refused with the Pen sentence.
+- Press Enter, and have the agent try again: it goes through. Press ⌘Z.
+- Look for: ⌘Z removes only the agent's element.
+
+Answer: ______
+
+**H-CORE-4. A link a cloned repository holds beside the canvas file** (CORE-1).
+- Make a repository that commits `victim.txt`, `.nyawit/canvas.figcraft.lossy.bak` as a link to `../victim.txt`,
+  and a `.nyawit/canvas.figcraft` with a damaged image: one the canvas opens with notes, keeping the original as
+  `.lossy.bak` (`file_with_a_damaged_image` in `crates/board/src/store.rs`'s tests builds one). Clone it, and open
+  the clone's canvas.
+- Look for: `victim.txt` is unchanged, and the clone's `.lossy.bak` is a file, not a link.
+
+Answer: ______
+
+**H-CORE-5. A pipe, then a device, named as a canvas file** (review-canvas-core I2). Run it in this order: a
+regression then hangs the window on the pipe, rather than filling the Mac's memory from `/dev/zero`.
+- With Sawit open on a project, run `mkfifo /tmp/p.figcraft`, and ask an agent to `canvas_load` it.
+- Look for: it answers "replace: couldn't read … not a regular file" at once; the window stays responsive, and the
+  board is unchanged.
+- Only once the pipe is refused: run `ln -s /dev/zero /tmp/z.figcraft`, and ask for `canvas_load` of that. Look
+  for: the same answer, at once.
+- Then `rm /tmp/p.figcraft /tmp/z.figcraft`.
+
+Answer: ______
+
+### Canvas UI: 6 checks
+
+Start: B. `$EX` is as for canvas core.
+
+**H-UI-1. The canvas takes the keyboard** (CANVAS-UI-2).
+- Click into a terminal pane, press ⌃⌘C, then R. Do the same from the title bar's Canvas button. Click a terminal,
+  then the canvas tab, then press V.
+- Look for: the Rectangle tool (then Move) is marked, and nothing is typed in the shell.
+- With the canvas focused, press ⌃Tab twice. Open a `.figcraft` from the Files tree and press ⌫.
+- Look for: ⌃Tab keeps cycling the tabs; ⌫ moves no file to the Trash.
+
+Answer: ______
+
+**H-UI-2. A renamed or trashed canvas file** (CANVAS-UI-3).
+- Copy `$EX` to `$S/proj/x.figcraft`. Open it from Files, draw, then rename it in Files with F2 to `y.figcraft`.
+  Draw again, then close and reopen `y.figcraft`.
+- Look for: the tab's title follows the rename, `x.figcraft` doesn't come back, and `y.figcraft` has both drawings.
+- Move the file to the Trash in Files, and draw. Look for: a toast says the file was saved again.
+
+Answer: ______
+
+**H-UI-3. Hidden in the middle of a drag** (CANVAS-UI-8).
+- Start dragging a shape and, holding the button, press ⌃Tab. Release, come back to the canvas, and ask an agent
+  for `canvas_add_elements`.
+- Look for: the shape stays where it was left, and the agent's call goes through.
+
+Answer: ______
+
+**H-UI-4. The memory of hidden canvas tabs** (CANVAS-UI-9).
+- Copy `$EX` to four `.figcraft` files, open each from Files, then switch to a tab that isn't a canvas.
+- Look for: in Activity Monitor, Sawit's memory and GPU memory are tens of MB lower per hidden canvas than a build
+  from before the hunt (`da0bf0a`) shows for the same steps. A hidden canvas now lets go of its kept render and its
+  GPU texture (about 36 MB each at 2× on a 1200 × 800 canvas), and keeps only its last frame's image.
+
+Answer: ______
+
+**H-UI-5. `--wait` on a canvas file** (CANVAS-UI-7).
+- From the recipe's shell, run `SAWIT_HOME=$S/home target/debug/sawit --wait "$S/proj/.nyawit/canvas.figcraft"`.
+  The canvas tab shows, and the command waits. Close the tab.
+- Do the same with an old board: `cp crates/board/tests/fixtures/excalidraw/basic.excalidraw "$S/proj/x.excalidraw"`
+  from a checkout of main, then `--wait "$S/proj/x.excalidraw"`.
+- Look for: each command returns when its canvas tab closes, and not before.
+
+Answer: ______
+
+**H-UI-6. A project opened through `/tmp`** (CANVAS-UI-4).
+- `mkdir -p /tmp/sawit-alias`, then `SAWIT_HOME=$S/home target/debug/sawit /tmp/sawit-alias`. Sawit keeps that
+  project as `/private/tmp/sawit-alias`. Open its canvas (⌃⌘C) and draw a shape, so that its file exists.
+- Ask an agent for `app_open` of `/tmp/sawit-alias/.nyawit/canvas.figcraft`, or send
+  `ctl '{"cmd":"open","path":"/tmp/sawit-alias/.nyawit/canvas.figcraft"}'`.
+- Look for: that project's canvas tab comes forward, and no second canvas tab opens.
+
+Answer: ______
+
+### Catalog: 3 checks
+
+These read and write your own AI clients' config files, whatever `SAWIT_HOME` says: back them up first.
+
+**H-CAT-1. Claude Desktop, with Node.js only from nvm** (CATALOG-4, CATALOG-6).
+- On a Mac, or a user account, whose Node.js comes only from nvm, install a remote server (Cloudflare, say) for
+  Claude Desktop from the MCP page.
+- Look for: Claude Desktop's config gets the server's `npx` bridge entry, with an `env.PATH` that starts with nvm's
+  Node.js folder. Restart Claude Desktop: the server starts, and its tools are listed.
+
+Answer: ______
+
+**H-CAT-2. An update through `claude mcp add` keeps your `env`** (CATALOG-1).
+- Install a server for Claude Code from the MCP page. In `~/.claude.json`, add `"env": {"MY_KEY": "x"}` to its
+  entry, and change its `url` or `command` so that the page offers an update. Update it from the MCP page.
+- Look for: the entry is the catalog's again, with your `env` back.
+
+Answer: ______
+
+**H-CAT-3. fish as the login shell** (CATALOG-2).
+- With fish installed, put `SHELL=$(command -v fish)` in front of the recipe's launch line, and open Tools.
+- Look for: the tools you have are found, with their versions, as under zsh. If detection fails, a warning row
+  names the shell, and Install Missing is off.
+
+Answer: ______
+
+### Files: 5 checks
+
+Start: A, with `a.rs`, `b.rs` and a folder of many files (a copy of a `node_modules`, say) in `$S/proj`.
+
+**F-1. Reopen, then type** (FILES-1).
+- Open `a.rs` and `b.rs` from the tree, click `a.rs` in the tree again, then type, and press ⌫ and ⌘Z.
+- Look for: they edit `a.rs`; nothing goes to the Trash, and no file change is undone.
+- Click a folder row: it is outlined. Click into the editor: the outline goes.
+
+Answer: ______
+
+**F-2. ⌫ and ⌘⌫ in Files and Config Files** (FILES-1, FILES-2).
+- In Files, ⌫ on a file asks; Cancel keeps it. ⌘⌫ moves it to the Trash at once; ⌘Z brings it back; ⇧⌘Z moves it
+  to the Trash again, and Finder's Put Back still works. Its open tab says it was deleted.
+- In Config Files, ⌫ asks the same way. These are your real files: if you try ⌘⌫ there, Finder's Put Back brings
+  the file back (the panel has no ⌘Z).
+
+Answer: ______
+
+**F-3. A big Duplicate, then ⌘Z** (FILES-5).
+- Rename a file. Then press ⌘D on the folder of many files, and ⌘Z at once.
+- Look for: the header's spinner while it copies, then the copy goes to the Trash; the rename is untouched.
+
+Answer: ______
+
+**F-4. Open Project Folder** (FILES-9, and review-files M1).
+- With projects A and B in one window (the title bar's + adds B) and A shown, pick B with the Files tab's folder
+  icon.
+- Look for: B is shown, and there's no third project. Pick a folder open in another window: that window comes
+  forward.
+- With A shown, click the folder icon and, while the picker is open, click a tab of B's group. Then pick a new
+  folder C.
+- Look for: A's folder becomes C, and B keeps its folder and tabs. Until review-files M1 is fixed, B's folder
+  becomes C instead, and B's tabs lose their group.
+
+Answer: ______
+
+**F-5. Initialize Repository** (FILES-15).
+- In a folder that isn't a repository, click Initialize Repository in the Git tab, then right-click a file in
+  Files.
+- Look for: Add to .gitignore and View History are enabled.
+
+Answer: ______
+
+### MCP: 3 checks
+
+**H-MCP-1. Two agents on one closed canvas** (MCP-1).
+- Quit Sawit. Run two Claude Code sessions in one project, with the scratch `SAWIT_HOME` so that they find no
+  Sawit running, and ask each to add ten stickies to the canvas.
+- Look for: no error answered, and all twenty on the canvas when Sawit opens the project.
+
+Answer: ______
+
+**H-MCP-2. A project opened through a linked folder** (MCP-2, and review-mcp M1).
+- Run `mkdir -p "$S/code/shop" && ln -s "$S/code" "$S/code-link"`. With the Open Folder dialog, open
+  `$S/code-link/shop`. From an agent, call `canvas_get {project: "$S/code/shop"}`, the other spelling.
+- Look for: it answers from that window.
+- From the agent, call `app_open` of `$S/code/shop`, the folder as it is on disk, which is what an agent's working
+  folder is. Look for: that project shows, and no second project is added for it.
+- From the agent, call `save_command {project_dir: "$S/code/shop", name: "hello", commands: ["echo hi"]}`. Look
+  for: the Run panel lists hello under that project.
+- Until review-mcp M1 is fixed, `app_open` adds the folder again, and hello doesn't show in the Run panel.
+
+Answer: ______
+
+**H-MCP-4. A relative `cwd` runs nothing** (MCP-4).
+- Start Sawit with `/` as its working folder: the installed Sawit.app from the Dock, or `cd /` before the recipe's
+  launch line. Have an agent call `terminal_run {cwd: "web", command: "pwd"}`.
+- Look for: "Nothing was run", and no shell opens in `/`.
+
+Answer: ______
+
+### Terminal: 5 checks
+
+Start: A. Open a second window, where a check needs one, with ⇧⌘N.
+
+**H-TERM-1. The quit question comes forward with its window** (review-terminal I2).
+- In a second window, run `sleep 600` in the terminal. Click the first window, whose terminals are idle, and press
+  ⌘Q.
+- Look for: the second window comes forward with "Quit Sawit?" ("A terminal is still running: sleep. Quitting
+  stops it."), so ⌘Q never looks dead.
+- Cancel, minimise the second window (⌘M), and press ⌘Q in the first: the second comes back with the question.
+  Move the second window to another Space and do it again: Sawit shows that Space with the question.
+
+Answer: ______
+
+**H-TERM-2. Return, Esc and the close button** (TERMINAL-6).
+- With `sleep 600` running, press ⌘Q, then Esc. Look for: the question goes, and Sawit and `sleep` keep running.
+- Press ⌘Q, then Return. Look for: Sawit quits.
+- Relaunch, run `sleep 600` again, and click the window's close button. Look for: "Close this window?", naming
+  `sleep`, with Close Window and Cancel.
+
+Answer: ______
+
+**H-TERM-3. The Dock's Quit doesn't ask** (TERMINAL-6's known limit).
+- With `sleep 600` running, quit from the Dock (right-click Sawit's icon, then Quit).
+- Look for: Sawit quits without asking, and `sleep` ends with it. gpui-pre doesn't pass
+  `applicationShouldTerminate` on to the app, so the Dock's Quit and logging out can't ask. Logging out, if you try
+  it, does the same. Say whether that's acceptable.
+
+Answer: ______
+
+**H-TERM-4. A file dropped on a pane without the keyboard** (TERMINAL-7).
+- Split a tab (⌘D) and keep the keyboard in the right pane. Drag a file from Finder onto the left pane.
+- Look for: the file's path is typed into the left pane, which takes the keyboard and the tab's focus (its border
+  has the accent colour). ⌘D now splits the left pane.
+
+Answer: ______
+
+**H-TERM-5. An agent's command while you type at a prompt** (final-seams I3).
+- Click in a terminal at its zsh prompt, type `echo mine`, and don't press Enter. Then, from the recipe's shell,
+  send `ctl '{"cmd":"terminal_run","command":"date"}'`, or ask an agent in another tab to wait ten seconds and
+  then `terminal_run` `date`, and go back to the prompt.
+- Look for: `date` runs in another idle shell, or in a new tab, in the background; your line still reads
+  `echo mine`, and Enter runs it as typed.
+- Click a file's text, so that the terminal doesn't have the keyboard, and send it again. Look for: `date` runs in
+  the terminal in front, which shows without taking the keyboard.
+
+Answer: ______
+
+### Site lane: unsaved files on quit, the install script and the DMG: 6 checks
+
+Start: A, with `echo 'on disk' > "$S/proj/notes.txt"`. "An unsaved file" below is `notes.txt`, opened from Files
+and typed into without saving.
+
+**H-SITE-1. ⌘Q and Quit Sawit with an unsaved file** (SITE-1).
+- Press ⌘Q. Look for: "Save changes to notes.txt before quitting?", with Save, Don't Save and Cancel. Cancel keeps
+  the app. Save writes the file and quits.
+- Relaunch, type again, press ⌘Q and choose Don't Save. Look for: Sawit quits, the file keeps its saved text, and
+  the next launch doesn't bring the changes back.
+- Do the same from the Sawit menu's Quit Sawit. With two unsaved files the question says "2 files", names them,
+  and offers Save All. Once an update waits, Restart to Update asks "… before restarting?" the same way.
+
+Answer: ______
+
+**H-SITE-2. A window's close button** (SITE-1).
+- With an unsaved file in each of two windows, click one window's close button.
+- Look for: it asks about that window's file only ("… before closing this window?").
+
+Answer: ______
+
+**H-SITE-3. The Dock's Quit keeps unsaved changes** (SITE-1).
+- With an unsaved file, quit from the Dock (right-click, then Quit). Look for: no question.
+- Relaunch. Look for: the file reopens with your changes, unsaved, and the note "Unsaved changes Sawit kept when it
+  quit are back. Save them, or close the tab to drop them."; the file on disk is unchanged.
+- Logging out, if you try it, does the same.
+
+Answer: ______
+
+**H-SITE-4. The restore warning on screen** (review-site I1).
+- With an unsaved file, quit from the Dock. Change the file from Terminal.app (`echo pulled >> "$S/proj/notes.txt"`),
+  then relaunch.
+- Look for: a red note under the toolbar: "Unsaved changes Sawit kept when it quit are back, but this file changed
+  on disk after they were made. Press ⌘S to overwrite the version on disk, or close the tab to drop them." It is
+  still there a few seconds later: the disk watcher doesn't clear it.
+- Press ⌘S. Look for: it overwrites, with no second question.
+
+Answer: ______
+
+**H-SITE-5. The install script while Sawit has an unsaved file** (SITE-1, SITE-18).
+- This replaces your installed Sawit.app, so use the installed app, not the scratch build. With an unsaved file in
+  it, run README's install command in Terminal.app. Not in Sawit's own terminal: the script ends with Sawit there.
+- Look for: Sawit quits without asking, the script waits until it has quit, then installs. The next launch brings
+  the unsaved changes back, as in H-SITE-3.
+
+Answer: ______
+
+**H-SITE-6. The DMG on macOS 15 or 26** (SITE-3).
+- After the release, download `Sawit.dmg` in Safari, drag Sawit to Applications and open it: macOS refuses. Choose
+  Done, then Open Anyway in System Settings ▸ Privacy & Security.
+- Look for: Sawit opens, and the site's DMG card and README say what you saw.
+
+Answer: ______
+
+### Smoke: 1 check
+
+**H-SMOKE-1. The center bar scrolls to the tab you open or switch to** (SMOKE-1).
+- In a window about 1280 × 800, open sixteen files from the recipe's shell:
+
+  ```bash
+  for i in $(seq -w 1 16); do touch "$S/proj/f$i.txt"; ctl "{\"cmd\":\"open\",\"path\":\"$S/proj/f$i.txt\"}"; done
+  ```
+- Look for: the bar ends at the active `f16.txt`, fully shown with its × and highlighted.
+- Click `f03.txt` in the Files tree. Look for: its tab comes in flush at the left edge, highlighted.
+- Run `mkdir -p "$S/proj2" && touch "$S/proj2/g01.txt"`, then `ctl "{\"cmd\":\"open\",\"path\":\"$S/proj2\"}"` and
+  `ctl "{\"cmd\":\"open\",\"path\":\"$S/proj2/g01.txt\"}"`.
+- Look for: the bar ends with proj2's header and the active `g01.txt` in proj2's colour, both fully shown.
+
+Answer: ______
