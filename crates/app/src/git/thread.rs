@@ -94,14 +94,8 @@ impl ThreadView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let comment = cx.new(|cx| {
-            let placeholder =
-                match crate::keymap::keys_for(&super::SendComment, "GitComment", window) {
-                    keys if keys.is_empty() => "Leave a comment (Markdown)".to_string(),
-                    keys => format!("Leave a comment (Markdown, {keys} to send)"),
-                };
-            TextareaState::new(window, cx).placeholder(placeholder)
-        });
+        let comment =
+            cx.new(|cx| TextareaState::new(window, cx).placeholder(comment_placeholder(cx)));
         let subscriptions =
             vec![
                 cx.subscribe_in(&comment, window, |this, input, e: &InputEvent, _, cx| {
@@ -1218,5 +1212,13 @@ impl Render for ThreadView {
                         ),
                 )
             })
+    }
+}
+
+/// The comment box's placeholder, with the keys that send in it as the keymap binds them.
+pub(super) fn comment_placeholder(cx: &App) -> String {
+    match crate::keymap::keys_for_path(&super::SendComment, &["GitComment", "Input"], cx) {
+        keys if keys.is_empty() => "Leave a comment (Markdown)".to_string(),
+        keys => format!("Leave a comment (Markdown, {keys} to send)"),
     }
 }

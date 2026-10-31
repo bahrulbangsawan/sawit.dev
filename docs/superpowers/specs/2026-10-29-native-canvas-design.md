@@ -224,7 +224,7 @@ A right-click on an unselected layer selects it first. The selection target come
 | `command` | `{command, params?}` | `{ok, result}` |
 | `commands` | – | `{ok, commands:[{id, label, params}]}` |
 | `pointer` | `{kind: down\|move\|up\|double, x, y (page), shift?, alt?, cmd?}` | `{ok}` |
-| `key` | `{key, shift?, alt?, cmd?, ctrl?}` | `{ok, handled}` |
+| `key` | `{key, shift?, alt?, cmd?, ctrl?}` | `{ok, handled}`; presses the canvas's default keys as Sawit binds them, not the user's keymap.json |
 | `type` | `{text}` | `{ok}`; types into the text being edited |
 
 Failures look like `{ok:false, error}`.
@@ -274,7 +274,10 @@ Plan 1 adds a debug log of render time per frame. Plan 8 measures the budget and
   - Drive it through the control socket (`canvas` ops).
   - Screenshot the window with `screencapture -l`.
   - Synthetic clicks don't reach the window, so input is driven through the `pointer`, `key` and `type`
-    ops. Those run the same code path as GPUI's events after event decoding.
+    ops. `pointer` and `type` run the same code path as GPUI's events after event decoding. `key` runs
+    a key through the canvas's default key bindings as a binding runs its command (the keys Sawit
+    keeps and the commands it doesn't offer aren't the canvas's), but not through GPUI's binding
+    layer itself: the let-through bindings and the user's rebinds need GPUI tests or a real keyboard.
 - **Gates for every commit:** `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`, and the touched crates' tests. Each plan ends
   with `cargo test --workspace`.

@@ -1,8 +1,6 @@
 //! Databases: finding them, listing/creating/dropping, schemas, read-only
 //! and read-write SQL, saved connections and `.env` files.
 
-use std::path::Path;
-
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
@@ -133,7 +131,7 @@ pub struct NameArgs {
 pub struct WriteEnvArgs {
     #[schemars(description = "Sawit instance name")]
     pub instance: String,
-    #[schemars(description = "Project folder whose .env gets DATABASE_URL")]
+    #[schemars(description = "Project folder whose .env gets DATABASE_URL (absolute path)")]
     pub project_dir: String,
 }
 
@@ -730,8 +728,10 @@ impl Sawit {
     }
 
     pub async fn write_env_tool(&self, instance: &str, project_dir: &str) -> CallToolResult {
+        // Read as every folder an agent names (MCP-7): a relative one would be sawit-mcp's folder.
+        let dir = tri!(crate::existing_dir(project_dir));
         let inst = tri!(self.instance(instance));
-        match write_database_url(Path::new(project_dir), &instance_url(&inst)) {
+        match write_database_url(&dir, &instance_url(&inst)) {
             Ok(path) => ok(format!("DATABASE_URL written to {}", tilde(&path))),
             Err(e) => fail(e),
         }
@@ -831,6 +831,53 @@ mod tests {
     use super::*;
     use sawit_core::db::ResultSet;
     use std::time::Duration;
+
+    /// MCP-7: write_env reads `project_dir` as list_scripts and save_command read theirs:
+    /// trimmed, `~` for the home folder, and absolute. A space at its end made it "not a folder",
+    /// and a relative one was written in whatever folder sawit-mcp ran in.
+    #[tokio::test]
+    async fn write_env_reads_its_folder_as_every_tool_does() {
+        use sawit_core::instances::{AppPaths, ListenScope};
+        let dir = tempfile::tempdir().unwrap();
+        let server = Sawit::new(AppPaths {
+            root: dir.path().join("home"),
+        });
+        let mut registry = Registry::default();
+        let shop = Instance {
+            name: "shop".into(),
+            bin_dir: dir.path().join("bin"),
+            data_dir: dir.path().join("data"),
+            port: 54329,
+            listen: ListenScope::Localhost,
+            managed: true,
+        };
+        registry.add(shop).unwrap();
+        registry.save(&server.paths.instances_file()).unwrap();
+        let said = |result: &CallToolResult| {
+            let texts = result.content.iter().filter_map(|c| c.as_text());
+            texts.map(|t| t.text.clone()).collect::<Vec<_>>().join("\n")
+        };
+
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let written = server
+            .write_env_tool("shop", &format!(" {} ", project.display()))
+            .await;
+        assert_ne!(written.is_error, Some(true), "{}", said(&written));
+        let env = std::fs::read_to_string(project.join(".env")).unwrap();
+        assert!(
+            env.contains("DATABASE_URL=postgres://postgres@localhost:54329/postgres"),
+            "{env}"
+        );
+
+        let refused = server.write_env_tool("shop", "no-such-folder").await;
+        assert_eq!(refused.is_error, Some(true));
+        assert!(
+            said(&refused).contains("must be an absolute path"),
+            "{}",
+            said(&refused)
+        );
+    }
 
     #[test]
     fn confirm_must_match_exactly() {

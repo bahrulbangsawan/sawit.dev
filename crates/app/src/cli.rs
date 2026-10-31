@@ -279,7 +279,17 @@ pub fn init(cx: &mut App) {
 /// Sets the app's menus. Their shortcuts are the keymap's as it is now, so the keymap sets them
 /// again whenever it changes.
 pub fn set_menus(cx: &mut App) {
-    cx.set_menus([
+    cx.set_menus(menus());
+}
+
+/// The app's menus. The Edit menu's items are the system's (`cut:`, `copy:`, `paste:`,
+/// `selectAll:`), sent to the view with AppKit's keyboard: a web page's clipboard keys reach it
+/// that way, which no binding of Sawit's takes there. Elsewhere Sawit's own bindings of the same
+/// keys run first, and a click on an item runs gpui-kit's text editing action in the field with
+/// the keyboard.
+fn menus() -> Vec<Menu> {
+    use gpui_kit::component::input as text;
+    vec![
         Menu::new("Sawit").items([
             MenuItem::action("Keymap Editor", crate::keymap::OpenKeymapEditor),
             MenuItem::action("Open Keymap File", crate::keymap::OpenKeymapFile),
@@ -292,7 +302,13 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("New Window", NewWindow),
             MenuItem::action("Open Folder…", OpenFolder),
         ]),
-    ]);
+        Menu::new("Edit").items([
+            MenuItem::os_action("Cut", text::Cut, OsAction::Cut),
+            MenuItem::os_action("Copy", text::Copy, OsAction::Copy),
+            MenuItem::os_action("Paste", text::Paste, OsAction::Paste),
+            MenuItem::os_action("Select All", text::SelectAll, OsAction::SelectAll),
+        ]),
+    ]
 }
 
 /// Opens a Sawit window, optionally with a project folder.
@@ -592,10 +608,11 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
             // Through the links on its way, as the CLI resolves its own paths and the projects'
             // folders are: `/tmp/p` is `/private/tmp/p` on macOS. Else a file of a project is
             // routed to no project's window, and a project's canvas file opens a second canvas of
-            // it (CANVAS-UI-4).
+            // it (CANVAS-UI-4). The answer names what was opened, which later calls name too.
+            let opened = sawit_core::files::resolve(&path);
             let request = OpenRequest {
                 targets: vec![Target {
-                    path: sawit_core::files::resolve(&path),
+                    path: opened.clone(),
                     line,
                     column,
                 }],
@@ -603,7 +620,7 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
                 ..OpenRequest::default()
             };
             handle(request, None, cx);
-            return Ok(Answer::Now(serde_json::json!({ "opened": path })));
+            return Ok(Answer::Now(serde_json::json!({ "opened": opened })));
         }
         _ => {}
     }
@@ -613,25 +630,33 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
         .enumerate()
         .map(|(ix, (_, w))| (ix, w.read(cx).roots(cx)))
         .collect();
-    let holding = |path: &Path| window_holding(&roots, path).map(|ix| spaces[ix].clone());
-    let (handle, workspace) = match (&request.project, &request.agent_folder) {
-        (Some(project), _) => holding(project).ok_or_else(|| {
-            format!(
-                "No Sawit window has {} open. Open it with app_open first.",
-                project.display()
-            )
-        })?,
+    let holding =
+        |path: &Path| window_naming(&roots, path).map(|(ix, named)| (spaces[ix].clone(), named));
+    let ((handle, workspace), project) = match (&request.project, &request.agent_folder) {
+        (Some(project), _) => {
+            let (window, named) = holding(project).ok_or_else(|| {
+                format!(
+                    "No Sawit window has {} open. Open it with app_open first.",
+                    project.display()
+                )
+            })?;
+            (window, Some(named))
+        }
         // No project named: the window the agent's own folder is open in,
         // else the frontmost one.
-        (None, folder) => folder
-            .as_deref()
-            .and_then(holding)
-            .or_else(|| frontmost(cx))
-            .or_else(|| open_window(None, cx))
-            .ok_or("Unable to open a Sawit window.")?,
+        (None, folder) => {
+            let window = folder
+                .as_deref()
+                .and_then(holding)
+                .map(|(window, _)| window)
+                .or_else(|| frontmost(cx))
+                .or_else(|| open_window(None, cx))
+                .ok_or("Unable to open a Sawit window.")?;
+            (window, None)
+        }
     };
     // Commands act on the project asked for: make it the active one.
-    if let Some(project) = &request.project {
+    if let Some(project) = &project {
         workspace.update(cx, |w, cx| w.activate_project_of(project, cx));
     }
     let focus = request.command == ControlCommand::Focus;
@@ -648,6 +673,38 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
         cx.activate(true);
     }
     Ok(answer)
+}
+
+/// The window whose project holds the folder an agent named, `path`, and `path` as that window's
+/// projects name it. The folder and the projects' folders are compared as they are on disk:
+/// through the links on their way, in the letter case they have there and without `..`
+/// ([`sawit_core::files::resolve`]). So `/tmp/p`, `/private/tmp/P` and `/private/tmp/q/../p` are
+/// the project at `/private/tmp/p`, as they are for `app_open` and the CLI (MCP-2, MCP-3), and
+/// `/private/tmp/p/../q` is not. The deepest project wins, the last when two tie, as in
+/// [`window_holding`]. A relative path is compared as written: the app's folder isn't the agent's.
+fn window_naming<H: Clone>(windows: &[(H, Vec<PathBuf>)], path: &Path) -> Option<(H, PathBuf)> {
+    if !path.is_absolute() {
+        return window_holding(windows, path).map(|window| (window, path.to_path_buf()));
+    }
+    let resolved = sawit_core::files::resolve(path);
+    let mut found: Option<(usize, &H, PathBuf)> = None;
+    for (window, roots) in windows {
+        for root in roots {
+            let real = sawit_core::files::resolve(root);
+            let Ok(rest) = resolved.strip_prefix(&real) else {
+                continue;
+            };
+            let depth = real.components().count();
+            if found.as_ref().is_none_or(|(deepest, ..)| depth >= *deepest) {
+                let named = match rest.as_os_str().is_empty() {
+                    true => root.clone(),
+                    false => root.join(rest),
+                };
+                found = Some((depth, window, named));
+            }
+        }
+    }
+    found.map(|(_, window, named)| (window.clone(), named))
 }
 
 /// The window whose project holds `path`, from each window's project
@@ -794,7 +851,7 @@ fn still_open(files: &[PathBuf], open: &HashSet<PathBuf>) -> bool {
         .any(|file| open.contains(file) || open.contains(&sawit_board::store::bound_file(file)))
 }
 
-/// Links `/usr/local/bin/sawit` to this app (menu and title bar), asking
+/// Links `/usr/local/bin/sawit` to this app (menu and status bar), asking
 /// for the admin password when the folder is root-owned.
 pub fn install_cli(cx: &mut App) {
     let Ok(exe) = std::env::current_exe().and_then(|e| e.canonicalize()) else {
@@ -846,7 +903,8 @@ pub fn install_cli(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::{bundle_of, still_open, window_holding};
+    use super::{bundle_of, still_open, window_holding, window_naming};
+    use gpui_kit::{KeyContext, MenuItem, OperatingSystem, OsAction, TestAppContext};
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
 
@@ -893,6 +951,213 @@ mod tests {
         assert_eq!(window("/code/shop/web"), Some("front"));
         assert_eq!(window("/code/other"), Some("back"));
         assert_eq!(window("/tmp/elsewhere"), None);
+    }
+
+    /// The app's key bindings, bound as `main` binds them, then taken as the keymap's defaults
+    /// (with a keymap file of the test's own, which it never writes).
+    fn bind_like_the_app(cx: &mut gpui_kit::App, keymap_file: &Path) {
+        gpui_kit::init(cx);
+        crate::editor::init(cx);
+        crate::files::init(cx);
+        crate::shell_config::init(cx);
+        crate::db::init(cx);
+        crate::git::init(cx);
+        crate::workspace::init(cx);
+        crate::terminal::init(cx);
+        super::init(cx);
+        crate::keymap::init_at(keymap_file.to_path_buf(), cx);
+    }
+
+    /// The Edit menu's Cut, Copy, Paste and Select All carry ⌘X, ⌘C, ⌘V and ⌘A and go to the
+    /// view with AppKit's keyboard (`cut:`, `copy:`, `paste:`, `selectAll:`): a web page's
+    /// clipboard keys reach it that way, once no binding of Sawit's takes them.
+    #[gpui_kit::test]
+    fn the_edit_menu_gives_a_web_page_its_clipboard_keys(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("sawit-edit-menu-{}", std::process::id()));
+        cx.update(|cx| bind_like_the_app(cx, &dir.join("keymap.json")));
+        cx.update(|cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let menus = super::menus();
+            let edit = menus.iter().find(|m| m.name.as_ref() == "Edit");
+            let found: Vec<(String, Option<String>, String)> = edit
+                .map(|edit| {
+                    edit.items
+                        .iter()
+                        .filter_map(|item| match item {
+                            MenuItem::Action {
+                                name,
+                                action,
+                                os_action,
+                                ..
+                            } => Some((
+                                name.to_string(),
+                                os_action.map(|a| {
+                                    match a {
+                                        OsAction::Cut => "Cut",
+                                        OsAction::Copy => "Copy",
+                                        OsAction::Paste => "Paste",
+                                        OsAction::SelectAll => "SelectAll",
+                                        OsAction::Undo => "Undo",
+                                        OsAction::Redo => "Redo",
+                                    }
+                                    .to_string()
+                                }),
+                                keymap
+                                    .bindings_for_action(action.as_ref())
+                                    .next()
+                                    .map(|b| crate::keymap::names::unparse(b.keystrokes()))
+                                    .unwrap_or_default(),
+                            )),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let expected = [
+                ("Cut", "Cut", "cmd-x"),
+                ("Copy", "Copy", "cmd-c"),
+                ("Paste", "Paste", "cmd-v"),
+                ("Select All", "SelectAll", "cmd-a"),
+            ]
+            .map(|(n, a, k)| (n.to_string(), Some(a.to_string()), k.to_string()));
+            assert_eq!(found, expected);
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The keymap editor shows each binding's action and context, and writes them into
+    /// keymap.json, where a later rename would break the user's binding: none of them still
+    /// calls the Config Files panel by its old name.
+    #[gpui_kit::test]
+    fn the_keymap_calls_config_files_by_its_name(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("sawit-config-names-{}", std::process::id()));
+        cx.update(|cx| bind_like_the_app(cx, &dir.join("keymap.json")));
+        cx.update(|cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let old: Vec<String> = keymap
+                .bindings()
+                .flat_map(|b| {
+                    [
+                        b.action().name().to_string(),
+                        b.predicate().map(|p| p.to_string()).unwrap_or_default(),
+                    ]
+                })
+                .filter(|name| name.contains("ShellConfig") || name.contains("shell_config"))
+                .collect();
+            assert!(old.is_empty(), "{old:?}");
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A menu item carries the key of the first binding of its action that GPUI's macOS menu
+    /// builder finds in a Workspace > Pane > Editor focus, else of the first binding at all
+    /// (`find_or_first`), and AppKit runs the item for that key wherever the item's action is
+    /// handled: in Sawit, everywhere the workspace is. So each item's action has no binding, or
+    /// one that holds everywhere in a window. A key bound only in a view (the keymap editor's
+    /// ⌘E) would otherwise run the item from every other view, a web page's included.
+    #[gpui_kit::test]
+    fn menu_keys_hold_everywhere_in_a_window(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("sawit-menu-keys-{}", std::process::id()));
+        cx.update(|cx| bind_like_the_app(cx, &dir.join("keymap.json")));
+        let workspace = {
+            let mut workspace = KeyContext::new_with_defaults(OperatingSystem::Mac);
+            workspace.add("Workspace");
+            let mut pane = KeyContext::new_with_defaults(OperatingSystem::Mac);
+            pane.add("Pane");
+            let mut editor = KeyContext::new_with_defaults(OperatingSystem::Mac);
+            editor.add("Editor");
+            pane.extend(&editor);
+            workspace.extend(&pane);
+            vec![workspace]
+        };
+        cx.update(|cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            for menu in super::menus() {
+                for item in &menu.items {
+                    // A system item (the Edit menu's) goes to the view with AppKit's keyboard,
+                    // not to a GPUI action, and only when no binding of Sawit's takes its key.
+                    let MenuItem::Action {
+                        name,
+                        action,
+                        os_action: None,
+                        ..
+                    } = item
+                    else {
+                        continue;
+                    };
+                    let bindings: Vec<_> = keymap.bindings_for_action(action.as_ref()).collect();
+                    let everywhere = bindings
+                        .iter()
+                        .any(|b| b.predicate().is_none_or(|p| p.eval(&workspace)));
+                    assert!(
+                        bindings.is_empty() || everywhere,
+                        "{name}: {:?}",
+                        bindings
+                            .iter()
+                            .map(|b| (
+                                crate::keymap::names::unparse(b.keystrokes()),
+                                b.predicate().map(|p| p.to_string())
+                            ))
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// MCP-2, MCP-3: an agent names an open project by another name of its folder: through a
+    /// link (`/tmp/p` for the project at `/private/tmp/p` on macOS), in another letter case (a
+    /// Mac's volumes ignore it), or with `..` in it. That is the open project, as it is for
+    /// `app_open` and the CLI, and the command goes to its window, named as the window names it.
+    /// Matched as written, it was "No Sawit window has … open. Open it with app_open first.",
+    /// while `app_open` of the same name answered that it had opened it.
+    #[test]
+    fn a_project_named_another_way_is_the_open_one() {
+        let dir = std::env::temp_dir().join(format!("sawit-cli-{}-named", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let project = dir.join("shop");
+        std::fs::create_dir_all(project.join("web")).unwrap();
+        let project = project.canonicalize().unwrap();
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&project, &link).unwrap();
+        let windows = vec![("window", vec![project.clone()])];
+        let named = |path: &Path| window_naming(&windows, path);
+
+        assert_eq!(named(&project), Some(("window", project.clone())));
+        for other in [
+            link.clone(),
+            dir.join("SHOP"),
+            project.join("web").join(".."),
+        ] {
+            assert_eq!(
+                named(&other),
+                Some(("window", project.clone())),
+                "{}",
+                other.display()
+            );
+        }
+        // A folder in it, through the link, names it as the window does.
+        assert_eq!(
+            named(&link.join("web")),
+            Some(("window", project.join("web")))
+        );
+        // `..` out of the project is another folder, though the path starts with the project's.
+        std::fs::create_dir_all(dir.join("api")).unwrap();
+        assert_eq!(named(&project.join("..").join("api")), None);
+        // Neither a folder of no open project nor a relative name is taken for one.
+        assert_eq!(named(&dir.join("other")), None);
+        assert_eq!(named(Path::new("shop")), None);
+        // A window that names its project through the link has it named so.
+        let windows = vec![("window", vec![link.clone()])];
+        assert_eq!(
+            window_naming(&windows, &project.join("web")),
+            Some(("window", link.join("web")))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

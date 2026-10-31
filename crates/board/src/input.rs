@@ -182,6 +182,52 @@ pub fn route_key(board: &mut BoardDoc, key: &str, mods: Mods) -> Result<KeyOutco
     route(board, key, mods, true)
 }
 
+/// [`route_key`] as the canvas's default key bindings take the key: Sawit's defaults
+/// ([`crate::shortcuts::key_bindings`]), which leave out the keys Sawit keeps (⌘J, ⌥⌘O…) and the
+/// commands the canvas doesn't offer (`/`), not FigCraft's raw keymap. A key one of them binds
+/// runs its command through [`route_command`], as its binding does; any other key goes through
+/// [`route_unbound_key`], as on the canvas. The keymap file's changes don't count: this is what
+/// the canvas does with its default keys, the same with or without a keymap.
+pub fn route_default_key(
+    board: &mut BoardDoc,
+    key: &str,
+    mods: Mods,
+) -> Result<KeyOutcome, BoardError> {
+    let editing = board.session.ds().is_ok_and(|ds| ds.text_edit.is_some());
+    match default_command(key, mods, editing) {
+        Some(id) => route_command(board, id, Some((key, mods))),
+        None => route_unbound_key(board, key, mods),
+    }
+}
+
+/// The command the canvas's default binding of `key` with `mods` runs
+/// ([`crate::shortcuts::key_bindings`]): in [`crate::shortcuts::TEXT_CONTEXT`] while text is
+/// edited, else in [`crate::shortcuts::CANVAS_CONTEXT`]. `None` when the canvas binds no such key
+/// by default.
+fn default_command(key: &str, mods: Mods, editing: bool) -> Option<&'static str> {
+    use crate::shortcuts::{CANVAS_CONTEXT, TEXT_CONTEXT, binding_keystroke, key_bindings};
+    let (key, mods) = figcraft_key(key, mods);
+    let context = if editing {
+        TEXT_CONTEXT
+    } else {
+        CANVAS_CONTEXT
+    };
+    let bound = key_bindings();
+    keymap::KEYS.iter().find_map(|binding| {
+        binding
+            .keys(Platform::Mac)
+            .iter()
+            .filter(|spec| keymap::matches(spec, Platform::Mac, &key, mods))
+            .find_map(|spec| {
+                let keystroke = binding_keystroke(spec)?;
+                bound
+                    .iter()
+                    .any(|b| b.id == binding.id && b.context == context && b.keystroke == keystroke)
+                    .then_some(binding.id)
+            })
+    })
+}
+
 /// [`route_key`] for a key no key binding of the app took. FigCraft's shortcuts are the app's key
 /// bindings ([`crate::shortcuts::key_bindings`]), which the user may change in the keymap editor,
 /// so this leaves them out: the key reaches the tools, the text editor and the canvas's own keys

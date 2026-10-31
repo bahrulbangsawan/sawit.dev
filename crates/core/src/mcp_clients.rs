@@ -7,10 +7,13 @@
 //! Claude Code and Codex are changed through their own CLI when it is
 //! installed (they rewrite their config files while running); everything
 //! else, and those two without a CLI, by editing the config file in place —
-//! other settings, key order and TOML comments are kept, and the original is
-//! backed up once next to it. Remote servers are written in each client's
-//! own format; clients that only run local programs get the `mcp-remote`
-//! bridge.
+//! other settings, their order, the JSON file's indentation and TOML comments
+//! are kept (JSON with comments is left alone), and the file is copied next
+//! to it before every change. Updating an entry changes only how
+//! the server is reached: the keys the user added to it (`autoApprove`,
+//! `env`, timeouts, …) stay, through the CLI too. Remote servers are written
+//! in each client's own format; clients that only run local programs get
+//! the `mcp-remote` bridge.
 
 use std::path::{Path, PathBuf};
 
@@ -200,7 +203,7 @@ fn target(client: Client, profile: &str, config: PathBuf, profile_dir: Option<Pa
 }
 
 /// Folders in `home` named `<prefix>-<profile>` that contain `marker`.
-fn profiles(home: &Path, prefix: &str, marker: &str) -> Vec<(String, PathBuf)> {
+pub(crate) fn profiles(home: &Path, prefix: &str, marker: &str) -> Vec<(String, PathBuf)> {
     let mut found: Vec<(String, PathBuf)> = std::fs::read_dir(home)
         .into_iter()
         .flatten()
@@ -531,6 +534,12 @@ fn http_entry(client: Client, url: &str, headers: &[(String, String)]) -> Option
     Some(v)
 }
 
+/// Whether `client` reaches a remote server only through the `mcp-remote`
+/// bridge, which `npx` runs: it only runs programs.
+pub fn needs_bridge(client: Client) -> bool {
+    client != Client::Codex && http_entry(client, "", &[]).is_none()
+}
+
 /// Where the server entry lives in a JSON client config, and its value.
 pub fn entry(client: Client, spec: &Spec) -> (&'static str, Value) {
     let key = servers_key(client);
@@ -539,7 +548,16 @@ pub fn entry(client: Client, spec: &Spec) -> (&'static str, Value) {
     {
         return (key, v);
     }
-    let (cmd, args, env) = spec.as_stdio();
+    let (cmd, args, mut env) = spec.as_stdio();
+    // A GUI client starts with launchd's PATH: npx's `#!/usr/bin/env node`
+    // needs to be told where node is.
+    if client.category() == Category::Editor
+        && cmd == spec.npx
+        && let Some(path) = node_path(&cmd)
+        && !env.iter().any(|(k, _)| k == "PATH")
+    {
+        env.push(("PATH".into(), path));
+    }
     let env = object(&env);
     let v = match client {
         Client::ClaudeCode => json!({"type": "stdio", "command": cmd, "args": args, "env": env}),
@@ -572,11 +590,39 @@ pub fn entry(client: Client, spec: &Spec) -> (&'static str, Value) {
     if let (Some(obj), Value::Object(env)) = (v.as_object_mut(), &env)
         && !env.is_empty()
         && !obj.contains_key("env")
-        && obj.contains_key("args")
     {
-        obj.insert("env".into(), Value::Object(env.clone()));
+        // opencode's and Kilo's local servers take theirs as `environment`.
+        let name = if obj.contains_key("args") {
+            "env"
+        } else {
+            "environment"
+        };
+        obj.insert(name.into(), Value::Object(env.clone()));
     }
     (key, v)
+}
+
+/// The `PATH` a GUI client must give `npx` at `program`, so that its
+/// `#!/usr/bin/env node` finds the node beside it (nvm's, Homebrew's):
+/// that folder, then the usual ones. `None` for a bare `npx`, or one in a
+/// folder launchd's PATH has.
+fn node_path(program: &str) -> Option<String> {
+    const USUAL: [&str; 6] = [
+        "/usr/local/bin",
+        "/opt/homebrew/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+    ];
+    let dir = Path::new(program).parent().filter(|d| d.is_absolute())?;
+    let dir = dir.to_str()?;
+    if matches!(dir, "/usr/bin" | "/bin") {
+        return None;
+    }
+    let mut parts = vec![dir];
+    parts.extend(USUAL.iter().filter(|d| **d != dir));
+    Some(parts.join(":"))
 }
 
 /// Every command, argument and URL in a JSON entry, space-separated.
@@ -649,43 +695,83 @@ fn read_toml(path: &Path) -> std::result::Result<toml_edit::DocumentMut, String>
         .map_err(|e| e.to_string())
 }
 
-/// Whether `spec` is installed for `target`.
-pub fn status(target: &Target, spec: &Spec) -> Status {
-    let wanted = spec.key();
+/// A target's config, read once: what every server in it points at, so
+/// the statuses of the whole catalog come from one read of the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Entries {
+    /// A YAML or script config, searched as text.
+    Manual(String),
+    /// Each server's command, arguments and URL, space-separated, by name.
+    Servers(std::collections::HashMap<String, String>),
+    /// Why the config can't be read safely (comments, syntax errors).
+    Unreadable(String),
+}
+
+/// Reads `target`'s config once: see [`status_in`].
+pub fn read_entries(target: &Target) -> Entries {
     if !target.client.editable() {
-        let text = std::fs::read_to_string(&target.config).unwrap_or_default();
-        return if text.contains(&spec.name) && text.contains(&wanted) {
-            Status::Installed
-        } else {
-            Status::Manual
+        return Entries::Manual(std::fs::read_to_string(&target.config).unwrap_or_default());
+    }
+    if target.client == Client::Codex {
+        return match read_toml(&target.config) {
+            Ok(doc) => Entries::Servers(
+                doc.get("mcp_servers")
+                    .and_then(|t| t.as_table_like())
+                    .map(|t| {
+                        t.iter()
+                            .map(|(name, item)| (name.to_string(), toml_signature(item)))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            ),
+            Err(e) => Entries::Unreadable(e),
         };
     }
-    let found: Option<String> = if target.client == Client::Codex {
-        match read_toml(&target.config) {
-            Ok(doc) => doc
-                .get("mcp_servers")
-                .and_then(|t| t.get(&spec.name))
-                .map(toml_signature),
-            Err(e) => return Status::Unreadable(e),
-        }
-    } else {
-        match read_json(&target.config) {
-            Ok(map) => map
-                .as_ref()
+    match read_json(&target.config) {
+        Ok(map) => Entries::Servers(
+            map.as_ref()
                 .and_then(|m| m.get(servers_key(target.client)))
-                .and_then(|s| s.get(&spec.name))
-                .map(signature),
-            Err(e) => return Status::Unreadable(e),
+                .and_then(|s| s.as_object())
+                .map(|servers| {
+                    servers
+                        .iter()
+                        .map(|(name, v)| (name.clone(), signature(v)))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        ),
+        Err(e) => Entries::Unreadable(e),
+    }
+}
+
+/// Whether `spec` is installed in a config already read.
+pub fn status_in(entries: &Entries, spec: &Spec) -> Status {
+    let wanted = spec.key();
+    let found = match entries {
+        Entries::Manual(text) => {
+            return if text.contains(&spec.name) && text.contains(&wanted) {
+                Status::Installed
+            } else {
+                Status::Manual
+            };
         }
+        Entries::Unreadable(e) => return Status::Unreadable(e.clone()),
+        Entries::Servers(servers) => servers.get(&spec.name),
     };
     match found {
         None => Status::NotInstalled,
         Some(sig) if sig.contains(&wanted) => Status::Installed,
-        Some(sig) => Status::Outdated(sig),
+        Some(sig) => Status::Outdated(sig.clone()),
     }
 }
 
-/// `<config>.sawit-backup`, written once before the first change.
+/// Whether `spec` is installed for `target`.
+pub fn status(target: &Target, spec: &Spec) -> Status {
+    status_in(&read_entries(target), spec)
+}
+
+/// `<config>.sawit-backup`: the file as it was before Sawit's last change to
+/// it, written again before every change.
 pub fn backup_path(config: &Path) -> PathBuf {
     let mut name = config.file_name().unwrap_or_default().to_os_string();
     name.push(".sawit-backup");
@@ -696,11 +782,167 @@ fn write_config(config: &Path, text: &str) -> Result<()> {
     if let Some(dir) = config.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let backup = backup_path(config);
-    if config.exists() && !backup.exists() {
-        std::fs::copy(config, &backup)?;
+    if config.exists() {
+        std::fs::copy(config, backup_path(config))?;
     }
     write_text_atomic(config, text)
+}
+
+/// An exclusive hold on one client config while it's read, changed and
+/// written back, so two of Sawit's writers (the MCP page, an agent's
+/// `install_mcp_server` in another process) never interleave and lose an
+/// entry. The lock file is Sawit's own, in the temp folder, not one more
+/// file beside the user's config. Dropping it lets go.
+struct ConfigLock(#[allow(dead_code)] std::fs::File);
+
+fn lock_file(config: &Path) -> Result<std::fs::File> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let key = std::fs::canonicalize(config)
+        .or_else(|_| {
+            let dir = std::fs::canonicalize(config.parent().unwrap_or(Path::new(".")))?;
+            Ok::<_, std::io::Error>(dir.join(config.file_name().unwrap_or_default()))
+        })
+        .unwrap_or_else(|_| config.to_path_buf());
+    // FNV-1a: stable across processes and builds.
+    let hash = key
+        .as_os_str()
+        .as_bytes()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+            (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
+        });
+    let dir = std::env::temp_dir().join("sawit-config-locks");
+    std::fs::create_dir_all(&dir)?;
+    Ok(std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(format!("{hash:016x}.lock")))?)
+}
+
+/// Waits for the config's lock: for file edits, which take milliseconds.
+fn lock_config(config: &Path) -> Result<ConfigLock> {
+    use std::os::fd::AsRawFd as _;
+    let file = lock_file(config)?;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(ConfigLock(file))
+}
+
+/// Waits for the config's lock without blocking a worker: a CLI update
+/// holds it for as long as the client's CLI runs.
+async fn lock_config_async(config: &Path) -> Result<ConfigLock> {
+    use std::os::fd::AsRawFd as _;
+    let file = lock_file(config)?;
+    let deadline = std::time::Instant::now() + 2 * CLI_TIMEOUT + std::time::Duration::from_secs(5);
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(ConfigLock(file));
+        }
+        let e = std::io::Error::last_os_error();
+        if e.raw_os_error() != Some(libc::EWOULDBLOCK) {
+            return Err(e.into());
+        }
+        if std::time::Instant::now() > deadline {
+            return Err(CoreError::Config(format!(
+                "Another change to {} is still running. Try again in a moment.",
+                config.display()
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// The keys of a JSON entry that say how a server is reached. Sawit writes
+/// them on every install. The rest of an entry (Cline's `autoApprove`,
+/// `disabled`, an `env` or `headers` the user added, a timeout, …) is the
+/// user's, and an update keeps it.
+const TRANSPORT_KEYS: [&str; 6] = ["type", "command", "args", "url", "httpUrl", "serverUrl"];
+
+/// What an install writes over `old`, the entry the config has. The
+/// transport keys come from `fresh`, and those `fresh` lacks go. Every other
+/// key stays as the user left it, `fresh` filling in only the missing ones;
+/// maps (`env`, `headers`) merge the same way, key by key. When the entry
+/// switches between a program and a URL, the other kind's map goes too.
+fn merge_entry(old: &Value, fresh: Value) -> Value {
+    let (Value::Object(old), Value::Object(fresh)) = (old, &fresh) else {
+        return fresh;
+    };
+    let program = |m: &Map<String, Value>| m.contains_key("command");
+    let mut out = old.clone();
+    if program(old) != program(fresh) {
+        out.shift_remove(if program(fresh) { "headers" } else { "env" });
+    }
+    for key in TRANSPORT_KEYS {
+        if !fresh.contains_key(key) {
+            out.shift_remove(key);
+        }
+    }
+    for (key, value) in fresh {
+        if TRANSPORT_KEYS.contains(&key.as_str()) {
+            // In place: the entry's keys keep their order.
+            out.insert(key.clone(), value.clone());
+        } else if let (Some(Value::Object(mine)), Value::Object(theirs)) = (out.get_mut(key), value)
+        {
+            for (k, v) in theirs {
+                if !mine.contains_key(k) {
+                    mine.insert(k.clone(), v.clone());
+                }
+            }
+        } else if !out.contains_key(key) {
+            out.insert(key.clone(), value.clone());
+        }
+    }
+    Value::Object(out)
+}
+
+/// Codex's keys for a program, and for a URL: an entry switching kinds
+/// drops the other kind's.
+const CODEX_PROGRAM_KEYS: [&str; 5] = ["command", "args", "env", "env_vars", "cwd"];
+const CODEX_URL_KEYS: [&str; 4] = [
+    "url",
+    "bearer_token_env_var",
+    "http_headers",
+    "env_http_headers",
+];
+
+/// Lays `spec` over Codex's `[mcp_servers.<name>]` table in place, like
+/// [`merge_entry`]: `command` and `args` (or `url`) are replaced, keeping
+/// their comments; the user's other keys, their order and comments stay.
+fn update_codex_table(table: &mut dyn toml_edit::TableLike, spec: &Spec) {
+    let (other_kind, owned): (&[&str], &[&str]) = match spec.transport {
+        Transport::Stdio { .. } => (&CODEX_URL_KEYS, &["command", "args"]),
+        Transport::Http { .. } => (&CODEX_PROGRAM_KEYS, &["url"]),
+    };
+    for key in other_kind {
+        table.remove(key);
+    }
+    for (key, item) in codex_table(spec).iter() {
+        if owned.contains(&key) {
+            match (table.get_mut(key), item) {
+                (Some(toml_edit::Item::Value(old)), toml_edit::Item::Value(new)) => {
+                    let decor = old.decor().clone();
+                    *old = new.clone();
+                    *old.decor_mut() = decor;
+                }
+                _ => {
+                    table.insert(key, item.clone());
+                }
+            }
+        } else if let (Some(mine), Some(theirs)) = (
+            table.get_mut(key).and_then(|i| i.as_table_like_mut()),
+            item.as_table_like(),
+        ) {
+            for (k, v) in theirs.iter() {
+                if !mine.contains_key(k) {
+                    mine.insert(k, v.clone());
+                }
+            }
+        } else if !table.contains_key(key) {
+            table.insert(key, item.clone());
+        }
+    }
 }
 
 fn manual(target: &Target, spec: &Spec, why: &str) -> CoreError {
@@ -745,24 +987,46 @@ fn codex_table(spec: &Spec) -> toml_edit::Table {
     table
 }
 
-/// Adds or updates the server by editing the config file.
+/// Codex's `[mcp_servers]` table, made when the config has none.
+fn codex_servers(doc: &mut toml_edit::DocumentMut) -> Option<&mut toml_edit::Table> {
+    doc.entry("mcp_servers")
+        .or_insert_with(|| {
+            let mut t = toml_edit::Table::new();
+            t.set_implicit(true);
+            toml_edit::Item::Table(t)
+        })
+        .as_table_mut()
+}
+
+/// Adds or updates the server by editing the config file. An update changes
+/// only how the server is reached ([`merge_entry`], [`update_codex_table`]).
 pub fn install_file(target: &Target, spec: &Spec) -> Result<()> {
+    if !target.client.editable() {
+        return Err(manual(target, spec, "YAML/script format"));
+    }
+    let _lock = lock_config(&target.config)?;
+    install_file_locked(target, spec)
+}
+
+/// [`install_file`] while the config's lock is held.
+fn install_file_locked(target: &Target, spec: &Spec) -> Result<()> {
     if !target.client.editable() {
         return Err(manual(target, spec, "YAML/script format"));
     }
     let legacy = spec.name == SERVER_NAME;
     if target.client == Client::Codex {
         let mut doc = read_toml(&target.config).map_err(|e| manual(target, spec, &e))?;
-        let servers = doc
-            .entry("mcp_servers")
-            .or_insert_with(|| {
-                let mut t = toml_edit::Table::new();
-                t.set_implicit(true);
-                toml_edit::Item::Table(t)
-            })
-            .as_table_mut()
+        let servers = codex_servers(&mut doc)
             .ok_or_else(|| manual(target, spec, "mcp_servers is not a table"))?;
-        servers[spec.name.as_str()] = toml_edit::Item::Table(codex_table(spec));
+        match servers
+            .get_mut(spec.name.as_str())
+            .and_then(|i| i.as_table_like_mut())
+        {
+            Some(table) => update_codex_table(table, spec),
+            None => {
+                servers.insert(&spec.name, toml_edit::Item::Table(codex_table(spec)));
+            }
+        }
         if legacy {
             servers.remove(LEGACY_SERVER_NAME);
         }
@@ -776,17 +1040,55 @@ pub fn install_file(target: &Target, spec: &Spec) -> Result<()> {
     let Value::Object(servers) = servers else {
         return Err(manual(target, spec, &format!("{key} is not an object")));
     };
+    let value = match servers.get(&spec.name) {
+        Some(old) => merge_entry(old, value),
+        None => value,
+    };
     servers.insert(spec.name.clone(), value);
     if legacy {
-        servers.remove(LEGACY_SERVER_NAME);
+        // Shifting, not swapping: the other servers keep their order.
+        servers.shift_remove(LEGACY_SERVER_NAME);
     }
-    let text = serde_json::to_string_pretty(&Value::Object(map))
+    write_json(&target.config, map)
+}
+
+/// Writes `map` as the config, indented as the file was (two spaces for a
+/// new one).
+fn write_json(config: &Path, map: Map<String, Value>) -> Result<()> {
+    use serde::Serialize as _;
+    let text = std::fs::read_to_string(config).unwrap_or_default();
+    let indent = json_indent(&text);
+    let mut out = Vec::new();
+    let mut writer = serde_json::Serializer::with_formatter(
+        &mut out,
+        serde_json::ser::PrettyFormatter::with_indent(indent.as_bytes()),
+    );
+    Value::Object(map)
+        .serialize(&mut writer)
         .map_err(|e| CoreError::Config(e.to_string()))?;
-    write_config(&target.config, &format!("{text}\n"))
+    out.push(b'\n');
+    write_config(config, &String::from_utf8_lossy(&out))
+}
+
+/// The indent of a JSON file's first indented line: its own spaces or tabs.
+fn json_indent(text: &str) -> String {
+    text.lines()
+        .find_map(|line| {
+            let rest = line.trim_start_matches([' ', '\t']);
+            (rest.len() < line.len() && !rest.is_empty())
+                .then(|| line[..line.len() - rest.len()].to_string())
+        })
+        .unwrap_or_else(|| "  ".into())
 }
 
 /// Removes the server entry (other servers and settings stay).
 pub fn uninstall_file(target: &Target, name: &str) -> Result<()> {
+    let _lock = lock_config(&target.config)?;
+    uninstall_file_locked(target, name)
+}
+
+/// [`uninstall_file`] while the config's lock is held.
+fn uninstall_file_locked(target: &Target, name: &str) -> Result<()> {
     if !target.client.editable() {
         return Err(CoreError::Config(format!(
             "Remove the `{name}` entry from {} manually.",
@@ -807,11 +1109,9 @@ pub fn uninstall_file(target: &Target, name: &str) -> Result<()> {
         return Ok(());
     };
     if let Some(Value::Object(servers)) = map.get_mut(servers_key(target.client)) {
-        servers.remove(name);
+        servers.shift_remove(name);
     }
-    let text = serde_json::to_string_pretty(&Value::Object(map))
-        .map_err(|e| CoreError::Config(e.to_string()))?;
-    write_config(&target.config, &format!("{text}\n"))
+    write_json(&target.config, map)
 }
 
 fn yaml_list(items: &[String]) -> String {
@@ -869,11 +1169,27 @@ pub struct CliCall {
 
 pub(crate) fn cli_call(target: &Target, cli: &Path, args: Vec<String>) -> Option<CliCall> {
     let var = target.client.profile_var()?;
+    let mut env = vec![(var.to_string(), target.profile_dir.clone())];
+    if let Some(path) = path_with(cli.parent()) {
+        env.push(("PATH".into(), Some(path)));
+    }
     Some(CliCall {
         program: cli.to_path_buf(),
         args,
-        env: vec![(var.to_string(), target.profile_dir.clone())],
+        env,
     })
+}
+
+/// `PATH` with `dir` in front, when it isn't on it: a CLI installed with
+/// npm (`#!/usr/bin/env node`) then finds the node nvm keeps beside it.
+fn path_with(dir: Option<&Path>) -> Option<PathBuf> {
+    let dir = dir.filter(|d| d.is_absolute())?;
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    if std::env::split_paths(&path).any(|p| p == dir) {
+        return None;
+    }
+    let dirs = std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(&path));
+    std::env::join_paths(dirs).ok().map(PathBuf::from)
 }
 
 pub fn cli_add(target: &Target, spec: &Spec, cli: &Path) -> Option<CliCall> {
@@ -965,12 +1281,137 @@ fn cli_error(target: &Target, out: &std::process::Output) -> CoreError {
     }
 }
 
+/// A server's entry as the config had it before a CLI update.
+#[derive(Debug, Clone)]
+enum SavedEntry {
+    Json(Value),
+    Toml(toml_edit::Item),
+}
+
+fn saved_entry(target: &Target, name: &str) -> Option<SavedEntry> {
+    if target.client == Client::Codex {
+        let doc = read_toml(&target.config).ok()?;
+        let item = doc.get("mcp_servers")?.get(name)?;
+        return Some(SavedEntry::Toml(item.clone()));
+    }
+    let map = read_json(&target.config).ok()??;
+    let value = map.get(servers_key(target.client))?.get(name)?;
+    Some(SavedEntry::Json(value.clone()))
+}
+
+/// Writes `saved` back as `name`'s entry when the config has none: a CLI
+/// update removes the entry before adding the new one, and when the add
+/// fails or is stopped the old one must not be lost.
+fn put_back(target: &Target, name: &str, saved: &SavedEntry) -> Result<()> {
+    match saved {
+        SavedEntry::Toml(item) => {
+            let mut doc = read_toml(&target.config).map_err(CoreError::Config)?;
+            let Some(servers) = codex_servers(&mut doc) else {
+                return Ok(());
+            };
+            if servers.contains_key(name) {
+                return Ok(());
+            }
+            servers.insert(name, item.clone());
+            write_config(&target.config, &doc.to_string())
+        }
+        SavedEntry::Json(value) => {
+            let mut map = read_json(&target.config)
+                .map_err(CoreError::Config)?
+                .unwrap_or_default();
+            let servers = map
+                .entry(servers_key(target.client))
+                .or_insert_with(|| Value::Object(Map::new()));
+            let Value::Object(servers) = servers else {
+                return Ok(());
+            };
+            if servers.contains_key(name) {
+                return Ok(());
+            }
+            servers.insert(name.to_string(), value.clone());
+            write_json(&target.config, map)
+        }
+    }
+}
+
+/// After a CLI update: the user's own keys of the entry it replaced, laid
+/// back over the one the CLI wrote, like an update by file does.
+fn keep_user_keys(target: &Target, spec: &Spec, saved: &SavedEntry) -> Result<()> {
+    match saved {
+        SavedEntry::Toml(item) => {
+            let mut doc = read_toml(&target.config).map_err(CoreError::Config)?;
+            let Some(servers) = doc
+                .get_mut("mcp_servers")
+                .and_then(|t| t.as_table_like_mut())
+            else {
+                return Ok(());
+            };
+            if !servers.contains_key(&spec.name) {
+                return Ok(());
+            }
+            let mut kept = item.clone();
+            let Some(table) = kept.as_table_like_mut() else {
+                return Ok(());
+            };
+            update_codex_table(table, spec);
+            servers.insert(&spec.name, kept);
+            write_config(&target.config, &doc.to_string())
+        }
+        SavedEntry::Json(old) => {
+            let Some(mut map) = read_json(&target.config).map_err(CoreError::Config)? else {
+                return Ok(());
+            };
+            let Some(Value::Object(servers)) = map.get_mut(servers_key(target.client)) else {
+                return Ok(());
+            };
+            let Some(now) = servers.get(&spec.name) else {
+                return Ok(());
+            };
+            let merged = merge_entry(old, now.clone());
+            if &merged == now {
+                return Ok(());
+            }
+            servers.insert(spec.name.clone(), merged);
+            write_json(&target.config, map)
+        }
+    }
+}
+
+/// Puts the saved entry back when dropped armed: a CLI update that fails,
+/// times out or is stopped (its future dropped) between `remove` and `add`.
+struct PutBack<'a> {
+    target: &'a Target,
+    name: &'a str,
+    saved: Option<SavedEntry>,
+}
+
+impl Drop for PutBack<'_> {
+    fn drop(&mut self) {
+        if let Some(saved) = self.saved.take() {
+            let _ = put_back(self.target, self.name, &saved);
+        }
+    }
+}
+
 /// Installs (or re-points) the server for `target`: through the client's
-/// CLI when `cli` is given and supported, else by editing the file.
+/// CLI when `cli` is given and supported, else by editing the file. The CLI
+/// can only remove an entry and add it again: the old entry comes back if
+/// the add fails or is stopped, and the user's own keys of it are kept.
 pub async fn install(target: &Target, spec: &Spec, cli: Option<&Path>) -> Result<()> {
+    if !target.client.editable() {
+        return Err(manual(target, spec, "YAML/script format"));
+    }
+    // Held to the end: the guard below, made after it, puts back first.
+    let _lock = lock_config_async(&target.config).await?;
     if let Some(cli) = cli
         && let Some(add) = cli_add(target, spec, cli)
     {
+        let saved = saved_entry(target, &spec.name);
+        let mut guard = PutBack {
+            target,
+            name: &spec.name,
+            saved: saved.clone(),
+        };
         if status(target, spec) != Status::NotInstalled
             && let Some(remove) = cli_remove(target, cli, &spec.name)
         {
@@ -979,6 +1420,11 @@ pub async fn install(target: &Target, spec: &Spec, cli: Option<&Path>) -> Result
         let out = run_cli(&add, CLI_TIMEOUT).await?;
         if !out.status.success() {
             return Err(cli_error(target, &out));
+        }
+        guard.saved = None;
+        if let Some(saved) = &saved {
+            // Best effort: the update itself worked.
+            let _ = keep_user_keys(target, spec, saved);
         }
         if spec.name == SERVER_NAME
             && has_legacy(target)
@@ -989,7 +1435,7 @@ pub async fn install(target: &Target, spec: &Spec, cli: Option<&Path>) -> Result
         }
         return Ok(());
     }
-    install_file(target, spec)
+    install_file_locked(target, spec)
 }
 
 /// Whether the config still has the pre-rename (PG Desk) entry.
@@ -1010,6 +1456,7 @@ fn has_legacy(target: &Target) -> bool {
 }
 
 pub async fn uninstall(target: &Target, name: &str, cli: Option<&Path>) -> Result<()> {
+    let _lock = lock_config_async(&target.config).await?;
     if let Some(cli) = cli
         && let Some(remove) = cli_remove(target, cli, name)
     {
@@ -1019,7 +1466,7 @@ pub async fn uninstall(target: &Target, name: &str, cli: Option<&Path>) -> Resul
         }
         return Ok(());
     }
-    uninstall_file(target, name)
+    uninstall_file_locked(target, name)
 }
 
 #[cfg(test)]
@@ -1113,11 +1560,16 @@ mod tests {
         let keys: Vec<_> = v.as_object().unwrap().keys().cloned().collect();
         assert_eq!(keys, ["numStartups", "projects", "mcpServers"]);
         assert_eq!(status(t, &Spec::sawit(server)), Status::Installed);
-        // Backed up once, before the first change.
+        // Backed up before the change.
         let backup = fs::read_to_string(backup_path(&t.config)).unwrap();
         assert_eq!(backup, r#"{"numStartups": 3, "projects": {}}"#);
+        // And again before the next one.
+        let installed = fs::read_to_string(&t.config).unwrap();
         install_file(t, &Spec::sawit(server)).unwrap();
-        assert_eq!(fs::read_to_string(backup_path(&t.config)).unwrap(), backup);
+        assert_eq!(
+            fs::read_to_string(backup_path(&t.config)).unwrap(),
+            installed
+        );
 
         // A different binary is reported, then replaced.
         let other = Path::new("/old/sawit-mcp");
@@ -1537,10 +1989,15 @@ mod tests {
             entry(Client::Zed, &spec),
             ("context_servers", json!({"url": url}))
         );
-        // Claude Desktop only runs programs: the mcp-remote bridge.
+        // Claude Desktop only runs programs: the mcp-remote bridge, told
+        // where node is.
         assert_eq!(
             entry(Client::ClaudeDesktop, &spec).1,
-            json!({"command": "/opt/bin/npx", "args": ["-y", "mcp-remote", url]})
+            json!({
+                "command": "/opt/bin/npx",
+                "args": ["-y", "mcp-remote", url],
+                "env": {"PATH": "/opt/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"}
+            })
         );
         let keyed =
             Spec::http("es", "https://es.dev/mcp").header("Authorization", "Bearer ${ES_KEY}");
@@ -1558,6 +2015,26 @@ mod tests {
                 "Authorization:Bearer ${ES_KEY}"
             ])
         );
+    }
+
+    #[test]
+    fn clients_that_only_run_programs_need_the_bridge() {
+        for c in [
+            Client::ClaudeDesktop,
+            Client::LmStudio,
+            Client::Warp,
+            Client::Junie,
+        ] {
+            assert!(needs_bridge(c), "{c:?}");
+        }
+        for c in [
+            Client::ClaudeCode,
+            Client::Codex,
+            Client::Cursor,
+            Client::Zed,
+        ] {
+            assert!(!needs_bridge(c), "{c:?}");
+        }
     }
 
     #[test]
@@ -1603,6 +2080,319 @@ mod tests {
             vec!["-y".into(), "rea-agents@6.3.0".into(), "mcp".into()],
         );
         assert_eq!(status(claude, &resolved), Status::Installed);
+    }
+
+    /// A Cline config whose Sawit entry points at an older build, with the
+    /// fields a user fills in after the install.
+    fn customised_cline(h: &tempfile::TempDir) -> Target {
+        let dir = h.path().join(".cline/data/settings");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("cline_mcp_settings.json"),
+            r#"{"mcpServers": {"sawit": {"command": "/old/sawit-mcp", "args": [], "disabled": false, "autoApprove": ["query", "list_instances"], "env": {"SAWIT_HOME": "/x"}, "timeout": 120}, "other": {"command": "y"}}}"#,
+        )
+        .unwrap();
+        find(&discover(h.path(), None), Client::Cline, "default").clone()
+    }
+
+    fn json_at(path: &Path) -> Value {
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn an_update_keeps_the_users_own_keys() {
+        let h = home();
+        let t = customised_cline(&h);
+        let server = Path::new("/Applications/Sawit.app/Contents/MacOS/sawit-mcp");
+        assert!(matches!(
+            status(&t, &Spec::sawit(server)),
+            Status::Outdated(_)
+        ));
+        install_file(&t, &Spec::sawit(server)).unwrap();
+        let v = json_at(&t.config);
+        let entry = &v["mcpServers"]["sawit"];
+        assert_eq!(entry["command"], server.display().to_string());
+        assert_eq!(entry["autoApprove"], json!(["query", "list_instances"]));
+        assert_eq!(entry["env"], json!({"SAWIT_HOME": "/x"}));
+        assert_eq!(entry["timeout"], 120);
+        assert_eq!(entry["disabled"], false);
+        // The entry keeps its place among the servers, and its keys their order.
+        let servers: Vec<_> = v["mcpServers"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(servers, ["sawit", "other"]);
+        let keys: Vec<_> = entry.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(
+            keys,
+            [
+                "command",
+                "args",
+                "disabled",
+                "autoApprove",
+                "env",
+                "timeout"
+            ]
+        );
+        assert_eq!(status(&t, &Spec::sawit(server)), Status::Installed);
+    }
+
+    #[test]
+    fn switching_between_a_program_and_a_url_drops_the_other_kinds_keys() {
+        let h = home();
+        let t = customised_cline(&h);
+        let spec = Spec::http("sawit", "https://sawit.dev/mcp").header("X-Team", "a");
+        install_file(&t, &spec).unwrap();
+        let entry = json_at(&t.config)["mcpServers"]["sawit"].clone();
+        assert_eq!(entry["url"], "https://sawit.dev/mcp");
+        assert_eq!(entry["type"], "streamableHttp");
+        assert_eq!(entry["headers"], json!({"X-Team": "a"}));
+        for gone in ["command", "args", "env"] {
+            assert!(entry.get(gone).is_none(), "{gone} stayed: {entry}");
+        }
+        assert_eq!(entry["autoApprove"], json!(["query", "list_instances"]));
+        assert_eq!(entry["timeout"], 120);
+    }
+
+    #[test]
+    fn a_codex_update_edits_the_table_in_place() {
+        let h = home();
+        let config = h.path().join(".codex/config.toml");
+        let original = "model = \"o3\"\n\n# Sawit, from the app\n[mcp_servers.sawit]\ncommand = \"/old/sawit-mcp\" # moved since\nargs = []\nstartup_timeout_sec = 20\ntool_timeout_sec = 90\nenabled = true\n\n[mcp_servers.sawit.env]\nSAWIT_HOME = \"/x\"\n";
+        fs::write(&config, original).unwrap();
+        let t = find(&discover(h.path(), None), Client::Codex, "default").clone();
+        install_file(&t, &Spec::sawit(Path::new("/new/sawit-mcp"))).unwrap();
+        let text = fs::read_to_string(&config).unwrap();
+        assert_eq!(
+            text,
+            original.replace("\"/old/sawit-mcp\"", "\"/new/sawit-mcp\""),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_backup_holds_the_file_as_it_was_before_the_last_change() {
+        let h = home();
+        let t = customised_cline(&h);
+        install_file(&t, &Spec::sawit(Path::new("/one/sawit-mcp"))).unwrap();
+        // The user ticks one more tool, then Sawit updates the entry again.
+        let edited = fs::read_to_string(&t.config).unwrap().replace(
+            "\"list_instances\"",
+            "\"list_instances\", \"describe_table\"",
+        );
+        fs::write(&t.config, &edited).unwrap();
+        install_file(&t, &Spec::sawit(Path::new("/two/sawit-mcp"))).unwrap();
+        assert_eq!(fs::read_to_string(backup_path(&t.config)).unwrap(), edited);
+    }
+
+    /// A stand-in for `claude` whose `mcp remove` writes `removed` to
+    /// `config` and whose `mcp add` runs `add`.
+    fn fake_cli(dir: &Path, config: &Path, removed: &str, add: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let cli = dir.join("claude");
+        fs::write(
+            &cli,
+            format!(
+                "#!/bin/sh\ncase \"$2\" in\n  remove) printf '%s' '{removed}' > '{}' ;;\n  add) {add} ;;\nesac\n",
+                config.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).unwrap();
+        cli
+    }
+
+    const CLAUDE_WITH_SAWIT: &str = r#"{"numStartups": 3, "mcpServers": {"sawit": {"type": "stdio", "command": "/old/sawit-mcp", "args": [], "env": {"SAWIT_HOME": "/x"}}}}"#;
+
+    #[tokio::test]
+    async fn a_failed_cli_update_puts_the_old_entry_back() {
+        let h = home();
+        let t = find(&discover(h.path(), None), Client::ClaudeCode, "work").clone();
+        fs::write(&t.config, CLAUDE_WITH_SAWIT).unwrap();
+        let cli = fake_cli(
+            h.path(),
+            &t.config,
+            r#"{"numStartups": 3, "mcpServers": {}}"#,
+            "echo boom >&2; exit 1",
+        );
+        let err = install(&t, &Spec::sawit(Path::new("/new/sawit-mcp")), Some(&cli))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("boom"), "{err}");
+        assert_eq!(
+            json_at(&t.config),
+            serde_json::from_str::<Value>(CLAUDE_WITH_SAWIT).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cli_update_stopped_halfway_puts_the_old_entry_back() {
+        let h = home();
+        let t = find(&discover(h.path(), None), Client::ClaudeCode, "work").clone();
+        fs::write(&t.config, CLAUDE_WITH_SAWIT).unwrap();
+        let cli = fake_cli(
+            h.path(),
+            &t.config,
+            r#"{"numStartups": 3, "mcpServers": {}}"#,
+            "exec sleep 30",
+        );
+        let spec = Spec::sawit(Path::new("/new/sawit-mcp"));
+        // Stop: the future is dropped while `mcp add` runs.
+        let stopped = tokio::time::timeout(
+            std::time::Duration::from_millis(1500),
+            install(&t, &spec, Some(&cli)),
+        )
+        .await;
+        assert!(stopped.is_err(), "the fake add didn't hang");
+        assert_eq!(
+            json_at(&t.config),
+            serde_json::from_str::<Value>(CLAUDE_WITH_SAWIT).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cli_update_keeps_the_users_own_keys() {
+        let h = home();
+        let t = find(&discover(h.path(), None), Client::ClaudeCode, "work").clone();
+        fs::write(&t.config, CLAUDE_WITH_SAWIT).unwrap();
+        let added = r#"{"numStartups": 3, "mcpServers": {"sawit": {"type": "stdio", "command": "/new/sawit-mcp", "args": [], "env": {}}}}"#;
+        let cli = fake_cli(
+            h.path(),
+            &t.config,
+            r#"{"numStartups": 3, "mcpServers": {}}"#,
+            &format!("printf '%s' '{added}' > '{}'", t.config.display()),
+        );
+        install(&t, &Spec::sawit(Path::new("/new/sawit-mcp")), Some(&cli))
+            .await
+            .unwrap();
+        let entry = json_at(&t.config)["mcpServers"]["sawit"].clone();
+        assert_eq!(entry["command"], "/new/sawit-mcp");
+        assert_eq!(entry["env"], json!({"SAWIT_HOME": "/x"}));
+    }
+
+    #[test]
+    fn removing_a_server_keeps_the_others_in_order_and_the_files_indent() {
+        let h = home();
+        fs::create_dir_all(h.path().join(".cursor")).unwrap();
+        let config = h.path().join(".cursor/mcp.json");
+        fs::write(
+            &config,
+            "{\n    \"mcpServers\": {\n        \"a\": {\"command\": \"a\"},\n        \"b\": {\"command\": \"b\"},\n        \"c\": {\"command\": \"c\"}\n    }\n}\n",
+        )
+        .unwrap();
+        let t = find(&discover(h.path(), None), Client::Cursor, "default").clone();
+        uninstall_file(&t, "a").unwrap();
+        let text = fs::read_to_string(&config).unwrap();
+        let v: Value = serde_json::from_str(&text).unwrap();
+        let names: Vec<_> = v["mcpServers"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(names, ["b", "c"]);
+        assert!(
+            text.starts_with("{\n    \"mcpServers\": {\n        \"b\""),
+            "{text}"
+        );
+        // The pre-rename entry goes the same way.
+        fs::write(
+            &config,
+            r#"{"mcpServers": {"pgdesk": {"command": "/old/pgdesk-mcp"}, "x": {}, "y": {}}}"#,
+        )
+        .unwrap();
+        install_file(&t, &Spec::sawit(Path::new("/bin/sawit-mcp"))).unwrap();
+        let v = json_at(&config);
+        let names: Vec<_> = v["mcpServers"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(names, ["x", "y", "sawit"]);
+        // A file with tabs keeps them.
+        fs::write(&config, "{\n\t\"mcpServers\": {}\n}\n").unwrap();
+        install_file(&t, &Spec::sawit(Path::new("/bin/sawit-mcp"))).unwrap();
+        let text = fs::read_to_string(&config).unwrap();
+        assert!(
+            text.starts_with("{\n\t\"mcpServers\": {\n\t\t\"sawit\""),
+            "{text}"
+        );
+    }
+
+    /// The MCP page and an agent's `install_mcp_server` (another process)
+    /// can change one config at once: neither loses the other's entry, and
+    /// the file never ends up half one write and half the other.
+    #[test]
+    fn two_writers_to_one_config_lose_nothing() {
+        let h = home();
+        fs::create_dir_all(h.path().join(".cursor")).unwrap();
+        let t = find(&discover(h.path(), None), Client::Cursor, "default").clone();
+        std::thread::scope(|scope| {
+            for name in ["one", "two"] {
+                let t = &t;
+                scope.spawn(move || {
+                    for i in 0..150 {
+                        let spec = Spec::stdio(name, format!("/bin/{name}-{i}"), vec![]);
+                        install_file(t, &spec).unwrap_or_else(|e| panic!("{name} {i}: {e}"));
+                    }
+                });
+            }
+        });
+        let v = json_at(&t.config);
+        assert_eq!(v["mcpServers"]["one"]["command"], "/bin/one-149");
+        assert_eq!(v["mcpServers"]["two"]["command"], "/bin/two-149");
+    }
+
+    /// GUI clients start with launchd's `PATH` (no Homebrew, no nvm), and
+    /// `npx` starts with `#!/usr/bin/env node`: their entries say where
+    /// `node` is. Agents run from a terminal keep its `PATH`.
+    #[test]
+    fn gui_clients_are_told_where_node_is() {
+        let npx = "/Users/me/.nvm/versions/node/v22.11.0/bin/npx";
+        let bridge = Spec::http("mobbin", "https://api.mobbin.com/mcp").with_npx(npx);
+        let path = "/Users/me/.nvm/versions/node/v22.11.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+        assert_eq!(
+            entry(Client::ClaudeDesktop, &bridge).1["env"],
+            json!({ "PATH": path })
+        );
+        let rea =
+            Spec::stdio("rea", npx, vec!["-y".into(), "rea-agents@6.3.0".into()]).with_npx(npx);
+        assert_eq!(entry(Client::Cursor, &rea).1["env"]["PATH"], path);
+        // An agent run from a terminal: its own PATH.
+        assert_eq!(entry(Client::ClaudeCode, &rea).1["env"], json!({}));
+        // Not npx: nothing to add.
+        let sawit = Spec::sawit(Path::new(
+            "/Applications/Sawit.app/Contents/MacOS/sawit-mcp",
+        ));
+        assert!(entry(Client::Cursor, &sawit).1.get("env").is_none());
+        // npx in /usr/bin finds a node there.
+        let system = Spec::http("x", "https://x.dev/mcp").with_npx("/usr/bin/npx");
+        assert!(entry(Client::ClaudeDesktop, &system).1.get("env").is_none());
+    }
+
+    /// A client CLI installed with npm (`#!/usr/bin/env node`) runs with
+    /// its own folder on `PATH`, where nvm keeps the `node` it needs.
+    #[test]
+    fn a_cli_runs_with_its_own_folder_on_path() {
+        let h = home();
+        let t = find(&discover(h.path(), None), Client::ClaudeCode, "default").clone();
+        let cli = h.path().join(".nvm/versions/node/v22.11.0/bin/claude");
+        let call = cli_add(&t, &Spec::sawit(Path::new("/bin/sawit-mcp")), &cli).unwrap();
+        let path = call
+            .env
+            .iter()
+            .find(|(k, _)| k == "PATH")
+            .and_then(|(_, v)| v.clone())
+            .expect("no PATH");
+        assert!(
+            path.to_string_lossy()
+                .starts_with(&format!("{}:", cli.parent().unwrap().display())),
+            "{}",
+            path.display()
+        );
     }
 
     #[test]

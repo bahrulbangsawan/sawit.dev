@@ -4,7 +4,7 @@
 //! versions, and running an installer or upgrade while streaming its output.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -50,6 +50,12 @@ pub struct Tool {
     /// Where it lands when the installer doesn't put it on `PATH` (`~` is
     /// `$HOME`).
     pub also: &'static [&'static str],
+    /// Besides the `also` paths themselves, the folders (or files) the
+    /// installer puts it in, matched by the path found or, for a link, the
+    /// path it leads to; with a leading `*`, a part of that real path. A copy
+    /// found anywhere else was installed another way (Homebrew's cask of an
+    /// app, pyenv's Python), and `uninstall` isn't run on it.
+    pub owns: &'static [&'static str],
     /// The install command, run by the login shell.
     pub install: &'static str,
     /// The command that removes what `install` put in place, when there is
@@ -99,6 +105,7 @@ const fn tool(
         category,
         bin,
         also: &[],
+        owns: &[],
         install,
         uninstall: None,
         needs: &[],
@@ -128,6 +135,7 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        owns: &["~/.nvm"],
         uninstall: Some(r#"rm -rf "$NVM_DIR""#),
         also: &["~/.nvm/nvm.sh"],
         version: false,
@@ -141,6 +149,7 @@ pub static TOOLS: &[Tool] = &[
         )
     },
     Tool {
+        owns: &["~/Library/pnpm"],
         latest: Latest::Npm("pnpm"),
         upgrade: Some("pnpm self-update"),
         uninstall: Some(r#"rm -rf "$HOME/Library/pnpm""#),
@@ -185,6 +194,7 @@ rm -f "$HOME/.local/bin/uv" "$HOME/.local/bin/uvx""#,
         )
     },
     Tool {
+        owns: &["~/.nvm/versions/node"],
         uninstall: Some(
             r#"nvm deactivate >/dev/null 2>&1 || true
 nvm uninstall "$(nvm version default)"
@@ -201,6 +211,7 @@ nvm unalias default"#,
         )
     },
     Tool {
+        owns: &["~/.bun"],
         latest: Latest::GitHub("oven-sh/bun"),
         upgrade: Some("bun upgrade"),
         uninstall: Some(r#"rm -rf "$HOME/.bun""#),
@@ -215,6 +226,7 @@ nvm unalias default"#,
         )
     },
     Tool {
+        owns: &["~/.deno"],
         latest: Latest::GitHub("denoland/deno"),
         upgrade: Some("deno upgrade"),
         uninstall: Some(r#"rm -rf "$HOME/.deno""#),
@@ -229,6 +241,7 @@ nvm unalias default"#,
         )
     },
     Tool {
+        owns: &["~/.local/share/uv/python"],
         uninstall: Some("uv python uninstall --all"),
         needs: &["uv"],
         also: &["~/.local/bin/python3"],
@@ -242,6 +255,7 @@ nvm unalias default"#,
         )
     },
     Tool {
+        owns: &["~/.cargo/bin", "~/.rustup"],
         latest: Latest::GitHub("rust-lang/rust"),
         upgrade: Some("rustup update stable"),
         uninstall: Some("rustup self uninstall -y"),
@@ -256,6 +270,7 @@ nvm unalias default"#,
         )
     },
     Tool {
+        owns: &["~/.local/share/claude"],
         latest: Latest::Npm("@anthropic-ai/claude-code"),
         upgrade: Some("claude update"),
         uninstall: Some(
@@ -298,6 +313,7 @@ rm -rf "$HOME/.local/share/claude""#,
         )
     },
     Tool {
+        owns: &["~/.opencode"],
         latest: Latest::Npm("opencode-ai"),
         upgrade: Some("opencode upgrade"),
         uninstall: Some(r#"rm -rf "$HOME/.opencode""#),
@@ -312,6 +328,7 @@ rm -rf "$HOME/.local/share/claude""#,
         )
     },
     Tool {
+        owns: &["~/.amp"],
         latest: Latest::Npm("@sourcegraph/amp"),
         uninstall: Some(
             r#"rm -f "$HOME/.local/bin/amp"
@@ -328,6 +345,7 @@ rm -rf "$HOME/.amp""#,
         )
     },
     Tool {
+        owns: &["~/.local/share/cursor-agent"],
         uninstall: Some(
             r#"rm -f "$HOME/.local/bin/cursor-agent" "$HOME/.local/bin/agent"
 rm -rf "$HOME/.local/share/cursor-agent""#,
@@ -380,8 +398,12 @@ rm -rf "$HOME/.local/share/cursor-agent""#,
         )
     },
     Tool {
+        // Where its installer links the cap-cli of Cap.app.
+        owns: &["~/.local/bin/cap", "~/.cap/bin/cap"],
         uninstall: Some(
-            r#"rm -f "$(command -v cap)"
+            r#"for shim in "$HOME/.local/bin/cap" "$HOME/.cap/bin/cap"; do
+  case "$(readlink "$shim")" in */cap-cli*) rm -f "$shim" ;; esac
+done
 rm -rf "/Applications/Cap.app" "$HOME/Applications/Cap.app""#,
         ),
         also: &["/Applications/Cap.app", "~/Applications/Cap.app"],
@@ -396,6 +418,8 @@ rm -rf "/Applications/Cap.app" "$HOME/Applications/Cap.app""#,
         )
     },
     Tool {
+        // Where its installer links the app's CLI.
+        owns: &["~/.local/bin/zed"],
         latest: Latest::GitHub("zed-industries/zed"),
         uninstall: Some(
             r#"rm -f "$HOME/.local/bin/zed"
@@ -425,6 +449,7 @@ rm -rf "/Applications/Zed.app" "$HOME/Applications/Zed.app""#,
         )
     },
     Tool {
+        owns: &["~/.fly"],
         latest: Latest::GitHub("superfly/flyctl"),
         upgrade: Some("flyctl version upgrade"),
         uninstall: Some(r#"rm -rf "$HOME/.fly""#),
@@ -466,18 +491,129 @@ pub fn plan(wanted: &[&str], installed: &dyn Fn(&str) -> bool) -> Vec<&'static T
     out
 }
 
-/// Put in front of every command: the folders installers use, and nvm, so a
-/// tool installed a moment ago is found even before the shell profile
-/// picks it up.
-const PRELUDE: &str = r#"export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.bun/bin:$HOME/.deno/bin:$HOME/.fly/bin:$HOME/.opencode/bin:$HOME/.amp/bin:$HOME/Library/pnpm:/opt/homebrew/bin:/usr/local/bin:$PATH"
+/// Put in front of every command: the folders installers use
+/// ([`INSTALL_DIRS`]), and nvm, so a tool installed a moment ago is found
+/// even before the shell profile picks it up.
+const PRELUDE: &str = r#"export PATH="$HOME/.local/bin:$HOME/.claude/local:$HOME/.npm-global/bin:$HOME/.cargo/bin:$HOME/.bun/bin:$HOME/.deno/bin:$HOME/.fly/bin:$HOME/.opencode/bin:$HOME/.amp/bin:$HOME/Library/pnpm:/opt/homebrew/bin:/usr/local/bin:$PATH"
 export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
 "#;
 
-/// The user's login shell, so the profile's `PATH` and variables apply.
-fn shell() -> tokio::process::Command {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let mut cmd = tokio::process::Command::new(shell);
+/// The folders installers put programs in. A login shell's `PATH`, which
+/// the app adopts, often misses them: their installers add them in
+/// `~/.zshrc`, which only interactive shells read.
+const INSTALL_DIRS: [&str; 10] = [
+    "~/.local/bin",
+    "~/.claude/local",
+    "~/.npm-global/bin",
+    "~/.cargo/bin",
+    "~/.bun/bin",
+    "~/.deno/bin",
+    "~/.fly/bin",
+    "~/.opencode/bin",
+    "~/.amp/bin",
+    "~/Library/pnpm",
+];
+
+/// Homebrew's folders, searched after nvm's Node.js: a terminal with nvm
+/// set up runs nvm's `npx` before Homebrew's.
+const SYSTEM_DIRS: [&str; 2] = ["/opt/homebrew/bin", "/usr/local/bin"];
+
+/// Finds the program `name` where the Dev Tools page finds tools: on
+/// `PATH`, then in the folders installers use, nvm's default Node.js
+/// (`npx`, and CLIs installed with npm) and Homebrew's. `cap` is only Cap's
+/// CLI.
+pub fn find_program(name: &str) -> Option<PathBuf> {
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    let nvm = std::env::var_os("NVM_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".nvm"));
+    let system = SYSTEM_DIRS.map(PathBuf::from);
+    find_program_in(
+        name,
+        std::env::var_os("PATH").as_deref(),
+        &home,
+        &nvm,
+        &system,
+    )
+}
+
+fn find_program_in(
+    name: &str,
+    path: Option<&std::ffi::OsStr>,
+    home: &Path,
+    nvm: &Path,
+    system: &[PathBuf],
+) -> Option<PathBuf> {
+    let on_path = path.map(std::env::split_paths).into_iter().flatten();
+    on_path
+        .chain(INSTALL_DIRS.iter().map(|d| expand_in(d, home)))
+        .chain(nvm_default_bin(nvm))
+        .chain(system.iter().cloned())
+        .map(|dir| dir.join(name))
+        .find(|p| is_program(p) && (name != "cap" || is_cap_cli(p)))
+}
+
+fn is_program(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+/// The `bin` folder of the Node.js nvm's `default` alias names, or of the
+/// newest one installed when it names none that is.
+fn nvm_default_bin(nvm: &Path) -> Option<PathBuf> {
+    let versions = nvm.join("versions/node");
+    let mut installed: Vec<(Vec<u64>, std::ffi::OsString)> = std::fs::read_dir(&versions)
+        .ok()?
+        .filter_map(|e| {
+            let name = e.ok()?.file_name();
+            Some((node_version(name.to_str()?)?, name))
+        })
+        .collect();
+    installed.sort();
+    let wanted = nvm_alias(nvm, "default", 0);
+    let (_, name) = wanted
+        .and_then(|w| installed.iter().rev().find(|(v, _)| v.starts_with(&w)))
+        .or(installed.last())?;
+    Some(versions.join(name).join("bin"))
+}
+
+/// The version nvm's alias `name` points at, as far as it says
+/// (`22` → `[22]`), following aliases of aliases (`lts/*` → `lts/jod` →
+/// `v22.11.0`); `None` for the newest (`node`, `stable`, unknown).
+fn nvm_alias(nvm: &Path, name: &str, depth: u8) -> Option<Vec<u64>> {
+    if depth > 8 {
+        return None;
+    }
+    let text = std::fs::read_to_string(nvm.join("alias").join(name)).ok();
+    let target = match (text, name) {
+        (Some(text), _) => text.trim().to_string(),
+        // An nvm without the `lts/*` file: its newest LTS.
+        (None, "lts/*") => {
+            return std::fs::read_dir(nvm.join("alias/lts"))
+                .ok()?
+                .filter_map(|e| {
+                    let lts = format!("lts/{}", e.ok()?.file_name().to_str()?);
+                    nvm_alias(nvm, &lts, depth + 1)
+                })
+                .max();
+        }
+        (None, _) => return None,
+    };
+    node_version(&target).or_else(|| nvm_alias(nvm, &target, depth + 1))
+}
+
+/// `v22.11.0`, `22.11` or `22` as numbers.
+fn node_version(text: &str) -> Option<Vec<u64>> {
+    let digits = text.strip_prefix('v').unwrap_or(text);
+    digits.split('.').map(|p| p.parse().ok()).collect()
+}
+
+/// A login shell to run a script in: the user's own when it runs POSIX
+/// scripts, so the profile's `PATH` and variables apply, else zsh
+/// ([`crate::probe::script_shell`]). `login` is `$SHELL`.
+fn shell(login: Option<&str>) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(crate::probe::script_shell(login));
     cmd.arg("-l")
         .stdin(Stdio::null())
         .env("NONINTERACTIVE", "1")
@@ -495,10 +631,24 @@ fn shell() -> tokio::process::Command {
 }
 
 fn expand(path: &str) -> PathBuf {
+    expand_in(path, Path::new(&std::env::var("HOME").unwrap_or_default()))
+}
+
+fn expand_in(path: &str, home: &Path) -> PathBuf {
     match path.strip_prefix("~/") {
-        Some(rest) => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(rest),
+        Some(rest) => home.join(rest),
         None => PathBuf::from(path),
     }
+}
+
+/// Whether `cap` at `path` is Cap's CLI: its installer links it to
+/// `Cap.app/Contents/MacOS/cap-cli`. Capistrano's `cap` is a Ruby script.
+pub fn is_cap_cli(path: &Path) -> bool {
+    std::fs::canonicalize(path).is_ok_and(|real| {
+        real.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("cap-cli"))
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -509,9 +659,27 @@ pub struct Found {
 
 const MARK: &str = "__SAWIT_TOOL__";
 
+/// How long detection waits for the login shell.
+const DETECT_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// What [`detect`] found.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Detection {
+    pub found: HashMap<&'static str, Found>,
+    /// Why the login shell couldn't say which tools it finds, when it
+    /// couldn't. `found` then has only the tools at their usual places, so
+    /// a tool missing from it may still be installed.
+    pub problem: Option<String>,
+}
+
 /// Which tools are installed: `command -v` in one login shell, then the
 /// known install locations, then each one's `--version`.
-pub async fn detect() -> HashMap<&'static str, Found> {
+pub async fn detect() -> Detection {
+    detect_as(crate::probe::login_shell().as_deref()).await
+}
+
+/// [`detect`] with `login` as `$SHELL`.
+async fn detect_as(login: Option<&str>) -> Detection {
     let mut script = String::from(PRELUDE);
     for t in TOOLS {
         // nvm is a shell function; its path is the script that defines it.
@@ -526,14 +694,43 @@ pub async fn detect() -> HashMap<&'static str, Found> {
         };
         script.push_str(&format!("printf '{MARK}{}\\t%s\\n' \"$({probe})\"\n", t.id));
     }
-    let mut cmd = shell();
+    let mut cmd = shell(login);
     cmd.arg("-c")
         .arg(script)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let out = match tokio::time::timeout(Duration::from_secs(20), cmd.output()).await {
-        Ok(Ok(out)) => String::from_utf8_lossy(&out.stdout).into_owned(),
-        _ => String::new(),
+        .stderr(Stdio::piped());
+    let shell_name = crate::probe::script_shell(login).display().to_string();
+    let (out, problem) = match tokio::time::timeout(DETECT_TIMEOUT, cmd.output()).await {
+        Ok(Ok(out)) => {
+            let text = String::from_utf8_lossy(&out.stdout).into_owned();
+            // It printed a line per tool, unless it failed before the first.
+            let problem = (!text.contains(MARK)).then(|| {
+                let why = String::from_utf8_lossy(&out.stderr)
+                    .lines()
+                    .rev()
+                    .find(|l| !l.trim().is_empty())
+                    .map(|l| format!(": {}", l.trim()))
+                    .unwrap_or_default();
+                format!(
+                    "{shell_name} -l failed (exit {}){why}",
+                    out.status
+                        .code()
+                        .map_or_else(|| "signal".to_string(), |c| c.to_string())
+                )
+            });
+            (text, problem)
+        }
+        Ok(Err(e)) => (
+            String::new(),
+            Some(format!("{shell_name} couldn't start: {e}")),
+        ),
+        Err(_) => (
+            String::new(),
+            Some(format!(
+                "{shell_name} -l didn't answer within {} seconds",
+                DETECT_TIMEOUT.as_secs()
+            )),
+        ),
     };
     let mut paths: HashMap<&'static str, PathBuf> = HashMap::new();
     for line in out.lines() {
@@ -546,6 +743,8 @@ pub async fn detect() -> HashMap<&'static str, Found> {
         // `command -v` names functions and aliases without a slash.
         if let Some(t) = find(id)
             && path.starts_with('/')
+            // Another program by the same name (Capistrano's `cap`).
+            && (t.id != "cap" || is_cap_cli(Path::new(path)))
         {
             paths.insert(t.id, PathBuf::from(path));
         }
@@ -575,13 +774,14 @@ pub async fn detect() -> HashMap<&'static str, Found> {
     }))
     .await;
     let mut versions: HashMap<&str, String> = versions.into_iter().flatten().collect();
-    paths
+    let found = paths
         .into_iter()
         .map(|(id, path)| {
             let version = versions.remove(id);
             (id, Found { path, version })
         })
-        .collect()
+        .collect();
+    Detection { found, problem }
 }
 
 /// The version number in a `--version` line ("Python 3.13.2" → "3.13.2").
@@ -711,30 +911,26 @@ pub fn is_newer(latest: &str, installed: &str) -> bool {
 /// Fails with the last lines of output when it exits non-zero. Dropping
 /// the future stops the installer and everything it started.
 pub async fn install(tool: &Tool, on_line: impl Fn(String) + Send + Sync) -> Result<()> {
-    run_script(tool.name, tool.install, on_line).await
+    run_locked(tool.id, tool.name, tool.install, on_line).await
 }
 
 /// Runs `command` (`tool`'s installer or upgrade) like [`install`].
 pub async fn run(tool: &Tool, command: &str, on_line: impl Fn(String) + Send + Sync) -> Result<()> {
-    run_script(tool.name, command, on_line).await
+    run_locked(tool.id, tool.name, command, on_line).await
 }
 
 /// How to remove the copy of `tool` found at `found`: `brew uninstall`
-/// when Homebrew put it there, the tool's own command when its installer
-/// did (under the home folder, or at one of its known locations), and
-/// `None` for anything else, which Sawit leaves alone.
-pub fn uninstall_command(tool: &Tool, found: &std::path::Path) -> Option<String> {
+/// when Homebrew put it there, `npm uninstall -g` when npm did, the tool's
+/// own command when its installer did (at one of its known locations, or in
+/// the folders it installs to: [`Tool::owns`]), and `None` for anything
+/// else (pyenv's Python, Capistrano's `cap`, …), which Sawit leaves alone.
+pub fn uninstall_command(tool: &Tool, found: &Path) -> Option<String> {
     let real = std::fs::canonicalize(found).unwrap_or_else(|_| found.to_path_buf());
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
     uninstall_command_in(tool, found, &real, &home)
 }
 
-fn uninstall_command_in(
-    tool: &Tool,
-    found: &std::path::Path,
-    real: &std::path::Path,
-    home: &std::path::Path,
-) -> Option<String> {
+fn uninstall_command_in(tool: &Tool, found: &Path, real: &Path, home: &Path) -> Option<String> {
     let parts: Vec<_> = real
         .components()
         .map(|c| c.as_os_str().to_string_lossy())
@@ -743,11 +939,30 @@ fn uninstall_command_in(
         && let Some(ix) = parts.iter().position(|p| p == "Cellar")
         && let Some(formula) = parts.get(ix + 1)
     {
-        return Some(format!("brew uninstall {formula}"));
+        // A folder name, into a shell command: only a formula's.
+        let formula_like = formula
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "@._+-".contains(c));
+        return formula_like.then(|| format!("brew uninstall {formula}"));
     }
-    let ours = found.starts_with(home)
-        || real.starts_with(home)
-        || tool.also.iter().any(|p| expand(p) == found);
+    let real_text = real.to_string_lossy();
+    // An npm package installed globally: npm removes it.
+    if let Latest::Npm(package) = tool.latest
+        && tool.id != "npm"
+        && real_text.contains(&format!("/node_modules/{package}/"))
+    {
+        return Some(format!("npm uninstall -g {package}"));
+    }
+    // An `also` path is the copy itself (an app bundle there may be
+    // Homebrew's cask, its CLI linked from elsewhere: not this one).
+    let ours = tool.also.iter().any(|p| expand_in(p, home) == found)
+        || tool.owns.iter().any(|p| match p.strip_prefix('*') {
+            Some(part) => real_text.contains(part),
+            None => {
+                let p = expand_in(p, home);
+                found.starts_with(&p) || real.starts_with(&p)
+            }
+        });
     ours.then_some(tool.uninstall).flatten().map(String::from)
 }
 
@@ -757,7 +972,43 @@ pub async fn uninstall(
     command: &str,
     on_line: impl Fn(String) + Send + Sync,
 ) -> Result<()> {
-    run_script(tool.name, command, on_line).await
+    run_locked(tool.id, tool.name, command, on_line).await
+}
+
+/// Runs `command` for the tool `id` while holding that tool's lock: one
+/// installer, upgrade or uninstaller per tool at a time, whether the Dev
+/// Tools page, an agent (`install_dev_tools`) or `sawit pasang` runs it. Two
+/// at once would write the same folders (rustup, nvm's clone, uv's).
+async fn run_locked(
+    id: &str,
+    name: &str,
+    command: &str,
+    on_line: impl Fn(String) + Send + Sync,
+) -> Result<()> {
+    let _lock = lock_tool(id, name)?;
+    run_script(name, command, on_line).await
+}
+
+/// Holds tool `id`'s lock until dropped; fails at once when it's held.
+fn lock_tool(id: &str, name: &str) -> Result<std::fs::File> {
+    use std::os::fd::AsRawFd as _;
+    let dir = std::env::temp_dir().join("sawit-tool-locks");
+    std::fs::create_dir_all(&dir)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(format!("{id}.lock")))?;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        let e = std::io::Error::last_os_error();
+        if e.raw_os_error() == Some(libc::EWOULDBLOCK) {
+            return Err(CoreError::Config(format!(
+                "{name} is already being installed, upgraded or removed (from the Dev Tools page, an agent or `sawit pasang`). Try again when that's done."
+            )));
+        }
+        return Err(e.into());
+    }
+    Ok(file)
 }
 
 /// The tools that need `id` installed first.
@@ -785,8 +1036,24 @@ async fn run_script(
     command: &str,
     on_line: impl Fn(String) + Send + Sync,
 ) -> Result<()> {
+    run_script_as(
+        crate::probe::login_shell().as_deref(),
+        name,
+        command,
+        on_line,
+    )
+    .await
+}
+
+/// [`run_script`] with `login` as `$SHELL`.
+async fn run_script_as(
+    login: Option<&str>,
+    name: &str,
+    command: &str,
+    on_line: impl Fn(String) + Send + Sync,
+) -> Result<()> {
     let script = format!("{PRELUDE}set -e\n{command}\n");
-    let mut cmd = shell();
+    let mut cmd = shell(login);
     cmd.arg("-c")
         .arg(script)
         .stdout(Stdio::piped())
@@ -800,9 +1067,18 @@ async fn run_script(
         let (on_line, tail) = (&on_line, &tail);
         async move {
             let Some(pipe) = pipe else { return };
-            let mut lines = BufReader::new(pipe).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let line = strip_ansi(&line);
+            let mut pipe = BufReader::new(pipe);
+            let mut bytes = Vec::new();
+            // Bytes, not `lines()`: a line that isn't UTF-8 would end the
+            // reading there and close the pipe under the installer.
+            loop {
+                bytes.clear();
+                match pipe.read_until(b'\n', &mut bytes).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                let line = String::from_utf8_lossy(&bytes);
+                let line = strip_ansi(line.trim_end_matches(['\n', '\r']));
                 // Progress bars redraw with \r; keep what's left at the end.
                 let line = line
                     .rsplit('\r')
@@ -944,6 +1220,102 @@ mod tests {
         );
     }
 
+    /// "Under the home folder" isn't "put there by this tool's installer":
+    /// another manager's copy gets no removal script (or its own manager's),
+    /// never the catalog's, which would remove something else.
+    #[test]
+    fn uninstall_is_offered_only_for_the_copy_the_installer_made() {
+        let home = std::path::Path::new("/Users/me");
+        let p = std::path::Path::new;
+        let script = |id: &str, found: &str, real: &str| {
+            uninstall_command_in(find(id).unwrap(), p(found), p(real), home)
+        };
+        let own = |id: &str| find(id).unwrap().uninstall.map(String::from);
+        // pyenv's and asdf's shims: `uv python uninstall --all` would remove
+        // every uv Python and leave theirs.
+        for shim in [
+            "/Users/me/.pyenv/shims/python3",
+            "/Users/me/.asdf/shims/python3",
+        ] {
+            assert_eq!(script("python", shim, shim), None, "{shim}");
+        }
+        assert_eq!(
+            script(
+                "python",
+                "/Users/me/.local/bin/python3",
+                "/Users/me/.local/share/uv/python/cpython-3.13.2-macos-aarch64-none/bin/python3.13"
+            ),
+            own("python")
+        );
+        // Claude Code from npm: npm removes it, not the native installer's script.
+        let npm = "/Users/me/.nvm/versions/node/v22.11.0/lib/node_modules/@anthropic-ai/claude-code/cli.js";
+        assert_eq!(
+            script(
+                "claude-code",
+                "/Users/me/.nvm/versions/node/v22.11.0/bin/claude",
+                npm
+            )
+            .as_deref(),
+            Some("npm uninstall -g @anthropic-ai/claude-code")
+        );
+        assert_eq!(
+            script(
+                "claude-code",
+                "/Users/me/.local/bin/claude",
+                "/Users/me/.local/share/claude/versions/2.0.14"
+            ),
+            own("claude-code")
+        );
+        // Capistrano's `cap` isn't Cap's; Cap's own is a link into Cap.app.
+        let rbenv = "/Users/me/.rbenv/shims/cap";
+        assert_eq!(script("cap", rbenv, rbenv), None);
+        assert_eq!(
+            script(
+                "cap",
+                "/Users/me/.local/bin/cap",
+                "/Applications/Cap.app/Contents/MacOS/cap-cli"
+            ),
+            own("cap")
+        );
+        // Bun from npm, and omp from bun: not where their installers put them.
+        assert_eq!(
+            script(
+                "bun",
+                "/Users/me/.nvm/versions/node/v22.11.0/bin/bun",
+                "/Users/me/.nvm/versions/node/v22.11.0/lib/node_modules/bun/bin/bun.exe"
+            ),
+            None
+        );
+        assert_eq!(
+            script("omp", "/Users/me/.bun/bin/omp", "/Users/me/.bun/bin/omp"),
+            None
+        );
+        assert_eq!(
+            script("bun", "/Users/me/.bun/bin/bun", "/Users/me/.bun/bin/bun"),
+            own("bun")
+        );
+        // Zed's CLI from its installer, and from Homebrew's cask, which links the same app.
+        let zed_cli = "/Applications/Zed.app/Contents/MacOS/cli";
+        assert_eq!(
+            script("zed", "/Users/me/.local/bin/zed", zed_cli),
+            own("zed")
+        );
+        assert_eq!(script("zed", "/opt/homebrew/bin/zed", zed_cli), None);
+        assert_eq!(
+            script("zed", "/Applications/Zed.app", "/Applications/Zed.app"),
+            own("zed")
+        );
+        // A Cellar folder whose name isn't a formula's isn't put in a command.
+        assert_eq!(
+            script(
+                "uv",
+                "/opt/homebrew/bin/uv",
+                "/opt/homebrew/Cellar/uv;touch${IFS}x/0.1/bin/uv"
+            ),
+            None
+        );
+    }
+
     #[tokio::test]
     async fn dropping_a_run_stops_everything_it_started() {
         let marker = format!("sleep 31.{}", std::process::id());
@@ -962,6 +1334,121 @@ mod tests {
         );
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(!alive(), "the script's processes outlived the run");
+    }
+
+    /// fish, nu, PowerShell and tcsh can't run the scripts: they run in zsh.
+    /// tcsh ships with macOS, so it stands in for them here.
+    #[tokio::test]
+    async fn scripts_run_whatever_the_login_shell() {
+        let lines = std::sync::Mutex::new(Vec::new());
+        run_script_as(Some("/bin/tcsh"), "test", "echo \"${NVM_DIR:+nvm}\"", |l| {
+            lines.lock().unwrap().push(l)
+        })
+        .await
+        .unwrap();
+        assert_eq!(*lines.lock().unwrap(), ["nvm"]);
+        let found = detect_as(Some("/bin/tcsh")).await;
+        assert_eq!(found.problem, None);
+    }
+
+    /// A login shell that fails is reported, not read as "nothing installed".
+    #[tokio::test]
+    async fn a_failing_login_shell_is_reported() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        // Named `sh`, so it's taken for a POSIX shell and run.
+        let sh = dir.path().join("sh");
+        std::fs::write(&sh, "#!/bin/sh\necho 'broken profile' >&2\nexit 3\n").unwrap();
+        std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let found = detect_as(sh.to_str()).await;
+        let problem = found.problem.expect("no problem reported");
+        assert!(problem.contains("broken profile"), "{problem}");
+        assert!(problem.contains("exit 3"), "{problem}");
+    }
+
+    /// An installer that prints a line in Latin-1 goes on being read: the
+    /// rest of its output still shows, and its pipe isn't closed under it.
+    #[tokio::test]
+    async fn output_after_a_line_that_isnt_utf8_still_comes_through() {
+        let lines = std::sync::Mutex::new(Vec::new());
+        run_script("test", r"printf 'caf\351\n'; echo after", |l| {
+            lines.lock().unwrap().push(l)
+        })
+        .await
+        .unwrap();
+        assert_eq!(*lines.lock().unwrap(), ["caf\u{FFFD}", "after"]);
+    }
+
+    /// The MCP page looks programs up where the Dev Tools page finds tools,
+    /// not only on the app's `PATH`, which misses what `~/.zshrc` adds.
+    #[test]
+    fn programs_are_found_where_installers_put_them() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let program = |path: &Path, text: &str| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        program(&home.join(".local/bin/claude"), "");
+        let nvm = home.join(".nvm");
+        for v in ["v18.20.4", "v22.11.0", "v23.1.0"] {
+            program(&nvm.join(format!("versions/node/{v}/bin/npx")), "");
+        }
+        std::fs::create_dir_all(nvm.join("alias/lts")).unwrap();
+        std::fs::write(nvm.join("alias/default"), "lts/*\n").unwrap();
+        std::fs::write(nvm.join("alias/lts/*"), "lts/jod\n").unwrap();
+        std::fs::write(nvm.join("alias/lts/jod"), "v22.11.0\n").unwrap();
+        // Capistrano's `cap`, a Ruby script: not Cap's.
+        program(&home.join(".local/bin/cap"), "#!/usr/bin/env ruby\n");
+        let empty = std::ffi::OsString::new();
+        let find = |name| find_program_in(name, Some(&empty), home, &nvm, &[]);
+        assert_eq!(find("claude"), Some(home.join(".local/bin/claude")));
+        assert_eq!(
+            find("npx"),
+            Some(nvm.join("versions/node/v22.11.0/bin/npx"))
+        );
+        assert_eq!(find("cap"), None);
+        assert_eq!(find("codex"), None);
+        // The default named by number, and an nvm with no default: the newest.
+        std::fs::write(nvm.join("alias/default"), "18").unwrap();
+        assert_eq!(
+            find("npx"),
+            Some(nvm.join("versions/node/v18.20.4/bin/npx"))
+        );
+        std::fs::remove_file(nvm.join("alias/default")).unwrap();
+        assert_eq!(find("npx"), Some(nvm.join("versions/node/v23.1.0/bin/npx")));
+        // PATH comes first.
+        program(&home.join("bin/claude"), "");
+        let path = std::env::join_paths([home.join("bin")]).unwrap();
+        assert_eq!(
+            find_program_in("claude", Some(&path), home, &nvm, &[]),
+            Some(home.join("bin/claude"))
+        );
+        // Every folder searched is one detection searches too.
+        for d in INSTALL_DIRS.iter().chain(&SYSTEM_DIRS) {
+            let d = d.replace("~/", "$HOME/");
+            assert!(PRELUDE.contains(&format!("{d}:")), "{d}");
+        }
+    }
+
+    /// Two runs for one tool (the page, an agent, `sawit pasang`) never
+    /// overlap: the second says the first is running.
+    #[tokio::test]
+    async fn one_run_per_tool_at_a_time() {
+        let id = format!("test-{}", std::process::id());
+        let first = run_locked(&id, "Test", "sleep 2", |_| {});
+        let second = async {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            run_locked(&id, "Test", "true", |_| {}).await
+        };
+        let (first, second) = tokio::join!(first, second);
+        first.unwrap();
+        let err = second.expect_err("ran alongside the first");
+        assert!(err.to_string().contains("already"), "{err}");
+        // Once the first is done, the next runs.
+        run_locked(&id, "Test", "true", |_| {}).await.unwrap();
     }
 
     #[test]

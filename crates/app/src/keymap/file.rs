@@ -199,33 +199,65 @@ impl UserKeymap {
         })
     }
 
-    /// Sets `keystrokes` to `entry` in `context`, in the last section with that context (a new one
-    /// at the end if there is none). The keystrokes' binding there, if any, is replaced: a JSON
-    /// object holds each key once.
-    pub fn set(&mut self, context: Option<&str>, keystrokes: &str, entry: Entry) {
+    /// Adds `keystrokes` → `entry` in `context` after every binding the file has in that context,
+    /// so that it runs before them (GPUI runs the binding bound last first): at the end of the
+    /// last section with that context, or of a new one at the end of the file. Nothing is
+    /// replaced. A JSON object holds each key once, so when that section has the keystrokes
+    /// already, a new section with the same context takes the binding; the same binding again is
+    /// not added twice.
+    pub fn add(&mut self, context: Option<&str>, keystrokes: &str, entry: Entry) {
         let context = context.map(str::trim).filter(|c| !c.is_empty());
-        let ix = match self
+        let last = self
             .sections
             .iter()
-            .rposition(|s| s.context.as_deref() == context)
-        {
-            Some(ix) => ix,
-            None => {
-                self.sections.push(Section {
-                    context: context.map(String::from),
-                    bindings: Vec::new(),
-                });
-                self.sections.len() - 1
-            }
+            .rposition(|s| s.context.as_deref() == context);
+        let ix = match last {
+            Some(ix) => match self.sections[ix]
+                .bindings
+                .iter()
+                .find(|b| same_keys(&b.keystrokes, keystrokes))
+            {
+                Some(binding) if binding.entry == entry => return,
+                Some(_) => self.push_section(context),
+                None => ix,
+            },
+            None => self.push_section(context),
         };
-        let bindings = &mut self.sections[ix].bindings;
-        match bindings.iter_mut().find(|b| b.keystrokes == keystrokes) {
-            Some(binding) => binding.entry = entry,
-            None => bindings.push(Binding {
-                keystrokes: keystrokes.to_string(),
-                entry,
-            }),
+        self.sections[ix].bindings.push(Binding {
+            keystrokes: keystrokes.to_string(),
+            entry,
+        });
+    }
+
+    /// Changes the binding at `at` to `keystrokes` → `entry` in `context`. It stays where it is
+    /// when its section has that context and no other binding in the context has the keystrokes;
+    /// otherwise it moves to where [`Self::add`] puts a new binding, after the ones it now shares
+    /// its keys with, so that it runs before them. No other binding changes.
+    pub fn replace(&mut self, at: Location, context: Option<&str>, keystrokes: &str, entry: Entry) {
+        let context = context.map(str::trim).filter(|c| !c.is_empty());
+        let in_its_section = self.sections.get(at.section).is_some_and(|section| {
+            section.context.as_deref() == context && at.binding < section.bindings.len()
+        });
+        let shared = self.bindings().any(|(other, other_context, binding)| {
+            other != at && other_context == context && same_keys(&binding.keystrokes, keystrokes)
+        });
+        if in_its_section && !shared {
+            let binding = &mut self.sections[at.section].bindings[at.binding];
+            binding.keystrokes = keystrokes.to_string();
+            binding.entry = entry;
+        } else {
+            self.remove(at);
+            self.add(context, keystrokes, entry);
         }
+    }
+
+    /// Adds an empty section with `context` at the end, and gives its index.
+    fn push_section(&mut self, context: Option<&str>) -> usize {
+        self.sections.push(Section {
+            context: context.map(String::from),
+            bindings: Vec::new(),
+        });
+        self.sections.len() - 1
     }
 
     /// Takes out the binding at `at`. Its section goes too when nothing is left in it.
@@ -241,19 +273,17 @@ impl UserKeymap {
         Some(binding)
     }
 
-    /// Where the `zed::Unbind` of `action` from `keystrokes` in `context` is, if the file has one.
-    pub fn find_unbind(
-        &self,
-        context: Option<&str>,
-        keystrokes: &str,
-        action: &str,
-    ) -> Option<Location> {
-        self.bindings()
-            .find(|(_, ctx, b)| {
-                *ctx == context && b.keystrokes == keystrokes && b.entry.unbinds() == Some(action)
-            })
-            .map(|(at, _, _)| at)
+    /// The binding at `at`, if there is one.
+    pub fn binding(&self, at: Location) -> Option<&Binding> {
+        self.sections.get(at.section)?.bindings.get(at.binding)
     }
+}
+
+/// Whether two keystrokes as the file writes them are the same keys, in any order of modifiers.
+fn same_keys(a: &str, b: &str) -> bool {
+    a == b
+        || super::names::normalize_keystrokes(a)
+            .is_some_and(|a| super::names::normalize_keystrokes(b) == Some(a))
 }
 
 /// `text` without its `//` and `/* */` comments, strings left as they are. A comment becomes
@@ -411,18 +441,18 @@ mod tests {
     #[test]
     fn round_trips() {
         let mut keymap = UserKeymap::default();
-        keymap.set(
+        keymap.add(
             Some("Workspace"),
             "cmd-k e",
             Entry::unbind("workspace::CloseTabsLeft"),
         );
-        keymap.set(
+        keymap.add(
             Some("Workspace"),
             "cmd-e",
             Entry::action("workspace::CloseTabsLeft", None),
         );
-        keymap.set(None, "cmd-q", Entry::Disabled);
-        keymap.set(
+        keymap.add(None, "cmd-q", Entry::Disabled);
+        keymap.add(
             Some("Board"),
             "ctrl-1",
             Entry::action("board::Command", Some(json!({"id": "tool.move"}))),
@@ -431,26 +461,105 @@ mod tests {
         assert_eq!(UserKeymap::parse(&text).unwrap(), keymap);
     }
 
+    /// A second binding of the same keys in the same context goes into a section of its own
+    /// after the first, which stays: a JSON object holds each key once.
     #[test]
-    fn set_replaces_the_same_keystrokes_in_the_same_context() {
+    fn add_keeps_the_other_binding_of_the_same_keys() {
         let mut keymap = UserKeymap::default();
-        keymap.set(Some("Workspace"), "cmd-e", Entry::action("a::B", None));
-        keymap.set(Some(" Workspace "), "cmd-e", Entry::action("c::D", None));
-        keymap.set(Some(""), "cmd-e", Entry::action("e::F", None));
-        assert_eq!(keymap.sections.len(), 2);
-        assert_eq!(keymap.sections[0].bindings.len(), 1);
-        assert_eq!(
-            keymap.sections[0].bindings[0].entry,
-            Entry::action("c::D", None)
+        keymap.add(Some("Workspace"), "cmd-e", Entry::action("a::B", None));
+        keymap.add(
+            Some(" Workspace "),
+            "shift-cmd-e",
+            Entry::action("a::B", None),
         );
-        assert_eq!(keymap.sections[1].context, None);
+        keymap.add(Some("Workspace"), "cmd-e", Entry::unbind("c::D"));
+        keymap.add(Some(""), "cmd-e", Entry::action("e::F", None));
+        let found: Vec<_> = keymap
+            .bindings()
+            .map(|(_, context, b)| (context, b.keystrokes.as_str(), b.entry.clone()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (Some("Workspace"), "cmd-e", Entry::action("a::B", None)),
+                (
+                    Some("Workspace"),
+                    "shift-cmd-e",
+                    Entry::action("a::B", None)
+                ),
+                (Some("Workspace"), "cmd-e", Entry::unbind("c::D")),
+                (None, "cmd-e", Entry::action("e::F", None)),
+            ]
+        );
+        assert_eq!(keymap.sections.len(), 3);
+        // The file holds every one of them.
+        assert_eq!(UserKeymap::parse(&keymap.to_json()).unwrap(), keymap);
+
+        // The keys in another order are the same keys; the same binding again changes nothing.
+        let mut keymap = UserKeymap::default();
+        keymap.add(Some("Editor"), "shift-cmd-k", Entry::action("a::B", None));
+        keymap.add(Some("Editor"), "cmd-shift-k", Entry::action("x::Y", None));
+        assert_eq!(keymap.sections.len(), 2);
+        let before = keymap.clone();
+        keymap.add(Some("Editor"), "cmd-shift-k", Entry::action("x::Y", None));
+        assert_eq!(keymap, before);
+    }
+
+    /// A changed binding stays in its place while its keys are its own in its context, and moves
+    /// after the bindings it would share them with otherwise, which stay.
+    #[test]
+    fn replace_changes_only_its_binding() {
+        let mut keymap = UserKeymap::default();
+        keymap.add(Some("Workspace"), "cmd-a", Entry::action("a::A", None));
+        keymap.add(Some("Workspace"), "cmd-b", Entry::action("b::B", None));
+        let first = Location {
+            section: 0,
+            binding: 0,
+        };
+        keymap.replace(
+            first,
+            Some("Workspace"),
+            "cmd-c",
+            Entry::action("a::A", None),
+        );
+        assert_eq!(keymap.sections.len(), 1);
+        assert_eq!(keymap.sections[0].bindings[0].keystrokes, "cmd-c");
+        keymap.replace(
+            first,
+            Some("Workspace"),
+            "cmd-b",
+            Entry::action("a::A", None),
+        );
+        let found: Vec<_> = keymap
+            .bindings()
+            .map(|(_, _, b)| (b.keystrokes.as_str(), b.entry.clone()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("cmd-b", Entry::action("b::B", None)),
+                ("cmd-b", Entry::action("a::A", None)),
+            ]
+        );
+        // Into another context, it moves there.
+        keymap.replace(
+            Location {
+                section: 1,
+                binding: 0,
+            },
+            Some("Editor"),
+            "cmd-b",
+            Entry::action("a::A", None),
+        );
+        assert_eq!(keymap.sections.len(), 2);
+        assert_eq!(keymap.sections[1].context.as_deref(), Some("Editor"));
     }
 
     #[test]
     fn remove_drops_an_empty_section() {
         let mut keymap = UserKeymap::default();
-        keymap.set(Some("A"), "cmd-e", Entry::action("a::B", None));
-        keymap.set(Some("C"), "cmd-e", Entry::action("a::B", None));
+        keymap.add(Some("A"), "cmd-e", Entry::action("a::B", None));
+        keymap.add(Some("C"), "cmd-e", Entry::action("a::B", None));
         let removed = keymap.remove(Location {
             section: 0,
             binding: 0,
@@ -461,23 +570,20 @@ mod tests {
     }
 
     #[test]
-    fn finds_an_unbind() {
+    fn finds_a_binding_by_its_place() {
         let mut keymap = UserKeymap::default();
-        keymap.set(
+        keymap.add(
             Some("Workspace"),
             "cmd-w",
             Entry::unbind("workspace::CloseActiveTab"),
         );
-        assert_eq!(
-            keymap.find_unbind(Some("Workspace"), "cmd-w", "workspace::CloseActiveTab"),
-            Some(Location {
-                section: 0,
-                binding: 0
-            })
-        );
-        assert_eq!(
-            keymap.find_unbind(None, "cmd-w", "workspace::CloseActiveTab"),
-            None
-        );
+        let at = Location {
+            section: 0,
+            binding: 0,
+        };
+        let binding = keymap.binding(at).unwrap();
+        assert_eq!(binding.entry.unbinds(), Some("workspace::CloseActiveTab"));
+        assert_eq!(keymap.binding(Location { binding: 1, ..at }), None);
+        assert_eq!(keymap.binding(Location { section: 1, ..at }), None);
     }
 }

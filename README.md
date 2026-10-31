@@ -227,13 +227,19 @@ explained. A conflict on the same address can't be forced.
 - Each tool shows whether it's installed, its version and where it lives, and the exact command that installs it.
 - Search the list, narrow it with the **Installed**, **Updates** and **Not Installed** tabs or to one category, and
   sort it by category, by name or by what needs attention. It shows eight tools a page.
+- The keyboard starts in the search (⌘F goes back to it); ↩ there moves to the first tool, ↑ and ↓ select, and ↩
+  installs, upgrades or retries the selected one.
 - When npm or GitHub has a newer release, an installed tool shows `11.21.0 → 12.16.1` and an **Upgrade** button;
   **Upgrade All** upgrades every one of them. Upgrades use the tool's own command (`bun upgrade`, `uv self update`,
   `claude update`, …), or its install script again.
-- **Install** one, tick several and **Install Selected**, or **Install All Missing**. Each runs its official install
-  script in your login shell, one at a time, with prerequisites first (nvm before Node.js, uv before Python).
+- **Install** one, tick several and **Install N**, or **Install Missing (N)**. Each runs its official install
+  script in your login shell (zsh when that is fish, nu, PowerShell or tcsh, which can't run these scripts), one at
+  a time, with prerequisites first (nvm before Node.js, uv before Python). If the shell can't say which tools are
+  installed, the page says so instead of showing them as not installed.
 - Homebrew asks for your password, so it runs in the terminal. Open a new terminal tab afterwards so it sees the
   new `PATH`.
+- Closing the tab while something installs asks first, and stops it. One tool is installed, upgraded or removed at a
+  time, whether from this page, an agent or `sawit pasang`.
 - From the terminal: `sawit list tools`, `sawit pasang bun uv` and `sawit pupuk`.
 
 ### Browser
@@ -245,6 +251,10 @@ explained. A conflict on the same address can't be forced.
   field (text that isn't a URL is searched), the device menu, **Annotate**, **Design**, **Open in Default Browser**
   and the Web Inspector.
 - Cookies and storage are kept per project, so being signed in to one app doesn't leak into another.
+- **Keys**: once you click the page (or press Enter in the address field), <kbd>⌘</kbd><kbd>C</kbd>,
+  <kbd>⌘</kbd><kbd>X</kbd>, <kbd>⌘</kbd><kbd>V</kbd> and <kbd>⌘</kbd><kbd>A</kbd> act in the page, through the
+  **Edit** menu. Sawit's own shortcuts (<kbd>⌘</kbd><kbd>W</kbd>, <kbd>⌘</kbd><kbd>T</kbd>,
+  <kbd>⌘</kbd><kbd>1</kbd>–<kbd>⌘</kbd><kbd>9</kbd>…) still work there, before the page sees them.
 - **Device sizes**: the device menu lays the page out as an iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop or
   Desktop, scaled to fit the tab. **Rotate** turns the device, and **Responsive** fills the tab again.
 - **Annotate** (<kbd>⇧</kbd><kbd>⌘</kbd><kbd>.</kbd>): click elements on the page and write what should change. Each
@@ -285,8 +295,9 @@ explained. A conflict on the same address can't be forced.
 - **Menus and shortcuts**: the ≡ button opens the main menu, and a right-click opens the context menu.
   <kbd>⌘</kbd><kbd>K</kbd> (or <kbd>⌘</kbd><kbd>/</kbd>) opens the **Actions** palette, which finds any menu command
   by name, and <kbd>⌃</kbd><kbd>⇧</kbd><kbd>?</kbd> lists every shortcut. While the canvas has the keyboard,
-  <kbd>⌘</kbd><kbd>K</kbd> belongs to the palette, so the chords that start with it (the tab chords, and
-  <kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd> for the Keymap Editor) don't work there.
+  <kbd>⌘</kbd><kbd>K</kbd> belongs to the palette, so the chords that start with it (the tab chords,
+  <kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd> for the Keymap Editor, and any you add) don't work there. The
+  same goes for a chord you add that starts with another key the canvas uses alone.
 - **Where files live**: the project's canvas is `.nyawit/canvas.figcraft` in its folder. With no project it is
   `canvas.figcraft` in Sawit's data folder. Exports go to `.nyawit/exports/`, or to `exports/` in the data folder
   with no project or for a canvas file outside a project's `.nyawit/` (a `.figcraft` opened from the Files tab, say),
@@ -353,10 +364,14 @@ explained. A conflict on the same address can't be forced.
   profiles, Gemini CLI, Qwen Code, opencode, Amp, GitHub Copilot CLI, Cursor, Windsurf, Kiro, Goose, Crush and
   Claude Desktop), on this Mac and in the window's projects: `~/.claude/settings.json`, `.codex/config.toml`,
   `AGENTS.md`, … Each agent's files come highest priority first, saying where they apply (managed, project,
-  user, …) and what they hold.
+  user, …) and what they hold. Each other profile (`~/.claude-work`, a `CLAUDE_CONFIG_DIR` or `CODEX_HOME`
+  elsewhere) is a group of its own, "Claude Code · work": profiles are alternatives, not layers.
 - Search by file, path, description or agent. Click a file to edit it.
 - Right-click a file to reveal it in Finder, open it in its default app, duplicate it (`.zshrc copy`, a quick
   backup), copy its path, move it to the Trash or delete it. The Files tab's shortcuts work here too.
+- **Save Shell Files to GitHub** commits your own startup files to a private repository (`sawit-shell-config`). Each
+  save that would send a line that looks like a secret (an API key, a token, a password, in any shell's syntax)
+  names those lines and asks first.
 
 ### Tabs & layout
 
@@ -381,15 +396,23 @@ explained. A conflict on the same address can't be forced.
 
 ## Keyboard shortcuts
 
-These are the defaults. Every shortcut can be changed in the **Keymap Editor**
+These are the defaults. Most shortcuts can be changed in the **Keymap Editor**
 (<kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd>, the keyboard button in the title bar,
 Sawit ▸ Keymap Editor, or an agent's `app_open_page` with `keymap`). It lists each binding of every
 feature, including the workspace, panels, editors, terminal, Git, inputs, and the native canvas's
 commands, with its action, arguments, keys, context and source. From it you can change, add, remove
 or restore a binding, find bindings by their keys, and see which ones clash. Your changes go to
 `~/Library/Application Support/sawit/keymap.json` in Zed's keymap format (*Edit in JSON*,
-<kbd>⌘</kbd><kbd>E</kbd>). You can also edit that file by hand: Sawit applies it as soon as it is
-saved.
+<kbd>⌘</kbd><kbd>E</kbd> in the editor). You can also edit that file by hand: Sawit applies it within a
+second of saving. A change made in the editor writes the whole file again, without your comments.
+
+A few keys aren't bindings, so the editor can't change them: the terminal's <kbd>⌘</kbd><kbd>C</kbd> and
+<kbd>⌘</kbd><kbd>V</kbd>, the video viewer's <kbd>Space</kbd>, and on the canvas <kbd>Space</kbd> to pan, the
+arrows and the number keys, and the keys of the text it edits (<kbd>⎋</kbd>, <kbd>↩</kbd>,
+<kbd>⌘</kbd><kbd>Z</kbd>, <kbd>⌘</kbd><kbd>A</kbd> and <kbd>⌘</kbd><kbd>↩</kbd> among them). The editor's
+Keystrokes field records every key but a plain <kbd>↩</kbd>, which saves, and a plain <kbd>⎋</kbd>, which
+stops recording: bind those two in keymap.json. On a keyboard layout that types some keys elsewhere (German,
+French…), the defaults move where macOS menus put them.
 
 | Action | Shortcut |
 |---|---|
@@ -525,21 +548,31 @@ the agent's project open (or the one `project` names), else the frontmost window
 | App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, changelog, git_graph, github, instance, keymap), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
 | Terminal (app running) | `terminal_run`, `terminal_read`, `terminal_input`, `terminal_close` (`terminal_run`, `app_run_script` and `app_ssh_connect` return the tab and `pane` they used; `terminal_input` needs the tab, and a split tab needs its pane) |
 | Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (what the user annotated), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`) |
-| Canvas | `canvas_get`, `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear`, `canvas_load`, `canvas_export`, `canvas_command` (any command of the canvas engine, by id), `canvas_commands` (lists them; pass a `filter` to see what each takes). All of them work on the saved canvas file when the app is closed |
+| Canvas | `canvas_get`, `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear`, `canvas_load`, `canvas_export`, `canvas_command` (any command of the canvas engine, by id), `canvas_commands` (lists them; pass a `filter` to see what each takes). All of them work on the saved canvas file when the app is closed; then each call starts from that file, so no undo or selection carries over to the next: pass `canvas_command` the ids, or its steps in one `command.batch` |
 
 Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`
 and `uninstall_mcp_server` take the name again as `confirm` (so does `remove_instance` when it deletes the data), and `install_dev_tools` and `upgrade_dev_tools` need
-`confirm: true` because they run install scripts from the internet. Passwords never appear in a result.
+`confirm: true` because they run install scripts from the internet. Passwords never appear in a result. Every tool
+also carries MCP's hints (`readOnlyHint`, `destructiveHint`, `openWorldHint`), for clients that let read-only tools
+through or ask before destructive ones.
 
 Click **MCP** in the title bar to install it, along with a catalog of other servers: AWS, Cloudflare, Neon, Postman,
-Figma, Mobbin, Exa and more. Search the catalog, narrow it with the **Installed**, **Not Installed** and
-**Needs Sign-In** tabs or by where a server runs (built in, remote, on this Mac), and sort it. Servers that need an
-account sign in through the client's own sign-in, which the page can start for Claude Code and Codex. The page
-finds the AI clients on this Mac: Claude Code (every
-profile, including `CLAUDE_CONFIG_DIR` folders), Codex (and `CODEX_HOME` profiles), Claude Desktop, Cursor,
-Windsurf, Gemini CLI, Zed, opencode and VS Code. It installs into each with one click and shows where each config
-lives. Claude Code and Codex are changed through their own CLI when it's installed. Other configs are edited in
-place, keeping other settings, key order and comments, with a one-time backup next to the original.
+Figma, Mobbin, Exa and more. Search the catalog, narrow it with the **Installed**, **Not Installed** and **Needs
+Sign-In** tabs or by where a server runs (built in, remote, on this Mac), and sort it. From the keyboard: ⌘F
+searches, ↩ in the search moves to the first server, ↑ and ↓ select, ↩ opens the server's sheet, and ↩ there
+installs. Servers that need an account sign in through the client's own sign-in, which the page can start for Claude
+Code and Codex. The page finds the AI clients on this Mac: Claude Code (every profile, including `CLAUDE_CONFIG_DIR`
+folders), Codex (and `CODEX_HOME` profiles), Claude Desktop, Cursor, Windsurf, Gemini CLI, Zed, opencode and VS
+Code. It installs into each with one click and shows where each config lives. The AWS server shows the Region your
+clients have it in, and an install in another Region reads as installed there. It finds `claude`, `codex` and `npx`
+where the Dev Tools page finds them (`~/.local/bin`, nvm's Node.js, …), not only on the PATH apps get. Claude Code
+and Codex are changed through their own CLI when it's installed. Apps such as Claude Desktop start without your
+shell's PATH, so their `npx` entries say which folder has `node`; clients that reach remote servers only through
+`npx` (Claude Desktop, LM Studio and others) say so when Node.js isn't installed. Other configs are edited in place,
+keeping other settings, their order and the file's indentation (a TOML file keeps its comments too; a JSON file with
+comments is left for you to edit, with the entry to paste), and each file is copied next to it (`.sawit-backup`)
+before every change. Updating an entry changes only where it points: what you added to it (Cline's auto-approved
+tools, `env`, timeouts, …) stays. **Remove from N** in a server's sheet asks first, like its row's trash button.
 
 To add it by hand:
 
@@ -567,6 +600,7 @@ scripts/bundle-macos.sh                        # target/release/Sawit.app (with 
 App data is stored in `~/Library/Application Support/sawit/`:
 
 - `instances.toml`, `profiles.toml`, `prompts.json` and `recent.toml`
+- `keymap.json`, your key bindings over the defaults (the Keymap Editor writes it)
 - `clusters/` and `logs/`
 - `bin/` for downloaded binaries
 - `run/` for sockets

@@ -1,5 +1,7 @@
 //! How the keymap editor writes actions and keystrokes for people.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use gpui_kit::{KeybindingKeystroke, Keystroke, Modifiers, OperatingSystem};
 
 /// `workspace::CloseActiveTab` as `workspace: close active tab`, `file_editor::Save` as
@@ -63,11 +65,18 @@ pub fn display_typed(keystrokes: &[Keystroke]) -> String {
 /// One keystroke as a Mac menu writes it: the modifiers in the order ⌃⌥⇧⌘, then the key, a
 /// named one as its symbol (`↩`, `⌫`, `→`) and a letter in upper case. A shifted symbol reads as
 /// the keys pressed for it, on a US keyboard as the canvas's bindings assume: GPUI reports ⇧⌘. as
-/// `cmd->` with Shift off, which is how it is bound, and `cmd->` reads `⇧⌘.`.
+/// `cmd->` with Shift off, which is how it is bound, and `cmd->` reads `⇧⌘.`. On a layout that
+/// moves keys for shortcuts the key is the character it types, and reads as it is.
 fn display_one(modifiers: &Modifiers, key: &str) -> String {
+    display_key(modifiers, key, !LAYOUT_MOVES_KEYS.load(Ordering::Relaxed))
+}
+
+/// [`display_one`], with a shifted symbol read as the keys pressed for it on a US keyboard when
+/// `us_keys`.
+fn display_key(modifiers: &Modifiers, key: &str, us_keys: bool) -> String {
     let mut chars = key.chars();
     let unshifted = match (chars.next(), chars.next()) {
-        (Some(c), None) if !modifiers.shift => {
+        (Some(c), None) if us_keys && !modifiers.shift => {
             sawit_board::shortcuts::unshifted(c).map(String::from)
         }
         _ => None,
@@ -107,6 +116,42 @@ fn display_one(modifiers: &Modifiers, key: &str) -> String {
         None => out.push_str(&key.to_uppercase()),
     }
     out
+}
+
+/// `keystrokes` (as the keymap file writes them) with each key that `moves` moves on the keyboard
+/// layout put where it is typed there (Apple's key equivalents: on a German layout `>` is typed
+/// as `:`, so `cmd->` becomes `cmd-:`). `None` when no key moves.
+pub fn relocate(keystrokes: &str, moves: impl Fn(char) -> Option<char>) -> Option<String> {
+    let mut moved = false;
+    let keys: Vec<String> = keystrokes
+        .split_whitespace()
+        .map(
+            |source| match Keystroke::parse_with_os(source, OperatingSystem::Mac) {
+                Ok(mut keystroke) => {
+                    let mut chars = keystroke.key.chars();
+                    if let (Some(c), None) = (chars.next(), chars.next())
+                        && let Some(to) = moves(c)
+                    {
+                        keystroke.key = to.to_string();
+                        moved = true;
+                    }
+                    keystroke.unparse(OperatingSystem::Mac)
+                }
+                Err(_) => source.to_string(),
+            },
+        )
+        .collect();
+    moved.then(|| keys.join(" "))
+}
+
+/// Whether the keyboard layout moves keys for shortcuts ([`relocate`]): its bindings' keys are
+/// then the characters it types, shown as they are. On a layout that moves none (US) a shifted
+/// symbol is shown as the keys pressed for it (`cmd->` as ⇧⌘.).
+static LAYOUT_MOVES_KEYS: AtomicBool = AtomicBool::new(false);
+
+/// Says whether the keyboard layout moves keys for shortcuts ([`LAYOUT_MOVES_KEYS`]).
+pub fn set_layout_moves_keys(moves: bool) {
+    LAYOUT_MOVES_KEYS.store(moves, Ordering::Relaxed);
 }
 
 /// `text` (keystrokes as the keymap file writes them, in any order of modifiers) as GPUI writes
@@ -175,6 +220,59 @@ mod tests {
         assert_eq!(display_typed(&keys("cmd-.")), "⌘.");
         assert_eq!(display_typed(&keys("cmd--")), "⌘-");
         assert_eq!(display_typed(&keys("cmd-shift->")), "⇧⌘>");
+    }
+
+    /// Part of Apple's German layout table (gpui-pre-macos `keyboard.rs`).
+    fn german(c: char) -> Option<char> {
+        [
+            ('<', ';'),
+            ('>', ':'),
+            ('[', 'ö'),
+            (']', 'ä'),
+            ('\\', '#'),
+            ('|', '\''),
+            ('`', '<'),
+            ('~', '>'),
+        ]
+        .into_iter()
+        .find(|(from, _)| *from == c)
+        .map(|(_, to)| to)
+    }
+
+    /// Keys a German layout can't type as a US one does move where macOS puts them: ⇧⌘. (bound
+    /// `cmd->`) is typed `cmd-:` there, and the window cycling keys ⌘` and ⌘~ are `cmd-<` and
+    /// `cmd->`.
+    #[test]
+    fn relocates_keys_as_the_layout_types_them() {
+        assert_eq!(relocate("cmd->", german).as_deref(), Some("cmd-:"));
+        assert_eq!(relocate("cmd-<", german).as_deref(), Some("cmd-;"));
+        assert_eq!(
+            relocate("ctrl-cmd-[", german).as_deref(),
+            Some("ctrl-cmd-ö")
+        );
+        assert_eq!(
+            relocate("cmd-k cmd-]", german).as_deref(),
+            Some("cmd-k cmd-ä")
+        );
+        assert_eq!(relocate("cmd-\\", german).as_deref(), Some("cmd-#"));
+        // Letters, named keys and keys the layout types as a US one does stay.
+        assert_eq!(relocate("cmd-j", german), None);
+        assert_eq!(relocate("cmd-k e", german), None);
+        assert_eq!(relocate("shift-cmd-enter", german), None);
+        assert_eq!(relocate("cmd--", german), None);
+    }
+
+    /// On a layout that moves keys for shortcuts, a key reads as the character the layout types.
+    #[test]
+    fn displays_a_moved_key_as_typed() {
+        let keys = |text: &str| Keystroke::parse_with_os(text, OperatingSystem::Mac).unwrap();
+        let shown = |text: &str, us_keys| {
+            let key = keys(text);
+            display_key(&key.modifiers, &key.key, us_keys)
+        };
+        assert_eq!(shown("cmd-:", false), "⌘:");
+        assert_eq!(shown("cmd->", false), "⌘>");
+        assert_eq!(shown("cmd->", true), "⇧⌘.");
     }
 
     #[test]
