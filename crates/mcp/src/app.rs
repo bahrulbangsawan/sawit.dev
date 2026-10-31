@@ -619,6 +619,21 @@ fn run_and_save(
     }
 }
 
+/// The text of the scene file at `path`, for `canvas_load`: only a regular file of at most
+/// [`sawit_board::excalidraw::MAX_SCENE`] bytes is read, as the canvas reads an `.excalidraw`
+/// file ([`sawit_core::files::read_regular`]). A named pipe blocked the read for ever, and a link
+/// a cloned repository holds to `/dev/zero` read until the Mac ran out of memory (CANVAS-CORE-6);
+/// both are refused at once. It blocks, so it runs off the server's async threads.
+fn read_scene(path: &Path) -> std::io::Result<String> {
+    let bytes = sawit_core::files::read_regular(path, sawit_board::excalidraw::MAX_SCENE)?;
+    String::from_utf8(bytes).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "stream did not contain valid UTF-8",
+        )
+    })
+}
+
 /// Whether `path` names a `.figcraft` file.
 fn is_figcraft(path: &str) -> bool {
     let extension = Path::new(path.trim()).extension();
@@ -997,14 +1012,21 @@ impl Sawit {
     async fn canvas_load(&self, Parameters(a): Parameters<CanvasLoadArgs>) -> CallToolResult {
         let op = match (a.scene, a.path) {
             (Some(scene), _) => json!({ "op": "replace", "scene": scene }),
-            // A .figcraft file is loaded by the canvas itself, from where it is.
+            // A .figcraft file is loaded by the canvas itself, from where it is, which refuses a
+            // file it can't read whole, a pipe or a device included.
             (None, Some(path)) if is_figcraft(&path) => {
                 json!({ "op": "replace", "path": absolute_path(&path) })
             }
             (None, Some(path)) => {
-                let text = match std::fs::read_to_string(&path) {
-                    Ok(t) => t,
-                    Err(e) => return fail(format!("Unable to read {path}: {e}")),
+                let text = match blocking({
+                    let path = path.clone();
+                    move || read_scene(Path::new(&path))
+                })
+                .await
+                {
+                    Ok(Ok(text)) => text,
+                    Ok(Err(e)) => return fail(format!("Unable to read {path}: {e}")),
+                    Err(e) => return fail(e),
                 };
                 match serde_json::from_str::<Value>(&text) {
                     Ok(scene) => json!({ "op": "replace", "scene": scene }),
@@ -1703,6 +1725,77 @@ mod tests {
             }))
             .await;
         assert_eq!(said(&nothing), "Give a path or a scene.");
+    }
+
+    /// Runs `call` on a runtime of its own, on a thread of its own, and gives what it answered:
+    /// `None` when it hadn't answered within 5 s (the thread is left as it is). For a call whose
+    /// read could block for ever, so that a test of it fails rather than hangs.
+    fn within_seconds<F>(call: F) -> Option<F::Output>
+    where
+        F: std::future::Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let _ = tx.send(runtime.block_on(call));
+        });
+        rx.recv_timeout(Duration::from_secs(5)).ok()
+    }
+
+    /// CANVAS-CORE-6, for an agent's load: `canvas_load` of a file that is a named pipe, or a link
+    /// a cloned repository holds to `/dev/zero`, never answered. The canvas's engine read a
+    /// `.figcraft` file (with the app closed, in the blocking task that holds every other canvas
+    /// call back; with it open, on its UI thread), and the tool itself read any other, on the
+    /// server's async thread. Each is refused at once now, and the canvas is as it was.
+    #[test]
+    fn canvas_load_of_a_pipe_or_a_device_is_refused_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let file = board_file(&project);
+        write_board(&file, 1);
+        let before = std::fs::read(&file).unwrap();
+        let refused_at_once = |paths: &[PathBuf]| {
+            let failed: Vec<String> = (paths.iter())
+                .filter_map(|path| {
+                    let (server, project) = (server.clone(), project_arg(&project));
+                    let path = path.display().to_string();
+                    let load = CanvasLoadArgs {
+                        path: Some(path.clone()),
+                        scene: None,
+                        project,
+                    };
+                    let call = async move { server.canvas_load(Parameters(load)).await };
+                    let Some(result) = within_seconds(call) else {
+                        return Some(format!("{path}: no answer within 5 s"));
+                    };
+                    let error = said(&result);
+                    let refused = result.is_error == Some(true)
+                        && error.contains(&path)
+                        && error.contains("not a regular file");
+                    (!refused).then(|| format!("{path}: {error}"))
+                })
+                .collect();
+            assert!(failed.is_empty(), "{}", failed.join("\n"));
+        };
+        let pipes =
+            ["board.figcraft", "scene.excalidraw", "scene.json"].map(|n| dir.path().join(n));
+        for pipe in &pipes {
+            let made = std::process::Command::new("mkfifo").arg(pipe).status();
+            assert!(made.unwrap().success(), "mkfifo {}", pipe.display());
+        }
+        // The pipes first: a device that never ends is read only once they are refused.
+        refused_at_once(&pipes);
+        let zeros = ["zero.figcraft", "zero.excalidraw"].map(|n| dir.path().join(n));
+        for zero in &zeros {
+            std::os::unix::fs::symlink("/dev/zero", zero).unwrap();
+        }
+        refused_at_once(&zeros);
+        assert_eq!(std::fs::read(&file).unwrap(), before);
     }
 
     #[tokio::test]

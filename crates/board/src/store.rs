@@ -614,6 +614,26 @@ fn lock<T>(shared: &Mutex<T>) -> MutexGuard<'_, T> {
     shared.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Runs `f` on a thread of its own and gives what it returned, or `None` when it hadn't returned
+/// within 5 s (the thread is left as it is): for a read that could block for ever.
+#[cfg(test)]
+pub(crate) fn within_seconds<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(5)).ok()
+}
+
+/// Makes a named pipe at `path`.
+#[cfg(test)]
+pub(crate) fn pipe_at(path: &Path) {
+    let made = std::process::Command::new("mkfifo").arg(path).status();
+    assert!(made.unwrap().success(), "mkfifo {}", path.display());
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -720,22 +740,6 @@ mod tests {
         let err = open(&path).err().unwrap();
         assert!(matches!(err, BoardError::Io(_)), "{err:?}");
         assert!(err.to_string().contains("canvas.figcraft"), "{err}");
-    }
-
-    /// Runs `f` on a thread of its own and gives what it returned, or `None` when it hadn't
-    /// returned within 5 s (the thread is left as it is).
-    fn within_seconds<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(f());
-        });
-        rx.recv_timeout(std::time::Duration::from_secs(5)).ok()
-    }
-
-    /// Makes a named pipe at `path`.
-    fn pipe_at(path: &Path) {
-        let made = std::process::Command::new("mkfifo").arg(path).status();
-        assert!(made.unwrap().success(), "mkfifo {}", path.display());
     }
 
     /// CANVAS-CORE-6: opening a canvas reads its file on the UI thread (and in sawit-mcp, holding

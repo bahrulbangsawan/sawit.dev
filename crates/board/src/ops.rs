@@ -42,6 +42,13 @@
 //! step of one that takes its params from another step's result, which names a path only as the
 //! batch runs.
 //!
+//! Nor may it have the engine read a file that never ends. An engine command that reads the file
+//! its params name (`file.import`, `image.place`...: [`READS_FROM_PATH`]) reads it whole, as it
+//! finds it, on the canvas's UI thread: it is refused when that is a named pipe, a device such as
+//! `/dev/zero` (a cloned repository can link a file to one), or a file past
+//! [`crate::store::MAX_FILE`], and as a batch step when the file's name is taken from another
+//! step's result. `replace` checks the `.figcraft` file it loads the same way.
+//!
 //! It also holds the document's side of the commands Sawit carries out itself instead of the
 //! engine, which the canvas's menus and keys run ([`export_page`], [`frames_pdf`], [`copy_as`],
 //! [`import_file`]).
@@ -111,6 +118,27 @@ const WRITES_TO_PATH: &[&str] = &[
     "variable.export",
     "component.playground",
     "codeConnect.export",
+];
+
+/// The engine's commands that read a file one of their params names, with those params: `path`,
+/// and `variables` when it is text that isn't JSON (the local variables JSON is then read from the
+/// file it names). The engine reads such a file whole, as it finds it (`file_access::read`): a
+/// named pipe blocks the read for ever, and a link to a device such as `/dev/zero`, which a cloned
+/// repository can hold, reads until the Mac runs out of memory, on the canvas's UI thread or in
+/// sawit-mcp. So the `command` op checks the file first ([`unreadable`]).
+///
+/// These are all of them at the pinned FigCraft revision, found by reading what reads in the
+/// engine: every read goes through `file_access`, and the other readers check that what they read
+/// is a file of a size they allow first (`read_capped`: `text.loadFont`, `codeConnect.import`, the
+/// images and variables beside an imported file; a library's `stat`; a plugin's `read_file`).
+/// `file.open` and `file.openRecent` are Sawit's own ([`HANDLED_BY_SAWIT`]), and `file.revert`
+/// reads the document's own file, which the canvas's document has none of.
+const READS_FROM_PATH: &[(&str, &[&str])] = &[
+    ("file.import", &["path", "variables"]),
+    ("file.recover", &["path"]),
+    ("image.place", &["path"]),
+    ("variable.import", &["variables"]),
+    ("collab.recoverFile", &["path"]),
 ];
 
 /// The ends of the names of the files a canvas is kept in: the one it is saved to, and the old
@@ -199,7 +227,8 @@ const MERMAID_GAP: f64 = 100.0;
 ///   which [`excalidraw::import`] draws), or the `.figcraft` file at `path`. A `scene` wins over a
 ///   `path`. It runs in the canvas's own session, so the canvas stays what it is (a board, with
 ///   its file), and undo brings the old pages back. A scene that has no `elements`, and a file
-///   that can't be read, are errors that change nothing.
+///   that can't be read, are errors that change nothing; a file that is no regular file (a named
+///   pipe, a device) is one at once, unread ("replace: couldn't read <path>: ...").
 /// - `export_svg` and `export_png` take no parameters and answer `{ok, svg}` and
 ///   `{ok, png_base64}`: the whole page on show as one file, whatever is selected, at 1×
 ///   ([`export_page`]). The PNG is encoded as base64. Nothing in the document changes. A page with
@@ -209,9 +238,11 @@ const MERMAID_GAP: f64 = 100.0;
 ///   `command.batch` too ("<id> is handled by Sawit"), and the commands that write a file where
 ///   their `path` says when that is a canvas file ("<id> would overwrite a canvas file"), or, in a
 ///   batch, is taken from another step's result ("<id> in a command.batch needs its params
-///   written out: ..."). A command
-///   that would leave the canvas with another document open or on show is undone and answers
-///   "<id> would open or switch documents; the canvas keeps its one document".
+///   written out: ..."). So are the commands that read the file their params name, when that is
+///   no regular file of at most 4 GiB ("<id> can't read <path>: ..."), or, in a batch, is taken
+///   from another step's result. A command that would leave the canvas with another document
+///   open or on show is undone and answers "<id> would open or switch documents; the canvas
+///   keeps its one document".
 /// - `commands` answers `{ok, commands: [{id, label, params}]}`: the engine's commands that
 ///   `command` runs and that the canvas doesn't hide, with the parameters each documents.
 /// - `pointer` (`{kind, x, y, shift?, alt?, cmd?}`) sends the tools a press (`down`), a move with
@@ -723,6 +754,12 @@ struct Incoming {
 /// What the `replace` op `op` brings in: the scene it carries, else the file its `path` names
 /// (read here when it is an Excalidraw one). Anything that can't be taken is the reply's error,
 /// before the canvas is touched.
+///
+/// A `.figcraft` file is read by the engine's `file.import`, whole and as it finds it, so it is
+/// checked first as the canvas checks its own file ([`sawit_core::files::check_regular`]): a named
+/// pipe blocked the read for ever, and a link to a device such as `/dev/zero` read until the Mac
+/// ran out of memory, on the UI thread (CANVAS-CORE-6). Only a regular file of at most
+/// [`crate::store::MAX_FILE`] bytes is taken.
 fn incoming(op: &Value) -> Result<Incoming, String> {
     if let Some(scene) = op.get("scene").filter(|scene| !scene.is_null()) {
         return from_scene(scene).map_err(|error| format!("replace: {error}"));
@@ -735,10 +772,14 @@ fn incoming(op: &Value) -> Result<Incoming, String> {
     };
     let extension = Path::new(path).extension().and_then(OsStr::to_str);
     match extension.map(str::to_ascii_lowercase).as_deref() {
-        Some("figcraft") => Ok(Incoming {
-            import: json!({"path": path}),
-            notes: Vec::new(),
-        }),
+        Some("figcraft") => {
+            sawit_core::files::check_regular(Path::new(path), crate::store::MAX_FILE)
+                .map_err(|error| format!("replace: couldn't read {path}: {error}"))?;
+            Ok(Incoming {
+                import: json!({"path": path}),
+                notes: Vec::new(),
+            })
+        }
         Some("excalidraw") => {
             let scene = excalidraw::read_file(Path::new(path))
                 .map_err(|error| format!("replace: {error}"))?;
@@ -884,9 +925,10 @@ enum Failed {
 
 /// Why the `command` op won't run `id` with `params`, if it won't. `id` itself, or a step of a
 /// `command.batch`, however deeply batches are nested, is one that Sawit handles
-/// ([`HANDLED_BY_SAWIT`]), or that would write over a canvas file ([`WRITES_TO_PATH`]), or a step
-/// that writes where its params say and takes any of them from another step's result
-/// ([`refers_to_a_step`]): what that names isn't known until the batch runs (CANVAS-CORE-7).
+/// ([`HANDLED_BY_SAWIT`]), or that would write over a canvas file ([`WRITES_TO_PATH`]), or read a
+/// file that never ends ([`READS_FROM_PATH`]), or a step that writes where its params say and
+/// takes any of them from another step's result ([`refers_to_a_step`]), or reads where they say
+/// and takes that from one: what that names isn't known until the batch runs (CANVAS-CORE-7).
 fn refused(id: &str, params: &Value) -> Option<Refusal> {
     refused_in(id, params, false)
 }
@@ -907,6 +949,9 @@ fn refused_in(id: &str, params: &Value, in_batch: bool) -> Option<Refusal> {
             refused_in(id, step.get("params").unwrap_or(&Value::Null), true)
         });
     }
+    if let Some((_, names)) = READS_FROM_PATH.iter().find(|(reader, _)| *reader == id) {
+        return unreadable(id, names, params, in_batch);
+    }
     if !WRITES_TO_PATH.contains(&id) {
         return None;
     }
@@ -917,16 +962,55 @@ fn refused_in(id: &str, params: &Value, in_batch: bool) -> Option<Refusal> {
     is_canvas_file(Path::new(path)).then(|| Refusal::Overwrites(id.to_string()))
 }
 
-/// Whether `params`, or anything in them, is a reference to another step's result, which
-/// FigCraft's `command.batch` puts in its place as it runs the step: `{"$step": n}` or
-/// `{"$ref": name}`, each with an optional `field`.
+/// Why `id`, a command that reads the file one of its params `names` names ([`READS_FROM_PATH`]),
+/// won't run with `params`, if it won't (as a step of a batch when `in_batch` says so):
+/// - in a batch, the params, or one of `names` in them, are taken from another step's result:
+///   what the step would read isn't known before the batch runs. Its other params may be taken
+///   so: an image placed from its bytes, in a frame that an earlier step made, reads no file;
+/// - a file named is no regular file (a named pipe, a device, a folder), or holds more than
+///   [`crate::store::MAX_FILE`] bytes ([`sawit_core::files::check_regular`], CANVAS-CORE-6).
+///
+/// A file that isn't there, or can't be opened, is the engine's to report, as it always was.
+fn unreadable(id: &str, names: &[&str], params: &Value, in_batch: bool) -> Option<Refusal> {
+    let named_by_a_step = is_a_reference(params)
+        || (names.iter()).any(|name| params.get(name).is_some_and(refers_to_a_step));
+    if in_batch && named_by_a_step {
+        return Some(Refusal::UncheckedRead(id.to_string()));
+    }
+    names.iter().find_map(|name| {
+        let path = params.get(name)?.as_str()?;
+        // Local variables JSON given as its text, not as a file's name.
+        if *name == "variables" && path.trim_start().starts_with('{') {
+            return None;
+        }
+        let error =
+            sawit_core::files::check_regular(Path::new(path), crate::store::MAX_FILE).err()?;
+        let refused = matches!(
+            error.kind(),
+            std::io::ErrorKind::InvalidInput | std::io::ErrorKind::FileTooLarge
+        );
+        refused.then(|| Refusal::Unreadable {
+            command: id.to_string(),
+            path: path.to_string(),
+            error: error.to_string(),
+        })
+    })
+}
+
+/// Whether `value` is a reference to another step's result, which FigCraft's `command.batch` puts
+/// in its place as it runs the step: `{"$step": n}` or `{"$ref": name}`, each with an optional
+/// `field`. Any object with either key is one.
+fn is_a_reference(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|map| map.contains_key("$step") || map.contains_key("$ref"))
+}
+
+/// Whether `params`, or anything in them, is a reference to another step's result
+/// ([`is_a_reference`]).
 fn refers_to_a_step(params: &Value) -> bool {
     match params {
-        Value::Object(map) => {
-            map.contains_key("$step")
-                || map.contains_key("$ref")
-                || map.values().any(refers_to_a_step)
-        }
+        Value::Object(map) => is_a_reference(params) || map.values().any(refers_to_a_step),
         Value::Array(items) => items.iter().any(refers_to_a_step),
         _ => false,
     }
@@ -948,6 +1032,21 @@ enum Refusal {
          what it writes can't be checked for a canvas file before the batch runs"
     )]
     Unchecked(String),
+    /// A step of a batch that reads the file its params name takes that name from another step's
+    /// result, so whether it is a file that can be read isn't known before the batch runs.
+    #[error(
+        "{0} in a command.batch needs its params written out: taken from another step's result, \
+         the file it reads can't be checked before the batch runs"
+    )]
+    UncheckedRead(String),
+    /// The command, by its id, would read the file at `path`, which is no regular file or is
+    /// past the most that is read from one file (`error`).
+    #[error("{command} can't read {path}: {error}")]
+    Unreadable {
+        command: String,
+        path: String,
+        error: String,
+    },
 }
 
 /// The documents a session holds, as a command op found them: their uids in order, and the uid of
@@ -2033,6 +2132,163 @@ mod tests {
         assert_eq!(reply["ok"], json!(true), "{reply}");
         let sticky = id_of(&reply["result"][0][0]["id"]).unwrap();
         assert_eq!(board.doc().unwrap().node(sticky).unwrap().name, "renamed");
+    }
+
+    /// A 1 × 1 PNG, as base64.
+    const DOT: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+    /// The engine's commands that read the file a parameter names, each with its params naming
+    /// `path` there: every reader of `READS_FROM_PATH`, and each parameter it reads a file from.
+    fn reads_of(path: &std::path::Path) -> Vec<(&'static str, Value)> {
+        vec![
+            ("file.import", json!({"path": path})),
+            (
+                "file.import",
+                json!({"data": DOT, "name": "dot.png", "variables": path}),
+            ),
+            ("file.recover", json!({"path": path})),
+            ("image.place", json!({"path": path})),
+            ("variable.import", json!({"variables": path})),
+            (
+                "collab.recoverFile",
+                json!({"path": path, "session": 1, "client": 1, "seq": 1}),
+            ),
+        ]
+    }
+
+    /// The engine reads the file a command's params name whole, as it finds it, on the canvas's
+    /// UI thread (`file.import {path}`, `image.place {path}`, `variable.import {variables}`...): a
+    /// named pipe blocked it for ever, and a link to `/dev/zero` read until the Mac ran out of
+    /// memory, as `replace` did (CANVAS-CORE-6). Each is refused at once, as a command and as a
+    /// step of a batch, before anything runs; and so is a file past what is read from one file.
+    #[test]
+    fn a_command_that_reads_a_pipe_or_a_device_is_refused_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("pipe.png");
+        crate::store::pipe_at(&pipe);
+        let batched = |id: &str, params: &Value| {
+            json!({"op": "command", "command": "command.batch", "params": {"commands": [
+                {"command": "board.sticky", "params": {"x": 0, "y": 300}},
+                {"command": id, "params": params},
+            ]}})
+        };
+        let refused_at_once = |path: &std::path::Path, why: &str| {
+            let shown = path.display().to_string();
+            // Each is sent to a board of its own, and what failed is told all at once: each one
+            // that hangs is seen.
+            let failed: Vec<String> = reads_of(path)
+                .into_iter()
+                .flat_map(|(id, params)| {
+                    let alone = json!({"op": "command", "command": id, "params": params});
+                    [(id, alone), (id, batched(id, &params))]
+                })
+                .filter_map(|(id, op)| {
+                    let Some((reply, unchanged)) = on_a_board_of_its_own(op.clone()) else {
+                        return Some(format!("{op}: no answer within 5 s"));
+                    };
+                    let error = reply["error"].as_str().unwrap_or_default();
+                    let refused = error.starts_with(&format!("{id} can't read {shown}: {why}"));
+                    (!refused || !unchanged).then(|| format!("{op}: {reply}"))
+                })
+                .collect();
+            assert!(failed.is_empty(), "{}", failed.join("\n"));
+        };
+        // The pipe first: a device that never ends is read only once it is refused.
+        refused_at_once(&pipe, "not a regular file");
+        let zero = dir.path().join("zero.png");
+        std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+        refused_at_once(&zero, "not a regular file");
+        let big = dir.path().join("big.png");
+        let file = std::fs::File::create(&big).unwrap();
+        file.set_len(crate::store::MAX_FILE + 1).unwrap();
+        refused_at_once(&big, "it holds more than 4096 MB");
+
+        // A file that is one is read, and one that isn't there is the engine's to report.
+        let png = dir.path().join("dot.png");
+        std::fs::write(&png, STANDARD.decode(DOT).unwrap()).unwrap();
+        let mut board = board();
+        let placed = send(&mut board, "image.place", json!({"path": png}));
+        assert_eq!(placed["ok"], json!(true), "{placed}");
+        let missing = dir.path().join("missing.png");
+        let reply = send(&mut board, "image.place", json!({"path": missing}));
+        assert_eq!(reply["ok"], json!(false), "{reply}");
+        let error = reply["error"].as_str().unwrap();
+        assert!(!error.contains("can't read"), "{error}");
+    }
+
+    /// A step of a batch that reads a file can take the file's name from another step's result,
+    /// as a writer can take its path (CANVAS-CORE-7): that name can't be checked before the batch
+    /// runs, so the step is refused, and nothing runs. Its other params may come from a step: an
+    /// image placed from its bytes in a frame an earlier step made runs.
+    #[test]
+    fn a_batch_reader_whose_file_comes_from_another_step_is_refused() {
+        let mut board = design();
+        let before = board.doc().unwrap();
+        let by_name = json!({"$ref": "pages", "field": "0/name"});
+        let steps = [
+            ("file.import", json!({"path": by_name})),
+            (
+                "file.import",
+                json!({"data": DOT, "name": "dot.png", "variables": by_name}),
+            ),
+            ("file.recover", json!({"$ref": "pages", "field": "0"})),
+            ("image.place", json!({"path": [by_name]})),
+            ("variable.import", json!({"variables": by_name})),
+            (
+                "collab.recoverFile",
+                json!({"path": {"$step": 0, "field": "0/name"}}),
+            ),
+        ];
+        for (id, params) in steps {
+            let reply = send(
+                &mut board,
+                "command.batch",
+                json!({"commands": [
+                    {"command": "page.list", "as": "pages"},
+                    {"command": "command.batch", "params": {"commands": [
+                        {"command": "page.list", "as": "pages"},
+                        {"command": id, "params": params},
+                    ]}},
+                ]}),
+            );
+            let error = reply["error"].as_str().unwrap_or_default();
+            let expected = format!("{id} in a command.batch needs its params written out");
+            assert!(error.starts_with(&expected), "{params}: {reply}");
+        }
+        assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
+
+        let reply = send(
+            &mut board,
+            "command.batch",
+            json!({"commands": [
+                {"command": "node.create", "as": "frame",
+                 "params": {"type": "frame", "x": 0, "y": 0, "width": 100, "height": 100}},
+                {"command": "image.place", "params": {"data": DOT, "parent": {"$ref": "frame"}}},
+            ]}),
+        );
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        let frame = id_of(&reply["result"][0]["id"]).unwrap();
+        let image = id_of(&reply["result"][1]["id"]).unwrap();
+        assert_eq!(
+            board.doc().unwrap().node(image).unwrap().parent,
+            Some(frame)
+        );
+    }
+
+    #[test]
+    fn the_guarded_readers_are_engine_commands_that_nothing_else_refuses() {
+        for (id, _) in READS_FROM_PATH {
+            assert!(figcraft_engine::cmd::find_command(id).is_some(), "{id}");
+            assert!(!HANDLED_BY_SAWIT.contains(id), "{id} is refused already");
+            assert!(!WRITES_TO_PATH.contains(id), "{id} is a writer");
+        }
+        let mut readers: Vec<&str> = reads_of(std::path::Path::new("/x"))
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        readers.dedup();
+        let guarded: Vec<&str> = READS_FROM_PATH.iter().map(|(id, _)| *id).collect();
+        assert_eq!(readers, guarded);
     }
 
     /// `file.exportLayers` and `data.fill` write into a folder, naming each file after its layer
@@ -3254,6 +3510,55 @@ mod tests {
         assert!(Arc::ptr_eq(&before, &board.doc().unwrap()));
         assert_eq!(board.session.undo_depth(), steps);
         assert_eq!(elements(&mut board).len(), 1);
+    }
+
+    /// Runs `op` on a board with a sticky, on a thread of its own
+    /// ([`crate::store::within_seconds`]), and gives its reply, and whether the board's document is
+    /// still the one it had: `None` when it hadn't answered within 5 s.
+    fn on_a_board_of_its_own(op: Value) -> Option<(Value, bool)> {
+        crate::store::within_seconds(move || {
+            let mut board = board();
+            send(&mut board, "board.sticky", json!({"x": 0, "y": 0}));
+            let before = board.doc().unwrap();
+            let reply = run(&mut board, &op);
+            (reply, Arc::ptr_eq(&before, &board.doc().unwrap()))
+        })
+    }
+
+    /// CANVAS-CORE-6, for an agent's load (`canvas_load`): a `replace` of a `.figcraft` file has
+    /// the engine read the file `path` names, whole and as it finds it, on the canvas's UI thread
+    /// (with the app closed, in sawit-mcp, holding every other canvas call back). A named pipe
+    /// blocked it for ever, and a link a cloned repository holds to `/dev/zero` read until the Mac
+    /// ran out of memory. Both are refused at once, as when a canvas opens such a file, and the
+    /// canvas is as it was; an `.excalidraw` file is, as before.
+    #[test]
+    fn replace_of_a_pipe_or_a_device_is_refused_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("board.figcraft");
+        crate::store::pipe_at(&pipe);
+        let scene = dir.path().join("scene.excalidraw");
+        crate::store::pipe_at(&scene);
+        let refused_at_once = |paths: &[&std::path::Path]| {
+            let failed: Vec<String> = (paths.iter())
+                .filter_map(|path| {
+                    let shown = path.display().to_string();
+                    let replaced = on_a_board_of_its_own(json!({"op": "replace", "path": path}));
+                    let Some((reply, unchanged)) = replaced else {
+                        return Some(format!("{shown}: no answer within 5 s"));
+                    };
+                    let error = reply["error"].as_str().unwrap_or_default();
+                    let refused = error.starts_with(&format!("replace: couldn't read {shown}"))
+                        && error.contains("not a regular file");
+                    (!refused || !unchanged).then(|| format!("{shown}: {reply}"))
+                })
+                .collect();
+            assert!(failed.is_empty(), "{}", failed.join("\n"));
+        };
+        // The pipes first: a device that never ends is read only once they are refused.
+        refused_at_once(&[&pipe, &scene]);
+        let zero = dir.path().join("zero.figcraft");
+        std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+        refused_at_once(&[&zero]);
     }
 
     /// The scene of the Excalidraw fixture: nine layers on the page, and an embed it leaves out.

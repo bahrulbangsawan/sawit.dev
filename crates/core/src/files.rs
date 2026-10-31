@@ -99,6 +99,31 @@ pub fn read_text(path: &Path) -> Result<TextFile> {
 /// file is [`std::io::ErrorKind::NotFound`], as for [`std::fs::read`].
 pub fn read_regular(path: &Path, max: u64) -> std::io::Result<Vec<u8>> {
     use std::io::Read as _;
+
+    let (file, len) = open_regular(path, max)?;
+    let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
+    // A file that grew meanwhile is read only as far as `max`.
+    file.take(max.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max {
+        return Err(too_large(max));
+    }
+    Ok(bytes)
+}
+
+/// Checks the file at `path` as [`read_regular`] does before it reads, and
+/// reads nothing: `Ok` for a regular file (a link is followed) of at most
+/// `max` bytes, else the error `read_regular` gives. It is for a file that
+/// something else reads next, by its path, as FigCraft's engine reads the
+/// file its `file.import` names: a pipe or a device is told at once, as the
+/// open doesn't block. Something that replaces the file in between isn't
+/// caught, which only a process of the user's own could do.
+pub fn check_regular(path: &Path, max: u64) -> std::io::Result<()> {
+    open_regular(path, max).map(|_| ())
+}
+
+/// The file at `path` opened for reading, and its length, when it is a
+/// regular file of at most `max` bytes ([`read_regular`]).
+fn open_regular(path: &Path, max: u64) -> std::io::Result<(std::fs::File, u64)> {
     use std::os::unix::fs::OpenOptionsExt as _;
 
     // Opening a pipe for reading waits for a writer, unless it doesn't block.
@@ -113,25 +138,21 @@ pub fn read_regular(path: &Path, max: u64) -> std::io::Result<Vec<u8>> {
             "not a regular file (a folder, a pipe, a socket or a device)",
         ));
     }
-    let too_large = || {
-        std::io::Error::new(
-            std::io::ErrorKind::FileTooLarge,
-            format!(
-                "it holds more than {} MB, more than is read from one file",
-                max / (1024 * 1024)
-            ),
-        )
-    };
     if meta.len() > max {
-        return Err(too_large());
+        return Err(too_large(max));
     }
-    let mut bytes = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
-    // A file that grew meanwhile is read only as far as `max`.
-    file.take(max.saturating_add(1)).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > max {
-        return Err(too_large());
-    }
-    Ok(bytes)
+    Ok((file, meta.len()))
+}
+
+/// [`read_regular`]'s error for a file of more than `max` bytes.
+fn too_large(max: u64) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::FileTooLarge,
+        format!(
+            "it holds more than {} MB, more than is read from one file",
+            max / (1024 * 1024)
+        ),
+    )
 }
 
 /// Writes via a private temp file in the same directory + rename, keeping
@@ -745,6 +766,36 @@ mod tests {
         let made = std::process::Command::new("mkfifo").arg(&pipe).status();
         assert!(made.unwrap().success());
         assert_eq!(kind(&pipe, 9), std::io::ErrorKind::InvalidInput);
+    }
+
+    /// `check_regular` passes what `read_regular` reads, and refuses the rest as it does, at once
+    /// and reading nothing: for a file another reader opens next.
+    #[test]
+    fn check_regular_passes_what_read_regular_reads() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("a.bin");
+        fs::write(&f, [1, 2, 3]).unwrap();
+        let link = d.path().join("link");
+        std::os::unix::fs::symlink(&f, &link).unwrap();
+        assert!(check_regular(&f, 3).is_ok());
+        assert!(check_regular(&link, 3).is_ok());
+        let pipe = d.path().join("pipe");
+        let made = std::process::Command::new("mkfifo").arg(&pipe).status();
+        assert!(made.unwrap().success());
+        let zero = d.path().join("zero");
+        std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+        for (path, max) in [
+            (f.as_path(), 2),
+            (&d.path().join("none"), 9),
+            (d.path(), 9),
+            (&zero, 9),
+            (&pipe, 9),
+        ] {
+            let checked = check_regular(path, max).unwrap_err();
+            let read = read_regular(path, max).unwrap_err();
+            assert_eq!(checked.kind(), read.kind(), "{}", path.display());
+            assert_eq!(checked.to_string(), read.to_string(), "{}", path.display());
+        }
     }
 
     #[test]
