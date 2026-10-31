@@ -76,9 +76,18 @@ pub(super) fn init(cx: &mut App) {
 /// real processes whose output arrives from reader threads, so the test
 /// scheduler is told to expect wakeups from other threads.
 pub(super) fn open_panel(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<TerminalPanel>) {
+    open_panel_sized(cx, 1200., 800.)
+}
+
+/// [`open_panel`], in a window `width` × `height` points big.
+pub(super) fn open_panel_sized(
+    cx: &mut TestAppContext,
+    width: f32,
+    height: f32,
+) -> (AnyWindowHandle, Entity<TerminalPanel>) {
     cx.executor().allow_parking();
     let opened = cx.update(|cx| {
-        let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
+        let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             ..Default::default()

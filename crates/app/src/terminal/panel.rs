@@ -22,7 +22,7 @@ use super::view::TerminalView;
 use super::{SplitDown, SplitRight};
 use crate::states::{Banner, Placeholder};
 use crate::tab_groups::{group_color, group_header, group_stripe, project_name};
-use crate::tabs::{Slot, insert_index, project_of};
+use crate::tabs::{Shown, Slot, insert_index, project_of, strip};
 
 pub struct TerminalPanel {
     tabs: Vec<Entity<TerminalTab>>,
@@ -33,6 +33,11 @@ pub struct TerminalPanel {
     projects: Vec<PathBuf>,
     /// Groups whose tabs are folded away.
     collapsed: HashSet<PathBuf>,
+    /// The tab strip's scroll, which brings the active tab into view.
+    tab_scroll: ScrollHandle,
+    /// The active tab last scrolled into view, and its index: another tab, or the same one moved,
+    /// is scrolled to; a fold or a scroll by hand leaves the strip alone.
+    scrolled_to: Option<(EntityId, usize)>,
     error: Option<String>,
     /// Whether the panel fills the window; kept in sync by the workspace.
     pub maximized: bool,
@@ -102,6 +107,8 @@ impl TerminalPanel {
             cwd: None,
             projects: Vec::new(),
             collapsed: HashSet::new(),
+            tab_scroll: ScrollHandle::new(),
+            scrolled_to: None,
             error: None,
             maximized: false,
             window: None,
@@ -174,16 +181,18 @@ impl TerminalPanel {
 
     /// Where a tab of `group` goes: at the end of that group's tabs.
     fn insert_at(&self, group: Option<&Path>, cx: &App) -> usize {
-        let groups: Vec<Option<PathBuf>> =
-            self.tabs.iter().map(|t| t.read(cx).group.clone()).collect();
-        let slots: Vec<Slot> = groups
-            .iter()
-            .map(|g| Slot {
-                pinned: false,
-                group: g.as_deref(),
-            })
-            .collect();
-        insert_index(&slots, false, group)
+        insert_index(&slots(&self.groups(cx)), false, group)
+    }
+
+    /// The group of each tab, in strip order.
+    fn groups(&self, cx: &App) -> Vec<Option<PathBuf>> {
+        self.tabs.iter().map(|t| t.read(cx).group.clone()).collect()
+    }
+
+    /// The colour of the group of project `root`.
+    fn group_color(&self, root: &Path, cx: &App) -> Hsla {
+        let at = self.projects.iter().position(|p| p == root).unwrap_or(0);
+        group_color(at, cx)
     }
 
     /// Adds a tab at its group's end; returns its index.
@@ -1040,6 +1049,34 @@ impl TerminalPanel {
 }
 
 impl TerminalPanel {
+    /// The header in front of the run of `root`'s tabs that starts at tab `first`, `count` long:
+    /// a click folds the group.
+    fn render_group_header(
+        &self,
+        first: usize,
+        count: usize,
+        root: PathBuf,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let color = self.group_color(&root, cx);
+        let collapsed = self.collapsed.contains(&root);
+        group_header(
+            ("term-group", first),
+            project_name(&root),
+            color,
+            collapsed,
+            count,
+            cx,
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            if !this.collapsed.remove(&root) {
+                this.collapsed.insert(root.clone());
+            }
+            cx.notify();
+        }))
+        .into_any_element()
+    }
+
     /// Every tab closed, or the first one failed to start.
     fn render_empty(&self, cx: &mut Context<Self>) -> Placeholder {
         let shell = Button::new("empty-new-terminal")
@@ -1062,46 +1099,30 @@ impl Render for TerminalPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.window = Some(window.window_handle());
         let weak = cx.entity().downgrade();
-        let mut tabs: Vec<AnyElement> = Vec::new();
-        for (ix, tab) in self.tabs.iter().enumerate() {
+        // A header in front of each group's run of tabs; a folded group shows its active tab only.
+        let groups = self.groups(cx);
+        let shown = strip(&slots(&groups), self.active, |g| self.collapsed.contains(g));
+        let mut tabs: Vec<AnyElement> = Vec::with_capacity(shown.len());
+        // The active tab's place among the strip's children, which a scroll goes by.
+        let mut active_child = None;
+        for item in shown {
+            let ix = match item {
+                Shown::Tab(ix) => ix,
+                Shown::Header { first, count } => {
+                    if let Some(root) = groups[first].clone() {
+                        tabs.push(self.render_group_header(first, count, root, cx));
+                    }
+                    continue;
+                }
+            };
+            let tab = &self.tabs[ix];
             let t = tab.read(cx);
             let v = t.focused_view().read(cx);
             let group = t.group.clone();
-            let color = group.as_ref().map(|g| {
-                let at = self.projects.iter().position(|p| p == g).unwrap_or(0);
-                group_color(at, cx)
-            });
-            // A header in front of each group's run of tabs.
-            let starts_run = ix == 0 || self.tabs[ix - 1].read(cx).group != group;
-            if let (Some(root), Some(color), true) = (&group, color, starts_run) {
-                let collapsed = self.collapsed.contains(root);
-                let count = self.tabs[ix..]
-                    .iter()
-                    .take_while(|w| w.read(cx).group == group)
-                    .count();
-                let root = root.clone();
-                tabs.push(
-                    group_header(
-                        ("term-group", ix),
-                        project_name(&root),
-                        color,
-                        collapsed,
-                        count,
-                        cx,
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.collapsed.remove(&root) {
-                            this.collapsed.insert(root.clone());
-                        }
-                        cx.notify();
-                    }))
-                    .into_any_element(),
-                );
-            }
+            let color = group.as_ref().map(|g| self.group_color(g, cx));
             let active = ix == self.active;
-            // A folded group still shows its active tab.
-            if !active && group.as_ref().is_some_and(|g| self.collapsed.contains(g)) {
-                continue;
+            if active {
+                active_child = Some(tabs.len());
             }
             let others: Vec<PathBuf> = self
                 .projects
@@ -1257,6 +1278,18 @@ impl Render for TerminalPanel {
                     .into_any_element()
             });
         }
+        // Bring a newly opened or activated tab into view, by its place among the strip's children:
+        // the group headers and the folded tabs make that differ from its index (SMOKE-2).
+        let key = self
+            .tabs
+            .get(self.active)
+            .map(|t| (t.entity_id(), self.active));
+        if let (Some(key), Some(child)) = (key, active_child)
+            && self.scrolled_to != Some(key)
+        {
+            self.tab_scroll.scroll_to_item(child);
+            self.scrolled_to = Some(key);
+        }
         let (max_icon, max_tip) = if self.maximized {
             (Lucide::Minimize, "Restore Layout")
         } else {
@@ -1283,9 +1316,11 @@ impl Render for TerminalPanel {
                     .child(
                         h_flex()
                             .id("term-tabs")
+                            .debug_selector(|| "term-tabs".into())
                             .h_full()
                             .flex_1()
                             .overflow_x_scroll()
+                            .track_scroll(&self.tab_scroll)
                             .children(tabs),
                     )
                     .child(
@@ -1337,6 +1372,17 @@ impl Render for TerminalPanel {
 /// The terminal of `tab`'s focused pane.
 fn focused<'a>(tab: &Entity<TerminalTab>, cx: &'a App) -> &'a TerminalView {
     tab.read(cx).focused_view().read(cx)
+}
+
+/// Tabs in `groups` as grouping sees them: terminal tabs are never pinned.
+fn slots(groups: &[Option<PathBuf>]) -> Vec<Slot<'_>> {
+    groups
+        .iter()
+        .map(|g| Slot {
+            pinned: false,
+            group: g.as_deref(),
+        })
+        .collect()
 }
 
 /// The user's home folder.
@@ -1471,7 +1517,8 @@ mod tests {
 
     use super::super::tab::TerminalTab;
     use super::super::testing::{
-        focus_terminal, init, open_panel, ready, scratch_dir, start, start_cat, wait_until,
+        focus_terminal, init, open_panel, open_panel_sized, ready, scratch_dir, start, start_cat,
+        wait_until,
     };
     use super::{JobTag, Origin, TerminalPanel};
 
@@ -1776,6 +1823,85 @@ mod tests {
             view.read(cx).cwd().as_ref() == Some(&project)
         });
         let _ = std::fs::remove_dir_all(&project);
+    }
+
+    /// Asserts that the active tab is drawn whole inside the strip, as the last frame drew them,
+    /// its scroll included; `what` says which tab that is.
+    fn assert_active_in_view(
+        cx: &mut TestAppContext,
+        w: AnyWindowHandle,
+        panel: &Entity<TerminalPanel>,
+        what: &str,
+    ) {
+        let ix = cx.update(|cx| panel.read(cx).active_index());
+        let mut vcx = VisualTestContext::from_window(w, cx);
+        vcx.run_until_parked();
+        let strip = vcx.debug_bounds("term-tabs").expect("the strip is drawn");
+        let tab = vcx
+            .debug_bounds(selector(format!("term-tab-{ix}")))
+            .unwrap_or_else(|| panic!("{what}: tab {ix} isn't drawn"));
+        let slack = gpui_kit::px(0.5);
+        assert!(
+            tab.left() >= strip.left() - slack && tab.right() <= strip.right() + slack,
+            "{what}: tab {ix} is at x {:?}..{:?}, out of the strip's {:?}..{:?}",
+            tab.left(),
+            tab.right(),
+            strip.left(),
+            strip.right(),
+        );
+    }
+
+    /// SMOKE-2: the strip scrolls the active tab into view, however it became the active one: a
+    /// new tab opened past the strip's end, a tab activated left of what shows, a new tab that
+    /// takes the active tab's index, and a tab after a folded group. The strip draws a header in
+    /// front of each project's tabs and a folded group's other tabs not at all, so the scroll goes
+    /// by the tab's place among what is drawn, not by its index.
+    #[gpui_kit::test]
+    fn the_strip_scrolls_the_active_tab_into_view(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel_sized(cx, 420., 300.);
+        let (alpha, beta) = (scratch_dir("strip-alpha"), scratch_dir("strip-beta"));
+        let projects = vec![alpha.clone(), beta.clone()];
+        // `n` new tabs in `project`, the way ⌘T opens them there.
+        let open_in = |cx: &mut TestAppContext, project: &std::path::PathBuf, n: usize| {
+            let (projects, project) = (projects.clone(), project.clone());
+            cx.update(|cx| panel.update(cx, |p, cx| p.set_projects(projects, Some(project), cx)));
+            open_tabs(cx, &panel, n);
+        };
+
+        // Alpha's tabs, then more of beta's than the strip holds.
+        open_in(cx, &alpha, 2);
+        open_in(cx, &beta, 8);
+        assert_active_in_view(cx, w, &panel, "the newest tab");
+
+        // Beta's first tab, by now left of what the strip shows.
+        let first_beta = cx.update(|cx| {
+            let p = panel.read(cx);
+            (0..p.tab_count())
+                .find(|&ix| p.tab(ix).read(cx).group.as_ref() == Some(&beta))
+                .expect("beta has tabs")
+        });
+        click_tab(cx, w, &panel, first_beta);
+        assert_active_in_view(cx, w, &panel, "a tab left of what shows");
+
+        // A new tab of alpha goes at the end of alpha's tabs: at the active tab's index.
+        open_in(cx, &alpha, 1);
+        cx.update(|cx| assert_eq!(panel.read(cx).active_index(), first_beta));
+        assert_active_in_view(cx, w, &panel, "a new tab at the active tab's index");
+
+        // Beta's newest tab, with alpha folded: alpha draws its header alone.
+        cx.update(|cx| {
+            panel.update(cx, |p, cx| {
+                p.collapsed.insert(alpha.clone());
+                cx.notify();
+            })
+        });
+        open_in(cx, &beta, 1);
+        assert_active_in_view(cx, w, &panel, "a tab after a folded group");
+
+        for dir in [alpha, beta] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     /// Running a script again types it into its old shell after a `cd` back to the script's
