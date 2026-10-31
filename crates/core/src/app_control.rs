@@ -20,11 +20,14 @@ pub const REPLY_OK: &str = "ok ";
 pub const REPLY_ERROR: &str = "error: ";
 
 /// A command for one window: the one whose project folder holds `project`
-/// (the deepest), else the frontmost.
+/// (the deepest). Without `project`, the one whose project folder holds
+/// `agent_folder`, the folder the agent works in, else the frontmost.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_folder: Option<PathBuf>,
     #[serde(flatten)]
     pub command: Command,
 }
@@ -345,6 +348,7 @@ pub fn notify_reload(paths: &AppPaths, store: Store) {
     if is_running(paths) {
         let request = Request {
             project: None,
+            agent_folder: None,
             command: Command::Reload { store },
         };
         let _ = send(paths, &request, Duration::from_secs(5));
@@ -359,6 +363,7 @@ mod tests {
     fn round_trip() {
         let request = Request {
             project: Some("/code/app".into()),
+            agent_folder: None,
             command: Command::TerminalRun {
                 command: "npm test".into(),
                 cwd: None,
@@ -374,10 +379,28 @@ mod tests {
         assert_eq!(decode(b"sawit-open/1\0n"), None);
     }
 
+    /// Without a project, the agent's folder goes along with the command.
+    #[test]
+    fn the_agents_folder_round_trips() {
+        let request = Request {
+            project: None,
+            agent_folder: Some("/code/app".into()),
+            command: Command::TerminalRead {
+                tab: None,
+                pane: None,
+                lines: None,
+            },
+        };
+        let bytes = encode(&request);
+        assert!(String::from_utf8_lossy(&bytes).contains(r#""agent_folder":"/code/app""#));
+        assert_eq!(decode(&bytes), Some(Ok(request)));
+    }
+
     #[test]
     fn wire_format_is_flat_json() {
         let bytes = encode(&Request {
             project: None,
+            agent_folder: None,
             command: Command::ShowPanel {
                 panel: Panel::Ports,
             },
@@ -397,6 +420,7 @@ mod tests {
     fn tools_page_round_trips() {
         let request = Request {
             project: None,
+            agent_folder: None,
             command: Command::OpenPage { page: Page::Tools },
         };
         let bytes = encode(&request);
@@ -434,6 +458,7 @@ mod tests {
         ] {
             let request = Request {
                 project: None,
+                agent_folder: None,
                 command,
             };
             let bytes = encode(&request);
@@ -466,6 +491,7 @@ mod tests {
     fn browser_ops_round_trip() {
         let request = Request {
             project: None,
+            agent_folder: None,
             command: Command::Browser {
                 op: crate::browser::BrowserOp::Navigate {
                     url: "http://localhost:5173".into(),

@@ -498,7 +498,8 @@ sawit pupuk bun -y                           # upgrade one tool without asking
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
 The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 117 tools work **without the app**,
-except the app-control ones, which drive the running app (`launch_app` starts it).
+except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
+the agent's project open (or the one `project` names), else the frontmost window.
 
 | Area | Tools |
 |---|---|

@@ -45,7 +45,7 @@ fn run_wait(wait_secs: Option<f64>) -> Duration {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct WindowArgs {
     #[schemars(
-        description = "Project folder (or a path inside it) whose window to use; default the frontmost window"
+        description = "Project folder (or a path inside it) whose window to use; default the window with your working folder open, else the frontmost"
     )]
     pub project: Option<String>,
 }
@@ -335,8 +335,15 @@ impl Sawit {
         command: Command,
     ) -> Result<Value, String> {
         let paths = self.paths.clone();
+        let project = project_path(project);
+        // Without a project, the app uses the window that has the agent's folder open.
+        let agent_folder = match project {
+            Some(_) => None,
+            None => crate::project_dir(None),
+        };
         let request = Request {
-            project: project_path(project),
+            project,
+            agent_folder,
             command,
         };
         tokio::task::spawn_blocking(move || app_control::send(&paths, &request, REPLY_TIMEOUT))
@@ -1104,6 +1111,7 @@ fn launch(paths: &sawit_core::instances::AppPaths, path: Option<&str>) -> Result
     if running && path.is_none() {
         let request = Request {
             project: None,
+            agent_folder: None,
             command: Command::Focus,
         };
         app_control::send(paths, &request, REPLY_TIMEOUT)?;
@@ -1403,6 +1411,41 @@ mod tests {
                 lines: Some(100),
             }
         );
+    }
+
+    /// Without `project`, a terminal or app tool names the folder the agent works in, so the app
+    /// uses the window that has it open rather than whichever window is in front; with one, it
+    /// names only the project.
+    #[tokio::test]
+    async fn app_tools_name_the_agents_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let asked = fake_app_answering(
+            &server.paths,
+            vec![json!({"text": ""}), json!({"text": ""})],
+        );
+        let read = |project: Option<String>| TerminalReadArgs {
+            tab: None,
+            pane: None,
+            lines: None,
+            project,
+        };
+        server.terminal_read(Parameters(read(None))).await;
+        let request = asked
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the app was asked");
+        assert_eq!(request.project, None);
+        assert_eq!(request.agent_folder, crate::project_dir(None));
+        assert!(request.agent_folder.is_some(), "the tests run in a folder");
+
+        server
+            .terminal_read(Parameters(read(Some("/code/shop".into()))))
+            .await;
+        let request = asked
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the app was asked");
+        assert_eq!(request.project, Some(PathBuf::from("/code/shop")));
+        assert_eq!(request.agent_folder, None);
     }
 
     /// The next op the stand-in app was asked for. It is waited for, but not for ever: a tool that

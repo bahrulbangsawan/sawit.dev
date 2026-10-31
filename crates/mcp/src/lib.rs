@@ -88,7 +88,7 @@ These control the running Sawit app (start it with launch_app; app_state shows w
 - canvas_*: the canvas (FigCraft engine): list, add shapes/stickies/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG. They also work on the saved file when the app is closed.
 - canvas_command: run any command of the canvas engine by id with its parameters (board.sticky, node.set, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes.
 - browser_*: a browser tab (WebKit) to check the app being built: navigate (default the project's dev server), snapshot the page as an outline with element refs, click/hover/type/press keys/select/scroll by ref or CSS selector, wait for text, screenshot, read console errors and network requests, evaluate JS, resize to a device, read the user's annotations, inspect an element's design, read the page's design system, export it as DESIGN.md + tokens + assets. Take a new browser_snapshot after the page changes; refs reset.
-Most app tools take `project` to pick the window that has that folder open; otherwise the frontmost window is used.
+Most app tools take `project` to pick the window that has that folder open; without it, the window that has the folder sawit-mcp runs in open is used, else the frontmost window.
 Targets: database tools take a Sawit instance name or a saved connection name (see list_connections).";
 
 #[derive(Debug, Clone)]
