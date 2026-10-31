@@ -1111,23 +1111,32 @@ fn mermaid(board: &mut BoardDoc, op: &Value) -> Value {
 ///
 /// Rendering blocks, and the app answers ops on its UI thread, because the canvas answers
 /// synchronously: well under a millisecond for a typical diagram, about 60 ms the first time,
-/// while Pele loads, and at most 5 s a try, when `sawit_core::mermaid` stops a runaway diagram.
+/// while Pele loads, and at most 5 s, when `sawit_core::mermaid` stops a runaway diagram, which
+/// isn't tried a second time ([`second_try`]).
 fn draw_mermaid(board: &mut BoardDoc, source: &str, op: &Value) -> Result<Applied, String> {
     let palette = Palette::default();
     let diagram = match render(source, &palette) {
         Ok(diagram) => diagram,
-        // Double quotes trip up some diagram types, so a source that has them is tried once more
-        // with single ones, as Excalidraw's own Mermaid import does. A diagram that fails both is
-        // reported in the words of the first try.
-        Err(first) if source.contains('"') => {
-            render(&source.replace('"', "'"), &palette).map_err(|_| first)?
-        }
-        Err(first) => return Err(first),
+        // A diagram that fails both tries is reported in the words of the first.
+        Err(first) => match second_try(source, &first) {
+            Some(again) => render(&again, &palette).map_err(|_| first)?,
+            None => return Err(first),
+        },
     };
     let items = crate::mermaid::to_skeletons(&diagram)?;
     let (left, top, _, _) = skeleton::bounds(&items).ok_or("the diagram is empty")?;
     let (x, y) = diagram_corner(board, op).map_err(|error| error.to_string())?;
     skeleton::apply(board, &items, (x - left, y - top)).map_err(|error| error.to_string())
+}
+
+/// The Mermaid `source` to try again, after its first render failed with `error`: double quotes
+/// trip up some diagram types, so a source that has them is tried once more with single ones, as
+/// Excalidraw's own Mermaid import does. Not a diagram stopped for taking too long, which the
+/// second try took as long again: the window froze for twice the render's time limit, 10 s
+/// (CANVAS-CORE-10).
+fn second_try(source: &str, error: &str) -> Option<String> {
+    let again = source.contains('"') && !sawit_core::mermaid::took_too_long(error);
+    again.then(|| source.replace('"', "'"))
 }
 
 /// Where the `mermaid` op puts a diagram's top left corner: at the op's `x` and `y`. What it leaves
@@ -4034,6 +4043,26 @@ mod tests {
     /// so an op run inside it was taken back by the next move, or by an Escape, though it had
     /// answered ok. Reads still answer during the drag; once the button is up the op goes
     /// through, and what it drew stays through the next drag.
+    /// CANVAS-CORE-10: a Mermaid source with double quotes that fails is tried once more with
+    /// single ones, but not after its render was stopped for running past the time limit: the
+    /// second try froze the window as long again, 10 s in all.
+    #[test]
+    fn a_mermaid_render_stopped_for_time_is_not_tried_again() {
+        let quoted = r#"graph TD; A["a"] --> B"#;
+        assert_eq!(
+            second_try(quoted, "Parse error on line 1").as_deref(),
+            Some("graph TD; A['a'] --> B")
+        );
+        assert_eq!(
+            second_try("graph TD; A --> B", "Parse error on line 1"),
+            None
+        );
+        assert_eq!(
+            second_try(quoted, "The diagram can't be drawn: it took too long."),
+            None
+        );
+    }
+
     /// CANVAS-CORE-8: between the Pen's clicks no button is held, but the path being drawn is an
     /// open gesture, which only Enter (or Escape) ends. An agent's op ran inside it and joined
     /// its undo step: the ⌘Z after Enter took the path and the agent's layers away together. Such

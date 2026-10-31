@@ -22,6 +22,16 @@ pub const PELE_JS: &str = include_str!("../assets/pele/pele.global.js");
 /// A runaway diagram is interrupted after this long.
 const RENDER_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How a [`render`] error ends when the diagram ran past [`RENDER_TIMEOUT`] and was stopped
+/// ([`took_too_long`]).
+const TOOK_TOO_LONG: &str = "it took too long.";
+
+/// Whether `error`, as [`render`] gave it, says the diagram was stopped for running past the
+/// render's time limit: another try of the same diagram takes as long again.
+pub fn took_too_long(error: &str) -> bool {
+    error.ends_with(TOOK_TOO_LONG)
+}
+
 /// The JS heap Pele may use.
 const MEMORY_LIMIT: usize = 256 << 20;
 
@@ -196,7 +206,7 @@ fn exception(cx: &rquickjs::Ctx<'_>, e: rquickjs::Error, fallback: &str) -> Stri
         .filter(|m| !m.is_empty());
     match message {
         // QuickJS throws "interrupted" once the deadline passes.
-        Some(m) if m == "interrupted" => format!("{fallback}: it took too long."),
+        Some(m) if m == "interrupted" => format!("{fallback}: {TOOK_TOO_LONG}"),
         Some(m) => m,
         None => format!("{fallback}."),
     }
@@ -576,6 +586,17 @@ pub fn index_in(url: &str, scheme: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CANVAS-CORE-10: a render stopped for running past its time limit says so in words
+    /// [`took_too_long`] knows; another error doesn't.
+    #[test]
+    fn a_render_stopped_for_time_is_told_from_other_errors() {
+        assert!(took_too_long(&format!(
+            "The diagram can't be drawn: {TOOK_TOO_LONG}"
+        )));
+        assert!(!took_too_long("Parse error on line 2: unexpected token"));
+        assert!(!took_too_long("The diagram renderer stopped."));
+    }
 
     #[test]
     fn flatten_resolves_vars_and_mixes() {
