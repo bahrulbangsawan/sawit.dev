@@ -2511,14 +2511,28 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<BrowserView> {
+        let root = self.root(cx);
+        self.open_browser_of(root, url, window, cx)
+    }
+
+    /// Opens the browser of the project at `root` (`None`: the one for no project), as
+    /// [`Self::open_browser`] opens the active project's, with its project, as a click on its
+    /// tab shows it: an agent's browser is the browser of the project it works in, which may not
+    /// be the one shown.
+    pub(super) fn open_browser_of(
+        &mut self,
+        root: Option<PathBuf>,
+        url: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<BrowserView> {
         self.leave_welcome(CENTER_ONLY, cx);
         if !self.layout.center {
             self.layout.toggle(Area::Center);
         }
-        let root = self.root(cx);
         let browser = match self.browser_tab(root.as_deref()) {
             Some((ix, browser)) => {
-                self.active = ix;
+                self.activate_tab(ix, cx);
                 browser.update(cx, |b, cx| b.show(url.as_deref(), cx));
                 browser
             }

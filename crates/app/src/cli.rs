@@ -648,7 +648,7 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
         .collect();
     let holding =
         |path: &Path| window_naming(&roots, path).map(|(ix, named)| (spaces[ix].clone(), named));
-    let ((handle, workspace), project) = match (&request.project, &request.agent_folder) {
+    let ((handle, workspace), project, own) = match (&request.project, &request.agent_folder) {
         (Some(project), _) => {
             let (window, named) = holding(project).ok_or_else(|| {
                 format!(
@@ -656,19 +656,20 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
                     project.display()
                 )
             })?;
-            (window, Some(named))
+            (window, Some(named), None)
         }
         // No project named: the window the agent's own folder is open in,
-        // else the frontmost one.
+        // else the frontmost one. The folder goes along, as that window
+        // names it: the agent's browser is its project's.
         (None, folder) => {
-            let window = folder
-                .as_deref()
-                .and_then(holding)
+            let found = folder.as_deref().and_then(holding);
+            let own = found.as_ref().map(|(_, named)| named.clone());
+            let window = found
                 .map(|(window, _)| window)
                 .or_else(|| frontmost(cx))
                 .or_else(|| open_window(None, cx))
                 .ok_or("Unable to open a Sawit window.")?;
-            (window, None)
+            (window, None, own)
         }
     };
     // Commands act on the project asked for: make it the active one.
@@ -682,7 +683,7 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
             if focus {
                 window.activate_window();
             }
-            workspace.update(cx, |w, cx| w.control(command, window, cx))
+            workspace.update(cx, |w, cx| w.control(command, own.as_deref(), window, cx))
         })
         .map_err(|_| "The Sawit window closed.".to_string())??;
     if focus {

@@ -1081,6 +1081,13 @@ There are 26 questions. They come from the ledger lines that leave a decision or
   open (else the frontmost window), while the closed-app path draws in the agent's working folder.
 - The fix is the browser tools' rule: only ops that show something bring the tab forward. That is a few lines in
   sawit-mcp or `control.rs`.
+- The browser follows that rule, and since final-seams m1 it no longer has the second inconsistency: with no
+  project named, an agent's `browser_*` ops and `app_open_page browser` use the browser of the project its
+  working folder is in, as `browser_navigate` opens that folder's dev server. Before, they used the active
+  project's browser, so with projects A and B in one window and B shown, an agent in A opened A's dev server in
+  B's browser, with B's cookies, and its screenshots and exports went into B's `.nyawit`. Ops in the background
+  change nothing on screen; one that shows a page brings that browser forward with its project. The canvas
+  could take the same rule.
 - Source: P1:186, P7:212.
 
 **Q13. May an agent's op open UI that takes the keyboard?**
