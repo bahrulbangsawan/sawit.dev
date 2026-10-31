@@ -262,7 +262,7 @@ pub struct FilesPanel {
     rows: Rc<Vec<Row>>,
     /// Why the project folder itself can't be listed.
     root_error: Option<String>,
-    /// Top folder of the Git repository the project is in.
+    /// Top folder of the Git repository the project is in, from the project's Git store.
     repo: Option<PathBuf>,
     clip: Option<Clip>,
     /// Changes that reverse the latest ones, newest last.
@@ -362,15 +362,7 @@ impl FilesPanel {
         self.forget_folder();
         self.expanded.insert(root.clone());
         self.load(root.clone(), cx);
-        let dir = root.clone();
-        let folder = self.folder;
-        let rx = rt::spawn(cx, async move { sawit_core::git::discover(&dir).await });
-        cx.spawn(async move |this, cx| {
-            if let Ok(repo) = rx.await {
-                let _ = this.update(cx, |this, _| this.found_repo(folder, repo));
-            }
-        })
-        .detach();
+        // The project's Git store looks its repository up ([`Self::set_repo`]).
         cx.emit(FilesEvent::RootChanged(root.clone()));
         self.root = Some(root);
         cx.notify();
@@ -417,10 +409,12 @@ impl FilesPanel {
         .detach();
     }
 
-    /// The repository of folder number `folder` ([`Self::folder`]) was looked up.
-    fn found_repo(&mut self, folder: u64, repo: Option<PathBuf>) {
-        if folder == self.folder {
+    /// The repository the folder shown is in, as the project's Git store has it: found again
+    /// after Initialize Repository, gone once `.git` is.
+    pub fn set_repo(&mut self, repo: Option<PathBuf>, cx: &mut Context<Self>) {
+        if self.repo != repo {
             self.repo = repo;
+            cx.notify();
         }
     }
 
@@ -1673,11 +1667,28 @@ mod tests {
         (seen, subscription)
     }
 
+    /// The tree's Git items follow the project's repository as the Git store has it (FILES-15):
+    /// one made with Initialize Repository, or `git init` in the terminal once the Git store has
+    /// noticed. The tree used to look the repository up once per folder, so Add to .gitignore,
+    /// Add to .git/info/exclude and View History stayed off until the folder was opened again,
+    /// and on once `.git` was deleted.
+    #[gpui_kit::test]
+    fn the_git_items_follow_the_projects_repository(cx: &mut TestAppContext) {
+        let (_window, panel) = open_panel(cx, &["notes.txt"]);
+        let git = |cx: &mut TestAppContext| cx.update(|cx| panel.read(cx).menu_state().git);
+        assert!(!git(cx));
+        cx.update(|cx| panel.update(cx, |p, cx| p.set_repo(Some(PathBuf::from(ROOT)), cx)));
+        assert!(git(cx), "a repository was made");
+        cx.update(|cx| panel.update(cx, |p, cx| p.set_repo(None, cx)));
+        assert!(!git(cx), "the repository was deleted");
+    }
+
     /// Work started in one folder that lands once the panel shows another leaves that one alone
-    /// (FILES-3). A change's undo and selection, an error, Expand All's folders, a folder's
-    /// listing and the repository of the old folder all went to the new one: ⌫ and ⌘Z then
-    /// trashed the old folder's copy, unseen. A move that landed is still told, for the tabs of
-    /// what moved to follow it. A change asked for in the old folder doesn't run.
+    /// (FILES-3). A change's undo and selection, an error, Expand All's folders and a folder's
+    /// listing of the old folder all went to the new one (its repository too, which now comes
+    /// from the project's Git store): ⌫ and ⌘Z then trashed the old folder's copy, unseen. A
+    /// move that landed is still told, for the tabs of what moved to follow it. A change asked
+    /// for in the old folder doesn't run.
     #[gpui_kit::test]
     fn work_that_lands_after_a_folder_change_leaves_the_new_folder_alone(cx: &mut TestAppContext) {
         let (window, panel) = open_panel(cx, &["notes.txt", "src"]);
@@ -1711,7 +1722,6 @@ mod tests {
         changes.land(0, Ok(undo), cx);
         cx.update(|cx| {
             panel.update(cx, |p, cx| {
-                p.found_repo(old, Some(root.to_path_buf()));
                 let entry = Entry {
                     name: "lib.rs".into(),
                     path: root.join("src/lib.rs"),

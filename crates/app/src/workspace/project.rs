@@ -47,7 +47,15 @@ impl Workspace {
                     this.on_files_event(files, event, window, cx)
                 },
             ),
-            cx.observe(&git, |_, _, cx| cx.notify()),
+            // The Files tab's Git items follow the repository the store finds, or loses.
+            cx.observe(&git, {
+                let files = files.clone();
+                move |_, git, cx| {
+                    let repo = git.read(cx).repo.clone();
+                    files.update(cx, |files, cx| files.set_repo(repo, cx));
+                    cx.notify();
+                }
+            }),
             cx.subscribe_in(
                 &git_panel,
                 window,
