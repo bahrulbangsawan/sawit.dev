@@ -452,10 +452,13 @@ impl BoardView {
         });
         let (board, toast) = match opened {
             Ok((mut board, toast)) => {
-                // As each frame does. Done before the document counts as saved: the blank page
-                // of a file nothing was done to takes the dark theme's colour (as FigCraft's new
-                // files do), which is no edit to save.
-                board.session.set_ui_dark(cx.theme().mode.is_dark());
+                // The theme, as each frame tells it (`set_ui_dark`), told without the first time's
+                // recolouring: FigCraft gives the dark page to a blank new file it makes, which it
+                // tells by its having no path, and a canvas keeps none, so a blank file another
+                // app made took the dark page, and the first edit saved that into it
+                // (CANVAS-CORE-11). Sawit makes no new design file, and a board's page isn't one
+                // that is recoloured.
+                board.session.ui_dark = Some(cx.theme().mode.is_dark());
                 board.session.apply_view_prefs();
                 (Ok(board), toast)
             }
@@ -2888,12 +2891,20 @@ mod tests {
         });
     }
 
+    /// The page colour of the first page of `doc`.
+    fn first_page_rgb(doc: &Document) -> [u8; 3] {
+        sawit_board::view::page_rgb(doc, doc.first_page().unwrap())
+    }
+
+    /// A blank file another app made (FigCraft's new design file, saved) opens in the dark theme
+    /// with its own page colour, as FigCraft opens a file from disk, and that is no edit to save.
+    /// CANVAS-CORE-11: it took the dark page (FigCraft gives one only to a new file it makes, and
+    /// counted the canvas's, which keeps no path, as new), and the first edit saved that into the
+    /// user's file.
     #[gpui_kit::test]
     fn opening_in_a_dark_theme_is_no_edit(cx: &mut TestAppContext) {
         let tmp = Scratch::new("dark");
         let path = tmp.0.join("design.figcraft");
-        // A new design file nothing was done to: FigCraft gives its blank page the dark theme's
-        // page colour when it opens.
         let mut session = figcraft_engine::Session::new();
         session
             .execute("file.saveAs", &json!({"path": path.to_str().unwrap()}))
@@ -2905,18 +2916,25 @@ mod tests {
         });
         let (_, view) = open_design_in_window(cx, &path);
         next_frame(cx, &view, None);
+        let [r, g, b, _] = Color::DEFAULT_PAGE.to_rgba8();
         let page = view.read_with(cx, |view, _| {
-            let doc = view.board().unwrap().doc().unwrap();
-            sawit_board::view::page_rgb(&doc, doc.first_page().unwrap())
+            first_page_rgb(&view.board().unwrap().doc().unwrap())
         });
-        let [r, g, b, _] = Color::DARK_PAGE.to_rgba8();
-        assert_eq!(page, [r, g, b]);
-        // That is no edit to save: neither the frames after it nor a flush write the file.
+        assert_eq!(page, [r, g, b], "the file's page took the dark colour");
+        // No edit to save: neither the frames after it nor a flush write the file.
         cx.executor().advance_clock(SAVE_DELAY * 2);
         cx.run_until_parked();
         view.update(cx, |view, _| view.flush());
         assert!(std::fs::read(&path).unwrap() == bytes, "the file was saved");
         assert_eq!(names(&tmp.0), ["design.figcraft"]);
+        // An edit saves the file with its own page colour.
+        let rectangle = json!({"type": "rectangle"});
+        let made = json!({"op": "command", "command": "node.create", "params": rectangle});
+        let reply = run_op(&view, made, cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        view.update(cx, |view, _| view.flush());
+        let saved = store::open(&path).unwrap().doc().unwrap();
+        assert_eq!(first_page_rgb(&saved), [r, g, b], "the dark page was saved");
     }
 
     #[gpui_kit::test]
