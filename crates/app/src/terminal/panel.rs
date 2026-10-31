@@ -441,6 +441,7 @@ impl TerminalPanel {
     }
 
     /// Sends raw input to a pane (the active tab's focused one by default).
+    /// The pane counts as used from then on, as when the user types there.
     pub fn input(
         &mut self,
         tab: Option<usize>,
@@ -450,11 +451,13 @@ impl TerminalPanel {
     ) -> Result<usize, String> {
         let ix = self.tab_ix(tab)?;
         let (_, view) = self.pane_of(ix, pane, cx)?;
-        let view = view.read(cx);
-        if view.exited {
+        if view.read(cx).exited {
             return Err(format!("Terminal {ix} has exited."));
         }
-        view.write(bytes);
+        view.update(cx, |view, _| {
+            view.touched = true;
+            view.write(bytes);
+        });
         cx.notify();
         Ok(ix)
     }
@@ -1185,7 +1188,7 @@ mod tests {
     use sawit_core::terminal::run_bytes;
 
     use super::super::tab::TerminalTab;
-    use super::super::testing::{focus_terminal, init, open_panel, wait_until};
+    use super::super::testing::{focus_terminal, init, open_panel, scratch_dir, wait_until};
     use super::{JobTag, TerminalPanel};
 
     /// The active tab.
@@ -1447,6 +1450,45 @@ mod tests {
                 .expect("the script's tab");
             assert_eq!(status.running, None, "the script reads as running");
         });
+    }
+
+    /// Commands an agent types (`terminal_input`) mark the shell as used, so opening the
+    /// window's first project moves it there with a `cd` instead of replacing it.
+    #[gpui_kit::test]
+    fn an_agents_input_keeps_its_shell_when_the_first_project_opens(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (_w, panel) = open_panel(cx);
+        let view = cx.update(|cx| panel.read(cx).tab(0).read(cx).focused_view().clone());
+        wait_until(cx, "the shell is at its prompt", |cx| {
+            view.read(cx).at_prompt()
+        });
+        cx.update(|cx| {
+            panel.update(cx, |p, cx| {
+                p.input(Some(0), None, run_bytes("printf 'sawit-%s\\n' typed"), cx)
+            })
+        })
+        .expect("the shell takes input");
+        wait_until(cx, "the shell ran what the agent typed", |cx| {
+            let v = view.read(cx);
+            v.text_tail(50).contains("sawit-typed") && v.at_prompt()
+        });
+        let project = scratch_dir("agent-input-project");
+        cx.update(|cx| {
+            panel.update(cx, |p, cx| {
+                p.set_projects(vec![project.clone()], Some(project.clone()), cx)
+            })
+        });
+        cx.update(|cx| {
+            let tab = panel.read(cx).tab(0).read(cx);
+            assert!(
+                *tab.focused_view() == view,
+                "the shell the agent used was replaced"
+            );
+        });
+        wait_until(cx, "the shell moved to the project", |cx| {
+            view.read(cx).cwd().as_ref() == Some(&project)
+        });
+        let _ = std::fs::remove_dir_all(&project);
     }
 
     #[gpui_kit::test]

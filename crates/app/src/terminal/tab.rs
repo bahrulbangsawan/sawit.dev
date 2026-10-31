@@ -954,7 +954,6 @@ impl Render for TerminalTab {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
     use gpui_kit::{
@@ -967,18 +966,11 @@ mod tests {
 
     use super::super::TerminalPanel;
 
-    use super::super::testing::{SHELLS, focus_terminal, init, open_panel, wait_until};
+    use super::super::testing::{
+        SHELLS, focus_terminal, init, open_panel, scratch_dir, wait_until,
+    };
     use super::super::view::FOLDER_TTL;
     use super::pane_menu_items;
-
-    /// A fresh, empty folder under the temp dir, by its real path (what a
-    /// process's cwd reports).
-    fn scratch_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("sawit-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.canonicalize().unwrap()
-    }
 
     /// Like `wait_until`, but lets the app handle what the shells sent
     /// (output, their exit) while it waits.
