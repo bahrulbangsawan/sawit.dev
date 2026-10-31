@@ -1,10 +1,8 @@
 import type { ReactNode } from 'react'
-import { useShortcuts } from './interactive'
 import { DMG, REPO } from '../content'
 
 // The page shell every route shares: icon sprite, skip link, nav, main and the blue footer.
 export function Page({ home = false, children }: { home?: boolean; children: ReactNode }) {
-  useShortcuts()
   return (
     <div className="flavor">
       <Sprite />
@@ -70,11 +68,11 @@ function Nav({ home }: { home: boolean }) {
           </a>
         </div>
         <div className="right">
-          <a className="btn sm k ghost hide-sm" href={REPO} aria-keyshortcuts="g">
-            GitHub<kbd aria-hidden="true">G</kbd>
+          <a className="btn sm ghost hide-sm" href={REPO}>
+            GitHub
           </a>
-          <a className="btn sm k pri" href={DMG} aria-keyshortcuts="d">
-            Download<kbd aria-hidden="true">D</kbd>
+          <a className="btn sm pri" href={DMG}>
+            Download
           </a>
         </div>
       </div>

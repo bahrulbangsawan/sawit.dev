@@ -1,25 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { DMG, INSTALL, REPO } from '../content'
+import { INSTALL } from '../content'
 
-// Single-letter shortcuts shown as <kbd> hints: C copies the install command, D downloads the DMG, G opens the repo.
-// Ignored while typing or with a modifier held, so ⌘C and form fields keep working.
-export function useShortcuts() {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return
-      const t = e.target as HTMLElement | null
-      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return
-      const key = e.key.toLowerCase()
-      if (key === 'c') document.getElementById('install-copy')?.click()
-      else if (key === 'd') window.location.href = DMG
-      else if (key === 'g') window.location.href = REPO
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
-}
-
-export function InstallButton({ id, className = 'btn k pri' }: { id?: string; className?: string }) {
+// No single-letter shortcuts: C, D and G used to copy the command, download the DMG and open GitHub
+// from anywhere on the page, which a stray key press or speech input set off and nothing could turn
+// off (WCAG 2.1.4).
+export function InstallButton({ id, className = 'btn pri' }: { id?: string; className?: string }) {
   const [copied, setCopied] = useState(false)
   const copy = async () => {
     try {
@@ -32,12 +17,11 @@ export function InstallButton({ id, className = 'btn k pri' }: { id?: string; cl
   }
   return (
     <>
-      <button type="button" id={id} className={className} onClick={copy} aria-keyshortcuts={id ? 'c' : undefined}>
+      <button type="button" id={id} className={className} onClick={copy}>
         <svg aria-hidden="true">
           <use href={copied ? '#i-check' : '#i-copy'} />
         </svg>
         {copied ? 'Copied, paste in Terminal' : 'Copy install command'}
-        {id && <kbd aria-hidden="true">C</kbd>}
       </button>
       <span className="sr-only" role="status">
         {copied ? 'Install command copied' : ''}

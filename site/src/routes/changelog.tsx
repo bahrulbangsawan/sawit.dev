@@ -52,12 +52,11 @@ function ChangelogPage() {
           <h1>Changelog</h1>
           <p className="lead">What’s new in Sawit, release by release.</p>
           <div className="acts">
-            <a className="btn k pri" href={DMG} aria-keyshortcuts="d">
+            <a className="btn pri" href={DMG}>
               <svg aria-hidden="true">
                 <use href="#i-down" />
               </svg>
               Download {latest ? `v${latest.version}` : 'the latest'}
-              <kbd aria-hidden="true">D</kbd>
             </a>
             <a className="btn" href={`${REPO}/blob/main/CHANGELOG.md`}>
               CHANGELOG.md on GitHub ↗

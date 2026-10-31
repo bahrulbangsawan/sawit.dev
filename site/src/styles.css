@@ -264,7 +264,7 @@ svg {
   color: var(--ink);
 }
 
-/* buttons: 36px, 4px radius, a 2px inset lip that disappears on hover, kbd hint inside */
+/* buttons: 36px, 4px radius, a 2px inset lip that disappears on hover */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -291,9 +291,6 @@ svg {
 }
 .btn:active {
   transform: translateY(1px) scale(0.99);
-}
-.btn.k {
-  padding-right: 6px;
 }
 .btn.ghost {
   border-color: transparent;
@@ -328,11 +325,6 @@ kbd {
   background: color-mix(in srgb, var(--bg-2) 50%, transparent);
   font: 400 11px/1 var(--font-mono);
   color: var(--fg-muted);
-}
-.pri kbd {
-  border-color: color-mix(in srgb, var(--accent-fg) 22%, transparent);
-  background: color-mix(in srgb, var(--accent-fg) 10%, transparent);
-  color: var(--accent-fg);
 }
 .keys {
   display: inline-flex;

@@ -37,11 +37,11 @@ function Hero() {
           <p className="lead">Your database, an editor and a terminal in one native Mac app.</p>
           <div className="acts">
             <InstallButton id="install-copy" />
-            <a className="btn k" href={DMG}>
+            <a className="btn" href={DMG}>
               <svg aria-hidden="true">
                 <use href="#i-down" />
               </svg>
-              Download the DMG<kbd aria-hidden="true">D</kbd>
+              Download the DMG
             </a>
           </div>
           <pre className="cmd" tabIndex={0} aria-label="Install command">
@@ -505,11 +505,11 @@ function Cta() {
         <p className="lead">Install it with one command on an Apple Silicon Mac.</p>
         <div className="acts">
           <InstallButton />
-          <a className="btn k" href={REPO}>
+          <a className="btn" href={REPO}>
             <svg aria-hidden="true">
               <use href="#i-git" />
             </svg>
-            View the source<kbd aria-hidden="true">G</kbd>
+            View the source
           </a>
         </div>
         <small>Your passwords stay in the macOS Keychain, never a file.</small>
