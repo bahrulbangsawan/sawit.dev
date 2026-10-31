@@ -986,15 +986,31 @@ fn style_op(target: Value, html: bool) -> Value {
     op
 }
 
-/// The URL's host without port, as a folder name: `[a-z0-9.-]`, else `page`.
+/// The URL's host as a folder name, `[a-z0-9.-]` (else `page`), with its port when it
+/// isn't the scheme's own: two dev servers on one host are two apps (`localhost-5173`).
 fn export_host(url: &str) -> String {
-    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     let authority = authority.rsplit('@').next().unwrap_or(authority);
-    let host = if let Some(v6) = authority.strip_prefix('[') {
-        v6.split(']').next().unwrap_or("")
+    let (host, port) = if let Some(v6) = authority.strip_prefix('[') {
+        let (host, after) = v6.split_once(']').unwrap_or((v6, ""));
+        (host, after.strip_prefix(':'))
     } else {
-        authority.split(':').next().unwrap_or("")
+        match authority.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        }
+    };
+    let default = match scheme.to_ascii_lowercase().as_str() {
+        "http" => "80",
+        "https" => "443",
+        _ => "",
+    };
+    let port =
+        port.filter(|p| !p.is_empty() && *p != default && p.bytes().all(|b| b.is_ascii_digit()));
+    let host = match port {
+        Some(port) if !host.trim_matches(['-', '.', ':']).is_empty() => format!("{host}-{port}"),
+        _ => host.to_string(),
     };
     let host: String = host
         .to_ascii_lowercase()
@@ -1311,12 +1327,25 @@ mod tests {
 
     #[test]
     fn export_hosts_are_safe_folder_names() {
-        assert_eq!(export_host("http://LocalHost:5173/"), "localhost");
+        assert_eq!(export_host("http://LocalHost:5173/"), "localhost-5173");
         assert_eq!(export_host("https://user:pw@x.dev/a"), "x.dev");
         assert_eq!(export_host("file:///Users/me/a.html"), "page");
-        assert_eq!(export_host("http://[::1]:8080/"), "1");
+        assert_eq!(export_host("http://[::1]:8080/"), "1-8080");
         assert_eq!(export_host("http://../"), "page");
         assert_eq!(export_host("http://a_b.dev/"), "a-b.dev");
+        // The scheme's own port says nothing.
+        assert_eq!(export_host("http://x.dev:80/"), "x.dev");
+        assert_eq!(export_host("http://x.dev:443/"), "x.dev-443");
+    }
+
+    /// Two dev servers on one host are two apps: an export of one used to replace the
+    /// other's folder, a `DESIGN.md` edited there included.
+    #[test]
+    fn apps_on_one_host_export_apart() {
+        assert_ne!(
+            export_host("http://localhost:3000/"),
+            export_host("http://localhost:5173/")
+        );
     }
 
     #[test]

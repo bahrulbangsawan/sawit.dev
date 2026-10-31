@@ -599,6 +599,25 @@ async fn fetch_one(
     outcome(a, Some(rel), len, None)
 }
 
+/// The names of the files already in `assets_dir`'s folders.
+fn names_in(assets_dir: &Path) -> HashSet<String> {
+    let kinds = [
+        AssetKind::Image,
+        AssetKind::Svg,
+        AssetKind::Icon,
+        AssetKind::Video,
+        AssetKind::Lottie,
+        AssetKind::Font,
+    ];
+    kinds
+        .into_iter()
+        .filter_map(|k| std::fs::read_dir(assets_dir.join(sub_dir(k))).ok())
+        .flatten()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
 fn is_file_url(url: &str) -> bool {
     url.trim().to_ascii_lowercase().starts_with("file://")
 }
@@ -622,7 +641,8 @@ pub async fn download_all(
     let file_page = is_file_url(page);
     let n = items.len();
     let mut results: Vec<Option<AssetOutcome>> = vec![None; n];
-    let mut taken: HashSet<String> = HashSet::new();
+    // An earlier Save's files keep theirs: new files take the next free name.
+    let mut taken = names_in(assets_dir);
     let total = AtomicU64::new(0);
     let mut done = 0;
     let mut remote: Vec<(usize, String, String)> = Vec::new();
@@ -761,6 +781,24 @@ mod tests {
             "",
         );
         assert_eq!(file_name(&data, &mut t), "image.png");
+    }
+
+    /// A Save into a folder an earlier Save filled names a new file after the ones there, so
+    /// it never writes over a file of another asset that had the same name.
+    #[tokio::test]
+    async fn saves_dont_write_over_earlier_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("images")).unwrap();
+        std::fs::write(dir.path().join("images/logo.png"), b"earlier").unwrap();
+        let png = format!("data:image/png;base64,{}", enc(&[7u8; 10]));
+        let items = vec![asset(AssetKind::Image, Some(&png), None, "logo")];
+        let page = "https://x.com/";
+        let out = download_all(items, dir.path(), page, page, false, 1 << 20, |_, _| {}).await;
+        assert_eq!(out[0].file.as_deref(), Some("images/logo-2.png"));
+        assert_eq!(
+            std::fs::read(dir.path().join("images/logo.png")).unwrap(),
+            b"earlier"
+        );
     }
 
     #[test]
