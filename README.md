@@ -541,21 +541,22 @@ and `uninstall_mcp_server` take the name again as `confirm` (so does `remove_ins
 `confirm: true` because they run install scripts from the internet. Passwords never appear in a result.
 
 Click **MCP** in the title bar to install it, along with a catalog of other servers: AWS, Cloudflare, Neon, Postman,
-Figma, Mobbin, Exa and more. Search the catalog, narrow it with the **Installed**, **Not Installed** and
-**Needs Sign-In** tabs or by where a server runs (built in, remote, on this Mac), and sort it. From the keyboard:
-⌘F searches, ↩ in the search moves to the first server, ↑ and ↓ select, ↩ opens the server's sheet, and ↩ there
-installs. Servers that need an
-account sign in through the client's own sign-in, which the page can start for Claude Code and Codex. The page
-finds the AI clients on this Mac: Claude Code (every
-profile, including `CLAUDE_CONFIG_DIR` folders), Codex (and `CODEX_HOME` profiles), Claude Desktop, Cursor,
-Windsurf, Gemini CLI, Zed, opencode and VS Code. It installs into each with one click and shows where each config
-lives. It finds `claude`, `codex` and `npx` where the Dev Tools page finds them (`~/.local/bin`, nvm's Node.js, …),
-not only on the PATH apps get. Claude Code and Codex are changed through their own CLI when it's installed. Apps
-such as Claude Desktop start without your shell's PATH, so their `npx` entries say which folder has `node`. Other configs are edited in
-place, keeping other settings, their order and the file's indentation (a TOML file keeps its comments too; a JSON
-file with comments is left for you to edit, with the entry to paste), and each file is copied next to it
-(`.sawit-backup`) before every change. Updating an entry changes only where it points: what you added to it (Cline's auto-approved tools,
-`env`, timeouts, …) stays. **Remove from N** in a server's sheet asks first, like its row's trash button.
+Figma, Mobbin, Exa and more. Search the catalog, narrow it with the **Installed**, **Not Installed** and **Needs
+Sign-In** tabs or by where a server runs (built in, remote, on this Mac), and sort it. From the keyboard: ⌘F
+searches, ↩ in the search moves to the first server, ↑ and ↓ select, ↩ opens the server's sheet, and ↩ there
+installs. Servers that need an account sign in through the client's own sign-in, which the page can start for Claude
+Code and Codex. The page finds the AI clients on this Mac: Claude Code (every profile, including `CLAUDE_CONFIG_DIR`
+folders), Codex (and `CODEX_HOME` profiles), Claude Desktop, Cursor, Windsurf, Gemini CLI, Zed, opencode and VS
+Code. It installs into each with one click and shows where each config lives. The AWS server shows the Region your
+clients have it in, and an install in another Region reads as installed there. It finds `claude`, `codex` and `npx`
+where the Dev Tools page finds them (`~/.local/bin`, nvm's Node.js, …), not only on the PATH apps get. Claude Code
+and Codex are changed through their own CLI when it's installed. Apps such as Claude Desktop start without your
+shell's PATH, so their `npx` entries say which folder has `node`; clients that reach remote servers only through
+`npx` (Claude Desktop, LM Studio and others) say so when Node.js isn't installed. Other configs are edited in place,
+keeping other settings, their order and the file's indentation (a TOML file keeps its comments too; a JSON file with
+comments is left for you to edit, with the entry to paste), and each file is copied next to it (`.sawit-backup`)
+before every change. Updating an entry changes only where it points: what you added to it (Cline's auto-approved
+tools, `env`, timeouts, …) stays. **Remove from N** in a server's sheet asks first, like its row's trash button.
 
 To add it by hand:
 
