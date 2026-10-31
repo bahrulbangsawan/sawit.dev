@@ -991,26 +991,15 @@ impl FilesPanel {
     }
 
     /// Adds the target to the repository's `.gitignore`, or to its private
-    /// `.git/info/exclude`.
+    /// `.git/info/exclude` ([`sawit_core::git::ignore`]).
     fn ignore(&mut self, exclude: bool, cx: &mut Context<Self>) {
         let (Some(repo), Some(path)) = (self.repo.clone(), self.target()) else {
             return;
         };
-        let rx = rt::spawn_blocking(cx, move || {
-            // `git` reports the repository's real path; the tree may not.
-            let real = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-            let rel = real
-                .strip_prefix(&repo)
-                .map_err(|_| "This isn't inside the repository.".to_string())?;
-            if rel.as_os_str().is_empty() {
-                return Err("The repository's own folder can't be ignored.".into());
-            }
-            let file = if exclude {
-                repo.join(".git/info/exclude")
-            } else {
-                repo.join(".gitignore")
-            };
-            files::add_ignore_line(&file, &files::ignore_pattern(rel, path.is_dir()))
+        let rx = rt::spawn(cx, async move {
+            sawit_core::git::ignore(&repo, &path, exclude)
+                .await
+                .map(drop)
                 .map_err(|e| e.to_string())
         });
         cx.spawn(async move |this, cx| {
