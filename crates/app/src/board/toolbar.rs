@@ -101,16 +101,24 @@ impl BoardView {
     }
 
     /// Places template `id`, one the picker lists, in the middle of the view, and closes the
-    /// picker.
+    /// picker. A text being typed in on the canvas ends first, as before any command of the
+    /// chrome ([`BoardView::end_text_edit`], ruling R-TEXTEDIT): placed inside the edit, the
+    /// template made no undo step of its own, and the canvas went on typing in the text while the
+    /// template showed selected (CANVAS-UI-5).
     pub(super) fn place_template(&mut self, id: &str, cx: &mut Context<Self>) {
         self.picker = None;
-        self.run(|board| model::place_template(board, id), cx);
+        if self.end_text_edit(Some("board.template"), cx) {
+            self.run(|board| model::place_template(board, id), cx);
+        }
     }
 
     /// Places a table of `rows` by `cols` cells in the middle of the view, and closes the picker.
+    /// A text being typed in ends first, as for a template.
     pub(super) fn place_table(&mut self, rows: u32, cols: u32, cx: &mut Context<Self>) {
         self.picker = None;
-        self.run(|board| model::place_table(board, rows, cols), cx);
+        if self.end_text_edit(Some("board.table"), cx) {
+            self.run(|board| model::place_table(board, rows, cols), cx);
+        }
     }
 }
 

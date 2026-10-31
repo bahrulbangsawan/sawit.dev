@@ -1265,6 +1265,53 @@ mod tests {
         assert_eq!(toast(&view, &cx), None);
     }
 
+    /// CANVAS-UI-5, ruling R-TEXTEDIT from the toolbar's Templates & table picker: a template or
+    /// a table placed while a sticky is typed in ends the typing first, as one undo step, and is
+    /// a step of its own. Placed inside the open edit, it made no undo step, the canvas went on
+    /// typing in the sticky while the template showed selected, and one ⌘Z took both back.
+    #[gpui_kit::test]
+    fn a_template_or_a_table_placed_while_typing_keeps_what_was_typed(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("picker-typing");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        let (note, _, steps) = typing_in_the_first_of_two(&view, &mut cx);
+        let template = figcraft_engine::board_templates::TEMPLATES[0].id;
+        click(&mut cx, "board-picker");
+        cx.run_until_parked();
+        view.update(&mut cx, |view, cx| view.place_template(template, cx));
+        cx.run_until_parked();
+        assert!(!typing(&view, &cx));
+        assert_eq!(gesture(&view, &cx), None);
+        assert_eq!(undo_steps(&view, &cx), steps + 2);
+        assert_eq!(toast(&view, &cx), None);
+        // One ⌘Z takes the template back, and what was typed stays.
+        let placed = layers(&view, &cx).len();
+        focus_canvas(&view, &mut cx);
+        cx.simulate_keystrokes("cmd-z");
+        assert_eq!(layers(&view, &cx).len(), 2, "{placed} layers before");
+        assert_eq!(reads(&view, note, &cx), "new");
+
+        // A table, the same way.
+        let steps = undo_steps(&view, &cx);
+        view.update(&mut cx, |view, cx| {
+            let session = &mut view.board_mut().unwrap().session;
+            assert!(figcraft_engine::board::edit_text(session, note).unwrap());
+            cx.notify();
+        });
+        cx.simulate_input("er");
+        let typed = reads(&view, note, &cx);
+        assert_ne!(typed, "new", "nothing was typed");
+        click(&mut cx, "board-picker");
+        cx.run_until_parked();
+        view.update(&mut cx, |view, cx| view.place_table(2, 3, cx));
+        cx.run_until_parked();
+        assert!(!typing(&view, &cx));
+        assert_eq!(gesture(&view, &cx), None);
+        assert_eq!(layers(&view, &cx).len(), 3);
+        assert_eq!(undo_steps(&view, &cx), steps + 2);
+        assert_eq!(reads(&view, note, &cx), typed);
+        assert_eq!(toast(&view, &cx), None);
+    }
+
     /// The page on show.
     fn page(view: &Entity<BoardView>, cx: &TestAppContext) -> NodeId {
         view.read_with(cx, |view, _| view.board().unwrap().session.page().unwrap())
