@@ -378,15 +378,23 @@ explained. A conflict on the same address can't be forced.
 
 ## Keyboard shortcuts
 
-These are the defaults. Every shortcut can be changed in the **Keymap Editor**
+These are the defaults. Most shortcuts can be changed in the **Keymap Editor**
 (<kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd>, the keyboard button in the title bar,
 Sawit ▸ Keymap Editor, or an agent's `app_open_page` with `keymap`). It lists each binding of every
 feature, including the workspace, panels, editors, terminal, Git, inputs, and the native canvas's
 commands, with its action, arguments, keys, context and source. From it you can change, add, remove
 or restore a binding, find bindings by their keys, and see which ones clash. Your changes go to
 `~/Library/Application Support/sawit/keymap.json` in Zed's keymap format (*Edit in JSON*,
-<kbd>⌘</kbd><kbd>E</kbd>). You can also edit that file by hand: Sawit applies it as soon as it is
-saved.
+<kbd>⌘</kbd><kbd>E</kbd> in the editor). You can also edit that file by hand: Sawit applies it within a
+second of saving. A change made in the editor writes the whole file again, without your comments.
+
+A few keys aren't bindings, so the editor can't change them: the terminal's <kbd>⌘</kbd><kbd>C</kbd> and
+<kbd>⌘</kbd><kbd>V</kbd>, the video viewer's <kbd>Space</kbd>, and on the canvas <kbd>Space</kbd> to pan, the
+arrows and the number keys, and the keys of the text it edits (<kbd>⎋</kbd>, <kbd>↩</kbd>,
+<kbd>⌘</kbd><kbd>Z</kbd>, <kbd>⌘</kbd><kbd>A</kbd> and <kbd>⌘</kbd><kbd>↩</kbd> among them). The editor's
+Keystrokes field records every key but a plain <kbd>↩</kbd>, which saves, and a plain <kbd>⎋</kbd>, which
+stops recording: bind those two in keymap.json. On a keyboard layout that types some keys elsewhere (German,
+French…), the defaults move where macOS menus put them.
 
 | Action | Shortcut |
 |---|---|
@@ -563,6 +571,7 @@ scripts/bundle-macos.sh                        # target/release/Sawit.app (with 
 App data is stored in `~/Library/Application Support/sawit/`:
 
 - `instances.toml`, `profiles.toml`, `prompts.json` and `recent.toml`
+- `keymap.json`, your key bindings over the defaults (the Keymap Editor writes it)
 - `clusters/` and `logs/`
 - `bin/` for downloaded binaries
 - `run/` for sockets
