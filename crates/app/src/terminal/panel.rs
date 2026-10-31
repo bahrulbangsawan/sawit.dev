@@ -695,6 +695,19 @@ impl TerminalPanel {
         }
     }
 
+    /// Closes the tab at `ix` for the user (the strip's ×): when the keyboard was in it, the
+    /// tab shown next takes it, and otherwise the keyboard stays where it is.
+    fn close_for_user(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(ix) else {
+            return;
+        };
+        let had_keyboard = tab.read(cx).has_focus(window, cx);
+        self.close(ix, cx);
+        if had_keyboard {
+            self.focus_active(window, cx);
+        }
+    }
+
     /// Drops a tab whose last pane closed (handing the keyboard to the next
     /// tab if it was there), redraws the strip on changes, and does what a
     /// pane's banner asks.
@@ -947,7 +960,12 @@ impl Render for TerminalPanel {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::X)
-                            .on_click(cx.listener(move |this, _, _, cx| this.close(ix, cx))),
+                            .debug_selector(move || format!("close-term-{ix}"))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                // The tab under the × would activate itself next.
+                                cx.stop_propagation();
+                                this.close_for_user(ix, window, cx)
+                            })),
                     )
                     .when_some(color, |el, color| el.child(group_stripe(color, active)))
                     .on_click(cx.listener(move |this, _, window, cx| this.activate(ix, window, cx)))
@@ -1118,7 +1136,9 @@ mod paste_tests {
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
+    use gpui_kit::{
+        AnyWindowHandle, AppContext as _, Entity, Modifiers, TestAppContext, VisualTestContext,
+    };
     use sawit_core::terminal::run_bytes;
 
     use super::super::tab::TerminalTab;
@@ -1163,6 +1183,90 @@ mod tests {
     ) -> bool {
         cx.update_window(w, |_, window, cx| tab.read(cx).has_focus(window, cx))
             .expect("the test window is open")
+    }
+
+    /// A debug selector made at run time: tests only, so leaking it is fine.
+    fn selector(text: String) -> &'static str {
+        Box::leak(text.into_boxed_str())
+    }
+
+    /// Clicks the × of tab `ix` in the strip.
+    fn click_close(cx: &mut TestAppContext, w: AnyWindowHandle, ix: usize) {
+        let mut vcx = VisualTestContext::from_window(w, cx);
+        vcx.run_until_parked();
+        let at = vcx
+            .debug_bounds(selector(format!("close-term-{ix}")))
+            .unwrap_or_else(|| panic!("tab {ix}'s × isn't drawn"))
+            .center();
+        vcx.simulate_click(at, Modifiers::default());
+        vcx.run_until_parked();
+    }
+
+    /// The × of the active, rightmost tab closes it and the tab left of it shows, with the
+    /// keyboard the closed tab had. The tab's own click must not run too: it would make the
+    /// closed tab's index (now past the end) the active one, and the dock would say "No
+    /// terminals open" while a tab is left.
+    #[gpui_kit::test]
+    fn the_close_button_of_the_last_tab_shows_the_one_left(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        let first = active(cx, &panel);
+        open_tabs(cx, &panel, 1);
+        click_tab(cx, w, &panel, 1);
+        click_close(cx, w, 1);
+        cx.update(|cx| {
+            let p = panel.read(cx);
+            assert_eq!(p.tab_count(), 1);
+            assert_eq!(p.active_index(), 0, "the active tab is past the end");
+            assert!(
+                p.text(None, None, 5, cx).is_ok(),
+                "reading the active tab fails"
+            );
+        });
+        assert!(
+            has_keyboard(cx, w, &first),
+            "the keyboard didn't go to the tab left"
+        );
+    }
+
+    /// The × of a tab in the background closes only that tab, on either side of the active
+    /// one: the active tab stays, and so does the keyboard.
+    #[gpui_kit::test]
+    fn the_close_button_of_a_background_tab_keeps_the_active_one(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        open_tabs(cx, &panel, 3);
+        // [A, B*, C, D], B with the keyboard.
+        click_tab(cx, w, &panel, 1);
+        let b = active(cx, &panel);
+        for (ix, closing) in [
+            (2, "C, right of B"),
+            (0, "A, left of B"),
+            (1, "D, the last"),
+        ] {
+            click_close(cx, w, ix);
+            assert!(active(cx, &panel) == b, "closing {closing} switched tabs");
+            assert!(
+                has_keyboard(cx, w, &b),
+                "closing {closing} took the keyboard"
+            );
+        }
+        cx.update(|cx| assert_eq!(panel.read(cx).tab_count(), 1));
+    }
+
+    /// The × of the active tab while it has the keyboard hands the keyboard to the tab that
+    /// takes its place.
+    #[gpui_kit::test]
+    fn the_close_button_of_the_typing_tab_hands_on_the_keyboard(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        open_tabs(cx, &panel, 1);
+        // [A*, B], A with the keyboard.
+        click_tab(cx, w, &panel, 0);
+        let b = cx.update(|cx| panel.read(cx).tab(1).clone());
+        click_close(cx, w, 0);
+        assert!(active(cx, &panel) == b);
+        assert!(has_keyboard(cx, w, &b), "the keyboard went nowhere");
     }
 
     /// Closing a tab left of the active one keeps the active tab (and the keyboard in it), as
