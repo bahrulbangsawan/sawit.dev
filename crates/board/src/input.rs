@@ -179,11 +179,101 @@ fn figcraft_key(key: &str, mut mods: Mods) -> (Cow<'_, str>, Mods) {
 /// commands ask of the view stays in `session.ui_requests` for the caller. Errors are the engine's
 /// refusals, and the engine's panics caught by [`guard::run`].
 pub fn route_key(board: &mut BoardDoc, key: &str, mods: Mods) -> Result<KeyOutcome, BoardError> {
+    route(board, key, mods, true)
+}
+
+/// [`route_key`] for a key no key binding of the app took. FigCraft's shortcuts are the app's key
+/// bindings ([`crate::shortcuts::key_bindings`]), which the user may change in the keymap editor,
+/// so this leaves them out: the key reaches the tools, the text editor and the canvas's own keys
+/// (the arrows, the number keys), and is [`KeyOutcome::Unhandled`] otherwise. A shortcut's
+/// binding runs [`route_command`].
+pub fn route_unbound_key(
+    board: &mut BoardDoc,
+    key: &str,
+    mods: Mods,
+) -> Result<KeyOutcome, BoardError> {
+    route(board, key, mods, false)
+}
+
+/// Runs command `id` for a key binding of the app, as [`route_key`] runs it for its shortcut.
+/// `key` is the key that was pressed (a FigCraft key name, see [`key_name`]), if known.
+///
+/// - While text is edited the command runs, but for copy and paste, which act on the text and come
+///   back as [`KeyOutcome::Ui`] for the caller ([`TEXT_CLIPBOARD`]).
+/// - Otherwise the tools have the key first, as for a shortcut: in vector edit mode a letter picks
+///   a vector tool, not the canvas's.
+/// - A hidden command, or one FigCraft doesn't have, is [`KeyOutcome::Unhandled`].
+pub fn route_command(
+    board: &mut BoardDoc,
+    id: &str,
+    key: Option<(&str, Mods)>,
+) -> Result<KeyOutcome, BoardError> {
+    let Some(id) = command_id(id).filter(|id| !is_hidden(id)) else {
+        return Ok(KeyOutcome::Unhandled);
+    };
+    if board.session.ds().is_ok_and(|ds| ds.text_edit.is_some()) {
+        if TEXT_CLIPBOARD.contains(&id) {
+            return Ok(KeyOutcome::Ui(id));
+        }
+        return run(board, id);
+    }
+    if let Some((key, mods)) = key {
+        let (key, mods) = figcraft_key(key, mods);
+        let key: &str = &key;
+        let session = &mut board.session;
+        if guard::run("ui.toolKey", || {
+            session.tool_key(key, mods.shift, mods.alt, mods.cmd)
+        })? {
+            return Ok(KeyOutcome::Handled);
+        }
+    }
+    shortcut_command(board, id)
+}
+
+/// The id of FigCraft's command `id` as FigCraft spells it: a shortcut's, a menu item's or an
+/// engine command's. `None` when FigCraft has no such command.
+pub fn command_id(id: &str) -> Option<&'static str> {
+    keymap::KEYS
+        .iter()
+        .map(|binding| binding.id)
+        .chain(figcraft_engine::catalog::items().map(|item| item.id))
+        .chain(
+            figcraft_engine::all_commands()
+                .iter()
+                .map(|command| command.id),
+        )
+        .find(|known| *known == id)
+}
+
+/// Runs command `id` for its shortcut on the canvas (not while text is edited): Escape and Enter's
+/// commands do as those keys do, and ⌘X cuts points in vector edit mode.
+fn shortcut_command(board: &mut BoardDoc, id: &'static str) -> Result<KeyOutcome, BoardError> {
+    match id {
+        "select.none" => guard::run("ui.escape", || board.session.escape())?,
+        "select.children" => enter(board)?,
+        "edit.cut" if vector_editing(&board.session) => cut_points(board)?,
+        "edit.delete" if board.session.tool.pen.is_some() => {
+            let session = &mut board.session;
+            // As in FigCraft, a pen that can't finish leaves nothing to report.
+            let _ = guard::run("ui.penFinish", || session.pen_finish());
+        }
+        id => return run(board, id),
+    }
+    Ok(KeyOutcome::Handled)
+}
+
+/// [`route_key`], with FigCraft's shortcuts looked up when `shortcuts` is set.
+fn route(
+    board: &mut BoardDoc,
+    key: &str,
+    mods: Mods,
+    shortcuts: bool,
+) -> Result<KeyOutcome, BoardError> {
     let (key, mods) = figcraft_key(key, mods);
     let key: &str = &key;
     let platform = Platform::current();
     if board.session.ds().is_ok_and(|ds| ds.text_edit.is_some()) {
-        return text_key(board, platform, key, mods);
+        return text_key(board, platform, key, mods, shortcuts);
     }
     // Vector edit mode and shape builder keys (tools, nudging points, delete, join, Enter), as on
     // the canvas.
@@ -193,19 +283,8 @@ pub fn route_key(board: &mut BoardDoc, key: &str, mods: Mods) -> Result<KeyOutco
     })? {
         return Ok(KeyOutcome::Handled);
     }
-    if let Some(id) = shortcut(platform, Context::Canvas, key, mods) {
-        match id {
-            "select.none" => guard::run("ui.escape", || board.session.escape())?,
-            "select.children" => enter(board)?,
-            "edit.cut" if vector_editing(&board.session) => cut_points(board)?,
-            "edit.delete" if board.session.tool.pen.is_some() => {
-                let session = &mut board.session;
-                // As in FigCraft, a pen that can't finish leaves nothing to report.
-                let _ = guard::run("ui.penFinish", || session.pen_finish());
-            }
-            id => return run(board, id),
-        }
-        return Ok(KeyOutcome::Handled);
+    if let Some(id) = shortcut(platform, Context::Canvas, key, mods).filter(|_| shortcuts) {
+        return shortcut_command(board, id);
     }
     let Some((name, _)) = keymap::normalize(key) else {
         return Ok(KeyOutcome::Unhandled);
@@ -277,19 +356,23 @@ fn run(board: &mut BoardDoc, id: &'static str) -> Result<KeyOutcome, BoardError>
 /// The copy and paste commands that act on the text being edited: its selected characters are
 /// copied or cut, and a paste types the clipboard's text, in FigCraft's text editor for every ⌘V
 /// it takes (Shift held or not). Paste to replace (⇧⌘R) replaces layers, and waits.
-const TEXT_CLIPBOARD: &[&str] = &["edit.copy", "edit.cut", "edit.paste", "edit.pasteOver"];
+pub const TEXT_CLIPBOARD: &[&str] = &["edit.copy", "edit.cut", "edit.paste", "edit.pasteOver"];
 
 /// A key while text is edited, taken as FigCraft's own keyboard takes it: the shortcuts live while
 /// editing, then typing (the input method's), then the text editor's keys. Canvas shortcuts wait
 /// until the edit ends, but for copy and paste, which act on the text ([`TEXT_CLIPBOARD`]).
+///
+/// Without `shortcuts`, the shortcuts are left to the app's key bindings ([`route_unbound_key`]):
+/// those live while editing, and copy and paste.
 fn text_key(
     board: &mut BoardDoc,
     platform: Platform,
     key: &str,
     mods: Mods,
+    shortcuts: bool,
 ) -> Result<KeyOutcome, BoardError> {
-    if let Some(id) =
-        shortcut(platform, Context::Text, key, mods).filter(|_| mods.cmd || mods.alt || mods.ctrl)
+    if let Some(id) = shortcut(platform, Context::Text, key, mods)
+        .filter(|_| shortcuts && (mods.cmd || mods.alt || mods.ctrl))
     {
         return run(board, id);
     }
@@ -313,7 +396,7 @@ fn text_key(
             // ends.
             _ if key.chars().count() == 1 => {
                 let clipboard = shortcut(platform, Context::Canvas, key, mods)
-                    .filter(|id| TEXT_CLIPBOARD.contains(id));
+                    .filter(|id| shortcuts && TEXT_CLIPBOARD.contains(id));
                 return Ok(clipboard.map_or(KeyOutcome::Unhandled, KeyOutcome::Ui));
             }
             _ => {}

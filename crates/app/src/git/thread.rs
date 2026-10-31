@@ -95,29 +95,28 @@ impl ThreadView {
         cx: &mut Context<Self>,
     ) -> Self {
         let comment = cx.new(|cx| {
-            TextareaState::new(window, cx).placeholder("Leave a comment (Markdown, ⌘↩ to send)")
+            let placeholder =
+                match crate::keymap::keys_for(&super::SendComment, "GitComment", window) {
+                    keys if keys.is_empty() => "Leave a comment (Markdown)".to_string(),
+                    keys => format!("Leave a comment (Markdown, {keys} to send)"),
+                };
+            TextareaState::new(window, cx).placeholder(placeholder)
         });
-        let subscriptions = vec![cx.subscribe_in(
-            &comment,
-            window,
-            |this, input, e: &InputEvent, window, cx| {
-                match e {
-                    InputEvent::PressEnter {
-                        secondary: true, ..
-                    } => this.send_comment(window, cx),
+        let subscriptions =
+            vec![
+                cx.subscribe_in(&comment, window, |this, input, e: &InputEvent, _, cx| {
+                    // ⌘↩ sends through its binding (`super::SendComment`), which the keymap may change.
                     // Only the Send button depends on the text. Re-rendering the
                     // whole timeline per keystroke made typing lag on long threads.
-                    InputEvent::Change => {
+                    if let InputEvent::Change = e {
                         let empty = input.read(cx).value().trim().is_empty();
                         if empty != this.comment_empty {
                             this.comment_empty = empty;
                             cx.notify();
                         }
                     }
-                    _ => {}
-                }
-            },
-        )];
+                }),
+            ];
         let mut this = Self {
             item,
             comment_empty: true,
@@ -1175,9 +1174,18 @@ impl Render for ThreadView {
                         .border_t_1()
                         .border_color(cx.theme().border)
                         .child(
-                            Textarea::new(&self.comment)
-                                .h(px(72.))
-                                .aria_label("Comment"),
+                            div()
+                                .key_context("GitComment")
+                                .on_action(cx.listener(
+                                    |this, _: &super::SendComment, window, cx| {
+                                        this.send_comment(window, cx)
+                                    },
+                                ))
+                                .child(
+                                    Textarea::new(&self.comment)
+                                        .h(px(72.))
+                                        .aria_label("Comment"),
+                                ),
                         )
                         .child(
                             h_flex()

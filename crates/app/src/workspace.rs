@@ -27,6 +27,8 @@ use crate::git::{
     CommitView, DiffView, DiffViewEvent, GitHubView, GitPanel, GitPanelEvent, GitStore, GraphEvent,
     GraphView,
 };
+use crate::keymap::editor::KeymapEditor;
+use crate::keymap::{OpenKeymapEditor, OpenKeymapFile};
 use crate::layout::{Area, Layout};
 use crate::mcp_page::McpPage;
 use crate::network::NetworkPanel;
@@ -139,6 +141,8 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-cmd-v", OpenChangelog, ctx),
         KeyBinding::new("ctrl-cmd-u", InstallUpdate, ctx),
         KeyBinding::new("ctrl-cmd-i", crate::cli::InstallCli, ctx),
+        // Zed's.
+        KeyBinding::new("cmd-k cmd-s", OpenKeymapEditor, ctx),
     ]
 }
 
@@ -937,14 +941,33 @@ impl Workspace {
         cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
         let muted = cx.theme().muted_foreground;
-        let item = |label: &'static str, keys: &'static str| {
+        let keys = |action: &dyn Action| crate::keymap::keys_for(action, "Workspace", window);
+        let [
+            close_keys,
+            others_keys,
+            left_keys,
+            right_keys,
+            clean_keys,
+            all_keys,
+            pin_keys,
+        ] = [
+            &CloseActiveTab as &dyn Action,
+            &CloseOtherTabs,
+            &CloseTabsLeft,
+            &CloseTabsRight,
+            &CloseCleanTabs,
+            &CloseAllTabs,
+            &TogglePinTab,
+        ]
+        .map(keys);
+        let item = |label: &'static str, keys: SharedString| {
             PopupMenuItem::element(move |_, _| {
                 h_flex()
                     .w_full()
                     .gap_6()
                     .justify_between()
                     .child(label)
-                    .child(div().text_color(muted).child(keys))
+                    .child(div().text_color(muted).child(keys.clone()))
             })
         };
         let close = |op: CloseOp| {
@@ -956,14 +979,14 @@ impl Workspace {
         let this_pin = this.clone();
         let this_ro = this.clone();
         let menu = Self::group_menu(this.clone(), ix, group, projects, menu, window, cx);
-        menu.item(item("Close", "⌘W").on_click(close(CloseOp::This)))
-            .item(item("Close Others", "⌥⌘T").on_click(close(CloseOp::Others)))
+        menu.item(item("Close", close_keys).on_click(close(CloseOp::This)))
+            .item(item("Close Others", others_keys).on_click(close(CloseOp::Others)))
             .separator()
-            .item(item("Close Left", "⌘K E").on_click(close(CloseOp::Left)))
-            .item(item("Close Right", "⌘K T").on_click(close(CloseOp::Right)))
+            .item(item("Close Left", left_keys).on_click(close(CloseOp::Left)))
+            .item(item("Close Right", right_keys).on_click(close(CloseOp::Right)))
             .separator()
-            .item(item("Close Clean", "⌘K U").on_click(close(CloseOp::Clean)))
-            .item(item("Close All", "⌘K W").on_click(close(CloseOp::All)))
+            .item(item("Close Clean", clean_keys).on_click(close(CloseOp::Clean)))
+            .item(item("Close All", all_keys).on_click(close(CloseOp::All)))
             .when(is_file, |menu| {
                 menu.separator().item(
                     PopupMenuItem::new(if read_only {
@@ -978,7 +1001,7 @@ impl Workspace {
             })
             .separator()
             .item(
-                item(if pinned { "Unpin Tab" } else { "Pin Tab" }, "⌘K ⇧↩").on_click(
+                item(if pinned { "Unpin Tab" } else { "Pin Tab" }, pin_keys).on_click(
                     move |_, _, cx| {
                         let _ = this_pin.update(cx, |ws, cx| ws.toggle_pin(ix, cx));
                     },
@@ -1326,7 +1349,7 @@ impl Workspace {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::X)
-                            .tooltip("Close (⌘W)")
+                            .tooltip_with_action("Close", &CloseActiveTab, Some("Workspace"))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
                                 this.close(CloseOp::This, ix, window, cx);
@@ -2195,6 +2218,52 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Shows the keymap editor (one tab), with the keyboard.
+    fn open_keymap_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_welcome(CENTER_ONLY, cx);
+        let key: SharedString = "keymap".into();
+        if let Some(ix) = self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
+        {
+            self.active = ix;
+            if let PaneItem::Other { view, .. } = &self.tabs[ix].item
+                && let Ok(editor) = view.clone().downcast::<KeymapEditor>()
+            {
+                window.focus(&editor.focus_handle(cx), cx);
+            }
+        } else {
+            let view = cx.new(|cx| KeymapEditor::new(window, cx));
+            window.focus(&view.focus_handle(cx), cx);
+            self.push_tab(
+                PaneItem::Other {
+                    view: view.into(),
+                    key,
+                    title: "Keymap Editor".into(),
+                    icon: Lucide::Keyboard,
+                    file: None,
+                },
+                None,
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    /// Opens the keymap file in an editor tab, writing a new one with a few lines on how to fill
+    /// it if there is none.
+    fn open_keymap_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let store = crate::keymap::store(cx);
+        let path = store.read(cx).path().to_path_buf();
+        if let Err(error) = store.read(cx).ensure_file() {
+            log::warn!("sawit: can't create {}: {error}", path.display());
+            return;
+        }
+        self.show_center(cx);
+        self.open_file(path, window, cx);
+    }
+
     /// Shows the Dev Tools install page (one tab).
     fn open_tools_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_welcome(CENTER_ONLY, cx);
@@ -2417,6 +2486,16 @@ impl Workspace {
                     )
                     .on_click(cx.listener(|this, _, _, cx| this.open_mcp_page(cx))),
             )
+            .child(
+                Button::new("open-keymap")
+                    .ghost()
+                    .xsmall()
+                    .icon(Lucide::Keyboard)
+                    .tooltip_with_action("Keymap Editor", &OpenKeymapEditor, Some("Workspace"))
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.open_keymap_editor(window, cx)),
+                    ),
+            )
             .child(div().w(px(6.)))
             .child(
                 toggle(
@@ -2606,6 +2685,11 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &OpenDevTools, w, cx| this.open_tools_page(w, cx)))
             .on_action(cx.listener(|this, _: &OpenMcp, _, cx| this.open_mcp_page(cx)))
+            .on_action(cx.listener(|this, _: &OpenKeymapEditor, w, cx| {
+                this.show_center(cx);
+                this.open_keymap_editor(w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &OpenKeymapFile, w, cx| this.open_keymap_file(w, cx)))
             .on_action(cx.listener(|this, _: &OpenChangelog, _, cx| {
                 this.show_center(cx);
                 this.open_changelog_page(cx)

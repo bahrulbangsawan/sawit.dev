@@ -15,8 +15,8 @@
 
 use figcraft_engine::keymap::{self, Binding, Group, KEYS, Platform};
 
-use crate::input::gpui_keystroke;
-use crate::policy::{SAWIT_WINS, is_hidden};
+use crate::input::{TEXT_CLIPBOARD, gpui_keystroke};
+use crate::policy::{SAWIT_WINS, SAWIT_WINS_UNLESS_EDITING, is_hidden};
 
 /// Most keys a row shows: a command's first bindings, as in FigCraft's own panel. The rest stay
 /// as alternatives that work without being listed.
@@ -100,6 +100,134 @@ fn row(binding: &Binding) -> Option<ShortcutRow> {
         label: binding.title().to_string(),
         keys: keys.join(" or "),
     })
+}
+
+/// The app's key context of the canvas while it doesn't edit text, for its bindings.
+pub const CANVAS_CONTEXT: &str = "Board && !BoardText";
+/// The app's key context of the canvas while it edits text.
+pub const TEXT_CONTEXT: &str = "BoardText";
+
+/// One of FigCraft's shortcuts as an app key binding: its GPUI keystroke, its command and the key
+/// context it is live in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyBinding {
+    pub keystroke: String,
+    pub id: &'static str,
+    pub context: &'static str,
+}
+
+/// FigCraft's shortcuts as the app binds them, which the keymap editor shows and changes. Each
+/// command's keys, but those of the commands the sheet leaves out (hidden, or of no use in the
+/// canvas) and the keys Sawit keeps ([`SAWIT_WINS`]), in FigCraft's order:
+///
+/// - On the canvas ([`CANVAS_CONTEXT`]), the keys of the commands live there, but those Sawit
+///   keeps while no text is edited ([`SAWIT_WINS_UNLESS_EDITING`]).
+/// - While text is edited ([`TEXT_CONTEXT`]), the keys with ⌘, ⌥ or ⌃ of the commands live
+///   there, and of copy and paste, which act on the text: plain keys type.
+pub fn key_bindings() -> Vec<KeyBinding> {
+    let mut out = Vec::new();
+    for binding in KEYS.iter() {
+        if is_hidden(binding.id) || NOT_OFFERED.contains(&binding.id) {
+            continue;
+        }
+        for spec in binding.keys(Platform::Mac) {
+            let Some(keystroke) = gpui_keystroke(spec) else {
+                continue;
+            };
+            if SAWIT_WINS.contains(&keystroke.as_str()) {
+                continue;
+            }
+            let Some(bound) = binding_keystroke(spec) else {
+                continue;
+            };
+            let modified = ["ctrl-", "alt-", "cmd-"].iter().any(|m| bound.contains(m));
+            let mut push = |context| {
+                let key = KeyBinding {
+                    keystroke: bound.clone(),
+                    id: binding.id,
+                    context,
+                };
+                if !out.contains(&key) {
+                    out.push(key);
+                }
+            };
+            if binding.context != keymap::Context::Text
+                && !SAWIT_WINS_UNLESS_EDITING.contains(&keystroke.as_str())
+            {
+                push(CANVAS_CONTEXT);
+            }
+            let in_text =
+                binding.context != keymap::Context::Canvas || TEXT_CLIPBOARD.contains(&binding.id);
+            if in_text && modified {
+                push(TEXT_CONTEXT);
+            }
+        }
+    }
+    out
+}
+
+/// The US keyboard's shifted symbols, each with its key.
+const SHIFTED: &[(char, char)] = &[
+    ('!', '1'),
+    ('@', '2'),
+    ('#', '3'),
+    ('$', '4'),
+    ('%', '5'),
+    ('^', '6'),
+    ('&', '7'),
+    ('*', '8'),
+    ('(', '9'),
+    (')', '0'),
+    ('_', '-'),
+    ('+', '='),
+    ('{', '['),
+    ('}', ']'),
+    ('|', '\\'),
+    (':', ';'),
+    ('"', '\''),
+    ('<', ','),
+    ('>', '.'),
+    ('?', '/'),
+    ('~', '`'),
+];
+
+/// The keystroke a binding for `spec` matches, which is [`gpui_keystroke`]'s but for a shifted
+/// symbol: GPUI reports ⇧1 as `!` and ⌃⇧/ as `ctrl-?`, Shift off, so the binding is the symbol
+/// without Shift (`Shift+1` is `!`, `Ctrl+Shift+?` is `ctrl-?`). A letter keeps its Shift.
+pub fn binding_keystroke(spec: &str) -> Option<String> {
+    let keystroke = gpui_keystroke(spec)?;
+    // The modifiers end at the last `-` but one when the key is `-` itself (`cmd--`).
+    let split = if keystroke.ends_with("--") {
+        keystroke.len() - 2
+    } else {
+        keystroke.rfind('-').unwrap_or(0)
+    };
+    let (modifiers, key) = if keystroke[split..].starts_with('-') {
+        (&keystroke[..split], &keystroke[split + 1..])
+    } else {
+        ("", keystroke.as_str())
+    };
+    let mut chars = key.chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else {
+        return Some(keystroke);
+    };
+    let shifted = modifiers.split('-').any(|m| m == "shift");
+    if !shifted || c.is_ascii_alphabetic() {
+        return Some(keystroke);
+    }
+    let Some(&(symbol, _)) = SHIFTED
+        .iter()
+        .find(|(symbol, key)| *symbol == c || *key == c)
+    else {
+        return Some(keystroke);
+    };
+    let mut out: String = modifiers
+        .split('-')
+        .filter(|m| !m.is_empty() && *m != "shift")
+        .map(|m| format!("{m}-"))
+        .collect();
+    out.push(symbol);
+    Some(out)
 }
 
 /// Whether Sawit keeps `spec`, a FigCraft binding (`Cmd+W`), when the canvas has the keyboard.
@@ -288,5 +416,54 @@ mod tests {
         for spec in ["Cmd+D", "Shift+Cmd+W", "Cmd+B", "Cmd+K", "J", "garbage", ""] {
             assert!(!owned_by_sawit(spec), "{spec} is the canvas's");
         }
+    }
+
+    #[test]
+    fn binding_keystrokes_read_shifted_symbols_as_gpui_reports_them() {
+        assert_eq!(binding_keystroke("Shift+1").as_deref(), Some("!"));
+        assert_eq!(binding_keystroke("Shift+=").as_deref(), Some("+"));
+        assert_eq!(binding_keystroke("Shift+Cmd+=").as_deref(), Some("cmd-+"));
+        assert_eq!(binding_keystroke("Ctrl+Shift+?").as_deref(), Some("ctrl-?"));
+        assert_eq!(
+            binding_keystroke("Shift+Cmd+K").as_deref(),
+            Some("shift-cmd-k")
+        );
+        assert_eq!(binding_keystroke("Cmd+-").as_deref(), Some("cmd--"));
+        assert_eq!(binding_keystroke("V").as_deref(), Some("v"));
+        assert_eq!(
+            binding_keystroke("Alt+Cmd+Enter").as_deref(),
+            Some("alt-cmd-enter")
+        );
+    }
+
+    #[test]
+    fn key_bindings_leave_sawits_keys_and_hidden_commands_out() {
+        let bindings = key_bindings();
+        assert!(!bindings.is_empty());
+        for binding in &bindings {
+            assert!(!is_hidden(binding.id), "{binding:?}");
+            assert!(!NOT_OFFERED.contains(&binding.id), "{binding:?}");
+            assert!(
+                !SAWIT_WINS.contains(&binding.keystroke.as_str()),
+                "{binding:?}"
+            );
+            if binding.context == CANVAS_CONTEXT {
+                assert!(
+                    !SAWIT_WINS_UNLESS_EDITING.contains(&binding.keystroke.as_str()),
+                    "{binding:?}"
+                );
+            }
+        }
+        let has = |keystroke: &str, id: &str, context: &str| {
+            bindings
+                .iter()
+                .any(|b| b.keystroke == keystroke && b.id == id && b.context == context)
+        };
+        assert!(has("v", "tool.move", CANVAS_CONTEXT));
+        // A plain key types while text is edited.
+        assert!(!has("v", "tool.move", TEXT_CONTEXT));
+        // Copy acts on the text being edited.
+        assert!(has("cmd-c", "edit.copy", TEXT_CONTEXT));
+        assert!(has("cmd-c", "edit.copy", CANVAS_CONTEXT));
     }
 }

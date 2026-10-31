@@ -73,7 +73,7 @@ impl Welcome {
         id: &'static str,
         icon: Lucide,
         label: &'static str,
-        hint: &'static str,
+        hint: SharedString,
         event: impl Fn() -> WelcomeEvent + 'static,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
@@ -289,13 +289,14 @@ impl Welcome {
 }
 
 impl Render for Welcome {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let keys = |action: &dyn Action| crate::keymap::keys_for(action, "Workspace", window);
         let start = Self::section("START", cx)
             .child(self.action(
                 "welcome-open-folder",
                 Lucide::FolderOpen,
                 "Open Folder…",
-                "⌘O",
+                keys(&crate::cli::OpenFolder),
                 || WelcomeEvent::OpenFolder,
                 cx,
             ))
@@ -303,7 +304,7 @@ impl Render for Welcome {
                 "welcome-new-instance",
                 Lucide::Plus,
                 "New PostgreSQL Instance…",
-                "",
+                SharedString::default(),
                 || WelcomeEvent::NewInstance,
                 cx,
             ))
@@ -311,7 +312,7 @@ impl Render for Welcome {
                 "welcome-terminal",
                 Lucide::SquareTerminal,
                 "Open Terminal",
-                "⌘J",
+                keys(&crate::workspace::ToggleTerminal),
                 || WelcomeEvent::OpenTerminal,
                 cx,
             ));
