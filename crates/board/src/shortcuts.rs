@@ -234,6 +234,16 @@ pub fn binding_keystroke(spec: &str) -> Option<String> {
     Some(out)
 }
 
+/// The key that types `symbol` with Shift on a US keyboard (`.` for `>`), when `symbol` is one of
+/// its shifted symbols: what a binding of the symbol, written as GPUI reports it
+/// ([`binding_keystroke`]), is pressed with. `None` for any other character.
+pub fn unshifted(symbol: char) -> Option<char> {
+    SHIFTED
+        .iter()
+        .find(|&&(shifted, _)| shifted == symbol)
+        .map(|&(_, key)| key)
+}
+
 /// Whether Sawit keeps `spec`, a FigCraft binding (`Cmd+W`), when the canvas has the keyboard.
 /// The policy writes its keys as GPUI does, so `spec` is converted to compare.
 pub(crate) fn owned_by_sawit(spec: &str) -> bool {
@@ -438,6 +448,21 @@ mod tests {
             binding_keystroke("Alt+Cmd+Enter").as_deref(),
             Some("alt-cmd-enter")
         );
+    }
+
+    #[test]
+    fn unshifted_gives_the_key_of_a_shifted_symbol() {
+        assert_eq!(unshifted('>'), Some('.'));
+        assert_eq!(unshifted('?'), Some('/'));
+        assert_eq!(unshifted('|'), Some('\\'));
+        assert_eq!(unshifted('!'), Some('1'));
+        // A key is no shifted symbol, and neither is a letter.
+        for &(symbol, key) in SHIFTED {
+            assert_eq!(unshifted(symbol), Some(key));
+            assert_eq!(unshifted(key), None, "{key}");
+        }
+        assert_eq!(unshifted('k'), None);
+        assert_eq!(unshifted('K'), None);
     }
 
     #[test]

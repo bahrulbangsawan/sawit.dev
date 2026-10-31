@@ -61,14 +61,24 @@ pub fn display_typed(keystrokes: &[Keystroke]) -> String {
 }
 
 /// One keystroke as a Mac menu writes it: the modifiers in the order ⌃⌥⇧⌘, then the key, a
-/// named one as its symbol (`↩`, `⌫`, `→`) and a letter in upper case.
+/// named one as its symbol (`↩`, `⌫`, `→`) and a letter in upper case. A shifted symbol reads as
+/// the keys pressed for it, on a US keyboard as the canvas's bindings assume: GPUI reports ⇧⌘. as
+/// `cmd->` with Shift off, which is how it is bound, and `cmd->` reads `⇧⌘.`.
 fn display_one(modifiers: &Modifiers, key: &str) -> String {
+    let mut chars = key.chars();
+    let unshifted = match (chars.next(), chars.next()) {
+        (Some(c), None) if !modifiers.shift => {
+            sawit_board::shortcuts::unshifted(c).map(String::from)
+        }
+        _ => None,
+    };
+    let key = unshifted.as_deref().unwrap_or(key);
     let mut out = String::new();
     for (on, symbol) in [
         (modifiers.function, "fn "),
         (modifiers.control, "⌃"),
         (modifiers.alt, "⌥"),
-        (modifiers.shift, "⇧"),
+        (modifiers.shift || unshifted.is_some(), "⇧"),
         (modifiers.platform, "⌘"),
     ] {
         if on {
@@ -144,6 +154,27 @@ mod tests {
         assert_eq!(display_typed(&keys("cmd-k e")), "⌘K E");
         assert_eq!(display_typed(&keys("shift-f10")), "⇧F10");
         assert_eq!(display_typed(&keys("ctrl-alt-cmd-backspace")), "⌃⌥⌘⌫");
+    }
+
+    /// GPUI reports a shifted symbol with Shift off (⇧⌘. is `cmd->`), and bindings are written
+    /// that way; they read as the keys pressed.
+    #[test]
+    fn displays_shifted_symbols_as_the_keys_pressed() {
+        let keys = |text: &str| -> Vec<Keystroke> {
+            text.split(' ')
+                .map(|k| Keystroke::parse_with_os(k, OperatingSystem::Mac).unwrap())
+                .collect()
+        };
+        assert_eq!(display_typed(&keys("cmd->")), "⇧⌘.");
+        assert_eq!(display_typed(&keys("ctrl-?")), "⌃⇧/");
+        assert_eq!(display_typed(&keys("alt-<")), "⌥⇧,");
+        assert_eq!(display_typed(&keys("cmd-|")), "⇧⌘\\");
+        assert_eq!(display_typed(&keys("!")), "⇧1");
+        assert_eq!(display_typed(&keys("cmd-k cmd-+")), "⌘K ⇧⌘=");
+        // Unshifted keys stay as they are, and so does a symbol written with Shift.
+        assert_eq!(display_typed(&keys("cmd-.")), "⌘.");
+        assert_eq!(display_typed(&keys("cmd--")), "⌘-");
+        assert_eq!(display_typed(&keys("cmd-shift->")), "⇧⌘>");
     }
 
     #[test]
