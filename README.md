@@ -412,7 +412,7 @@ saved.
 | Files / Config Files: open in default app | <kbd>⌃</kbd><kbd>⇧</kbd><kbd>↩</kbd> |
 | Files / Config Files: duplicate | <kbd>⌘</kbd><kbd>D</kbd> |
 | Files / Config Files: copy path | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>C</kbd> |
-| Files / Config Files: move to Trash / delete | <kbd>⌫</kbd> / <kbd>⌥</kbd><kbd>⌘</kbd><kbd>⌫</kbd> |
+| Files / Config Files: move to Trash (asks first) / without asking / delete | <kbd>⌫</kbd> / <kbd>⌘</kbd><kbd>⌫</kbd> / <kbd>⌥</kbd><kbd>⌘</kbd><kbd>⌫</kbd> |
 | Files: new file / new folder | <kbd>⌘</kbd><kbd>N</kbd> / <kbd>⌥</kbd><kbd>⌘</kbd><kbd>N</kbd> |
 | Files: rename | <kbd>F2</kbd> |
 | Files: cut / copy / paste | <kbd>⌘</kbd><kbd>X</kbd> / <kbd>⌘</kbd><kbd>C</kbd> / <kbd>⌘</kbd><kbd>V</kbd> |

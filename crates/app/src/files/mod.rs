@@ -47,6 +47,7 @@ actions!(
         ViewHistory,
         Rename,
         Trash,
+        TrashWithoutAsking,
         Delete,
         ExpandAll,
         CollapseAll
@@ -58,6 +59,10 @@ actions!(
 /// passes on the keys it has no use for (F2, ⌘N, ⌘D, …), and ⌫ with nothing before the cursor (a
 /// new name starts empty). F2 would start a rename over the name typed, ⌘D duplicate the
 /// selected entry and ⌫ move it to the Trash.
+///
+/// ⌫ asks before it moves anything to the Trash, as in Zed: the tree has the keyboard after a
+/// click in it, which nothing on screen says, and ⌫ meant for a text field would move a file, or
+/// a whole folder, away. ⌘⌫ doesn't ask, as in Finder.
 pub fn init(cx: &mut App) {
     let tree = Some("FilesPanel && !Input");
     cx.bind_keys([
@@ -76,8 +81,32 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("alt-cmd-shift-c", CopyRelativePath, tree),
         KeyBinding::new("f2", Rename, tree),
         KeyBinding::new("backspace", Trash, tree),
+        KeyBinding::new("cmd-backspace", TrashWithoutAsking, tree),
         KeyBinding::new("alt-cmd-backspace", Delete, tree),
     ]);
+}
+
+/// Asks before `path` goes to the Trash (⌫ in Files and Config Files): 0 is yes. `detail` says
+/// how to get it back.
+pub(crate) fn ask_to_trash(
+    path: &Path,
+    detail: &str,
+    window: &mut Window,
+    cx: &mut App,
+) -> oneshot::Receiver<usize> {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let question = if path.is_dir() {
+        format!("Move the folder “{name}” and everything in it to the Trash?")
+    } else {
+        format!("Move “{name}” to the Trash?")
+    };
+    window.prompt(
+        PromptLevel::Warning,
+        &question,
+        Some(detail),
+        &["Move to Trash", "Cancel"],
+        cx,
+    )
 }
 
 pub enum FilesEvent {
@@ -637,11 +666,8 @@ impl Render for FilesPanel {
                 }
             }))
             .on_action(cx.listener(|this, _: &Rename, w, cx| this.start_rename(w, cx)))
-            .on_action(cx.listener(|this, _: &Trash, w, cx| {
-                if let Some(path) = this.trash_target() {
-                    this.request(Request::Do(Op::Trash(path), After::default()), w, cx);
-                }
-            }))
+            .on_action(cx.listener(|this, _: &Trash, w, cx| this.trash(true, w, cx)))
+            .on_action(cx.listener(|this, _: &TrashWithoutAsking, w, cx| this.trash(false, w, cx)))
             .on_action(cx.listener(|this, _: &Delete, w, cx| this.delete(w, cx)))
             .on_action(cx.listener(|this, _: &ExpandAll, _, cx| this.expand_all(cx)))
             .on_action(cx.listener(|this, _: &CollapseAll, _, cx| this.collapse_all(cx)))
@@ -1267,6 +1293,31 @@ impl FilesPanel {
             self.error = Some(error);
             cx.notify();
         }
+    }
+
+    /// Moves the selected entry to the Trash, with `ask`, once the user says so.
+    fn trash(&mut self, ask: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = self.trash_target() else {
+            return;
+        };
+        if !ask {
+            self.request(Request::Do(Op::Trash(path), After::default()), window, cx);
+            return;
+        }
+        let detail = "You can undo this, or put it back from the Trash.";
+        let answer = ask_to_trash(&path, detail, window, cx);
+        let folder = self.folder;
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await != Ok(0) {
+                return;
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                if this.folder == folder {
+                    this.request(Request::Do(Op::Trash(path), After::default()), window, cx);
+                }
+            });
+        })
+        .detach();
     }
 
     /// Deletes the selected entry for good, after asking.
@@ -2011,6 +2062,42 @@ mod tests {
             })
             .unwrap();
         assert_eq!(key.as_deref(), Some("backspace"));
+    }
+
+    /// ⌫ asks before it moves the selected file or folder to the Trash; ⌘⌫ doesn't (FILES-1).
+    /// The tree takes the keyboard on a click, which nothing shows, and reopening a file whose
+    /// tab is open used to leave it there: ⌫ meant for the editor then moved the file, or a
+    /// whole folder, to the Trash without a word. Zed's project panel, whose keys these are,
+    /// asks too; ⌘⌫ is Finder's Move to Trash.
+    #[gpui_kit::test]
+    fn backspace_asks_before_moving_anything_to_the_trash(cx: &mut TestAppContext) {
+        let (window, panel) = open_panel(cx, &["notes.txt"]);
+        let changes = Changes::install(&panel, cx);
+        let notes = Path::new(ROOT).join("notes.txt");
+        select(cx, window, &panel, &notes);
+
+        cx.simulate_keystrokes(window, "backspace");
+        assert_eq!(changes.started(), [], "moved to the Trash without asking");
+        let (question, _) = cx.pending_prompt().expect("⌫ asks");
+        assert_eq!(question, "Move “notes.txt” to the Trash?");
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        assert_eq!(changes.started(), []);
+
+        cx.simulate_keystrokes(window, "backspace");
+        cx.simulate_prompt_answer("Move to Trash");
+        cx.run_until_parked();
+        assert_eq!(changes.started(), [Op::Trash(notes.clone())]);
+        let back = Op::Restore {
+            from: PathBuf::from("/Trash/notes.txt"),
+            to: notes.clone(),
+        };
+        changes.land(0, Ok(back), cx);
+
+        select(cx, window, &panel, &notes);
+        cx.simulate_keystrokes(window, "cmd-backspace");
+        assert!(!cx.has_pending_prompt(), "⌘⌫ asked");
+        assert_eq!(changes.started()[1..], [Op::Trash(notes)]);
     }
 
     /// While a name is typed, the tree's keys leave it alone (FILES-13). F2 started a rename
