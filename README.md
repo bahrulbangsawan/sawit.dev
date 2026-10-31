@@ -356,7 +356,8 @@ explained. A conflict on the same address can't be forced.
   profiles, Gemini CLI, Qwen Code, opencode, Amp, GitHub Copilot CLI, Cursor, Windsurf, Kiro, Goose, Crush and
   Claude Desktop), on this Mac and in the window's projects: `~/.claude/settings.json`, `.codex/config.toml`,
   `AGENTS.md`, … Each agent's files come highest priority first, saying where they apply (managed, project,
-  user, …) and what they hold.
+  user, …) and what they hold. Each other profile (`~/.claude-work`, a `CLAUDE_CONFIG_DIR` or `CODEX_HOME`
+  elsewhere) is a group of its own, "Claude Code · work": profiles are alternatives, not layers.
 - Search by file, path, description or agent. Click a file to edit it.
 - Right-click a file to reveal it in Finder, open it in its default app, duplicate it (`.zshrc copy`, a quick
   backup), copy its path, move it to the Trash or delete it. The Files tab's shortcuts work here too.

@@ -60,10 +60,23 @@ pub enum ShellConfigEvent {
 impl EventEmitter<ShellConfigEvent> for ShellConfigPanel {}
 
 /// A collapsible group of rows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Group {
     Shell,
-    Agent(Client),
+    /// An agent's files, or with a profile that profile's own: profiles are
+    /// alternatives, each its own group.
+    Agent(Client, Option<String>),
+}
+
+impl Group {
+    /// "Claude Code", or "Claude Code · work" for a profile.
+    fn title(&self) -> String {
+        match self {
+            Group::Shell => "Shell".into(),
+            Group::Agent(client, None) => client.name().into(),
+            Group::Agent(client, Some(profile)) => format!("{} · {profile}", client.name()),
+        }
+    }
 }
 
 /// One file, as the list shows it.
@@ -177,7 +190,7 @@ impl ShellConfigPanel {
             groups.push((Group::Shell, shell));
         }
         for config in &self.agents {
-            let group = Group::Agent(config.client);
+            let group = Group::Agent(config.client, config.profile.clone());
             if groups.last().is_none_or(|(g, _)| *g != group) {
                 groups.push((group, Vec::new()));
             }
@@ -236,19 +249,18 @@ impl ShellConfigPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let muted = cx.theme().muted_foreground;
-        let (id, title, logo): (SharedString, &str, AnyElement) = match group {
+        let title = group.title();
+        let (id, logo): (SharedString, AnyElement) = match &group {
             Group::Shell => (
                 "config-group-shell".into(),
-                "Shell",
                 Icon::new(Lucide::SquareTerminal)
                     .small()
                     .text_color(muted)
                     .into_any_element(),
             ),
-            Group::Agent(client) => (
-                format!("config-group-{}", client.name()).into(),
-                client.name(),
-                crate::mcp_page::client_logo(client, 16., cx),
+            Group::Agent(client, _) => (
+                format!("config-group-{title}").into(),
+                crate::mcp_page::client_logo(*client, 16., cx),
             ),
         };
         h_flex()
@@ -260,7 +272,7 @@ impl ShellConfigPanel {
             .when(!filtering, |el| {
                 el.cursor_pointer()
                     .hover(|el| el.bg(cx.theme().list_hover))
-                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(group, cx)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(group.clone(), cx)))
             })
             .child(
                 Icon::new(if open {
@@ -279,7 +291,7 @@ impl ShellConfigPanel {
                     .truncate()
                     .text_sm()
                     .font_medium()
-                    .child(title.to_string()),
+                    .child(title),
             )
             .child(
                 div()
@@ -667,10 +679,7 @@ impl Render for ShellConfigPanel {
         let mut ix = 0;
         let mut agents_titled = false;
         for (group, rows) in &groups {
-            let title = match group {
-                Group::Shell => "Shell",
-                Group::Agent(client) => client.name(),
-            };
+            let title = group.title();
             // Searching a group's name lists all of its files.
             let rows: Vec<&Row> = if title.to_lowercase().contains(&query) {
                 rows.iter().collect()
@@ -680,12 +689,12 @@ impl Render for ShellConfigPanel {
             if rows.is_empty() {
                 continue;
             }
-            if matches!(group, Group::Agent(_)) && !agents_titled {
+            if matches!(group, Group::Agent(..)) && !agents_titled {
                 agents_titled = true;
                 items.push(self.render_section("AGENTS · HIGHEST PRIORITY FIRST", cx));
             }
             let open = filtering || !self.collapsed.contains(group);
-            items.push(self.render_group(*group, rows.len(), open, filtering, cx));
+            items.push(self.render_group(group.clone(), rows.len(), open, filtering, cx));
             if open {
                 for row in rows {
                     items.push(self.render_row(ix, row, cx));

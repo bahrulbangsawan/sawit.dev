@@ -203,7 +203,7 @@ fn target(client: Client, profile: &str, config: PathBuf, profile_dir: Option<Pa
 }
 
 /// Folders in `home` named `<prefix>-<profile>` that contain `marker`.
-fn profiles(home: &Path, prefix: &str, marker: &str) -> Vec<(String, PathBuf)> {
+pub(crate) fn profiles(home: &Path, prefix: &str, marker: &str) -> Vec<(String, PathBuf)> {
     let mut found: Vec<(String, PathBuf)> = std::fs::read_dir(home)
         .into_iter()
         .flatten()
