@@ -4,7 +4,6 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::cmd;
 use crate::probe::find_in_path;
 use crate::{CoreError, Result};
 
@@ -38,6 +37,9 @@ pub async fn find(dir: &Path, query: &str, limit: usize) -> Result<Vec<Hit>> {
                 "--null",
                 "--color=never",
                 "--fixed-strings",
+                // A minified line is kept to its start, not read whole.
+                "--max-columns=500",
+                "--max-columns-preview",
             ]
             .into_iter()
             .chain(smart_case)
@@ -60,15 +62,67 @@ pub async fn find(dir: &Path, query: &str, limit: usize) -> Result<Vec<Hit>> {
                 .collect(),
         ),
     };
-    let out = cmd::run(&program, &args, TIMEOUT).await?;
-    // Both exit 1 when nothing matched.
-    match out.code {
-        Some(0) | Some(1) => Ok(parse(&out.stdout, limit)),
-        code => Err(CoreError::Command {
-            program: program.to_string_lossy().into_owned(),
-            code,
-            stderr: out.stderr,
-        }),
+    search(&program, &args, limit, TIMEOUT).await
+}
+
+/// Runs `program` (ripgrep or grep) with `args`, and reads its first `limit` hits as they come.
+/// With `limit` of them it stops the search: what it would print after them isn't read (a
+/// one-letter query over a big tree prints most of the tree).
+async fn search(
+    program: &Path,
+    args: &[String],
+    limit: usize,
+    timeout: Duration,
+) -> Result<Vec<Hit>> {
+    use std::process::Stdio;
+    use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, BufReader};
+
+    let failed = |code, stderr| CoreError::Command {
+        program: program.to_string_lossy().into_owned(),
+        code,
+        stderr,
+    };
+    let mut child = tokio::process::Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let (Some(stdout), Some(mut stderr)) = (child.stdout.take(), child.stderr.take()) else {
+        return Err(failed(None, "its output can't be read".into()));
+    };
+    // Read alongside, so that a search with much to say there never waits on it.
+    let errors = tokio::spawn(async move {
+        let mut text = Vec::new();
+        let _ = stderr.read_to_end(&mut text).await;
+        String::from_utf8_lossy(&text).into_owned()
+    });
+    let read = async {
+        let mut hits = Vec::new();
+        let mut out = BufReader::new(stdout);
+        let mut line = Vec::new();
+        while hits.len() < limit {
+            line.clear();
+            if out.read_until(b'\n', &mut line).await? == 0 {
+                break;
+            }
+            hits.extend(parse(&String::from_utf8_lossy(&line), 1));
+        }
+        if hits.len() >= limit {
+            let _ = child.start_kill();
+        }
+        Ok::<_, std::io::Error>((hits, child.wait().await?))
+    };
+    let (hits, status) = tokio::time::timeout(timeout, read)
+        .await
+        .map_err(|_| failed(None, format!("timed out after {timeout:?}")))??;
+    match status.code() {
+        // Stopped at the limit.
+        _ if hits.len() >= limit => Ok(hits),
+        // Both exit 1 when nothing matched.
+        Some(0) | Some(1) => Ok(hits),
+        code => Err(failed(code, errors.await.unwrap_or_default())),
     }
 }
 
@@ -115,6 +169,33 @@ mod tests {
             ]
         );
         assert_eq!(parse(raw, 1).len(), 1);
+    }
+
+    /// A search stops reading once it has `limit` hits, and stops the search (FILES-11). It used
+    /// to read everything the search printed before keeping the first `limit` hits: a one-letter
+    /// query over a big tree held every matching line in memory, and could end "timed out"
+    /// without showing any. Here the search would print hits for ever.
+    #[tokio::test]
+    async fn a_search_stops_at_its_limit() {
+        let endless = "i=1; while :; do printf 'f\\000%s:hit\\n' $i; i=$((i+1)); done";
+        let args = ["-c".to_string(), endless.to_string()];
+        let started = std::time::Instant::now();
+        let hits = search(Path::new("/bin/sh"), &args, 50, Duration::from_secs(10))
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 50);
+        assert_eq!((hits[49].line, hits[49].text.as_str()), (50, "hit"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+
+        // One that ends early gives what it found, and one that fails says why.
+        let sh = |script: &str| ["-c".to_string(), script.to_string()];
+        let few = sh("printf 'a\\0001:x\\nb\\0002:y\\n'; exit 1");
+        let hits = search(Path::new("/bin/sh"), &few, 50, Duration::from_secs(10));
+        assert_eq!(hits.await.unwrap().len(), 2);
+        let broken = sh("echo 'bad pattern' >&2; exit 2");
+        let failed = search(Path::new("/bin/sh"), &broken, 50, Duration::from_secs(10));
+        let failed = failed.await.unwrap_err();
+        assert!(failed.to_string().contains("bad pattern"), "{failed}");
     }
 
     #[tokio::test]
