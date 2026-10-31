@@ -71,7 +71,7 @@ use serde_json::{Map, Value, json};
 use thiserror::Error;
 
 use crate::design::export::{ExportRow, export_bytes, exported_file};
-use crate::doc::{BoardDoc, BoardError};
+use crate::doc::{BoardDoc, BoardError, DocKind};
 use crate::input::{self, KeyOutcome, Mods};
 use crate::skeleton::{self, Applied, Label, Skeleton};
 use crate::{clipboard, excalidraw, policy, summary};
@@ -207,7 +207,9 @@ const MERMAID_GAP: f64 = 100.0;
 ///   `{ok, added, ids, notes?}`: the node id of each element drawn, in the order they were given,
 ///   and a note for each one skipped. A skipped element has no id, so `ids[i]` is `elements[i]`
 ///   only when nothing before it was skipped. What an element leaves out is its default: a missing
-///   `x` or `y` is 0, and an arrow or a line with no points, size or end is drawn 100 long.
+///   `x` or `y` is 0, and an arrow or a line with no points, size or end is drawn 100 long. On a
+///   design file it draws text, frames and images only: shapes, stickies, lines and ink are a
+///   board's, and the refusal names the commands that draw them there instead.
 /// - `update` (`{elements: [{id, ...}]}`) changes the layers the ids name, and answers
 ///   `{ok, updated, missing, notes?}`: how many it found, and the ids it didn't. An element can
 ///   change:
@@ -253,6 +255,7 @@ const MERMAID_GAP: f64 = 100.0;
 ///   one undo step, and answers `{ok, added, ids}`, with `notes` on what couldn't be drawn. The
 ///   diagram's top left corner goes to `x`, `y`; what they leave out is 100 px right of what the
 ///   page holds and level with its top, or 0 on an empty page. Every error starts "mermaid: ".
+///   On a design file only a chart, which comes in as one picture, can be drawn.
 /// - `key` (`{key, shift?, alt?, cmd?, ctrl?}`) presses `key` on the canvas, with the modifier
 ///   keys given held, as the keyboard does ([`input::route_key`]), and answers `{ok, handled}`:
 ///   whether the canvas took the key. `key` is FigCraft's name for it: a letter or a digit,
@@ -469,8 +472,29 @@ fn add(board: &mut BoardDoc, op: &Value) -> Value {
     };
     match skeleton::apply(board, &items, (0.0, 0.0)) {
         Ok(applied) => added(&applied),
+        Err(error) if needs_a_board(board, &error.to_string()) => {
+            failure(format!("add: {error}. {ADD_ON_A_DESIGN_FILE}"))
+        }
         Err(error) => failure(format!("add: {error}")),
     }
+}
+
+/// What `add`'s refusal goes on to say when an element is one only a board has and the canvas is a
+/// design file: what it draws there, and the engine's commands that draw the rest (SMOKE-3).
+const ADD_ON_A_DESIGN_FILE: &str = "On a design file add draws text, frames and images; draw \
+     shapes and lines with the command op: shape.rectangle, shape.ellipse, shape.line or \
+     shape.arrow";
+
+/// What `mermaid` answers when the diagram's shapes or connectors can't be drawn because the canvas
+/// is a design file, and what to do instead (SMOKE-3). A chart, which comes in as one picture, can.
+const MERMAID_ON_A_DESIGN_FILE: &str = "mermaid: this canvas is a design file, and a diagram's \
+     shapes and connectors are for boards: bring the diagram in as an SVG file with the command \
+     op's file.import instead";
+
+/// Whether `error` is the engine refusing a board's command because the canvas is a design file
+/// ([`crate::doc::BOARDS_ONLY`]).
+fn needs_a_board(board: &BoardDoc, error: &str) -> bool {
+    board.kind() == DocKind::Design && error.contains(crate::doc::BOARDS_ONLY)
 }
 
 /// The elements of an `add`, each read as a [`Skeleton`].
@@ -1223,6 +1247,7 @@ fn mermaid(board: &mut BoardDoc, op: &Value) -> Value {
             }
             reply
         }
+        Err(error) if needs_a_board(board, &error) => failure(MERMAID_ON_A_DESIGN_FILE),
         Err(error) => failure(format!("mermaid: {error}")),
     }
 }
@@ -2845,6 +2870,11 @@ mod tests {
         assert_eq!(board.session.undo_depth(), (0, 0));
     }
 
+    /// SMOKE-3: what only a board has (shapes, stickies, lines, ink) doesn't go on a design file.
+    /// The refusal says so in Sawit's words, with what does go there and the commands that draw
+    /// the rest, instead of sending the agent to File ▸ New board, which the canvas hides (and no
+    /// op makes a design file a board: `replace` keeps the canvas what it is). Text, frames and
+    /// images still come in.
     #[test]
     fn add_to_a_design_file_is_refused() {
         let mut design = design();
@@ -2853,8 +2883,66 @@ mod tests {
             &mut design,
             json!({"op": "add", "elements": [{"type": "rectangle", "x": 0, "y": 0}]}),
         );
-        assert!(error.contains("board"), "{error}");
+        assert_eq!(
+            error,
+            "add: elements[0] (rectangle): command `board.shape` is not available right now: this \
+             is for boards, and this canvas is a design file. On a design file add draws text, \
+             frames and images; draw shapes and lines with the command op: shape.rectangle, \
+             shape.ellipse, shape.line or shape.arrow"
+        );
+        for kind in ["ellipse", "diamond", "sticky", "arrow", "line", "freedraw"] {
+            let element = json!({"type": kind, "x": 0, "y": 0, "points": [[0, 0], [10, 10]]});
+            let error = refusal(&mut design, json!({"op": "add", "elements": [element]}));
+            assert!(
+                error.contains("this canvas is a design file. On a design file add draws"),
+                "{kind}: {error}"
+            );
+            assert!(!error.contains("New board"), "{kind}: {error}");
+        }
         assert!(Arc::ptr_eq(&before, &design.doc().unwrap()));
+        for kind in ["text", "frame"] {
+            let element = json!({"type": kind, "x": 0, "y": 0, "width": 100, "text": "kept"});
+            ask(&mut design, json!({"op": "add", "elements": [element]}));
+        }
+        assert_eq!(elements(&mut design).len(), 2);
+    }
+
+    /// SMOKE-3: a Mermaid diagram drawn as shapes and connectors doesn't go on a design file, and
+    /// the refusal says why in Sawit's words, not the engine's for one of the diagram's own
+    /// elements. A chart, which comes in as one picture, still does.
+    #[test]
+    fn mermaid_on_a_design_file_says_why() {
+        let mut design = design();
+        let before = design.doc().unwrap();
+        let error = refusal(
+            &mut design,
+            json!({"op": "mermaid", "source": "graph TD; A-->B; B-->C"}),
+        );
+        assert_eq!(
+            error,
+            "mermaid: this canvas is a design file, and a diagram's shapes and connectors are for \
+             boards: bring the diagram in as an SVG file with the command op's file.import instead"
+        );
+        assert!(Arc::ptr_eq(&before, &design.doc().unwrap()));
+        let pie = "pie title Pets\n \"Dogs\" : 386\n \"Cats\" : 85";
+        ask(&mut design, json!({"op": "mermaid", "source": pie}));
+        assert_eq!(elements(&mut design).len(), 1);
+    }
+
+    /// SMOKE-3: a board's command run on a design file by the `command` op says what the canvas
+    /// is, in Sawit's words, too.
+    #[test]
+    fn a_boards_command_on_a_design_file_says_what_the_canvas_is() {
+        let mut design = design();
+        let reply = send(&mut design, "board.sticky", json!({"x": 0, "y": 0}));
+        assert_eq!(
+            reply["error"],
+            json!(
+                "command `board.sticky` is not available right now: this is for boards, and this \
+                 canvas is a design file"
+            ),
+            "{reply}"
+        );
     }
 
     #[test]

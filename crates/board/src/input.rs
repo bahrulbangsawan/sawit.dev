@@ -1447,6 +1447,28 @@ mod tests {
         }
     }
 
+    /// SMOKE-3: a board tool's key on a design file (Q for a sticky, B for a shape...) says in its
+    /// toast why it does nothing, in Sawit's words: FigCraft's send the user to File ▸ New board,
+    /// which the canvas hides.
+    #[test]
+    fn a_board_tools_key_on_a_design_file_says_what_the_canvas_is() {
+        for (id, key) in [
+            ("tool.sticky", "q"),
+            ("tool.shape", "b"),
+            ("tool.marker", "m"),
+        ] {
+            let mut design = design();
+            let error = route_command(&mut design, id, Some((key, Mods::default())));
+            assert_eq!(
+                error.map_err(|e| e.to_string()),
+                Err(format!(
+                    "command `{id}` is not available right now: this is for boards, and this \
+                     canvas is a design file"
+                )),
+            );
+        }
+    }
+
     /// A pointer event of `kind` at page point (`x`, `y`), at 100%.
     fn at(kind: PointerKind, x: f64, y: f64) -> PointerEvent {
         PointerEvent::at(kind, x, y, 1.0)

@@ -25,9 +25,16 @@ pub enum BoardError {
     Io(String),
 }
 
+/// Why a board's command does nothing on a design file, in Sawit's words. FigCraft's
+/// ([`board::NEEDS_BOARD`]) sends the user to File ▸ New board, which the canvas hides: a canvas
+/// keeps the file it opened, and nothing in Sawit makes a design file a board (SMOKE-3).
+pub const BOARDS_ONLY: &str = "this is for boards, and this canvas is a design file";
+
 impl From<EngineError> for BoardError {
+    /// The engine's message, with Sawit's words for what it says in FigCraft's ([`BOARDS_ONLY`]):
+    /// the same for a toast and for an agent's reply, wherever in it the engine's words are.
     fn from(e: EngineError) -> Self {
-        BoardError::Engine(e.to_string())
+        BoardError::Engine(e.to_string().replace(board::NEEDS_BOARD, BOARDS_ONLY))
     }
 }
 
