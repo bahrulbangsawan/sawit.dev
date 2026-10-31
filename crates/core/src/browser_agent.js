@@ -16,6 +16,9 @@
       post(TOKEN + "\n" + kind + "\n" + JSON.stringify(data));
     } catch (_) {}
   };
+  // A press in the page gives it AppKit's keyboard, which the app follows: the ⌘ keys it sees
+  // first (⌘C, ⌘V…) then go to the page, not to the field that had the keyboard before.
+  addEventListener("pointerdown", () => send("pressed", true), { capture: true, passive: true });
   const now = () => performance.now();
   const clip = (text, max) =>
     text.length > max ? text.slice(0, max) + "… (" + text.length + " chars)" : text;

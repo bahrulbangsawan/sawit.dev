@@ -58,8 +58,18 @@ actions!(browser, [ToggleAnnotate]);
 /// (Shift off, the character it types), so that is what is bound, as the
 /// canvas binds its shifted keys; `cmd-shift-.` would never match. The keymap
 /// editor and the tooltip write `cmd->` as ⇧⌘. (`keymap::names`).
+///
+/// GPUI sees the ⌘ keys before the page does, even while the page has AppKit's
+/// keyboard, and runs them where GPUI's keyboard is: the view's own while the
+/// page has the keyboard ([`BrowserView::give_page_keyboard`], and a press in
+/// the page). ⌘C is let through there, as the terminal and the canvas let it
+/// through, past gpui-kit's root, which would copy its own text selection: the
+/// Edit menu then copies in the page (`cli::set_menus`).
 pub fn init(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("cmd->", ToggleAnnotate, Some("Browser"))]);
+    cx.bind_keys([
+        KeyBinding::new("cmd->", ToggleAnnotate, Some("Browser")),
+        KeyBinding::new("cmd-c", NoAction, Some("Browser")),
+    ]);
 }
 
 /// The side panel's modes; one at a time.
@@ -171,7 +181,8 @@ pub struct BrowserView {
     last_pick: Option<String>,
     /// Responsive, or a device size (kept per tab).
     viewport: ViewportMode,
-    /// Keeps the "Browser" key context on the dispatch path (⇧⌘.).
+    /// Keeps the "Browser" key context on the dispatch path (⇧⌘.), and GPUI's
+    /// keyboard while the page has AppKit's.
     focus: FocusHandle,
     panel: Option<Panel>,
     annotate: Entity<AnnotatePanel>,
@@ -218,10 +229,11 @@ impl BrowserView {
             cx.subscribe_in(
                 &address,
                 window,
-                |this, address, event: &InputEvent, _, cx| match event {
+                |this, address, event: &InputEvent, window, cx| match event {
                     InputEvent::PressEnter { .. } => {
                         let typed = address.read(cx).value().to_string();
                         this.navigate(&typed, cx);
+                        this.give_page_keyboard(window, cx);
                     }
                     // Typing goes to the address field, not the page.
                     InputEvent::Focus => {
@@ -732,6 +744,8 @@ impl BrowserView {
             .unwrap_or_else(|| self.url.clone())
     }
 
+    /// Loads `typed`'s address. The keyboard stays where it is: an agent's
+    /// load, or the dev server found at start, never takes it from the user.
     fn navigate(&mut self, typed: &str, cx: &mut Context<Self>) {
         let url = normalize_address(typed);
         self.navigated = true;
@@ -739,11 +753,22 @@ impl BrowserView {
         self.url = url.clone();
         if let Some(engine) = &self.engine {
             engine.load_url(&url);
-            if self.visible {
-                engine.focus();
-            }
         }
         cx.notify();
+    }
+
+    /// Gives the page the keyboard, while the tab shows: AppKit's, and GPUI's,
+    /// which goes to the view itself. GPUI sees the ⌘ keys first, wherever
+    /// AppKit's keyboard is, and would otherwise run them where its own keyboard
+    /// was: ⌘V pasting into the address field, or into the terminal.
+    fn give_page_keyboard(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.visible {
+            return;
+        }
+        if let Some(engine) = &self.engine {
+            engine.focus();
+        }
+        self.focus.focus(window, cx);
     }
 
     fn receive(&mut self, message: FromPage, window: &mut Window, cx: &mut Context<Self>) {
@@ -773,6 +798,8 @@ impl BrowserView {
                 "escape" => self.set_pick(PickMode::Off, cx),
                 _ => {}
             },
+            // A press in the page gave it AppKit's keyboard: GPUI's follows.
+            FromPage::Event(PageEvent::Pressed) => self.focus.focus(window, cx),
             FromPage::Event(PageEvent::Url(url)) => {
                 self.url = url;
                 self.design_url_changed();
@@ -820,7 +847,10 @@ impl BrowserView {
                 self.annotate.update(cx, |a, cx| a.set_current(&url, cx));
             }
             FromPage::Engine(EngineEvent::Title(title)) => self.title = title,
-            FromPage::Engine(EngineEvent::NewWindow(url)) => self.navigate(&url, cx),
+            FromPage::Engine(EngineEvent::NewWindow(url)) => {
+                self.navigate(&url, cx);
+                self.give_page_keyboard(window, cx);
+            }
             FromPage::Shoot { rect, reply } => self.shoot(rect, reply, cx),
         }
     }
@@ -1648,5 +1678,95 @@ mod tests {
         assert!(cx.update(|window, cx| note.read(cx).focus_handle(cx).is_focused(window)));
         cx.simulate_keystrokes("cmd->");
         assert_eq!(toggles(cx), 3, "from the note's text box too");
+    }
+
+    /// A browser tab's view in a window, not drawn (its WKWebView needs a real window), shown as
+    /// the workspace shows it.
+    fn browser_view(cx: &mut gpui_kit::VisualTestContext) -> gpui_kit::Entity<super::BrowserView> {
+        use gpui_kit::AppContext as _;
+        cx.update(|window, cx| {
+            let view = cx.new(|cx| super::BrowserView::new(None, None, window, cx));
+            view.update(cx, |view, _| view.visible = true);
+            view
+        })
+    }
+
+    /// Enter in the address field loads the page and gives it the keyboard: AppKit's, and
+    /// GPUI's, which goes to the browser's own view, so that the ⌘ keys GPUI sees first (⌘V, ⌘A,
+    /// ⌘Z) no longer act on the address field while the page has the keyboard.
+    #[gpui_kit::test]
+    fn enter_in_the_address_gives_the_page_the_keyboard(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::component::input::InputEvent;
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::init(cx);
+        });
+        let cx = cx.add_empty_window();
+        let view = browser_view(cx);
+        let address = cx.update(|_, cx| view.read(cx).address.clone());
+        cx.update(|window, cx| {
+            address.update(cx, |a, cx| {
+                a.set_value("localhost:3000", window, cx);
+                a.focus(window, cx);
+            })
+        });
+        cx.update(|_, cx| {
+            address.update(cx, |_, cx| {
+                cx.emit(InputEvent::PressEnter {
+                    secondary: false,
+                    shift: false,
+                })
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(view.read(cx).focus.is_focused(window));
+            assert_eq!(view.read(cx).url, "http://localhost:3000");
+        });
+    }
+
+    /// ⌘C goes to the page while the browser's view has GPUI's keyboard: no binding of Sawit's
+    /// takes it (gpui-kit's root copies its own text selection on ⌘C).
+    #[gpui_kit::test]
+    fn cmd_c_in_the_browser_is_left_to_the_page(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::{KeyContext, Keystroke, OperatingSystem};
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::workspace::init(cx);
+        });
+        cx.update(|cx| {
+            let typed = [Keystroke::parse_with_os("cmd-c", OperatingSystem::Mac).unwrap()];
+            let stack = ["Root", "Workspace", "Browser"].map(|c| KeyContext::parse(c).unwrap());
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let (bindings, _) = keymap.bindings_for_input(&typed, &stack);
+            let names: Vec<&str> = bindings.iter().map(|b| b.action().name()).collect();
+            assert!(names.is_empty(), "{names:?}");
+        });
+    }
+
+    /// A press in the page (the page agent's `pressed` message) moves GPUI's keyboard to the
+    /// browser's view, as AppKit gave the page its own: off the address field, the terminal or
+    /// Files, whose ⌘V, ⌘C and ⌘Z would otherwise act there.
+    #[gpui_kit::test]
+    fn a_press_in_the_page_moves_gpuis_keyboard_to_it(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::init(cx);
+        });
+        let cx = cx.add_empty_window();
+        let view = browser_view(cx);
+        let address = cx.update(|_, cx| view.read(cx).address.clone());
+        cx.update(|window, cx| address.update(cx, |a, cx| a.focus(window, cx)));
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.receive(
+                    super::FromPage::Event(sawit_core::browser::PageEvent::Pressed),
+                    window,
+                    cx,
+                )
+            })
+        });
+        cx.update(|window, cx| assert!(view.read(cx).focus.is_focused(window)));
     }
 }

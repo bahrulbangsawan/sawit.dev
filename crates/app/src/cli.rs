@@ -280,8 +280,13 @@ pub fn set_menus(cx: &mut App) {
     cx.set_menus(menus());
 }
 
-/// The app's menus.
+/// The app's menus. The Edit menu's items are the system's (`cut:`, `copy:`, `paste:`,
+/// `selectAll:`), sent to the view with AppKit's keyboard: a web page's clipboard keys reach it
+/// that way, which no binding of Sawit's takes there. Elsewhere Sawit's own bindings of the same
+/// keys run first, and a click on an item runs gpui-kit's text editing action in the field with
+/// the keyboard.
 fn menus() -> Vec<Menu> {
+    use gpui_kit::component::input as text;
     vec![
         Menu::new("Sawit").items([
             MenuItem::action("Keymap Editor", crate::keymap::OpenKeymapEditor),
@@ -294,6 +299,12 @@ fn menus() -> Vec<Menu> {
         Menu::new("File").items([
             MenuItem::action("New Window", NewWindow),
             MenuItem::action("Open Folder…", OpenFolder),
+        ]),
+        Menu::new("Edit").items([
+            MenuItem::os_action("Cut", text::Cut, OsAction::Cut),
+            MenuItem::os_action("Copy", text::Copy, OsAction::Copy),
+            MenuItem::os_action("Paste", text::Paste, OsAction::Paste),
+            MenuItem::os_action("Select All", text::SelectAll, OsAction::SelectAll),
         ]),
     ]
 }
@@ -802,7 +813,7 @@ pub fn install_cli(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::bundle_of;
-    use gpui_kit::{KeyContext, MenuItem, OperatingSystem, TestAppContext};
+    use gpui_kit::{KeyContext, MenuItem, OperatingSystem, OsAction, TestAppContext};
     use std::path::Path;
 
     /// The app's key bindings, bound as `main` binds them, then taken as the keymap's defaults
@@ -818,6 +829,64 @@ mod tests {
         crate::terminal::init(cx);
         super::init(cx);
         crate::keymap::init_at(keymap_file.to_path_buf(), cx);
+    }
+
+    /// The Edit menu's Cut, Copy, Paste and Select All carry ⌘X, ⌘C, ⌘V and ⌘A and go to the
+    /// view with AppKit's keyboard (`cut:`, `copy:`, `paste:`, `selectAll:`): a web page's
+    /// clipboard keys reach it that way, once no binding of Sawit's takes them.
+    #[gpui_kit::test]
+    fn the_edit_menu_gives_a_web_page_its_clipboard_keys(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("sawit-edit-menu-{}", std::process::id()));
+        cx.update(|cx| bind_like_the_app(cx, &dir.join("keymap.json")));
+        cx.update(|cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let menus = super::menus();
+            let edit = menus.iter().find(|m| m.name.as_ref() == "Edit");
+            let found: Vec<(String, Option<String>, String)> = edit
+                .map(|edit| {
+                    edit.items
+                        .iter()
+                        .filter_map(|item| match item {
+                            MenuItem::Action {
+                                name,
+                                action,
+                                os_action,
+                                ..
+                            } => Some((
+                                name.to_string(),
+                                os_action.map(|a| {
+                                    match a {
+                                        OsAction::Cut => "Cut",
+                                        OsAction::Copy => "Copy",
+                                        OsAction::Paste => "Paste",
+                                        OsAction::SelectAll => "SelectAll",
+                                        OsAction::Undo => "Undo",
+                                        OsAction::Redo => "Redo",
+                                    }
+                                    .to_string()
+                                }),
+                                keymap
+                                    .bindings_for_action(action.as_ref())
+                                    .next()
+                                    .map(|b| crate::keymap::names::unparse(b.keystrokes()))
+                                    .unwrap_or_default(),
+                            )),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let expected = [
+                ("Cut", "Cut", "cmd-x"),
+                ("Copy", "Copy", "cmd-c"),
+                ("Paste", "Paste", "cmd-v"),
+                ("Select All", "SelectAll", "cmd-a"),
+            ]
+            .map(|(n, a, k)| (n.to_string(), Some(a.to_string()), k.to_string()));
+            assert_eq!(found, expected);
+        });
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The keymap editor shows each binding's action and context, and writes them into
@@ -871,7 +940,15 @@ mod tests {
             let keymap = keymap.borrow();
             for menu in super::menus() {
                 for item in &menu.items {
-                    let MenuItem::Action { name, action, .. } = item else {
+                    // A system item (the Edit menu's) goes to the view with AppKit's keyboard,
+                    // not to a GPUI action, and only when no binding of Sawit's takes its key.
+                    let MenuItem::Action {
+                        name,
+                        action,
+                        os_action: None,
+                        ..
+                    } = item
+                    else {
                         continue;
                     };
                     let bindings: Vec<_> = keymap.bindings_for_action(action.as_ref()).collect();

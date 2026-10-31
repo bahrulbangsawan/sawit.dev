@@ -485,6 +485,8 @@ pub enum PageEvent {
     Hovered(Value),
     /// A shortcut pressed in the page: `toggle-annotate` or `escape`.
     Key(String),
+    /// A pointer went down in the page, which AppKit then gives the keyboard.
+    Pressed,
 }
 
 /// A page message, if it carries `token`.
@@ -502,6 +504,7 @@ pub fn parse_ipc(body: &str, token: &str) -> Option<PageEvent> {
         "key" => serde_json::from_str::<String>(json)
             .ok()
             .map(PageEvent::Key),
+        "pressed" => Some(PageEvent::Pressed),
         _ => None,
     }
 }
@@ -1110,6 +1113,19 @@ mod tests {
             Some(PageEvent::Key("toggle-annotate".into()))
         );
         assert_eq!(parse_ipc("bad\nkey\n\"escape\"", "tok"), None);
+    }
+
+    #[test]
+    fn ipc_reads_a_press_in_the_page() {
+        assert_eq!(
+            parse_ipc("tok\npressed\ntrue", "tok"),
+            Some(PageEvent::Pressed)
+        );
+        assert_eq!(parse_ipc("bad\npressed\ntrue", "tok"), None);
+        // The page agent sends it for every press, before the page's own listeners.
+        assert!(
+            AGENT_JS.contains(r#"addEventListener("pointerdown", () => send("pressed", true)"#)
+        );
     }
 
     /// Every field of the design contract fixtures is written by the design module.
