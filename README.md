@@ -360,6 +360,9 @@ explained. A conflict on the same address can't be forced.
 - Search by file, path, description or agent. Click a file to edit it.
 - Right-click a file to reveal it in Finder, open it in its default app, duplicate it (`.zshrc copy`, a quick
   backup), copy its path, move it to the Trash or delete it. The Files tab's shortcuts work here too.
+- **Save Shell Files to GitHub** commits your own startup files to a private repository (`sawit-shell-config`). Each
+  save that would send a line that looks like a secret (an API key, a token, a password, in any shell's syntax)
+  names those lines and asks first.
 
 ### Tabs & layout
 

@@ -511,24 +511,13 @@ impl ShellConfigPanel {
                     return;
                 }
             };
-            // The first save creates the repository: say what's about to
-            // leave this Mac when it looks like a secret.
-            if plan.repo.is_none() && !plan.secrets.is_empty() {
+            // Say what's about to leave this Mac when it looks like a secret.
+            if let Some((title, detail)) = secrets_question(&plan) {
                 let Ok(answer) = this.update_in(cx, |_, window, cx| {
-                    let mut lines: Vec<&str> = plan.secrets.iter().take(6).map(String::as_str).collect();
-                    let more = plan.secrets.len().saturating_sub(lines.len());
-                    let more = format!("and {more} more");
-                    if plan.secrets.len() > 6 {
-                        lines.push(&more);
-                    }
                     window.prompt(
                         PromptLevel::Warning,
-                        "Save lines that look like secrets?",
-                        Some(&format!(
-                            "{}\n\nThey'll be stored in the new private repository github.com/{}/{BACKUP_REPO}. Anyone you give access to it can read them.",
-                            lines.join("\n"),
-                            plan.login
-                        )),
+                        &title,
+                        Some(&detail),
                         &["Save Anyway", "Cancel"],
                         cx,
                     )
@@ -544,7 +533,10 @@ impl ShellConfigPanel {
                 }
             }
             let Ok(rx) = this.update(cx, |_, cx| {
-                rt::spawn(cx, async move { shell_config::save_backup(&token, &plan).await })
+                rt::spawn(
+                    cx,
+                    async move { shell_config::save_backup(&token, &plan).await },
+                )
             }) else {
                 return;
             };
@@ -611,6 +603,31 @@ impl ShellConfigPanel {
                 )
             })
     }
+}
+
+/// What to ask before a save that sends lines that look like secrets: on
+/// every such save, as a key added since the last one goes up the same way.
+fn secrets_question(plan: &shell_config::BackupPlan) -> Option<(String, String)> {
+    if plan.secrets.is_empty() {
+        return None;
+    }
+    let mut lines: Vec<String> = plan.secrets.iter().take(6).cloned().collect();
+    if plan.secrets.len() > 6 {
+        lines.push(format!("and {} more", plan.secrets.len() - 6));
+    }
+    let repo = if plan.repo.is_some() {
+        "the private repository"
+    } else {
+        "the new private repository"
+    };
+    Some((
+        "Save lines that look like secrets?".into(),
+        format!(
+            "{}\n\nThey'll be stored in {repo} github.com/{}/{BACKUP_REPO}. Anyone you give access to it can read them.",
+            lines.join("\n"),
+            plan.login
+        ),
+    ))
 }
 
 fn saved_message(saved: &Saved) -> String {
@@ -793,6 +810,36 @@ mod tests {
 
     use super::{OpenConfig, ShellConfigPanel};
     use crate::files::Trash;
+
+    /// A key added to `~/.zshrc` after the first save is pointed out on the next save too,
+    /// into the repository that's there by then (or one the user made), not only the first.
+    #[test]
+    fn every_save_with_secrets_asks_first() {
+        let plan = |repo: bool, secrets: &[&str]| sawit_core::shell_config::BackupPlan {
+            login: "me".into(),
+            repo: repo.then(|| sawit_core::github::OwnRepo {
+                private: true,
+                default_branch: "main".into(),
+                html_url: "https://github.com/me/sawit-shell-config".into(),
+            }),
+            secrets: secrets.iter().map(|s| s.to_string()).collect(),
+        };
+        let (title, detail) = super::secrets_question(&plan(true, &["~/.zshrc:12 ANTHROPIC_KEY"]))
+            .expect("didn't ask");
+        assert_eq!(title, "Save lines that look like secrets?");
+        assert!(
+            detail.starts_with("~/.zshrc:12 ANTHROPIC_KEY\n\n"),
+            "{detail}"
+        );
+        assert!(
+            detail.contains("github.com/me/sawit-shell-config"),
+            "{detail}"
+        );
+        assert!(!detail.contains("new private"), "{detail}");
+        let (_, first) = super::secrets_question(&plan(false, &["~/.zshrc:1 X_TOKEN"])).unwrap();
+        assert!(first.contains("the new private repository"), "{first}");
+        assert_eq!(super::secrets_question(&plan(true, &[])), None);
+    }
 
     /// Typing a search runs none of the list's commands. The search box passes on ↩, and ⌫ with
     /// nothing before the cursor (an emptied box), to the bindings around it, where the list's
