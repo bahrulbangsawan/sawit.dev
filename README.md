@@ -731,6 +731,9 @@ Figures for other apps are not listed because they have not been measured on the
 
 - Sawit includes [FigCraft](https://github.com/storytold/figcraft), Copyright (c) 2026 ArtCraft Team and the FigCraft
   contributors, licensed under MIT OR Apache-2.0. See [`NOTICE`](NOTICE).
+- Sawit includes four crates of [craft-libs](https://github.com/storytold/craft-libs), which FigCraft builds on,
+  Copyright (c) 2026 ArtCraft Team and the craft-libs contributors, licensed under MIT OR Apache-2.0. See
+  [`NOTICE`](NOTICE).
 - Sawit embeds [Inter](https://github.com/rsms/inter), Copyright 2020 The Inter Project Authors, licensed under the
   SIL Open Font License 1.1. See [`NOTICE`](NOTICE).
 - The browser tab's page picker adapts [Visual Annotator](https://github.com/wernerstrauch/visual-annotator),

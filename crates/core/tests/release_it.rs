@@ -663,3 +663,26 @@ fn the_release_job_pins_its_actions_and_keeps_no_token_on_disk() {
     let step = checkout.split("\n      - ").next().unwrap();
     assert!(step.contains("persist-credentials: false"), "{step}");
 }
+
+/// RELEASE-8: NOTICE goes into Sawit.app with the licence texts of what the binary carries. A
+/// crate from a git repository brings code no crates.io release vouches for, so NOTICE names
+/// each such repository: craft-libs, compiled in through FigCraft since the native canvas, was
+/// missing.
+#[test]
+fn notice_names_every_git_repository_the_build_uses() {
+    let lock = fs::read_to_string(checkout().join("Cargo.lock")).unwrap();
+    let notice = fs::read_to_string(checkout().join("NOTICE")).unwrap();
+    let mut repositories: Vec<&str> = lock
+        .lines()
+        .filter_map(|line| line.strip_prefix("source = \"git+"))
+        .filter_map(|url| url.split(['?', '#', '"']).next())
+        .collect();
+    repositories.sort_unstable();
+    repositories.dedup();
+    assert!(!repositories.is_empty(), "Cargo.lock has no git source");
+    let missing: Vec<&str> = repositories
+        .into_iter()
+        .filter(|repository| !notice.contains(repository))
+        .collect();
+    assert!(missing.is_empty(), "NOTICE doesn't name {missing:?}");
+}
