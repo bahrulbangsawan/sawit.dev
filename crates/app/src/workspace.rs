@@ -616,7 +616,7 @@ impl Workspace {
             _ => None,
         });
         if let Some(editor) = editor {
-            editor.update(cx, |e, cx| e.restore(kept.text, from, window, cx));
+            editor.update(cx, |e, cx| e.restore(kept, from, window, cx));
         }
     }
 

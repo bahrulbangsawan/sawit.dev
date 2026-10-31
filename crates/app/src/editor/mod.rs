@@ -102,7 +102,13 @@ pub struct FileEditor {
     discarded: bool,
     /// Changes the app kept when it last quit with this file unsaved, and the file that holds
     /// them, to put back once the file has loaded ([`Self::restore`]).
-    restoring: Option<(String, PathBuf)>,
+    restoring: Option<(kept::Kept, PathBuf)>,
+    /// Kept changes put back over a file that had changed on disk after they were made
+    /// ([`Self::put_back`]): the file's text as it loaded then, and the text the changes were made
+    /// to (None: Sawit doesn't know it). While `saved_text` is still the former, neither saved
+    /// nor reloaded since, a quit keeps the changes as made to the latter, so the next launch
+    /// warns again.
+    restored_over: Option<(String, Option<String>)>,
     notice: Option<Notice>,
     loading: bool,
     formatting: bool,
@@ -190,6 +196,7 @@ impl FileEditor {
             read_only: false,
             discarded: false,
             restoring: None,
+            restored_over: None,
             notice: None,
             loading: true,
             formatting: false,
@@ -364,6 +371,10 @@ impl FileEditor {
                         cx.emit(FileEditorEvent::Changed);
                     }
                     this.discarded = false;
+                    if !dirty {
+                        // Back as the file loaded or saved: what was put back over it is gone.
+                        this.restored_over = None;
+                    }
                     this.schedule_preview(cx);
                     cx.notify();
                 }
@@ -387,8 +398,8 @@ impl FileEditor {
         if let Some((line, column)) = self.pending_cursor.take() {
             self.go_to(line, column, window, cx);
         }
-        if let Some((text, from)) = self.restoring.take() {
-            self.put_back(text, &from, window, cx);
+        if let Some((kept, from)) = self.restoring.take() {
+            self.put_back(kept, &from, window, cx);
         }
         self.watch_disk(window, cx);
     }
@@ -435,26 +446,34 @@ impl FileEditor {
 
     /// Puts back changes the app kept when it last quit with this file unsaved ([`kept`]): the
     /// buffer holds them, unsaved, now or once the file has loaded, and `from`, the file that kept
-    /// them, goes once they're in. A file that can't be edited (binary, too large, unreadable)
-    /// leaves `from` for the next launch to try again.
+    /// them, goes once they're in. When the file on disk is no longer the text they were made to,
+    /// the note warns that saving writes over it. A file that can't be edited (binary, too large,
+    /// unreadable) leaves `from` for the next launch to try again.
     pub fn restore(
         &mut self,
-        text: String,
+        kept: kept::Kept,
         from: PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.state.is_some() {
-            self.put_back(text, &from, window, cx);
+            self.put_back(kept, &from, window, cx);
         } else {
-            self.restoring = Some((text, from));
+            self.restoring = Some((kept, from));
         }
     }
 
-    fn put_back(&mut self, text: String, from: &Path, window: &mut Window, cx: &mut Context<Self>) {
+    fn put_back(
+        &mut self,
+        kept: kept::Kept,
+        from: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(state) = self.state.clone() else {
             return;
         };
+        let kept::Kept { text, base, .. } = kept;
         state.update(cx, |s, cx| s.set_value(text.clone(), window, cx));
         // set_value doesn't emit Change: the unsaved mark and the preview follow here.
         self.dirty = text != self.saved_text;
@@ -464,10 +483,27 @@ impl FileEditor {
         if let Err(e) = std::fs::remove_file(from) {
             log::warn!("{} stays: {e}", from.display());
         }
-        self.flash(
-            "Unsaved changes Sawit kept when it quit are back. Save them, or close the tab to drop them.".into(),
-            cx,
-        );
+        // The file as it loaded now (`saved_text`, empty when it is gone) isn't the text the
+        // changes were made to, or Sawit can't tell: it changed after they were made, while Sawit
+        // ran or after it quit (a `git pull`, another editor). A save writes over that change, so
+        // the note warns, as `on_disk_mtime` does while Sawit runs, and doesn't invite the save.
+        let changed = self.dirty && base.as_deref() != Some(self.saved_text.as_str());
+        if changed {
+            let (what, then) = match self.disk_mtime {
+                Some(_) => ("changed on disk", "to overwrite the version on disk"),
+                None => ("was deleted from disk", "to save it again"),
+            };
+            self.notice = Some(error(format!(
+                "Unsaved changes Sawit kept when it quit are back, but this file {what} after they were made. {} {then}, or close the tab to drop them.",
+                press(&Save, window)
+            )));
+        } else {
+            self.flash(
+                "Unsaved changes Sawit kept when it quit are back. Save them, or close the tab to drop them.".into(),
+                cx,
+            );
+        }
+        self.restored_over = changed.then(|| (self.saved_text.clone(), base));
         cx.emit(FileEditorEvent::Changed);
         cx.notify();
     }
@@ -483,8 +519,20 @@ impl FileEditor {
         let Some(state) = &self.state else {
             return;
         };
-        let text = state.read(cx).value().to_string();
-        match kept::keep(&kept::folder(cx), &self.path, &text) {
+        let base = match &self.restored_over {
+            // Put back over a file that had changed, and neither saved nor reloaded since: the
+            // changes are still made to the older text, whatever the file holds now.
+            Some((over, base)) if *over == self.saved_text => base.clone(),
+            // When the file changes on disk under unsaved changes while Sawit runs, `saved_text`
+            // stays the text they were made to, so the next launch sees that change too.
+            _ => Some(self.saved_text.clone()),
+        };
+        let kept = kept::Kept {
+            path: self.path.clone(),
+            text: state.read(cx).value().to_string(),
+            base,
+        };
+        match kept::keep(&kept::folder(cx), &kept) {
             Ok(file) => log::warn!(
                 "{} has unsaved changes; they're kept in {} for the next launch",
                 self.path.display(),
