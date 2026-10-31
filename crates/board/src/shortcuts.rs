@@ -4,14 +4,17 @@
 //!
 //! A row is left out when:
 //! - its command is hidden ([`crate::policy::is_hidden`]), because the keyboard cannot reach it;
-//! - its command has nothing to do in the canvas, although the keyboard reaches it: Dev Mode, a
-//!   live session's cursor chat, F6's walk through FigCraft's window regions, and the keyboard box
-//!   selection (⌥Space, F8), whose box the canvas never draws;
+//! - its command has nothing to do in the canvas: Dev Mode, a live session's cursor chat, F6's
+//!   walk through FigCraft's window regions, and the keyboard box selection (⌥Space, F8), whose
+//!   box the canvas never draws;
 //! - it belongs to the Prototype group, which is all Present and Preview.
 //!
 //! A key is left out when Sawit keeps it ([`crate::policy::SAWIT_WINS`]: ⌘W, ⌘J, ⌃⌘M…). A row
 //! with no key left goes too, so it shows nothing for a key the canvas never receives. The keys
 //! Sawit keeps only while the canvas is not editing text (⌘B, ⌥⌘T, ⇧⌘↵) stay: they work then.
+//!
+//! The same keys are the app's key bindings of the canvas ([`key_bindings`]), which the keymap
+//! editor shows and changes. The sheet lists FigCraft's own keys, not the ones the user binds.
 
 use figcraft_engine::keymap::{self, Binding, Group, KEYS, Platform};
 
@@ -28,7 +31,8 @@ const MAX_KEYS: usize = 2;
 /// window (toolbar, layers, canvas, properties), which Sawit's chrome does not have, and
 /// FigCraft's keyboard box selection (`select.area`, ⌥Space or F8): it raises a `selectArea`
 /// request for a box that the arrows move and Enter selects with, and the canvas never draws that
-/// box. The keyboard still reaches them; the sheet does not advertise them.
+/// box. The sheet does not advertise them, and they get no key binding ([`key_bindings`]): the
+/// keyboard reaches one only once the user gives it a key in the keymap editor.
 const NOT_OFFERED: &[&str] = &[
     "view.devMode",
     "view.designPrototype",
