@@ -114,11 +114,22 @@ impl Repo {
     /// `program args` in the clone, with the stand-ins first on the `PATH`, no git config but
     /// the clone's, and none of the release's switches but `env`.
     fn run(&self, program: &str, args: &[&str], env: Option<(&str, &str)>) -> Output {
+        self.run_in(&self.work, program, args, env)
+    }
+
+    /// `program args` in the folder `dir`, as [`Repo::run`] runs them in the clone.
+    fn run_in(
+        &self,
+        dir: &Path,
+        program: &str,
+        args: &[&str],
+        env: Option<(&str, &str)>,
+    ) -> Output {
         let path = std::env::var("PATH").unwrap_or_default();
         let mut command = Command::new(program);
         command
             .args(args)
-            .current_dir(&self.work)
+            .current_dir(dir)
             .env("PATH", format!("{}:{path}", self.bin.display()))
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -492,6 +503,38 @@ fn a_release_reaches_a_remote_at_a_relative_path() {
     ok(repo.push_main(None));
     let tagged = repo.wait_for_remote("refs/tags/v0.0.8");
     repo.wait_for_remote_at("refs/heads/main", &tagged);
+}
+
+/// The refusal's steps get run as printed, by agents too, from wherever `git push` was typed.
+/// They named the worktree `../sawit-main`, which from a folder inside the checkout put it
+/// inside the checkout, and they removed it straight after the push. Now they name it by its
+/// full path, beside the checkout, and say to remove it once the release's tag is on origin.
+#[test]
+fn following_the_refusal_from_a_folder_inside_the_checkout_releases_main() {
+    let repo = Repo::new();
+    repo.commit("feat(app): a new thing");
+    repo.git(&["switch", "-q", "-c", "feat/other"]);
+    let inside = repo.work.join("docs");
+    fs::create_dir(&inside).unwrap();
+    let out = repo.run_in(&inside, "git", &["push", "origin", "main"], None);
+    let said = stderr(&out);
+    assert!(!out.status.success(), "the push went through: {said}");
+    let steps: Vec<&str> = said
+        .lines()
+        .filter_map(|line| line.strip_prefix("pre-push:   "))
+        .collect();
+    let (remove, add_and_push) = steps.split_last().expect("no steps");
+    for step in add_and_push {
+        ok(repo.run_in(&inside, "sh", &["-c", step], None));
+    }
+    let worktree = repo.work.with_file_name("sawit-main");
+    assert!(worktree.is_dir(), "no worktree beside the checkout: {said}");
+    assert_eq!(repo.git(&["status", "--porcelain"]), "", "{said}");
+    assert!(said.contains("git ls-remote --tags origin"), "{said}");
+    let tagged = repo.wait_for_remote("refs/tags/v0.0.8");
+    ok(repo.run_in(&inside, "sh", &["-c", remove], None));
+    assert!(!worktree.exists(), "{said}");
+    assert_eq!(repo.local("main"), Some(tagged));
 }
 
 /// The section release.sh wrote for `version` in CHANGELOG.md, without its heading line.

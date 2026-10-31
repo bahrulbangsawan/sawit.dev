@@ -223,9 +223,10 @@ Commit this as `docs: update README, screenshots and demo for <short summary>`.
 3. Push from a checkout of `main`: `git push origin main`.
    - The release is cut on `HEAD`, so the hook refuses a push of `main` from any other checkout (another
      branch, a detached `HEAD`): it would release nothing. When `main` is checked out nowhere (lanes move it
-     with `git fetch . <lane>:main`), check it out in a worktree of its own: `git worktree add ../sawit-main main`,
-     then `git -C ../sawit-main push origin main`. Remove that worktree once step 4 is done
-     (`git worktree remove ../sawit-main`): while it holds `main`, `git fetch . <lane>:main` is refused.
+     with `git fetch . <lane>:main`), check it out in a worktree of its own, from the main checkout's root:
+     `git worktree add ../sawit-main main`, then `git -C ../sawit-main push origin main`. Remove that worktree
+     only once step 4 is done (`git worktree remove ../sawit-main`): while it holds `main`,
+     `git fetch . <lane>:main` is refused.
    - With `core.hooksPath = .githooks`, the pre-push hook runs `scripts/release.sh`. It bumps the version in
      `Cargo.toml`/`Cargo.lock`, writes the new `CHANGELOG.md` section from the commit subjects, commits
      `chore(release): vX` and tags `vX`. A background job then pushes that commit and tag, with any earlier

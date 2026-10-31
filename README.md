@@ -635,8 +635,10 @@ worktree run its own checkout's hook):
    GitHub Release (`Sawit-X-macos-arm64.zip` for the updater, `Sawit.dmg`, notes from `CHANGELOG.md`).
 
 The release is cut on `HEAD`, so `main` is pushed from a checkout of `main`. A push of `main` from anywhere else
-(another branch, a detached `HEAD`) would release nothing, so the hook refuses it. Push from a checkout of `main`
-instead (`git worktree add ../sawit-main main`, push there, then `git worktree remove ../sawit-main`), or set
+(another branch, a detached `HEAD`) would release nothing, so the hook refuses it and prints, with full paths,
+the steps to push from a worktree of `main` instead. From the checkout's root, they are
+`git worktree add ../sawit-main main` and `git -C ../sawit-main push origin main`, then, once the release is out
+(`git ls-remote --tags origin vX` lists its tag), `git worktree remove ../sawit-main`. Or set
 `SAWIT_SKIP_RELEASE=1` to push without a release. `scripts/release.sh` runs on `main` only, too
 (`SAWIT_RELEASE_ANY_BRANCH=1` cuts a release on another branch on purpose).
 

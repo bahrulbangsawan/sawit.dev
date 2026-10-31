@@ -32,11 +32,15 @@ else
     here="on a detached HEAD"
 fi
 if [ "$here" != "on main" ]; then
+    # By its full path: the steps are run from wherever `git push` was typed.
+    worktree="$(dirname "$(git rev-parse --show-toplevel)")/sawit-main"
     cat >&2 <<EOF
 pre-push: a push of main is a release, cut on HEAD, but this checkout is $here,
 pre-push: so it would release nothing. Nothing was pushed. Push main from a checkout of main:
-pre-push:   git worktree add ../sawit-main main && git -C ../sawit-main push $remote main
-pre-push:   git worktree remove ../sawit-main
+pre-push:   git worktree add '$worktree' main
+pre-push:   git -C '$worktree' push $remote main
+pre-push: then, once git ls-remote --tags $remote lists the release tag that push names:
+pre-push:   git worktree remove '$worktree'
 pre-push: or push it without a release: SAWIT_SKIP_RELEASE=1 git push ...
 EOF
     exit 1
@@ -53,6 +57,7 @@ if [ -z "$tag" ]; then
 fi
 
 echo "pre-push: release $tag created; the release commit and tag are pushed once this push finishes (log: $log)" >&2
+echo "pre-push: it is out once git ls-remote --tags $remote $tag lists the tag" >&2
 # Not from this checkout: a worktree main is pushed from may be removed as
 # soon as this push returns, and its git folder (the GIT_DIR git gives this
 # hook) with it. From the main working tree, which stays, with the common git
