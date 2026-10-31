@@ -865,9 +865,18 @@ async fn run_script_as(
         let (on_line, tail) = (&on_line, &tail);
         async move {
             let Some(pipe) = pipe else { return };
-            let mut lines = BufReader::new(pipe).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let line = strip_ansi(&line);
+            let mut pipe = BufReader::new(pipe);
+            let mut bytes = Vec::new();
+            // Bytes, not `lines()`: a line that isn't UTF-8 would end the
+            // reading there and close the pipe under the installer.
+            loop {
+                bytes.clear();
+                match pipe.read_until(b'\n', &mut bytes).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                let line = String::from_utf8_lossy(&bytes);
+                let line = strip_ansi(line.trim_end_matches(['\n', '\r']));
                 // Progress bars redraw with \r; keep what's left at the end.
                 let line = line
                     .rsplit('\r')
@@ -1057,6 +1066,19 @@ mod tests {
         let problem = found.problem.expect("no problem reported");
         assert!(problem.contains("broken profile"), "{problem}");
         assert!(problem.contains("exit 3"), "{problem}");
+    }
+
+    /// An installer that prints a line in Latin-1 goes on being read: the
+    /// rest of its output still shows, and its pipe isn't closed under it.
+    #[tokio::test]
+    async fn output_after_a_line_that_isnt_utf8_still_comes_through() {
+        let lines = std::sync::Mutex::new(Vec::new());
+        run_script("test", r"printf 'caf\351\n'; echo after", |l| {
+            lines.lock().unwrap().push(l)
+        })
+        .await
+        .unwrap();
+        assert_eq!(*lines.lock().unwrap(), ["caf\u{FFFD}", "after"]);
     }
 
     #[test]
