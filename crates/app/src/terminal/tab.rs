@@ -151,6 +151,7 @@ impl TerminalTab {
                 TerminalEvent::MenuRequested(at) => this.request_menu(pane, *at, cx),
                 TerminalEvent::TitleChanged => cx.emit(TabEvent::Changed),
                 TerminalEvent::Exited => this.pane_exited(pane, cx),
+                TerminalEvent::Focused => this.pane_focused(pane, cx),
             }
         })
         .detach();
@@ -174,6 +175,16 @@ impl TerminalTab {
             });
         }
         cx.emit(TabEvent::Changed);
+        cx.notify();
+    }
+
+    /// `pane` took the keyboard by itself: the tab's focus (its ring, where
+    /// a split starts, what zoom and the agents' default pane mean) follows.
+    fn pane_focused(&mut self, pane: PaneId, cx: &mut Context<Self>) {
+        if self.state.focused != pane {
+            self.state.focus(pane);
+            cx.emit(TabEvent::Changed);
+        }
         cx.notify();
     }
 
@@ -957,10 +968,10 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use gpui_kit::{
-        AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, Focusable as _,
-        InteractiveElement as _, IntoElement, Modifiers, MouseButton, ParentElement as _, Pixels,
-        Point, Render, Styled as _, TestAppContext, VisualTestContext, Window, WindowBounds,
-        WindowOptions, div, point, px, size,
+        AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, ExternalPaths,
+        FileDropEvent, Focusable as _, InteractiveElement as _, IntoElement, Modifiers,
+        MouseButton, ParentElement as _, Pixels, Point, Render, Styled as _, TestAppContext,
+        VisualTestContext, Window, WindowBounds, WindowOptions, div, point, px, size,
     };
     use sawit_core::terminal::{Layout, MIN_COLS, MIN_ROWS, SplitDir};
 
@@ -1300,6 +1311,59 @@ mod tests {
             .update_window(w, |_, window, cx| next.read(cx).has_focus(window, cx))
             .unwrap();
         assert!(kept, "the keyboard did not go to the next tab");
+    }
+
+    /// A file dropped on a pane gives that pane the keyboard and the tab's focus too: the
+    /// focus ring, ⌘D, zoom and the agents' default pane all follow the keyboard.
+    #[gpui_kit::test]
+    fn dropping_a_file_on_a_pane_focuses_it(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let tab = cx.update(|cx| panel.read(cx).tab(0).clone());
+        let panes = cx.update(|cx| tab.read(cx).state.layout.panes());
+        assert_eq!(panes.len(), 2);
+        cx.simulate_keystrokes(w, "cmd-alt-left");
+        cx.update(|cx| assert_eq!(tab.read(cx).state.focused, panes[0]));
+        // The middle of the second pane, in window coordinates.
+        let at = cx.update(|cx| {
+            let t = tab.read(cx);
+            let bounds = t.bounds.get().expect("the tab was drawn");
+            let (_, rect) = t
+                .state
+                .visible(t.area().expect("the tab was drawn"))
+                .into_iter()
+                .find(|(pane, _)| *pane == panes[1])
+                .expect("the second pane is drawn");
+            bounds.origin + point(px(rect.x + rect.w / 2.), px(rect.y + rect.h / 2.))
+        });
+        let file = scratch_dir("dropped").join("notes.txt");
+        let mut vcx = VisualTestContext::from_window(w, cx);
+        // The pointer comes over the window (GPUI ignores drops while the last input was a key).
+        vcx.simulate_mouse_move(at, None, Modifiers::default());
+        vcx.simulate_event(FileDropEvent::Entered {
+            position: at,
+            paths: ExternalPaths(vec![file.clone()].into()),
+        });
+        vcx.simulate_event(FileDropEvent::Submit { position: at });
+        vcx.run_until_parked();
+        let (focused, second) = cx.update(|cx| {
+            let t = tab.read(cx);
+            (
+                t.state.focused,
+                t.view(panes[1]).expect("the second pane").clone(),
+            )
+        });
+        let typed = cx
+            .update_window(w, |_, window, cx| {
+                second.focus_handle(cx).is_focused(window)
+            })
+            .unwrap();
+        assert!(typed, "the drop didn't give the pane the keyboard");
+        assert_eq!(focused, panes[1], "the tab still focuses the first pane");
+        let _ = std::fs::remove_dir_all(file.parent().unwrap());
     }
 
     #[gpui_kit::test]

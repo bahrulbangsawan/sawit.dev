@@ -73,6 +73,9 @@ pub enum TerminalEvent {
     Exited,
     /// A right-click asked for the pane menu, at this window position.
     MenuRequested(Point<Pixels>),
+    /// The terminal took the keyboard without a click on its pane (files
+    /// were dropped on it), so its tab should focus its pane.
+    Focused,
 }
 
 /// Where a right-click goes.
@@ -414,6 +417,7 @@ impl TerminalView {
         self.touched = true;
         self.write(drop_bytes(paths, self.modes()));
         self.focus(window, cx);
+        cx.emit(TerminalEvent::Focused);
         cx.notify();
     }
 
