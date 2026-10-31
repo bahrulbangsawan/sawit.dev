@@ -173,7 +173,9 @@ fn curl_args_with(
     max_time: &str,
     max_size: &str,
 ) -> Vec<OsString> {
-    let mut a: Vec<OsString> = ["-fsSL", "--compressed", "--max-time", max_time]
+    // No `--compressed`: `--max-filesize` counts the bytes on the wire, so curl would
+    // inflate a gzip answer far past it (100 KB of gzip can hold 100 MB).
+    let mut a: Vec<OsString> = ["-fsSL", "--max-time", max_time]
         .into_iter()
         .map(OsString::from)
         .collect();
@@ -201,8 +203,9 @@ fn curl_args_with(
     a
 }
 
-pub fn curl_args(url: &str, out: &Path, referer: &str) -> Vec<OsString> {
-    curl_args_with(url, Some(out), referer, "30", "52428800")
+/// A download of `url` into `out`, of at most `max_size` bytes.
+pub fn curl_args(url: &str, out: &Path, referer: &str, max_size: u64) -> Vec<OsString> {
+    curl_args_with(url, Some(out), referer, "30", &max_size.to_string())
 }
 
 /// A fetched text resource, and what curl says about where it came from.
@@ -503,6 +506,22 @@ fn copy_file_url(
     }
 }
 
+/// Takes up to `most` bytes of what is left of `budget` (`total` is what is taken), so
+/// downloads running at once can't pass the budget between them; `None` when none is left.
+fn claim(total: &AtomicU64, budget: u64, most: u64) -> Option<u64> {
+    let mut used = total.load(Ordering::SeqCst);
+    loop {
+        let take = budget.saturating_sub(used).min(most);
+        if take == 0 {
+            return None;
+        }
+        match total.compare_exchange(used, used + take, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return Some(take),
+            Err(now) => used = now,
+        }
+    }
+}
+
 async fn fetch_one(
     a: &AssetRef,
     url: &str,
@@ -512,18 +531,21 @@ async fn fetch_one(
     total: &AtomicU64,
     budget: u64,
 ) -> AssetOutcome {
-    if total.load(Ordering::SeqCst) >= budget {
+    // The file may be as large as what this download holds of the budget, and gives
+    // back what it didn't use.
+    let Some(held) = claim(total, budget, MAX_FILE) else {
         return outcome(a, None, 0, Some(budget_msg(budget)));
-    }
+    };
     let path = dir.join(&rel);
     if let Some(parent) = path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
+        total.fetch_sub(held, Ordering::SeqCst);
         return outcome(a, None, 0, Some(e.to_string()));
     }
     let res = cmd::run(
         "/usr/bin/curl",
-        curl_args(url, &path, referer),
+        curl_args(url, &path, referer, held),
         Duration::from_secs(40),
     )
     .await;
@@ -534,6 +556,7 @@ async fn fetch_one(
     };
     if let Some(msg) = err {
         let _ = std::fs::remove_file(&path);
+        total.fetch_sub(held, Ordering::SeqCst);
         let msg = if msg.is_empty() {
             "Download failed.".into()
         } else {
@@ -542,7 +565,7 @@ async fn fetch_one(
         return outcome(a, None, 0, Some(msg));
     }
     let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-    total.fetch_add(len, Ordering::SeqCst);
+    total.fetch_sub(held - len.min(held), Ordering::SeqCst);
     outcome(a, Some(rel), len, None)
 }
 
@@ -716,6 +739,7 @@ mod tests {
             "https://x.com/a.png",
             Path::new("/tmp/a.png"),
             "https://x.com/",
+            52_428_800,
         );
         let s: Vec<String> = a.iter().map(|x| x.to_string_lossy().into_owned()).collect();
         let at = |f: &str| s.iter().position(|x| x == f).unwrap();
@@ -863,6 +887,119 @@ mod tests {
         assert!(is_skipped_video(&out[3]));
         assert!(!out.iter().take(3).any(is_skipped_video));
         assert_eq!(out[4].error.as_deref(), Some(BLOB_MSG));
+    }
+
+    /// A server on this Mac answering `/gz/<n>` with `n` zero bytes gzip-encoded (whatever
+    /// the request asked for) and `/plain/<n>` with `n` zero bytes as they are, both with no
+    /// `Content-Length`; its origin.
+    fn zeros_server() -> String {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                std::thread::spawn(move || {
+                    let mut head = Vec::new();
+                    let mut byte = [0u8; 1];
+                    while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).unwrap_or(0) == 1 {
+                        head.push(byte[0]);
+                    }
+                    let head = String::from_utf8_lossy(&head);
+                    let path = head.split_whitespace().nth(1).unwrap_or("/");
+                    let (kind, n) = path
+                        .trim_start_matches('/')
+                        .split_once('/')
+                        .unwrap_or(("", "0"));
+                    let n: usize = n
+                        .split(['/', '.'])
+                        .next()
+                        .unwrap_or("0")
+                        .parse()
+                        .unwrap_or(0);
+                    let zeros = vec![0u8; n];
+                    let (encoding, body) = if kind == "gz" {
+                        let mut gz =
+                            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+                        gz.write_all(&zeros).unwrap();
+                        ("Content-Encoding: gzip\r\n", gz.finish().unwrap())
+                    } else {
+                        ("", zeros)
+                    };
+                    let reply = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/css\r\n{encoding}Connection: close\r\n\r\n"
+                    );
+                    let _ = stream.write_all(reply.as_bytes());
+                    let _ = stream.write_all(&body);
+                });
+            }
+        });
+        origin
+    }
+
+    /// The bytes in `dir`'s files, all the way down.
+    fn bytes_in(dir: &Path) -> u64 {
+        std::fs::read_dir(dir).map_or(0, |entries| {
+            entries
+                .flatten()
+                .map(|e| match e.file_type() {
+                    Ok(t) if t.is_dir() => bytes_in(&e.path()),
+                    _ => e.metadata().map_or(0, |m| m.len()),
+                })
+                .sum()
+        })
+    }
+
+    /// The size caps hold for the bytes written: a gzip answer (64 MB of zeros arrive as
+    /// 64 KB) was inflated by curl past `--max-filesize`, which counts the bytes on the wire,
+    /// and downloads running at once each had the whole budget left to them.
+    #[tokio::test]
+    async fn downloads_and_sheets_stay_under_their_caps() {
+        let origin = zeros_server();
+        let page = format!("{origin}/");
+        let budget = 1 << 20;
+        let gz = vec![asset(
+            AssetKind::Image,
+            Some(&format!("{origin}/gz/{}/a.png", 64 << 20)),
+            None,
+            "gz",
+        )];
+        let dir = tempfile::tempdir().unwrap();
+        download_all(gz, dir.path(), &page, false, false, budget, |_, _| {}).await;
+        let written = bytes_in(dir.path());
+        assert!(written <= budget, "a gzip answer wrote {written} bytes");
+
+        let plain = |name: &str, n: u64| {
+            asset(
+                AssetKind::Image,
+                Some(&format!("{origin}/plain/{n}/{name}.png")),
+                None,
+                name,
+            )
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let items = vec![plain("big", 3 << 20)];
+        download_all(items, dir.path(), &page, false, false, budget, |_, _| {}).await;
+        let written = bytes_in(dir.path());
+        assert!(written <= budget, "one download wrote {written} bytes");
+
+        let dir = tempfile::tempdir().unwrap();
+        let items = vec![plain("one", 800 << 10), plain("two", 800 << 10)];
+        download_all(items, dir.path(), &page, false, false, budget, |_, _| {}).await;
+        let written = bytes_in(dir.path());
+        assert!(
+            written <= budget,
+            "two downloads at once wrote {written} bytes"
+        );
+
+        let sheet = fetch_text(&format!("{origin}/gz/{}/a.css", 64 << 20), &page).await;
+        if let Ok(sheet) = sheet {
+            assert!(
+                sheet.text.len() <= 5 << 20,
+                "a gzip sheet came back as {} bytes",
+                sheet.text.len()
+            );
+        }
     }
 
     fn css(text: &str, final_url: &str, remote_ip: &str) -> Fetched {
