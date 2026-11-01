@@ -1022,7 +1022,7 @@ mod tests {
         assert!(
             clear.contains("The board it held is kept beside the canvas file as <file>.bak (canvas.figcraft.bak for the project's canvas, home.figcraft.bak for home.figcraft)")
                 && clear.contains("the 4 kept before it moving to .bak.1 to .bak.4")
-                && clear.contains("never a deletion")
+                && clear.contains("never a deletion that leaves layers on the canvas")
                 && clear.contains("canvas_load brings it back")
                 && clear.contains("in the app the user can also undo it"),
             "{clear}"

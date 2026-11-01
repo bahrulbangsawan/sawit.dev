@@ -556,7 +556,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Change a saved SSH server; only the given fields change. A new password replaces the one saved in the Keychain. Moving a password host to default or key sign-in (auth, or identity_file) deletes its saved Keychain password, which can't be undone: that needs confirm = the host's id or name"
+        description = "Change a saved SSH server; only the given fields change. A new password replaces the one saved in the Keychain. DESTRUCTIVE when it moves a password host to default or key sign-in (auth, or identity_file): that deletes its saved Keychain password, which can't be undone, so it needs confirm = the host's id or name"
     )]
     async fn update_ssh_host(&self, Parameters(a): Parameters<UpdateHostArgs>) -> CallToolResult {
         self.update_ssh_host_tool(a).await

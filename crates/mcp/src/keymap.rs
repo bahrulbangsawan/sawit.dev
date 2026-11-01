@@ -196,7 +196,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "DESTRUCTIVE: changes the user's key bindings. Takes a binding out, as the Keymap Editor's remove button does: the user's own leaves keymap.json, and a default is turned off there (keymap_list then shows it as removed); restore true brings a turned-off default back. Name it by its keys, and its context, action or args when several bindings have those keys. It writes keymap.json again, whole and without comments: a file with comments is refused unless confirm is true. Needs the app running"
+        description = "DESTRUCTIVE: changes the user's key bindings. Takes a binding out, as the Keymap Editor's remove button does: the user's own leaves keymap.json, and a default is turned off there (keymap_list then shows it as removed); restore true brings a turned-off default back. A \"(keys turned off)\" row of the user's own that turns off no default can't be taken out here: the Keymap Editor's remove button can. Name it by its keys, and its context, action or args when several bindings have those keys. It writes keymap.json again, whole and without comments: a file with comments is refused unless confirm is true. Needs the app running"
     )]
     async fn keymap_unbind(&self, Parameters(a): Parameters<KeymapUnbindArgs>) -> CallToolResult {
         let op = KeymapOp::Unbind {

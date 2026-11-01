@@ -164,7 +164,7 @@ pub struct TerminalInputArgs {
     #[schemars(description = "Text to type as is (no Enter added)")]
     pub text: Option<String>,
     #[schemars(description = format!(
-        "Key to press after the text: {} (ctrl-c interrupts)",
+        "Key to press after the text: {}; ctrl-c interrupts",
         app_control::KEY_NAMES
     ))]
     pub key: Option<String>,
@@ -1172,7 +1172,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Split a terminal pane in two, as ⌘D (right) or ⇧⌘D (down) does, and start a shell in the new half, optionally running a command there: a dev server or a test watcher beside the user's shell. Name the tab, and the pane in a split tab, as terminal_run or app_state give them. The new pane never takes the keyboard. Each half must keep at least 20 columns by 4 rows: a split that would leave less is refused, saying so, and starts nothing. Waits, then returns where the new pane is (\"Terminal 2, pane 1:\") with its latest output: pass that tab and pane to terminal_read, terminal_input and terminal_close. Needs the app running"
+        description = "Split a terminal pane in two, as ⌘D (right) or ⇧⌘D (down) does, and start a shell in the new half, optionally running a command there: a dev server or a test watcher beside the user's shell. Name the tab, and the pane in a split tab, as terminal_run or app_state give them. The new pane never takes the keyboard. Each half must keep at least 20 columns by 4 rows: a split that would leave less is refused, saying so, and starts nothing. A terminal that hasn't been on screen yet can't be measured: the first split shows it and is refused, so split it again. Waits, then returns where the new pane is (\"Terminal 2, pane 1:\") with its latest output: pass that tab and pane to terminal_read, terminal_input and terminal_close. The split renumbers the panes after the one split, so read app_state again for any other pane of that tab you use. Needs the app running"
     )]
     async fn terminal_split(&self, Parameters(a): Parameters<TerminalSplitArgs>) -> CallToolResult {
         let direction = tri!(variant::<app_control::SplitDirection>(
@@ -1408,7 +1408,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Delete every layer of the canvas's page on show; other pages keep theirs. The board it held is kept beside the canvas file as <file>.bak (canvas.figcraft.bak for the project's canvas, home.figcraft.bak for home.figcraft), the 4 kept before it moving to .bak.1 to .bak.4 (the oldest goes); only a clear, a load or a save that empties the canvas moves them along, never a deletion. canvas_load brings it back; in the app the user can also undo it"
+        description = "Delete every layer of the canvas's page on show; other pages keep theirs. The board it held is kept beside the canvas file as <file>.bak (canvas.figcraft.bak for the project's canvas, home.figcraft.bak for home.figcraft), the 4 kept before it moving to .bak.1 to .bak.4 (the oldest goes); only a clear, a load or a save that empties the canvas moves them along, never a deletion that leaves layers on the canvas. canvas_load brings it back; in the app the user can also undo it"
     )]
     async fn canvas_clear(&self, Parameters(a): Parameters<CanvasTargetArgs>) -> CallToolResult {
         match self
