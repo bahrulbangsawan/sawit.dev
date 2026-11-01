@@ -226,8 +226,8 @@ pub(crate) fn expand_home(path: &str) -> PathBuf {
 
 /// The project a tool's files belong to: the `project` argument, else the
 /// folder the agent started `sawit-mcp` in (its project), unless that is
-/// `/` or the home folder. Diagram files default to its `.nyawit/`; the
-/// canvas goes by [`agent_project`].
+/// `/` or the home folder. The canvas, and the diagrams and exports written
+/// with no path, go by the project that holds it ([`agent_project`]).
 pub(crate) fn project_dir(project: Option<&str>) -> Option<PathBuf> {
     if let Some(p) = project.map(str::trim).filter(|p| !p.is_empty()) {
         return Some(expand_home(p));
@@ -242,7 +242,8 @@ pub(crate) fn project_dir(project: Option<&str>) -> Option<PathBuf> {
 /// app takes an agent's folder to mean the project of its window that holds it, so an agent
 /// started in a subfolder (`web/` of a repository) reaches the canvas the app shows for that
 /// project with the app closed too, rather than a canvas of the subfolder's own that the app never
-/// shows (Q12).
+/// shows (Q12). The diagrams and canvas exports an agent writes with no path go to its `.nyawit/`
+/// too, so that sawit-mcp makes no `.nyawit/` of a subfolder's own.
 pub(crate) fn agent_project(project: Option<&str>) -> Option<PathBuf> {
     let named = project.is_some_and(|p| !p.trim().is_empty());
     let folder = project_dir(project)?;
@@ -253,19 +254,32 @@ pub(crate) fn agent_project(project: Option<&str>) -> Option<PathBuf> {
     Some(project_holding(&folder, home.as_deref()))
 }
 
-/// The project that holds `folder`, from what is on disk: the nearest folder from `folder` up
-/// with Sawit's `.nyawit/` folder in it, where the app keeps a project's canvas; else the nearest
-/// with `.git`; else `folder` itself. The home folder and `/` are never one, nor is a folder above
-/// them, as [`project_dir`] has it.
+/// The project that holds `folder`, from what is on disk, as the app would have it open: within
+/// the git repository `folder` is in (the nearest folder from it up with `.git`), the nearest
+/// folder whose `.nyawit/` holds a canvas (`canvas.figcraft`, or the old `canvas.excalidraw`),
+/// which the app made for a project it opened (a package of the repository opened as a project of
+/// its own, say); else the repository. Outside a repository, `folder` itself.
+///
+/// A `.nyawit/` with no canvas in it decides nothing: sawit-mcp made one for the diagrams an agent
+/// rendered in `shop/web`, which then took the agent's canvas too, one the app never shows with
+/// `shop` open. Nor does a canvas above the repository: an agent once run in `~/code` left one
+/// there, which every repository under it with no canvas of its own then shared. The home folder
+/// and `/` are never one, nor is a folder above them, as [`project_dir`] has it.
 fn project_holding(folder: &Path, home: Option<&Path>) -> PathBuf {
     let below_home = |dir: &&Path| dir.parent().is_some() && Some(*dir) != home;
-    let nearest = |marker: &str, is_it: fn(&Path) -> bool| {
-        let mut up = folder.ancestors().take_while(below_home);
-        up.find(|dir| is_it(&dir.join(marker)))
+    let up: Vec<&Path> = folder.ancestors().take_while(below_home).collect();
+    let Some(repository) = up.iter().position(|dir| dir.join(".git").exists()) else {
+        return folder.to_path_buf();
     };
-    let found = nearest(sawit_core::nyawit::DIR, Path::is_dir);
-    let found = found.or_else(|| nearest(".git", Path::exists));
-    found.unwrap_or(folder).to_path_buf()
+    let holds_a_canvas = |dir: &Path| {
+        sawit_core::nyawit::board_file(dir).exists()
+            || sawit_core::nyawit::legacy_canvas_file(dir).exists()
+    };
+    let mut within = up[..=repository].iter().copied();
+    within
+        .find(|dir| holds_a_canvas(dir))
+        .unwrap_or(up[repository])
+        .to_path_buf()
 }
 
 /// Unix seconds as `YYYY-MM-DD HH:MM` (UTC).
@@ -1261,32 +1275,59 @@ mod tests {
     }
 
     /// Q12: with the app closed, a canvas tool that names no project draws on the canvas of the
-    /// project that holds the agent's folder, as the app does: the nearest folder up with Sawit's
-    /// `.nyawit/`, else with `.git`, else the folder itself. An agent started in `shop/web` edited
-    /// `shop/web/.nyawit/canvas.figcraft`, which the app never shows. The home folder is never the
-    /// project, whatever it holds.
+    /// project that holds the agent's folder, as the app does: within the agent's repository, the
+    /// nearest folder up whose `.nyawit/` holds a canvas, else the repository; outside one, the
+    /// folder itself. An agent started in `shop/web` edited `shop/web/.nyawit/canvas.figcraft`,
+    /// which the app never shows. A `.nyawit/` with no canvas in it (one sawit-mcp made for an
+    /// agent's diagrams), or a canvas above the repository (left by an agent run in `~/code`),
+    /// decides nothing: either took the canvas of every agent below it. The home folder is never
+    /// the project, whatever it holds.
     #[test]
     fn the_agents_project_is_the_nearest_folder_up_that_is_one() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
-        let shop = home.join("code").join("shop");
-        let web = shop.join("web").join("src");
-        std::fs::create_dir_all(&web).unwrap();
+        let code = home.join("code");
+        let shop = code.join("shop");
+        let web = shop.join("web");
+        let src = web.join("src");
+        std::fs::create_dir_all(&src).unwrap();
         let project = |folder: &Path| project_holding(folder, Some(&home));
-        assert_eq!(project(&web), web, "nothing marks a project");
+        let canvas_in = |folder: &Path, name: &str| {
+            let nyawit = sawit_core::nyawit::dir(folder);
+            std::fs::create_dir_all(&nyawit).unwrap();
+            std::fs::write(nyawit.join(name), "").unwrap();
+        };
+        assert_eq!(project(&src), src, "nothing marks a project");
 
         std::fs::create_dir(shop.join(".git")).unwrap();
-        assert_eq!(project(&web), shop, "the repository");
-        // A package with a repository of its own (a submodule's `.git` is a file).
-        std::fs::write(shop.join("web").join(".git"), "gitdir: ../.git/modules/web").unwrap();
-        assert_eq!(project(&web), shop.join("web"));
-        // The project Sawit has made a canvas or an export for wins over a nearer repository.
-        std::fs::create_dir(shop.join(".nyawit")).unwrap();
-        assert_eq!(project(&web), shop);
+        assert_eq!(project(&src), shop, "the repository");
         assert_eq!(project(&shop), shop);
-        // A file at that name is no such folder.
-        std::fs::write(shop.join("web").join(".nyawit"), "").unwrap();
-        assert_eq!(project(&web), shop);
+        // The `.nyawit/` sawit-mcp made in the agent's subfolder for its diagrams.
+        std::fs::create_dir_all(sawit_core::nyawit::diagrams_dir(&web)).unwrap();
+        assert_eq!(project(&src), shop, "a .nyawit/ without a canvas took it");
+        // A canvas above the repository, which an agent once run in `~/code` left there: the
+        // repositories under it keep their own.
+        canvas_in(&code, "canvas.figcraft");
+        assert_eq!(project(&src), shop, "a canvas above the repository took it");
+        let blog = code.join("blog");
+        std::fs::create_dir_all(blog.join(".git")).unwrap();
+        assert_eq!(project(&blog), blog);
+        // A folder of the repository the app has made a canvas for, a package opened as a project
+        // of its own: its old canvas counts too.
+        canvas_in(&web, "canvas.excalidraw");
+        assert_eq!(project(&src), web);
+        canvas_in(&shop, "canvas.figcraft");
+        assert_eq!(project(&src), web, "the nearest");
+        assert_eq!(project(&shop), shop);
+        // A package with a repository of its own (a submodule's `.git` is a file) is its own.
+        let api = shop.join("api");
+        std::fs::create_dir_all(&api).unwrap();
+        std::fs::write(api.join(".git"), "gitdir: ../.git/modules/api").unwrap();
+        assert_eq!(project(&api.join("src")), api);
+        // A file at `.nyawit`'s name holds no canvas.
+        std::fs::remove_dir_all(sawit_core::nyawit::dir(&web)).unwrap();
+        std::fs::write(sawit_core::nyawit::dir(&web), "").unwrap();
+        assert_eq!(project(&src), shop);
 
         // The home folder isn't one, nor is anything above it.
         std::fs::create_dir(home.join(".nyawit")).unwrap();

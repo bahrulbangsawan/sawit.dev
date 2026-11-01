@@ -341,10 +341,13 @@ explained. A conflict on the same address can't be forced.
   boxes, connectors joined to them, and labels. Charts (pie, Gantt, XY, quadrant, journey, Sankey, architecture) are
   placed as one picture. Pele, the renderer the rest of the app uses, lays the diagram out. `canvas_command` runs any
   other canvas command by its id. With no `project`, an agent draws on the canvas of the project it works in, with
-  Sawit open or closed: with Sawit closed, that is the nearest folder up from the agent's with `.nyawit/` (else
-  with `.git`). `file` names any other canvas file instead, such as a design file in the repository: the agent
-  works on it in its own canvas tab, which opens without taking your keyboard, or on the file while Sawit is
-  closed. An `.excalidraw` file is imported once into the `.figcraft` file beside it, as the Files tab opens it.
+  Sawit open or closed. With Sawit closed, that is, within the agent's git repository, the nearest folder up from
+  the agent's whose `.nyawit/` holds a canvas, else the repository's root (outside a repository, the agent's own
+  folder); a diagram it renders with no path goes to that project's `.nyawit/diagrams/`. A `.nyawit/` with no canvas
+  in it, or one above the repository, doesn't count. `file` names any other canvas file instead, such as a design
+  file in the repository: the agent works on it in its own canvas tab, which opens without taking your keyboard,
+  or on the file while Sawit is closed. An `.excalidraw` file is imported once into the `.figcraft` file beside it,
+  as the Files tab opens it.
 
 ### Git
 

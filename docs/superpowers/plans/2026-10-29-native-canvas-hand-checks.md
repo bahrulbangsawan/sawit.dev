@@ -1090,8 +1090,10 @@ There are 26 questions. They come from the ledger lines that leave a decision or
   could take the same rule.
 - Settled for the second inconsistency (v0.0.8 parity): with no project named, an agent's canvas ops and
   `app_open_page canvas` use the canvas of the project its working folder is in, as its browser does, and with the
-  app closed sawit-mcp edits that project's canvas: the nearest folder up from the agent's with `.nyawit/`, else
-  with `.git`, else the folder itself. Every canvas op still brings the canvas tab forward.
+  app closed sawit-mcp edits that project's canvas: within the agent's git repository, the nearest folder up from
+  its folder whose `.nyawit/` holds a canvas, else the repository's root; outside a repository, the folder itself.
+  A `.nyawit/` with no canvas in it, or one above the repository, decides nothing. Every canvas op still brings the
+  canvas tab forward.
 - Source: P1:186, P7:212.
 
 **Q13. May an agent's op open UI that takes the keyboard?**

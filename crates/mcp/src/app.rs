@@ -251,7 +251,7 @@ pub struct OpenPromptArgs {
 const CANVAS_FILE: &str = "A canvas file to work on instead of the project's canvas: an absolute path (or ~/…) to a .figcraft file (a design file or a board; one not there yet, in a folder that is, starts as a new board) or to an .excalidraw file, imported once into the .figcraft file of its name beside it (flow.figcraft for flow.excalidraw) and left as it is. With the app running the op runs on that file's canvas tab, opened if need be without taking the user's keyboard; with it closed, on the file itself. Its backups go beside it (home.figcraft.bak and home.figcraft.del.bak for home.figcraft): in a repository they show in git status, and staging everything would commit them";
 
 /// What a canvas tool's `project` names: the project whose canvas it uses ([`crate::agent_project`]).
-const CANVAS_PROJECT: &str = "Project folder whose canvas (.nyawit/canvas.figcraft) to use, in the window that has it open. Default: the project your working folder is in (with the app closed, the nearest folder up from it with .nyawit/, else with .git, else the folder itself)";
+const CANVAS_PROJECT: &str = "Project folder whose canvas (.nyawit/canvas.figcraft) to use, in the window that has it open. Default: the project your working folder is in (with the app closed: within its git repository, the nearest folder up from it whose .nyawit/ holds a canvas, else the repository's root; outside a repository, the folder itself)";
 
 /// canvas_get's and canvas_clear's arguments: which canvas.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -3035,14 +3035,31 @@ mod tests {
     /// Q12: an agent started in a subfolder of a project (`web/` of a repository) names no
     /// project, and with the app closed its canvas tools draw on that project's canvas, the one
     /// the app shows, as the app's own path does: they made a canvas of the subfolder's own,
-    /// which the app never shows. The folder an agent runs in is its process's, so the call runs
-    /// in a process of its own: this test binary, run again in the subfolder for this test alone.
+    /// which the app never shows. A diagram it renders first goes to that project's `.nyawit/`
+    /// too: in the subfolder's own, it made the folder that then took the canvas. A canvas above
+    /// the repository is left alone. The folder an agent runs in is its process's, so the calls
+    /// run in a process of their own: this test binary, run again in the subfolder for this test
+    /// alone.
     #[test]
     fn an_agent_in_a_subfolder_draws_on_its_projects_canvas() {
         const AGENT_HOME: &str = "SAWIT_TEST_AGENT_IN_A_SUBFOLDER";
         if let Some(home) = std::env::var_os(AGENT_HOME) {
             // The agent's side, run in the subfolder.
             let server = Sawit::new(AppPaths { root: home.into() });
+            let render = {
+                let server = server.clone();
+                async move {
+                    let args = crate::diagrams::RenderArgs {
+                        source: "flowchart LR\n  a --> b".into(),
+                        output_path: None,
+                        theme: crate::diagrams::Theme::Light,
+                        inline: false,
+                    };
+                    server.render_mermaid_tool(args).await
+                }
+            };
+            let rendered = within_seconds(render).expect("the render answered");
+            assert_ne!(rendered.is_error, Some(true), "{}", said(&rendered));
             let sticky = json!({"type": "sticky", "x": 0, "y": 0, "text": "from web"});
             let add = async move {
                 let elements = vec![sticky];
@@ -3062,6 +3079,10 @@ mod tests {
         let web = project.join("web");
         std::fs::create_dir_all(project.join(".git")).unwrap();
         std::fs::create_dir_all(&web).unwrap();
+        // A canvas above the repository, as an agent run in the folder that holds it left one.
+        let above = board_file(dir.path());
+        write_board(&above, 1);
+        let left = std::fs::read(&above).unwrap();
         let this_test = "app::tests::an_agent_in_a_subfolder_draws_on_its_projects_canvas";
         let ran = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", this_test, "--nocapture"])
@@ -3082,8 +3103,14 @@ mod tests {
         assert!(texts_in(&board_file(&project)).contains("from web"));
         assert!(
             !web.join(".nyawit").exists(),
-            "a canvas of the subfolder's own"
+            "a .nyawit/ of the subfolder's own"
         );
+        let diagrams = names(&sawit_core::nyawit::diagrams_dir(&project));
+        assert!(
+            diagrams.len() == 1 && diagrams[0].ends_with(".svg"),
+            "{diagrams:?}"
+        );
+        assert_eq!(std::fs::read(&above).unwrap(), left, "the canvas above");
     }
 
     /// canvas_get and canvas_clear act on the page on show, the one last saved with the app

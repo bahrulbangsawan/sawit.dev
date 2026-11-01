@@ -217,8 +217,11 @@ canvas is bound to the `.figcraft` file beside it as in D14). The op then runs o
 the Files tab opens it but without the keyboard, in the window that shows the file's canvas, else the one whose
 project holds the file. Without `file` the op runs on the canvas of the agent's project: the project of the window
 that holds `agent_folder`, else the active one (the one `project` names, made active). With the app closed,
-`sawit-mcp` runs the op on the file itself: the one named, else the canvas of the nearest folder up from the
-agent's with `.nyawit/`, else with `.git`, else the folder itself.
+`sawit-mcp` runs the op on the file itself: the one named, else the canvas of the agent's project. That is, within
+the git repository the agent's folder is in, the nearest folder up from it whose `.nyawit/` holds a canvas
+(`canvas.figcraft` or the old `canvas.excalidraw`), else the repository's root; outside a repository, the agent's
+folder itself. A `.nyawit/` with no canvas in it (one sawit-mcp made for an agent's diagrams, say), or a canvas above
+the repository, decides nothing.
 
 | Op | Params | Result |
 |---|---|---|
