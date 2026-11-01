@@ -58,7 +58,7 @@ use gpui_kit::*;
 use sawit_board::clipboard::{self, PasteSource};
 use sawit_board::input::KeyOutcome;
 use sawit_board::overlay::{self, Composition};
-use sawit_board::store::{self, Stamp, Writer};
+use sawit_board::store::{self, Backup, Stamp, Writer};
 use sawit_board::toolbar::Flyout;
 use sawit_board::view::{self, PREVIEW_QUALITY, Viewport};
 use sawit_board::{BoardDoc, BoardError, DocKind, input, ops, policy, shortcuts};
@@ -472,11 +472,12 @@ pub struct BoardView {
     saved: Option<Arc<Document>>,
     /// The document the autosave waits to save, or saved last.
     pending: Option<Arc<Document>>,
-    /// An agent's op took layers off the canvas since the last save was handed over: a `clear`, a
-    /// deletion, another canvas loaded in its place ([`Self::run_op`]). The next save keeps the
-    /// board the file holds as a backup first, as a save that empties the canvas does
-    /// ([`Writer::save`], CANVAS-CORE-3).
-    took_layers_off: bool,
+    /// The backup the next save keeps of the board the file holds, as an agent's ops since the
+    /// last save was handed over asked for one ([`Self::run_op`], [`store::backup_after`]): the
+    /// board's for a `clear` or another canvas loaded in its place, a deletion's for an op that
+    /// took some layers off. A save that empties the canvas keeps the board's anyway
+    /// ([`Self::queue_save`], CANVAS-CORE-3).
+    next_backup: Backup,
     /// The document last kept in a copy of its own because it couldn't be saved as the canvas
     /// closed ([`Self::keep_unsaved`]): it isn't kept twice.
     kept_unsaved: Option<Arc<Document>>,
@@ -661,7 +662,7 @@ impl BoardView {
             writer: Arc::new(writer),
             saved,
             pending: None,
-            took_layers_off: false,
+            next_backup: Backup::None,
             kept_unsaved: None,
             save_later: None,
             toast_timer: toast.is_some().then(|| hide_toast_later(cx)),
@@ -847,11 +848,12 @@ impl BoardView {
     /// engine command such as `edit.delete` or `page.delete`), has its save keep what the file
     /// holds as a backup first, the ones before it too (CANVAS-CORE-3): undo isn't saved, so after
     /// the tab closes that is all that is left of those layers. What the op left tells whether it
-    /// took any off ([`store::removes_layers`]). Before an op that can, the board as the canvas
-    /// has it is handed to the writer, an edit made a moment before included, which the autosave
-    /// would have saved [`SAVE_DELAY`] later: the backup is of it, not of the file as it was before
-    /// that edit. The user's own deletions keep none: they have undo, and a backup at each ⌫ would
-    /// soon push the ones an agent's ops kept out of the five there are.
+    /// took any off, and which backup it keeps: the board's for a clear or a load, a deletion's,
+    /// apart, for the rest ([`store::backup_after`]). Before an op that can, the board as the
+    /// canvas has it is handed to the writer, an edit made a moment before included, which the
+    /// autosave would have saved [`SAVE_DELAY`] later: the backup is of it, not of the file as it
+    /// was before that edit. The user's own deletions keep none: they have undo, and a backup at
+    /// each ⌫ would soon push the ones an agent's ops kept out of the five there are.
     pub fn run_op(&mut self, op: &Value, cx: &mut Context<Self>) -> Value {
         if let Some(reply) = self.close_menus_for_op(op, cx) {
             return reply;
@@ -868,14 +870,12 @@ impl BoardView {
             Some(board) => ops::run(board, op),
             None => self.not_opened(),
         };
-        let replaced =
-            op.get("op").and_then(Value::as_str) == Some("replace") && reply["ok"] == json!(true);
-        let removed = match (&before, self.document()) {
-            (Some(before), Some(after)) => store::removes_layers(before, &after),
-            _ => false,
-        };
-        if replaced || removed {
-            self.took_layers_off = true;
+        if let (Some(before), Some(after)) = (&before, self.document())
+            && !Arc::ptr_eq(before, &after)
+        {
+            let name = op.get("op").and_then(Value::as_str).unwrap_or_default();
+            let backup = store::backup_after(name, before, &after);
+            self.next_backup = self.next_backup.max(backup);
         }
         self.handle_ui_requests(Vec::new(), cx);
         self.autosave(cx);
@@ -1371,7 +1371,9 @@ impl BoardView {
     /// is the error, and the file stays as it is.
     ///
     /// A save of a canvas without layers, or the first after an agent's op took layers off it
-    /// ([`Self::run_op`]), keeps the board the file holds as a backup first ([`Writer::save`]).
+    /// ([`Self::run_op`]), keeps the board the file holds as a backup first
+    /// ([`Writer::save_with`]): the board's (`.bak`) for a save that empties the canvas, else the
+    /// one the op asked for.
     fn queue_save(&mut self) -> Result<Option<Arc<Document>>, BoardError> {
         let Ok(board) = &self.board else {
             return Ok(None);
@@ -1382,8 +1384,13 @@ impl BoardView {
         }
         board.refuse_dropping_images(&self.path)?;
         let bytes = board.to_bytes()?;
-        let backup = store::is_empty(&doc) || std::mem::take(&mut self.took_layers_off);
-        self.writer.save(self.path.clone(), bytes, backup);
+        let empties = if store::is_empty(&doc) {
+            Backup::Board
+        } else {
+            Backup::None
+        };
+        let backup = std::mem::take(&mut self.next_backup).max(empties);
+        self.writer.save_with(self.path.clone(), bytes, backup);
         self.saved = Some(doc.clone());
         self.pending = Some(doc.clone());
         Ok(Some(doc))
@@ -2793,10 +2800,22 @@ mod tests {
         }
     }
 
-    /// The bytes of the backups beside the canvas file `path`: `<name>.bak` and the older ones.
+    /// The bytes of the backups beside the canvas file `path` that clears, loads and saves that
+    /// empty the canvas keep: `<name>.bak` and the older ones.
     fn backups(path: &Path) -> Vec<Vec<u8>> {
+        kept_as(path, ".bak")
+    }
+
+    /// The bytes of the backups beside the canvas file `path` that an agent's deletions keep:
+    /// `<name>.del.bak` and the older ones.
+    fn deletion_backups(path: &Path) -> Vec<Vec<u8>> {
+        kept_as(path, ".del.bak")
+    }
+
+    /// The bytes of the files beside `path` named `<name><suffix>`, then `<name><suffix>.<n>`.
+    fn kept_as(path: &Path, suffix: &str) -> Vec<Vec<u8>> {
         let dir = path.parent().unwrap();
-        let name = format!("{}.bak", path.file_name().unwrap().to_string_lossy());
+        let name = format!("{}{suffix}", path.file_name().unwrap().to_string_lossy());
         names(dir)
             .into_iter()
             .filter(|n| n.starts_with(&name))
@@ -2867,9 +2886,10 @@ mod tests {
     /// An agent's op that deletes layers keeps the board it took them off as a backup, as a clear
     /// does: its `delete`, an engine command such as `edit.delete`, and a clear of a board with a
     /// second page, which leaves the canvas with layers (only a save that emptied the canvas kept
-    /// one). Undo isn't saved, so after the tab closes the backup is all that is left of them. The
-    /// user's own deletions keep none: they have undo, and a backup at each ⌫ would soon push the
-    /// agents' out of the five kept.
+    /// one). Undo isn't saved, so after the tab closes the backup is all that is left of them.
+    /// Deletions keep theirs apart (`.del.bak`), so that they never push out the board a clear
+    /// kept. The user's own deletions keep none: they have undo, and a backup at each ⌫ would soon
+    /// push the agents' out of the five kept.
     #[gpui_kit::test]
     fn an_agents_deletion_keeps_the_board_it_took_layers_off(cx: &mut TestAppContext) {
         let tmp = Scratch::new("deletion-backups");
@@ -2898,13 +2918,14 @@ mod tests {
                 .unwrap();
         });
         flush(cx);
-        assert!(backups(&path).is_empty());
+        assert!(backups(&path).is_empty() && deletion_backups(&path).is_empty());
 
-        // An agent's delete, then its edit.delete: each keeps the board it deleted from.
+        // An agent's delete, then its edit.delete: each keeps the board it deleted from, as a
+        // deletion's backup.
         let first = node_of("first", cx);
         ask(json!({"op": "delete", "ids": [first.to_string()]}), cx);
         flush(cx);
-        let kept = backed_up_texts(&backups(&path));
+        let kept = backed_up_texts(&deletion_backups(&path));
         assert_eq!(kept, [texts(&["first", "second", "third"])]);
         let second = node_of("second", cx);
         let params = json!({"ids": [second]});
@@ -2913,9 +2934,13 @@ mod tests {
             cx,
         );
         flush(cx);
-        let kept = backed_up_texts(&backups(&path));
+        let kept = backed_up_texts(&deletion_backups(&path));
         assert!(kept.contains(&texts(&["second", "third"])), "{kept:?}");
         assert_eq!(kept.len(), 2);
+        assert!(
+            backups(&path).is_empty(),
+            "a deletion kept a clear's backup"
+        );
 
         // A clear of the first page while a second page keeps its sticky.
         let page = |command: &str, params: Value| json!({"op": "command", "command": command, "params": params});
@@ -2926,7 +2951,8 @@ mod tests {
         flush(cx);
         assert_eq!(saved_layers(&path), 0, "the first page is cleared");
         let kept = backups(&path);
-        assert_eq!(kept.len(), 3);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(deletion_backups(&path).len(), 2);
         // The newest, whichever page it opens on.
         let newest = BoardDoc::from_bytes(&kept[0]).unwrap().doc().unwrap();
         let held = |text: &str| {

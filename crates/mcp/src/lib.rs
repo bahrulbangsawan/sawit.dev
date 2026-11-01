@@ -85,7 +85,7 @@ Sawit is a macOS developer workbench. These tools work without the Sawit app run
 These control the running Sawit app (start it with launch_app; app_state shows windows, tabs and terminals):
 - app_*: open files/folders, show panels, layout, tabs, pages (canvas, MCP, tools, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
 - terminal_*: run commands in Sawit's terminal and read their output, type keys (ctrl-c), close tabs or panes. terminal_run, app_run_script and app_ssh_connect return the terminal (tab) and `pane` they used: pass both to terminal_read, terminal_input and terminal_close, since the user may be typing in another terminal, which stays in front (app_state lists tabs and panes). terminal_input needs the tab, and a split tab needs its pane; terminal_read without a tab reads the pane the user has in front, and terminal_close without a pane closes the whole tab.
-- canvas_*: the canvas (FigCraft engine): list, add shapes/stickies/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG, on the page on show. They use your project's canvas (.nyawit/canvas.figcraft), or the .figcraft file named by `file` (a design file, say), in a canvas tab of its own. They also work on the saved file when the app is closed, and keep what they delete as a .bak beside it.
+- canvas_*: the canvas (FigCraft engine): list, clear and export SVG/PNG the page on show; add shapes/stickies/arrows and Mermaid as editable shapes; update and delete layers by id, on any page; load another canvas in place of every page. They use your project's canvas (.nyawit/canvas.figcraft), or the .figcraft file named by `file` (a design file, say), in a canvas tab of its own. They also work on the saved file when the app is closed, and keep what they clear, load over or delete in backups beside it (.bak, .del.bak), which canvas_load reads back.
 - canvas_command: run any command of the canvas engine by id with its parameters (board.sticky, node.set, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes. With the app closed each call starts from the saved file, so nothing carries over between calls (no undo, no selection, no view): pass ids, or run the steps in one command.batch.
 - browser_*: a browser tab (WebKit) to check the app being built: navigate (default the project's dev server), snapshot the page as an outline with element refs, click/hover/type/press keys/select/scroll by ref or CSS selector, wait for text, screenshot, read console errors and network requests, evaluate JS, resize to a device, read the user's annotations, inspect an element's design, read the page's design system, export it as DESIGN.md + tokens + assets. Take a new browser_snapshot after the page changes; refs reset.
 Most app tools take `project` to pick the window that has that folder open; without it, the window that has the folder sawit-mcp runs in open is used, else the frontmost window. The browser_* and canvas_* tools (and app_open_page browser or canvas) use that project's own browser tab and canvas, even while the user looks at another project of the window.
@@ -965,15 +965,17 @@ mod tests {
         // The canvas tab opens only in the app. With the app closed a clear is saved at once, so
         // nothing undoes it, and the save keeps the board it cleared beside the file (m1), and the
         // ones before it (CANVAS-CORE-3). So does every op that deletes layers, a deletion by id
-        // and an engine command that deletes included, whatever is left on the canvas.
+        // and an engine command that deletes included, whatever is left on the canvas, in
+        // backups of their own, which never push out a clear's.
         assert!(
             elements.contains("Opens the canvas tab when the app is running"),
             "{elements}"
         );
         let clear = tool("canvas_clear");
         assert!(
-            clear.contains("The board it held is kept beside the canvas file as <name>.bak (canvas.figcraft.bak for the project's canvas)")
+            clear.contains("The board it held is kept beside the canvas file as <file>.bak (canvas.figcraft.bak for the project's canvas, home.figcraft.bak for home.figcraft)")
                 && clear.contains("the 4 kept before it moving to .bak.1 to .bak.4")
+                && clear.contains("never a deletion")
                 && clear.contains("canvas_load brings it back")
                 && clear.contains("in the app the user can also undo it"),
             "{clear}"
@@ -981,16 +983,24 @@ mod tests {
         let delete = tool("canvas_delete");
         assert!(
             delete.contains(
-                "The board they were on is kept beside the canvas file as <name>.bak first"
-            ) && delete.contains("canvas_load brings it back")
+                "The board they were on is first kept beside the canvas file as <file>.del.bak (canvas.figcraft.del.bak for the project's canvas, home.figcraft.del.bak for home.figcraft)"
+            ) && delete.contains("the 4 kept before it moving to .del.bak.1 to .del.bak.4")
+                && delete.contains("so they never push those out")
+                && delete.contains("canvas_load brings any of them back")
                 && delete.contains("in the app the user can also undo it"),
             "{delete}"
         );
         let command = tool("canvas_command");
         assert!(
-            command.contains("A command that deletes layers (edit.delete, edit.cut, page.delete, ...) keeps the board they were on beside the canvas file as <name>.bak first"),
+            command.contains("A command that deletes layers (edit.delete, edit.cut, page.delete, ...) keeps the board they were on beside the canvas file as <file>.del.bak first"),
             "{command}"
         );
+        // A backup is named one way everywhere, arguments included: the canvas file's whole name,
+        // then what Sawit adds (`<file>.bak`). `<name>` meant the file's stem in one place and its
+        // whole name in another.
+        for (name, text) in sent.iter().filter(|(name, _)| name.starts_with("canvas_")) {
+            assert!(!text.contains("<name>"), "{name}: {text}");
+        }
         let load = tool("canvas_load");
         assert!(
             load.contains(
@@ -1162,8 +1172,10 @@ mod tests {
         for said in [
             "your project's canvas (.nyawit/canvas.figcraft)",
             "the .figcraft file named by `file`",
-            "on the page on show",
-            "keep what they delete as a .bak",
+            "list, clear and export SVG/PNG the page on show",
+            "update and delete layers by id, on any page",
+            "load another canvas in place of every page",
+            "keep what they clear, load over or delete in backups beside it (.bak, .del.bak)",
         ] {
             assert!(line.contains(said), "no {said:?} in {line}");
         }
@@ -1228,6 +1240,8 @@ mod tests {
             "/p/.nyawit/canvas.excalidraw",
             "/p/.nyawit/canvas.figcraft.bak",
             "/p/.nyawit/canvas.figcraft.bak.3",
+            "/p/.nyawit/canvas.figcraft.del.bak",
+            "/p/design/home.figcraft.del.bak.4",
             "/p/.nyawit/canvas.figcraft.tmp",
         ] {
             assert_eq!(

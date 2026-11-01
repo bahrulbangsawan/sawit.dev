@@ -146,18 +146,19 @@ const READS_FROM_PATH: &[(&str, &[&str])] = &[
 const CANVAS_EXTENSIONS: [&str; 2] = [".figcraft", ".excalidraw"];
 
 /// What goes after that to name a copy Sawit keeps of a canvas file, or a file it writes one
-/// through: the backups of the store (`.bak`, the newest, and `.lossy.bak`; the older ones are
-/// [`OLDER_BACKUP`]'s), and the files a save is staged in
+/// through: the backups of the store (`.bak` and `.del.bak`, the newest of each kind, and
+/// `.lossy.bak`; [`OLDER_BACKUPS`] names the older ones), and the files a save is staged in
 /// (`.tmp`, and `.<name>.sawit-tmp`, the name Sawit's saves were staged at before CANVAS-CORE-1).
-const CANVAS_COMPANIONS: [&str; 5] = ["", ".bak", ".lossy.bak", ".tmp", ".sawit-tmp"];
+const CANVAS_COMPANIONS: [&str; 6] = ["", ".bak", ".del.bak", ".lossy.bak", ".tmp", ".sawit-tmp"];
 
 /// What follows a canvas file's name in the names its saves are staged at now,
 /// `.<name>.sawit-tmp-<process>-<n>` ([`sawit_core::files::staging_file`]).
 const STAGED: &str = ".sawit-tmp-";
 
-/// What follows a canvas file's name in the names of its older backups, `<name>.bak.<n>`
-/// ([`crate::store::backup_file`]), before the number.
-const OLDER_BACKUP: &str = ".bak.";
+/// What follows a canvas file's name in the names of its older backups, before the number:
+/// `<name>.bak.<n>` ([`crate::store::backup_file`]) and `<name>.del.bak.<n>`
+/// ([`crate::store::deletion_backup_file`]).
+const OLDER_BACKUPS: [&str; 2] = [".bak.", ".del.bak."];
 
 /// Whether `path` names a canvas file: a `.figcraft` or an `.excalidraw` file, or one of the
 /// copies and staging files that Sawit keeps beside one.
@@ -173,7 +174,9 @@ pub fn is_canvas_file(path: &Path) -> bool {
     let name = name.to_string_lossy().to_lowercase();
     let older_backup = |extension: &str| {
         let numbered = name.trim_end_matches(|c: char| c.is_ascii_digit());
-        numbered.len() < name.len() && numbered.ends_with(&format!("{extension}{OLDER_BACKUP}"))
+        (OLDER_BACKUPS.iter()).any(|older| {
+            numbered.len() < name.len() && numbered.ends_with(&format!("{extension}{older}"))
+        })
     };
     CANVAS_EXTENSIONS.iter().any(|extension| {
         (CANVAS_COMPANIONS.iter())
@@ -820,8 +823,9 @@ fn incoming(op: &Value) -> Result<Incoming, String> {
 }
 
 /// Whether `path` names a FigCraft file: a `.figcraft` file, or a copy Sawit keeps of one under
-/// another name, the backups of the store (`<name>.figcraft.bak`, the older `.bak.<n>`, and the
-/// `.lossy.bak` of a file opened with notes). Only the name counts, in any case.
+/// another name, the backups of the store (`<name>.figcraft.bak` and `<name>.figcraft.del.bak`,
+/// the older `.bak.<n>` and `.del.bak.<n>`, and the `.lossy.bak` of a file opened with notes).
+/// Only the name counts, in any case.
 pub fn is_figcraft_file(path: &Path) -> bool {
     let Some(name) = path.file_name() else {
         return false;
@@ -831,9 +835,11 @@ pub fn is_figcraft_file(path: &Path) -> bool {
         return false;
     };
     let kept = &name[at + ".figcraft".len()..];
-    let numbered = (kept.strip_prefix(".bak."))
-        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-    matches!(kept, "" | ".bak" | ".lossy.bak") || numbered
+    let numbered = OLDER_BACKUPS.iter().any(|older| {
+        (kept.strip_prefix(older))
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    });
+    matches!(kept, "" | ".bak" | ".del.bak" | ".lossy.bak") || numbered
 }
 
 /// A copy Sawit keeps of a canvas file under another name ([`is_figcraft_file`]:
@@ -1911,6 +1917,7 @@ mod tests {
             "canvas.figcraft",
             "canvas.excalidraw",
             "canvas.figcraft.bak",
+            "canvas.figcraft.del.bak",
             "canvas.figcraft.lossy.bak",
             "canvas.figcraft.tmp",
             "canvas.excalidraw.bak",
@@ -1945,6 +1952,9 @@ mod tests {
             "canvas.figcraft.bak.1",
             "canvas.figcraft.bak.4",
             "Design.FIGCRAFT.BAK.12",
+            "canvas.figcraft.del.bak",
+            "canvas.figcraft.del.bak.1",
+            "home.FigCraft.DEL.BAK.4",
             "canvas.excalidraw.bak",
             "canvas.excalidraw.lossy.bak",
             "canvas.excalidraw.tmp",
@@ -1964,6 +1974,9 @@ mod tests {
             "canvas.figcraft.bak.",
             "canvas.figcraft.bak.png",
             "canvas.figcraft.bak.1.svg",
+            "canvas.figcraft.del.bak.",
+            "canvas.figcraft.del.bak.png",
+            "canvas.del.bak",
             "/project/.figcraft/page.png",
             "",
             "/",
@@ -3895,11 +3908,12 @@ mod tests {
     }
 
     /// MCP-6: the copies Sawit keeps of a canvas file (`canvas.figcraft.bak` and the older
-    /// `.bak.<n>`, which a clear or a load keeps of the board it takes off, and the `.lossy.bak` of
-    /// a file opened with notes) are FigCraft files under another name, and load as the file they
-    /// were: that is how an agent brings back a board it cleared. Refused by its name, a backup
-    /// could only be loaded once someone copied it to a `.figcraft` name; and passed on by its
-    /// path, the engine, which tells a file's kind by its name, would place it as an image.
+    /// `.bak.<n>`, which a clear or a load keeps of the board it takes off, `.del.bak` and the
+    /// older `.del.bak.<n>`, which an agent's deletion keeps, and the `.lossy.bak` of a file
+    /// opened with notes) are FigCraft files under another name, and load as the file they were:
+    /// that is how an agent brings back a board it cleared. Refused by its name, a backup could
+    /// only be loaded once someone copied it to a `.figcraft` name; and passed on by its path,
+    /// the engine, which tells a file's kind by its name, would place it as an image.
     #[test]
     fn replace_loads_a_copy_kept_of_a_canvas_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -3907,6 +3921,8 @@ mod tests {
         for name in [
             "canvas.figcraft.bak",
             "canvas.figcraft.bak.2",
+            "canvas.figcraft.del.bak",
+            "canvas.figcraft.del.bak.3",
             "canvas.figcraft.lossy.bak",
             "Board.FIGCRAFT.BAK",
         ] {

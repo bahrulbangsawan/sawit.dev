@@ -248,7 +248,7 @@ pub struct OpenPromptArgs {
 
 /// What a canvas tool's `file` names: a canvas file to work on instead of the project's canvas
 /// ([`canvas_file`]).
-const CANVAS_FILE: &str = "A canvas file to work on instead of the project's canvas: an absolute path (or ~/…) to a .figcraft file (a design file or a board; one not there yet, in a folder that is, starts as a new board) or to an .excalidraw file, imported once into the <name>.figcraft beside it and left as it is. With the app running the op runs on that file's canvas tab, opened if need be without taking the user's keyboard; with it closed, on the file itself";
+const CANVAS_FILE: &str = "A canvas file to work on instead of the project's canvas: an absolute path (or ~/…) to a .figcraft file (a design file or a board; one not there yet, in a folder that is, starts as a new board) or to an .excalidraw file, imported once into the .figcraft file of its name beside it (flow.figcraft for flow.excalidraw) and left as it is. With the app running the op runs on that file's canvas tab, opened if need be without taking the user's keyboard; with it closed, on the file itself. Its backups go beside it (home.figcraft.bak and home.figcraft.del.bak for home.figcraft): in a repository they show in git status, and staging everything would commit them";
 
 /// What a canvas tool's `project` names: the project whose canvas it uses ([`crate::agent_project`]).
 const CANVAS_PROJECT: &str = "Project folder whose canvas (.nyawit/canvas.figcraft) to use, in the window that has it open. Default: the project your working folder is in (with the app closed, the nearest folder up from it with .nyawit/, else with .git, else the folder itself)";
@@ -312,7 +312,7 @@ pub struct CanvasDeleteArgs {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasLoadArgs {
     #[schemars(
-        description = "A .figcraft file to load, or an .excalidraw file to import (replaces the board). A backup Sawit keeps loads too: <name>.figcraft.bak beside the canvas file (canvas.figcraft.bak for the project's canvas) brings back the board a clear, a deletion or a load took off"
+        description = "A .figcraft file to load, or an .excalidraw file to import (replaces the board). A backup Sawit keeps loads too: beside the canvas file, <file>.bak holds the board the last clear or load took off, and <file>.del.bak the board the last deletion took layers off (canvas.figcraft.bak and canvas.figcraft.del.bak for the project's canvas), with the ones before them in .bak.1 to .bak.4 and .del.bak.1 to .del.bak.4"
     )]
     pub path: Option<String>,
     #[schemars(description = "Or the .excalidraw scene JSON itself")]
@@ -696,7 +696,7 @@ fn lock_stored_canvas(lock: &Path) -> Result<std::fs::File, String> {
 ///   imported once, and the `.excalidraw` file is never touched. A canvas that can't be opened is
 ///   an error, and then nothing is written, so a blank board never takes its place.
 /// - A change is saved as the app's autosave saves it ([`run_and_save`]): through the store's
-///   [`Writer`] (a temporary file renamed into place, a `.bak` kept before a save that takes
+///   [`Writer`] (a temporary file renamed into place, a backup kept before a save that takes
 ///   layers off the canvas, and a `.nyawit/` made with its `.gitignore`), with the file's version
 ///   history and branches, and never over what the save would lose: images the loader left in
 ///   the file, or what something else wrote to the file since this call read it.
@@ -771,14 +771,16 @@ fn changed_while_running(file: &Path) -> String {
 /// - when something else wrote to the file since it was read ([`Writer::guard`]): another
 ///   `sawit-mcp`, say, whose edit the save would drop though its call answered ok.
 ///
-/// A save that takes layers off the canvas keeps the file it replaces as a backup first:
-/// `<file>.bak`, the backups before it moving along ([`Writer::save`]). That is a `replace` of a
-/// canvas with layers, a save that empties it, and any op that deletes a layer, on any page
-/// ([`store::removes_layers`]): a `delete`, a `clear` of a page while other pages keep theirs, an
-/// engine command such as `edit.delete` or `page.delete`. The app can undo them; here every call
-/// opens the canvas afresh, so the backups are all that is left of those layers, and one was not
-/// enough: an agent that started over twice lost the board it replaced first (CANVAS-CORE-3).
-/// A refused save keeps no backup either.
+/// A save that takes layers off the canvas keeps the file it replaces as a backup first, the
+/// backups of its kind before it moving along ([`Writer::save_with`], [`store::backup_after`]):
+/// `<file>.bak` for a `replace` of a canvas with layers, a `clear` (of a page while other pages
+/// keep theirs too) and a save that empties the canvas; `<file>.del.bak` for any other op that
+/// deletes a layer, on any page ([`store::removes_layers`]): a `delete`, an engine command such as
+/// `edit.delete` or `page.delete`. The app can undo them; here every call opens the canvas
+/// afresh, so the backups are all that is left of those layers, and one was not enough: an agent
+/// that started over twice lost the board it replaced first (CANVAS-CORE-3). Deletions keep
+/// theirs apart, so that five small ones never push out the board a clear kept. A refused save
+/// keeps no backup either.
 fn run_and_save(
     board: &mut BoardDoc,
     file: &Path,
@@ -795,11 +797,10 @@ fn run_and_save(
         .refuse_dropping_images(file)
         .map_err(|e| e.to_string())?;
     let bytes = board.to_bytes().map_err(|e| e.to_string())?;
-    let backup =
-        op["op"] == "replace" || store::is_empty(&after) || store::removes_layers(&before, &after);
+    let backup = store::backup_after(op["op"].as_str().unwrap_or_default(), &before, &after);
     let writer = Writer::spawn();
     writer.guard(file.to_path_buf(), read);
-    writer.save(file.to_path_buf(), bytes, backup);
+    writer.save_with(file.to_path_buf(), bytes, backup);
     writer.flush();
     match writer.last_error() {
         Some(error) => Err(error),
@@ -823,8 +824,8 @@ fn read_scene(path: &Path) -> std::io::Result<String> {
 }
 
 /// Whether `path` names a FigCraft file: a `.figcraft` file, or a backup Sawit keeps of one, such as
-/// the `canvas.figcraft.bak` a clear keeps ([`ops::is_figcraft_file`]), which loads as the board it
-/// was (MCP-6).
+/// the `canvas.figcraft.bak` a clear keeps or the `canvas.figcraft.del.bak` a deletion keeps
+/// ([`ops::is_figcraft_file`]), which loads as the board it was (MCP-6).
 fn is_figcraft(path: &str) -> bool {
     ops::is_figcraft_file(Path::new(path.trim()))
 }
@@ -1273,7 +1274,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Delete canvas elements by id, on any page (a connector's label goes with it). The board they were on is kept beside the canvas file as <name>.bak first (canvas.figcraft.bak for the project's canvas), as canvas_clear keeps one, and canvas_load brings it back; in the app the user can also undo it"
+        description = "Delete canvas elements by id, on any page (a connector's label goes with it). The board they were on is first kept beside the canvas file as <file>.del.bak (canvas.figcraft.del.bak for the project's canvas, home.figcraft.del.bak for home.figcraft), the 4 kept before it moving to .del.bak.1 to .del.bak.4 (the oldest goes). Deletions keep these apart from the .bak files canvas_clear and canvas_load keep, so they never push those out; a deletion that leaves the canvas empty keeps a .bak, as a clear does. canvas_load brings any of them back; in the app the user can also undo it"
     )]
     async fn canvas_delete(&self, Parameters(a): Parameters<CanvasDeleteArgs>) -> CallToolResult {
         match self
@@ -1286,7 +1287,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Delete every layer of the canvas's page on show; other pages keep theirs. The board it held is kept beside the canvas file as <name>.bak (canvas.figcraft.bak for the project's canvas), the 4 kept before it moving to .bak.1 to .bak.4 (the oldest goes), and canvas_load brings it back; in the app the user can also undo it"
+        description = "Delete every layer of the canvas's page on show; other pages keep theirs. The board it held is kept beside the canvas file as <file>.bak (canvas.figcraft.bak for the project's canvas, home.figcraft.bak for home.figcraft), the 4 kept before it moving to .bak.1 to .bak.4 (the oldest goes); only a clear, a load or a save that empties the canvas moves them along, never a deletion. canvas_load brings it back; in the app the user can also undo it"
     )]
     async fn canvas_clear(&self, Parameters(a): Parameters<CanvasTargetArgs>) -> CallToolResult {
         match self
@@ -1299,7 +1300,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Replace the canvas with a .figcraft file, or import an .excalidraw file or scene JSON in its place. The board it replaces is kept beside the canvas file as <name>.bak (canvas.figcraft.bak for the project's canvas), as canvas_clear keeps one"
+        description = "Replace the canvas with a .figcraft file, or import an .excalidraw file or scene JSON in its place. The board it replaces is kept beside the canvas file as <file>.bak (canvas.figcraft.bak for the project's canvas, home.figcraft.bak for home.figcraft), as canvas_clear keeps one"
     )]
     async fn canvas_load(&self, Parameters(a): Parameters<CanvasLoadArgs>) -> CallToolResult {
         let op = match (a.scene, a.path) {
@@ -1402,7 +1403,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Run one command of the canvas engine by its id, with its parameters as JSON: board.sticky {x, y, text}, node.set, align.left, edit.undo, view.zoomFit, ... The reply is the command's result, and a command the engine refuses is an error. canvas_commands lists the ids, and with a filter what each takes. With the app closed each call starts from the saved file, so nothing carries over between calls (no undo, no selection, no view): pass ids, or run the steps in one command.batch. A command that deletes layers (edit.delete, edit.cut, page.delete, ...) keeps the board they were on beside the canvas file as <name>.bak first, as canvas_clear does"
+        description = "Run one command of the canvas engine by its id, with its parameters as JSON: board.sticky {x, y, text}, node.set, align.left, edit.undo, view.zoomFit, ... The reply is the command's result, and a command the engine refuses is an error. canvas_commands lists the ids, and with a filter what each takes. With the app closed each call starts from the saved file, so nothing carries over between calls (no undo, no selection, no view): pass ids, or run the steps in one command.batch. A command that deletes layers (edit.delete, edit.cut, page.delete, ...) keeps the board they were on beside the canvas file as <file>.del.bak first, as canvas_delete does"
     )]
     async fn canvas_command(&self, Parameters(a): Parameters<CanvasCommandArgs>) -> CallToolResult {
         self.canvas_command_tool(a).await
@@ -2738,10 +2739,22 @@ mod tests {
         assert!(!bak.exists());
     }
 
-    /// The bytes of the backups beside the canvas file `file`: `<name>.bak` and the older ones.
+    /// The bytes of the backups beside the canvas file `file` that clears and loads keep:
+    /// `<file>.bak` and the older ones.
     fn backups_of(file: &Path) -> Vec<Vec<u8>> {
+        kept_as(file, ".bak")
+    }
+
+    /// The bytes of the backups beside the canvas file `file` that deletions keep:
+    /// `<file>.del.bak` and the older ones.
+    fn deletion_backups_of(file: &Path) -> Vec<Vec<u8>> {
+        kept_as(file, ".del.bak")
+    }
+
+    /// The bytes of the files beside `file` named `<file><suffix>`, then `<file><suffix>.<n>`.
+    fn kept_as(file: &Path, suffix: &str) -> Vec<Vec<u8>> {
         let dir = file.parent().unwrap();
-        let name = format!("{}.bak", file.file_name().unwrap().to_string_lossy());
+        let name = format!("{}{suffix}", file.file_name().unwrap().to_string_lossy());
         let mut kept: Vec<_> = std::fs::read_dir(dir)
             .unwrap()
             .map(|entry| entry.unwrap().path())
@@ -2831,8 +2844,9 @@ mod tests {
     /// With Sawit closed there is no undo across calls, and an op that deleted layers kept a
     /// backup only when it left the canvas empty: canvas_delete, canvas_clear of a page while
     /// another page keeps its layers, and canvas_command's edit.delete or page.delete took them
-    /// for good. Each keeps the board it took them off as `canvas.figcraft.bak` now, the one
-    /// before moving along; an op that only adds or moves keeps none.
+    /// for good. Each keeps the board it took them off now, the one before moving along: a
+    /// deletion as `canvas.figcraft.del.bak`, a clear as `canvas.figcraft.bak`. An op that only
+    /// adds or moves keeps none.
     #[tokio::test]
     async fn every_deletion_with_sawit_closed_keeps_the_board_it_took_layers_off() {
         let dir = tempfile::tempdir().unwrap();
@@ -2857,10 +2871,11 @@ mod tests {
                 answer(&ran)["result"].clone()
             }
         };
-        let newest_holds = |texts: &[&str]| {
-            let held = texts_of(&backups_of(&file)[0]);
+        let holds = |backup: &[u8], texts: &[&str]| {
+            let held = texts_of(backup);
             texts.iter().all(|text| held.contains(*text))
         };
+        let newest_deletion_holds = |texts: &[&str]| holds(&deletion_backups_of(&file)[0], texts);
 
         let deleted = server
             .canvas_delete(Parameters(CanvasDeleteArgs {
@@ -2870,11 +2885,15 @@ mod tests {
             }))
             .await;
         assert_eq!(answer(&deleted)["deleted"], json!(1));
-        assert!(newest_holds(&["note 0", "note 1", "note 2"]));
+        assert!(newest_deletion_holds(&["note 0", "note 1", "note 2"]));
         let note = id_of("note 1").parse::<u64>().unwrap();
         command("edit.delete", json!({"ids": [note]})).await;
-        assert!(newest_holds(&["note 1", "note 2"]));
-        assert_eq!(backups_of(&file).len(), 2);
+        assert!(newest_deletion_holds(&["note 1", "note 2"]));
+        assert_eq!(deletion_backups_of(&file).len(), 2);
+        assert!(
+            backups_of(&file).is_empty(),
+            "a deletion kept a clear's backup"
+        );
 
         // Two more pages with a sticky each, the first page on show again: nothing is taken off.
         let steps = json!({"commands": [
@@ -2885,9 +2904,10 @@ mod tests {
             {"command": "page.select", "params": {"index": 0}},
         ]});
         command("command.batch", steps).await;
-        assert_eq!(backups_of(&file).len(), 2);
+        assert_eq!(deletion_backups_of(&file).len(), 2);
+        assert!(backups_of(&file).is_empty());
 
-        // A clear of the first page, while the others keep their stickies.
+        // A clear of the first page, while the others keep their stickies: a clear's backup.
         let cleared = server
             .canvas_clear(Parameters(CanvasTargetArgs {
                 file: None,
@@ -2896,8 +2916,12 @@ mod tests {
             .await;
         assert_ne!(cleared.is_error, Some(true), "{}", said(&cleared));
         assert!(layers_in(&file).is_empty());
-        assert!(newest_holds(&["note 2", "on two", "on three"]));
-        assert_eq!(backups_of(&file).len(), 3);
+        assert!(holds(
+            &backups_of(&file)[0],
+            &["note 2", "on two", "on three"]
+        ));
+        assert_eq!(backups_of(&file).len(), 1);
+        assert_eq!(deletion_backups_of(&file).len(), 2);
 
         // A page deleted with its sticky, while the third keeps its own.
         let pages = command("page.list", json!({})).await;
@@ -2907,9 +2931,105 @@ mod tests {
             .iter()
             .find(|p| p["name"] == "Two");
         command("page.delete", json!({"id": two.unwrap()["id"]})).await;
-        assert!(newest_holds(&["on two", "on three"]));
-        assert_eq!(backups_of(&file).len(), 4);
+        assert!(newest_deletion_holds(&["on two", "on three"]));
+        assert_eq!(deletion_backups_of(&file).len(), 3);
+        assert_eq!(backups_of(&file).len(), 1);
         assert!(texts_of(&std::fs::read(&file).unwrap()).contains("on three"));
+    }
+
+    /// CANVAS-CORE-3, with deletions: they shared the five `.bak` files with clears and loads,
+    /// so an agent that cleared the user's board, drew, then deleted five stickies one call at a
+    /// time pushed the cleared board out of every backup, and with Sawit closed nothing undoes a
+    /// call. Deletions keep their own five now (`.del.bak`): after a clear and six deletions,
+    /// canvas_load brings the cleared board back from the clear's `canvas.figcraft.bak`.
+    #[tokio::test]
+    async fn deletions_after_a_clear_never_push_out_the_board_it_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let file = board_file(&project);
+        write_board(&file, 3);
+        let users = std::fs::read(&file).unwrap();
+
+        let cleared = server
+            .canvas_clear(Parameters(CanvasTargetArgs {
+                file: None,
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_ne!(cleared.is_error, Some(true), "{}", said(&cleared));
+        let stickies = (0..7)
+            .map(|n| json!({"type": "sticky", "x": n * 300, "y": 0, "text": format!("drawn {n}")}))
+            .collect();
+        let drawn = server
+            .canvas_add_elements(Parameters(CanvasElementsArgs {
+                elements: stickies,
+                file: None,
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_ne!(drawn.is_error, Some(true), "{}", said(&drawn));
+        for n in 0..6 {
+            let layers = layers_in(&file);
+            let text = format!("drawn {n}");
+            let layer = layers.iter().find(|layer| layer["text"] == json!(text));
+            let id = layer.unwrap()["id"].as_str().unwrap().to_string();
+            let deleted = server
+                .canvas_delete(Parameters(CanvasDeleteArgs {
+                    ids: vec![id],
+                    file: None,
+                    project: project_arg(&project),
+                }))
+                .await;
+            assert_eq!(answer(&deleted)["deleted"], json!(1), "{}", said(&deleted));
+        }
+        assert_eq!(layers_in(&file).len(), 1);
+        assert_eq!(
+            deletion_backups_of(&file).len(),
+            5,
+            "six deletions keep five"
+        );
+        assert_eq!(
+            backups_of(&file),
+            [users],
+            "the cleared board was pushed out"
+        );
+
+        let loaded = server
+            .canvas_load(Parameters(CanvasLoadArgs {
+                path: Some(file.with_extension("figcraft.bak").display().to_string()),
+                scene: None,
+                file: None,
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_ne!(loaded.is_error, Some(true), "{}", said(&loaded));
+        let back = texts_in(&file);
+        assert!(
+            ["note 0", "note 1", "note 2"]
+                .iter()
+                .all(|note| back.contains(*note)),
+            "{back:?}"
+        );
+        // A deletion's backup loads too: the board before the last deletion.
+        let loaded = server
+            .canvas_load(Parameters(CanvasLoadArgs {
+                path: Some(
+                    file.with_extension("figcraft.del.bak")
+                        .display()
+                        .to_string(),
+                ),
+                scene: None,
+                file: None,
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_ne!(loaded.is_error, Some(true), "{}", said(&loaded));
+        let back = texts_in(&file);
+        assert!(
+            back.contains("drawn 5") && back.contains("drawn 6"),
+            "{back:?}"
+        );
     }
 
     /// Q12: an agent started in a subfolder of a project (`web/` of a repository) names no
@@ -3108,9 +3228,13 @@ mod tests {
         // The backups Sawit keeps of a canvas file are FigCraft files too; an export of one isn't.
         assert!(is_figcraft("/p/.nyawit/canvas.figcraft.bak"));
         assert!(is_figcraft("/p/.nyawit/canvas.figcraft.bak.3"));
+        assert!(is_figcraft("/p/.nyawit/canvas.figcraft.del.bak"));
+        assert!(is_figcraft("/p/design/home.figcraft.del.bak.4"));
         assert!(is_figcraft("/p/.nyawit/canvas.figcraft.lossy.bak"));
         assert!(!is_figcraft("/p/canvas.figcraft.svg"));
         assert!(!is_figcraft("/p/canvas.figcraft.bak.x"));
+        assert!(!is_figcraft("/p/canvas.figcraft.del.bak.x"));
+        assert!(!is_figcraft("/p/canvas.figcraft.del"));
     }
 
     #[test]
@@ -3155,6 +3279,7 @@ mod tests {
             "canvas.figcraft",
             "canvas.excalidraw",
             "canvas.figcraft.bak",
+            "canvas.figcraft.del.bak",
         ] {
             for format in ["svg", "png"] {
                 let target = file.with_file_name(name);
@@ -3413,10 +3538,10 @@ mod tests {
             .await;
         assert_eq!(answer(&deleted)["deleted"], json!(1), "{}", said(&deleted));
         assert!(!texts_in(&design).contains("Hero"));
-        assert!(texts_of(&backups_of(&design)[0]).contains("Hero"));
+        assert!(texts_of(&deletion_backups_of(&design)[0]).contains("Hero"));
         assert_eq!(
             names(&design.with_file_name("")),
-            ["home.figcraft", "home.figcraft.bak"]
+            ["home.figcraft", "home.figcraft.del.bak"]
         );
     }
 
