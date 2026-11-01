@@ -337,7 +337,31 @@ async fn sql_is_tried_read_only_first() {
     assert_eq!(next.results[0].rows[0][0].as_deref(), Some("1"));
     let databases = db::list_databases(&admin).await.unwrap();
     assert!(!databases.contains(&"other".to_string()));
-    // `run_read_only` refuses them all, as before.
+    // A read that only names the read-only switch is a read: `sawit shop
+    // product_characteristics` asked about it as a write. A switch run alone is rolled back with
+    // the try, so the session stays read-only.
+    admin
+        .batch_execute("CREATE TABLE product_characteristics (x int)")
+        .await
+        .unwrap();
+    let switch = "SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE";
+    for sql in [
+        "SELECT * FROM product_characteristics",
+        "SHOW transaction_read_only",
+        switch,
+    ] {
+        let tried = db::run_if_read_only(&ro, sql, 10).await;
+        assert!(
+            matches!(tried, Ok(db::ReadOnlyTry::Read(_))),
+            "{sql}: {tried:?}"
+        );
+    }
+    let mode = db::run_sql(&ro, "SHOW default_transaction_read_only", 1)
+        .await
+        .unwrap();
+    assert_eq!(mode.results[0].rows[0][0].as_deref(), Some("on"));
+    // `run_read_only` refuses them all, as before, and a switch's words too.
+    assert!(db::run_read_only(&ro, switch, 10).await.is_err());
     assert!(db::run_read_only(&ro, "DELETE FROM t", 10).await.is_err());
     assert!(
         db::run_read_only(&ro, "SELECT 1; SELECT 2", 10)

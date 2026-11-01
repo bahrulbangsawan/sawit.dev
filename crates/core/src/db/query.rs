@@ -919,8 +919,14 @@ pub fn screen_read_only_sql(sql: &str) -> Result<()> {
     if lowered.contains("transaction_read_only") || lowered.contains("characteristics") {
         return Err(CoreError::Sql("Read-only mode can't be changed.".into()));
     }
+    screen_copy(&lowered)
+}
+
+/// Rejects COPY, which reaches the server's files and programs even inside a read-only
+/// transaction. `lowered` is the SQL in lower case.
+fn screen_copy(lowered: &str) -> Result<()> {
     // First keyword after whitespace, comments and opening parentheses.
-    let mut rest = lowered.as_str();
+    let mut rest = lowered;
     loop {
         let trimmed = rest.trim_start_matches(|c: char| c.is_whitespace() || c == '(');
         if let Some(after) = trimmed.strip_prefix("--") {
@@ -961,6 +967,7 @@ pub async fn ensure_read_only_role(admin: &Client) -> Result<()> {
 /// Parse step rejects them), as are COPY and read-only switches. Use a
 /// non-superuser role (see `ensure_read_only_role`) for full protection.
 pub async fn run_read_only(client: &Client, sql: &str, max_rows: usize) -> Result<QueryOutcome> {
+    screen_read_only_sql(sql)?;
     match run_if_read_only(client, sql, max_rows).await? {
         ReadOnlyTry::Read(outcome) => Ok(outcome),
         ReadOnlyTry::Writes(why) | ReadOnlyTry::Several(why) => Err(CoreError::Sql(why)),
@@ -973,9 +980,9 @@ pub enum ReadOnlyTry {
     /// It only reads: what it returned.
     Read(QueryOutcome),
     /// It writes (the server refused it in a read-only transaction), must run outside any
-    /// transaction (`DROP DATABASE`, `VACUUM`, a procedure that commits), or is what read-only
-    /// mode never runs (`COPY`, a switch of the mode): the refusal, in the server's or Sawit's
-    /// words. Nothing of it ran.
+    /// transaction (`DROP DATABASE`, `VACUUM`, a procedure that commits), or is `COPY`, which
+    /// read-only mode never runs: the refusal, in the server's or Sawit's words. Nothing of it
+    /// ran.
     Writes(String),
     /// Several statements, which a read-only run can't take (a `COMMIT` among them would end its
     /// transaction): the server's refusal. None of them ran.
@@ -985,10 +992,16 @@ pub enum ReadOnlyTry {
 /// Runs `sql` as [`run_read_only`] does, and tells SQL that only reads (its results) from what
 /// the read-only run refuses for what it is: a write, or several statements. Any other error, a
 /// typo or a missing table, is the statement's own.
+///
+/// Only `COPY` is screened out by its text. A switch of the read-only mode runs, alone, inside
+/// the read-only transaction, which is rolled back, so it can't outlive the try; screening for
+/// its words also caught reads that only name them, such as a `product_characteristics` table
+/// or `SHOW transaction_read_only`, which `sawit <db>` then asked about as writes.
+/// [`run_read_only`] still refuses those words.
 pub async fn run_if_read_only(client: &Client, sql: &str, max_rows: usize) -> Result<ReadOnlyTry> {
     use tokio_postgres::error::SqlState;
 
-    if let Err(e) = screen_read_only_sql(sql) {
+    if let Err(e) = screen_copy(&sql.to_lowercase()) {
         return Ok(ReadOnlyTry::Writes(e.to_string()));
     }
     if let Err(e) = client.prepare(sql).await {
