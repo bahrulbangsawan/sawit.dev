@@ -11,19 +11,21 @@ use crate::ports::{PortJob, group_into_jobs, parse_lsof, parse_lsof_cwd, parse_p
 pub async fn listening_jobs() -> Result<Vec<PortJob>> {
     let env = ProbeEnv::default();
     // lsof exits 1 with empty output when nothing matches; `+c 0` gives
-    // full command names.
-    let out = cmd::run(
-        &env.lsof,
-        ["-nP", "+c", "0", "-iTCP", "-sTCP:LISTEN", "-F", "pctn"],
-        TIMEOUT,
-    )
-    .await?;
-    let listeners = parse_lsof(&out.stdout);
+    // full command names. `ps` runs alongside it: each takes tens of
+    // milliseconds, and the Ports panel asks every few seconds.
+    let (out, ps) = tokio::join!(
+        cmd::run(
+            &env.lsof,
+            ["-nP", "+c", "0", "-iTCP", "-sTCP:LISTEN", "-F", "pctn"],
+            TIMEOUT,
+        ),
+        cmd::run(&env.ps, ["-axo", "pid=,ppid=,command="], TIMEOUT),
+    );
+    let listeners = parse_lsof(&out?.stdout);
     if listeners.is_empty() {
         return Ok(Vec::new());
     }
-    let ps = cmd::run(&env.ps, ["-axo", "pid=,ppid=,command="], TIMEOUT).await?;
-    let procs = parse_ps(&ps.stdout);
+    let procs = parse_ps(&ps?.stdout);
     // Never climb into Sawit itself or what started it.
     let mut exclude = vec![std::process::id()];
     while let Some(parent) = procs
