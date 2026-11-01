@@ -55,9 +55,6 @@
   .w {
     margin-inline: 12px;
   }
-  .nav .w {
-    padding: 0 12px;
-  }
   .pad {
     padding: var(--space-7) var(--space-4);
   }
