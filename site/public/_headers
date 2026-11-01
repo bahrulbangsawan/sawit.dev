@@ -1,0 +1,5 @@
+# Headers for the static files Workers Static Assets serves (Worker-rendered pages get none of these).
+# Vite names every file in /assets/ after a hash of its content, so a file there never changes:
+# browsers keep it a year and skip revalidating it on each visit.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
