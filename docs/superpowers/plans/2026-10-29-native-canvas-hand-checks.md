@@ -1093,7 +1093,8 @@ There are 26 questions. They come from the ledger lines that leave a decision or
   app closed sawit-mcp edits that project's canvas: within the agent's git repository, the nearest folder up from
   its folder whose `.nyawit/` holds a canvas, else the repository's root; outside a repository, the folder itself.
   A `.nyawit/` with no canvas in it, or one above the repository, decides nothing. Every canvas op still brings the
-  canvas tab forward.
+  canvas tab forward, so the first half of this question is still open, and with no project named it now brings
+  the agent's own project forward with it, where it used to leave the project in front (H-PAR-1).
 - Source: P1:186, P7:212.
 
 **Q13. May an agent's op open UI that takes the keyboard?**
@@ -1929,5 +1930,53 @@ Answer: ______
 - Run `mkdir -p "$S/proj2" && touch "$S/proj2/g01.txt"`, then `ctl "{\"cmd\":\"open\",\"path\":\"$S/proj2\"}"` and
   `ctl "{\"cmd\":\"open\",\"path\":\"$S/proj2/g01.txt\"}"`.
 - Look for: the bar ends with proj2's header and the active `g01.txt` in proj2's colour, both fully shown.
+
+Answer: ______
+
+## Added by the parity work (v0.0.8)
+
+The canvas lane of the MCP and CLI parity work (canvas-agent-project and canvas-file-tabs in its audit) sends an
+agent's canvas ops to the canvas of its own project, and to the canvas tab of a file it names. Tests cover the
+choice of project and of window as functions, but no test can build a `Workspace` (P8-C8), so for the tab and
+window an op reaches these checks are the only cover.
+- There are **2 checks**. Each starts from a fresh launch, as under "Before you start", with start state A, and
+  with proj2 shown in front of proj as set up before H-WS-1.
+
+**H-PAR-1. An agent's canvas is its own project's** (canvas-agent-project, Q12).
+- Click into the terminal (⌘J shows it) and type `echo hi`, without Enter. Run what an agent working in `$S/proj`
+  sends when it names no project: a read, then a drawing.
+
+  ```bash
+  ctl "{\"agent_folder\":\"$S/proj\",\"cmd\":\"canvas\",\"op\":{\"op\":\"get\"}}"
+  ctl "{\"agent_folder\":\"$S/proj\",\"cmd\":\"canvas\",\"op\":{\"op\":\"add\",\"elements\":[{\"type\":\"sticky\",\"x\":0,\"y\":0,\"text\":\"from proj\"}]}}"
+  ```
+- Look for: the read brings proj forward with its canvas tab, in proj's group (Q12's first half, still open), and
+  the drawing puts the sticky on it. proj2 has no canvas tab. Press ⌫ twice: it erases `hi` in the terminal, which
+  kept the keyboard. A second later `$S/proj/.nyawit/canvas.figcraft` is there, and `$S/proj2/.nyawit` isn't.
+- Click `g01.txt`'s tab, then run the agent's `app_open_page canvas`:
+  `ctl "{\"agent_folder\":\"$S/proj\",\"cmd\":\"open_page\",\"page\":\"canvas\"}"`. Look for: proj's canvas tab
+  comes forward with proj, and no second canvas tab opens.
+- Before, the sticky went onto proj2's canvas, the project in front.
+
+Answer: ______
+
+**H-PAR-2. A canvas file an agent names** (canvas-file-tabs).
+- Click into the terminal and type `echo hi`, without Enter. Run what an agent's `canvas_add_elements` sends with
+  `file` set to a design file in proj that isn't there yet:
+
+  ```bash
+  mkdir -p "$S/proj/design"; F="$S/proj/design/home.figcraft"
+  ctl "{\"cmd\":\"canvas\",\"file\":\"$F\",\"op\":{\"op\":\"add\",\"elements\":[{\"type\":\"sticky\",\"x\":0,\"y\":0,\"text\":\"on home\"}]}}"
+  ```
+- Look for: a `home.figcraft` canvas tab opens in proj's group with the sticky on it, and proj's own canvas is left
+  as it was. Press ⌫ twice: it erases `hi` in the terminal. A second later `$F` is there. Run the line again: the
+  same tab gets a second sticky, and no other tab opens.
+- Open a second window on another project and leave it in front:
+  `mkdir -p "$S/proj3" && ctl "{\"cmd\":\"open\",\"path\":\"$S/proj3\",\"new_window\":true}"`. Run the line again.
+  Look for: the sticky lands on the first window's `home.figcraft` tab, the window that shows the file, and no tab
+  opens in the second.
+- Close the `home.figcraft` tab, click the second window to bring it to the front, and run the line again. Look
+  for: the tab opens again in the first window, whose project holds the file.
+- Before, the op ran on the project's canvas, whatever `file` named.
 
 Answer: ______

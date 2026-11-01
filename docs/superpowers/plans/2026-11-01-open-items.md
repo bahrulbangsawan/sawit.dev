@@ -17,9 +17,11 @@ and minor items nobody has fixed yet. The hand checks to run before a release ar
   `CLOUDFLARE_API_TOKEN` secret. Its job still runs the site's package scripts before the deploy step.
 - **The app-wide browser** can't be reached, by agents or the user, once a folder is open (each project has its own).
 - **Config Files' ⌘⌫** moves a file such as `~/.zshrc` to the Trash without asking, and the panel can't undo it.
-- **`app_open` of a canvas file** takes the keyboard when its tab only shows again (Q13). Canvas ops without a
-  `project` now go to the agent's own project, as terminal and browser ops do, with Sawit open or closed: Q12 is
-  settled.
+- **An agent's canvas reads bring the canvas forward** (Q12's first half): every canvas op, `canvas_get` included,
+  opens the canvas tab and makes it active, over a maximized terminal too. With no `project` that is now the canvas
+  of the agent's own project, so a read also brings that project forward, where it used to leave the project in
+  front. Which canvas the ops use is settled: the agent's own project's, with Sawit open or closed.
+- **`app_open` of a canvas file** takes the keyboard when its tab only shows again (Q13).
 - **Media.** README and the site still show the Excalidraw canvas until they are re-recorded. Seven unused site images
   (`site/public/media/{canvas,instances,mcp,network,port-conflict,prompts,tools}.jpg`) were left out of the repository.
 
@@ -31,6 +33,8 @@ and minor items nobody has fixed yet. The hand checks to run before a release ar
 - Read `scripts/release.sh --dry-run` first. The notes list `feat`/`fix` subjects only; a few internal "reconcile"
   and garden-path subjects may need a hand edit (`/consolidate`, Phase 6 step 2).
 - Tell users to restart their agent sessions after updating: an older `sawit-mcp` can't name split panes.
+- Tell them to quit and reopen Sawit once it is updated, too: a `sawit-mcp` of 0.0.8 refuses a canvas op that names
+  a `file` while an older app runs, since that app would run the op on the project's canvas.
 
 ## Minor, still open
 
