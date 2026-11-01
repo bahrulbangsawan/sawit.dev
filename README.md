@@ -221,8 +221,8 @@ explained. A conflict on the same address can't be forced.
 - What an agent runs in the terminal (`terminal_run`, `app_run_script`, `app_ssh_connect`) never takes the keyboard,
   and never goes into the shell you're typing in, even at its prompt: `terminal_run` then uses another idle shell or a
   new tab. Its terminal comes forward unless you're typing in a terminal, and then it runs in the background. The agent
-  is told which terminal and pane it got, and its keys (`terminal_input`) go only to a terminal it names. A new tab
-  it opens without a folder starts in the agent's own project, even while the window shows another.
+  is told which terminal and pane it got, and its keys (`terminal_input`) go only to a terminal it names. A tab it
+  asks for (`new_tab`) without a folder starts in the agent's own project, even while the window shows another.
 - An agent can split a pane too (`terminal_split`, right or down), to run a dev server or a test watcher beside your
   shell. The new half never takes the keyboard, and the split stops at 20 columns by 4 rows, as <kbd>⌘D</kbd>'s does.
   Its `terminal_close` ends what runs there, so it needs `confirm: true` while a program runs in that terminal or
@@ -253,7 +253,7 @@ explained. A conflict on the same address can't be forced.
   new `PATH`.
 - The trash button uninstalls a tool, asking first and naming the installed tools that need it. It removes only the
   copy that the tool's own installer, Homebrew (`brew uninstall`) or npm (`npm uninstall -g`) put in place; a copy
-  installed another way is left alone, and the tool says so if it's still found afterwards. Homebrew's own
+  installed another way is left alone, and the page says so if it's still found afterwards. Homebrew's own
   uninstaller asks for your password, so it runs in the terminal.
 - Closing the tab or its window, quitting and **Restart to Update** ask first while something installs, and stop it.
   One tool is installed, upgraded or removed at a time, whether from this page, an agent, `sawit pasang`,
@@ -297,8 +297,9 @@ explained. A conflict on the same address can't be forced.
   screenshot or a device size brings it forward.
 - From the terminal: `sawit browse` opens the project's dev server here, `sawit browse 5173` a port, and
   `sawit https://example.com` any page.
-- The requests an agent reads keep no secrets: what you type into a password field, and the values of fields named
-  like secrets (password, token, API key, authorization, cookie, session, …) in URLs and bodies, read `[redacted]`.
+- In the requests an agent reads, the secrets Sawit recognizes read `[redacted]`: what you type into a password
+  field, and the values of fields named like secrets (password, token, API key, authorization, cookie, session, …)
+  in URLs and bodies. A secret under another name, or inside free text, isn't recognized.
 
 ### Canvas
 
@@ -565,9 +566,9 @@ sawit kyzn                                   # list the tables
 sawit kyzn leads                             # first 100 rows
 sawit kyzn leads "phone is null"             # filter: SELECT * FROM leads WHERE phone is null
 sawit kyzn leads "select * from leads where phone is null"   # any SQL, like psql
-sawit kyzn "delete from leads where id = 3"   # SQL that writes is shown and asks first (-y: no question)
+sawit kyzn "delete from leads where id = 3"  # SQL that writes is shown and asks first (-y: no question)
 sawit list                                   # instances, databases, ports and saved connections
-sawit list db                                # or: instances, ports, connections, tools, mcp, config
+sawit list db                                # or: instances, ports, connections, tools, mcp, config, keys
 sawit bakar ports                            # "burn" dev servers: confirm, SIGTERM, then SIGKILL
 sawit bakar ports 3000 5173 -y               # whatever listens on these ports, without asking
 sawit bakar instances                        # stop running Sawit instances (data is kept)
@@ -585,6 +586,7 @@ sawit pupuk bun -y                           # upgrade one tool without asking
 sawit cabut bun                              # "uproot": uninstall a dev tool, its installer's copy only (asks; -y skips)
 sawit list mcp                               # the MCP page: servers and the AI clients that have them
 sawit list config                            # shell startup files and coding agents' config files
+sawit list keys                              # every shortcut and what it runs (asks the running app)
 ```
 
 - `<db>` is looked up in this order: a Sawit instance or saved connection with that name, a database with that name in
@@ -625,10 +627,11 @@ sawit list config                            # shell startup files and coding ag
   skips the question; without a terminal it needs `-y`). Homebrew's uninstaller asks for a password, so `cabut`
   prints it for you to run. Afterwards it says if a tool is still found, because that copy was installed another
   way.
-- `list tools`, `list mcp` and `list config` show only when asked, not in a plain `sawit list`. `list mcp` names each
-  server's address, how it signs in (an environment variable by its name, never its value) and the clients and
-  profiles that have it. `list config` is the **Config Files** tab for the current folder's project, dimming the shell
-  files your login shell doesn't read.
+- `list tools`, `list mcp`, `list config` and `list keys` show only when asked, not in a plain `sawit list`. `list mcp`
+  names each server's address, how it signs in (an environment variable by its name, never its value) and the clients
+  and profiles that have it. `list config` is the **Config Files** tab for the current folder's project, dimming the
+  shell files your login shell doesn't read. `list keys` is the only one that needs the app: the default shortcuts
+  live in it, so without Sawit running it says so (and where your keymap.json is) instead of starting it.
 
 ## MCP for AI agents
 
@@ -668,7 +671,8 @@ host off password sign-in, which deletes its saved password). `install_dev_tools
 `confirm: true` because they run install scripts from the internet; so do `uninstall_dev_tools` (it deletes the
 tools' files), `stop_processes`, and `write_env` when it would replace a different `DATABASE_URL`. `terminal_close`
 needs `confirm: true` while a program runs in that terminal or you're typing in it, and `keymap_bind` and
-`keymap_unbind` need it when keymap.json has comments. Passwords never appear in a result. Every tool
+`keymap_unbind` need it when keymap.json has comments. `browser_export_design` replaces an earlier export of the same
+host only with `replace: true`. Passwords never appear in a result. Every tool
 also carries MCP's hints (`readOnlyHint`, `destructiveHint`, `openWorldHint`), for clients that let read-only tools
 through or ask before destructive ones.
 

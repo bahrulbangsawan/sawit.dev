@@ -20,7 +20,8 @@ and minor items nobody has fixed yet. The hand checks to run before a release ar
 - **An agent's canvas reads bring the canvas forward** (Q12's first half): every canvas op, `canvas_get` included,
   opens the canvas tab and makes it active, over a maximized terminal too. With no `project` that is now the canvas
   of the agent's own project, so a read also brings that project forward, where it used to leave the project in
-  front. Which canvas the ops use is settled: the agent's own project's, with Sawit open or closed.
+  front. Which canvas the ops use is settled for a project opened at its repository's root: the agent's own
+  project's, with Sawit open or closed. The cases where the two still differ are under Minor, still open.
 - **`app_open` of a canvas file** takes the keyboard when its tab only shows again (Q13).
 - **Media.** README and the site still show the Excalidraw canvas until they are re-recorded. Seven unused site images
   (`site/public/media/{canvas,instances,mcp,network,port-conflict,prompts,tools}.jpg`) were left out of the repository.
@@ -55,6 +56,12 @@ Small, rare or untested-wiring items. Most of the untested wiring has one root c
   shutdown end terminals without asking (gpui doesn't implement `applicationShouldTerminate:`).
 - **Canvas.** The refusal toast doesn't mention the unsaved copy; Save As then close makes a second copy; backup
   rotation isn't all-or-nothing; a Mermaid diagram of thousands of edges stalls the worker for seconds.
+- **An agent's canvas, open or closed** (Q12's second half). With no `project`, Sawit closed can still pick another
+  canvas than Sawit open in these cases: a project outside a git repository with the agent in a subfolder (no
+  walk-up there), a Sawit project folder above nested repositories (several repositories in one folder, or a
+  superproject's submodules), and a subfolder canvas an older `sawit-mcp` left, which still wins as the nearest. With
+  Sawit open, an agent whose folder no window has open gets the front window's project's canvas. Passing `project`
+  avoids all of them.
 - **Release and install.** The installer's "run it from another terminal" guard relies on Sawit's PTY setting
   `TERM_PROGRAM=sawit`, which no test pins; its pgrep half is untested. A stale remote-tracking ref can still let a dry
   run publish (near impossible). `release_it`'s installer test leaves one temporary folder per run.
