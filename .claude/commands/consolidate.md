@@ -217,11 +217,13 @@ Commit this as `docs: update README, screenshots and demo for <short summary>`.
    passed on this exact HEAD.
 2. Note the version you expect: the patch after the one in `Cargo.toml` (for example `0.0.5` → `0.0.6`), and
    read the notes the push will publish: `scripts/release.sh --dry-run` in a checkout of `main` (see step 3)
-   prints the section and changes nothing. An entry that is internal or reads badly comes from its commit
-   subject: tell the user before pushing. To change the notes of this release only, cut it by hand in the
-   checkout of `main` (`tag=$(scripts/release.sh)`), edit the new `CHANGELOG.md` section, run
-   `git commit --amend --no-verify --no-edit -- CHANGELOG.md` and `git tag -fa --cleanup=whitespace "$tag" -F
-   <the edited section>`, then push with `SAWIT_RELEASE_PUSH=1 git push origin main "$tag"` instead of step 3.
+   prints the section and changes nothing. Not `git push --dry-run`: git runs the hook for it too, so it cuts
+   the release in the checkout, unpushed, for the next push of `main`. An entry that is internal or reads
+   badly comes from its commit subject: tell the user before pushing. To change the notes of this release
+   only, cut it by hand in the checkout of `main` (`tag=$(scripts/release.sh)`), edit the new `CHANGELOG.md`
+   section, run `git commit --amend --no-verify --no-edit -- CHANGELOG.md` and
+   `git tag -fa --cleanup=whitespace "$tag" -F <the edited section>`, then push with
+   `SAWIT_RELEASE_PUSH=1 git push origin main "$tag"` instead of step 3.
 3. Push from a checkout of `main`: `git push origin main`.
    - The release is cut on `HEAD`, so the hook refuses a push of `main` from any other checkout (another
      branch, a detached `HEAD`): it would release nothing. When `main` is checked out nowhere (lanes move it
@@ -243,12 +245,15 @@ Commit this as `docs: update README, screenshots and demo for <short summary>`.
      `SAWIT_RELEASE_PUSH=1 git push origin main "$tag"`.
    - A release whose background push failed: the log says why, and how to push it. Pushing `main` again from
      the checkout of `main` takes the release commit and tag along too, while origin's `main` lacks that commit.
-4. Wait for the release push to finish, then confirm:
+4. Wait for the release push to finish, then confirm. These read `main` itself, not whatever branch the
+   checkout you run them in has (the main checkout may be on another one), so they hold from anywhere:
    - `cat "$(git rev-parse --git-common-dir)/sawit-release.log"` has no errors;
-   - `git log --oneline -3` shows `chore(release): vX` on top, and `git ls-remote --tags origin vX` lists the tag;
-   - `git status -sb` shows `main` even with `origin/main`;
-   - `head -20 CHANGELOG.md` shows the new section with sensible entries. If a line reads badly, the cause
-     is its commit subject. Tell the user; don't rewrite pushed history.
+   - `git log --oneline -3 main` shows `chore(release): vX` on top, and `git ls-remote --tags origin vX` lists
+     the tag;
+   - `git ls-remote origin refs/heads/main` shows the commit `git rev-parse main` prints: origin's `main` is
+     the release;
+   - `git show main:CHANGELOG.md | head -20` shows the new section with sensible entries. If a line reads
+     badly, the cause is its commit subject. Tell the user; don't rewrite pushed history.
    - `gh run list --workflow release.yml --limit 1` shows the release build started. Report its URL.
 
 ## Report

@@ -2,12 +2,15 @@
 //! makes each push of main a release, and `scripts/release.sh`, which cuts it. Each test gets a
 //! clone of a small workspace, released at v0.0.7 and pushed to a bare `origin`, both in a
 //! temporary folder, with the hook and the script as they are in this checkout. `cargo` and
-//! `osascript` are stand-ins first on the `PATH`; git reads no global or system config.
+//! `osascript` are stand-ins first on the `PATH`; git reads no global or system config. Also here:
+//! release.yml's Publish step, run against a stand-in `gh` ([`publish`]); every workflow, read for
+//! how it keeps its token; and `scripts/install.sh`, which installs a release, run with nothing but
+//! stand-ins on its `PATH` ([`run_installer`]).
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -125,6 +128,17 @@ impl Repo {
         args: &[&str],
         env: Option<(&str, &str)>,
     ) -> Output {
+        self.command(dir, program, args, env).output().unwrap()
+    }
+
+    /// `program args` in the folder `dir`, set up as [`Repo::run_in`] runs them, not yet started.
+    fn command(
+        &self,
+        dir: &Path,
+        program: &str,
+        args: &[&str],
+        env: Option<(&str, &str)>,
+    ) -> Command {
         let path = std::env::var("PATH").unwrap_or_default();
         let mut command = Command::new(program);
         command
@@ -150,7 +164,7 @@ impl Repo {
         if let Some((key, value)) = env {
             command.env(key, value);
         }
-        command.output().unwrap()
+        command
     }
 
     /// `git args` in the clone, which must succeed; its stdout.
@@ -176,6 +190,44 @@ impl Repo {
     /// `git push origin main`, with `env`.
     fn push_main(&self, env: Option<(&str, &str)>) -> Output {
         self.run("git", &["push", "origin", "main"], env)
+    }
+
+    /// `git push origin main`, with `meanwhile` run once origin has taken main but before the
+    /// push has finished: origin's post-receive hook holds the push until `meanwhile` is done.
+    /// So whatever `meanwhile` does in the clone is done before the release push the hook leaves
+    /// in the background starts, which waits for this push to finish.
+    fn push_main_meanwhile(&self, meanwhile: impl FnOnce()) -> Output {
+        let root = self.work.parent().unwrap();
+        let (taken, done) = (root.join("main-taken"), root.join("meanwhile-done"));
+        let hook = self.remote.join("hooks/post-receive");
+        script(
+            &hook,
+            &format!(
+                "touch '{taken}'\ni=0\nwhile [ ! -e '{done}' ] && [ \"$i\" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done\n",
+                taken = taken.display(),
+                done = done.display(),
+            ),
+        );
+        let mut push = self
+            .command(&self.work, "git", &["push", "origin", "main"], None)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let start = Instant::now();
+        while !taken.exists() {
+            if push.try_wait().unwrap().is_some() {
+                let out = push.wait_with_output().unwrap();
+                panic!("the push ended before origin took main: {}", stderr(&out));
+            }
+            assert!(start.elapsed() < LANDS_WITHIN, "origin never took main");
+            thread::sleep(Duration::from_millis(50));
+        }
+        meanwhile();
+        // Only this push is held: the release push after it goes straight through.
+        fs::remove_file(&hook).unwrap();
+        fs::write(&done, "").unwrap();
+        push.wait_with_output().unwrap()
     }
 
     /// `scripts/release.sh`, with `env`.
@@ -234,6 +286,24 @@ impl Repo {
         }
     }
 
+    /// Waits for the background release push to move `rev` on `origin` off `commit`; where it
+    /// moved it.
+    fn wait_for_remote_off(&self, rev: &str, commit: &str) -> String {
+        let start = Instant::now();
+        loop {
+            match self.remote(rev) {
+                Some(moved) if moved != commit => return moved,
+                _ => {}
+            }
+            assert!(
+                start.elapsed() < LANDS_WITHIN,
+                "{rev} never moved off {commit} on origin; the release log says: {}",
+                self.release_log()
+            );
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     fn release_log(&self) -> String {
         fs::read_to_string(self.work.join(".git/sawit-release.log")).unwrap_or_default()
     }
@@ -258,6 +328,23 @@ impl Repo {
     fn notifications(&self) -> String {
         let shown = self.work.parent().unwrap().join("notifications");
         fs::read_to_string(shown).unwrap_or_default()
+    }
+
+    /// Waits for the hook to show a notification that says `what`; the notifications.
+    fn wait_for_notification(&self, what: &str) -> String {
+        let start = Instant::now();
+        loop {
+            let shown = self.notifications();
+            if shown.contains(what) {
+                return shown;
+            }
+            assert!(
+                start.elapsed() < LANDS_WITHIN,
+                "no notification says {what:?}: {shown}; the release log says: {}",
+                self.release_log()
+            );
+            thread::sleep(Duration::from_millis(100));
+        }
     }
 
     /// From now on `origin` takes no tags, as a remote that fails part of a push does; or takes
@@ -543,6 +630,157 @@ fn a_dry_run_of_main_sends_no_release_tag_left_behind() {
     assert_eq!(repo.remote("refs/tags/v0.0.8"), None);
 }
 
+/// Git runs the hook for `git push --dry-run` of main too, without saying so, and the hook cut
+/// the release and pushed it for real: a dry run published a release. A release now follows only
+/// a push of main that went through. A dry run still cuts it here, as the hook can't tell, and
+/// says so; the next push of main takes it along.
+#[test]
+fn a_dry_run_of_main_publishes_no_release() {
+    let repo = Repo::new();
+    repo.commit("feat(app): a new thing");
+    let before = repo.remote("refs/heads/main");
+    let out = repo.run("git", &["push", "--dry-run", "origin", "main"], None);
+    let said = stderr(&out);
+    assert!(said.contains("release v0.0.8 created"), "{said}");
+    ok(out);
+    let start = Instant::now();
+    while !repo.release_log().contains("did not go out") {
+        assert_eq!(
+            repo.remote("refs/tags/v0.0.8"),
+            None,
+            "the dry run published v0.0.8; the release log says: {}",
+            repo.release_log()
+        );
+        assert!(
+            start.elapsed() < LANDS_WITHIN,
+            "the release log never said main did not go out: {}",
+            repo.release_log()
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+    let log = repo.release_log();
+    assert!(
+        log.contains("SAWIT_RELEASE_PUSH=1 git push --follow-tags origin main"),
+        "{log}"
+    );
+    repo.wait_for_notification("v0.0.8");
+    assert_eq!(repo.remote("refs/heads/main"), before);
+    assert_eq!(repo.remote("refs/tags/v0.0.8"), None);
+
+    let released = repo.local("refs/tags/v0.0.8").expect("no release here");
+    let out = repo.push_main(None);
+    let said = stderr(&out);
+    assert!(
+        said.contains("nothing new since the last release"),
+        "{said}"
+    );
+    ok(out);
+    repo.wait_for_remote_at("refs/tags/v0.0.8", &released);
+    repo.wait_for_remote_at("refs/heads/main", &released);
+}
+
+/// A push to the remote's URL, not its name, moves no remote-tracking main. A release still
+/// follows it once it went through: the hook then asks the remote where its main is.
+#[test]
+fn a_release_pushed_to_the_remotes_url_goes_out() {
+    let repo = Repo::new();
+    repo.commit("feat(app): a new thing");
+    let url = repo.remote.display().to_string();
+    let out = repo.run("git", &["push", &url, "main"], None);
+    let said = stderr(&out);
+    assert!(said.contains("release v0.0.8 created"), "{said}");
+    ok(out);
+    let tagged = repo.wait_for_remote("refs/tags/v0.0.8");
+    repo.wait_for_remote_at("refs/heads/main", &tagged);
+}
+
+/// With nothing new, a push of main to the remote's URL said "main did not go out" though it
+/// had, and left the release tag behind: no remote-tracking main moved. Now the hook asks the
+/// remote, and the tag follows.
+#[test]
+fn a_release_left_behind_goes_out_when_main_is_pushed_again_to_the_remotes_url() {
+    let repo = Repo::new();
+    repo.commit("feat(app): a new thing");
+    ok(repo.push_main(Some(("SAWIT_SKIP_RELEASE", "1"))));
+    assert_eq!(ok(repo.release(None)), "v0.0.8");
+    let released = repo.local("main").unwrap();
+    let url = repo.remote.display().to_string();
+    let out = repo.run("git", &["push", &url, "main"], None);
+    let said = stderr(&out);
+    assert!(
+        said.contains("nothing new since the last release"),
+        "{said}"
+    );
+    ok(out);
+    repo.wait_for_remote_at("refs/tags/v0.0.8", &released);
+    assert_eq!(repo.remote("refs/heads/main"), Some(released));
+}
+
+/// The release push the hook leaves in the background pushed `main` as it was when that push
+/// ran, not the release: a commit made on main while main was pushed, or as soon as the push
+/// returned, went out with the release commit, in no release. Now it sends the release commit.
+#[test]
+fn the_release_push_sends_the_release_commit_not_main_as_it_is_by_then() {
+    let repo = Repo::new();
+    repo.commit("feat(app): a new thing");
+    let pushed = repo.local("main").unwrap();
+    let out = repo.push_main_meanwhile(|| repo.commit("feat(app): made while main was pushed"));
+    let said = stderr(&out);
+    assert!(said.contains("release v0.0.8 created"), "{said}");
+    ok(out);
+    let tagged = repo.wait_for_remote("refs/tags/v0.0.8");
+    let main = repo.wait_for_remote_off("refs/heads/main", &pushed);
+    assert_eq!(
+        main,
+        tagged,
+        "origin's main isn't the release commit; the release log says: {}",
+        repo.release_log()
+    );
+    assert_eq!(
+        repo.subject("main"),
+        "feat(app): made while main was pushed"
+    );
+}
+
+/// With nothing new to release, the push that takes a tag left behind along pushed `main` as it
+/// was by then: a lane landing on main as soon as main was pushed (`git fetch . <lane>:main`)
+/// went out with that tag, in no release. Now it sends the commit that went out as main.
+#[test]
+fn a_tag_left_behind_follows_the_commit_pushed_not_main_as_it_is_by_then() {
+    let repo = Repo::new();
+    repo.commit("feat(app): a new thing");
+    ok(repo.push_main(Some(("SAWIT_SKIP_RELEASE", "1"))));
+    assert_eq!(ok(repo.release(None)), "v0.0.8");
+    let released = repo.local("main").unwrap();
+    let out = repo.push_main_meanwhile(|| repo.commit("feat(app): a lane landed"));
+    let said = stderr(&out);
+    assert!(
+        said.contains("nothing new since the last release"),
+        "{said}"
+    );
+    ok(out);
+    repo.wait_for_remote_at("refs/tags/v0.0.8", &released);
+    // Until the release push has finished, or has moved origin's main.
+    let start = Instant::now();
+    while !repo.release_log().contains("is out")
+        && repo.remote("refs/heads/main").as_deref() == Some(released.as_str())
+    {
+        assert!(
+            start.elapsed() < LANDS_WITHIN,
+            "the release push never finished: {}",
+            repo.release_log()
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(
+        repo.remote("refs/heads/main"),
+        Some(released),
+        "the release log says: {}",
+        repo.release_log()
+    );
+    assert_eq!(repo.subject("main"), "feat(app): a lane landed");
+}
+
 /// The refusal's steps get run as printed, by agents too, from wherever `git push` was typed.
 /// They named the worktree `../sawit-main`, which from a folder inside the checkout put it
 /// inside the checkout, and they removed it straight after the push. Now they name it by its
@@ -796,32 +1034,73 @@ fn a_rebuild_replaces_the_assets_of_a_release_that_exists() {
     assert!(!calls.contains("release create"), "{calls}");
 }
 
-/// RELEASE-9: the release job's token can write to the repository. Each action it runs is
-/// pinned to a commit, since a tag can be moved to other code, and checkout doesn't leave the
-/// token in `.git/config`, where every build script and the cache action could read it.
+/// The step of a workflow whose `uses:` line is `lines[at]`: from its `- ` line to the next line
+/// indented no deeper than that dash.
+fn step_at(lines: &[&str], at: usize) -> String {
+    let indent = |line: &str| line.len() - line.trim_start().len();
+    let start = (0..=at)
+        .rev()
+        .find(|&i| lines[i].trim_start().starts_with("- "))
+        .expect("a step");
+    let dash = indent(lines[start]);
+    let end = (start + 1..lines.len())
+        .find(|&i| !lines[i].trim().is_empty() && indent(lines[i]) <= dash)
+        .unwrap_or(lines.len());
+    lines[start..end].join("\n")
+}
+
+/// RELEASE-9: a workflow's token reaches the repository, and its jobs hold more: the release
+/// job's token can write to the repository, and the site job deploys the `install.sh` users pipe
+/// into `sh`. So each workflow says what its token may do rather than taking the repository's
+/// default, pins each action it runs to a commit, since a tag can be moved to other code, and
+/// has checkout leave no token in `.git/config`, where every later step could read it. The
+/// site's workflow came later and had none of this.
 #[test]
-fn the_release_job_pins_its_actions_and_keeps_no_token_on_disk() {
-    let workflow = fs::read_to_string(checkout().join(".github/workflows/release.yml")).unwrap();
-    let mut actions = 0;
-    for line in workflow.lines() {
-        let Some(action) = line.trim().trim_start_matches("- ").strip_prefix("uses: ") else {
+fn every_workflow_pins_its_actions_and_keeps_no_token_on_disk() {
+    let mut checked = Vec::new();
+    for entry in fs::read_dir(checkout().join(".github/workflows")).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if !name.ends_with(".yml") && !name.ends_with(".yaml") {
             continue;
-        };
-        actions += 1;
-        let commit = action.split_once('@').map_or("", |(_, at)| at);
-        let commit = commit.split_whitespace().next().unwrap_or("");
+        }
+        let workflow = fs::read_to_string(&path).unwrap();
         assert!(
-            commit.len() == 40 && commit.chars().all(|c| c.is_ascii_hexdigit()),
-            "{action} isn't pinned to a commit"
+            workflow
+                .lines()
+                .any(|line| line.starts_with("permissions:")),
+            "{name} doesn't say what its token may do"
         );
+        let lines: Vec<&str> = workflow.lines().collect();
+        let mut checkouts = 0;
+        for (at, line) in lines.iter().enumerate() {
+            let Some(action) = line.trim().trim_start_matches("- ").strip_prefix("uses: ") else {
+                continue;
+            };
+            if action.starts_with("./") {
+                continue;
+            }
+            let commit = action.split_once('@').map_or("", |(_, at)| at);
+            let commit = commit.split_whitespace().next().unwrap_or("");
+            assert!(
+                commit.len() == 40 && commit.chars().all(|c| c.is_ascii_hexdigit()),
+                "{name}: {action} isn't pinned to a commit"
+            );
+            if action.starts_with("actions/checkout@") {
+                checkouts += 1;
+                let step = step_at(&lines, at);
+                assert!(
+                    step.contains("persist-credentials: false"),
+                    "{name}: checkout leaves the token on disk:\n{step}"
+                );
+            }
+        }
+        assert!(checkouts > 0, "{name} has no checkout step");
+        checked.push(name);
     }
-    assert!(actions >= 2, "{workflow}");
-    let checkout = workflow
-        .split("- uses: actions/checkout@")
-        .nth(1)
-        .expect("a checkout step");
-    let step = checkout.split("\n      - ").next().unwrap();
-    assert!(step.contains("persist-credentials: false"), "{step}");
+    for workflow in ["release.yml", "site.yml"] {
+        assert!(checked.iter().any(|name| name == workflow), "{checked:?}");
+    }
 }
 
 /// RELEASE-8: NOTICE goes into Sawit.app with the licence texts of what the binary carries. A
@@ -845,4 +1124,89 @@ fn notice_names_every_git_repository_the_build_uses() {
         .filter(|repository| !notice.contains(repository))
         .collect();
     assert!(missing.is_empty(), "NOTICE doesn't name {missing:?}");
+}
+
+/// `scripts/install.sh`, run by `/bin/sh` with `TERM_PROGRAM` set to `term` while Sawit runs:
+/// what it printed, and what it asked `osascript`, one call a line.
+///
+/// Its `PATH` holds only stand-ins and a few harmless tools, in a temporary folder: the OS
+/// checks find an Apple Silicon Mac, `curl` serves a release and an empty zip, `ditto` unpacks a
+/// Sawit.app, `pgrep` always finds Sawit running, `sleep` returns at once, and `osascript` records
+/// what it is asked. Sawit never quits, and there is no `rm`, `mv` or `xattr` on that `PATH`, so
+/// the script replaces no app: it gives up waiting for Sawit to quit.
+fn run_installer(term: &str) -> (Output, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let asked = root.join("asked");
+    let curl = r#"case "$*" in
+*api.github.com*) echo '  "browser_download_url": "https://github.com/o/r/releases/download/v0.0.8/Sawit-0.0.8-macos-arm64.zip",' ;;
+*) while [ $# -gt 0 ]; do [ "$1" != -o ] || exec /usr/bin/touch "$2"; shift; done; exit 1 ;;
+esac
+"#;
+    let ditto = r#"app="$4/Sawit.app/Contents/MacOS"
+/bin/mkdir -p "$app" && /usr/bin/touch "$app/sawit" && /bin/chmod +x "$app/sawit"
+"#;
+    let osascript = format!("printf '%s\\n' \"$*\" >>'{}'\n", asked.display());
+    for (name, body) in [
+        ("uname", "echo Darwin\n"),
+        ("sysctl", "echo 1\n"),
+        ("curl", curl),
+        ("ditto", ditto),
+        ("pgrep", "echo 4242\n"),
+        ("sleep", "exit 0\n"),
+        ("osascript", &osascript),
+    ] {
+        script(&bin.join(name), body);
+    }
+    for tool in [
+        "/usr/bin/sed",
+        "/usr/bin/head",
+        "/usr/bin/mktemp",
+        "/bin/mkdir",
+    ] {
+        let name = Path::new(tool).file_name().unwrap();
+        std::os::unix::fs::symlink(tool, bin.join(name)).unwrap();
+    }
+    let out = Command::new("/bin/sh")
+        .arg(checkout().join("scripts/install.sh"))
+        .current_dir(&root)
+        .env_clear()
+        .env("PATH", &bin)
+        .env("HOME", &root)
+        .env("TMPDIR", &root)
+        .env("TERM_PROGRAM", term)
+        .output()
+        .unwrap();
+    (out, fs::read_to_string(asked).unwrap_or_default())
+}
+
+/// The install command, pasted into Sawit's own terminal, asked Sawit to quit so that it could
+/// replace it. Quitting ends Sawit's terminals, and the script with them: nothing was installed,
+/// and the terminal was gone. Sawit's terminals say whose they are (`TERM_PROGRAM=sawit`), so the
+/// script now leaves Sawit running, before downloading anything, and says where to run it.
+#[test]
+fn the_installer_run_in_sawits_own_terminal_leaves_sawit_running() {
+    let (out, asked) = run_installer("sawit");
+    let said = stderr(&out);
+    assert_eq!(asked, "", "it asked Sawit to quit: {said}");
+    assert!(!out.status.success(), "{said}");
+    assert!(said.contains("another terminal"), "{said}");
+    assert!(said.contains("Restart to Update"), "{said}");
+    let printed = String::from_utf8_lossy(&out.stdout);
+    assert!(!printed.contains("Downloading"), "{printed}");
+}
+
+/// From any other terminal, the install command still quits Sawit before it replaces it.
+#[test]
+fn the_installer_run_from_another_terminal_quits_sawit_first() {
+    let (out, asked) = run_installer("Apple_Terminal");
+    let (printed, said) = (String::from_utf8_lossy(&out.stdout), stderr(&out));
+    assert!(
+        asked.contains("quit app \"Sawit\""),
+        "{asked:?}: {printed}{said}"
+    );
+    assert!(printed.contains("Quitting the running Sawit"), "{printed}");
+    assert!(said.contains("Sawit is still running"), "{said}");
 }
