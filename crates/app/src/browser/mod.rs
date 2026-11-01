@@ -34,8 +34,8 @@ use sawit_core::annotations::{
     relative_source, screenshot_dir, screenshot_name,
 };
 use sawit_core::browser::{
-    BrowserOp, ConsoleEntry, Logs, PageEvent, Target, ViewportMode, fit, normalize_address,
-    page_script, parse_ipc, resize_mode, search_url,
+    BrowserOp, ConsoleEntry, Device, Logs, PageEvent, Target, ViewportMode, device_by_name, fit,
+    normalize_address, page_script, parse_ipc, resize_mode, search_url,
 };
 use sawit_core::probe;
 use serde_json::{Value, json};
@@ -215,6 +215,9 @@ pub struct BrowserView {
     bounds: Option<Bounds<Pixels>>,
     /// The tab is active and the center pane is showing.
     visible: bool,
+    /// The device menu is open, over the page: the webview is hidden meanwhile
+    /// ([`Self::set_menu_open`]).
+    menu_open: bool,
     address: Entity<InputState>,
     url: String,
     title: String,
@@ -329,6 +332,7 @@ impl BrowserView {
             error: None,
             bounds: None,
             visible: false,
+            menu_open: false,
             address,
             url: url.unwrap_or_else(|| "about:blank".into()),
             title: String::new(),
@@ -860,7 +864,7 @@ impl BrowserView {
     /// AppKit's keyboard is, and would otherwise run them where its own keyboard
     /// was: ⌘V pasting into the address field, or into the terminal.
     fn give_page_keyboard(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.visible {
+        if !self.page_shown() {
             return;
         }
         if let Some(engine) = &self.engine {
@@ -906,7 +910,7 @@ impl BrowserView {
             // would leave the terminal or field that has it for a view that isn't drawn, which
             // the workspace then takes it from (`workspace::KeyboardHome`).
             FromPage::Event(PageEvent::Pressed) => {
-                if self.visible {
+                if self.page_shown() {
                     self.focus.focus(window, cx);
                 }
             }
@@ -1234,10 +1238,43 @@ impl BrowserView {
         if self.visible == visible {
             return;
         }
+        let was = self.page_shown();
         self.visible = visible;
+        // A menu left open goes with the toolbar that drew it, which says nothing then.
+        if !visible {
+            self.menu_open = false;
+        }
+        self.show_page(was);
+    }
+
+    /// The device menu opened or closed. It opens over the page, and the webview draws above
+    /// GPUI's drawing, menus too: the menu would open unseen behind the page, the button alone
+    /// showing it open. So the webview is hidden while the menu is open, and comes back, at the
+    /// size picked, when it closes.
+    fn set_menu_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.menu_open == open {
+            return;
+        }
+        let was = self.page_shown();
+        self.menu_open = open;
+        self.show_page(was);
+        cx.notify();
+    }
+
+    /// Whether the webview shows: its tab is on screen, and no menu is open over it.
+    fn page_shown(&self) -> bool {
+        self.visible && !self.menu_open
+    }
+
+    /// Shows or hides the webview, when [`Self::page_shown`] is no longer `was`.
+    fn show_page(&self, was: bool) {
+        let shown = self.page_shown();
+        if shown == was {
+            return;
+        }
         if let Some(engine) = &self.engine {
-            engine.set_visible(visible);
-            if !visible {
+            engine.set_visible(shown);
+            if !shown {
                 engine.focus_parent();
             }
         }
@@ -1283,7 +1320,7 @@ impl BrowserView {
                     .project
                     .as_deref()
                     .map(sawit_core::browser::data_store_id),
-                visible: self.visible,
+                visible: self.page_shown(),
                 frame: page_frame(frame(bounds), &self.viewport).0,
             },
             move |event| {
@@ -1329,7 +1366,10 @@ impl Render for BrowserView {
             .min_w_0()
             .h_full()
             .relative()
-            .when(device.is_some(), |d| d.bg(cx.theme().muted))
+            // The page hidden under the device menu leaves the same backdrop as a device's.
+            .when(device.is_some() || self.menu_open, |d| {
+                d.bg(cx.theme().muted)
+            })
             .children(device.map(|text| {
                 div()
                     .absolute()
@@ -1623,6 +1663,25 @@ impl ShotGate {
 /// Around every screenshot: hide the overlay, then show it again.
 fn shoot_ops() -> [Value; 2] {
     [overlay_op(true), overlay_op(false)]
+}
+
+/// The device `mode` imitates, and whether it is turned on its side (the size swapped):
+/// `None` in responsive mode, or for a size of no device's.
+fn device_of(mode: &ViewportMode) -> Option<(&'static Device, bool)> {
+    let ViewportMode::Fixed {
+        name: Some(name),
+        width,
+        height,
+    } = mode
+    else {
+        return None;
+    };
+    let device = device_by_name(name)?;
+    match (*width, *height) {
+        size if size == (device.width, device.height) => Some((device, false)),
+        size if size == (device.height, device.width) => Some((device, true)),
+        _ => None,
+    }
 }
 
 /// The same size with width and height swapped; nothing in responsive mode.

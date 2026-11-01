@@ -137,6 +137,11 @@ gpui_kit::assets::icon_assets!(
         Diamond,
         // The browser's device menu (src/browser/toolbar.rs).
         Smartphone,
+        Tablet,
+        Laptop,
+        Monitor,
+        MonitorSmartphone,
+        Proportions,
         // The browser's Annotate panel (src/browser/annotate.rs).
         Camera,
         // The Dev Tools and MCP catalogs (src/catalog.rs, tools_page.rs, mcp_page.rs).

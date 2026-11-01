@@ -278,7 +278,9 @@ explained. A conflict on the same address can't be forced.
   **Edit** menu. Sawit's own shortcuts (<kbd>⌘</kbd><kbd>W</kbd>, <kbd>⌘</kbd><kbd>T</kbd>,
   <kbd>⌘</kbd><kbd>1</kbd>–<kbd>⌘</kbd><kbd>9</kbd>…) still work there, before the page sees them.
 - **Device sizes**: the device menu lays the page out as an iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop or
-  Desktop, scaled to fit the tab. **Rotate** turns the device, and **Responsive** fills the tab again.
+  Desktop, scaled to fit the tab. **Rotate** turns the device, and **Responsive** fills the tab again. The device
+  button shows the device in use (its name, or the size an agent set), and the menu ticks it, and **Rotate** while
+  it's turned. While the menu is open the page steps aside for it and comes back at the size you picked.
 - **Annotate** (<kbd>⇧</kbd><kbd>⌘</kbd><kbd>.</kbd>): click elements on the page and write what should change. Each
   note carries the element's selector, styles, a screenshot and, in a dev build, its source file. **Copy** the notes
   as Markdown, or **Send to terminal** to paste them into Claude Code (or a shell) without pressing Enter: the
