@@ -142,28 +142,29 @@ fn change(xy: &str, path: &str, from: Option<String>, conflicted: bool) -> FileC
 }
 
 pub async fn status(repo: &Path) -> Result<Status> {
-    let raw = git_ok(
-        repo,
-        &[
-            "status",
-            "--porcelain=v2",
-            "--branch",
-            "-z",
-            "--untracked-files=all",
-        ],
-        None,
-        LOCAL_TIMEOUT,
-    )
-    .await?;
-    let mut status = parse_status(&raw);
-    status.merging = git(
-        repo,
-        &["rev-parse", "-q", "--verify", "MERGE_HEAD"],
-        None,
-        LOCAL_TIMEOUT,
-    )
-    .await
-    .is_ok_and(|o| o.ok);
+    // Neither takes a lock (`GIT_OPTIONAL_LOCKS=0`), so both run at once.
+    let (raw, merge_head) = tokio::join!(
+        git_ok(
+            repo,
+            &[
+                "status",
+                "--porcelain=v2",
+                "--branch",
+                "-z",
+                "--untracked-files=all",
+            ],
+            None,
+            LOCAL_TIMEOUT,
+        ),
+        git(
+            repo,
+            &["rev-parse", "-q", "--verify", "MERGE_HEAD"],
+            None,
+            LOCAL_TIMEOUT,
+        ),
+    );
+    let mut status = parse_status(&raw?);
+    status.merging = merge_head.is_ok_and(|o| o.ok);
     Ok(status)
 }
 
