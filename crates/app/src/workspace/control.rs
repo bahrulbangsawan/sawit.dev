@@ -60,6 +60,24 @@ fn agent_project(
         .or(active)
 }
 
+/// The kind of canvas file `file` is, which an agent's canvas op names: an absolute path to a
+/// `.figcraft` or an `.excalidraw` file. Anything else is the op's error, and no tab opens for it.
+fn canvas_file_kind(file: &Path) -> Result<FileKind, String> {
+    if !file.is_absolute() {
+        return Err(format!(
+            "{} isn't an absolute path: name the canvas file as one.",
+            file.display()
+        ));
+    }
+    match classify(file) {
+        kind @ (FileKind::Figcraft | FileKind::Excalidraw) => Ok(kind),
+        _ => Err(format!(
+            "{} isn't a canvas file: name a .figcraft or .excalidraw file.",
+            file.display()
+        )),
+    }
+}
+
 fn panel_name(tab: SidebarTab) -> &'static str {
     match tab {
         SidebarTab::Servers => "instances",
@@ -452,13 +470,19 @@ impl Workspace {
                 self.open_prompt(id, window, cx);
                 done(json!({ "tab": self.active }))
             }
-            // The canvas of the agent's project ([`agent_project`]), brought forward with its
-            // project, as on a click on its tab, but with the keyboard left where the user has it.
-            // It answers at once, with the op's own reply: `{ok: false, error}` when it failed.
-            Command::Canvas { op } => {
-                let root = agent_project(&self.roots(cx), agent_folder, self.root(cx));
-                let board = self.open_canvas_of(root, cx);
-                let board = board.ok_or("The canvas didn't open.")?;
+            // The canvas of the agent's project ([`agent_project`]), or of the canvas file it
+            // names, brought forward with its project, as on a click on its tab, but with the
+            // keyboard left where the user has it. It answers at once, with the op's own reply:
+            // `{ok: false, error}` when it failed.
+            Command::Canvas { op, file } => {
+                let board = match file {
+                    Some(file) => self.agent_canvas_file(file, cx)?,
+                    None => {
+                        let root = agent_project(&self.roots(cx), agent_folder, self.root(cx));
+                        let board = self.open_canvas_of(root, cx);
+                        board.ok_or("The canvas didn't open.")?
+                    }
+                };
                 Ok(Answer::Now(board.update(cx, |b, cx| b.run_op(&op, cx))))
             }
             // The browser of the agent's project ([`agent_project`]). One brought forward comes
@@ -525,6 +549,24 @@ impl Workspace {
             Page::Keymap => self.show_keymap_editor(false, window, cx),
         }
         Ok(())
+    }
+
+    /// The canvas of the canvas file an agent's op names, `file`: its tab, opened as `sawit <file>`
+    /// opens it ([`Self::open_board_file`]: a project's canvas file is that project's canvas tab,
+    /// and an `.excalidraw` file's canvas is bound to the `.figcraft` file beside it), shown with
+    /// the tab area and its project, but with the keyboard left where the user has it.
+    fn agent_canvas_file(
+        &mut self,
+        file: PathBuf,
+        cx: &mut Context<Self>,
+    ) -> Result<Entity<BoardView>, String> {
+        let kind = canvas_file_kind(&file)?;
+        self.leave_welcome(CENTER_ONLY, cx);
+        if !self.layout.center {
+            self.layout.toggle(Area::Center);
+        }
+        let board = self.open_board_file(file, kind, cx);
+        board.ok_or_else(|| "The canvas didn't open.".into())
     }
 
     /// A center tab by index (from `state`) or title: exact (any case),
@@ -652,10 +694,12 @@ impl Workspace {
 mod tests {
     use std::path::{Path, PathBuf};
 
+    use sawit_core::files::FileKind;
     use serde_json::json;
 
     use super::{
-        BrowserRoute, agent_project, browser_route, close_answer, script_answer, shell_folder,
+        BrowserRoute, agent_project, browser_route, canvas_file_kind, close_answer, script_answer,
+        shell_folder,
     };
 
     /// MCP-4: a shell an agent starts in a folder starts there or not at all. The PTY ignores a
@@ -793,5 +837,23 @@ mod tests {
             Some(b),
             "run from no project of it"
         );
+    }
+
+    /// An agent's canvas op names a canvas file by its absolute path: a `.figcraft` file, or an
+    /// `.excalidraw` file, whose canvas is bound to the `.figcraft` file beside it. Anything else
+    /// is the op's error, and no tab opens for it.
+    #[test]
+    fn an_agents_canvas_file_is_a_figcraft_or_excalidraw_file_by_its_absolute_path() {
+        let kind = |file: &str| canvas_file_kind(Path::new(file));
+        assert_eq!(kind("/p/design/home.figcraft"), Ok(FileKind::Figcraft));
+        assert_eq!(kind("/p/Old.EXCALIDRAW"), Ok(FileKind::Excalidraw));
+        for (file, says) in [
+            ("design/home.figcraft", "isn't an absolute path"),
+            ("/p/notes.md", "isn't a canvas file"),
+            ("/p/.nyawit/canvas.figcraft.bak", "isn't a canvas file"),
+        ] {
+            let refused = kind(file).unwrap_err();
+            assert!(refused.contains(says), "{file}: {refused}");
+        }
     }
 }

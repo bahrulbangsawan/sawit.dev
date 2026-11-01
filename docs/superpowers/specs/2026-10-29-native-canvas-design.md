@@ -211,6 +211,15 @@ A right-click on an unselected layer selects it first. The selection target come
 
 `{"cmd":"canvas","op":{...}}` on the control socket. The native canvas answers synchronously.
 
+**Note, 2026-11-01 (which canvas an op reaches):** a request may name a canvas file,
+`{"cmd":"canvas","op":{...},"file":"/abs/path.figcraft"}` (a `.figcraft` file, or an `.excalidraw` file, whose
+canvas is bound to the `.figcraft` file beside it as in D14). The op then runs on that file's canvas tab, opened as
+the Files tab opens it but without the keyboard, in the window that shows the file's canvas, else the one whose
+project holds the file. Without `file` the op runs on the canvas of the agent's project: the project of the window
+that holds `agent_folder`, else the active one (the one `project` names, made active). With the app closed,
+`sawit-mcp` runs the op on the file itself: the one named, else the canvas of the nearest folder up from the
+agent's with `.nyawit/`, else with `.git`, else the folder itself.
+
 | Op | Params | Result |
 |---|---|---|
 | `get` | – | `{ok, elements:[Summary]}` |

@@ -198,6 +198,23 @@ pub fn removes_layers(before: &Document, after: &Document) -> bool {
     }
 }
 
+/// Opens the canvas a canvas tab shows for the file at `path` (spec D14), as [`open`] opens one:
+/// an `.excalidraw` file's scene, imported ([`import_file`]), while the `.figcraft` file it is
+/// bound to ([`bound_file`]) isn't there, and that file once it is; any other file itself. What
+/// the import left out is only logged. Nothing is written, the `.excalidraw` file least of all:
+/// the first save of the canvas makes the `.figcraft` file, so the scene is imported once.
+pub fn open_bound(path: &Path) -> Result<BoardDoc, BoardError> {
+    let file = bound_file(path);
+    if file == path || file.exists() {
+        return open(&file);
+    }
+    let (board, issues) = import_file(path)?;
+    for issue in issues {
+        log::warn!("{} imported with an issue: {issue}", path.display());
+    }
+    Ok(board)
+}
+
 /// A file's length and modification time, as the canvas read or wrote it: when the file there has
 /// another stamp, something else wrote to it since. FigCraft stamps a document's file the same way
 /// (`library::stat`, #1330), but keeps its stamp to itself.
@@ -1254,6 +1271,39 @@ mod tests {
         assert!(without(second), "a page with layers on it");
         assert!(!without(empty), "a page with nothing on it");
         assert!(!removes_layers(&doc, &doc.clone()));
+    }
+
+    /// A canvas tab opens an `.excalidraw` file imported, bound to the `.figcraft` file beside it
+    /// (spec D14), and so does sawit-mcp with the app closed: the scene while that file isn't
+    /// there, and that file once a save has made it, so the scene is imported once. Neither file
+    /// is written by opening.
+    #[test]
+    fn an_excalidraw_file_opens_imported_until_its_figcraft_is_there() {
+        let dir = tempdir().unwrap();
+        let scene = dir.path().join("sketch.excalidraw");
+        std::fs::write(&scene, FIXTURE).unwrap();
+        let board = open_bound(&scene).unwrap();
+        assert_eq!(top_level(&board), 9);
+        assert_eq!(board.doc().unwrap().name, "sketch");
+        assert_eq!(names(dir.path()), ["sketch.excalidraw"]);
+
+        // Saved once, edited since: the `.figcraft` file is what opens, not the scene again.
+        std::fs::write(dir.path().join("sketch.figcraft"), bytes_with(&["edited"])).unwrap();
+        let board = open_bound(&scene).unwrap();
+        assert_eq!(top_level(&board), 1);
+        assert!(has_text(&board, "edited"));
+        assert_eq!(std::fs::read(&scene).unwrap(), FIXTURE.as_bytes());
+
+        // A `.figcraft` file opens itself, as `open` opens it: one that isn't there is a new board.
+        let file = dir.path().join("board.figcraft");
+        assert_eq!(top_level(&open_bound(&file).unwrap()), 0);
+        assert!(!file.exists());
+        // A scene that can't be imported is the import's error, and nothing is made.
+        let broken = dir.path().join("broken.excalidraw");
+        std::fs::write(&broken, b"{ not json").unwrap();
+        let error = open_bound(&broken).err().unwrap().to_string();
+        assert!(error.contains("broken.excalidraw"), "{error}");
+        assert!(!dir.path().join("broken.figcraft").exists());
     }
 
     #[test]

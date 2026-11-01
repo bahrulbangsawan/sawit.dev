@@ -743,6 +743,13 @@ impl Workspace {
         Some(view)
     }
 
+    /// Whether a canvas tab of this window shows the canvas of the canvas file at `path`
+    /// ([`Self::board_tab`]): an `.excalidraw` file's is the one bound to the `.figcraft` file
+    /// beside it. An agent's op on that file goes to this window ([`crate::cli`]).
+    pub(crate) fn shows_canvas_file(&self, path: &Path, cx: &App) -> bool {
+        self.board_tab(&store::bound_file(path), cx).is_some()
+    }
+
     /// The tab of the canvas bound to the `.figcraft` file `file` ([`BoardView::path`]), and the
     /// canvas, whatever opened it: a project's canvas tab, or a canvas file's. Named through a
     /// link or as written, it is one file ([`same_canvas_file`]).

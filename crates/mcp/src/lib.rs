@@ -85,7 +85,7 @@ Sawit is a macOS developer workbench. These tools work without the Sawit app run
 These control the running Sawit app (start it with launch_app; app_state shows windows, tabs and terminals):
 - app_*: open files/folders, show panels, layout, tabs, pages (canvas, MCP, tools, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
 - terminal_*: run commands in Sawit's terminal and read their output, type keys (ctrl-c), close tabs or panes. terminal_run, app_run_script and app_ssh_connect return the terminal (tab) and `pane` they used: pass both to terminal_read, terminal_input and terminal_close, since the user may be typing in another terminal, which stays in front (app_state lists tabs and panes). terminal_input needs the tab, and a split tab needs its pane; terminal_read without a tab reads the pane the user has in front, and terminal_close without a pane closes the whole tab.
-- canvas_*: the canvas (FigCraft engine): list, add shapes/stickies/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG. They also work on the saved file when the app is closed.
+- canvas_*: the canvas (FigCraft engine): list, add shapes/stickies/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG, on the page on show. They use your project's canvas (.nyawit/canvas.figcraft), or the .figcraft file named by `file` (a design file, say), in a canvas tab of its own. They also work on the saved file when the app is closed, and keep what they delete as a .bak beside it.
 - canvas_command: run any command of the canvas engine by id with its parameters (board.sticky, node.set, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes. With the app closed each call starts from the saved file, so nothing carries over between calls (no undo, no selection, no view): pass ids, or run the steps in one command.batch.
 - browser_*: a browser tab (WebKit) to check the app being built: navigate (default the project's dev server), snapshot the page as an outline with element refs, click/hover/type/press keys/select/scroll by ref or CSS selector, wait for text, screenshot, read console errors and network requests, evaluate JS, resize to a device, read the user's annotations, inspect an element's design, read the page's design system, export it as DESIGN.md + tokens + assets. Take a new browser_snapshot after the page changes; refs reset.
 Most app tools take `project` to pick the window that has that folder open; without it, the window that has the folder sawit-mcp runs in open is used, else the frontmost window. The browser_* and canvas_* tools (and app_open_page browser or canvas) use that project's own browser tab and canvas, even while the user looks at another project of the window.
@@ -258,9 +258,9 @@ pub(crate) fn agent_project(project: Option<&str>) -> Option<PathBuf> {
 /// with `.git`; else `folder` itself. The home folder and `/` are never one, nor is a folder above
 /// them, as [`project_dir`] has it.
 fn project_holding(folder: &Path, home: Option<&Path>) -> PathBuf {
+    let below_home = |dir: &&Path| dir.parent().is_some() && Some(*dir) != home;
     let nearest = |marker: &str, is_it: fn(&Path) -> bool| {
-        let mut up =
-            (folder.ancestors()).take_while(|dir| dir.parent().is_some() && Some(*dir) != home);
+        let mut up = folder.ancestors().take_while(below_home);
         up.find(|dir| is_it(&dir.join(marker)))
     };
     let found = nearest(sawit_core::nyawit::DIR, Path::is_dir);
@@ -882,8 +882,8 @@ mod tests {
     /// The canvas the tools draw on is the native one, and what an agent is sent says so. Nothing
     /// in it names the web canvas that this one replaced: not a tool's description, not the
     /// description of one of its arguments (those are in the input schema), and not the
-    /// instructions. `canvas_load` alone speaks of that canvas's format, to import it, and only as
-    /// the extension of the files it takes.
+    /// instructions. The canvas tools speak of that canvas's format only as the extension of the
+    /// files they take: `canvas_load` imports one, and every canvas tool's `file` may name one.
     #[test]
     fn canvas_tools_describe_the_native_canvas() {
         const OLD_NAME: &str = "excalidraw";
@@ -900,10 +900,10 @@ mod tests {
 
         let mut stale = Vec::new();
         for (name, text) in &sent {
-            // `canvas_load` takes `.excalidraw` files: that extension is a file's, not a name.
-            let named = match name.as_str() {
-                "canvas_load" => text.replace(".excalidraw", ""),
-                _ => text.clone(),
+            // The canvas tools take `.excalidraw` files: that extension is a file's, not a name.
+            let named = match name.starts_with("canvas_") {
+                true => text.replace(".excalidraw", ""),
+                false => text.clone(),
             };
             if named.to_lowercase().contains(OLD_NAME) {
                 stale.push(format!("{name}: {text}"));
@@ -1137,6 +1137,35 @@ mod tests {
                 "{}: {project}",
                 tool.name
             );
+        }
+    }
+
+    /// Every canvas tool takes `file`, a canvas file to work on instead of the project's board (a
+    /// design file, say), and the canvas_* line says so: the tools reached the project's canvas
+    /// alone, though the app opens any `.figcraft` file in a canvas tab of its own.
+    #[test]
+    fn every_canvas_tool_takes_a_file_and_the_instructions_say_so() {
+        let tools = Sawit::router().list_all();
+        let canvas_tools = tools.iter().filter(|tool| tool.name.starts_with("canvas_"));
+        let without: Vec<&str> = canvas_tools
+            .filter(|tool| {
+                let properties = tool.input_schema.get("properties");
+                properties.is_none_or(|p| p.get("file").is_none())
+            })
+            .map(|tool| tool.name.as_ref())
+            .collect();
+        assert!(without.is_empty(), "these take no file: {without:?}");
+        let line = INSTRUCTIONS
+            .lines()
+            .find(|line| line.starts_with("- canvas_*:"))
+            .expect("a canvas_* line");
+        for said in [
+            "your project's canvas (.nyawit/canvas.figcraft)",
+            "the .figcraft file named by `file`",
+            "on the page on show",
+            "keep what they delete as a .bak",
+        ] {
+            assert!(line.contains(said), "no {said:?} in {line}");
         }
     }
 

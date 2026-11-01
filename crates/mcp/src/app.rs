@@ -12,6 +12,7 @@ use rmcp::{schemars, tool, tool_router};
 use sawit_board::store::{self, Stamp, Writer};
 use sawit_board::{BoardDoc, ops};
 use sawit_core::app_control::{self, Command, InstanceAction, Page, Panel, Request};
+use sawit_core::files::FileKind;
 use serde_json::{Value, json};
 
 use crate::{Sawit, blocking, fail, ok, tri};
@@ -245,12 +246,18 @@ pub struct OpenPromptArgs {
     pub project: Option<String>,
 }
 
+/// What a canvas tool's `file` names: a canvas file to work on instead of the project's canvas
+/// ([`canvas_file`]).
+const CANVAS_FILE: &str = "A canvas file to work on instead of the project's canvas: an absolute path (or ~/…) to a .figcraft file (a design file or a board; one not there yet, in a folder that is, starts as a new board) or to an .excalidraw file, imported once into the <name>.figcraft beside it and left as it is. With the app running the op runs on that file's canvas tab, opened if need be without taking the user's keyboard; with it closed, on the file itself";
+
 /// What a canvas tool's `project` names: the project whose canvas it uses ([`crate::agent_project`]).
 const CANVAS_PROJECT: &str = "Project folder whose canvas (.nyawit/canvas.figcraft) to use, in the window that has it open. Default: the project your working folder is in (with the app closed, the nearest folder up from it with .nyawit/, else with .git, else the folder itself)";
 
 /// canvas_get's and canvas_clear's arguments: which canvas.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasTargetArgs {
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -261,6 +268,8 @@ pub struct CanvasElementsArgs {
         description = "Element skeletons, e.g. {\"type\":\"rectangle\",\"id\":\"a\",\"x\":0,\"y\":0,\"width\":160,\"height\":60,\"label\":{\"text\":\"API\"}}, {\"type\":\"arrow\",\"x\":160,\"y\":30,\"start\":{\"id\":\"a\"},\"end\":{\"id\":\"b\"}}, {\"type\":\"text\",\"x\":0,\"y\":-40,\"text\":\"Title\"}. Types: rectangle, ellipse, diamond, sticky, text, arrow, line, frame. With no colour given, shapes and stickies are sticky yellow (#FFE78A): pass backgroundColor for another, \"transparent\" for no fill. A line through more than two points is drawn as ink, #1E1E1E unless strokeColor names another. Arrows and lines run straight"
     )]
     pub elements: Vec<Value>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -272,6 +281,8 @@ pub struct CanvasMermaidArgs {
     #[schemars(description = "Where to put it; default right of the existing content")]
     pub x: Option<f64>,
     pub y: Option<f64>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -282,6 +293,8 @@ pub struct CanvasUpdateArgs {
         description = "Changes per element: {\"id\":\"a\", \"x\":10, \"text\":\"New label\", \"strokeColor\":\"#e03131\", \"backgroundColor\":\"#ffc9c9\", ...}"
     )]
     pub elements: Vec<Value>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -290,6 +303,8 @@ pub struct CanvasUpdateArgs {
 pub struct CanvasDeleteArgs {
     #[schemars(description = "Element ids (from canvas_get)")]
     pub ids: Vec<String>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -297,11 +312,13 @@ pub struct CanvasDeleteArgs {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasLoadArgs {
     #[schemars(
-        description = "A .figcraft file to load, or an .excalidraw file to import (replaces the board). A backup Sawit keeps loads too: canvas.figcraft.bak brings back the board a clear, a deletion or a load took off"
+        description = "A .figcraft file to load, or an .excalidraw file to import (replaces the board). A backup Sawit keeps loads too: <name>.figcraft.bak beside the canvas file (canvas.figcraft.bak for the project's canvas) brings back the board a clear, a deletion or a load took off"
     )]
     pub path: Option<String>,
     #[schemars(description = "Or the .excalidraw scene JSON itself")]
     pub scene: Option<Value>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -316,6 +333,8 @@ pub struct CanvasCommandArgs {
         description = "The command's parameters as an object, e.g. {\"x\": 0, \"y\": 0, \"text\": \"Idea\"} for board.sticky"
     )]
     pub params: Option<Value>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -326,6 +345,8 @@ pub struct CanvasCommandsArgs {
         description = "Only the commands whose id or label contains this text (any case), such as board. or align, each with the parameters it takes. Without it: every command's id and label"
     )]
     pub filter: Option<String>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -338,6 +359,8 @@ pub struct CanvasExportArgs {
         description = "Absolute path (or ~/…) to write the file to; default the project's .nyawit/exports folder (Sawit's cache folder outside a project)"
     )]
     pub output_path: Option<String>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -397,17 +420,27 @@ impl Sawit {
         }
     }
 
-    /// Runs canvas op `op` and answers it. A running app answers every canvas tool, as it always
-    /// has. With no app running, the op runs on the stored canvas file itself ([`headless`]),
-    /// which is how an agent edits a canvas while Sawit is closed. The two are never both at work,
-    /// so the app's autosave and the file never race.
-    async fn canvas(&self, project: Option<String>, op: Value) -> Result<Value, String> {
+    /// Runs canvas op `op` on the canvas of `project`, or on the canvas file that `file` names
+    /// ([`canvas_file`]), and answers it. A running app answers every canvas tool, as it always
+    /// has, on that canvas's tab. With no app running, the op runs on the stored canvas file itself
+    /// ([`headless`]), which is how an agent edits a canvas while Sawit is closed. The two are
+    /// never both at work, so the app's autosave and the file never race.
+    async fn canvas(
+        &self,
+        project: Option<String>,
+        file: Option<String>,
+        op: Value,
+    ) -> Result<Value, String> {
+        let file = canvas_file(file.as_deref())?;
         if !app_control::is_running(&self.paths) {
-            let file = self.canvas_board_file(project.as_deref())?;
+            let named = match file {
+                Some(file) => file,
+                None => self.canvas_board_file(project.as_deref())?,
+            };
             let lock = self.paths.root.join(CANVAS_LOCK);
-            return blocking(move || headless(&file, &lock, &op)).await?;
+            return blocking(move || headless(&named, &lock, &op)).await?;
         }
-        op_reply(self.app_call(project, Command::Canvas { op }).await?)
+        op_reply(self.app_call(project, Command::Canvas { op, file }).await?)
     }
 
     /// The file `project`'s canvas is saved in while the app is closed: its
@@ -436,9 +469,9 @@ impl Sawit {
 
     pub async fn canvas_get_tool(&self, a: CanvasTargetArgs) -> CallToolResult {
         let reply = if app_control::is_running(&self.paths) {
-            self.canvas(a.project, json!({ "op": "get" })).await
+            self.canvas(a.project, a.file, json!({ "op": "get" })).await
         } else {
-            self.canvas_get_stored(a.project).await
+            self.canvas_get_stored(a.project, a.file).await
         };
         match reply {
             Ok(v) => ok(pretty(&v)),
@@ -451,7 +484,7 @@ impl Sawit {
             .params
             .map(|params| with_files_resolved(&a.command, params));
         let op = json!({ "op": "command", "command": a.command, "params": params });
-        match self.canvas(a.project, op).await {
+        match self.canvas(a.project, a.file, op).await {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
         }
@@ -463,11 +496,20 @@ impl Sawit {
     ///
     /// The one exception is an old canvas the importer can't read, while no canvas file has been
     /// made from it: the old reader says what it always did. Once the canvas file is there its own
-    /// error is the answer, because the old canvas is months behind it.
-    async fn canvas_get_stored(&self, project: Option<String>) -> Result<Value, String> {
-        let file = self.canvas_board_file(project.as_deref())?;
-        match self.canvas(project.clone(), json!({ "op": "get" })).await {
-            Err(_) if !file.exists() => self.canvas_file_summary(project.as_deref()),
+    /// error is the answer, because the old canvas is months behind it. A canvas file the agent
+    /// names (`file`) has no such exception: it is read as every canvas op reads it.
+    async fn canvas_get_stored(
+        &self,
+        project: Option<String>,
+        file: Option<String>,
+    ) -> Result<Value, String> {
+        let get = json!({ "op": "get" });
+        if canvas_file(file.as_deref())?.is_some() {
+            return self.canvas(project, file, get).await;
+        }
+        let board = self.canvas_board_file(project.as_deref())?;
+        match self.canvas(project.clone(), None, get).await {
+            Err(_) if !board.exists() => self.canvas_file_summary(project.as_deref()),
             reply => reply,
         }
     }
@@ -641,15 +683,18 @@ fn lock_stored_canvas(lock: &Path) -> Result<std::fs::File, String> {
     }
 }
 
-/// Runs canvas op `op` on the canvas stored in `file` while no app is running, as the app would run
-/// it, and saves the canvas if the op changed it. The reply is the op's, and an op that fails is
-/// an `Err` that has changed nothing in the file.
+/// Runs canvas op `op` on the canvas stored in `named` while no app is running, as the app would
+/// run it, and saves the canvas if the op changed it. `named` is the project's canvas file, or a
+/// canvas file the agent named: a `.figcraft` file, or an `.excalidraw` file, whose canvas is
+/// saved to the `.figcraft` file beside it ([`store::bound_file`]). The reply is the op's, and an
+/// op that fails is an `Err` that has changed nothing in the file.
 ///
-/// - The canvas is opened as the app opens it ([`store::open`]): a canvas file that isn't there is
-///   a new, empty board, and one that is missing beside an old `canvas.excalidraw` is that board,
-///   imported. Nothing is written until an op changes the canvas, and the old canvas is never
-///   touched. A canvas that can't be opened is an error, and then nothing is written, so a blank
-///   board never takes its place.
+/// - The canvas is opened as the app opens it ([`store::open_bound`]): a canvas file that isn't
+///   there is a new, empty board, and one that is missing beside an old `canvas.excalidraw` is
+///   that board, imported; an `.excalidraw` file is its scene, imported, until the `.figcraft`
+///   file beside it is there. Nothing is written until an op changes the canvas, so the scene is
+///   imported once, and the `.excalidraw` file is never touched. A canvas that can't be opened is
+///   an error, and then nothing is written, so a blank board never takes its place.
 /// - A change is saved as the app's autosave saves it ([`run_and_save`]): through the store's
 ///   [`Writer`] (a temporary file renamed into place, a `.bak` kept before a save that takes
 ///   layers off the canvas, and a `.nyawit/` made with its `.gitignore`), with the file's version
@@ -658,24 +703,25 @@ fn lock_stored_canvas(lock: &Path) -> Result<std::fs::File, String> {
 /// - Calls take turns: this process's by [`take_turn`], every `sawit-mcp`'s by the lock `lock`
 ///   ([`lock_stored_canvas`]), held from the read to the save. So an answer is true: ok when the
 ///   edit is on disk, an error when nothing was saved.
-fn headless(file: &Path, lock: &Path, op: &Value) -> Result<Value, String> {
+fn headless(named: &Path, lock: &Path, op: &Value) -> Result<Value, String> {
     let _turn = take_turn();
-    headless_turn(file, lock, op)
+    headless_turn(named, lock, op)
 }
 
-/// One call's turn at the stored canvas in `file`: what [`headless`] does once this process's
+/// One call's turn at the canvas stored in `named`: what [`headless`] does once this process's
 /// other calls are out of the way. It holds the lock `lock`, which keeps other processes' calls
 /// out, for the whole turn.
-fn headless_turn(file: &Path, lock: &Path, op: &Value) -> Result<Value, String> {
+fn headless_turn(named: &Path, lock: &Path, op: &Value) -> Result<Value, String> {
     let _held = lock_stored_canvas(lock)?;
     // The fonts the app's text has: Sawit's own (Inter), then the system's, which no app is
     // scanning here, so they are read the first time text is laid out.
     sawit_board::fonts::register();
     sawit_board::scan_system_fonts_on_demand();
-    edit_stored(file, op, || {})
+    edit_stored(named, op, || {})
 }
 
-/// Reads the canvas stored in `file`, runs `op` on it and saves it ([`run_and_save`]).
+/// Reads the canvas stored in `named` ([`store::open_bound`]), runs `op` on it and saves it to its
+/// `.figcraft` file ([`run_and_save`]).
 ///
 /// Every `sawit-mcp` takes turns ([`lock_stored_canvas`]), but Sawit as it starts, or another
 /// program, may still save the file while a call runs: then the call's save is refused (its edit
@@ -683,17 +729,19 @@ fn headless_turn(file: &Path, lock: &Path, op: &Value) -> Result<Value, String> 
 /// times, so the agent's op goes through on top of theirs. When the file changed every time, the
 /// call saved nothing, and its error says so in words for an agent. `between` runs after each
 /// read, before the op: a test writes the file there.
-fn edit_stored(file: &Path, op: &Value, mut between: impl FnMut()) -> Result<Value, String> {
+fn edit_stored(named: &Path, op: &Value, mut between: impl FnMut()) -> Result<Value, String> {
+    let file = store::bound_file(named);
     let mut attempt = 1;
     loop {
         // Stamped before it is read, as the app stamps a canvas file it opens: a save made in
         // between by something else makes this call's save refuse, rather than drop its edit.
-        let read = Stamp::of(file);
-        let mut board = store::open(file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let read = Stamp::of(&file);
+        let opened = store::open_bound(named);
+        let mut board = opened.map_err(|e| format!("{}: {e}", named.display()))?;
         between();
-        match run_and_save(&mut board, file, read, op) {
-            Err(_) if Stamp::of(file) != read && attempt < CANVAS_ATTEMPTS => attempt += 1,
-            Err(_) if Stamp::of(file) != read => return Err(changed_while_running(file)),
+        match run_and_save(&mut board, &file, read, op) {
+            Err(_) if Stamp::of(&file) != read && attempt < CANVAS_ATTEMPTS => attempt += 1,
+            Err(_) if Stamp::of(&file) != read => return Err(changed_while_running(&file)),
             done => return done,
         }
     }
@@ -781,6 +829,48 @@ fn is_figcraft(path: &str) -> bool {
     ops::is_figcraft_file(Path::new(path.trim()))
 }
 
+/// The canvas file an agent names with `file`, if it names one: trimmed (a blank one names none),
+/// `~` for the home folder, absolute, and through the links on its way, as the app names the files
+/// it opens ([`sawit_core::files::resolve`]). It is a `.figcraft` file that is there, or one to be
+/// made in a folder that is there (a new board, written by the first edit), or an `.excalidraw`
+/// file that is there or was imported into the `.figcraft` file beside it ([`store::bound_file`]).
+/// It is checked before the app or a file is touched, so a mistaken name opens no tab and makes
+/// no file.
+fn canvas_file(file: Option<&str>) -> Result<Option<PathBuf>, String> {
+    let Some(named) = file.map(str::trim).filter(|file| !file.is_empty()) else {
+        return Ok(None);
+    };
+    let path = crate::expand_home(named);
+    if !path.is_absolute() {
+        return Err(format!(
+            "file “{named}” must be an absolute path (or start with ~/): nothing was changed."
+        ));
+    }
+    let path = sawit_core::files::resolve(&path);
+    // A link left at the name is no file to make, nor one to write through.
+    let there = std::fs::symlink_metadata(&path).is_ok();
+    let in_a_folder = path.parent().is_some_and(Path::is_dir);
+    match sawit_core::files::classify(&path) {
+        FileKind::Figcraft if path.is_file() || (!there && in_a_folder) => Ok(Some(path)),
+        FileKind::Figcraft if there => Err(format!("{} isn't a canvas file.", path.display())),
+        FileKind::Figcraft => Err(format!(
+            "{} isn't there, nor is the folder a new canvas file would go in.",
+            path.display()
+        )),
+        FileKind::Excalidraw if path.is_file() || store::bound_file(&path).is_file() => {
+            Ok(Some(path))
+        }
+        FileKind::Excalidraw => Err(format!(
+            "{} isn't there: name an .excalidraw file to import.",
+            path.display()
+        )),
+        _ => Err(format!(
+            "{} isn't a canvas file: name a .figcraft or .excalidraw file.",
+            path.display()
+        )),
+    }
+}
+
 /// `path` as the app, whose working folder is not the agent's, can open it: `~` expanded, and a
 /// relative path taken from the folder the agent runs in. It is text for a JSON op, so a folder
 /// that isn't valid UTF-8 comes out with replacement characters, and the canvas says it can't be read.
@@ -840,14 +930,14 @@ fn with_files_resolved(command: &str, mut params: Value) -> Value {
     params
 }
 
-/// Where an export goes when no path is given: the project's
-/// `.nyawit/exports/`, else `<cache>/canvas`.
-fn export_path(project: Option<&Path>, cache: &Path, ext: &str) -> PathBuf {
+/// Where an export goes when no path is given: the project's `.nyawit/exports/`, else
+/// `<cache>/canvas`, named after the canvas file (`stem`) and the time.
+fn export_path(project: Option<&Path>, cache: &Path, stem: &str, ext: &str) -> PathBuf {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    let name = format!("canvas-{stamp}.{ext}");
+    let name = format!("{stem}-{stamp}.{ext}");
     match project {
         Some(project) => {
             let dir = sawit_core::nyawit::exports_dir(project);
@@ -1141,7 +1231,11 @@ impl Sawit {
         Parameters(a): Parameters<CanvasElementsArgs>,
     ) -> CallToolResult {
         match self
-            .canvas(a.project, json!({ "op": "add", "elements": a.elements }))
+            .canvas(
+                a.project,
+                a.file,
+                json!({ "op": "add", "elements": a.elements }),
+            )
             .await
         {
             Ok(v) => ok(pretty(&v)),
@@ -1157,7 +1251,7 @@ impl Sawit {
         Parameters(a): Parameters<CanvasMermaidArgs>,
     ) -> CallToolResult {
         let op = json!({ "op": "mermaid", "source": a.source, "x": a.x, "y": a.y });
-        match self.canvas(a.project, op).await {
+        match self.canvas(a.project, a.file, op).await {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
         }
@@ -1166,7 +1260,11 @@ impl Sawit {
     #[tool(description = "Change canvas elements by id: position, size, colors, text")]
     async fn canvas_update(&self, Parameters(a): Parameters<CanvasUpdateArgs>) -> CallToolResult {
         match self
-            .canvas(a.project, json!({ "op": "update", "elements": a.elements }))
+            .canvas(
+                a.project,
+                a.file,
+                json!({ "op": "update", "elements": a.elements }),
+            )
             .await
         {
             Ok(v) => ok(pretty(&v)),
@@ -1179,7 +1277,7 @@ impl Sawit {
     )]
     async fn canvas_delete(&self, Parameters(a): Parameters<CanvasDeleteArgs>) -> CallToolResult {
         match self
-            .canvas(a.project, json!({ "op": "delete", "ids": a.ids }))
+            .canvas(a.project, a.file, json!({ "op": "delete", "ids": a.ids }))
             .await
         {
             Ok(v) => ok(pretty(&v)),
@@ -1191,7 +1289,10 @@ impl Sawit {
         description = "Delete every layer of the canvas's page on show; other pages keep theirs. The board it held is kept beside the canvas file as <name>.bak (canvas.figcraft.bak for the project's canvas), the 4 kept before it moving to .bak.1 to .bak.4 (the oldest goes), and canvas_load brings it back; in the app the user can also undo it"
     )]
     async fn canvas_clear(&self, Parameters(a): Parameters<CanvasTargetArgs>) -> CallToolResult {
-        match self.canvas(a.project, json!({ "op": "clear" })).await {
+        match self
+            .canvas(a.project, a.file, json!({ "op": "clear" }))
+            .await
+        {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
         }
@@ -1229,7 +1330,7 @@ impl Sawit {
             }
             (None, None) => return fail("Give a path or a scene."),
         };
-        match self.canvas(a.project, op).await {
+        match self.canvas(a.project, a.file, op).await {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
         }
@@ -1253,7 +1354,12 @@ impl Sawit {
         ));
         let op = json!({ "op": if png { "export_png" } else { "export_svg" } });
         let project = crate::agent_project(a.project.as_deref());
-        let value = match self.canvas(a.project, op).await {
+        // Named after the canvas file: `canvas-…` for the project's, `home-…` for home.figcraft.
+        let canvas = tri!(canvas_file(a.file.as_deref()));
+        let stem = canvas.as_deref().map(store::bound_file);
+        let stem = stem.as_deref().and_then(Path::file_stem);
+        let stem = stem.map_or_else(|| "canvas".into(), |stem| stem.to_string_lossy());
+        let value = match self.canvas(a.project, a.file, op).await {
             Ok(v) => v,
             Err(e) => return fail(e),
         };
@@ -1276,6 +1382,7 @@ impl Sawit {
             export_path(
                 project.as_deref(),
                 &self.paths.cache_dir(),
+                &stem,
                 if png { "png" } else { "svg" },
             )
         });
@@ -1308,7 +1415,10 @@ impl Sawit {
         &self,
         Parameters(a): Parameters<CanvasCommandsArgs>,
     ) -> CallToolResult {
-        match self.canvas(a.project, json!({ "op": "commands" })).await {
+        match self
+            .canvas(a.project, a.file, json!({ "op": "commands" }))
+            .await
+        {
             Ok(reply) => ok(command_list(&reply, a.filter.as_deref())),
             Err(e) => fail(e),
         }
@@ -1683,7 +1793,7 @@ mod tests {
                     continue;
                 }
                 let Some(Ok(Request {
-                    command: Command::Canvas { op },
+                    command: Command::Canvas { op, .. },
                     ..
                 })) = app_control::decode(&bytes)
                 else {
@@ -1891,6 +2001,7 @@ mod tests {
         // the app is the one that has the canvas.
         let got = server
             .canvas_get_tool(CanvasTargetArgs {
+                file: None,
                 project: project_arg(&project),
             })
             .await;
@@ -1901,6 +2012,7 @@ mod tests {
         let failed = server
             .canvas_add_elements(Parameters(CanvasElementsArgs {
                 elements: vec![json!({"type": "rectangle"})],
+                file: None,
                 project: project_arg(&project),
             }))
             .await;
@@ -1912,6 +2024,7 @@ mod tests {
             .canvas_command_tool(CanvasCommandArgs {
                 command: "board.sticky".into(),
                 params: Some(json!({"x": 0, "y": 0})),
+                file: None,
                 project: project_arg(&project),
             })
             .await;
@@ -1922,6 +2035,7 @@ mod tests {
         let listed = server
             .canvas_commands(Parameters(CanvasCommandsArgs {
                 filter: None,
+                file: None,
                 project: project_arg(&project),
             }))
             .await;
@@ -1948,6 +2062,7 @@ mod tests {
             let run = server.canvas_command_tool(CanvasCommandArgs {
                 command: command.into(),
                 params: Some(params),
+                file: None,
                 project: project_arg(&project),
             });
             async {
@@ -2017,6 +2132,7 @@ mod tests {
                     json!({"type": "rectangle", "id": "db", "x": 300, "y": 0, "width": 160, "height": 60, "label": {"text": "DB"}}),
                     json!({"type": "arrow", "id": "calls", "x": 160, "y": 30, "start": {"id": "api"}, "end": {"id": "db"}}),
                 ],
+                file: None,
                 project: project_arg(&project),
             }))
             .await;
@@ -2027,6 +2143,7 @@ mod tests {
         let updated = server
             .canvas_update(Parameters(CanvasUpdateArgs {
                 elements: vec![json!({"id": "db", "text": "Database"})],
+                file: None,
                 project: project_arg(&project),
             }))
             .await;
@@ -2052,6 +2169,7 @@ mod tests {
                 source: "graph TD; A-->B".into(),
                 x: Some(0.0),
                 y: Some(400.0),
+                file: None,
                 project: project_arg(&project),
             }))
             .await;
@@ -2068,6 +2186,7 @@ mod tests {
             .canvas_command_tool(CanvasCommandArgs {
                 command: "view.zoomFit".into(),
                 params: None,
+                file: None,
                 project: project_arg(&project),
             })
             .await;
@@ -2076,6 +2195,7 @@ mod tests {
         let deleted = server
             .canvas_delete(Parameters(CanvasDeleteArgs {
                 ids: vec!["calls".into(), "nope".into()],
+                file: None,
                 project: project_arg(&project),
             }))
             .await;
@@ -2087,6 +2207,7 @@ mod tests {
         // Clearing the canvas keeps what it held, in the `.bak` beside it.
         let cleared = server
             .canvas_clear(Parameters(CanvasTargetArgs {
+                file: None,
                 project: project_arg(&project),
             }))
             .await;
@@ -2111,6 +2232,7 @@ mod tests {
         let calls = (0..8).map(|n| {
             server.canvas_add_elements(Parameters(CanvasElementsArgs {
                 elements: vec![json!({"type": "rectangle", "id": format!("box-{n}"), "x": n * 200, "y": 0, "width": 100, "height": 60})],
+                file: None,
                 project: project_arg(&project),
             }))
         });
@@ -2134,6 +2256,7 @@ mod tests {
         let load = |path: &Path| CanvasLoadArgs {
             path: Some(path.display().to_string()),
             scene: None,
+            file: None,
             project: project_arg(&project),
         };
 
@@ -2162,6 +2285,7 @@ mod tests {
             .canvas_load(Parameters(CanvasLoadArgs {
                 path: None,
                 scene: None,
+                file: None,
                 project: project_arg(&project),
             }))
             .await;
@@ -2208,6 +2332,7 @@ mod tests {
                     let load = CanvasLoadArgs {
                         path: Some(path.clone()),
                         scene: None,
+                        file: None,
                         project,
                     };
                     let call = async move { server.canvas_load(Parameters(load)).await };
@@ -2252,6 +2377,7 @@ mod tests {
 
         let cleared = server
             .canvas_clear(Parameters(CanvasTargetArgs {
+                file: None,
                 project: project_arg(&project),
             }))
             .await;
@@ -2263,6 +2389,7 @@ mod tests {
             .canvas_load(Parameters(CanvasLoadArgs {
                 path: Some(backup.display().to_string()),
                 scene: None,
+                file: None,
                 project: project_arg(&project),
             }))
             .await;
@@ -2287,6 +2414,7 @@ mod tests {
         let load = |path: String| CanvasLoadArgs {
             path: Some(path),
             scene: None,
+            file: None,
             project: project_arg(&project),
         };
 
@@ -2318,6 +2446,7 @@ mod tests {
         let list = |filter: Option<&str>| {
             server.canvas_commands(Parameters(CanvasCommandsArgs {
                 filter: filter.map(str::to_string),
+                file: None,
                 project: project_arg(&project),
             }))
         };
@@ -2390,6 +2519,7 @@ mod tests {
             .canvas_command_tool(CanvasCommandArgs {
                 command: "board.sticky".into(),
                 params: Some(json!({"x": 0, "y": 0})),
+                file: None,
                 project: project_arg(&project),
             })
             .await;
@@ -2591,6 +2721,7 @@ mod tests {
         let load = |path: &Path| CanvasLoadArgs {
             path: Some(path.display().to_string()),
             scene: None,
+            file: None,
             project: project_arg(&project),
         };
 
@@ -2638,6 +2769,7 @@ mod tests {
         let project = project_in(dir.path());
         let file = board_file(&project);
         let window = || CanvasTargetArgs {
+            file: None,
             project: project_arg(&project),
         };
         write_board(&file, 3);
@@ -2649,6 +2781,7 @@ mod tests {
         let drawn = server
             .canvas_add_elements(Parameters(CanvasElementsArgs {
                 elements: vec![json!({"type": "rectangle", "x": 0, "y": 0})],
+                file: None,
                 project: project_arg(&project),
             }))
             .await;
@@ -2675,6 +2808,7 @@ mod tests {
                 .canvas_load(Parameters(CanvasLoadArgs {
                     path: Some(other.display().to_string()),
                     scene: None,
+                    file: None,
                     project: project_arg(&project),
                 }))
                 .await;
@@ -2715,6 +2849,7 @@ mod tests {
             let run = server.canvas_command_tool(CanvasCommandArgs {
                 command: command.into(),
                 params: Some(params),
+                file: None,
                 project: project_arg(&project),
             });
             async {
@@ -2730,6 +2865,7 @@ mod tests {
         let deleted = server
             .canvas_delete(Parameters(CanvasDeleteArgs {
                 ids: vec![id_of("note 0")],
+                file: None,
                 project: project_arg(&project),
             }))
             .await;
@@ -2754,6 +2890,7 @@ mod tests {
         // A clear of the first page, while the others keep their stickies.
         let cleared = server
             .canvas_clear(Parameters(CanvasTargetArgs {
+                file: None,
                 project: project_arg(&project),
             }))
             .await;
@@ -2791,6 +2928,7 @@ mod tests {
                 let elements = vec![sticky];
                 let args = CanvasElementsArgs {
                     elements,
+                    file: None,
                     project: None,
                 };
                 server.canvas_add_elements(Parameters(args)).await
@@ -2842,6 +2980,7 @@ mod tests {
             let run = server.canvas_command_tool(CanvasCommandArgs {
                 command: command.into(),
                 params: Some(params),
+                file: None,
                 project: project_arg(&project),
             });
             async {
@@ -2856,6 +2995,7 @@ mod tests {
         ]});
         command("command.batch", steps).await;
         let window = || CanvasTargetArgs {
+            file: None,
             project: project_arg(&project),
         };
 
@@ -2923,6 +3063,7 @@ mod tests {
             .canvas_load(Parameters(CanvasLoadArgs {
                 path: Some(other.display().to_string()),
                 scene: None,
+                file: None,
                 project: project_arg(&project),
             }))
             .await;
@@ -2998,6 +3139,7 @@ mod tests {
             .canvas_command_tool(CanvasCommandArgs {
                 command: "file.exportSvg".into(),
                 params: Some(json!({"path": file})),
+                file: None,
                 project: project_arg(&project),
             })
             .await;
@@ -3020,6 +3162,7 @@ mod tests {
                     .canvas_export(Parameters(CanvasExportArgs {
                         format: Some(format.into()),
                         output_path: Some(target.display().to_string()),
+                        file: None,
                         project: project_arg(&project),
                     }))
                     .await;
@@ -3033,6 +3176,7 @@ mod tests {
         // The canvas is still there, with its sticky.
         let got = server
             .canvas_get_tool(CanvasTargetArgs {
+                file: None,
                 project: project_arg(&project),
             })
             .await;
@@ -3045,6 +3189,7 @@ mod tests {
                 .canvas_export(Parameters(CanvasExportArgs {
                     format: Some(format.into()),
                     output_path: Some(out.display().to_string()),
+                    file: None,
                     project: project_arg(&project),
                 }))
                 .await;
@@ -3065,6 +3210,7 @@ mod tests {
         let export = |format: &str, output_path: &str| CanvasExportArgs {
             format: Some(format.into()),
             output_path: Some(output_path.into()),
+            file: None,
             project: project_arg(&project),
         };
 
@@ -3116,6 +3262,7 @@ mod tests {
             .canvas_export(Parameters(CanvasExportArgs {
                 format: Some("svg".into()),
                 output_path: Some(out.display().to_string()),
+                file: None,
                 project: project_arg(&project),
             }))
             .await;
@@ -3164,6 +3311,7 @@ mod tests {
             .canvas_export(Parameters(CanvasExportArgs {
                 format: Some("svg".into()),
                 output_path: Some(format!("{}  ", out.display())),
+                file: None,
                 project: project_arg(&project),
             }))
             .await;
@@ -3177,5 +3325,263 @@ mod tests {
                 written.len()
             )
         );
+    }
+
+    /// A design file at `path`, with nothing on it yet: frames, text and vectors go on it, a
+    /// board's stickies and shapes don't.
+    fn write_design(path: &Path) {
+        let bytes = figcraft_format::save_bytes(&Default::default(), None).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    /// The names in `dir`, sorted.
+    fn names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// The canvas tools work on any canvas file an agent names with `file`, not only on the
+    /// project's board: a design file kept in the repository could be edited only by hand. With
+    /// Sawit closed, they draw on it, read it, export it and delete from it there, it stays a
+    /// design file, its backups are its own, and the project's canvas is left alone.
+    #[tokio::test]
+    async fn the_canvas_tools_work_on_a_design_file_named_by_file_with_sawit_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let design = project.join("design").join("home.figcraft");
+        write_design(&design);
+        let file = || Some(format!(" {} ", design.display()));
+
+        let added = server
+            .canvas_add_elements(Parameters(CanvasElementsArgs {
+                elements: vec![
+                    json!({"type": "frame", "x": 0, "y": 0, "width": 400, "height": 300}),
+                    json!({"type": "text", "id": "hero", "x": 20, "y": 20, "text": "Hero"}),
+                ],
+                file: file(),
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_eq!(answer(&added)["added"], json!(2), "{}", said(&added));
+        let got = server
+            .canvas_get_tool(CanvasTargetArgs {
+                file: file(),
+                project: project_arg(&project),
+            })
+            .await;
+        let got = answer(&got);
+        let texts: Vec<&str> = (got["elements"].as_array().unwrap().iter())
+            .filter_map(|layer| layer["text"].as_str())
+            .collect();
+        assert_eq!(texts, ["Hero"]);
+        let saved = BoardDoc::from_bytes(&std::fs::read(&design).unwrap()).unwrap();
+        assert_eq!(saved.kind(), sawit_board::DocKind::Design);
+        assert!(
+            !board_file(&project).exists(),
+            "the project's canvas was made"
+        );
+
+        // An export with no path goes to the project's exports, named after the file.
+        let exported = server
+            .canvas_export(Parameters(CanvasExportArgs {
+                format: None,
+                output_path: None,
+                file: file(),
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_ne!(exported.is_error, Some(true), "{}", said(&exported));
+        let exports = names(&project.join(".nyawit").join("exports"));
+        assert!(
+            exports.len() == 1 && exports[0].starts_with("home-") && exports[0].ends_with(".svg"),
+            "{exports:?}"
+        );
+
+        // A deletion keeps the design file's board beside it.
+        let deleted = server
+            .canvas_delete(Parameters(CanvasDeleteArgs {
+                ids: vec!["hero".into()],
+                file: file(),
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_eq!(answer(&deleted)["deleted"], json!(1), "{}", said(&deleted));
+        assert!(!texts_in(&design).contains("Hero"));
+        assert!(texts_of(&backups_of(&design)[0]).contains("Hero"));
+        assert_eq!(
+            names(&design.with_file_name("")),
+            ["home.figcraft", "home.figcraft.bak"]
+        );
+    }
+
+    /// An `.excalidraw` file an agent names is imported once, into the `.figcraft` file beside
+    /// it, as the app opens one (spec D14): reads import it and write nothing, the first edit
+    /// writes the `.figcraft` file, and from then on that file is the canvas. The `.excalidraw`
+    /// file is never touched.
+    #[tokio::test]
+    async fn an_excalidraw_file_named_by_file_is_imported_once_into_the_figcraft_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let sketches = project.join("sketches");
+        let scene = sketches.join("flow.excalidraw");
+        std::fs::create_dir_all(&sketches).unwrap();
+        std::fs::write(&scene, OLD_BOARD).unwrap();
+        let get = || {
+            server.canvas_get_tool(CanvasTargetArgs {
+                file: Some(scene.display().to_string()),
+                project: project_arg(&project),
+            })
+        };
+
+        let got = answer(&get().await);
+        assert_eq!(got["elements"].as_array().unwrap().len(), 9);
+        assert_eq!(names(&sketches), ["flow.excalidraw"], "a read wrote");
+
+        let added = server
+            .canvas_add_elements(Parameters(CanvasElementsArgs {
+                elements: vec![json!({"type": "sticky", "x": 900, "y": 0, "text": "added"})],
+                file: Some(scene.display().to_string()),
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_ne!(added.is_error, Some(true), "{}", said(&added));
+        assert_eq!(names(&sketches), ["flow.excalidraw", "flow.figcraft"]);
+        assert_eq!(layers_in(&sketches.join("flow.figcraft")).len(), 10);
+        assert_eq!(std::fs::read_to_string(&scene).unwrap(), OLD_BOARD);
+
+        // Imported once: the scene changing on disk changes the canvas no more.
+        std::fs::write(&scene, r#"{"type": "excalidraw", "elements": []}"#).unwrap();
+        assert_eq!(
+            answer(&get().await)["elements"].as_array().unwrap().len(),
+            10
+        );
+        assert!(
+            !board_file(&project).exists(),
+            "the project's canvas was made"
+        );
+    }
+
+    /// With Sawit running, a canvas tool's `file` goes to the app with the op, as the file it is
+    /// on disk, for the app to run the op on that file's canvas tab; without one the op is the
+    /// project canvas's, as before. A file that is no canvas file is refused here, and the app
+    /// isn't asked.
+    #[tokio::test]
+    async fn a_running_app_is_sent_the_canvas_file_an_agent_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let design = project.join("home.figcraft");
+        write_design(&design);
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&project, &link).unwrap();
+        let asked = fake_app_answering(
+            &server.paths,
+            vec![json!({"ok": true, "elements": []}), json!({"ok": true})],
+        );
+        let sent = |asked: &Receiver<Request>| {
+            let request = asked.recv_timeout(Duration::from_secs(5)).expect("asked");
+            match request.command {
+                Command::Canvas { op, file } => (op, file),
+                other => panic!("{other:?}"),
+            }
+        };
+
+        let got = server
+            .canvas_get_tool(CanvasTargetArgs {
+                file: Some(link.join("home.figcraft").display().to_string()),
+                project: None,
+            })
+            .await;
+        assert_ne!(got.is_error, Some(true), "{}", said(&got));
+        let real = design.canonicalize().unwrap();
+        assert_eq!(sent(&asked), (json!({"op": "get"}), Some(real)));
+        let cleared = server
+            .canvas_clear(Parameters(CanvasTargetArgs {
+                file: Some("  ".into()),
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_ne!(cleared.is_error, Some(true), "{}", said(&cleared));
+        assert_eq!(sent(&asked), (json!({"op": "clear"}), None));
+
+        let refused = server
+            .canvas_clear(Parameters(CanvasTargetArgs {
+                file: Some(project.join("notes.md").display().to_string()),
+                project: project_arg(&project),
+            }))
+            .await;
+        assert_eq!(refused.is_error, Some(true), "{}", said(&refused));
+        assert!(
+            said(&refused).contains("isn't a canvas file"),
+            "{}",
+            said(&refused)
+        );
+        assert!(asked.recv_timeout(Duration::from_millis(300)).is_err());
+    }
+
+    /// `file` names a canvas file by its absolute path (or `~/…`): a `.figcraft` file that is
+    /// there, or a new one in a folder that is (a new board, made by the first edit), or an
+    /// `.excalidraw` file that is there or was imported. Anything else is refused before a tab
+    /// opens or a file is made, and says why.
+    #[test]
+    fn a_canvas_file_is_an_absolute_figcraft_or_excalidraw_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().canonicalize().unwrap();
+        let design = real.join("home.figcraft");
+        write_design(&design);
+        let file = |path: &Path| canvas_file(Some(&path.display().to_string()));
+        assert_eq!(canvas_file(None), Ok(None));
+        assert_eq!(canvas_file(Some("  ")), Ok(None));
+        assert_eq!(file(&design), Ok(Some(design.clone())));
+        let new = real.join("new.figcraft");
+        assert_eq!(file(&new), Ok(Some(new.clone())));
+        assert!(!new.exists());
+        // An `.excalidraw` file whose scene went, once imported, is the file it was imported into.
+        write_board(&real.join("gone.figcraft"), 1);
+        let gone = real.join("gone.excalidraw");
+        assert_eq!(file(&gone), Ok(Some(gone.clone())));
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = Path::new(&home).canonicalize().unwrap();
+            let named = canvas_file(Some("~/sawit-test-no-such-folder/x.figcraft"));
+            let error = named.unwrap_err();
+            assert!(error.contains(&home.display().to_string()), "{error}");
+        }
+
+        for (named, says) in [
+            ("home.figcraft".to_string(), "must be an absolute path"),
+            (
+                real.join("notes.md").display().to_string(),
+                "isn't a canvas file",
+            ),
+            (
+                real.join("canvas.figcraft.bak").display().to_string(),
+                "isn't a canvas file",
+            ),
+            (
+                real.join("no/such/folder/x.figcraft").display().to_string(),
+                "nor is the folder a new canvas file would go in",
+            ),
+            (
+                real.join("missing.excalidraw").display().to_string(),
+                "isn't there: name an .excalidraw file to import",
+            ),
+        ] {
+            let refused = canvas_file(Some(&named)).unwrap_err();
+            assert!(refused.contains(says), "{named}: {refused}");
+        }
+        // A folder by that name is no canvas file, and neither is a link left at the name.
+        std::fs::create_dir(real.join("folder.figcraft")).unwrap();
+        std::os::unix::fs::symlink(real.join("nowhere"), real.join("dangling.figcraft")).unwrap();
+        for name in ["folder.figcraft", "dangling.figcraft"] {
+            let refused = file(&real.join(name)).unwrap_err();
+            assert!(refused.contains("isn't a canvas file"), "{name}: {refused}");
+        }
     }
 }
