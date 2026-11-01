@@ -55,6 +55,7 @@ pub fn menu(
             .xsmall()
             .icon(Lucide::Package)
             .label(shown.id())
+            .accessibility_label(format!("Run with {}", shown.id()))
             .tooltip("The Package Manager That Runs It")
             .dropdown_menu_with_anchor(Anchor::TopLeft, move |mut menu, _, _| {
                 for pm in &usable {

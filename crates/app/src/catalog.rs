@@ -302,6 +302,7 @@ pub fn tabs(
                         .ghost()
                         .xsmall()
                         .selected(ix == current)
+                        .toggled(ix == current)
                         .label(format!("{label} {n}"))
                         .on_click(move |_, window, cx| on(&ix, window, cx))
                 }),
@@ -554,7 +555,10 @@ pub fn pager(
                 .debug_selector(move || format!("{list}-count"))
                 .flex_none()
                 .gap_2()
-                .child(format!("{first}–{last} of {total} {noun}"))
+                .child(label(
+                    SharedString::from(format!("{list}-count")),
+                    format!("{first}–{last} of {total} {noun}"),
+                ))
                 // Fewer rows than the smallest page: the size changes nothing.
                 .when(total > PageSize::CHOICES[0].rows(total), |el| {
                     el.child(size_menu)
@@ -602,6 +606,27 @@ pub fn empty(title: String, clear: Button, cx: &App) -> impl IntoElement + use<>
                 .child("Try another search, or clear the filters."),
         )
         .child(div().pt_1().child(clear))
+}
+
+/// Text that assistive technology reads as text: GPUI exposes no plain text to it, so a count or
+/// a status that matters on its own is shown through this, under its element `id`.
+pub fn label(id: impl Into<ElementId>, text: impl Into<SharedString>) -> Stateful<Div> {
+    let text = text.into();
+    div()
+        .id(id)
+        .role(Role::Label)
+        .aria_label(text.clone())
+        .child(text)
+}
+
+/// A row of a catalog list as assistive technology sees it: an item named `name`, so a screen
+/// reader (and a test) can tell the rows apart rather than hearing only their buttons.
+pub fn list_item(
+    row: Div,
+    id: impl Into<ElementId>,
+    name: impl Into<SharedString>,
+) -> Stateful<Div> {
+    row.id(id).role(Role::ListItem).aria_label(name)
 }
 
 /// A thin upright rule between groups of buttons.

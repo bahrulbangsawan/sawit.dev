@@ -1448,6 +1448,8 @@ impl Workspace {
                     .ghost()
                     .xsmall()
                     .icon(icon)
+                    .role(Role::Tab)
+                    .accessibility_label(tooltip)
                     .tooltip_with_action(tooltip, action, Some("Workspace"))
                     .selected(current == which)
                     .on_click(cx.listener(move |this, _, _, cx| this.show_panel(which, cx)))
@@ -1639,6 +1641,9 @@ impl Workspace {
                 let weak = weak.clone();
                 h_flex()
                     .id(("pane-tab", ix))
+                    .role(Role::Tab)
+                    .aria_label(title.clone())
+                    .aria_selected(active)
                     .relative()
                     .flex_none()
                     .h_full()
@@ -1673,6 +1678,7 @@ impl Workspace {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::Pin)
+                            .accessibility_label("Unpin")
                             .tooltip("Unpin")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
@@ -1683,6 +1689,7 @@ impl Workspace {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::X)
+                            .accessibility_label("Close Tab")
                             .tooltip_with_action("Close", &CloseActiveTab, Some("Workspace"))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
@@ -1719,6 +1726,8 @@ impl Workspace {
         }
         h_flex()
             .id("tab-bar")
+            .role(Role::TabList)
+            .aria_label("Tabs")
             .h(px(32.))
             .flex_none()
             .bg(cx.theme().tab_bar)
@@ -2943,6 +2952,9 @@ impl Workspace {
             Some(
                 h_flex()
                     .id(("project", ix))
+                    .role(Role::Tab)
+                    .aria_label(project_name(&root))
+                    .aria_selected(active)
                     .flex_none()
                     .h(px(24.))
                     .pl_2()
@@ -2962,6 +2974,7 @@ impl Workspace {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::X)
+                            .accessibility_label(format!("Close {}", project_name(&root)))
                             .tooltip(if only {
                                 "Close Project"
                             } else {
@@ -2980,6 +2993,8 @@ impl Workspace {
         });
         h_flex()
             .id("project-switcher")
+            .role(Role::TabList)
+            .aria_label("Projects")
             .min_w_0()
             .gap_1()
             .overflow_x_scroll()
@@ -2989,6 +3004,7 @@ impl Workspace {
                     .ghost()
                     .xsmall()
                     .icon(Lucide::Plus)
+                    .accessibility_label("Open Another Project")
                     .tooltip_with_action(
                         "Open Another Project in This Window",
                         &AddProject,
@@ -3023,6 +3039,7 @@ impl Workspace {
                 .ghost()
                 .xsmall()
                 .icon(icon)
+                .accessibility_label(tooltip)
                 .tooltip_with_action(tooltip, action, Some("Workspace"))
                 .selected(on)
         };
@@ -3119,6 +3136,7 @@ impl Workspace {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::Keyboard)
+                            .accessibility_label("Keymap Editor")
                             .tooltip_with_action(
                                 "Keymap Editor",
                                 &OpenKeymapEditor,
@@ -3231,6 +3249,7 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        A11Y_ACTIVE.set(window.is_a11y_active() && needs_whole_tree());
         if window.focused(cx).is_none() {
             // Keep workspace shortcuts working when nothing inside has focus.
             self.focus.focus(window, cx);
@@ -3382,10 +3401,67 @@ impl Render for Workspace {
     }
 }
 
+thread_local! {
+    /// Whether the window being drawn has assistive technology attached that walks the whole
+    /// accessibility tree (VoiceOver, Switch Control, or an end-to-end run's driver), as the
+    /// workspace's render saw it: see [`cached`].
+    static A11Y_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The last answer of [`screen_reader_on`] and when it was read, so a render asks macOS at
+    /// most once every [`SCREEN_READER_RECHECK`].
+    static SCREEN_READER: std::cell::Cell<Option<(std::time::Instant, bool)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// How long a read of whether VoiceOver or Switch Control is on stays good.
+const SCREEN_READER_RECHECK: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Whether the panes must render uncached for the accessibility tree to stay whole. Any app
+/// that reads the window's accessibility (a text expander, a grammar checker, a clipboard or
+/// launcher utility reading the focused field) turns GPUI's accessibility on, and stays on, but
+/// only a screen reader, Switch Control or an end-to-end run walks the whole tree. Rendering
+/// uncached for the rest would rebuild every pane on each line of terminal output.
+fn needs_whole_tree() -> bool {
+    static E2E_RUN: std::sync::LazyLock<bool> =
+        std::sync::LazyLock::new(|| std::env::var_os("SAWIT_E2E_RUN").is_some());
+    if *E2E_RUN {
+        return true;
+    }
+    SCREEN_READER.with(|cell| match cell.get() {
+        Some((at, on)) if at.elapsed() < SCREEN_READER_RECHECK => on,
+        _ => {
+            let on = screen_reader_on();
+            cell.set(Some((std::time::Instant::now(), on)));
+            on
+        }
+    })
+}
+
+/// Whether VoiceOver or Switch Control is on.
+#[cfg(target_os = "macos")]
+fn screen_reader_on() -> bool {
+    let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+    workspace.isVoiceOverEnabled() || workspace.isSwitchControlEnabled()
+}
+
+/// Elsewhere, any attached assistive technology counts: there is no cheap way to tell a screen
+/// reader from other clients.
+#[cfg(not(target_os = "macos"))]
+fn screen_reader_on() -> bool {
+    true
+}
+
 /// Mounts a pane so it re-renders only when it notifies, not every time the
 /// workspace does (terminal output, a cursor blink or a poll elsewhere
 /// would otherwise rebuild the whole window).
+///
+/// Not while a screen reader, Switch Control or an end-to-end run reads the accessibility tree
+/// ([`needs_whole_tree`]): GPUI leaves a cached view's accessibility nodes out of every frame
+/// that reuses the view's last render, so the panes' buttons, fields and lists would vanish from
+/// the accessibility tree as soon as they stopped changing.
 fn cached(view: AnyView) -> AnyElement {
+    if A11Y_ACTIVE.get() {
+        return view.into_any_element();
+    }
     view.cached(StyleRefinement::default().size_full())
         .into_any_element()
 }

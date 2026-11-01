@@ -979,9 +979,12 @@ impl Focusable for FileEditor {
 
 impl Render for FileEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let title = self.title();
         let editor = self.state.clone().map(|state| {
             div().size_full().child(
                 Editor::new(&state)
+                    // A screen reader names the text by its file.
+                    .aria_label(title)
                     .size_full()
                     .bordered(false)
                     .readonly(self.read_only),

@@ -310,7 +310,13 @@ fn menu(
                 let picture = option_icons::of_params(&params);
                 let item = PopupMenuItem::element(move |_, _| {
                     let label = label.clone();
-                    option_icons::menu_row(picture, label.clone())
+                    // The words as text a screen reader reads: a menu item drawn from elements
+                    // has no name of its own.
+                    let words = crate::catalog::label(
+                        SharedString::from(format!("{id}-{label}")),
+                        label.clone(),
+                    );
+                    option_icons::menu_row(picture, words)
                         .debug_selector(move || format!("{id}-{label}"))
                 })
                 .checked(option.selected)

@@ -715,6 +715,8 @@ impl Render for TerminalView {
 
         div()
             .id("terminal")
+            .role(Role::Terminal)
+            .aria_label("Terminal")
             .relative()
             .key_context("Terminal")
             .track_focus(&self.focus)

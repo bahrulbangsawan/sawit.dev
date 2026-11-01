@@ -1794,6 +1794,8 @@ impl BoardView {
         let toast = self.render_toast(chrome, cx);
         div()
             .id("board-canvas")
+            .role(Role::Canvas)
+            .aria_label("Canvas")
             .relative()
             .flex_1()
             .min_w_0()
@@ -1852,6 +1854,9 @@ impl BoardView {
                 .justify_center()
                 .child(
                     div()
+                        .id("board-toast")
+                        .role(Role::Status)
+                        .aria_label(text.clone())
                         .debug_selector(|| "board-toast".into())
                         .max_w(px(560.))
                         .px_3()

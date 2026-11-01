@@ -1325,6 +1325,9 @@ impl Render for TerminalPanel {
                 };
                 h_flex()
                     .id(("term-tab", ix))
+                    .role(Role::Tab)
+                    .aria_label(label.clone())
+                    .aria_selected(active)
                     .debug_selector(move || format!("term-tab-{ix}"))
                     .relative()
                     .flex_none()
@@ -1354,6 +1357,7 @@ impl Render for TerminalPanel {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::X)
+                            .accessibility_label("Close Terminal")
                             .debug_selector(move || format!("close-term-{ix}"))
                             .on_click(cx.listener({
                                 let tab = this_tab.clone();
@@ -1486,6 +1490,8 @@ impl Render for TerminalPanel {
                     .child(
                         h_flex()
                             .id("term-tabs")
+                            .role(Role::TabList)
+                            .aria_label("Terminals")
                             .debug_selector(|| "term-tabs".into())
                             .h_full()
                             .flex_1()
@@ -1502,6 +1508,7 @@ impl Render for TerminalPanel {
                                     .ghost()
                                     .xsmall()
                                     .icon(IconName::Plus)
+                                    .accessibility_label("New Terminal")
                                     .tooltip("New Terminal")
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_shell(Some(window), cx)
@@ -1512,6 +1519,7 @@ impl Render for TerminalPanel {
                                     .ghost()
                                     .xsmall()
                                     .icon(max_icon)
+                                    .accessibility_label(max_tip)
                                     .tooltip(max_tip)
                                     .on_click(cx.listener(|_, _, _, cx| cx.emit(ToggleMaximize))),
                             ),

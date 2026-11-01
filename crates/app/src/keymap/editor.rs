@@ -279,6 +279,8 @@ impl KeymapEditor {
                     .small()
                     .icon(Lucide::Keyboard)
                     .selected(self.keystroke_search)
+                    .accessibility_label("Search by Keystroke")
+                    .toggled(self.keystroke_search)
                     .tooltip_with_action(
                         "Search by Keystroke",
                         &ToggleKeystrokeSearch,
@@ -294,6 +296,8 @@ impl KeymapEditor {
                     .small()
                     .icon(Lucide::ListFilter)
                     .selected(self.show_unbound)
+                    .accessibility_label("Show Actions Without a Binding")
+                    .toggled(self.show_unbound)
                     .tooltip(if self.show_unbound {
                         "Hide Actions Without a Binding"
                     } else {
@@ -366,6 +370,10 @@ impl KeymapEditor {
         let group = SharedString::from(format!("keymap-row-{ix}"));
         h_flex()
             .id(("keymap-row", ix))
+            .role(Role::Row)
+            .aria_label(row.label.clone())
+            .aria_description(row.display.clone())
+            .aria_selected(selected)
             .group(group.clone())
             .w_full()
             .h(px(ROW_HEIGHT))
@@ -396,6 +404,11 @@ impl KeymapEditor {
                                 .ghost()
                                 .xsmall()
                                 .icon(Lucide::Pencil)
+                                .accessibility_label(if unbound {
+                                    "Add a Keybinding"
+                                } else {
+                                    "Edit"
+                                })
                                 .tooltip(if unbound { "Add a Keybinding" } else { "Edit" })
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     cx.stop_propagation();
@@ -471,6 +484,7 @@ impl KeymapEditor {
                                 .ghost()
                                 .xsmall()
                                 .icon(remove_icon)
+                                .accessibility_label(remove_tip)
                                 .tooltip(remove_tip)
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     cx.stop_propagation();
@@ -527,6 +541,9 @@ impl Render for KeymapEditor {
             .child(self.render_header(cx))
             .child(
                 div()
+                    .id("keymap-table")
+                    .role(Role::Table)
+                    .aria_label("Keybindings")
                     .flex_1()
                     .min_h_0()
                     .when(count > 0, |el| {

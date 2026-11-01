@@ -1553,7 +1553,7 @@ impl McpPage {
             .collect();
         let kind = Kind::of(s);
 
-        catalog::columns(
+        let row = catalog::columns(
             None,
             catalog::tile(server_logo(server, cx), cx),
             v_flex()
@@ -1655,6 +1655,10 @@ impl McpPage {
                             .ghost()
                             .small()
                             .icon(Icon::new(Lucide::Trash).text_color(theme.danger))
+                            .accessibility_label(format!(
+                                "Uninstall {} from Every Client",
+                                server.name
+                            ))
                             .tooltip(format!("Uninstall {} from Every Client", server.name))
                             .disabled(self.loading)
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -1689,6 +1693,13 @@ impl McpPage {
                             b.outline().icon(Lucide::Settings2).label("Manage")
                         })
                         .small()
+                        // It opens the sheet that installs, which the ellipsis says, as a Mac
+                        // button that opens a dialog does.
+                        .accessibility_label(if none {
+                            format!("Install {}…", server.name)
+                        } else {
+                            format!("Manage {}…", server.name)
+                        })
                         .tooltip(if none {
                             "Choose the Clients to Install Into"
                         } else {
@@ -1701,13 +1712,14 @@ impl McpPage {
                             }),
                         ),
                 ),
-        )
-        .px_4()
-        .py_3()
-        .border_b_1()
-        .border_color(theme.border)
-        .hover(|el| el.bg(theme.list_hover))
-        .when(selected, |el| el.bg(theme.list_active))
+        );
+        catalog::list_item(row, ("mcp-row", s), server.name)
+            .px_4()
+            .py_3()
+            .border_b_1()
+            .border_color(theme.border)
+            .hover(|el| el.bg(theme.list_hover))
+            .when(selected, |el| el.bg(theme.list_active))
     }
 
     /// The list card: column titles, a page of servers and the pager, or
@@ -1889,6 +1901,9 @@ impl McpPage {
 
         let title = format!("Install {}", server.name);
         v_flex()
+            .id("mcp-sheet")
+            .role(Role::Dialog)
+            .aria_label(title.clone())
             .w(px(720.))
             .max_w_full()
             .max_h_full()
@@ -1913,6 +1928,7 @@ impl McpPage {
                                     .ghost()
                                     .xsmall()
                                     .icon(Lucide::X)
+                                    .accessibility_label("Close")
                                     .tooltip("Close")
                                     .on_click(cx.listener(|this, _, _, cx| this.close_sheet(cx))),
                             ),

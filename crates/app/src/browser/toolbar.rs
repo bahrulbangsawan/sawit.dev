@@ -38,6 +38,7 @@ impl BrowserView {
                     .ghost()
                     .xsmall()
                     .icon(Lucide::ChevronLeft)
+                    .accessibility_label("Back")
                     .tooltip("Back")
                     .on_click(cx.listener(|this, _, _, cx| {
                         drop(this.apply(BrowserOp::Back, cx));
@@ -48,6 +49,7 @@ impl BrowserView {
                     .ghost()
                     .xsmall()
                     .icon(Lucide::ChevronRight)
+                    .accessibility_label("Forward")
                     .tooltip("Forward")
                     .on_click(cx.listener(|this, _, _, cx| {
                         drop(this.apply(BrowserOp::Forward, cx));
@@ -58,6 +60,7 @@ impl BrowserView {
                     .ghost()
                     .xsmall()
                     .icon(if loading { Lucide::X } else { Lucide::RotateCw })
+                    .accessibility_label(if loading { "Stop" } else { "Reload" })
                     .tooltip(if loading { "Stop" } else { "Reload" })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if loading {
@@ -78,6 +81,8 @@ impl BrowserView {
                     .ghost()
                     .xsmall()
                     .icon(Lucide::Pencil)
+                    .accessibility_label("Annotate")
+                    .toggled(self.panel() == Some(Panel::Annotate))
                     .tooltip(tip(Panel::Annotate, annotate_tooltip(window)))
                     .selected(self.panel() == Some(Panel::Annotate))
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -90,6 +95,8 @@ impl BrowserView {
                     .ghost()
                     .xsmall()
                     .icon(Lucide::Palette)
+                    .accessibility_label("Design")
+                    .toggled(self.panel() == Some(Panel::Design))
                     .tooltip(tip(Panel::Design, "Design".into()))
                     .selected(self.panel() == Some(Panel::Design))
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -102,6 +109,7 @@ impl BrowserView {
                     .ghost()
                     .xsmall()
                     .icon(Lucide::ExternalLink)
+                    .accessibility_label("Open in Default Browser")
                     .tooltip("Open in Default Browser")
                     .disabled(self.current_url() == "about:blank")
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -113,6 +121,7 @@ impl BrowserView {
                     .ghost()
                     .xsmall()
                     .icon(Lucide::Code)
+                    .accessibility_label("Web Inspector")
                     .tooltip("Web Inspector")
                     .on_click(cx.listener(|this, _, _, cx| {
                         drop(this.apply(BrowserOp::Devtools, cx));
@@ -146,6 +155,9 @@ pub(super) fn device_button(
         .xsmall()
         .icon(device_icon(mode))
         .when_some(device_label(mode), |button, label| button.label(label))
+        // Its icon alone says nothing to a screen reader in responsive mode: its name is the
+        // tooltip's, which names the mode or the device and its size.
+        .accessibility_label(device_tooltip(mode))
         .tooltip(device_tooltip(mode))
         .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
             device_menu(menu, view.clone(), &current)

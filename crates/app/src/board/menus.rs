@@ -712,7 +712,11 @@ fn menu_item(
                     .w_full()
                     .gap_6()
                     .justify_between()
-                    .child(label.clone())
+                    // As text a screen reader reads: a menu item drawn from elements has no name.
+                    .child(crate::catalog::label(
+                        SharedString::from(format!("board-menu-{id}")),
+                        label.clone(),
+                    ))
                     .child(
                         div()
                             .text_color(cx.theme().muted_foreground)

@@ -55,7 +55,8 @@ tokio-postgres.workspace = true
 wry = { version = "0.57", default-features = false, features = ["os-webview", "devtools"] }
 # Browser tab screenshots (WKWebView takeSnapshot → PNG); same versions as wry's.
 objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKSnapshotConfiguration"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSResponder", "NSView"] }
+# NSWorkspace: whether VoiceOver or Switch Control is on (workspace::screen_reader_on).
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSResponder", "NSView", "NSWorkspace", "NSAccessibility"] }
 block2 = "0.6"
 serde_json = "1"
 # The arguments of actions bound in the keymap (`board::Command`): GPUI builds them from JSON and

@@ -551,6 +551,11 @@ impl FilesPanel {
         };
         h_flex()
             .id(("file-row", ix))
+            .role(Role::TreeItem)
+            .aria_label(name.clone())
+            .aria_level(depth + 1)
+            .aria_selected(selected)
+            .when(entry.is_dir, |el| el.aria_expanded(open))
             .w_full()
             .h(px(ROW_HEIGHT))
             .pl(px(4. + depth as f32 * 12.))
@@ -731,6 +736,7 @@ impl Render for FilesPanel {
                                 .ghost()
                                 .xsmall()
                                 .icon(IconName::RotateCw)
+                                .accessibility_label("Reload File List")
                                 .tooltip("Reload File List")
                                 .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
                         )
@@ -740,6 +746,7 @@ impl Render for FilesPanel {
                             .ghost()
                             .xsmall()
                             .icon(IconName::FolderOpen)
+                            .accessibility_label("Open Project Folder")
                             .tooltip("Open Project Folder")
                             .on_click(cx.listener(|this, _, _, cx| this.prompt_open(cx))),
                     ),
@@ -754,6 +761,9 @@ impl Render for FilesPanel {
             })
             .child(
                 v_flex()
+                    .id("file-tree")
+                    .role(Role::Tree)
+                    .aria_label("Files")
                     .flex_1()
                     .min_h_0()
                     .py_1()

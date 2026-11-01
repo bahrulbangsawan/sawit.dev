@@ -235,6 +235,8 @@ pub(super) fn render_toolbar(
         .child(row);
     let bar = h_flex()
         .id("board-toolbar")
+        .role(Role::Toolbar)
+        .aria_label("Canvas tools")
         .debug_selector(|| "board-toolbar".into())
         .occlude()
         .min_w_0()
@@ -273,6 +275,8 @@ fn tool_button(
         .ghost()
         .icon(tool_icon(tool.icon))
         .selected(active)
+        .accessibility_label(tool.label)
+        .toggled(active)
         .tooltip(with_keys(tool.label, keys))
         .debug_selector(|| command.to_owned())
         .on_click(move |_, _, cx| {
@@ -382,6 +386,10 @@ fn flyout_items(
     let rows = items.iter().enumerate().map(|(i, (item, keys))| {
         h_flex()
             .id(("board-flyout-item", i))
+            .role(Role::MenuItem)
+            .aria_label(item.label.clone())
+            .aria_selected(item.selected)
+            .when_some(keys.clone(), |row, keys| row.aria_description(keys))
             .debug_selector(selector(item))
             .h(px(28.))
             .px_2()
@@ -423,6 +431,7 @@ fn picker_button(picker: Option<Picker>, view: &WeakEntity<BoardView>) -> Popove
     let button = Button::new("board-picker")
         .ghost()
         .icon(PICKER_ICON)
+        .accessibility_label("Templates & table")
         .tooltip("Templates & table")
         .debug_selector(|| "board-picker".into());
     let (on_change, view) = (view.clone(), view.clone());
@@ -558,6 +567,7 @@ pub(super) fn swatch(
         .w(px(SWATCH))
         .h(px(SWATCH))
         .p_0()
+        .accessibility_label(capitalized(label))
         .tooltip(capitalized(label))
         .child(
             div()

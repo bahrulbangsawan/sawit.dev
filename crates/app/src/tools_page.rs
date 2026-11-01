@@ -1383,6 +1383,7 @@ impl ToolsPage {
         } else {
             let checked = self.selected.contains(id);
             Checkbox::new(("tool-pick", ix))
+                .accessibility_label(format!("Select {}", tool.name))
                 .checked(checked)
                 .on_click(cx.listener(move |this, checked: &bool, _, cx| {
                     if *checked {
@@ -1445,7 +1446,7 @@ impl ToolsPage {
         // Under the name: past the checkbox, the tile and their gaps.
         let indent = px(16. + catalog::TILE + 24.);
 
-        v_flex()
+        catalog::list_item(v_flex(), ("tool-row", ix), tool.name)
             .px_4()
             .py_3()
             .gap_1p5()
@@ -1501,6 +1502,11 @@ impl ToolsPage {
                                     .ghost()
                                     .xsmall()
                                     .icon(Lucide::Copy)
+                                    .accessibility_label(if upgrade_shown {
+                                        "Copy Upgrade Command"
+                                    } else {
+                                        "Copy Install Command"
+                                    })
                                     .tooltip(if upgrade_shown {
                                         "Copy Upgrade Command"
                                     } else {
@@ -1524,6 +1530,8 @@ impl ToolsPage {
                                 .small()
                                 .icon(Lucide::ScrollText)
                                 .selected(expanded)
+                                .accessibility_label("Output")
+                                .toggled(expanded)
                                 .tooltip(if expanded {
                                     "Hide Output"
                                 } else {
@@ -1543,6 +1551,7 @@ impl ToolsPage {
                                 .ghost()
                                 .small()
                                 .icon(Icon::new(Lucide::Trash).text_color(cx.theme().danger))
+                                .accessibility_label(format!("Uninstall {}", tool.name))
                                 .tooltip(format!("Uninstall {}", tool.name))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.confirm_uninstall(tool, window, cx)

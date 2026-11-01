@@ -795,7 +795,10 @@ impl TerminalTab {
                 // A click in the field must not reach the pane or tab under
                 // it, which would take the keyboard and close the field.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(Input::new(&rename.input).xsmall())
+                .child(Input::new(&rename.input).xsmall().aria_label(match what {
+                    Renamed::Tab => "Tab Name",
+                    Renamed::Pane(_) => "Pane Name",
+                }))
                 .into_any_element(),
         )
     }
@@ -905,6 +908,7 @@ impl TerminalTab {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::Columns2)
+                            .accessibility_label("Split Right")
                             .tooltip("Split right")
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.focus_pane(pane, window, cx);
@@ -916,6 +920,7 @@ impl TerminalTab {
                             .ghost()
                             .xsmall()
                             .icon(zoom_icon)
+                            .accessibility_label(zoom_tip)
                             .tooltip(zoom_tip)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.toggle_zoom(pane, window, cx)
@@ -926,6 +931,7 @@ impl TerminalTab {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::X)
+                            .accessibility_label("Close Pane")
                             .tooltip("Close pane")
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.close_pane(pane, window, cx)
@@ -1010,6 +1016,9 @@ impl TerminalTab {
         v_flex()
             .id(("pane", pane))
             .debug_selector(move || format!("pane-{pane}-{look:?}"))
+            .role(Role::Group)
+            .aria_label("Terminal pane")
+            .aria_selected(pane == self.state.focused)
             .absolute()
             .left(px(rect.x))
             .top(px(rect.y))

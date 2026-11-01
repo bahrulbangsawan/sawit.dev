@@ -829,6 +829,7 @@ impl SkillsPage {
                                 .ghost()
                                 .small()
                                 .icon(Lucide::RefreshCw)
+                                .accessibility_label("Detect Again")
                                 .tooltip(if self.running.is_none() {
                                     "Detect Again"
                                 } else {
@@ -1025,6 +1026,13 @@ impl SkillsPage {
                     b.outline().icon(Lucide::Settings2).label("Manage")
                 })
                 .small()
+                // It opens the sheet that installs, which the ellipsis says, as a Mac button that
+                // opens a dialog does.
+                .accessibility_label(if having.is_empty() {
+                    format!("Install {}…", pack.name)
+                } else {
+                    format!("Manage {}…", pack.name)
+                })
                 .tooltip(if having.is_empty() {
                     "Choose the Agents and See the Commands"
                 } else {
@@ -1036,7 +1044,7 @@ impl SkillsPage {
                 ),
         };
 
-        v_flex()
+        catalog::list_item(v_flex(), ("skill-row", ix), pack.name)
             .px_4()
             .py_3()
             .gap_1p5()
@@ -1101,6 +1109,7 @@ impl SkillsPage {
                                     .ghost()
                                     .xsmall()
                                     .icon(Lucide::ExternalLink)
+                                    .accessibility_label(format!("Open the Docs of {}", pack.name))
                                     .tooltip("Open Its Docs")
                                     .on_click(move |_, _, cx| cx.open_url(home)),
                             ),
@@ -1126,6 +1135,8 @@ impl SkillsPage {
                                 .small()
                                 .icon(Lucide::ScrollText)
                                 .selected(expanded)
+                                .accessibility_label("Output")
+                                .toggled(expanded)
                                 .tooltip(if expanded {
                                     "Hide Output"
                                 } else {
@@ -1146,6 +1157,10 @@ impl SkillsPage {
                                 .ghost()
                                 .small()
                                 .icon(Icon::new(Lucide::Trash).text_color(theme.danger))
+                                .accessibility_label(format!(
+                                    "Remove {} from Every Agent",
+                                    pack.name
+                                ))
                                 .tooltip(format!("Remove {} from Every Agent", pack.name))
                                 .disabled(self.loading)
                                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -1372,6 +1387,9 @@ impl SkillsPage {
         });
         let copy = preview.as_ref().ok().map(|lines| lines.join("\n"));
         v_flex()
+            .id("skills-sheet")
+            .role(Role::Dialog)
+            .aria_label(pack.name)
             .w(px(760.))
             .max_w_full()
             .max_h_full()
@@ -1402,6 +1420,7 @@ impl SkillsPage {
                                     .ghost()
                                     .xsmall()
                                     .icon(Lucide::X)
+                                    .accessibility_label("Close")
                                     .tooltip("Close")
                                     .on_click(cx.listener(|this, _, _, cx| this.close_sheet(cx))),
                             ),
@@ -1484,6 +1503,7 @@ impl SkillsPage {
                                         .ghost()
                                         .xsmall()
                                         .icon(Lucide::Copy)
+                                        .accessibility_label("Copy the Commands")
                                         .tooltip("Copy the Commands")
                                         .on_click(move |_, _, cx| {
                                             cx.write_to_clipboard(ClipboardItem::new_string(
