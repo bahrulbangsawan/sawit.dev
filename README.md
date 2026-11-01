@@ -222,6 +222,8 @@ explained. A conflict on the same address can't be forced.
   is told which terminal and pane it got, and its keys (`terminal_input`) go only to a terminal it names.
 - An agent can split a pane too (`terminal_split`, right or down), to run a dev server or a test watcher beside your
   shell. The new half never takes the keyboard, and the split stops at 20 columns by 4 rows, as <kbd>⌘D</kbd>'s does.
+  Its `terminal_close` ends what runs there, so it needs `confirm: true` while a program runs in that terminal or
+  you're typing in it.
 - Terminals end with the app and with their window. So quitting, closing a window and **Restart to Update** ask
   first while a terminal runs a command or an SSH session, and name them. Shells waiting at their prompt don't count.
 
@@ -588,7 +590,8 @@ the agent's project open (or the one `project` names), else the frontmost window
 
 Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`
 and `uninstall_mcp_server` take the name again as `confirm` (so does `remove_instance` when it deletes the data), and `install_dev_tools` and `upgrade_dev_tools` need
-`confirm: true` because they run install scripts from the internet. Passwords never appear in a result. Every tool
+`confirm: true` because they run install scripts from the internet. `terminal_close` needs `confirm: true` while a
+program runs in that terminal or you're typing in it. Passwords never appear in a result. Every tool
 also carries MCP's hints (`readOnlyHint`, `destructiveHint`, `openWorldHint`), for clients that let read-only tools
 through or ask before destructive ones.
 

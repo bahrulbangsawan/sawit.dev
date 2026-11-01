@@ -342,7 +342,17 @@ impl Workspace {
                     .update(cx, |t, cx| t.input(tab, pane, bytes, cx))?;
                 done(json!({ "terminal": ix }))
             }
-            Command::TerminalClose { tab, pane } => {
+            // Unconfirmed, a close that would end what runs there, or the terminal the user types
+            // in, is refused: terminal_run never touches the user's shell, and a close shouldn't
+            // either without the agent saying it is sure.
+            Command::TerminalClose { tab, pane, confirm } => {
+                let refusal = self
+                    .terminal
+                    .read(cx)
+                    .close_refusal(tab, pane, window, cx)?;
+                if let Some(refusal) = refusal.filter(|_| !confirm) {
+                    return Err(refusal);
+                }
                 self.terminal
                     .update(cx, |t, cx| t.close_tab(tab, pane, window, cx))?;
                 done(json!({ "closed": tab }))

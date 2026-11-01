@@ -613,6 +613,47 @@ impl TerminalPanel {
         Ok(ix)
     }
 
+    /// Why an agent may not close the tab at `ix`, or only its pane at position `pane`, without
+    /// saying it is sure (`terminal_close`'s `confirm`): closing would end what runs there (a
+    /// command in the foreground or a live SSH session, as [`Self::running`] names them), or the
+    /// user is typing in it. `None` when it would end only shells at their prompt, nobody types
+    /// in, as quitting ends them without asking.
+    pub fn close_refusal(
+        &self,
+        ix: usize,
+        pane: Option<usize>,
+        window: &Window,
+        cx: &App,
+    ) -> Result<Option<String>, String> {
+        let ix = self.tab_ix(Some(ix))?;
+        let panes: Vec<PaneId> = match pane {
+            None => self.tabs[ix].read(cx).views().map(|(id, _)| id).collect(),
+            Some(_) => vec![self.pane_of(ix, pane, cx)?.0],
+        };
+        let tab = self.tabs[ix].read(cx);
+        let ends: Vec<String> = panes
+            .iter()
+            .filter_map(|&id| running_in(tab, id, tab.view(id)?.read(cx)))
+            .collect();
+        let typing = self
+            .typing_pane(window, cx)
+            .is_some_and(|(at, id)| at == ix && panes.contains(&id));
+        let what = match pane {
+            Some(n) => format!("Terminal {ix}, pane {n}"),
+            None => format!("Terminal {ix}"),
+        };
+        let ending = format!("closing it ends what runs there ({})", ends.join(", "));
+        let why = match (ends.is_empty(), typing) {
+            (true, false) => return Ok(None),
+            (false, false) => ending,
+            (true, true) => "the user is typing in it".to_string(),
+            (false, true) => format!("{ending}, and the user is typing in it"),
+        };
+        Ok(Some(format!(
+            "{what} wasn't closed: {why}. Pass confirm: true to close it anyway."
+        )))
+    }
+
     /// Closes the tab at `ix`, or only its pane at position `pane`. Closing
     /// a pane moves the keyboard only if it was in that tab.
     pub fn close_tab(
@@ -1069,20 +1110,7 @@ impl TerminalPanel {
         for tab in &self.tabs {
             let t = tab.read(cx);
             for (pane, view) in t.views() {
-                let v = view.read(cx);
-                if v.exited {
-                    continue;
-                }
-                let named = t.state.panes.get(&pane).and_then(|m| m.name.clone());
-                if v.remote.is_some() {
-                    running.push(format!("{} (SSH)", t.pane_label(pane, v)));
-                } else if v.foreground_job().is_some() {
-                    let name = named
-                        .or_else(|| v.job.as_ref().map(|j| j.name.clone()))
-                        .or_else(|| v.foreground_name())
-                        .unwrap_or_else(|| v.title.to_string());
-                    running.push(name);
-                }
+                running.extend(running_in(t, pane, view.read(cx)));
             }
         }
         running
@@ -1475,6 +1503,26 @@ impl Render for TerminalPanel {
 /// The terminal of `tab`'s focused pane.
 fn focused<'a>(tab: &Entity<TerminalTab>, cx: &'a App) -> &'a TerminalView {
     tab.read(cx).focused_view().read(cx)
+}
+
+/// What runs in `pane` of `tab`, whose terminal is `view`, that closing it would end, by name: a
+/// command in the foreground (by the pane's name, its script's, else the program's) or a live SSH
+/// session. `None` for a shell at its prompt, a script's terminal between runs or an ended session.
+fn running_in(tab: &TerminalTab, pane: PaneId, view: &TerminalView) -> Option<String> {
+    if view.exited {
+        return None;
+    }
+    if view.remote.is_some() {
+        return Some(format!("{} (SSH)", tab.pane_label(pane, view)));
+    }
+    view.foreground_job()?;
+    let named = tab.state.panes.get(&pane).and_then(|m| m.name.clone());
+    Some(
+        named
+            .or_else(|| view.job.as_ref().map(|j| j.name.clone()))
+            .or_else(|| view.foreground_name())
+            .unwrap_or_else(|| view.title.to_string()),
+    )
 }
 
 /// The folder a shell split off `pane` of `tab` starts in, as ⌘D starts it: the pane's folder if
@@ -1878,6 +1926,44 @@ mod tests {
             .expect_err("a tab there isn't");
         assert!(tab.contains("no terminal 3"), "{tab}");
         cx.update(|cx| assert_eq!(panel.read(cx).tab(0).read(cx).views().count(), 2));
+    }
+
+    /// An agent's terminal_close ends what runs there, so without its confirm it is refused
+    /// while a program runs in the tab or pane, or the user is typing in it, naming why; shells
+    /// waiting at their prompt that nobody types in close as before.
+    #[gpui_kit::test]
+    fn closing_asks_while_a_program_runs_or_the_user_types(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        open_tabs(cx, &panel, 1);
+        click_tab(cx, w, &panel, 0);
+        let other = cx.update(|cx| panel.read(cx).tab(1).read(cx).focused_view().clone());
+        ready(cx, &other);
+        let refusal = |cx: &mut TestAppContext, ix: usize, pane: Option<usize>| {
+            cx.update_window(w, |_, window, cx| {
+                panel.read(cx).close_refusal(ix, pane, window, cx)
+            })
+            .expect("the test window is open")
+        };
+
+        assert_eq!(
+            refusal(cx, 1, None),
+            Ok(None),
+            "an idle shell nobody types in"
+        );
+        let typing = refusal(cx, 0, None).unwrap().expect("the user types there");
+        assert!(typing.contains("the user is typing in it"), "{typing}");
+        assert!(typing.contains("confirm: true"), "{typing}");
+
+        start(cx, &other, "sleep 30", "sleep");
+        let busy = refusal(cx, 1, Some(0)).unwrap().expect("sleep runs there");
+        assert!(
+            busy.starts_with("Terminal 1, pane 0 wasn't closed"),
+            "{busy}"
+        );
+        assert!(busy.contains("(sleep)"), "{busy}");
+        assert!(!busy.contains("typing"), "{busy}");
+        assert!(refusal(cx, 4, None).is_err());
     }
 
     /// The active tab.

@@ -171,6 +171,11 @@ pub struct TerminalCloseArgs {
     pub tab: usize,
     #[schemars(description = "Pane within the tab (from app_state); default: the whole tab")]
     pub pane: Option<usize>,
+    #[schemars(
+        description = "Close it even though closing ends what runs there (a dev server, an SSH session, an agent) or the user is typing in it. Without it such a close is refused, naming what runs"
+    )]
+    #[serde(default)]
+    pub confirm: bool,
     pub project: Option<String>,
 }
 
@@ -1069,13 +1074,16 @@ impl Sawit {
         self.app_tool(a.project, command).await
     }
 
-    #[tool(description = "Close a terminal tab, or just one pane of it")]
+    #[tool(
+        description = "Close a terminal tab, or just one pane of it, ending whatever runs there: a dev server, an SSH session, the user's own agent. DESTRUCTIVE: while a program runs there or the user is typing in it, the close is refused unless confirm is true, and the refusal names what runs; shells waiting at their prompt close without it. Name the tab, and a pane to close only that one, as terminal_run or app_state give them"
+    )]
     async fn terminal_close(&self, Parameters(a): Parameters<TerminalCloseArgs>) -> CallToolResult {
         self.app_tool(
             a.project,
             Command::TerminalClose {
                 tab: a.tab,
                 pane: a.pane,
+                confirm: a.confirm,
             },
         )
         .await
@@ -1896,6 +1904,35 @@ mod tests {
             asked.recv_timeout(Duration::from_millis(300)).is_err(),
             "the app was asked to split with a way or a folder that isn't one"
         );
+    }
+
+    /// `terminal_close` passes the agent's `confirm` on: the app refuses an unconfirmed close
+    /// that would end what runs there, and a `sawit-mcp` that dropped it could never close one.
+    #[tokio::test]
+    async fn terminal_close_passes_its_confirm_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let asked = fake_app_answering(
+            &server.paths,
+            vec![json!({"closed": 1}), json!({"closed": 1})],
+        );
+        for confirm in [false, true] {
+            let args: TerminalCloseArgs = serde_json::from_value(match confirm {
+                true => json!({"tab": 1, "pane": 0, "confirm": true}),
+                false => json!({"tab": 1, "pane": 0}),
+            })
+            .unwrap();
+            server.terminal_close(Parameters(args)).await;
+            let request = asked.recv_timeout(Duration::from_secs(5)).expect("asked");
+            assert_eq!(
+                request.command,
+                Command::TerminalClose {
+                    tab: 1,
+                    pane: Some(0),
+                    confirm,
+                }
+            );
+        }
     }
 
     /// MCP-4: `terminal_run` starts its shell in the folder it names, or not at all. The PTY

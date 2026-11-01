@@ -170,11 +170,15 @@ pub enum Command {
         #[serde(default)]
         key: Option<String>,
     },
-    /// Closes a terminal tab, or only one of its panes.
+    /// Closes a terminal tab, or only one of its panes, ending what runs
+    /// there. Without `confirm` it is refused while a program runs there (a
+    /// dev server, an SSH session, an agent) or the user is typing in it.
     TerminalClose {
         tab: usize,
         #[serde(default)]
         pane: Option<usize>,
+        #[serde(default)]
+        confirm: bool,
     },
     /// The Run panel's scripts and saved commands, with running state.
     RunList,
@@ -594,6 +598,42 @@ mod tests {
                 String::from_utf8_lossy(wrong)
             );
         }
+    }
+
+    /// A close from a `sawit-mcp` that predates `confirm` reads as unconfirmed, so the app still
+    /// asks before ending what runs there.
+    #[test]
+    fn a_terminal_close_is_unconfirmed_unless_it_says_so() {
+        let old = decode(
+            br#"sawit-control/1
+{"cmd":"terminal_close","tab":1}"#,
+        );
+        assert!(matches!(
+            old,
+            Some(Ok(Request {
+                command: Command::TerminalClose {
+                    tab: 1,
+                    pane: None,
+                    confirm: false
+                },
+                ..
+            }))
+        ));
+        let request = Request {
+            project: None,
+            agent_folder: None,
+            command: Command::TerminalClose {
+                tab: 1,
+                pane: Some(0),
+                confirm: true,
+            },
+        };
+        let bytes = encode(&request);
+        assert_eq!(
+            &bytes[MAGIC.len()..],
+            br#"{"cmd":"terminal_close","tab":1,"pane":0,"confirm":true}"#
+        );
+        assert_eq!(decode(&bytes), Some(Ok(request)));
     }
 
     #[test]
