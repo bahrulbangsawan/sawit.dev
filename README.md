@@ -445,9 +445,11 @@ or restore a binding, find bindings by their keys, and see which ones clash. You
 <kbd>⌘</kbd><kbd>E</kbd> in the editor). You can also edit that file by hand: Sawit applies it within a
 second of saving. A change made in the editor writes the whole file again, without your comments.
 
-AI agents get the same list from `keymap_list` (what a key does, or which key runs an action) and change bindings
-with `keymap_bind` and `keymap_unbind`, with the editor's checks. When keymap.json has comments, an agent's change
-needs `confirm: true`, since it writes the file again without them.
+While Sawit runs, `sawit list keys` (or `sawit list pintasan`) prints every shortcut in a terminal: its keys, what it
+runs, where, and whether it's a default, yours or turned off. AI agents get the same list from `keymap_list` (what a
+key does, or which key runs an action) and change bindings with `keymap_bind` and `keymap_unbind`, with the editor's
+checks. When keymap.json has comments, an agent's change needs `confirm: true`, since it writes the file again
+without them.
 
 A few keys aren't bindings, so the editor can't change them: the terminal's <kbd>⌘</kbd><kbd>C</kbd> and
 <kbd>⌘</kbd><kbd>V</kbd>, the video viewer's <kbd>Space</kbd>, and on the canvas <kbd>Space</kbd> to pan, the
@@ -550,7 +552,9 @@ sawit pupuk bun -y                           # upgrade one tool without asking
   `tanam`, `pasang`, `pupuk`, …), use `sawit ./list`.
 - Every word has an English and an Indonesian name: `list`/`ls`, `panen`/`export`/`ekspor`,
   `backup`/`dump`/`cadangkan`, `tanam`/`import`/`impor`, `pasang`/`install`, `pupuk`/`upgrade`, and for `list`: `db`/`blok`,
-  `ports`/`lahan`, `instances`/`kebun`, `connections`/`konsesi`, `tools`/`alat`/`perkakas`.
+  `ports`/`lahan`, `instances`/`kebun`, `connections`/`konsesi`, `tools`/`alat`/`perkakas`, and
+  `keys`/`pintasan`/`keymap`/`shortcuts`. `list keys` alone needs the app: the default shortcuts live in it, so without
+  Sawit running it says so (and where your keymap.json is) instead of starting it.
 - `panen` and `backup` ask before replacing an existing file; `-y` replaces it without asking. Without a terminal
   they refuse instead of prompting. `panen` with SQL runs it read-only.
 - Table output goes to stdout, while the "connected to" line and timing go to stderr, so `sawit kyzn leads | less`
