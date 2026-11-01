@@ -40,7 +40,7 @@ macro_rules! drawn {
     ($($name:literal),* $(,)?) => {
         /// Sawit's drawings of the canvas's choices, by name (`assets/canvas_icons/<name>.svg`).
         const DRAWN: &[(&str, &[u8])] = &[
-            $(($name, include_bytes!(concat!("../../../../assets/canvas_icons/", $name, ".svg")))),*
+            $(($name, include_bytes!(concat!("../../../../../assets/canvas_icons/", $name, ".svg")))),*
         ];
     };
 }
