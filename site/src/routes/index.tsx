@@ -40,8 +40,10 @@ function Hero() {
       </div>
       <header className="sec hero" id="top">
         <div className="w">
-          <h1>Local Postgres. No Docker.</h1>
-          <p className="lead">Your database, an editor and a terminal in one native Mac app.</p>
+          <h1>One native app for local development.</h1>
+          <p className="lead">
+            Databases, code, terminals, a browser and a canvas in one window. Your AI agents can use it too.
+          </p>
           <div className="acts">
             <InstallButton id="install-copy" />
             <a className="btn" href={DMG}>

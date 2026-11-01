@@ -6,9 +6,10 @@
 </p>
 
 <p align="center">
-  <b>Postgres, an editor, and a terminal in one native macOS app, without Docker.</b><br>
-  Run local PostgreSQL instances, browse data, write SQL, edit project code, watch your dev servers,
-  and open a terminal from a single window.
+  <b>One native app for local development.</b><br>
+  Run PostgreSQL without Docker, browse and query data, edit code, work in split terminals, test your app
+  in a browser, draw on a canvas, and install dev tools, all from one window. AI agents can do the same
+  through Sawit's MCP server.
 </p>
 
 <p align="center">
@@ -39,9 +40,10 @@
 
 ## Overview
 
-Sawit is built for local development with PostgreSQL. This work usually needs Docker Desktop,
-a database client, an editor, a terminal, and a few command-line tools as separate apps. In Sawit
-they all live in a single Rust binary of about **60 MiB** (see [Size & memory](#size--memory)).
+Sawit is built for local development. That work usually takes Docker Desktop, a database client,
+an editor, a terminal, a browser, a design tool, and a few installers, each a separate app. In Sawit
+they all live in a single Rust binary of about **60 MiB** (see [Size & memory](#size--memory)), and AI
+agents can drive it through the `sawit-mcp` server.
 The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (the "One Dark" palette).
 
 <p align="center">

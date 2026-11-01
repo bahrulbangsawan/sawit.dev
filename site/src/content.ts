@@ -6,7 +6,7 @@ export const INSTALL = 'curl -fsSL https://sawit.dev/install.sh | sh'
 export const SIZE = '60 MiB'
 // The site's address, for the absolute URLs link previews and canonical links need.
 export const SITE = 'https://sawit.dev'
-export const DESCRIPTION = `Run local PostgreSQL without Docker, browse data, write SQL, edit code and open a terminal in one native macOS app of about ${SIZE}.`
+export const DESCRIPTION = 'One native app for local development: Postgres without Docker, an editor, terminals, a browser, a canvas and dev tools, ready for AI agents.'
 
 // Capabilities, shortcuts and wording from the README; screenshots from docs/media.
 export const features = [

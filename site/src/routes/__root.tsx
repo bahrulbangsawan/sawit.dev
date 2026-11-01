@@ -9,7 +9,7 @@ export const Route = createRootRoute({
     meta: [
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { title: 'Sawit — Postgres, an editor and a terminal for macOS' },
+      { title: 'Sawit — one native app for local development' },
       { name: 'description', content: DESCRIPTION },
       { name: 'theme-color', content: '#1b1d22' },
       // Link previews. Crawlers want absolute URLs; each page adds its own og:url and canonical

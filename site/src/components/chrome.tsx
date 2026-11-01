@@ -88,7 +88,7 @@ function Footer({ home }: { home: boolean }) {
         <div className="fc">
           <div>
             <h2>Sawit</h2>
-            <p>A native macOS workbench for local Postgres. Named after the oil-palm plantations; its command line jokes about their fires.</p>
+            <p>A native workbench for local development. Named after the oil-palm plantations; its command line jokes about their fires.</p>
             <div className="fine">
               <span>Screenshots and video recorded from a release build with demo data.</span>
               <span>Built with Rust and GPUI.</span>

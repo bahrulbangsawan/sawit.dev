@@ -4,7 +4,7 @@
  "seed": 1192344162,
  "redraws": 0,
  "input": {
-  "brief": "Sawit: Postgres, an editor and a terminal in one native macOS app, no Docker; its CLI speaks plantation (tanam, panen, bakar, pupuk); logo is a palm whose trunk is three database discs",
+  "brief": "Sawit: one native app for local development (Postgres without Docker, an editor, terminals, a browser, a canvas, dev tools, an MCP server for agents); its CLI speaks plantation (tanam, panen, bakar, pupuk); logo is a palm whose trunk is three database discs",
   "sector": "dev-tool",
   "tone": null,
   "have": [
