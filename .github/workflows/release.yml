@@ -35,6 +35,10 @@ jobs:
           persist-credentials: false
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build app
+        # The GitHub OAuth app every user signs in with (Device Flow; a client ID is public, so
+        # it's a repository variable, not a secret). Unset, the build says sign-in isn't set up.
+        env:
+          SAWIT_GITHUB_CLIENT_ID: ${{ vars.SAWIT_GITHUB_CLIENT_ID }}
         run: scripts/bundle-macos.sh --zip --dmg
       - name: Release notes
         run: |
