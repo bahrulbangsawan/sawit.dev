@@ -105,6 +105,7 @@ export const menu = [
       { cmd: 'sawit list tools', means: 'tools', note: 'Package managers, runtimes and AI agents' },
       { cmd: 'sawit pasang bun uv', means: 'install', note: 'Official install scripts, prerequisites first' },
       { cmd: 'sawit pupuk', means: 'upgrade', note: 'Every tool with a newer release' },
+      { cmd: 'sawit cabut bun', means: 'uninstall', note: 'Only the copy its own installer put there' },
     ],
   },
 ]
