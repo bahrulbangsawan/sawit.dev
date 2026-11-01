@@ -13,12 +13,13 @@
 //! that is open closes when the file on show turns from a board into a design file or back, and
 //! when the UI is hidden ([`BoardView::settle_chrome`]).
 
+mod flyouts;
+mod picker;
+
 use figcraft_engine::{ToolId, guard};
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
-use gpui_kit::component::popover::Popover;
 use gpui_kit::component::*;
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_board::DocKind;
 use sawit_board::toolbar::{
@@ -26,8 +27,10 @@ use sawit_board::toolbar::{
 };
 use serde_json::json;
 
+use super::BoardView;
 use super::top_bar::with_keys;
-use super::{BoardView, commands};
+use flyouts::flyout;
+use picker::picker_button;
 
 /// The toolbar's height.
 pub(super) const HEIGHT: f32 = 44.;
@@ -36,16 +39,8 @@ pub(super) const BOTTOM: f32 = 16.;
 /// The least room the toolbar leaves at each side of the canvas: in a canvas narrower than the
 /// toolbar and this room, the toolbar is as wide as the canvas less it, and its buttons scroll.
 const MARGIN: f32 = 8.;
-/// A tool button's side.
-const BUTTON: f32 = 32.;
-/// The width of the chevron beside a tool that opens its flyout.
-const CHEVRON: f32 = 16.;
 /// The side of a colour swatch's button, in the flyouts and the context bar.
 pub(super) const SWATCH: f32 = 24.;
-/// The picker's table grid: up to this many rows, and as many columns.
-const GRID: u32 = 6;
-/// The side of a cell of that grid.
-const CELL: f32 = 18.;
 
 /// The picture of the chevron that opens a flyout.
 pub(super) const CHEVRON_ICON: Lucide = Lucide::ChevronUp;
@@ -67,45 +62,6 @@ pub(super) struct Picker {
 /// ([`super::option_icons::tool`]).
 pub(super) fn tool_icon(icon: ToolIcon) -> Lucide {
     super::option_icons::tool(icon)
-}
-
-/// The side of a choice's picture in a flyout: a stamp's badge, a shape's outline, a connector's
-/// line.
-const OPTION_GLYPH: f32 = 16.;
-
-impl BoardView {
-    /// The picker opens: the engine lists the templates now, once, for as long as it stays open
-    /// (ruling P3-C14), and a flyout that was open closes. When the list can't be had, the error
-    /// shows as a toast and the picker offers its table alone.
-    fn open_picker(&mut self, cx: &mut Context<Self>) {
-        self.open_flyout = None;
-        let templates = self.run(model::templates, cx).unwrap_or_default();
-        self.picker = Some(Picker {
-            templates,
-            hover: None,
-        });
-    }
-
-    /// Places template `id`, one the picker lists, in the middle of the view, and closes the
-    /// picker. A text being typed in on the canvas ends first, as before any command of the
-    /// chrome ([`BoardView::end_text_edit`], ruling R-TEXTEDIT): placed inside the edit, the
-    /// template made no undo step of its own, and the canvas went on typing in the text while the
-    /// template showed selected (CANVAS-UI-5).
-    pub(super) fn place_template(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.picker = None;
-        if self.end_text_edit(Some("board.template"), cx) {
-            self.run(|board| model::place_template(board, id), cx);
-        }
-    }
-
-    /// Places a table of `rows` by `cols` cells in the middle of the view, and closes the picker.
-    /// A text being typed in ends first, as for a template.
-    pub(super) fn place_table(&mut self, rows: u32, cols: u32, cx: &mut Context<Self>) {
-        self.picker = None;
-        if self.end_text_edit(Some("board.table"), cx) {
-            self.run(|board| model::place_table(board, rows, cols), cx);
-        }
-    }
 }
 
 /// What the toolbar shows this frame, as the model gives it.
@@ -282,269 +238,6 @@ fn tool_button(
         .on_click(move |_, _, cx| {
             let _ = view.update(cx, |view, cx| view.choose(command, json!({}), cx));
         })
-}
-
-/// What a flyout's chevron says it opens.
-fn flyout_name(f: Flyout) -> &'static str {
-    match f {
-        Flyout::StickyColors => "Sticky note colors",
-        Flyout::Shapes => "Shapes",
-        Flyout::ConnectorStyles => "Connector styles",
-        Flyout::Stamps => "Stamps",
-        Flyout::Tools("frame") => "Frame tools",
-        Flyout::Tools("shape" | "geometry") => "Shape tools",
-        Flyout::Tools("pen") => "Drawing tools",
-        Flyout::Tools("text") => "Text tools",
-        Flyout::Tools(_) => "Tools",
-    }
-}
-
-/// The chevron that opens flyout `f`, and the flyout above it, open while `items` are given, each
-/// with its keys.
-fn flyout(
-    f: Flyout,
-    items: Option<Vec<(FlyoutItem, Option<String>)>>,
-    view: &WeakEntity<BoardView>,
-) -> Popover {
-    let open = items.is_some();
-    let items = items.unwrap_or_default();
-    let name = SharedString::from(f.name());
-    let chevron = Button::new(SharedString::from(format!("board-flyout-{name}")))
-        .ghost()
-        .xsmall()
-        .icon(CHEVRON_ICON)
-        .w(px(CHEVRON))
-        .h(px(BUTTON))
-        .accessibility_label(flyout_name(f))
-        .tooltip(flyout_name(f))
-        .debug_selector(move || format!("board-flyout-{name}"));
-    let (on_change, view) = (view.clone(), view.clone());
-    Popover::new(SharedString::from(format!(
-        "board-flyout-popover-{}",
-        f.name()
-    )))
-    .anchor(Anchor::BottomCenter)
-    .trigger(chevron)
-    .open(open)
-    .on_open_change(move |open, _, cx| {
-        let _ = on_change.update(cx, |view, cx| {
-            if *open {
-                view.open_flyout = Some(f);
-                view.picker = None;
-            } else if view.open_flyout == Some(f) {
-                view.open_flyout = None;
-            }
-            cx.notify();
-        });
-    })
-    .content(move |_, _, cx| flyout_items(&items, &view, cx))
-}
-
-/// A flyout's choices: a row of swatches for colours, else a list of pictures and labels with the
-/// one the tool makes now checked, and for a group's tools each tool's keys. Picking one closes
-/// the flyout and runs its command with its params; Place image… asks for the file, as its menu
-/// item does.
-fn flyout_items(
-    items: &[(FlyoutItem, Option<String>)],
-    view: &WeakEntity<BoardView>,
-    cx: &App,
-) -> AnyElement {
-    let theme = cx.theme();
-    let (hover, muted) = (theme.accent, theme.muted_foreground);
-    let pick = |item: &FlyoutItem| {
-        let (command, params, view) = (item.command, item.params.clone(), view.clone());
-        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-            let _ = view.update(cx, |view, cx| {
-                view.open_flyout = None;
-                if sawit_board::policy::is_ui(command) {
-                    // As its menu item: a text being typed in ends first (ruling R-TEXTEDIT).
-                    if view.end_text_edit(Some(command), cx) {
-                        commands::run_ui(view, command, window, cx);
-                    }
-                } else {
-                    view.choose(command, params.clone(), cx);
-                }
-            });
-        }
-    };
-    let selector = |item: &FlyoutItem| {
-        let label = item.label.clone();
-        move || format!("board-flyout-item-{label}")
-    };
-    if items.iter().all(|(item, _)| item.swatch.is_some()) {
-        let swatches = items.iter().enumerate().map(|(i, (item, _))| {
-            let rgba = item.swatch.unwrap_or_default();
-            let id = ("board-flyout-item", i);
-            swatch(id, rgba, &item.label, item.selected, pick(item)).debug_selector(selector(item))
-        });
-        return h_flex()
-            .debug_selector(|| "board-flyout".into())
-            .gap(px(4.))
-            .children(swatches)
-            .into_any_element();
-    }
-    let rows = items.iter().enumerate().map(|(i, (item, keys))| {
-        h_flex()
-            .id(("board-flyout-item", i))
-            .role(Role::MenuItem)
-            .aria_label(item.label.clone())
-            .aria_selected(item.selected)
-            .when_some(keys.clone(), |row, keys| row.aria_description(keys))
-            .debug_selector(selector(item))
-            .h(px(28.))
-            .px_2()
-            .gap_2()
-            .rounded(px(6.))
-            .text_sm()
-            .hover(move |row| row.bg(hover))
-            .child(div().w(px(14.)).when(item.selected, |slot| {
-                slot.child(Icon::new(CHECK_ICON).xsmall())
-            }))
-            // The choice's picture before its words: a tool's icon, or a stamp's badge, a shape's
-            // outline, a connector's line (`option_icons`).
-            .when_some(item.icon, |row, icon| {
-                row.child(Icon::new(tool_icon(icon)).small())
-            })
-            .when(item.icon.is_none(), |row| {
-                let picture = super::option_icons::of_params(&item.params);
-                row.children(picture.map(|picture| picture.element(px(OPTION_GLYPH))))
-            })
-            .child(div().flex_1().child(item.label.clone()))
-            .when_some(keys.clone(), |row, keys| {
-                row.child(div().pl_4().text_color(muted).child(keys))
-            })
-            .on_click(pick(item))
-    });
-    v_flex()
-        .debug_selector(|| "board-flyout".into())
-        .min_w(px(160.))
-        .gap(px(2.))
-        .children(rows)
-        .into_any_element()
-}
-
-/// The button that opens the Templates & table picker, and the picker above it, open while
-/// `picker` is given.
-fn picker_button(picker: Option<Picker>, view: &WeakEntity<BoardView>) -> Popover {
-    let open = picker.is_some();
-    let Picker { templates, hover } = picker.unwrap_or_default();
-    let button = Button::new("board-picker")
-        .ghost()
-        .icon(PICKER_ICON)
-        .accessibility_label("Templates & table")
-        .tooltip("Templates & table")
-        .debug_selector(|| "board-picker".into());
-    let (on_change, view) = (view.clone(), view.clone());
-    Popover::new("board-picker-popover")
-        .anchor(Anchor::BottomCenter)
-        .trigger(button)
-        .open(open)
-        .on_open_change(move |open, _, cx| {
-            let _ = on_change.update(cx, |view, cx| {
-                if *open {
-                    view.open_picker(cx);
-                } else {
-                    view.picker = None;
-                    cx.notify();
-                }
-            });
-        })
-        .content(move |_, _, cx| picker_content(&templates, hover, &view, cx))
-}
-
-/// The picker: the board's templates, then a grid of 6 × 6 cells that places a table of as many
-/// rows and columns as the cell under the pointer.
-fn picker_content(
-    templates: &[Template],
-    hover: Option<(u32, u32)>,
-    view: &WeakEntity<BoardView>,
-    cx: &App,
-) -> Stateful<Div> {
-    let theme = cx.theme();
-    let (muted, line, hovered) = (theme.muted_foreground, theme.border, theme.accent);
-    let heading = |text: String| div().text_xs().text_color(muted).child(text);
-    let rows = templates.iter().enumerate().map(|(i, template)| {
-        let (id, view) = (template.id.clone(), view.clone());
-        v_flex()
-            .id(("board-template", i))
-            .px_2()
-            .py_1()
-            .rounded(px(6.))
-            .hover(move |row| row.bg(hovered))
-            .child(div().text_sm().child(template.name.clone()))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(template.description.clone()),
-            )
-            .on_click(move |_, _, cx| {
-                let _ = view.update(cx, |view, cx| view.place_template(&id, cx));
-            })
-    });
-    let table = match hover {
-        Some((rows, cols)) => format!("Table  {rows} × {cols}"),
-        None => "Table".to_owned(),
-    };
-    v_flex()
-        .id("board-picker-content")
-        .debug_selector(|| "board-picker-content".into())
-        .w(px(260.))
-        .gap_2()
-        .child(heading("Templates".to_owned()))
-        .child(v_flex().gap(px(2.)).children(rows))
-        .child(div().h(px(1.)).bg(line))
-        .child(heading(table))
-        .child(table_grid(hover, view, cx))
-}
-
-/// The picker's grid: the cells up to the one under the pointer light up, and a click places a
-/// table of that many rows and columns.
-fn table_grid(hover: Option<(u32, u32)>, view: &WeakEntity<BoardView>, cx: &App) -> Stateful<Div> {
-    let theme = cx.theme();
-    let (line, lit_line, lit) = (theme.border, theme.primary, theme.primary.opacity(0.3));
-    let leave = view.clone();
-    let rows = (1..=GRID).map(|row| {
-        let cells = (1..=GRID).map(|col| {
-            let on = hover.is_some_and(|(rows, cols)| row <= rows && col <= cols);
-            let (point, place) = (view.clone(), view.clone());
-            div()
-                .id(("board-table-cell", ((row - 1) * GRID + col - 1) as usize))
-                .size(px(CELL))
-                .rounded(px(3.))
-                .border_1()
-                .border_color(if on { lit_line } else { line })
-                .when(on, |cell| cell.bg(lit))
-                .on_hover(move |entered, _, cx| {
-                    if *entered {
-                        let _ = point.update(cx, |view, cx| point_at(view, Some((row, col)), cx));
-                    }
-                })
-                .on_click(move |_, _, cx| {
-                    let _ = place.update(cx, |view, cx| view.place_table(row, col, cx));
-                })
-        });
-        h_flex().gap(px(3.)).children(cells)
-    });
-    v_flex()
-        .id("board-table-grid")
-        .gap(px(3.))
-        .on_hover(move |entered, _, cx| {
-            if !*entered {
-                let _ = leave.update(cx, |view, cx| point_at(view, None, cx));
-            }
-        })
-        .children(rows)
-}
-
-/// The pointer is over cell `cell` of the picker's grid (rows and columns), or off it.
-fn point_at(view: &mut BoardView, cell: Option<(u32, u32)>, cx: &mut Context<BoardView>) {
-    if let Some(picker) = &mut view.picker
-        && picker.hover != cell
-    {
-        picker.hover = cell;
-        cx.notify();
-    }
 }
 
 /// A thin line between groups of buttons.
