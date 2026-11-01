@@ -6,7 +6,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
 use sawit_core::app_control::Command;
-use sawit_core::keymap::{BindingRef, KeymapList, KeymapOp};
+use sawit_core::keymap::{BindingRef, KeySource, KeymapList, KeymapOp};
 use serde_json::{Value, json};
 
 use crate::app::pretty;
@@ -119,6 +119,31 @@ impl Sawit {
     /// Sends keymap op `op` to the running app.
     async fn keymap(&self, op: KeymapOp) -> Result<Value, String> {
         self.app_call(None, Command::Keymap { op }).await
+    }
+
+    /// The keys that run `action` as the user's keymap binds them now, as a Mac menu writes them
+    /// (`⇧⌘.`): each binding of it that runs, the user's own first. Empty when no key runs it, or
+    /// the app can't say.
+    pub(crate) async fn keys_for(&self, action: &str) -> Vec<String> {
+        let op = KeymapOp::List {
+            filter: Some(action.to_string()),
+            keys: None,
+            unbound: false,
+        };
+        let Ok(reply) = self.keymap(op).await else {
+            return Vec::new();
+        };
+        let Ok(list) = serde_json::from_value::<KeymapList>(reply) else {
+            return Vec::new();
+        };
+        let mut running: Vec<_> = list
+            .rows
+            .into_iter()
+            .filter(|row| row.action == action)
+            .filter(|row| matches!(row.source, KeySource::Default | KeySource::User))
+            .collect();
+        running.sort_by_key(|row| row.source != KeySource::User);
+        running.into_iter().map(|row| row.display).collect()
     }
 }
 
@@ -385,6 +410,46 @@ mod tests {
                 }
             }
         ));
+    }
+
+    /// keys_for names the keys that run an action now, the user's own first, and not a default
+    /// the user turned off: browser_annotations tells the agent Annotate's real key with it,
+    /// where it said "⇧⌘. by default".
+    #[tokio::test]
+    async fn keys_for_names_the_keys_that_run_an_action_now() {
+        let dir = tempfile::tempdir().unwrap();
+        let sawit = server(dir.path());
+        let action = "browser::ToggleAnnotate";
+        let shown = |keys: &str, display: &str, source| KeymapRow {
+            display: display.into(),
+            context: Some("Browser".into()),
+            ..row(action, keys, source)
+        };
+        let list = KeymapList {
+            path: "/home/keymap.json".into(),
+            writable: true,
+            errors: vec![],
+            rows: vec![
+                shown("cmd->", "⇧⌘.", KeySource::Default),
+                shown("cmd-.", "⌘.", KeySource::Removed),
+                shown("ctrl-a", "⌃A", KeySource::User),
+                row("browser::Reload", "cmd-r", KeySource::Default),
+            ],
+        };
+        let requests = fake_app(&sawit.paths, vec![json!(list), json!({"rows": 3})]);
+        assert_eq!(sawit.keys_for(action).await, ["⌃A", "⇧⌘."]);
+        assert_eq!(
+            asked(&requests),
+            Command::Keymap {
+                op: KeymapOp::List {
+                    filter: Some(action.into()),
+                    keys: None,
+                    unbound: false,
+                }
+            }
+        );
+        // An answer it can't read names no key.
+        assert!(sawit.keys_for(action).await.is_empty());
     }
 
     /// With no app running the keymap tools say so: the defaults live in the app.

@@ -651,11 +651,17 @@ impl Sawit {
         );
         match v["markdown"].as_str() {
             Some(md) => ok(md.to_string()),
-            // Sawit-mcp can't see the user's keymap, which may give Annotate another key.
-            None => ok(
-                "No annotations yet. The user adds them with Annotate in the Browser tab's toolbar (⇧⌘. by default)."
-                    .to_string(),
-            ),
+            // Annotate's keys as the user's keymap binds them, which may not be the default's.
+            None => {
+                let keys = self.keys_for("browser::ToggleAnnotate").await;
+                let keys = match keys.as_slice() {
+                    [] => String::new(),
+                    keys => format!(" ({})", keys.join(" or ")),
+                };
+                ok(format!(
+                    "No annotations yet. The user adds them with Annotate in the Browser tab's toolbar{keys}."
+                ))
+            }
         }
     }
 
