@@ -1,10 +1,12 @@
-//! The GitHub tab: sign in with your GitHub account, then the open
-//! repository's pull requests and issues (conversation, comments, close,
-//! merge, new issue or pull request) and your repositories to clone.
+//! The GitHub tab: it leads with the sign-in card until you sign in (the
+//! app's one sign-in, [`super::account`]), then shows the open repository's
+//! pull requests and issues (conversation, comments, close, merge, new issue
+//! or pull request) and your repositories to clone.
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -12,7 +14,8 @@ use gpui_kit::*;
 use sawit_core::git;
 use sawit_core::github::{self, Item, Repo, ago, now};
 
-use super::store::{GitStore, SignIn};
+use super::account::{self, GitHubAccount, SignIn};
+use super::store::GitStore;
 use super::thread::{ThreadEvent, ThreadView};
 use crate::rt;
 use crate::states::{Banner, Placeholder};
@@ -35,6 +38,9 @@ enum Load<T> {
 
 pub struct GitHubView {
     store: Entity<GitStore>,
+    account: Entity<GitHubAccount>,
+    /// The sign-in what's loaded was loaded with: another one (a new account) loads afresh.
+    loaded_with: Option<String>,
     page: Page,
     show_open: bool,
     items: Load<Vec<Item>>,
@@ -64,8 +70,14 @@ impl GitHubView {
             cx.new(|cx| TextareaState::new(window, cx).placeholder("Description (Markdown)"));
         let repo_search =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search your repositories"));
+        let account = account::global(cx);
         let subscriptions = vec![
             cx.observe(&store, |this, _, cx| {
+                this.ensure_loaded(cx);
+                cx.notify();
+            }),
+            // Signing in or out anywhere shows here at once.
+            cx.observe(&account, |this, _, cx| {
                 this.ensure_loaded(cx);
                 cx.notify();
             }),
@@ -82,6 +94,8 @@ impl GitHubView {
         ];
         let mut this = Self {
             store,
+            account,
+            loaded_with: None,
             page: Page::Repository,
             show_open: true,
             items: Load::Idle,
@@ -108,21 +122,33 @@ impl GitHubView {
     }
 
     fn token(&self, cx: &App) -> Option<String> {
-        let store = self.store.read(cx);
-        store.account.as_ref().and(store.token.clone())
+        self.account.read(cx).token().map(String::from)
     }
 
     fn slug(&self, cx: &App) -> Option<(String, String)> {
         self.store.read(cx).slug.clone()
     }
 
-    /// Loads what the current page shows if it isn't loaded yet.
+    /// When `error` is GitHub refusing `token` itself: the app signs out everywhere and this
+    /// page goes back to its sign-in card, which says why. True then.
+    fn refused(error: &sawit_core::CoreError, token: &str, cx: &mut App) -> bool {
+        account::note_refusal(error, token, cx)
+    }
+
+    /// Loads what the current page shows if it isn't loaded yet. Signed out, or signed in as
+    /// someone else, nothing loaded stays.
     fn ensure_loaded(&mut self, cx: &mut Context<Self>) {
-        if self.token(cx).is_none() {
+        let token = self.token(cx);
+        if token != self.loaded_with {
+            self.loaded_with = token.clone();
             self.items = Load::Idle;
             self.items_for = None;
             self.repos = Load::Idle;
             self.thread = None;
+            self.composing = None;
+            self.error = None;
+        }
+        if token.is_none() {
             return;
         }
         match self.page {
@@ -148,8 +174,9 @@ impl GitHubView {
         self.items_for = Some((owner.clone(), name.clone(), open));
         self.items = Load::Loading;
         cx.notify();
-        let rx = rt::spawn(cx, async move {
-            github::items(&token, &owner, &name, open).await
+        let rx = rt::spawn(cx, {
+            let token = token.clone();
+            async move { github::items(&token, &owner, &name, open).await }
         });
         cx.spawn(async move |this, cx| {
             let Ok(result) = rx.await else {
@@ -158,6 +185,7 @@ impl GitHubView {
             let _ = this.update(cx, |this, cx| {
                 this.items = match result {
                     Ok(items) => Load::Ready(items),
+                    Err(e) if Self::refused(&e, &token, cx) => Load::Idle,
                     Err(e) => Load::Failed(e.to_string()),
                 };
                 cx.notify();
@@ -172,7 +200,10 @@ impl GitHubView {
         };
         self.repos = Load::Loading;
         cx.notify();
-        let rx = rt::spawn(cx, async move { github::repos(&token).await });
+        let rx = rt::spawn(cx, {
+            let token = token.clone();
+            async move { github::repos(&token).await }
+        });
         cx.spawn(async move |this, cx| {
             let Ok(result) = rx.await else {
                 return;
@@ -180,6 +211,7 @@ impl GitHubView {
             let _ = this.update(cx, |this, cx| {
                 this.repos = match result {
                     Ok(repos) => Load::Ready(repos),
+                    Err(e) if Self::refused(&e, &token, cx) => Load::Idle,
                     Err(e) => Load::Failed(e.to_string()),
                 };
                 cx.notify();
@@ -295,6 +327,7 @@ impl GitHubView {
         self.working = true;
         self.error = None;
         cx.notify();
+        let used = token.clone();
         let rx = rt::spawn(cx, async move {
             if pull {
                 let head = head.unwrap_or_default();
@@ -326,6 +359,7 @@ impl GitHubView {
                         this.composing = None;
                         this.open_thread(number, window, cx);
                     }
+                    Err(e) if Self::refused(&e, &used, cx) => {}
                     Err(e) => {
                         let mut message = e.to_string();
                         if pull && message.contains("422") {
@@ -399,9 +433,11 @@ impl GitHubView {
     // ------------------------------------------------------------ render
 
     fn render_sign_in(&self, cx: &mut Context<Self>) -> AnyElement {
-        let store = self.store.read(cx);
+        let account = self.account.read(cx);
+        let signed_in = account.is_signed_in();
+        let notice = account.notice().map(String::from);
         let muted = cx.theme().muted_foreground;
-        let card = match &store.sign_in {
+        let card = match &account.sign_in {
             SignIn::Waiting(device) => {
                 let (code, url) = (device.user_code.clone(), device.verification_uri.clone());
                 let page = url.trim_start_matches("https://").to_string();
@@ -466,7 +502,7 @@ impl GitHubView {
                                     .small()
                                     .label("Cancel")
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        this.store.update(cx, |s, cx| s.cancel_sign_in(cx))
+                                        this.account.update(cx, |a, cx| a.cancel_sign_in(cx))
                                     })),
                             ),
                     )
@@ -488,20 +524,33 @@ impl GitHubView {
                         )
                         .child(text)
                 };
+                let scopes = github::SCOPES
+                    .iter()
+                    .map(|(scope, _)| *scope)
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 v_flex()
                     .gap_5()
                     .child(card_heading(
                         "Connect your GitHub account",
-                        "Sign in once to work with GitHub from Sawit.",
+                        "One sign-in for every GitHub feature in Sawit.",
                         cx,
                     ))
+                    .when_some(notice, |el, notice| {
+                        el.child(Banner::error("gh-sign-in-notice", notice).on_dismiss(
+                            cx.listener(|this, _, _, cx| {
+                                this.account.update(cx, |a, cx| a.dismiss_notice(cx))
+                            }),
+                        ))
+                    })
                     .child(
                         v_flex()
                             .gap_2()
                             .child(perk("Pull requests and issues, with their timelines", cx))
                             .child(perk("Comment, close and merge", cx))
                             .child(perk("Clone your repositories", cx))
-                            .child(perk("Push and pull without password prompts", cx)),
+                            .child(perk("Push and pull over HTTPS without password prompts", cx))
+                            .child(perk("Save your shell files to a private repository", cx)),
                     )
                     .when_some(failed, |el, e| el.child(Banner::error("gh-sign-in-error", e)))
                     .child(
@@ -512,7 +561,30 @@ impl GitHubView {
                             .label(if starting { "Contacting GitHub…" } else { "Sign In with GitHub" })
                             .loading(starting)
                             .disabled(starting)
-                            .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.sign_in(cx)))),
+                            .on_click(cx.listener(|this, _, _, cx| this.account.update(cx, |a, cx| a.sign_in(cx)))),
+                    )
+                    .when(signed_in, |el| {
+                        el.child(
+                            Button::new("gh-sign-in-not-now")
+                                .ghost()
+                                .small()
+                                .w_full()
+                                .label("Keep the Current Sign-In")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.account.update(cx, |a, cx| a.cancel_sign_in(cx))
+                                })),
+                        )
+                    })
+                    .child(
+                        h_flex()
+                            .items_start()
+                            .gap_1p5()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(div().pt(px(2.)).child(Icon::new(Lucide::KeyRound).xsmall()))
+                            .child(div().flex_1().min_w_0().child(format!(
+                                "Sawit asks GitHub for {scopes}: repo for your repositories, pull requests and issues, workflow to push changes to GitHub Actions workflows, read:user for your name and avatar."
+                            ))),
                     )
                     .child(
                         h_flex()
@@ -573,12 +645,14 @@ impl GitHubView {
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let store = self.store.read(cx);
-        let login = store
+        let login = self
             .account
-            .as_ref()
-            .map(|a| a.login.clone())
-            .unwrap_or_default();
+            .read(cx)
+            .login()
+            .map(|l| format!("@{l}"))
+            .unwrap_or_else(|| "GitHub".into());
         let slug = store.slug.clone();
+        let account = self.account.clone();
         let page = self.page;
         let tab = |id: &'static str, label: String, which: Page| {
             Button::new(id)
@@ -597,7 +671,8 @@ impl GitHubView {
             .child(
                 tab(
                     "gh-page-repo",
-                    slug.map(|(o, n)| format!("{o}/{n}")).unwrap_or_else(|| "This Repository".into()),
+                    slug.map(|(o, n)| format!("{o}/{n}"))
+                        .unwrap_or_else(|| "This Repository".into()),
                     Page::Repository,
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -607,37 +682,59 @@ impl GitHubView {
                 })),
             )
             .child(
-                tab("gh-page-repos", "Your Repositories".into(), Page::Repos).on_click(cx.listener(|this, _, _, cx| {
-                    this.page = Page::Repos;
-                    this.ensure_loaded(cx);
-                    cx.notify();
-                })),
+                tab("gh-page-repos", "Your Repositories".into(), Page::Repos).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.page = Page::Repos;
+                        this.ensure_loaded(cx);
+                        cx.notify();
+                    }),
+                ),
             )
             .child(div().flex_1())
-            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(format!("@{login}")))
+            // The account menu, as in the title bar: Sign Out is there.
             .child(
-                Button::new("gh-sign-out")
+                Button::new("gh-account")
                     .ghost()
                     .small()
-                    .icon(Lucide::LogOut)
-                    .tooltip("Sign Out of GitHub")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        let answer = window.prompt(
-                            PromptLevel::Warning,
-                            "Sign out of GitHub?",
-                            Some("Sawit forgets your sign-in. Your repositories and local changes stay as they are."),
-                            &["Sign Out", "Cancel"],
-                            cx,
-                        );
-                        let store = this.store.clone();
-                        cx.spawn(async move |_, cx| {
-                            if answer.await == Ok(0) {
-                                store.update(cx, |s, cx| s.sign_out(cx));
-                            }
-                        })
-                        .detach();
-                    })),
+                    .label(login)
+                    .tooltip("GitHub Account")
+                    .dropdown_caret(true)
+                    .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, cx| {
+                        account::account_menu(menu, account.read(cx))
+                    }),
             )
+    }
+
+    /// Says what the sign-in lacks of what Sawit asks for (one from before Sawit asked for
+    /// `workflow`), with a new sign-in to allow it.
+    fn render_missing_scopes(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let missing = self.account.read(cx).missing_scopes();
+        if missing.is_empty() {
+            return None;
+        }
+        let what: Vec<&str> = github::SCOPES
+            .iter()
+            .filter(|(scope, _)| missing.contains(scope))
+            .map(|(_, needed_for)| *needed_for)
+            .collect();
+        Some(
+            Banner::info(
+                "gh-missing-scopes",
+                format!(
+                    "Your sign-in predates what Sawit asks GitHub for now: {} ({}). Sign in again to allow it.",
+                    missing.join(", "),
+                    what.join("; ")
+                ),
+            )
+            .action(
+                Button::new("gh-sign-in-again")
+                    .xsmall()
+                    .label("Sign In Again")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.account.update(cx, |a, cx| a.sign_in(cx))
+                    })),
+            ),
+        )
     }
 
     fn render_item_row(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -1042,13 +1139,17 @@ impl GitHubView {
 
 impl Render for GitHubView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let signed_in = self.token(cx).is_some();
+        // The whole page needs GitHub: signed out it is the sign-in card, not a wall of
+        // disabled buttons. A new sign-in under way (or failed) shows the card too.
+        let account = self.account.read(cx);
+        let card = !account.is_signed_in() || account.sign_in != SignIn::Idle;
         v_flex()
             .size_full()
             .bg(cx.theme().background)
-            .when(!signed_in, |el| el.child(self.render_sign_in(cx)))
-            .when(signed_in, |el| {
+            .when(card, |el| el.child(self.render_sign_in(cx)))
+            .when(!card, |el| {
                 el.child(self.render_header(cx))
+                    .children(self.render_missing_scopes(cx))
                     .child(div().flex_1().min_h_0().child(match self.page {
                         Page::Repository => self.render_repository(cx),
                         Page::Repos => self.render_repos(cx),
@@ -1074,8 +1175,11 @@ fn card_heading(title: &'static str, subtitle: &'static str, cx: &App) -> impl I
                 .justify_center()
                 .child(Icon::new(Lucide::Github).size(px(20.))),
         )
+        // Wraps within the card rather than running past its edge.
         .child(
             v_flex()
+                .flex_1()
+                .min_w_0()
                 .gap_0p5()
                 .child(div().text_base().font_semibold().child(title))
                 .child(

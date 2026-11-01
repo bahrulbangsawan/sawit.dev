@@ -1,7 +1,8 @@
 //! Git and GitHub: the sidebar (changes, commit, branches, sync), the
-//! commit graph, file diffs, and the GitHub tab (sign-in, pull requests,
-//! issues, comments, your repositories).
+//! commit graph, file diffs, the app's one GitHub sign-in, and the GitHub tab
+//! (pull requests, issues, comments, your repositories).
 
+pub mod account;
 mod commit;
 mod diff;
 mod github;
@@ -10,6 +11,7 @@ mod panel;
 mod store;
 mod thread;
 
+pub use account::{GitHubAccount, OpenGitHub, SignInToGitHub};
 pub use commit::CommitView;
 pub use diff::{DiffView, DiffViewEvent};
 pub use github::GitHubView;
@@ -41,7 +43,43 @@ pub fn init(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::TestAppContext;
+    use gpui_kit::{AppContext as _, TestAppContext};
+
+    /// Clone from GitHub in the Git panel (a window with no folder) is off while signed out,
+    /// saying why, and turns on as the one sign-in happens, without reopening anything.
+    #[gpui_kit::test]
+    fn clone_from_github_waits_for_the_sign_in(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::init(cx);
+        });
+        let (_, panel) = cx.update(|cx| {
+            gpui_kit::open_window(Default::default(), cx, |window, cx| {
+                // No folder open: the panel offers Clone from GitHub.
+                let store = cx.new(super::GitStore::new);
+                cx.new(|cx| super::GitPanel::new(store, window, cx))
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(
+                panel.read(cx).clone_blocked(cx).as_deref(),
+                Some("Sign in to GitHub to clone your repositories")
+            )
+        });
+        let account = cx.update(super::account::global);
+        let me = sawit_core::github::Account {
+            login: "me".into(),
+            ..Default::default()
+        };
+        account.update(cx, |a, cx| a.signed_in("gho_1".into(), me, None, cx));
+        cx.run_until_parked();
+        cx.update(|cx| assert_eq!(panel.read(cx).clone_blocked(cx), None));
+        account.update(cx, |a, cx| a.sign_out(cx));
+        cx.run_until_parked();
+        cx.update(|cx| assert!(panel.read(cx).clone_blocked(cx).is_some()));
+    }
 
     /// The commit and comment boxes say which keys send them, as the keymap binds them: ⌘↩ in
     /// the box (`GitCommitMessage > Input`), which takes the box's own ⌘↩.

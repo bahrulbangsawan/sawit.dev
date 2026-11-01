@@ -1,6 +1,7 @@
-//! The window's Git state: the repository of the open folder, its status
-//! and branches, the action running, and the GitHub sign-in. Shared by the
-//! Git sidebar, the graph, diff and GitHub tabs.
+//! A project's Git state: the repository of the open folder, its status
+//! and branches, and the action running. Shared by the Git sidebar, the
+//! graph, diff and GitHub tabs. The GitHub sign-in is the app's one
+//! ([`super::account`]), which remote actions lend git.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -8,7 +9,6 @@ use std::time::Duration;
 
 use gpui_kit::{Context, EventEmitter, Task};
 use sawit_core::git::{self, Branch, Status};
-use sawit_core::github::{self, Account, DeviceCode};
 use sawit_core::{CoreError, Result};
 
 use crate::rt;
@@ -24,17 +24,6 @@ pub enum GitEvent {
 
 impl EventEmitter<GitEvent> for GitStore {}
 
-#[derive(Clone, Default)]
-pub enum SignIn {
-    #[default]
-    Idle,
-    /// Asking GitHub for a code.
-    Starting,
-    /// Waiting for the user to enter the code on github.com.
-    Waiting(DeviceCode),
-    Failed(String),
-}
-
 pub struct GitStore {
     /// The open folder.
     dir: Option<PathBuf>,
@@ -49,15 +38,14 @@ pub struct GitStore {
     /// The action running ("Pushing…"); others wait for it.
     pub busy: Option<&'static str>,
     pub error: Option<String>,
+    /// The last error was the remote asking for a sign-in while there was none to lend it:
+    /// the panel offers the GitHub sign-in beside it.
+    pub sign_in_would_help: bool,
     pub notice: Option<String>,
-    pub token: Option<String>,
-    pub account: Option<Account>,
-    pub sign_in: SignIn,
     head: Option<String>,
     /// Bumped on every refresh so a stale answer is dropped.
     generation: u64,
     _poll: Task<()>,
-    _sign_in: Task<()>,
 }
 
 impl GitStore {
@@ -74,7 +62,7 @@ impl GitStore {
                 };
             }
         });
-        let mut this = Self {
+        Self {
             dir: None,
             repo: None,
             checked: false,
@@ -83,17 +71,12 @@ impl GitStore {
             slug: None,
             busy: None,
             error: None,
+            sign_in_would_help: false,
             notice: None,
-            token: None,
-            account: None,
-            sign_in: SignIn::Idle,
             head: None,
             generation: 0,
             _poll: poll,
-            _sign_in: Task::ready(()),
-        };
-        this.load_account(cx);
-        this
+        }
     }
 
     /// Follows the folder open in the window. The same folder again (Try Again in the Files
@@ -202,9 +185,9 @@ impl GitStore {
         .detach();
     }
 
-    /// Runs one Git action. `f` gets the repository and the GitHub token;
-    /// what it returns is shown as a notice (or an error), then everything
-    /// is re-read.
+    /// Runs one Git action. `f` gets the repository and the app's GitHub sign-in, which a
+    /// remote action lends git for github.com over HTTPS when the user's own credentials don't
+    /// answer; what it returns is shown as a notice (or an error), then everything is re-read.
     pub fn run<F, Fut>(&mut self, label: &'static str, cx: &mut Context<Self>, f: F)
     where
         F: FnOnce(PathBuf, Option<String>) -> Fut,
@@ -218,9 +201,15 @@ impl GitStore {
         }
         self.busy = Some(label);
         self.error = None;
+        self.sign_in_would_help = false;
         self.notice = None;
         cx.notify();
-        let rx = rt::spawn(cx, f(repo, self.token.clone()));
+        let token = super::account::global(cx)
+            .read(cx)
+            .token()
+            .map(String::from);
+        let signed_in = token.is_some();
+        let rx = rt::spawn(cx, f(repo, token));
         cx.spawn(async move |this, cx| {
             let result = rx
                 .await
@@ -229,7 +218,11 @@ impl GitStore {
                 this.busy = None;
                 match result {
                     Ok(message) => this.notice = Some(message).filter(|m| !m.trim().is_empty()),
-                    Err(e) => this.error = Some(friendly(&e.to_string(), this.token.is_some())),
+                    Err(e) => {
+                        let message = e.to_string();
+                        this.sign_in_would_help = !signed_in && asks_for_sign_in(&message);
+                        this.error = Some(friendly(&message, signed_in));
+                    }
                 }
                 this.refresh(cx);
                 cx.emit(GitEvent::HistoryChanged);
@@ -259,136 +252,28 @@ impl GitStore {
 
     pub fn dismiss_message(&mut self, cx: &mut Context<Self>) {
         self.error = None;
+        self.sign_in_would_help = false;
         self.notice = None;
-        cx.notify();
-    }
-
-    // ------------------------------------------------------------ GitHub
-
-    fn load_account(&mut self, cx: &mut Context<Self>) {
-        let rx = rt::spawn(cx, async move {
-            let token = github::load_token().ok().flatten()?;
-            let account = github::account(&token).await;
-            Some((token, account))
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(Some((token, account))) = rx.await else {
-                return;
-            };
-            let _ = this.update(cx, |this, cx| {
-                let (token, account, said) = saved_sign_in(token, account);
-                this.token = token;
-                this.account = account;
-                if let Some(said) = said {
-                    this.sign_in = said;
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    /// Starts the device flow; the GitHub tab shows the code to enter.
-    pub fn sign_in(&mut self, cx: &mut Context<Self>) {
-        self.sign_in = SignIn::Starting;
-        cx.notify();
-        let rx = rt::spawn(cx, async move { github::start_sign_in().await });
-        self._sign_in = cx.spawn(async move |this, cx| {
-            let device = match rx.await {
-                Ok(Ok(device)) => device,
-                Ok(Err(e)) => {
-                    let _ = this.update(cx, |this, cx| {
-                        this.sign_in = SignIn::Failed(e.to_string());
-                        cx.notify();
-                    });
-                    return;
-                }
-                Err(_) => return,
-            };
-            let Ok(rx) = this.update(cx, |this, cx| {
-                this.sign_in = SignIn::Waiting(device.clone());
-                cx.notify();
-                rt::spawn(cx, async move {
-                    let token = github::wait_for_token(&device).await?;
-                    let account = github::account(&token).await?;
-                    Ok::<_, CoreError>((token, account))
-                })
-            }) else {
-                return;
-            };
-            let result = rx.await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(Ok((token, account))) => {
-                        this.token = Some(token);
-                        this.account = Some(account);
-                        this.sign_in = SignIn::Idle;
-                    }
-                    Ok(Err(e)) => this.sign_in = SignIn::Failed(e.to_string()),
-                    Err(_) => this.sign_in = SignIn::Idle,
-                }
-                cx.notify();
-            });
-        });
-    }
-
-    pub fn cancel_sign_in(&mut self, cx: &mut Context<Self>) {
-        self._sign_in = Task::ready(());
-        self.sign_in = SignIn::Idle;
-        cx.notify();
-    }
-
-    pub fn sign_out(&mut self, cx: &mut Context<Self>) {
-        if let Err(e) = github::delete_token() {
-            self.sign_in = SignIn::Failed(e.to_string());
-        } else {
-            self.sign_in = SignIn::Idle;
-        }
-        self.token = None;
-        self.account = None;
         cx.notify();
     }
 }
 
-/// What the sign-in card says when GitHub no longer accepts the sign-in kept in the Keychain. The
-/// card has no Sign Out, and needs none: a new sign-in replaces the old one.
-const SAVED_SIGN_IN_REFUSED: &str =
-    "GitHub no longer accepts the sign-in Sawit saved. Sign in again to replace it.";
-
-/// What the store keeps of the sign-in the Keychain holds (`token`), once GitHub was asked whose
-/// it is (`account`): the token, the account, and what the sign-in card says, if anything.
-///
-/// - GitHub knows it: the token and its account.
-/// - GitHub couldn't be reached: the token, which may well still work for git, and why.
-/// - GitHub no longer accepts it (revoked, expired): neither, so git goes back to the user's own
-///   credentials instead of sending a token GitHub refuses (which read as an account without
-///   access to the remote), and the card asks for a new sign-in (SMOKE-5).
-fn saved_sign_in(
-    token: String,
-    account: Result<Account>,
-) -> (Option<String>, Option<Account>, Option<SignIn>) {
-    match account {
-        Ok(account) => (Some(token), Some(account), None),
-        Err(e) if github::is_revoked(&e) => (
-            None,
-            None,
-            Some(SignIn::Failed(SAVED_SIGN_IN_REFUSED.into())),
-        ),
-        Err(e) => (Some(token), None, Some(SignIn::Failed(e.to_string()))),
-    }
+/// Whether git's `message` is the remote asking for credentials nobody gave it.
+fn asks_for_sign_in(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("could not read username")
+        || lower.contains("authentication failed")
+        || lower.contains("terminal prompts disabled")
 }
 
 /// Adds what to do to git's most common refusals.
 fn friendly(message: &str, signed_in: bool) -> String {
     let lower = message.to_lowercase();
-    let hint = if lower.contains("could not read username")
-        || lower.contains("authentication failed")
-        || lower.contains("terminal prompts disabled")
-    {
+    let hint = if asks_for_sign_in(message) {
         if signed_in {
             "GitHub refused your sign-in for this remote. Check that your account has access to it."
         } else {
-            "This remote needs a sign-in. Sign in to GitHub in the GitHub tab, or set up a Git credential helper."
+            "This remote needs a sign-in. Sign in to GitHub (one sign-in for all of Sawit), or set up a Git credential helper or an SSH key."
         }
     } else if lower.contains("not possible to fast-forward") || lower.contains("diverging branches")
     {
@@ -415,40 +300,21 @@ fn friendly(message: &str, signed_in: bool) -> String {
 mod tests {
     use super::*;
 
-    /// SMOKE-5: a saved sign-in that GitHub no longer accepts (401: revoked, expired) is let go,
-    /// so git stops sending it, and the sign-in card, which has no Sign Out, asks for a new
-    /// sign-in, which replaces it in the Keychain, instead of telling the user to sign out first.
+    /// A remote asking for credentials while signed out points at the one GitHub sign-in (the
+    /// panel offers it beside the error), as well as the user's own credential helper; signed
+    /// in, it says the account may lack access instead.
     #[test]
-    fn a_saved_sign_in_github_refuses_is_let_go() {
-        let refused = Err(CoreError::GitHub(github::REVOKED.into()));
-        let (token, account, said) = saved_sign_in("revoked".into(), refused);
-        assert_eq!(token, None, "git still gets the token GitHub refuses");
-        assert_eq!(account, None);
-        let Some(SignIn::Failed(said)) = said else {
-            panic!("the sign-in card says nothing");
-        };
-        assert_eq!(
-            said,
-            "GitHub no longer accepts the sign-in Sawit saved. Sign in again to replace it."
+    fn a_remote_asking_for_credentials_points_at_the_sign_in() {
+        let refused =
+            "fatal: could not read Username for 'https://github.com': terminal prompts disabled";
+        assert!(asks_for_sign_in(refused));
+        assert!(!asks_for_sign_in("! [rejected] main -> main (fetch first)"));
+        let signed_out = friendly(refused, false);
+        assert!(
+            signed_out.starts_with("This remote needs a sign-in. Sign in to GitHub"),
+            "{signed_out}"
         );
-    }
-
-    /// A saved sign-in that couldn't be checked (no connection) is kept: it may well still work
-    /// for git. One GitHub accepts signs in.
-    #[test]
-    fn a_saved_sign_in_that_couldnt_be_checked_is_kept() {
-        let offline = "Unable to reach GitHub. Check your connection and try again.";
-        let (token, account, said) =
-            saved_sign_in("saved".into(), Err(CoreError::GitHub(offline.into())));
-        assert_eq!((token.as_deref(), account), (Some("saved"), None));
-        assert!(matches!(said, Some(SignIn::Failed(said)) if said == offline));
-
-        let me = Account {
-            login: "me".into(),
-            name: None,
-        };
-        let (token, account, said) = saved_sign_in("saved".into(), Ok(me.clone()));
-        assert_eq!((token.as_deref(), account), (Some("saved"), Some(me)));
-        assert!(said.is_none(), "a sign-in under way would be cut short");
+        assert!(signed_out.ends_with(refused), "git's own words are kept");
+        assert!(friendly(refused, true).starts_with("GitHub refused your sign-in"));
     }
 }

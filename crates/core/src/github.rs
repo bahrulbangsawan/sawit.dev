@@ -14,12 +14,43 @@ use crate::{CoreError, Result};
 /// Set at build time with `SAWIT_GITHUB_CLIENT_ID`, or at run time with the
 /// same variable.
 const CLIENT_ID: Option<&str> = option_env!("SAWIT_GITHUB_CLIENT_ID");
-/// Private repositories (push, issues, pull requests) and the profile.
-const SCOPES: &str = "repo read:user";
+/// What the one sign-in asks GitHub for, and what in Sawit needs each: every GitHub control
+/// works on this one sign-in, so it asks once for all of them. The sign-in card lists them.
+pub const SCOPES: &[(&str, &str)] = &[
+    (
+        "repo",
+        "pull requests and issues, comments, merges, cloning private repositories, push and pull over HTTPS, saving shell files to a private repository",
+    ),
+    (
+        "workflow",
+        "pushing commits that change GitHub Actions workflows (.github/workflows): GitHub refuses those pushes without it",
+    ),
+    ("read:user", "your name and avatar in the title bar"),
+];
 const API: &str = "https://api.github.com";
 
-const KEYCHAIN_SERVICE: &str = "sawit";
-const KEYCHAIN_ACCOUNT: &str = "github";
+/// The scopes as the device flow takes them, space-separated.
+fn scope_list() -> String {
+    SCOPES
+        .iter()
+        .map(|(scope, _)| *scope)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The scopes of [`SCOPES`] a token granted `granted` lacks: one signed in before Sawit asked
+/// for them. A wider scope GitHub lists counts for the narrower one (`user` for `read:user`).
+pub fn missing_scopes(granted: &[String]) -> Vec<&'static str> {
+    let has = |scope: &str| granted.iter().any(|g| g == scope);
+    SCOPES
+        .iter()
+        .map(|(scope, _)| *scope)
+        .filter(|scope| match *scope {
+            "read:user" => !has("read:user") && !has("user"),
+            scope => !has(scope),
+        })
+        .collect()
+}
 
 fn client_id() -> Result<String> {
     std::env::var("SAWIT_GITHUB_CLIENT_ID")
@@ -35,29 +66,132 @@ fn client_id() -> Result<String> {
 
 // ---------------------------------------------------------------- token
 
-pub fn load_token() -> Result<Option<String>> {
-    crate::keychain::get(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
+/// Where the sign-in is kept. The app keeps it in the Keychain ([`Keychain::user`]); its tests
+/// keep theirs in memory ([`MemoryStore`]), so no test signs the user in or out.
+pub trait TokenStore: Send + Sync {
+    fn load(&self) -> Result<Option<String>>;
+    fn save(&self, token: &str) -> Result<()>;
+    fn delete(&self) -> Result<()>;
 }
 
-pub fn store_token(token: &str) -> Result<()> {
-    crate::keychain::set(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT, token)
+/// A Keychain item holding the token: the one the app signs in with, or a test's own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Keychain {
+    service: String,
+    account: String,
 }
 
-pub fn delete_token() -> Result<()> {
-    crate::keychain::delete(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
+impl Keychain {
+    /// The user's sign-in: every GitHub control in the app works with it. A Sawit run with a
+    /// data folder of its own (`SAWIT_HOME`: a scratch copy, the demo data the README's
+    /// screenshots are taken with) keeps a sign-in of its own too, so it neither shows nor
+    /// signs out the user's GitHub account.
+    pub fn user() -> Self {
+        Keychain {
+            service: "sawit".into(),
+            account: user_account(std::env::var_os("SAWIT_HOME").as_deref()),
+        }
+    }
+
+    /// An item of a test's own, under another service, away from the user's.
+    pub fn named(service: &str, account: &str) -> Self {
+        Keychain {
+            service: service.into(),
+            account: account.into(),
+        }
+    }
+}
+
+/// The Keychain account of the GitHub sign-in: `github`, or with a data folder of its own
+/// (`SAWIT_HOME`) `github:<that folder>`.
+fn user_account(home: Option<&std::ffi::OsStr>) -> String {
+    match home.filter(|h| !h.is_empty()) {
+        Some(home) => format!("github:{}", home.to_string_lossy()),
+        None => "github".into(),
+    }
+}
+
+impl TokenStore for Keychain {
+    fn load(&self) -> Result<Option<String>> {
+        crate::keychain::get(&self.service, &self.account)
+    }
+
+    fn save(&self, token: &str) -> Result<()> {
+        crate::keychain::set(&self.service, &self.account, token)
+    }
+
+    fn delete(&self) -> Result<()> {
+        crate::keychain::delete(&self.service, &self.account)
+    }
+}
+
+/// A token kept in memory only, for tests.
+#[derive(Default)]
+pub struct MemoryStore(std::sync::Mutex<Option<String>>);
+
+impl MemoryStore {
+    pub fn with(token: &str) -> Self {
+        MemoryStore(std::sync::Mutex::new(Some(token.to_string())))
+    }
+}
+
+impl TokenStore for MemoryStore {
+    fn load(&self) -> Result<Option<String>> {
+        Ok(self.0.lock().map(|t| t.clone()).unwrap_or_default())
+    }
+
+    fn save(&self, token: &str) -> Result<()> {
+        if let Ok(mut t) = self.0.lock() {
+            *t = Some(token.to_string());
+        }
+        Ok(())
+    }
+
+    fn delete(&self) -> Result<()> {
+        if let Ok(mut t) = self.0.lock() {
+            *t = None;
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------- http
 
+/// What one request answered: the HTTP status, the scopes GitHub says the token has (its
+/// `X-OAuth-Scopes`, `None` when it didn't say), and the body.
+struct Reply {
+    code: u16,
+    scopes: Option<Vec<String>>,
+    body: String,
+}
+
+/// What `curl -w` prints after the body: the scopes header and the status, a line each.
+const WRITE_OUT: &str = "\n%header{x-oauth-scopes}\n%{http_code}";
+
+/// Splits what `curl` printed with [`WRITE_OUT`] into a [`Reply`]. A curl too old for
+/// `%header{…}` prints it as is: no scopes then, rather than wrong ones.
+fn parse_reply(text: &str) -> Reply {
+    let (rest, code) = text.rsplit_once('\n').unwrap_or(("", text));
+    let (body, scopes) = rest.rsplit_once('\n').unwrap_or(("", rest));
+    let scopes = scopes.trim();
+    Reply {
+        code: code.trim().parse().unwrap_or(0),
+        scopes: (!scopes.contains('%') && !scopes.contains('{')).then(|| {
+            scopes
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect()
+        }),
+        body: body.to_string(),
+    }
+}
+
 /// One request with `curl`. `header` lines (the token among them) go in on
 /// stdin and the body in a private temporary file, so neither shows up in
 /// `ps`; the HTTP status comes back with the body.
-async fn curl(
-    method: &str,
-    url: &str,
-    headers: &[String],
-    body: Option<&str>,
-) -> Result<(u16, String)> {
+async fn curl(method: &str, url: &str, headers: &[String], body: Option<&str>) -> Result<Reply> {
     let mut cmd = tokio::process::Command::new("/usr/bin/curl");
     cmd.args([
         "-sS",
@@ -68,7 +202,7 @@ async fn curl(
         "-H",
         "@-",
         "-w",
-        "\n%{http_code}",
+        WRITE_OUT,
     ]);
     let body_file = body.map(write_private).transpose()?;
     if let Some(file) = &body_file {
@@ -98,9 +232,7 @@ async fn curl(
             err.trim()
         )));
     }
-    let text = String::from_utf8_lossy(&out.stdout);
-    let (body, code) = text.rsplit_once('\n').unwrap_or(("", &text));
-    Ok((code.trim().parse().unwrap_or(0), body.to_string()))
+    Ok(parse_reply(&String::from_utf8_lossy(&out.stdout)))
 }
 
 /// What a call says when GitHub no longer accepts the token it was made with (401: revoked or
@@ -128,6 +260,19 @@ async fn api_raw(
     body: Option<Value>,
     accept: &str,
 ) -> Result<String> {
+    api_reply(method, path, token, body, accept)
+        .await
+        .map(|reply| reply.body)
+}
+
+/// Like [`api_raw`], with the scopes GitHub says the token has.
+async fn api_reply(
+    method: &str,
+    path: &str,
+    token: &str,
+    body: Option<Value>,
+    accept: &str,
+) -> Result<Reply> {
     let headers = vec![
         format!("Authorization: Bearer {token}"),
         format!("Accept: {accept}"),
@@ -135,12 +280,13 @@ async fn api_raw(
         "Content-Type: application/json".to_string(),
     ];
     let body = body.map(|b| b.to_string());
-    let (code, text) = curl(method, &format!("{API}{path}"), &headers, body.as_deref()).await?;
+    let reply = curl(method, &format!("{API}{path}"), &headers, body.as_deref()).await?;
+    let (code, text) = (reply.code, &reply.body);
     match code {
-        200..=299 => Ok(text),
+        200..=299 => Ok(reply),
         401 => Err(CoreError::GitHub(REVOKED.into())),
         _ => {
-            let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+            let value: Value = serde_json::from_str(text).unwrap_or(Value::Null);
             let message = value["message"].as_str().unwrap_or("Unknown error");
             let hint = match code {
                 403 | 404 => {
@@ -213,9 +359,11 @@ pub async fn start_sign_in() -> Result<DeviceCode> {
     let body = format!(
         "client_id={}&scope={}",
         client_id()?,
-        SCOPES.replace(' ', "%20")
+        scope_list().replace(' ', "%20")
     );
-    let (code, text) = curl(
+    let Reply {
+        code, body: text, ..
+    } = curl(
         "POST",
         "https://github.com/login/device/code",
         &["Accept: application/json".into()],
@@ -262,7 +410,8 @@ pub fn parse_poll(v: &Value) -> Poll {
     }
 }
 
-/// Polls until the user approves on github.com, then saves the token.
+/// Polls until the user approves on github.com, and returns the token for the caller to keep
+/// (in its [`TokenStore`]).
 pub async fn wait_for_token(device: &DeviceCode) -> Result<String> {
     let client_id = client_id()?;
     let body = format!(
@@ -273,18 +422,15 @@ pub async fn wait_for_token(device: &DeviceCode) -> Result<String> {
     let deadline = std::time::Instant::now() + Duration::from_secs(device.expires_in);
     while std::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_secs(interval)).await;
-        let (_, text) = curl(
+        let reply = curl(
             "POST",
             "https://github.com/login/oauth/access_token",
             &["Accept: application/json".into()],
             Some(&body),
         )
         .await?;
-        match parse_poll(&serde_json::from_str(&text).unwrap_or(Value::Null)) {
-            Poll::Token(token) => {
-                store_token(&token)?;
-                return Ok(token);
-            }
+        match parse_poll(&serde_json::from_str(&reply.body).unwrap_or(Value::Null)) {
+            Poll::Token(token) => return Ok(token),
             Poll::Pending => {}
             Poll::SlowDown => interval += 5,
             Poll::Failed(message) => return Err(CoreError::GitHub(message)),
@@ -297,18 +443,60 @@ pub async fn wait_for_token(device: &DeviceCode) -> Result<String> {
 
 // ---------------------------------------------------------------- data
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Account {
     pub login: String,
     pub name: Option<String>,
+    /// The picture GitHub shows for the account, on its avatars host.
+    pub avatar_url: Option<String>,
+    /// What the token may do, as GitHub says (`X-OAuth-Scopes`); `None` when it didn't say.
+    pub scopes: Option<Vec<String>>,
+}
+
+pub fn parse_account(v: &Value, scopes: Option<Vec<String>>) -> Account {
+    Account {
+        login: v["login"].as_str().unwrap_or_default().to_string(),
+        name: v["name"]
+            .as_str()
+            .filter(|n| !n.is_empty())
+            .map(String::from),
+        avatar_url: v["avatar_url"]
+            .as_str()
+            .filter(|u| u.starts_with("https://"))
+            .map(String::from),
+        scopes,
+    }
 }
 
 pub async fn account(token: &str) -> Result<Account> {
-    let v = api("GET", "/user", token, None).await?;
-    Ok(Account {
-        login: v["login"].as_str().unwrap_or_default().to_string(),
-        name: v["name"].as_str().map(String::from),
-    })
+    let reply = api_reply("GET", "/user", token, None, "application/vnd.github+json").await?;
+    let v: Value = serde_json::from_str(&reply.body).unwrap_or(Value::Null);
+    Ok(parse_account(&v, reply.scopes))
+}
+
+/// The account's picture, small: a public address, so it's fetched without the token. Bytes of
+/// a PNG or JPEG, which the caller sniffs.
+pub async fn avatar(url: &str) -> Result<Vec<u8>> {
+    let sized = if url.contains('?') {
+        format!("{url}&s=64")
+    } else {
+        format!("{url}?s=64")
+    };
+    let out = tokio::time::timeout(
+        Duration::from_secs(20),
+        tokio::process::Command::new("/usr/bin/curl")
+            .args(["-sSfL", "--max-time", "15", "--max-filesize", "1000000"])
+            .arg(&sized)
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| CoreError::GitHub("GitHub didn't send the avatar in time.".into()))??;
+    if !out.status.success() || out.stdout.is_empty() {
+        return Err(CoreError::GitHub("GitHub didn't send the avatar.".into()));
+    }
+    Ok(out.stdout)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1062,6 +1250,99 @@ mod tests {
         assert_eq!(base64(b"fo"), "Zm8=");
         assert_eq!(base64(b"foo"), "Zm9v");
         assert_eq!(base64(b"export A=1\n"), "ZXhwb3J0IEE9MQo=");
+    }
+
+    /// The one sign-in asks for every scope a GitHub control needs: `repo` for pull requests,
+    /// issues, private clones, HTTPS push and the shell files' private repository; `workflow`,
+    /// without which GitHub refuses a push that changes `.github/workflows`; and the profile.
+    #[test]
+    fn the_sign_in_asks_for_what_every_control_needs() {
+        assert_eq!(scope_list(), "repo workflow read:user");
+        let granted = |s: &[&str]| s.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(missing_scopes(&granted(&["repo", "workflow", "read:user"])).is_empty());
+        assert!(missing_scopes(&granted(&["repo", "workflow", "user"])).is_empty());
+        // A sign-in from before Sawit asked for `workflow`.
+        assert_eq!(
+            missing_scopes(&granted(&["read:user", "repo"])),
+            ["workflow"]
+        );
+        assert_eq!(
+            missing_scopes(&[]),
+            ["repo", "workflow", "read:user"],
+            "nothing granted lacks everything"
+        );
+    }
+
+    /// The status and the scopes header come after the body, a line each; a curl too old for
+    /// `%header{…}` leaves the scopes unknown instead of making some up.
+    #[test]
+    fn a_reply_carries_its_status_and_scopes() {
+        let r = parse_reply("{\"login\":\"me\"}\nrepo, workflow,read:user\n200");
+        assert_eq!(r.code, 200);
+        assert_eq!(r.body, "{\"login\":\"me\"}");
+        assert_eq!(
+            r.scopes.as_deref(),
+            Some(&["repo".to_string(), "workflow".into(), "read:user".into()][..])
+        );
+        let r = parse_reply("line one\nline two\n\n404");
+        assert_eq!((r.code, r.body.as_str()), (404, "line one\nline two"));
+        assert_eq!(r.scopes, Some(Vec::new()), "an empty header is no scopes");
+        let r = parse_reply("{}\n%header{x-oauth-scopes}\n200");
+        assert_eq!((r.code, r.scopes), (200, None));
+    }
+
+    #[test]
+    fn accounts_parse() {
+        let a = parse_account(
+            &json!({"login": "me", "name": "", "avatar_url": "https://avatars.githubusercontent.com/u/1?v=4"}),
+            None,
+        );
+        assert_eq!(a.login, "me");
+        assert_eq!(a.name, None, "an empty name is none");
+        assert_eq!(
+            a.avatar_url.as_deref(),
+            Some("https://avatars.githubusercontent.com/u/1?v=4")
+        );
+        let a = parse_account(
+            &json!({"login": "me", "avatar_url": "file:///etc/passwd"}),
+            None,
+        );
+        assert_eq!(a.avatar_url, None, "only an https picture is fetched");
+    }
+
+    /// The app's sign-in is the `sawit`/`github` Keychain item; a Sawit with a data folder of its
+    /// own keeps its own, so a scratch or demo copy never shows (nor signs out) the user's.
+    #[test]
+    fn a_separate_data_folder_keeps_a_separate_sign_in() {
+        assert_eq!(user_account(None), "github");
+        assert_eq!(user_account(Some("".as_ref())), "github");
+        assert_eq!(
+            user_account(Some("/Users/Shared/sawit-demo".as_ref())),
+            "github:/Users/Shared/sawit-demo"
+        );
+    }
+
+    #[test]
+    fn a_memory_store_keeps_one_token() {
+        let store = MemoryStore::default();
+        assert_eq!(store.load().unwrap(), None);
+        store.save("t1").unwrap();
+        store.save("t2").unwrap();
+        assert_eq!(store.load().unwrap().as_deref(), Some("t2"));
+        store.delete().unwrap();
+        assert_eq!(store.load().unwrap(), None);
+    }
+
+    /// The Keychain store, on an item of the test's own: never the user's sign-in.
+    #[test]
+    #[ignore = "writes to the login Keychain"]
+    fn a_keychain_store_round_trips_on_its_own_item() {
+        let store = Keychain::named("sawit.github-test", "probe");
+        assert_ne!(store, Keychain::user());
+        store.save("gho_test").unwrap();
+        assert_eq!(store.load().unwrap().as_deref(), Some("gho_test"));
+        store.delete().unwrap();
+        assert_eq!(store.load().unwrap(), None);
     }
 
     #[test]

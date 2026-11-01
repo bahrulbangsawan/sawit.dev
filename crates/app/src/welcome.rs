@@ -15,6 +15,7 @@ use sawit_core::recent::{RecentProjects, tildify};
 use sawit_core::update::Version;
 
 use crate::db::DbStore;
+use crate::git::GitHubAccount;
 use crate::servers::{ServerStore, status_color};
 
 /// Rows shown per list before "N more".
@@ -29,6 +30,10 @@ pub enum WelcomeEvent {
     OpenTerminal,
     /// "Skip": the plain workspace.
     Dismiss,
+    /// The one GitHub sign-in, whose code the GitHub page shows.
+    SignInToGitHub,
+    /// Signed in: the GitHub page, to clone one of your repositories.
+    OpenGitHub,
 }
 
 impl EventEmitter<WelcomeEvent> for Welcome {}
@@ -36,6 +41,7 @@ impl EventEmitter<WelcomeEvent> for Welcome {}
 pub struct Welcome {
     servers: Entity<ServerStore>,
     db: Entity<DbStore>,
+    github: Entity<GitHubAccount>,
     recent: RecentProjects,
     recent_file: PathBuf,
     home: Option<PathBuf>,
@@ -46,13 +52,16 @@ impl Welcome {
     pub fn new(servers: Entity<ServerStore>, db: Entity<DbStore>, cx: &mut Context<Self>) -> Self {
         let recent_file = AppPaths::default_macos().recent_file();
         let recent = RecentProjects::load(&recent_file).unwrap_or_default();
+        let github = crate::git::account::global(cx);
         Self {
             _subscriptions: vec![
                 cx.observe(&servers, |_, _, cx| cx.notify()),
                 cx.observe(&db, |_, _, cx| cx.notify()),
+                cx.observe(&github, |_, _, cx| cx.notify()),
             ],
             servers,
             db,
+            github,
             recent,
             recent_file,
             home: std::env::var_os("HOME").map(PathBuf::from),
@@ -245,6 +254,36 @@ impl Welcome {
             .when(empty, |el| el.child(Self::empty("No instances yet.", cx)))
     }
 
+    /// GitHub, where a new window starts: the one sign-in while signed out, else your
+    /// repositories to clone. It never signs in by itself.
+    fn render_github(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let account = self.github.read(cx);
+        if account.is_signed_in() {
+            let hint: SharedString = account
+                .login()
+                .map(|l| format!("@{l}"))
+                .unwrap_or_default()
+                .into();
+            self.action(
+                "welcome-github",
+                Lucide::Github,
+                "Clone from GitHub…",
+                hint,
+                || WelcomeEvent::OpenGitHub,
+                cx,
+            )
+        } else {
+            self.action(
+                "welcome-github",
+                Lucide::Github,
+                "Sign In to GitHub…",
+                SharedString::default(),
+                || WelcomeEvent::SignInToGitHub,
+                cx,
+            )
+        }
+    }
+
     fn render_databases(&self, cx: &mut Context<Self>) -> Option<Div> {
         let profiles = &self.db.read(cx).profiles.items;
         if profiles.is_empty() {
@@ -315,7 +354,8 @@ impl Render for Welcome {
                 keys(&crate::workspace::ToggleTerminal),
                 || WelcomeEvent::OpenTerminal,
                 cx,
-            ));
+            ))
+            .child(self.render_github(cx));
         let right = v_flex()
             .flex_1()
             .min_w(px(280.))

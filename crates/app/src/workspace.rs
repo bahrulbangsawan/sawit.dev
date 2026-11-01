@@ -26,8 +26,8 @@ use crate::editor::{FileEditor, FileEditorEvent};
 use crate::files::search::{FolderSearch, SearchEvent};
 use crate::files::{FilesEvent, FilesPanel};
 use crate::git::{
-    CommitView, DiffView, DiffViewEvent, GitHubView, GitPanel, GitPanelEvent, GitStore, GraphEvent,
-    GraphView,
+    CommitView, DiffView, DiffViewEvent, GitHubAccount, GitHubView, GitPanel, GitPanelEvent,
+    GitStore, GraphEvent, GraphView, OpenGitHub, SignInToGitHub,
 };
 use crate::keymap::editor::KeymapEditor;
 use crate::keymap::{OpenKeymapEditor, OpenKeymapFile};
@@ -334,6 +334,8 @@ pub struct Workspace {
     pending_db: Option<DbEvent>,
     cli_status: Entity<CliStatus>,
     updater: Entity<Updater>,
+    /// The app's one GitHub sign-in, which the title bar shows.
+    github: Entity<GitHubAccount>,
     focus: FocusHandle,
     /// Takes the keyboard from what goes off screen, and gives it back when it is shown again.
     keyboard: KeyboardHome<Shown>,
@@ -371,6 +373,7 @@ impl Workspace {
         let shell_config_panel = cx.new(|cx| ShellConfigPanel::new(window, cx));
         let cli_status = cli_status(cx);
         let updater = updater(cx);
+        let github = crate::git::account::global(cx);
         let welcome = cx.new(|cx| Welcome::new(servers.clone(), db.clone(), cx));
         let focus = cx.focus_handle();
         let keyboard = KeyboardHome::new(focus.clone(), window, cx);
@@ -378,6 +381,7 @@ impl Workspace {
             cx.observe(&servers, |_, _, cx| cx.notify()),
             cx.observe(&cli_status, |_, _, cx| cx.notify()),
             cx.observe(&updater, |_, _, cx| cx.notify()),
+            cx.observe(&github, |_, _, cx| cx.notify()),
             cx.subscribe_in(
                 &welcome,
                 window,
@@ -479,7 +483,6 @@ impl Workspace {
                     ShellConfigEvent::OpenTerminal(dir) => {
                         this.open_terminal_in(dir.clone(), window, cx)
                     }
-                    ShellConfigEvent::SignInToGitHub => this.open_github(window, cx),
                 },
             ),
             // Server tabs follow renames and close when deleted.
@@ -555,6 +558,7 @@ impl Workspace {
             keyboard,
             cli_status,
             updater,
+            github,
             _subscriptions: subscriptions,
         }
     }
@@ -2004,6 +2008,11 @@ impl Workspace {
                 self.terminal.update(cx, |t, cx| t.focus_active(window, cx));
             }
             WelcomeEvent::Dismiss => self.leave_welcome(PANEL_AND_TABS, cx),
+            WelcomeEvent::SignInToGitHub => self.sign_in_to_github(window, cx),
+            WelcomeEvent::OpenGitHub => {
+                self.leave_welcome(PANEL_AND_TABS, cx);
+                self.open_github(window, cx);
+            }
         }
         cx.notify();
     }
@@ -2366,6 +2375,15 @@ impl Workspace {
             );
         }
         cx.notify();
+    }
+
+    /// Starts the one GitHub sign-in (unless one is under way) and shows the GitHub page, whose
+    /// card shows the code to enter: from the title bar, the Welcome screen, or a "Sign in"
+    /// beside a GitHub control. Only ever from the user's click: nothing signs in by itself.
+    fn sign_in_to_github(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_welcome(PANEL_AND_TABS, cx);
+        self.github.update(cx, |a, cx| a.sign_in(cx));
+        self.open_github(window, cx);
     }
 
     /// The GitHub tab (one tab).
@@ -3363,6 +3381,13 @@ impl Render for Workspace {
                 this.show_center(cx);
                 this.open_changelog_page(cx)
             }))
+            // Every "Sign in" in the window runs the one sign-in, whose code the GitHub page
+            // shows.
+            .on_action(cx.listener(|this, _: &SignInToGitHub, w, cx| this.sign_in_to_github(w, cx)))
+            .on_action(cx.listener(|this, _: &OpenGitHub, w, cx| {
+                this.leave_welcome(PANEL_AND_TABS, cx);
+                this.open_github(w, cx)
+            }))
             .on_action(cx.listener(|this, _: &InstallUpdate, _, cx| {
                 // Installs a pending update, else checks for one and shows
                 // the changelog page, where the result appears.
@@ -3391,7 +3416,8 @@ impl Render for Workspace {
                             .child(div().font_semibold().child("Sawit"))
                             .child(self.render_project_switcher(cx))
                             .child(div().flex_1())
-                            .child(self.render_layout_toggles(cx)),
+                            .child(self.render_layout_toggles(cx))
+                            .child(crate::git::account::account_control(&self.github, cx)),
                     ),
             )
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))

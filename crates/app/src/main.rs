@@ -149,6 +149,8 @@ fn main() -> std::process::ExitCode {
         terminal::init(cx);
         theme::apply_zed_one_dark(cx);
         cx.set_global(rt::Rt(runtime));
+        // The saved GitHub sign-in, before any window shows it. It never starts a sign-in.
+        git::account::init(cx);
         highlight::prewarm(cx);
         cli::init(cx);
         update::init(cx);

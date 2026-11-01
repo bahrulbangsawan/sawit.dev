@@ -10,6 +10,10 @@ use serde_json::{Value, json};
 
 use super::*;
 
+/// What `app_open_page github` says while signed out: the GitHub work an agent asked for waits on
+/// the user's own sign-in, which no tool can do for them.
+pub const GITHUB_SIGNED_OUT: &str = "Sign in to GitHub in Sawit first: the GitHub page shows its sign-in card, for the user to sign in. Agents can't sign in for them; app_state's github says when they have.";
+
 /// Terminal lines `terminal_read` returns by default, and at most.
 const READ_LINES: usize = 200;
 const MAX_READ_LINES: usize = 5_000;
@@ -316,7 +320,13 @@ impl Workspace {
             }
             Command::OpenPage { page } => {
                 self.open_page(page, agent_folder, window, cx)?;
-                done(json!({ "tab": self.active }))
+                let mut answer = json!({ "tab": self.active });
+                // Agents can't sign in: the page shows the user its sign-in card, and says so.
+                if page == Page::Github && !self.github.read(cx).is_signed_in() {
+                    answer["github"] = self.github.read(cx).describe();
+                    answer["note"] = GITHUB_SIGNED_OUT.into();
+                }
+                done(answer)
             }
             // As a click on the tab: its group unfolds, and its project becomes the active one.
             // The keyboard stays where the user has it, a canvas's tab included.
@@ -772,6 +782,15 @@ mod tests {
         shell_folder,
     };
     use super::{agent_shell_folder, split_dir};
+
+    /// An agent that opens the GitHub page while the user is signed out is told to wait for
+    /// them, in the words the other GitHub answers use: it can't sign in itself.
+    #[test]
+    fn the_github_page_tells_agents_to_wait_for_the_users_sign_in() {
+        assert!(super::GITHUB_SIGNED_OUT.starts_with("Sign in to GitHub in Sawit first"));
+        assert!(super::GITHUB_SIGNED_OUT.contains("Agents can't sign in"));
+        assert!(super::GITHUB_SIGNED_OUT.contains("app_state"));
+    }
 
     /// An agent's new terminal (terminal_run with new_tab and no cwd) starts in the agent's own
     /// project, as its browser opens on that project's dev server: with projects A and B in one

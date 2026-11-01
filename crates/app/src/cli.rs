@@ -617,8 +617,12 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
                     state
                 })
                 .collect();
+            // The GitHub sign-in is the app's, not a window's: whether there is one, and whose.
+            // Never the token. Agents can't sign in: the user does, in the app.
+            let github = crate::git::account::global(cx).read(cx).describe();
             return Ok(Answer::Now(serde_json::json!({
                 "version": env!("CARGO_PKG_VERSION"),
+                "github": github,
                 "windows": windows,
             })));
         }

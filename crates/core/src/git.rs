@@ -34,22 +34,28 @@ impl GitOutput {
     }
 }
 
-/// Runs `git -C dir args…`. Never prompts in a terminal; with `token`, HTTPS
-/// remotes on github.com fall back to it when no credential helper answers.
-async fn git(
-    dir: &Path,
-    args: &[&str],
-    token: Option<&str>,
-    timeout: Duration,
-) -> Result<GitOutput> {
+/// The variable the GitHub sign-in reaches git's credential helper in: the environment of that
+/// one `git` run, never its command line, where `ps` would show it.
+pub const TOKEN_ENV: &str = "SAWIT_GITHUB_TOKEN";
+
+/// The `-c` setting that lends git the GitHub sign-in: a credential helper for
+/// `https://github.com` only (no other host, nor SSH remotes, ever sees the token), which
+/// answers `get` with the token from [`TOKEN_ENV`] and ignores `store` and `erase`, so git never
+/// writes it anywhere. Git asks the helpers the user set up first (their own `osxkeychain`, `gh
+/// auth git-credential`) and only falls back to this one when none answers.
+pub fn github_credential_helper() -> [&'static str; 2] {
+    [
+        "-c",
+        "credential.https://github.com.helper=!f() { test \"$1\" = get && echo username=x-access-token && echo \"password=$SAWIT_GITHUB_TOKEN\"; }; f",
+    ]
+}
+
+/// The `git -C dir args…` command, with `token` lent through [`github_credential_helper`].
+fn command(dir: &Path, args: &[&str], token: Option<&str>) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new("git");
     cmd.arg("-C").arg(dir);
     if token.is_some() {
-        // Read from the environment so the token never shows up in `ps`.
-        cmd.args([
-            "-c",
-            "credential.https://github.com.helper=!f() { test \"$1\" = get && echo username=x-access-token && echo \"password=$SAWIT_GITHUB_TOKEN\"; }; f",
-        ]);
+        cmd.args(github_credential_helper());
     }
     cmd.args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -58,8 +64,20 @@ async fn git(
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
     if let Some(token) = token {
-        cmd.env("SAWIT_GITHUB_TOKEN", token);
+        cmd.env(TOKEN_ENV, token);
     }
+    cmd
+}
+
+/// Runs `git -C dir args…`. Never prompts in a terminal; with `token`, HTTPS
+/// remotes on github.com fall back to it when no credential helper answers.
+async fn git(
+    dir: &Path,
+    args: &[&str],
+    token: Option<&str>,
+    timeout: Duration,
+) -> Result<GitOutput> {
+    let mut cmd = command(dir, args, token);
     let out = tokio::time::timeout(timeout, cmd.output())
         .await
         .map_err(|_| CoreError::Command {
@@ -785,6 +803,59 @@ pub async fn diff(repo: &Path, file: &FileChange, staged: bool) -> Result<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The GitHub sign-in reaches git as a credential helper scoped to `https://github.com`, which
+    /// reads the token from the run's environment: the command line (what `ps` shows) holds the
+    /// helper, never the token, and without a sign-in there is no helper at all.
+    #[test]
+    fn the_sign_in_reaches_git_without_showing_on_its_command_line() {
+        let token = "gho_secret123";
+        let cmd = command(Path::new("/repo"), &["push"], Some(token));
+        let cmd = cmd.as_std();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            args.iter().all(|a| !a.contains(token)),
+            "the token is on the command line: {args:?}"
+        );
+        let helper = args
+            .iter()
+            .find(|a| a.starts_with("credential."))
+            .expect("no credential helper");
+        assert!(
+            helper.starts_with("credential.https://github.com.helper="),
+            "the helper isn't scoped to github.com: {helper}"
+        );
+        assert!(helper.contains(&format!("${TOKEN_ENV}")));
+        assert!(
+            helper.contains("test \"$1\" = get"),
+            "the helper would answer store or erase too: {helper}"
+        );
+        assert_eq!(args.last().map(String::as_str), Some("push"));
+        let env: Vec<(String, Option<String>)> = cmd
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert!(env.contains(&(TOKEN_ENV.into(), Some(token.into()))));
+        assert!(env.contains(&("GIT_TERMINAL_PROMPT".into(), Some("0".into()))));
+
+        let signed_out = command(Path::new("/repo"), &["push"], None);
+        let signed_out = signed_out.as_std();
+        assert!(
+            signed_out
+                .get_args()
+                .all(|a| !a.to_string_lossy().starts_with("credential.")),
+            "a helper without a sign-in"
+        );
+        assert!(signed_out.get_envs().all(|(k, _)| k != TOKEN_ENV));
+    }
 
     #[test]
     fn status_reads_branch_and_every_entry_kind() {

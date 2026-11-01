@@ -13,6 +13,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::git::{self, FileChange};
 
+use super::account::{self, GitHubAccount};
 use super::store::GitStore;
 use crate::states::{Banner, Placeholder};
 
@@ -41,6 +42,7 @@ enum Section {
 
 pub struct GitPanel {
     store: Entity<GitStore>,
+    account: Entity<GitHubAccount>,
     message: Entity<TextareaState>,
     new_branch: Entity<InputState>,
     creating_branch: bool,
@@ -54,8 +56,11 @@ impl GitPanel {
         let message =
             cx.new(|cx| TextareaState::new(window, cx).placeholder(commit_placeholder(cx)));
         let new_branch = cx.new(|cx| InputState::new(window, cx).placeholder("New branch name"));
+        let account = account::global(cx);
         let subscriptions = vec![
             cx.observe(&store, |_, _, cx| cx.notify()),
+            // Clone from GitHub turns on and off with the one sign-in.
+            cx.observe(&account, |_, _, cx| cx.notify()),
             cx.subscribe_in(
                 &message,
                 window,
@@ -89,6 +94,7 @@ impl GitPanel {
         ];
         Self {
             store,
+            account,
             message,
             new_branch,
             creating_branch: false,
@@ -764,9 +770,21 @@ impl GitPanel {
     }
 }
 
+impl GitPanel {
+    /// Why "Clone from GitHub…" is off, or `None` when it's on: it lists your repositories,
+    /// which needs the GitHub sign-in.
+    pub(crate) fn clone_blocked(&self, cx: &App) -> Option<SharedString> {
+        self.account.read(cx).blocked("clone your repositories")
+    }
+}
+
 impl Render for GitPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let store = self.store.read(cx);
+        let account = self.account.read(cx);
+        let login = account.login().map(String::from);
+        let signed_in = account.is_signed_in();
+        let clone_blocked = self.clone_blocked(cx).is_some();
         let header = h_flex()
             .h(px(32.))
             .px_2()
@@ -801,20 +819,24 @@ impl Render for GitPanel {
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(GitPanelEvent::Graph))),
                 )
             })
+            // The page itself leads with the sign-in card while signed out: it stays on.
             .child(
                 Button::new("git-open-github")
                     .ghost()
                     .xsmall()
                     .icon(Lucide::Github)
-                    .tooltip(match &store.account {
-                        Some(a) => format!("GitHub · @{}", a.login),
-                        None => "GitHub · Sign In".to_string(),
+                    .accessibility_label("GitHub")
+                    .tooltip(match (&login, signed_in) {
+                        (Some(login), _) => format!("GitHub · @{login}"),
+                        (None, true) => "GitHub".to_string(),
+                        (None, false) => "GitHub · Sign In".to_string(),
                     })
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(GitPanelEvent::GitHub))),
             );
 
         let body: AnyElement = if store.repo.is_none() {
-            let state = if !store.checked {
+            // No folder: nothing to look for (the store never looks), so it says so at once.
+            let state = if store.dir().is_some() && !store.checked {
                 Placeholder::loading("Looking for a repository…").compact()
             } else if store.dir().is_none() {
                 Placeholder::new(Lucide::GitBranch, "No folder open")
@@ -829,13 +851,19 @@ impl Render for GitPanel {
                                 crate::cli::prompt_open_folder(Some(window.window_handle()), cx)
                             }),
                     )
-                    .action(
+                    .action(account::gate(
                         Button::new("git-clone")
                             .small()
                             .icon(Lucide::Github)
                             .label("Clone from GitHub…")
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(GitPanelEvent::GitHub))),
-                    )
+                        account,
+                        "clone your repositories",
+                        cx,
+                    ))
+                    .when(clone_blocked, |state| {
+                        state.action(account::sign_in_link("git-clone-sign-in"))
+                    })
             } else {
                 Placeholder::new(Lucide::GitBranch, "Not a Git repository")
                     .compact()
@@ -864,6 +892,8 @@ impl Render for GitPanel {
                 .clone()
                 .map(|e| (e, true))
                 .or_else(|| store.notice.clone().map(|n| (n, false)));
+            // A remote that asked for credentials Sawit had none to lend: the way on is beside it.
+            let offer_sign_in = store.sign_in_would_help && !signed_in;
             v_flex()
                 .flex_1()
                 .min_h_0()
@@ -924,6 +954,11 @@ impl Render for GitPanel {
                         Banner::error("git-message", text)
                     } else {
                         Banner::info("git-message", text)
+                    };
+                    let banner = if error && offer_sign_in {
+                        banner.action(account::sign_in_link("git-message-sign-in"))
+                    } else {
+                        banner
                     };
                     el.child(banner.on_dismiss(cx.listener(|this, _, _, cx| {
                         this.store.update(cx, |s, cx| s.dismiss_message(cx))

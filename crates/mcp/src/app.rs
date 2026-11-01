@@ -1074,7 +1074,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "What the Sawit app shows: each window's project, sidebar panel, layout, open tabs (index, title, kind, path, unsaved) and terminal tabs (index, title, running job, script, ssh, and `agent`: the coding agent running there, such as claude-code or codex, with a tab's `agents` listing every one of its panes') and each tab's split panes (each with its `agent`), and `browser`: the browser tab of the window's active project (url, title, loading, viewport, panel, pick_mode), which may not be the browser your browser_* tools use (theirs is your project's; browser_snapshot shows its page)"
+        description = "What the Sawit app shows: each window's project, sidebar panel, layout, open tabs (index, title, kind, path, unsaved) and terminal tabs (index, title, running job, script, ssh, and `agent`: the coding agent running there, such as claude-code or codex, with a tab's `agents` listing every one of its panes') and each tab's split panes (each with its `agent`), and `browser`: the browser tab of the window's active project (url, title, loading, viewport, panel, pick_mode), which may not be the browser your browser_* tools use (theirs is your project's; browser_snapshot shows its page). `github` is the app's one GitHub sign-in: signed_in, and login (never a token); only the user can sign in"
     )]
     async fn app_state(&self) -> CallToolResult {
         self.app_tool(None, Command::State).await
@@ -1122,7 +1122,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Open a page as a tab: canvas (whiteboard and design canvas), browser (web browser agents can drive), mcp (install page), tools (dev tools installer), skills (agent skills installer), changelog, git_graph, github, instance (selected PostgreSQL instance), keymap (keymap editor)"
+        description = "Open a page as a tab: canvas (whiteboard and design canvas), browser (web browser agents can drive), mcp (install page), tools (dev tools installer), skills (agent skills installer), changelog, git_graph, github (pull requests, issues and your repositories; while the user isn't signed in to GitHub it shows them the sign-in card, and the reply says to sign in to GitHub in Sawit first), instance (selected PostgreSQL instance), keymap (keymap editor)"
     )]
     async fn app_open_page(&self, Parameters(a): Parameters<PageArgs>) -> CallToolResult {
         match variant::<Page>(&a.page, PAGES) {

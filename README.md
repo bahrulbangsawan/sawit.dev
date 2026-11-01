@@ -517,10 +517,34 @@ explained. A conflict on the same address can't be forced.
 
 - The **Git** tab shows the branch with fetch, pull and push, a commit message box (<kbd>⌘</kbd><kbd>↩</kbd>
   commits, **Amend** rewrites the last commit), and staged, changed and conflicted files. Click a file for its diff.
-- The **Commit Graph** page draws branches, merges and tags with their authors and dates. On the **GitHub** page,
-  sign in to read and comment on the repository's pull requests and issues, merge or close them, open new ones,
-  and clone your repositories.
+- The **Commit Graph** page draws branches, merges and tags with their authors and dates.
 - Agents get the same through `git_status`, `git_diff`, `git_commit` and the other git tools.
+
+### GitHub
+
+- **Sign in to GitHub** once, from the title bar, the Welcome screen, the **GitHub** page or any "Sign In to
+  GitHub" beside a GitHub button: every GitHub feature in Sawit uses that one sign-in. You type a code on
+  github.com (Sawit never sees your password), and the sign-in is kept in the macOS Keychain, nowhere else.
+- Until you sign in, the GitHub buttons are off and say why ("Sign in to GitHub to clone your repositories"),
+  with Sign In to GitHub beside them, and the GitHub page shows the sign-in card. Signing in turns them all on at
+  once, in every window; nothing signs in by itself.
+- Once signed in, the title bar shows your avatar and login. Its menu is where you **Sign Out**, which turns every
+  GitHub feature off again. If GitHub stops accepting the sign-in (you revoked it, or it expired), Sawit signs you
+  out everywhere and says so once.
+- The **GitHub** page: the repository's pull requests and issues with their timelines; comment, close, reopen and
+  merge them, open new ones; and your repositories to clone. **Save Shell Files to GitHub** (Config Files) uses the
+  same sign-in.
+- Push, pull and fetch use your own Git credentials first (SSH keys, the macOS Keychain helper, `gh`), so they work
+  signed out and with any remote. For an HTTPS remote on github.com that nothing else answers for, Sawit lends git
+  the sign-in through a credential helper scoped to `https://github.com`, which reads it from that one git run's
+  environment: it never shows on a command line, nor is it written to git's config.
+- Sawit asks GitHub for `repo` (your repositories, pull requests, issues, push and pull over HTTPS, the shell files'
+  private repository), `workflow` (pushing commits that change `.github/workflows`, which GitHub refuses
+  without it) and `read:user` (your name and avatar). A sign-in from before Sawit asked for `workflow` says so,
+  with **Sign In Again**.
+- Release notes and the update check read public GitHub pages and need no sign-in.
+- Agents can't sign in for you: `app_state` reports `github: {signed_in, login}`, and `app_open_page github` while
+  you're signed out shows you the sign-in card and tells the agent to wait for you.
 
 ### Listening ports
 
@@ -570,9 +594,10 @@ explained. A conflict on the same address can't be forced.
   from `list_config_files`. Both give paths and what each file is, never what it holds.
 - Right-click a file to reveal it in Finder, open it in its default app, duplicate it (`.zshrc copy`, a quick
   backup), copy its path, move it to the Trash or delete it. The Files tab's shortcuts work here too.
-- **Save Shell Files to GitHub** commits your own startup files to a private repository (`sawit-shell-config`). Each
-  save that would send a line that looks like a secret (an API key, a token, a password, in any shell's syntax)
-  names those lines and asks first.
+- **Save Shell Files to GitHub** commits your own startup files to a private repository (`sawit-shell-config`),
+  with your [GitHub sign-in](#github) (until you sign in it's off, with Sign In to GitHub beside it). Each save
+  that would send a line that looks like a secret (an API key, a token, a password, in any shell's syntax) names
+  those lines and asks first.
 
 ### Tabs & layout
 
@@ -843,7 +868,7 @@ its own project's, even while you look at another project of that window.
 | Dev tools | `list_dev_tools` (with newer releases, where each was found and its uninstall command), `install_dev_tools` (`package_manager`: npm, pnpm, bun or yarn for the tools npm installs globally), `upgrade_dev_tools` (with the package manager that installed the copy), `uninstall_dev_tools` (the copy its own installer, Homebrew or the package manager put in place) |
 | MCP servers | `list_mcp_servers`, `install_mcp_server` (`package_manager`: a local server and the remote bridge run with `npx -y`, `pnpm dlx`, `bunx` or `yarn dlx`), `uninstall_mcp_server` |
 | Skills | `list_skills` (each pack, its skills, source and install commands per package manager, and the agents that have it), `install_skill` (into the agents given: the skills CLI with `package_manager`, a Claude Code plugin, or a clone and copy), `uninstall_skill` |
-| App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, skills, changelog, git_graph, github, instance, keymap), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
+| App control (app running) | `launch_app`, `app_state` (with `github: {signed_in, login}`), `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, skills, changelog, git_graph, github: the sign-in card while signed out, instance, keymap), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
 | Terminal (app running) | `terminal_run`, `terminal_split` (a pane split right or down, with a command in the new half), `terminal_read`, `terminal_input`, `terminal_close` (`terminal_run`, `terminal_split`, `app_run_script` and `app_ssh_connect` return the tab and `pane` they used; `terminal_input` needs the tab, and a split tab needs its pane; `app_state` names the coding agent running in each tab and pane, as `agent`: `claude-code`, `codex`, …) |
 | Keymap (app running) | `keymap_list` (every binding: what a key does, which key runs an action, what clashes), `keymap_bind`, `keymap_unbind` (with the Keymap Editor's checks; `restore` brings back a default) |
 | Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (the user's notes as Markdown: each element's selector, path, attributes, role, box, styles, neighbours, source file and screenshot), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`; replacing an earlier export needs `replace: true`) |

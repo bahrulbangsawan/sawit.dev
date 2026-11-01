@@ -138,6 +138,12 @@ impl ThreadView {
         self.item.number
     }
 
+    /// When `error` is GitHub refusing this thread's sign-in itself: the app signs out
+    /// everywhere, and the GitHub page closes this thread for its sign-in card. True then.
+    fn refused(&self, error: &sawit_core::CoreError, cx: &mut App) -> bool {
+        super::account::note_refusal(error, &self.token, cx)
+    }
+
     fn api(&self) -> (String, String, String, u64) {
         (
             self.token.clone(),
@@ -176,6 +182,7 @@ impl ThreadView {
                         this.pages = 1;
                         this.events = Load::Ready(events);
                     }
+                    Err(e) if this.refused(&e, cx) => {}
                     Err(e) => this.events = Load::Failed(e.to_string()),
                 }
                 if this.tab == Tab::Changes {
@@ -212,6 +219,7 @@ impl ThreadView {
                             events.extend(more);
                         }
                     }
+                    Err(e) if this.refused(&e, cx) => {}
                     Err(e) => this.error = Some(e.to_string()),
                 }
                 cx.notify();
@@ -243,6 +251,7 @@ impl ThreadView {
                             Load::Failed(format!("Unable to show this diff. {}", e.message()))
                         }
                     },
+                    Err(e) if this.refused(&e, cx) => Load::Loading,
                     Err(e) => Load::Failed(e.to_string()),
                 });
                 cx.notify();
@@ -291,6 +300,7 @@ impl ThreadView {
                         this.tab = Tab::Timeline;
                         cx.emit(ThreadEvent::Commented(number));
                     }
+                    Err(e) if this.refused(&e, cx) => {}
                     Err(e) => this.error = Some(e.to_string()),
                 }
                 cx.notify();
@@ -319,6 +329,7 @@ impl ThreadView {
                         cx.emit(ThreadEvent::StateChanged { number, open });
                         this.reload(cx);
                     }
+                    Err(e) if this.refused(&e, cx) => {}
                     Err(e) => this.error = Some(e.to_string()),
                 }
                 cx.notify();
@@ -366,6 +377,7 @@ impl ThreadView {
                         cx.emit(ThreadEvent::Merged(number));
                         this.reload(cx);
                     }
+                    Ok(Err(e)) if this.refused(&e, cx) => {}
                     Ok(Err(e)) => this.error = Some(e.to_string()),
                     Err(_) => {}
                 }

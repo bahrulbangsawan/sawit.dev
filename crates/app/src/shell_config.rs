@@ -4,7 +4,8 @@
 //! `.codex/config.toml`, …), each agent's highest priority first. A click
 //! opens one in the editor, a right-click offers the Files panel's commands
 //! that fit a single file. "Save to GitHub" commits the user's own shell
-//! files to a private repository, creating it the first time.
+//! files to a private repository, creating it the first time: it needs the
+//! app's one GitHub sign-in, and is off until there is one.
 
 use std::path::{Path, PathBuf};
 
@@ -19,7 +20,6 @@ use gpui_kit::*;
 use sawit_core::CoreError;
 use sawit_core::agent_config::{self, AgentConfig};
 use sawit_core::files;
-use sawit_core::github;
 use sawit_core::mcp_clients::Client;
 use sawit_core::recent::tildify;
 use sawit_core::shell_config::{self, BACKUP_REPO, Saved, Scope, ShellConfig};
@@ -29,6 +29,7 @@ use crate::files::{
     CopyPath, Delete, Duplicate, OpenInDefaultApp, OpenInTerminal, RevealInFinder, Trash,
     TrashWithoutAsking,
 };
+use crate::git::account::{self, GitHubAccount};
 use crate::rt;
 use crate::states::{Banner, Placeholder};
 
@@ -56,9 +57,6 @@ pub fn init(cx: &mut App) {
 pub enum ShellConfigEvent {
     OpenFile(PathBuf),
     OpenTerminal(PathBuf),
-    /// Saving needs a GitHub sign-in first: there's none, or GitHub no longer
-    /// accepts the one Sawit saved.
-    SignInToGitHub,
 }
 
 impl EventEmitter<ShellConfigEvent> for ShellConfigPanel {}
@@ -117,18 +115,25 @@ pub struct ShellConfigPanel {
     saving: bool,
     /// The last save's outcome, and the repository's address.
     saved: Option<(String, Option<String>)>,
+    /// The app's GitHub sign-in, which saving needs.
+    account: Entity<GitHubAccount>,
     focus: FocusHandle,
-    _subscription: Subscription,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl ShellConfigPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Search config files"));
-        let subscription = cx.subscribe(&filter, |_, _, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Change) {
-                cx.notify();
-            }
-        });
+        let account = account::global(cx);
+        let subscriptions = vec![
+            cx.subscribe(&filter, |_, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            }),
+            // Save turns on and off with the one sign-in.
+            cx.observe(&account, |_, _, cx| cx.notify()),
+        ];
         Self {
             configs: shell_config::detect(),
             agents: agent_config::detect(&[]),
@@ -140,8 +145,9 @@ impl ShellConfigPanel {
             error: None,
             saving: false,
             saved: None,
+            account,
             focus: cx.focus_handle(),
-            _subscription: subscription,
+            _subscriptions: subscriptions,
         }
     }
 
@@ -501,31 +507,19 @@ impl ShellConfigPanel {
         if self.saving {
             return;
         }
+        // The button is off while signed out; this holds for its keyboard path too.
+        let Some(token) = self.account.read(cx).token().map(String::from) else {
+            return;
+        };
         self.error = None;
         self.saved = None;
-        let token = match github::load_token() {
-            Ok(Some(token)) => token,
-            Ok(None) => {
-                self.saved = Some((
-                    "Sign in to GitHub in the GitHub tab, then save again.".into(),
-                    None,
-                ));
-                cx.emit(ShellConfigEvent::SignInToGitHub);
-                cx.notify();
-                return;
-            }
-            Err(e) => {
-                self.error = Some(e.to_string());
-                cx.notify();
-                return;
-            }
-        };
         self.saving = true;
         cx.notify();
         let rx = rt::spawn(cx, {
             let token = token.clone();
             async move { shell_config::plan_backup(&token).await }
         });
+        let used = token.clone();
         cx.spawn_in(window, async move |this, cx| {
             let plan = match rx.await {
                 Ok(Ok(plan)) => plan,
@@ -533,7 +527,7 @@ impl ShellConfigPanel {
                     let _ = this.update(cx, |this, cx| {
                         this.saving = false;
                         if let Ok(Err(e)) = outcome {
-                            this.github_failed(e, cx);
+                            this.github_failed(e, &used, cx);
                         }
                         cx.notify();
                     });
@@ -574,7 +568,7 @@ impl ShellConfigPanel {
                 this.saving = false;
                 match outcome {
                     Ok(Ok(saved)) => this.saved = Some((saved_message(&saved), Some(saved.url))),
-                    Ok(Err(e)) => this.github_failed(e, cx),
+                    Ok(Err(e)) => this.github_failed(e, &used, cx),
                     Err(_) => {}
                 }
                 cx.notify();
@@ -583,17 +577,21 @@ impl ShellConfigPanel {
         .detach();
     }
 
-    /// A save GitHub didn't take: why. GitHub refusing the saved sign-in itself
-    /// (revoked, expired) is like having none: it asks for a new one, in the
-    /// GitHub tab.
-    fn github_failed(&mut self, e: CoreError, cx: &mut Context<Self>) {
-        if github::is_revoked(&e) {
-            self.saved = Some((SIGN_IN_REFUSED.into(), None));
-            cx.emit(ShellConfigEvent::SignInToGitHub);
-        } else {
+    /// A save GitHub didn't take: why. GitHub refusing the sign-in `token` itself (revoked,
+    /// expired) signs the app out everywhere, which says so once; the button then turns off
+    /// with Sign In to GitHub beside it, so this says nothing more.
+    fn github_failed(&mut self, e: CoreError, token: &str, cx: &mut Context<Self>) {
+        if !account::note_refusal(&e, token, cx) {
             self.error = Some(e.to_string());
         }
         cx.notify();
+    }
+
+    /// Why Save Shell Files to GitHub is off, or `None` when it's on.
+    pub(crate) fn save_blocked(&self, cx: &App) -> Option<SharedString> {
+        self.account
+            .read(cx)
+            .blocked("save your shell files to a private repository")
     }
 
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -602,12 +600,13 @@ impl ShellConfigPanel {
             .iter()
             .filter(|c| c.scope == Scope::User)
             .count();
+        let blocked = self.save_blocked(cx).is_some();
         v_flex()
             .p_2()
             .gap_1()
             .border_t_1()
             .border_color(cx.theme().border)
-            .child(
+            .child(account::gate(
                 Button::new("shell-config-save-github")
                     .outline()
                     .small()
@@ -624,7 +623,13 @@ impl ShellConfigPanel {
                         "Commit Your {user_files} Shell Files to the Private Repository {BACKUP_REPO}"
                     ))
                     .on_click(cx.listener(|this, _, window, cx| this.save_to_github(window, cx))),
-            )
+                self.account.read(cx),
+                "save your shell files to a private repository",
+                cx,
+            ))
+            .when(blocked, |el| {
+                el.child(account::sign_in_link("shell-config-sign-in").w_full())
+            })
             .when_some(self.saved.clone(), |el, (message, url)| {
                 el.child(
                     h_flex()
@@ -646,11 +651,6 @@ impl ShellConfigPanel {
             })
     }
 }
-
-/// What a save says when GitHub no longer accepts the sign-in Sawit saved. The
-/// GitHub tab then shows its sign-in card, which has no Sign Out and needs
-/// none: a new sign-in replaces the old one.
-const SIGN_IN_REFUSED: &str = "GitHub no longer accepts the sign-in Sawit saved. Sign in again in the GitHub tab, then save again.";
 
 /// What to ask before a save that sends lines that look like secrets: on
 /// every such save, as a key added since the last one goes up the same way.
@@ -862,16 +862,58 @@ mod tests {
     use gpui_kit::{Action, AppContext as _, FocusHandle, Focusable as _, TestAppContext};
     use sawit_core::CoreError;
 
-    use super::{OpenConfig, ShellConfigEvent, ShellConfigPanel};
+    use super::{OpenConfig, ShellConfigPanel};
     use crate::files::Trash;
 
-    /// Final seams m5: GitHub refusing the sign-in Sawit saved (revoked, expired) is like having
-    /// none. Save Shell Files to GitHub asks for a new sign-in and opens the GitHub tab, whose
-    /// sign-in card has no Sign Out and needs none, as a new sign-in replaces the old one. It
-    /// said "Sign out, then sign in again", which that tab doesn't offer. Other failures still
-    /// say why, and open nothing.
+    fn me() -> sawit_core::github::Account {
+        sawit_core::github::Account {
+            login: "me".into(),
+            ..Default::default()
+        }
+    }
+
+    /// Save Shell Files to GitHub is off while signed out, saying why, with Sign In to GitHub
+    /// beside it; the one sign-in turns it on in every panel at once, here two windows'.
     #[gpui_kit::test]
-    fn a_refused_github_sign_in_asks_for_a_new_one(cx: &mut TestAppContext) {
+    fn saving_waits_for_the_one_sign_in(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::init(cx);
+        });
+        let panels: Vec<_> = (0..2)
+            .map(|_| {
+                cx.update(|cx| {
+                    gpui_kit::open_window(Default::default(), cx, |window, cx| {
+                        cx.new(|cx| ShellConfigPanel::new(window, cx))
+                    })
+                    .unwrap()
+                    .1
+                })
+            })
+            .collect();
+        cx.run_until_parked();
+        for panel in &panels {
+            cx.update(|cx| {
+                assert_eq!(
+                    panel.read(cx).save_blocked(cx).as_deref(),
+                    Some("Sign in to GitHub to save your shell files to a private repository")
+                )
+            });
+        }
+        let account = cx.update(crate::git::account::global);
+        account.update(cx, |a, cx| a.signed_in("gho_1".into(), me(), None, cx));
+        cx.run_until_parked();
+        for panel in &panels {
+            cx.update(|cx| assert_eq!(panel.read(cx).save_blocked(cx), None));
+        }
+    }
+
+    /// Final seams m5: GitHub refusing the sign-in Sawit saved (revoked, expired) is like having
+    /// none: the app signs out everywhere and says so once (the account's notice), and Save
+    /// turns off with Sign In to GitHub beside it, so the panel says nothing of its own. Other
+    /// failures still say why, and sign nobody out.
+    #[gpui_kit::test]
+    fn a_refused_github_sign_in_signs_out_everywhere(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_kit::init(cx);
             super::init(cx);
@@ -882,39 +924,31 @@ mod tests {
             })
             .unwrap()
         });
-        let asked = Rc::new(RefCell::new(0));
-        let _subscription = cx.update(|cx| {
-            let asked = asked.clone();
-            cx.subscribe(&panel, move |_, event: &ShellConfigEvent, _| {
-                if matches!(event, ShellConfigEvent::SignInToGitHub) {
-                    *asked.borrow_mut() += 1;
-                }
-            })
-        });
+        let account = cx.update(crate::git::account::global);
+        account.update(cx, |a, cx| a.signed_in("gho_1".into(), me(), None, cx));
         let refused = CoreError::GitHub(sawit_core::github::REVOKED.into());
-        panel.update(cx, |p, cx| p.github_failed(refused, cx));
+        panel.update(cx, |p, cx| p.github_failed(refused, "gho_1", cx));
         cx.run_until_parked();
         cx.update(|cx| {
             let p = panel.read(cx);
-            assert_eq!(p.error, None, "it still said to sign out");
+            assert_eq!(p.error, None, "it said more than the account's notice");
+            assert!(p.save_blocked(cx).is_some(), "Save is still on");
             assert_eq!(
-                p.saved.as_ref().map(|(said, _)| said.as_str()),
-                Some(
-                    "GitHub no longer accepts the sign-in Sawit saved. Sign in again in the \
-                     GitHub tab, then save again."
-                )
+                account.read(cx).notice(),
+                Some(crate::git::account::REVOKED_NOTICE)
             );
         });
-        assert_eq!(*asked.borrow(), 1, "the GitHub tab wasn't opened");
 
+        account.update(cx, |a, cx| a.signed_in("gho_2".into(), me(), None, cx));
         let offline = "Unable to reach GitHub. Check your connection and try again.";
         panel.update(cx, |p, cx| {
-            p.saved = None;
-            p.github_failed(CoreError::GitHub(offline.into()), cx)
+            p.github_failed(CoreError::GitHub(offline.into()), "gho_2", cx)
         });
         cx.run_until_parked();
-        cx.update(|cx| assert_eq!(panel.read(cx).error.as_deref(), Some(offline)));
-        assert_eq!(*asked.borrow(), 1);
+        cx.update(|cx| {
+            assert_eq!(panel.read(cx).error.as_deref(), Some(offline));
+            assert!(account.read(cx).is_signed_in());
+        });
     }
 
     /// The panel lists many files of one name (each profile's `settings.json`, a project's
