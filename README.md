@@ -65,7 +65,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
 | 🤖 **Ready for AI agents** | The `sawit-mcp` server (126 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
-| ✨ **Agent skills** | Superpowers, Cloudflare's skills, MCP Apps, unslop and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
+| ✨ **Agent skills** | Superpowers, shadcn's improve, Cloudflare's skills, MCP Apps, unslop and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
 ## Install
 
@@ -305,6 +305,10 @@ explained. A conflict on the same address can't be forced.
     (`claude plugin install animate@animate`), or its skill folder copied by hand.
   - **Superpowers** by Jesse Vincent ([obra/superpowers](https://github.com/obra/superpowers)): the plugin from the
     official Claude plugin marketplace (`superpowers@claude-plugins-official`).
+  - **improve** by shadcn ([shadcn/improve](https://github.com/shadcn/improve)): the `improve` skill, which audits a
+    codebase and writes plans for cheaper models to execute, with the `skills` CLI as its README says
+    (`npx skills add shadcn/improve`), or as the Claude Code plugin from its own marketplace
+    (`claude plugin install improve@improve`).
   - **MCP Apps** ([modelcontextprotocol.io](https://modelcontextprotocol.io/extensions/apps/build)):
     `create-mcp-app` and its three siblings, as the `mcp-apps` plugin or with the `skills` CLI.
   - **cf CLI** and **Cloudflare Skills** ([developers.cloudflare.com/cf](https://developers.cloudflare.com/cf/agents/)):

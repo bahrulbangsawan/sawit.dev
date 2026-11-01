@@ -342,7 +342,7 @@ impl Sawit {
 #[tool_router(router = skills_router, vis = "pub(crate)")]
 impl Sawit {
     #[tool(
-        description = "List the agent skill packs of Sawit's Skills page (Superpowers, Interface Skills, unslop, Animate, MCP Apps, Cloudflare's cf CLI, …): who publishes each, its skills, its source, the exact install command for each way it installs (the skills CLI per package manager: npx, pnpm dlx, bunx, yarn dlx; a Claude Code plugin; a git clone and copy), and which agents on this Mac have it (Claude Code per profile, Codex, Cursor, …, by skills folder). Works without the app"
+        description = "List the agent skill packs of Sawit's Skills page (Superpowers, shadcn's improve, Interface Skills, unslop, Animate, MCP Apps, Cloudflare's cf CLI, …): who publishes each, its skills, its source, the exact install command for each way it installs (the skills CLI per package manager: npx, pnpm dlx, bunx, yarn dlx; a Claude Code plugin; a git clone and copy), and which agents on this Mac have it (Claude Code per profile, Codex, Cursor, …, by skills folder). Works without the app"
     )]
     async fn list_skills(&self) -> CallToolResult {
         self.list_skills_tool().await

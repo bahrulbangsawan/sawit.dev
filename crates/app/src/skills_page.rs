@@ -1,12 +1,12 @@
 //! Skills page: agent skill packs from their official sources (Superpowers,
-//! Jakub Krehel's interface skills, unslop, Animate, MCP Apps, Cloudflare's),
-//! installed into the agents found on this Mac the way each source documents:
-//! the `skills` CLI run with the package manager picked (npx, pnpm dlx, bunx,
-//! yarn dlx), a Claude Code plugin, or a clone and copy. A pack's sheet picks
-//! the agents and shows the exact commands before they run; they run one pack
-//! at a time in the login shell, as the Dev Tools page's installers do, with
-//! their output under the row. Removing deletes the pack's skill folders from
-//! the agents picked, or uninstalls its plugin.
+//! shadcn's improve, Jakub Krehel's interface skills, unslop, Animate, MCP
+//! Apps, Cloudflare's), installed into the agents found on this Mac the way
+//! each source documents: the `skills` CLI run with the package manager picked
+//! (npx, pnpm dlx, bunx, yarn dlx), a Claude Code plugin, or a clone and copy.
+//! A pack's sheet picks the agents and shows the exact commands before they
+//! run; they run one pack at a time in the login shell, as the Dev Tools
+//! page's installers do, with their output under the row. Removing deletes the
+//! pack's skill folders from the agents picked, or uninstalls its plugin.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -1830,6 +1830,49 @@ mod tests {
             ]
         );
         // Nothing ran.
+        assert!(page.read_with(cx, |page, _| page.running.is_none()
+            && page.queue.is_empty()));
+    }
+
+    /// shadcn's improve opens on the way its README documents, the skills CLI with the package
+    /// manager picked, and offers its Claude Code plugin second.
+    #[gpui_kit::test]
+    fn improve_opens_on_the_skills_cli_its_readme_documents(cx: &mut TestAppContext) {
+        let (page, cx) = open(cx, |_| {});
+        let improve = skills::get("improve").unwrap();
+        cx.update(|window, cx| page.update(cx, |page, cx| page.open_sheet(improve, window, cx)));
+        cx.run_until_parked();
+        let script = |page: &Entity<SkillsPage>, cx: &mut VisualTestContext| {
+            page.read_with(cx, |page, _| {
+                page.sheet_script(Action::Install, &page.picked(super::Pick::Install))
+            })
+        };
+        assert_eq!(
+            page.read_with(cx, |page, _| page.sheet.as_ref().unwrap().method),
+            improve.methods[0]
+        );
+        assert_eq!(
+            script(&page, cx).unwrap(),
+            ["bunx skills add shadcn/improve --skill '*' -g -a claude-code -y"]
+        );
+        page.update(cx, |page, _| {
+            page.sheet.as_mut().unwrap().selected = [0, 1].into();
+        });
+        assert_eq!(
+            script(&page, cx).unwrap(),
+            ["bunx skills add shadcn/improve --skill '*' -g -a claude-code -a codex -y"]
+        );
+        page.update(cx, |page, _| {
+            page.sheet.as_mut().unwrap().method = improve.methods[1];
+        });
+        // The plugin goes into Claude Code only.
+        assert_eq!(
+            script(&page, cx).unwrap(),
+            [
+                "claude plugin marketplace add shadcn/improve",
+                "claude plugin install improve@improve"
+            ]
+        );
         assert!(page.read_with(cx, |page, _| page.running.is_none()
             && page.queue.is_empty()));
     }
