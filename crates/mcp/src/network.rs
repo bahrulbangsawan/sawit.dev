@@ -99,15 +99,21 @@ pub(crate) fn report(f: &Findings) -> String {
 
 impl Sawit {
     async fn diagnose_network_tool(&self) -> CallToolResult {
-        let route = async { (network::local_ip().await, network::default_gateway().await) };
+        // The router is pinged as soon as it is known, while the other checks run: a ping takes
+        // about a second, which it added to the whole diagnosis when it came after them.
+        let route = async {
+            let (local_ip, gateway) = (network::local_ip().await, network::default_gateway().await);
+            let router = match &gateway {
+                Some(gw) => Some(network::ping(gw, PINGS).await.map_err(|e| e.to_string())),
+                None => None,
+            };
+            (local_ip, gateway, router)
+        };
         let dns = network::resolve(DNS_TEST_HOST);
         let pings = futures::future::join_all(PUBLIC_HOSTS.iter().map(|h| network::ping(h, PINGS)));
         let portal = network::captive_portal();
-        let ((local_ip, gateway), dns, internet, portal) = tokio::join!(route, dns, pings, portal);
-        let router = match &gateway {
-            Some(gw) => Some(network::ping(gw, PINGS).await.map_err(|e| e.to_string())),
-            None => None,
-        };
+        let ((local_ip, gateway, router), dns, internet, portal) =
+            tokio::join!(route, dns, pings, portal);
         let findings = Findings {
             local_ip,
             gateway,
