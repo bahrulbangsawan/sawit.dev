@@ -1015,9 +1015,18 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
                                 .map(|v| format!(" {v}"))
                                 .unwrap_or_default()
                         ));
-                        match crate::dev_tools::newer(t.id, &found, &latest) {
-                            Some(v) => format!("{installed} {}", ink.yellow(&format!("→ {v}"))),
-                            None => installed,
+                        match (crate::dev_tools::newer(t.id, &found, &latest), f.outside) {
+                            (Some(v), _) => {
+                                format!("{installed} {}", ink.yellow(&format!("→ {v}")))
+                            }
+                            // Sawit neither upgrades nor removes it.
+                            (None, Some(crate::dev_tools::Outside::Homebrew)) => {
+                                format!("{installed} {}", ink.gray("(di luar Homebrew)"))
+                            }
+                            (None, Some(crate::dev_tools::Outside::InstallScript)) => {
+                                format!("{installed} {}", ink.gray("(di luar skrip instalnya)"))
+                            }
+                            (None, None) => installed,
                         }
                     }
                     None => ink.gray("belum"),
@@ -2163,6 +2172,67 @@ pub async fn pasang(args: PasangArgs) -> i32 {
     0
 }
 
+/// Why `sawit pupuk` leaves alone a tool it was asked to upgrade: an app
+/// installed outside what upgrades it (PureMac from its disk image), one
+/// already up to date, or one not installed.
+fn pupuk_skip(
+    id: &str,
+    found: &std::collections::HashMap<&'static str, crate::dev_tools::Found>,
+) -> String {
+    use crate::dev_tools::{Found, Outside};
+    match found.get(id) {
+        Some(Found {
+            outside: Some(outside),
+            path,
+            ..
+        }) => format!(
+            "{id} di {} dipasang di luar {}: tidak dipupuk Sawit",
+            tilde(path),
+            match outside {
+                Outside::Homebrew => "Homebrew",
+                Outside::InstallScript => "skrip instalnya",
+            }
+        ),
+        Some(_) => format!("{id} sudah versi terbaru"),
+        None => format!("{id} belum terpasang. Tanam dulu: `sawit pasang {id}`"),
+    }
+}
+
+/// What `sawit cabut` warns before removing `tool`, which the installed
+/// tools `needed_by` need: those that run through it wither with it; an app
+/// from a Homebrew cask keeps running, but Homebrew no longer updates it.
+fn cabut_warnings(
+    tool: &crate::dev_tools::Tool,
+    needed_by: &[&crate::dev_tools::Tool],
+) -> Vec<String> {
+    use crate::dev_tools::{Impact, impact};
+    let names = |which: Impact| -> Vec<&str> {
+        needed_by
+            .iter()
+            .filter(|t| impact(t) == which)
+            .map(|t| t.name)
+            .collect()
+    };
+    let mut out = Vec::new();
+    let wither = names(Impact::StopsWorking);
+    if !wither.is_empty() {
+        out.push(format!(
+            "{} butuh {}; ikut layu kalau dicabut.",
+            wither.join(", "),
+            tool.name
+        ));
+    }
+    let apps = names(Impact::NoHomebrewUpdates);
+    if !apps.is_empty() {
+        out.push(format!(
+            "{} tetap jalan, tapi tak lagi diperbarui lewat {}.",
+            apps.join(", "),
+            tool.name
+        ));
+    }
+    out
+}
+
 /// `sawit pupuk [tool…]`.
 pub async fn pupuk(args: PupukArgs) -> i32 {
     use crate::dev_tools;
@@ -2184,13 +2254,7 @@ pub async fn pupuk(args: PupukArgs) -> i32 {
         .iter()
         .filter(|id| !plan.iter().any(|t| t.id == **id))
     {
-        if found.contains_key(id) {
-            ink.empty(&format!("{id} sudah versi terbaru"));
-        } else {
-            ink.empty(&format!(
-                "{id} belum terpasang. Tanam dulu: `sawit pasang {id}`"
-            ));
-        }
+        ink.empty(&pupuk_skip(id, &found));
     }
     if plan.is_empty() {
         ink.footer("Tidak ada yang perlu dipupuk. Kebun sudah subur.");
@@ -2329,13 +2393,8 @@ pub async fn cabut(args: CabutArgs) -> i32 {
         for line in command.lines() {
             println!("       {}", ink.gray(line));
         }
-        if !step.needed_by.is_empty() {
-            let names: Vec<&str> = step.needed_by.iter().map(|t| t.name).collect();
-            ink.warn(&format!(
-                "{} butuh {}; ikut layu kalau dicabut.",
-                names.join(", "),
-                step.tool.name
-            ));
+        for warning in cabut_warnings(step.tool, &step.needed_by) {
+            ink.warn(&warning);
         }
     }
     println!();
@@ -2525,6 +2584,53 @@ impl Ink {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `sawit pupuk puremac` on PureMac from its disk image says it's outside Homebrew and leaves
+    /// it, as the page and upgrade_dev_tools do; `sawit cabut homebrew` says a cask's app only
+    /// stops getting updates.
+    #[test]
+    fn pupuk_and_cabut_word_an_app_outside_homebrew() {
+        use crate::dev_tools::{Found, Outside, find, upgrade_plan};
+        let at = |path: &str, outside| Found {
+            path: PathBuf::from(path),
+            version: Some("3.1.0".into()),
+            outside,
+        };
+        let found = std::collections::HashMap::from([
+            (
+                "puremac",
+                at("/Applications/PureMac.app", Some(Outside::Homebrew)),
+            ),
+            (
+                "zed",
+                at("/Applications/Zed.app", Some(Outside::InstallScript)),
+            ),
+            ("bun", at("/nonexistent-sawit-test/.bun/bin/bun", None)),
+        ]);
+        let latest = std::collections::HashMap::from([("puremac", "3.2.0".to_string())]);
+        assert!(upgrade_plan(&["puremac", "zed"], &found, &latest).is_empty());
+        assert_eq!(
+            pupuk_skip("puremac", &found),
+            "puremac di /Applications/PureMac.app dipasang di luar Homebrew: tidak dipupuk Sawit"
+        );
+        assert_eq!(
+            pupuk_skip("zed", &found),
+            "zed di /Applications/Zed.app dipasang di luar skrip instalnya: tidak dipupuk Sawit"
+        );
+        assert_eq!(pupuk_skip("bun", &found), "bun sudah versi terbaru");
+        assert!(pupuk_skip("deno", &found).contains("belum terpasang"));
+
+        let tool = |id: &str| find(id).unwrap();
+        assert_eq!(
+            cabut_warnings(tool("homebrew"), &[tool("puremac")]),
+            ["PureMac tetap jalan, tapi tak lagi diperbarui lewat Homebrew."]
+        );
+        assert_eq!(
+            cabut_warnings(tool("node"), &[tool("npm"), tool("gemini")]),
+            ["npm (latest), Gemini CLI butuh Node.js; ikut layu kalau dicabut."]
+        );
+        assert!(cabut_warnings(tool("bun"), &[]).is_empty());
+    }
 
     fn q(args: &[&str]) -> Option<QueryArgs> {
         let args: Vec<OsString> = args.iter().map(OsString::from).collect();

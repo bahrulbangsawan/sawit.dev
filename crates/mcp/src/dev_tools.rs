@@ -3,6 +3,8 @@
 //! which have a newer release, installing a selection with its prerequisites
 //! first, upgrading installed ones, and uninstalling them.
 
+use std::collections::HashMap;
+
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
@@ -59,11 +61,40 @@ fn unknown(wanted: &[String]) -> Vec<&str> {
         .collect()
 }
 
-/// "Gemini CLI needs it", "npm (latest), Gemini CLI need it".
+/// "Gemini CLI needs it and will stop working", "PureMac won't get updates
+/// through Homebrew any more": what the installed tools that need a removed
+/// one lose, per kind ([`dev_tools::needed_by_warning`]).
 fn needs_it(tools: &[&Tool]) -> String {
-    let names: Vec<&str> = tools.iter().map(|t| t.name).collect();
-    let s = if names.len() == 1 { "s" } else { "" };
-    format!("{} need{s} it and will stop working", names.join(", "))
+    dev_tools::needed_by_warning(tools)
+}
+
+/// What `list_dev_tools` says upgrades an installed tool: its upgrade
+/// command, or none for an app installed outside what upgrades it.
+fn upgrade_line(tool: &Tool, found: &dev_tools::Found) -> String {
+    match found.outside {
+        Some(outside) => format!(
+            "none: installed outside {}, so Sawit leaves this copy alone",
+            outside.of()
+        ),
+        None => tool.upgrade_command().to_string(),
+    }
+}
+
+/// Why `upgrade_dev_tools` didn't upgrade a tool it was given: an app
+/// installed outside what upgrades it, one already the latest, or one not
+/// installed.
+fn not_upgraded(id: &str, found: &HashMap<&'static str, dev_tools::Found>) -> String {
+    match found.get(id) {
+        Some(f) => match f.outside {
+            Some(outside) => format!(
+                "- {id}: installed outside {} ({}), so Sawit leaves it alone: not upgraded",
+                outside.of(),
+                tilde(&f.path)
+            ),
+            None => format!("- {id}: already the latest"),
+        },
+        None => format!("- {id}: not installed (install_dev_tools)"),
+    }
 }
 
 /// What `list_dev_tools` says about removing an installed tool: what
@@ -104,13 +135,16 @@ impl Sawit {
             for t in TOOLS.iter().filter(|t| t.category == category) {
                 let state = match found.get(t.id) {
                     Some(f) => format!(
-                        "installed{}{}",
+                        "installed{}{}{}",
                         f.version
                             .as_ref()
                             .map(|v| format!(" {v}"))
                             .unwrap_or_default(),
                         dev_tools::newer(t.id, &found, &latest)
                             .map(|v| format!(" · {v} available (upgrade_dev_tools)"))
+                            .unwrap_or_default(),
+                        f.outside
+                            .map(|o| format!(" · installed outside {}", o.of()))
                             .unwrap_or_default()
                     ),
                     None if t.interactive => {
@@ -127,7 +161,7 @@ impl Sawit {
                     Some(f) => format!(
                         "\n    found: {}\n    upgrade: {}{}",
                         tilde(&f.path),
-                        t.upgrade_command(),
+                        upgrade_line(t, f),
                         dev_tools::uninstall_plan(&[t.id], &found)
                             .first()
                             .map(uninstall_line)
@@ -284,11 +318,7 @@ impl Sawit {
             .iter()
             .filter(|id| !plan.iter().any(|t| t.id == **id))
         {
-            out.push(if found.contains_key(id) {
-                format!("- {id}: already the latest")
-            } else {
-                format!("- {id}: not installed (install_dev_tools)")
-            });
+            out.push(not_upgraded(id, &found));
         }
         if plan.is_empty() && wanted.is_empty() {
             out.push("Every installed tool is up to date.".into());
@@ -439,7 +469,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Upgrade installed developer tools (the Tools page's Upgrade / Upgrade All): with no ids, every installed tool that list_dev_tools shows a newer release for; with ids, those tools unless already the latest. Runs each tool's own upgrade command (bun upgrade, uv self update, claude update, …) or else its install script FROM THE INTERNET: needs confirm=true. Tools that may ask for a password (Homebrew) are not run; their command is returned for a terminal. Returns one line per tool. Can take minutes. Works without the app"
+        description = "Upgrade installed developer tools (the Tools page's Upgrade / Upgrade All): with no ids, every installed tool that list_dev_tools shows a newer release for; with ids, those tools unless already the latest. An app installed outside what upgrades it (PureMac dragged in from its disk image rather than Homebrew's cask, Zed or Cap without their install script's command) is never upgraded. Runs each tool's own upgrade command (bun upgrade, uv self update, claude update, …) or else its install script FROM THE INTERNET: needs confirm=true. Tools that may ask for a password (Homebrew) are not run; their command is returned for a terminal. Returns one line per tool. Can take minutes. Works without the app"
     )]
     async fn upgrade_dev_tools(
         &self,
@@ -449,7 +479,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Uninstall developer tools by id, as the Tools page's trash button does. DESTRUCTIVE: deletes each tool's files (and what it installed: nvm's Node.js versions, uv's Pythons, …), which can't be undone: needs confirm=true. Removes only the copy the tool's own installer, Homebrew (brew uninstall) or npm (npm uninstall -g) put in place, with the command list_dev_tools shows as `uninstall`; a copy installed another way is left alone. Homebrew's own uninstaller asks for a password, so its command is returned for a terminal. Installed tools that need a removed one are named: they stop working. Detects again and returns one line per tool: removed, still found (another copy), not installed or left alone. Works without the app"
+        description = "Uninstall developer tools by id, as the Tools page's trash button does. DESTRUCTIVE: deletes each tool's files (and what it installed: nvm's Node.js versions, uv's Pythons, …), which can't be undone: needs confirm=true. Removes only the copy the tool's own installer, Homebrew (brew uninstall) or npm (npm uninstall -g) put in place, with the command list_dev_tools shows as `uninstall`; a copy installed another way is left alone. Homebrew's own uninstaller asks for a password, so its command is returned for a terminal. Installed tools that need a removed one are named: they stop working, except an app from a Homebrew cask, which keeps working but no longer gets updates through Homebrew. Detects again and returns one line per tool: removed, still found (another copy), not installed or left alone. Works without the app"
     )]
     async fn uninstall_dev_tools(
         &self,
@@ -579,6 +609,61 @@ mod tests {
         assert_eq!(
             needs_it(&[tool("npm"), tool("gemini")]),
             "npm (latest), Gemini CLI need it and will stop working"
+        );
+        // Removing Homebrew: its cask's app keeps working, without Homebrew's updates.
+        assert_eq!(
+            line(
+                "homebrew",
+                Removal::Terminal("uninstall.sh".into()),
+                vec![tool("puremac")]
+            ),
+            "\n    uninstall: uninstall.sh (asks for a password: run it in a terminal); PureMac won't get updates through Homebrew any more"
+        );
+    }
+
+    /// An app installed outside what upgrades it gets no upgrade from list_dev_tools or
+    /// upgrade_dev_tools, which say why, as the page does; Homebrew's copy upgrades with brew.
+    #[test]
+    fn an_app_installed_outside_homebrew_is_never_upgraded() {
+        use dev_tools::{Found, Outside};
+        let puremac = dev_tools::find("puremac").unwrap();
+        let mut found = HashMap::from([(
+            "puremac",
+            Found {
+                path: "/Applications/PureMac.app".into(),
+                version: Some("3.1.0".into()),
+                outside: Some(Outside::Homebrew),
+            },
+        )]);
+        let latest = HashMap::from([("puremac", "3.2.0".to_string())]);
+        assert!(dev_tools::upgrade_plan(&["puremac"], &found, &latest).is_empty());
+        assert_eq!(
+            upgrade_line(puremac, &found["puremac"]),
+            "none: installed outside Homebrew, so Sawit leaves this copy alone"
+        );
+        assert_eq!(
+            not_upgraded("puremac", &found),
+            "- puremac: installed outside Homebrew (/Applications/PureMac.app), so Sawit leaves it alone: not upgraded"
+        );
+        assert_eq!(
+            not_upgraded("bun", &found),
+            "- bun: not installed (install_dev_tools)"
+        );
+        found.get_mut("puremac").unwrap().outside = None;
+        assert_eq!(
+            upgrade_line(puremac, &found["puremac"]),
+            "brew upgrade --cask puremac"
+        );
+        assert_eq!(
+            not_upgraded("puremac", &found),
+            "- puremac: already the latest"
+        );
+        assert_eq!(
+            dev_tools::upgrade_plan(&["puremac"], &found, &latest)
+                .iter()
+                .map(|t| t.id)
+                .collect::<Vec<_>>(),
+            ["puremac"]
         );
     }
 }

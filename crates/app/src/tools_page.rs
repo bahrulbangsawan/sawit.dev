@@ -21,9 +21,9 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::dev_tools::{
-    Category, Detection, Found, TOOLS, Tool, dependents, detect, find, in_terminal,
-    install_command, installed_with, is_newer, latest_versions, npm_package, plan, run, uninstall,
-    uninstall_command, upgrade_command,
+    Category, Detection, Found, Outside, TOOLS, Tool, dependents, detect, find, in_terminal,
+    install_command, installed_with, is_newer, latest_versions, needed_by_warning, npm_package,
+    plan, run, uninstall, uninstall_command, upgrade_command,
 };
 use sawit_core::package_manager::{self, Available, PackageManager, Use};
 
@@ -479,11 +479,31 @@ impl ToolsPage {
         }
     }
 
-    /// The newer release an installed tool can upgrade to.
+    /// The newer release an installed tool can upgrade to. None for an app
+    /// installed outside what upgrades it ([`Self::outside`]).
     fn newer(&self, id: &str) -> Option<&String> {
-        let installed = self.found.get(id)?.version.as_ref()?;
+        let found = self.found.get(id)?;
+        if found.outside.is_some() {
+            return None;
+        }
+        let installed = found.version.as_ref()?;
         let latest = self.latest.get(id)?;
         (is_newer(latest, installed) && self.states.get(id) != Some(&State::Done)).then_some(latest)
+    }
+
+    /// What the app found was installed outside of, when it isn't the copy
+    /// its own commands install, upgrade and remove (PureMac dragged in from
+    /// its disk image): the row says so, with no Upgrade, Reinstall or
+    /// Uninstall.
+    fn outside(&self, id: &str) -> Option<Outside> {
+        self.found.get(id)?.outside
+    }
+
+    /// Whether the row offers Reinstall: installed, and not an app installed
+    /// outside its installer, which Reinstall would fail on (`brew install
+    /// --cask` over an app already there) or replace (Zed's script).
+    fn offers_reinstall(&self, id: &str) -> bool {
+        self.installed(id) && self.outside(id).is_none()
     }
 
     /// Installed tools with a newer release, not already queued.
@@ -595,18 +615,15 @@ impl ToolsPage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let needed_by: Vec<&str> = dependents(tool.id)
+        // A copy installed outside what it needs (PureMac from its disk image) doesn't need it.
+        let needed_by: Vec<&Tool> = dependents(tool.id)
             .into_iter()
-            .filter(|t| self.installed(t.id))
-            .map(|t| t.name)
+            .filter(|t| self.installed(t.id) && self.outside(t.id).is_none())
             .collect();
         let mut detail = format!("Runs: {command}");
         if !needed_by.is_empty() {
-            detail = format!(
-                "{} need{} it and will stop working.\n\n{detail}",
-                needed_by.join(", "),
-                if needed_by.len() == 1 { "s" } else { "" }
-            );
+            // Per kind: a cask's app keeps working, without Homebrew's updates.
+            detail = format!("{}.\n\n{detail}", needed_by_warning(&needed_by));
         }
         let answer = window.prompt(
             PromptLevel::Warning,
@@ -1351,6 +1368,8 @@ impl ToolsPage {
                     .tooltip(self.upgrade_line(tool))
                     .on_click(cx.listener(move |this, _, _, cx| this.upgrade(&[id], cx))),
             ),
+            // Installed outside its installer: the note under the row says why nothing runs.
+            _ if installed && !self.offers_reinstall(id) => None,
             _ if installed => Some(
                 Button::new(("tool-reinstall", ix))
                     .outline()
@@ -1562,6 +1581,25 @@ impl ToolsPage {
                     })
                     .children(action),
             ))
+            .when_some(
+                self.outside(id).filter(|_| state.is_none()),
+                |el, outside| {
+                    el.child(
+                        h_flex()
+                            .debug_selector(move || format!("tool-outside-{id}"))
+                            .pl(indent)
+                            .gap_1p5()
+                            .items_start()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(div().pt(px(1.)).child(Icon::new(Lucide::Info).xsmall()))
+                            .child(div().whitespace_normal().child(format!(
+                                "{}, so Sawit doesn't upgrade, reinstall or remove this copy.",
+                                outside.text()
+                            ))),
+                    )
+                },
+            )
             .when_some(last_line.filter(|_| !expanded), |el, line| {
                 el.child(
                     div()
@@ -1780,6 +1818,7 @@ mod tests {
                         Found {
                             path: "/Users/me/.bun/bin/bun".into(),
                             version: Some("1.2.0".into()),
+                            outside: None,
                         },
                     );
                     page
@@ -1861,6 +1900,7 @@ mod tests {
             let homebrew = Found {
                 path: "/opt/homebrew/bin/bun".into(),
                 version: Some("1.2.0".into()),
+                outside: None,
             };
             page.detected(
                 Detection {
@@ -1921,6 +1961,7 @@ mod tests {
                     path: "/nonexistent-sawit-test/.bun/install/global/node_modules/cf/bin/cf"
                         .into(),
                     version: Some("1.0.0".into()),
+                    outside: None,
                 },
             );
             assert_eq!(page.command(cf), "bun add -g cf");
@@ -1974,6 +2015,160 @@ mod tests {
             page.upgrades.insert("puremac");
             assert_eq!(page.command(puremac), "brew upgrade --cask puremac");
         });
+    }
+
+    /// An app installed outside what upgrades it (PureMac from its disk image, Zed without its
+    /// script's command) shows its version and why, but no Update badge, Upgrade, Upgrade All,
+    /// Reinstall or ↩; Homebrew's copy of PureMac gets them all.
+    #[gpui_kit::test]
+    fn an_app_installed_outside_homebrew_offers_no_upgrade(cx: &mut TestAppContext) {
+        use gpui_kit::VisualTestContext;
+        use sawit_core::dev_tools::Outside;
+
+        use super::Filter;
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::catalog::init(cx);
+        });
+        let at = |path: &str, v: &str, outside| Found {
+            path: path.into(),
+            version: Some(v.into()),
+            outside,
+        };
+        let (window, page) = cx
+            .update(|cx| {
+                gpui_kit::open_window(Default::default(), cx, |_, cx| {
+                    cx.new(|cx| {
+                        let mut page = ToolsPage::blank(cx);
+                        page.loading = false;
+                        page.filter = Filter::Installed;
+                        page.found = [
+                            (
+                                "puremac",
+                                at(
+                                    "/Applications/PureMac.app",
+                                    "3.1.0",
+                                    Some(Outside::Homebrew),
+                                ),
+                            ),
+                            (
+                                "zed",
+                                at(
+                                    "/Applications/Zed.app",
+                                    "0.200.0",
+                                    Some(Outside::InstallScript),
+                                ),
+                            ),
+                            ("bun", at("/Users/me/.bun/bin/bun", "1.0.0", None)),
+                        ]
+                        .into();
+                        page.latest = [
+                            ("puremac", "3.2.0".to_string()),
+                            ("zed", "0.210.0".to_string()),
+                            ("bun", "1.1.0".to_string()),
+                        ]
+                        .into();
+                        page
+                    })
+                })
+            })
+            .unwrap();
+        let cx = VisualTestContext::from_window(window, cx).into_mut();
+        cx.run_until_parked();
+        page.read_with(cx, |page, _| {
+            assert_eq!(page.newer("puremac"), None);
+            assert_eq!(page.newer("zed"), None);
+            assert_eq!(page.upgradable(), ["bun"]);
+            assert!(!page.offers_reinstall("puremac") && !page.offers_reinstall("zed"));
+            assert!(page.offers_reinstall("bun"));
+            let tool = |id| find(id).unwrap();
+            assert!(!page.passes(tool("puremac"), Filter::Updates));
+            assert!(page.passes(tool("bun"), Filter::Updates));
+        });
+        // The row says why, under PureMac and Zed alike.
+        assert!(cx.debug_bounds("tool-outside-puremac").is_some());
+        assert!(cx.debug_bounds("tool-outside-zed").is_some());
+        assert!(cx.debug_bounds("tool-outside-bun").is_none());
+        // ↩ on PureMac's row runs nothing.
+        page.update(cx, |page, cx| {
+            page.cursor = page.shown("").iter().position(|(_, t)| t.id == "puremac");
+            assert!(page.cursor.is_some());
+            page.confirm(cx);
+            assert!(page.queue.is_empty() && page.running.is_none());
+            assert_eq!(page.states.get("puremac"), None);
+        });
+        // Homebrew's copy: Update, Upgrade and Reinstall are back.
+        page.update(cx, |page, _| {
+            page.found.get_mut("puremac").unwrap().outside = None;
+            assert_eq!(page.newer("puremac").map(String::as_str), Some("3.2.0"));
+            assert_eq!(page.upgradable(), ["bun", "puremac"]);
+            assert!(page.offers_reinstall("puremac"));
+        });
+    }
+
+    /// Removing Homebrew warns that its cask's app won't get updates through Homebrew any more,
+    /// not that it stops working; a copy from the disk image isn't named.
+    #[gpui_kit::test]
+    fn removing_homebrew_says_puremac_only_stops_getting_updates(cx: &mut TestAppContext) {
+        use sawit_core::dev_tools::Outside;
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::catalog::init(cx);
+        });
+        let at = |path: &str, outside| Found {
+            path: path.into(),
+            version: None,
+            outside,
+        };
+        let (window, page) = cx
+            .update(|cx| {
+                gpui_kit::open_window(Default::default(), cx, |_, cx| {
+                    cx.new(|cx| {
+                        let mut page = ToolsPage::blank(cx);
+                        page.loading = false;
+                        page.found = [
+                            ("homebrew", at("/opt/homebrew/bin/brew", None)),
+                            ("puremac", at("/Applications/PureMac.app", None)),
+                        ]
+                        .into();
+                        page
+                    })
+                })
+            })
+            .unwrap();
+        let homebrew = find("homebrew").unwrap();
+        let ask = |cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| {
+                page.update(cx, |page, cx| {
+                    page.ask_uninstall(homebrew, "uninstall.sh".into(), window, cx)
+                })
+            })
+            .unwrap();
+            cx.run_until_parked();
+            let prompt = cx.pending_prompt();
+            cx.simulate_prompt_answer("Cancel");
+            cx.run_until_parked();
+            prompt
+        };
+        assert_eq!(
+            ask(cx),
+            Some((
+                "Uninstall Homebrew?".to_string(),
+                "PureMac won't get updates through Homebrew any more.\n\nRuns: uninstall.sh"
+                    .to_string()
+            ))
+        );
+        page.update(cx, |page, _| {
+            page.found.get_mut("puremac").unwrap().outside = Some(Outside::Homebrew)
+        });
+        assert_eq!(
+            ask(cx),
+            Some((
+                "Uninstall Homebrew?".to_string(),
+                "Runs: uninstall.sh".to_string()
+            ))
+        );
+        assert!(page.read_with(cx, |page, _| page.queue.is_empty()));
     }
 
     /// PureMac's logo is its app icon, a PNG in the app's assets; the SVG logos load as before.

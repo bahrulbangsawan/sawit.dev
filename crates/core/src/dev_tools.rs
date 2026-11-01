@@ -726,6 +726,37 @@ pub fn is_cap_cli(path: &Path) -> bool {
 pub struct Found {
     pub path: PathBuf,
     pub version: Option<String>,
+    /// For an app whose copy isn't the one its own commands install,
+    /// upgrade and remove (dragged in from a disk image, kept up to date by
+    /// its own updater): what it was installed outside of, said instead of
+    /// offering Upgrade, Reinstall or Uninstall. `None` for every other copy
+    /// ([`installed_outside`]).
+    pub outside: Option<Outside>,
+}
+
+/// What an app's copy was installed outside of ([`Found::outside`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outside {
+    /// A cask's app that Homebrew's Caskroom doesn't have: dragged in from
+    /// its disk image.
+    Homebrew,
+    /// Another app with no command of its install script leading into it.
+    InstallScript,
+}
+
+impl Outside {
+    /// What it was installed outside of: "Homebrew", "its install script".
+    pub fn of(self) -> &'static str {
+        match self {
+            Outside::Homebrew => "Homebrew",
+            Outside::InstallScript => "its install script",
+        }
+    }
+
+    /// "Installed outside Homebrew", for the page.
+    pub fn text(self) -> String {
+        format!("Installed outside {}", self.of())
+    }
 }
 
 const MARK: &str = "__SAWIT_TOOL__";
@@ -876,7 +907,15 @@ async fn detect_as(login: Option<&str>) -> Detection {
         .into_iter()
         .map(|(id, path)| {
             let version = versions.remove(id);
-            (id, Found { path, version })
+            let outside = find(id).and_then(|t| installed_outside(t, &path));
+            (
+                id,
+                Found {
+                    path,
+                    version,
+                    outside,
+                },
+            )
         })
         .collect();
     Detection { found, problem }
@@ -995,20 +1034,28 @@ pub async fn latest_versions() -> HashMap<&'static str, String> {
     .collect()
 }
 
-/// The newer release installed tool `id` can upgrade to.
+/// The newer release installed tool `id` can upgrade to. None for an app
+/// whose copy its upgrade command doesn't upgrade ([`Found::outside`]): its
+/// version shows, but nothing offers to upgrade it.
 pub fn newer<'a>(
     id: &str,
     found: &HashMap<&'static str, Found>,
     latest: &'a HashMap<&'static str, String>,
 ) -> Option<&'a str> {
-    let installed = found.get(id)?.version.as_ref()?;
+    let found = found.get(id)?;
+    if found.outside.is_some() {
+        return None;
+    }
+    let installed = found.version.as_ref()?;
     let latest = latest.get(id)?;
     is_newer(latest, installed).then_some(latest.as_str())
 }
 
 /// The tools upgrading `wanted` runs, in catalog order: every installed
 /// tool with a newer release when `wanted` is empty, else each wanted tool
-/// that is installed and not known to be up to date.
+/// that is installed and not known to be up to date. Never an app whose
+/// copy its upgrade command doesn't upgrade ([`Found::outside`]), named or
+/// not: the page, `upgrade_dev_tools` and `sawit pupuk` all leave it alone.
 pub fn upgrade_plan(
     wanted: &[&str],
     found: &HashMap<&'static str, Found>,
@@ -1016,7 +1063,7 @@ pub fn upgrade_plan(
 ) -> Vec<&'static Tool> {
     TOOLS
         .iter()
-        .filter(|t| found.contains_key(t.id))
+        .filter(|t| found.get(t.id).is_some_and(|f| f.outside.is_none()))
         .filter(|t| {
             if wanted.is_empty() {
                 newer(t.id, found, latest).is_some()
@@ -1104,6 +1151,17 @@ fn uninstall_command_at(
         let homebrews = caskrooms.iter().any(|room| room.join(token).is_dir());
         return (at_its_place && homebrews).then(|| own.to_string());
     }
+    // Another app is its install script's copy when the command the script links (Zed's
+    // ~/.local/bin/zed, Cap's shims) leads into it. Without one, it was dragged in from a disk
+    // image and keeps itself up to date: running the script again would replace it or put a
+    // second copy beside it, and its uninstaller would delete it, so Sawit leaves it alone.
+    if is_app(found) {
+        let linked = tool.owns.iter().filter(|p| !p.starts_with('*')).any(|p| {
+            std::fs::canonicalize(expand_in(p, home))
+                .is_ok_and(|to| to.starts_with(found) || to.starts_with(real))
+        });
+        return linked.then(|| own.to_string());
+    }
     let parts: Vec<_> = real
         .components()
         .map(|c| c.as_os_str().to_string_lossy())
@@ -1127,8 +1185,9 @@ fn uninstall_command_at(
     {
         return Some(PackageManager::owning(&real_text).global_uninstall(package));
     }
-    // An `also` path is the copy itself (an app bundle there may be
-    // Homebrew's cask, its CLI linked from elsewhere: not this one).
+    // An `also` path is the copy itself (a command; an app is worked out
+    // above). A command linked into an app from elsewhere (Homebrew's cask
+    // of Zed links /opt/homebrew/bin/zed) isn't this one.
     let ours = tool.also.iter().any(|p| expand_in(p, home) == found)
         || tool.owns.iter().any(|p| match p.strip_prefix('*') {
             Some(part) => real_text.contains(part),
@@ -1138,6 +1197,93 @@ fn uninstall_command_at(
             }
         });
     ours.then(|| own.to_string())
+}
+
+/// Whether `tool` is an app: an app bundle is one of its places (Cap, Zed,
+/// PureMac).
+fn is_app_tool(tool: &Tool) -> bool {
+    tool.also.iter().any(|p| p.ends_with(".app"))
+}
+
+/// [`Found::outside`] for the copy of `tool` found at `found`. An app's
+/// upgrade (its cask's `brew upgrade`, its install script again) and
+/// uninstall act on the copy they put in place, so a copy that isn't that
+/// one (by the rule of [`uninstall_command`]) gets neither: outside
+/// Homebrew for a cask's app, outside its install script for another. Every
+/// other tool's copy is `None`, as before.
+pub fn installed_outside(tool: &Tool, found: &Path) -> Option<Outside> {
+    let real = std::fs::canonicalize(found).unwrap_or_else(|_| found.to_path_buf());
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    installed_outside_at(tool, found, &real, &home, &CASKROOMS.map(PathBuf::from))
+}
+
+/// [`installed_outside`] with `caskrooms` for Homebrew's Caskroom.
+fn installed_outside_at(
+    tool: &Tool,
+    found: &Path,
+    real: &Path,
+    home: &Path,
+    caskrooms: &[PathBuf],
+) -> Option<Outside> {
+    if !is_app_tool(tool) || uninstall_command_at(tool, found, real, home, caskrooms).is_some() {
+        return None;
+    }
+    Some(if tool.cask.is_some() {
+        Outside::Homebrew
+    } else {
+        Outside::InstallScript
+    })
+}
+
+/// What losing a tool it needs does to `dependent`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Impact {
+    /// It runs through the tool removed (Gemini CLI through Node.js): it
+    /// stops working.
+    StopsWorking,
+    /// An app from a Homebrew cask (PureMac): it keeps working, but
+    /// Homebrew no longer updates it.
+    NoHomebrewUpdates,
+}
+
+pub fn impact(dependent: &Tool) -> Impact {
+    if dependent.cask.is_some() {
+        Impact::NoHomebrewUpdates
+    } else {
+        Impact::StopsWorking
+    }
+}
+
+/// The warning before removing a tool the installed tools `needed_by` need,
+/// as the page, `uninstall_dev_tools` and `list_dev_tools` give it, without
+/// its full stop: "npm (latest), Gemini CLI need it and will stop working",
+/// "PureMac won't get updates through Homebrew any more", or both joined
+/// with "; ". Empty when nothing needs it.
+pub fn needed_by_warning(needed_by: &[&Tool]) -> String {
+    let names = |which: Impact| -> Vec<&str> {
+        needed_by
+            .iter()
+            .filter(|t| impact(t) == which)
+            .map(|t| t.name)
+            .collect()
+    };
+    let mut parts = Vec::new();
+    let stop = names(Impact::StopsWorking);
+    if !stop.is_empty() {
+        let s = if stop.len() == 1 { "s" } else { "" };
+        parts.push(format!(
+            "{} need{s} it and will stop working",
+            stop.join(", ")
+        ));
+    }
+    let apps = names(Impact::NoHomebrewUpdates);
+    if !apps.is_empty() {
+        parts.push(format!(
+            "{} won't get updates through Homebrew any more",
+            apps.join(", ")
+        ));
+    }
+    parts.join("; ")
 }
 
 /// The package manager that installed the copy of an npm tool found at
@@ -1192,8 +1338,9 @@ pub struct Uninstall {
     pub found: Option<PathBuf>,
     pub removal: Removal,
     /// The installed tools that need it and stay, so they stop working once
-    /// it's gone (the page names them before it asks). Empty when nothing is
-    /// removed.
+    /// it's gone, or for a cask's app stop getting updates
+    /// ([`needed_by_warning`]; the page names them before it asks). Empty
+    /// when nothing is removed.
     pub needed_by: Vec<&'static Tool>,
 }
 
@@ -1254,9 +1401,13 @@ fn uninstall_plan_with(
         .map(|u| u.tool.id)
         .collect();
     for u in out.iter_mut().filter(|u| removed.contains(&u.tool.id)) {
+        // A copy installed outside what the tool needs (PureMac from its disk image) doesn't
+        // need it.
         u.needed_by = dependents(u.tool.id)
             .into_iter()
-            .filter(|t| found.contains_key(t.id) && !removed.contains(&t.id))
+            .filter(|t| {
+                found.get(t.id).is_some_and(|f| f.outside.is_none()) && !removed.contains(&t.id)
+            })
             .collect();
     }
     out
@@ -1636,6 +1787,7 @@ mod tests {
             Found {
                 path: system.to_path_buf(),
                 version: Some("3.2.0".into()),
+                outside: None,
             },
         )]);
         let plan = || {
@@ -1649,7 +1801,8 @@ mod tests {
             plan()[0].removal,
             Removal::Run("brew uninstall --cask puremac".into())
         );
-        // Other tools are as they were: a cask's Caskroom doesn't make Zed's app Homebrew's.
+        // A cask's Caskroom doesn't make another app Homebrew's: Zed's app, with no command of
+        // its install script leading into it, is left alone.
         assert_eq!(
             uninstall_command_at(
                 find("zed").unwrap(),
@@ -1658,8 +1811,195 @@ mod tests {
                 &home,
                 &rooms
             ),
-            find("zed").unwrap().uninstall.map(String::from)
+            None
         );
+    }
+
+    /// Every app of the catalog (an app bundle among its places) is one whose copy the rule of
+    /// `installed_outside` works out: Cap, Zed and PureMac, each with an uninstaller, which
+    /// that rule is built on.
+    #[test]
+    fn the_catalogs_apps_are_cap_zed_and_puremac() {
+        let apps: Vec<&str> = TOOLS
+            .iter()
+            .filter(|t| is_app_tool(t))
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(apps, ["cap", "zed", "puremac"]);
+        for id in apps {
+            assert!(find(id).unwrap().uninstall.is_some(), "{id}");
+        }
+    }
+
+    /// An app found at its place is its install script's copy only while the command the script
+    /// links leads into it (Zed's ~/.local/bin/zed, Cap's ~/.cap/bin/cap): then Sawit upgrades
+    /// and removes it. Without one it was dragged in from the disk image and keeps itself up to
+    /// date: "Installed outside its install script", no Upgrade and no Uninstall. A cask's app
+    /// without its Caskroom entry is "Installed outside Homebrew". Other tools are as before.
+    #[test]
+    fn an_app_is_its_scripts_only_with_its_command_linked() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("me");
+        let rooms = [dir.path().join("Caskroom")];
+        std::fs::create_dir_all(&rooms[0]).unwrap();
+        let app = |name: &str, program: &str| {
+            let app = home.join(format!("Applications/{name}.app"));
+            let macos = app.join("Contents/MacOS");
+            std::fs::create_dir_all(&macos).unwrap();
+            std::fs::write(macos.join(program), "").unwrap();
+            app
+        };
+        let link = |from: &str, to: &Path| {
+            let from = home.join(from);
+            std::fs::create_dir_all(from.parent().unwrap()).unwrap();
+            let _ = std::fs::remove_file(&from);
+            std::os::unix::fs::symlink(to, from).unwrap();
+        };
+        let (uninstall, outside) = (
+            |id: &str, found: &Path| {
+                let real = std::fs::canonicalize(found).unwrap();
+                uninstall_command_at(find(id).unwrap(), found, &real, &home, &rooms)
+            },
+            |id: &str, found: &Path| {
+                let real = std::fs::canonicalize(found).unwrap();
+                installed_outside_at(find(id).unwrap(), found, &real, &home, &rooms)
+            },
+        );
+        let own = |id: &str| find(id).unwrap().uninstall.map(String::from);
+
+        let zed = app("Zed", "cli");
+        assert_eq!(uninstall("zed", &zed), None);
+        assert_eq!(outside("zed", &zed), Some(Outside::InstallScript));
+        // A link into another Zed doesn't make this one the script's.
+        let other = dir.path().join("elsewhere/Zed.app/Contents/MacOS");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("cli"), "").unwrap();
+        link(".local/bin/zed", &other.join("cli"));
+        assert_eq!(outside("zed", &zed), Some(Outside::InstallScript));
+        link(".local/bin/zed", &zed.join("Contents/MacOS/cli"));
+        assert_eq!(uninstall("zed", &zed), own("zed"));
+        assert_eq!(outside("zed", &zed), None);
+        // Found by that command, as detection usually finds it: the script's.
+        assert_eq!(outside("zed", &home.join(".local/bin/zed")), None);
+
+        // Cap's shim in ~/.cap/bin, which the login shell may not have on its PATH.
+        let cap = app("Cap", "cap-cli");
+        assert_eq!(outside("cap", &cap), Some(Outside::InstallScript));
+        link(".cap/bin/cap", &cap.join("Contents/MacOS/cap-cli"));
+        assert_eq!(uninstall("cap", &cap), own("cap"));
+        assert_eq!(outside("cap", &cap), None);
+
+        let puremac = app("PureMac", "PureMac");
+        assert_eq!(outside("puremac", &puremac), Some(Outside::Homebrew));
+        std::fs::create_dir_all(rooms[0].join("puremac/3.2.0")).unwrap();
+        assert_eq!(outside("puremac", &puremac), None);
+
+        // Not an app: whatever copy it is, its upgrade is offered as before.
+        let bun = home.join("bin/bun");
+        std::fs::create_dir_all(bun.parent().unwrap()).unwrap();
+        std::fs::write(&bun, "").unwrap();
+        assert_eq!(uninstall("bun", &bun), None);
+        assert_eq!(outside("bun", &bun), None);
+    }
+
+    /// An app installed outside what upgrades it shows its version, but never an upgrade: not in
+    /// `newer` (the page's Update badge and Upgrade All, list_dev_tools, `sawit list`), and not
+    /// in `upgrade_plan`, whether every tool is upgraded or it's named (upgrade_dev_tools,
+    /// `sawit pupuk puremac`), even when its latest release is unknown.
+    #[test]
+    fn an_app_installed_outside_is_never_upgraded() {
+        let at = |path: &str, v: &str, outside: Option<Outside>| Found {
+            path: PathBuf::from(path),
+            version: Some(v.into()),
+            outside,
+        };
+        let dmg = Some(Outside::Homebrew);
+        let script = Some(Outside::InstallScript);
+        let mut found = HashMap::from([
+            ("puremac", at("/Applications/PureMac.app", "3.1.0", dmg)),
+            ("zed", at("/Applications/Zed.app", "0.200.0", script)),
+            ("cap", at("/Applications/Cap.app", "1.0.0", script)),
+            ("bun", at("/Users/me/.bun/bin/bun", "1.0.0", None)),
+        ]);
+        let latest = HashMap::from([
+            ("puremac", "3.2.0".to_string()),
+            ("zed", "0.210.0".to_string()),
+            ("bun", "1.1.0".to_string()),
+        ]);
+        let ids = |p: Vec<&Tool>| p.iter().map(|t| t.id).collect::<Vec<_>>();
+        assert_eq!(super::newer("puremac", &found, &latest), None);
+        assert_eq!(super::newer("zed", &found, &latest), None);
+        assert_eq!(ids(upgrade_plan(&[], &found, &latest)), ["bun"]);
+        assert_eq!(
+            ids(upgrade_plan(
+                &["puremac", "zed", "cap", "bun"],
+                &found,
+                &latest
+            )),
+            ["bun"]
+        );
+        // Homebrew's copy, and Zed's script's: upgraded.
+        found.get_mut("puremac").unwrap().outside = None;
+        found.get_mut("zed").unwrap().outside = None;
+        assert_eq!(super::newer("puremac", &found, &latest), Some("3.2.0"));
+        assert_eq!(
+            ids(upgrade_plan(&[], &found, &latest)),
+            ["bun", "zed", "puremac"]
+        );
+        // Cap publishes no latest release: named, it runs its script again, as before.
+        found.get_mut("cap").unwrap().outside = None;
+        assert_eq!(ids(upgrade_plan(&["cap"], &found, &latest)), ["cap"]);
+    }
+
+    /// Removing Homebrew warns per kind of tool that needs it: an app from its cask keeps
+    /// working but won't get updates through Homebrew any more; a tool that runs through what's
+    /// removed stops working. A copy installed outside it (PureMac from its disk image) isn't
+    /// named at all.
+    #[test]
+    fn removing_homebrew_warns_per_kind_of_dependent() {
+        let tool = |id: &str| find(id).unwrap();
+        assert_eq!(impact(tool("puremac")), Impact::NoHomebrewUpdates);
+        assert_eq!(impact(tool("gemini")), Impact::StopsWorking);
+        assert_eq!(
+            needed_by_warning(&[tool("puremac")]),
+            "PureMac won't get updates through Homebrew any more"
+        );
+        assert_eq!(
+            needed_by_warning(&[tool("npm"), tool("gemini")]),
+            "npm (latest), Gemini CLI need it and will stop working"
+        );
+        assert_eq!(
+            needed_by_warning(&[tool("node")]),
+            "Node.js needs it and will stop working"
+        );
+        assert_eq!(
+            needed_by_warning(&[tool("puremac"), tool("gemini")]),
+            "Gemini CLI needs it and will stop working; PureMac won't get updates through Homebrew any more"
+        );
+        assert_eq!(needed_by_warning(&[]), "");
+
+        let at = |path: &str, outside: Option<Outside>| Found {
+            path: PathBuf::from(path),
+            version: None,
+            outside,
+        };
+        let mut found = HashMap::from([
+            ("homebrew", at("/opt/homebrew/bin/brew", None)),
+            ("puremac", at("/Applications/PureMac.app", None)),
+        ]);
+        let command = |_: &Tool, _: &Path| Some("uninstall.sh".to_string());
+        let plan = uninstall_plan_with(&["homebrew"], &found, &command);
+        assert_eq!(
+            plan[0].needed_by.iter().map(|t| t.id).collect::<Vec<_>>(),
+            ["puremac"]
+        );
+        assert_eq!(
+            needed_by_warning(&plan[0].needed_by),
+            "PureMac won't get updates through Homebrew any more"
+        );
+        found.get_mut("puremac").unwrap().outside = Some(Outside::Homebrew);
+        let plan = uninstall_plan_with(&["homebrew"], &found, &command);
+        assert!(plan[0].needed_by.is_empty());
     }
 
     /// The tools npm installs globally install with the package manager picked, the way the cf
@@ -1844,9 +2184,11 @@ mod tests {
             own("zed")
         );
         assert_eq!(script("zed", "/opt/homebrew/bin/zed", zed_cli), None);
+        // The app found on its own, with no ~/.local/bin/zed leading into it: dragged in from
+        // the disk image, not the script's (an_app_is_its_scripts_only_with_its_command_linked).
         assert_eq!(
             script("zed", "/Applications/Zed.app", "/Applications/Zed.app"),
-            own("zed")
+            None
         );
         // A Cellar folder whose name isn't a formula's isn't put in a command.
         assert_eq!(
@@ -1902,6 +2244,7 @@ mod tests {
         let at = |path: &str| Found {
             path: PathBuf::from(path),
             version: None,
+            outside: None,
         };
         let found: HashMap<&'static str, Found> = HashMap::from([
             ("homebrew", at("/opt/homebrew/bin/brew")),
@@ -2181,6 +2524,7 @@ mod tests {
         let at = |v: &str| Found {
             path: PathBuf::from("/x"),
             version: Some(v.into()),
+            outside: None,
         };
         // bun is behind, uv is current, deno publishes nothing readable.
         let found = HashMap::from([

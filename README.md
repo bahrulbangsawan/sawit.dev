@@ -267,7 +267,10 @@ explained. A conflict on the same address can't be forced.
 - **PureMac** ([momenbasel/PureMac](https://github.com/momenbasel/PureMac)), the open source Mac cleaner, installs
   from its Homebrew cask as its README says (`brew install --cask puremac`, Homebrew first), upgrades with
   `brew upgrade --cask puremac` when Homebrew has a newer version, and uninstalls with `brew uninstall --cask
-  puremac`. A copy dragged into Applications from its disk image shows as installed, and is left alone.
+  puremac`. A copy dragged into Applications from its disk image shows its version and "Installed outside
+  Homebrew", with no Upgrade, Reinstall or Uninstall, here, in `upgrade_dev_tools` and in `sawit pupuk` alike.
+  Zed or Cap found as an app without the command their install script links into it (dragged in from a disk
+  image, kept up to date by the app itself) is "Installed outside its install script" and left alone the same way.
 - The tools npm installs for every project (Gemini CLI, Cloudflare's `cf`) have a package manager menu beside their
   command: **npm** (`npm install -g cf`), **pnpm** (`pnpm add -g cf`), **bun** (`bun add -g cf`) or **yarn**
   (`yarn global add cf`, Yarn 1). It lists only the ones installed, and the command shown changes with it before
@@ -289,10 +292,11 @@ explained. A conflict on the same address can't be forced.
   installed, the page says so instead of showing them as not installed.
 - Homebrew asks for your password, so it runs in the terminal. Open a new terminal tab afterwards so it sees the
   new `PATH`.
-- The trash button uninstalls a tool, asking first and naming the installed tools that need it. It removes only the
-  copy that the tool's own installer, Homebrew (`brew uninstall`) or npm (`npm uninstall -g`) put in place; a copy
-  installed another way is left alone, and the page says so if it's still found afterwards. Homebrew's own
-  uninstaller asks for your password, so it runs in the terminal.
+- The trash button uninstalls a tool, asking first and naming the installed tools that need it: they stop working,
+  except an app from a Homebrew cask, which keeps working but won't get updates through Homebrew any more. It
+  removes only the copy that the tool's own installer, Homebrew (`brew uninstall`) or npm (`npm uninstall -g`) put
+  in place; a copy installed another way is left alone, and the page says so if it's still found afterwards.
+  Homebrew's own uninstaller asks for your password, so it runs in the terminal.
 - Closing the tab or its window, quitting and **Restart to Update** ask first while something installs, and stop it.
   One tool is installed, upgraded or removed at a time, whether from this page, an agent, `sawit pasang`,
   `sawit pupuk` or `sawit cabut`.
