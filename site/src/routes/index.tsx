@@ -79,7 +79,7 @@ function Trio() {
         <div>
           <h2>Agents welcome</h2>
           <p>
-            <code>sawit-mcp</code> gives AI agents 118 tools. Destructive ones ask for the name again.
+            <code>sawit-mcp</code> gives AI agents 121 tools. Destructive ones ask for the name again.
           </p>
         </div>
       </div>
@@ -351,7 +351,7 @@ function Binary() {
           </div>
           <div>
             <dt>Tools for agents</dt>
-            <dd>118</dd>
+            <dd>121</dd>
           </div>
           <div>
             <dt>Editor languages</dt>

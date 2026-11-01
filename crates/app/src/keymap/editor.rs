@@ -126,13 +126,7 @@ impl KeymapEditor {
     /// Reads the keymap again and filters it.
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let all = self.store.read(cx).rows(self.show_unbound, cx);
-        self.conflicts.clear();
-        for row in all.iter().filter(|r| is_active(r)) {
-            *self
-                .conflicts
-                .entry((row.context.clone(), row.keystrokes.clone()))
-                .or_default() += 1;
-        }
+        self.conflicts = binding_counts(&all);
         let selected = self
             .selected
             .and_then(|ix| self.rows.get(ix))
@@ -157,11 +151,7 @@ impl KeymapEditor {
     }
 
     fn row_conflicts(&self, row: &Row) -> bool {
-        is_active(row)
-            && self
-                .conflicts
-                .get(&(row.context.clone(), row.keystrokes.clone()))
-                .is_some_and(|n| *n > 1)
+        conflicts(row, &self.conflicts)
     }
 
     fn select(&mut self, ix: usize, cx: &mut Context<Self>) {
@@ -582,13 +572,146 @@ impl Render for KeymapEditor {
 }
 
 /// Whether `row` is a binding that runs: a default or a user's, not one that only turns keys off.
-fn is_active(row: &Row) -> bool {
+pub(crate) fn is_active(row: &Row) -> bool {
     matches!(row.source, Source::Default(_) | Source::User(_))
         && row.action.as_ref() != "zed::NoAction"
 }
 
+/// How many active bindings each (context, keystrokes) of `rows` has.
+pub(crate) type BindingCounts = HashMap<(Option<SharedString>, SharedString), usize>;
+
+/// The active bindings of `rows` counted by their context and keystrokes, for [`conflicts`].
+pub(crate) fn binding_counts(rows: &[Row]) -> BindingCounts {
+    let mut counts = BindingCounts::new();
+    for row in rows.iter().filter(|r| is_active(r)) {
+        *counts
+            .entry((row.context.clone(), row.keystrokes.clone()))
+            .or_default() += 1;
+    }
+    counts
+}
+
+/// Whether `row` is a binding that runs and another one that runs has its keys in its context
+/// (`counts`, from [`binding_counts`]): only one of them runs.
+pub(crate) fn conflicts(row: &Row, counts: &BindingCounts) -> bool {
+    is_active(row)
+        && counts
+            .get(&(row.context.clone(), row.keystrokes.clone()))
+            .is_some_and(|n| *n > 1)
+}
+
+/// The other active bindings of `keys` (as the keymap file writes them) among `rows`, the row
+/// `own` aside (the one being changed): the labels of those in `context` (as a binding's context
+/// reads, `""` for anywhere), which would clash, then how many in other contexts.
+fn clashes(rows: &[Row], keys: &str, context: &str, own: Option<Source>) -> (Vec<String>, usize) {
+    if keys.is_empty() {
+        return (Vec::new(), 0);
+    }
+    let mut same = Vec::new();
+    let mut elsewhere = 0;
+    for row in rows
+        .iter()
+        .filter(|r| is_active(r) && Some(r.source) != own)
+    {
+        if row.keystrokes.as_ref() != keys {
+            continue;
+        }
+        if row.context.as_deref().unwrap_or_default() == context {
+            same.push(row.label.to_string());
+        } else {
+            elsewhere += 1;
+        }
+    }
+    (same, elsewhere)
+}
+
+/// The active bindings of `rows`, in `context` or anywhere, the row `own` aside, that `keys`
+/// start (`⌘K W (workspace: close all tabs)`), then those that start `keys`: a key bound alone
+/// and a chord on it either keep the key waiting for the chord's next key, or leave the chord out
+/// of reach.
+fn chord_clashes(
+    rows: &[Row],
+    keys: &str,
+    context: &str,
+    own: Option<Source>,
+) -> (Vec<String>, Vec<String>) {
+    if keys.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let (mut longer, mut shorter) = (Vec::new(), Vec::new());
+    for row in rows
+        .iter()
+        .filter(|r| is_active(r) && Some(r.source) != own)
+    {
+        let row_context = row.context.as_deref().unwrap_or_default();
+        if !(row_context == context || row_context.is_empty() || context.is_empty()) {
+            continue;
+        }
+        let named = || format!("{} ({})", row.display, row.label);
+        if row.keystrokes.len() > keys.len() && starts_with_keys(&row.keystrokes, keys) {
+            longer.push(named());
+        } else if keys.len() > row.keystrokes.len() && starts_with_keys(keys, &row.keystrokes) {
+            shorter.push(named());
+        }
+    }
+    (longer, shorter)
+}
+
+/// What binding `keys` in `context` among `rows` (the row `own` aside) clashes with, as the
+/// binding form says it under its fields, each note with its banner's id: another binding of the
+/// same keys there, chords the keys start or keys that start them, or bindings of the keys in
+/// other contexts. The agent's `keymap_bind` answers with the same notes.
+pub(crate) fn clash_notes(
+    rows: &[Row],
+    keys: &str,
+    context: &str,
+    own: Option<Source>,
+) -> Vec<(&'static str, String)> {
+    let (same, elsewhere) = clashes(rows, keys, context, own);
+    let (longer, shorter) = chord_clashes(rows, keys, context, own);
+    let shown = names::display_typed(&parse_keys(keys));
+    let mut notes = Vec::new();
+    if !same.is_empty() {
+        notes.push((
+            "binding-clash",
+            format!(
+                "{shown} is also bound to {} in this context. Both bindings stay, and this one runs: the binding saved last goes first.",
+                same.join(", ")
+            ),
+        ));
+    }
+    if !longer.is_empty() {
+        notes.push((
+            "binding-starts-chords",
+            format!(
+                "{shown} also starts {} here. Bound alone, it runs at once, and those chords can no longer be typed here.",
+                longer.join(", ")
+            ),
+        ));
+    }
+    if !shorter.is_empty() {
+        notes.push((
+            "binding-extends-keys",
+            format!(
+                "These keys start with {}, bound alone here: with this chord, those keys wait up to a second for the next key before they run.",
+                shorter.join(", ")
+            ),
+        ));
+    }
+    if same.is_empty() && elsewhere > 0 {
+        notes.push((
+            "binding-elsewhere",
+            format!(
+                "These keys are bound in {elsewhere} other context{}: the deepest context with the focus wins.",
+                if elsewhere == 1 { "" } else { "s" }
+            ),
+        ));
+    }
+    notes
+}
+
 /// Whether `row` matches the filter's `query` (lower case): its name, action, keys or context.
-fn matches_query(row: &Row, query: &str) -> bool {
+pub(crate) fn matches_query(row: &Row, query: &str) -> bool {
     if query.is_empty() {
         return true;
     }
@@ -606,7 +729,7 @@ fn matches_query(row: &Row, query: &str) -> bool {
 }
 
 /// Whether `keystrokes` start with `keys` (both as the keymap file writes them).
-fn starts_with_keys(keystrokes: &str, keys: &str) -> bool {
+pub(crate) fn starts_with_keys(keystrokes: &str, keys: &str) -> bool {
     let mut have = keystrokes.split_whitespace();
     keys.split_whitespace().all(|key| have.next() == Some(key))
 }
@@ -854,70 +977,41 @@ impl BindingForm {
         cx.notify();
     }
 
-    /// The other bindings of the keys being recorded: those in the same context, which would
-    /// clash, then how many in other contexts.
-    fn clashes(&self, cx: &App) -> (Vec<String>, usize) {
-        let keys = self.keys.read(cx).keystrokes();
-        if keys.is_empty() {
-            return (Vec::new(), 0);
-        }
-        let context = self.context.read(cx).value().trim().to_string();
-        let own = match &self.target {
+    /// The row the form changes, if it changes one: its own keys don't clash with it.
+    fn own(&self) -> Option<Source> {
+        match &self.target {
             FormTarget::Row(row) => Some(row.source),
             FormTarget::New => None,
-        };
-        let rows = store(cx).read(cx).rows(false, cx);
-        let mut same = Vec::new();
-        let mut elsewhere = 0;
-        for row in rows
-            .iter()
-            .filter(|r| is_active(r) && Some(r.source) != own)
-        {
-            if row.keystrokes.as_ref() != keys {
-                continue;
-            }
-            if row.context.as_deref().unwrap_or_default() == context {
-                same.push(row.label.to_string());
-            } else {
-                elsewhere += 1;
-            }
         }
-        (same, elsewhere)
     }
 
-    /// The active bindings, in this context or anywhere, that the keys being recorded start
-    /// (`⌘K W (workspace: close all tabs)`), then those that start them: a key bound alone and a
-    /// chord on it either keep the key waiting for the chord's next key, or leave the chord out
-    /// of reach.
+    /// The other bindings of the keys being recorded: those in the same context, which would
+    /// clash, then how many in other contexts ([`clashes`]). The form shows them as
+    /// [`Self::clash_notes`]; the tests read them here.
+    #[cfg(test)]
+    fn clashes(&self, cx: &App) -> (Vec<String>, usize) {
+        let keys = self.keys.read(cx).keystrokes();
+        let context = self.context.read(cx).value().trim().to_string();
+        let rows = store(cx).read(cx).rows(false, cx);
+        clashes(&rows, &keys, &context, self.own())
+    }
+
+    /// The active bindings, in this context or anywhere, that the keys being recorded start,
+    /// then those that start them ([`chord_clashes`]), as [`Self::clashes`] reads them.
+    #[cfg(test)]
     fn chord_clashes(&self, cx: &App) -> (Vec<String>, Vec<String>) {
         let keys = self.keys.read(cx).keystrokes();
-        if keys.is_empty() {
-            return (Vec::new(), Vec::new());
-        }
         let context = self.context.read(cx).value().trim().to_string();
-        let own = match &self.target {
-            FormTarget::Row(row) => Some(row.source),
-            FormTarget::New => None,
-        };
         let rows = store(cx).read(cx).rows(false, cx);
-        let (mut longer, mut shorter) = (Vec::new(), Vec::new());
-        for row in rows
-            .iter()
-            .filter(|r| is_active(r) && Some(r.source) != own)
-        {
-            let row_context = row.context.as_deref().unwrap_or_default();
-            if !(row_context == context || row_context.is_empty() || context.is_empty()) {
-                continue;
-            }
-            let named = || format!("{} ({})", row.display, row.label);
-            if row.keystrokes.len() > keys.len() && starts_with_keys(&row.keystrokes, &keys) {
-                longer.push(named());
-            } else if keys.len() > row.keystrokes.len() && starts_with_keys(&keys, &row.keystrokes)
-            {
-                shorter.push(named());
-            }
-        }
-        (longer, shorter)
+        chord_clashes(&rows, &keys, &context, self.own())
+    }
+
+    /// What the keys being recorded clash with, as notes under the fields ([`clash_notes`]).
+    fn clash_notes(&self, cx: &App) -> Vec<(&'static str, String)> {
+        let keys = self.keys.read(cx).keystrokes();
+        let context = self.context.read(cx).value().trim().to_string();
+        let rows = store(cx).read(cx).rows(false, cx);
+        clash_notes(&rows, &keys, &context, self.own())
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1012,9 +1106,7 @@ impl Render for BindingForm {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let (same, elsewhere) = self.clashes(cx);
-        let (longer, shorter) = self.chord_clashes(cx);
-        let keys = self.keys.read(cx).keystrokes();
+        let notes = self.clash_notes(cx);
         let label = |text: &'static str| {
             div()
                 .text_xs()
@@ -1128,44 +1220,11 @@ impl Render for BindingForm {
                     .child(label("Arguments"))
                     .child(Input::new(&self.args).small()),
             )
-            .when(!same.is_empty(), |el| {
-                el.child(Banner::info(
-                    "binding-clash",
-                    format!(
-                        "{} is also bound to {} in this context. Both bindings stay, and this one runs: the binding saved last goes first.",
-                        names::display_typed(&parse_keys(&keys)),
-                        same.join(", ")
-                    ),
-                ))
-            })
-            .when(!longer.is_empty(), |el| {
-                el.child(Banner::info(
-                    "binding-starts-chords",
-                    format!(
-                        "{} also starts {} here. Bound alone, it runs at once, and those chords can no longer be typed here.",
-                        names::display_typed(&parse_keys(&keys)),
-                        longer.join(", ")
-                    ),
-                ))
-            })
-            .when(!shorter.is_empty(), |el| {
-                el.child(Banner::info(
-                    "binding-extends-keys",
-                    format!(
-                        "These keys start with {}, bound alone here: with this chord, those keys wait up to a second for the next key before they run.",
-                        shorter.join(", ")
-                    ),
-                ))
-            })
-            .when(same.is_empty() && elsewhere > 0, |el| {
-                el.child(Banner::info(
-                    "binding-elsewhere",
-                    format!(
-                        "These keys are bound in {elsewhere} other context{}: the deepest context with the focus wins.",
-                        if elsewhere == 1 { "" } else { "s" }
-                    ),
-                ))
-            })
+            .children(
+                notes
+                    .into_iter()
+                    .map(|(id, note)| Banner::info(id, note)),
+            )
             .children(
                 self.error
                     .clone()

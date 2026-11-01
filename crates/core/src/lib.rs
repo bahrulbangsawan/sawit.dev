@@ -21,6 +21,7 @@ pub mod github;
 pub mod instances;
 pub mod kebun;
 pub mod keychain;
+pub mod keymap;
 pub mod mcp_auth;
 pub mod mcp_catalog;
 pub mod mcp_clients;

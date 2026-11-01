@@ -12,6 +12,7 @@
 //! canvas, whose FigCraft shortcuts are `board::Command` bindings (`crate::board::bindings`).
 //! The menus, tooltips and hints read the keymap as it is now.
 
+pub mod control;
 pub mod editor;
 pub mod file;
 pub mod names;
@@ -240,6 +241,14 @@ impl KeymapStore {
     /// the user is in the middle of writing.
     pub fn can_write(&self) -> bool {
         self.file_error.is_none()
+    }
+
+    /// Whether writing the file would drop comments the user wrote in it, as it is on disk now:
+    /// every change writes it whole, as JSON ([`file::has_comments`]). The lines a new file
+    /// starts with ([`NEW_FILE`]) are Sawit's, not the user's.
+    pub fn has_user_comments(&self) -> bool {
+        std::fs::read_to_string(&self.path)
+            .is_ok_and(|text| text != NEW_FILE && file::has_comments(&text))
     }
 
     pub fn defaults(&self) -> &[KeyBinding] {

@@ -25,6 +25,7 @@ pub mod diagrams;
 pub mod files;
 pub mod git;
 pub mod instances;
+pub mod keymap;
 pub mod mcp_servers;
 pub mod network;
 pub mod ports;
@@ -88,6 +89,7 @@ These control the running Sawit app (start it with launch_app; app_state shows w
 - canvas_*: the canvas (FigCraft engine): list, add shapes/stickies/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG. They also work on the saved file when the app is closed.
 - canvas_command: run any command of the canvas engine by id with its parameters (board.sticky, node.set, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes. With the app closed each call starts from the saved file, so nothing carries over between calls (no undo, no selection, no view): pass ids, or run the steps in one command.batch.
 - browser_*: a browser tab (WebKit) to check the app being built: navigate (default the project's dev server), snapshot the page as an outline with element refs, click/hover/type/press keys/select/scroll by ref or CSS selector, wait for text, screenshot, read console errors and network requests, evaluate JS, resize to a device, read the user's annotations, inspect an element's design, read the page's design system, export it as DESIGN.md + tokens + assets. Take a new browser_snapshot after the page changes; refs reset.
+- keymap_*: the key bindings, as the Keymap Editor shows them: keymap_list says what a key does or which key runs an action, keymap_bind and keymap_unbind change the user's bindings (they write keymap.json again without its comments, so a file with comments needs confirm: true). They need the app: the default keys live in it.
 Most app tools take `project` to pick the window that has that folder open; without it, the window that has the folder sawit-mcp runs in open is used, else the frontmost window. The browser_* tools use that project's own browser tab, even while the user looks at another project of the window.
 Targets: database tools take a Sawit instance name or a saved connection name (see list_connections).";
 
@@ -313,6 +315,7 @@ const READ_ONLY: &[&str] = &[
     "browser_resize",
     "browser_inspect",
     "browser_design",
+    "keymap_list",
 ];
 
 /// The tools that can delete or replace what was there before the call (a database, rows, a file
@@ -375,6 +378,8 @@ const DESTRUCTIVE: &[&str] = &[
     "browser_annotations",
     "browser_export_design",
     "terminal_split",
+    "keymap_bind",
+    "keymap_unbind",
 ];
 
 /// The tools that change things but only add: a database, an instance, a prompt, rows, shapes on
@@ -506,6 +511,7 @@ impl Sawit {
             + Self::app_router()
             + Self::browser_router()
             + Self::browser_design_router()
+            + Self::keymap_router()
     }
 
     /// Tells a running app to re-read `store` after a tool changed its file.
@@ -670,6 +676,10 @@ mod tests {
             "browser_export_design",
             // terminal splits
             "terminal_split",
+            // keymap
+            "keymap_list",
+            "keymap_bind",
+            "keymap_unbind",
         ];
         expected.sort();
         assert_eq!(names, expected);
@@ -1030,6 +1040,21 @@ mod tests {
             launch.contains("The app_*, terminal_* and browser_* tools need it running"),
             "{launch}"
         );
+        // The keymap's defaults are bound in the app, and a split is the app's terminal's.
+        assert!(
+            launch.contains("The keymap_* tools and terminal_split need it running too"),
+            "{launch}"
+        );
+        let keymap = INSTRUCTIONS
+            .lines()
+            .find(|line| line.starts_with("- keymap_*:"))
+            .expect("a keymap_* line");
+        assert!(keymap.contains("They need the app"), "{keymap}");
+        for name in ["keymap_list", "keymap_bind", "keymap_unbind"] {
+            assert!(keymap.contains(name), "no {name} in {keymap}");
+            let said = tool(name).to_lowercase();
+            assert!(said.contains("needs the app running"), "{said}");
+        }
         let panel = tool("app_show_panel");
         assert!(
             panel.contains("shell_config (the Config Files panel)"),
@@ -1095,6 +1120,53 @@ mod tests {
             for word in ["pane", "terminal_read", "terminal_input"] {
                 assert!(said.contains(word), "{name} doesn't mention {word}: {said}");
             }
+        }
+    }
+
+    /// The tools that end what runs in a terminal or change the user's key bindings say so, and
+    /// take the argument that confirms it: terminal_close ended a dev server, an SSH session or
+    /// the user's own agent on a bare call, and a rewrite of keymap.json drops its comments.
+    #[test]
+    fn tools_that_end_a_program_or_rewrite_the_keymap_say_so() {
+        let tools = Sawit::router().list_all();
+        let tool = |name: &str| {
+            let tool = tools.iter().find(|t| t.name == name).expect(name);
+            let confirm = tool
+                .input_schema
+                .get("properties")
+                .and_then(|p| p.get("confirm"));
+            (
+                tool.description.as_deref().unwrap_or_default().to_string(),
+                confirm.is_some(),
+            )
+        };
+        let (close, confirm) = tool("terminal_close");
+        assert!(confirm, "terminal_close takes no confirm");
+        for said in [
+            "DESTRUCTIVE",
+            "ending whatever runs there",
+            "confirm is true",
+        ] {
+            assert!(
+                close.contains(said),
+                "terminal_close doesn't say {said:?}: {close}"
+            );
+        }
+        for name in ["keymap_bind", "keymap_unbind"] {
+            let (said, confirm) = tool(name);
+            assert!(confirm, "{name} takes no confirm");
+            for words in ["DESTRUCTIVE", "without comments", "confirm is true"] {
+                assert!(said.contains(words), "{name} doesn't say {words:?}: {said}");
+            }
+        }
+        let (list, _) = tool("keymap_list");
+        assert!(list.contains("Read-only"), "{list}");
+        let (split, _) = tool("terminal_split");
+        for said in ["never takes the keyboard", "20 columns by 4 rows"] {
+            assert!(
+                split.contains(said),
+                "terminal_split doesn't say {said:?}: {split}"
+            );
         }
     }
 

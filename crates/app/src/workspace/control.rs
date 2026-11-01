@@ -242,7 +242,7 @@ impl Workspace {
         }
     }
 
-    /// Runs a window command. `State`, `Focus`, `Open` and `Reload` are
+    /// Runs a window command. `State`, `Focus`, `Open`, `Reload` and `Keymap` are
     /// handled for the whole app by the caller. `agent_folder` is the folder the agent works in,
     /// when it named no project and a project of this window holds it: its browser is that
     /// project's ([`browser_project`]), and so is a new terminal it starts without a folder.
@@ -539,6 +539,8 @@ impl Workspace {
                 let pane = self.terminal.read(cx).pane_index(tab, pane, cx);
                 done(json!({ "terminal": tab, "pane": pane }))
             }
+            // The keymap is every window's: the caller answers it for the whole app.
+            Command::Keymap { .. } => done(json!({})),
         };
         cx.notify();
         result

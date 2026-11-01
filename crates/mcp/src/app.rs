@@ -907,7 +907,7 @@ pub(crate) fn base64_decode(text: &str, from: &str) -> Result<Vec<u8>, String> {
 #[tool_router(router = app_router, vis = "pub(crate)")]
 impl Sawit {
     #[tool(
-        description = "Start the Sawit app if it isn't running (or bring it forward), optionally opening a folder or file. The app_*, terminal_* and browser_* tools need it running; the canvas_* tools also work on the saved canvas file without it"
+        description = "Start the Sawit app if it isn't running (or bring it forward), optionally opening a folder or file. The app_*, terminal_* and browser_* tools need it running; the canvas_* tools also work on the saved canvas file without it. The keymap_* tools and terminal_split need it running too"
     )]
     async fn launch_app(&self, Parameters(a): Parameters<LaunchArgs>) -> CallToolResult {
         let paths = self.paths.clone();

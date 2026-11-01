@@ -259,6 +259,11 @@ pub enum Command {
         #[serde(default)]
         cwd: Option<PathBuf>,
     },
+    /// Reads or changes the key bindings, which every window shares; see
+    /// [`crate::keymap`].
+    Keymap {
+        op: crate::keymap::KeymapOp,
+    },
 }
 
 /// The keys [`key_bytes`] knows, as `terminal_input` and its errors list them.
@@ -677,6 +682,28 @@ mod tests {
         assert_eq!(
             &bytes[MAGIC.len()..],
             br#"{"cmd":"terminal_close","tab":1,"pane":0,"confirm":true}"#
+        );
+        assert_eq!(decode(&bytes), Some(Ok(request)));
+    }
+
+    /// The keymap's ops go to the app inside one `keymap` command.
+    #[test]
+    fn keymap_ops_round_trip() {
+        let request = Request {
+            project: None,
+            agent_folder: None,
+            command: Command::Keymap {
+                op: crate::keymap::KeymapOp::List {
+                    filter: Some("close tab".into()),
+                    keys: None,
+                    unbound: true,
+                },
+            },
+        };
+        let bytes = encode(&request);
+        assert_eq!(
+            &bytes[MAGIC.len()..],
+            br#"{"cmd":"keymap","op":{"op":"list","filter":"close tab","unbound":true}}"#
         );
         assert_eq!(decode(&bytes), Some(Ok(request)));
     }
