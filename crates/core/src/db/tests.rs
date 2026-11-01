@@ -170,6 +170,30 @@ fn dotenv_finds_database_url_variants() {
     );
 }
 
+/// A `.env` that can't be read is left as it is: read as nothing, writing DATABASE_URL replaced
+/// the whole file with that one line, and every other key in it was lost. One that isn't there is
+/// made.
+#[test]
+fn a_dotenv_that_cant_be_read_keeps_its_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = dir.path().join(".env");
+    let url = "postgres://postgres@localhost:5440/app";
+    let theirs = b"API_KEY=abc\nNAME=caf\xe9\n";
+    std::fs::write(&env, theirs).unwrap();
+    let refused = write_database_url(dir.path(), url).unwrap_err();
+    assert!(refused.contains("can't be read"), "{refused}");
+    assert_eq!(std::fs::read(&env).unwrap(), theirs);
+    assert!(read_dotenv(dir.path()).is_err());
+
+    std::fs::remove_file(&env).unwrap();
+    assert_eq!(read_dotenv(dir.path()), Ok(String::new()));
+    write_database_url(dir.path(), url).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&env).unwrap(),
+        format!("DATABASE_URL={url}\n")
+    );
+}
+
 #[test]
 fn dotenv_upsert_replaces_or_appends() {
     let url = "postgres://postgres@localhost:5440/app";

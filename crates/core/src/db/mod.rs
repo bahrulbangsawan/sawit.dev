@@ -46,7 +46,23 @@ pub fn quote_ident(name: &str) -> String {
 #[cfg(test)]
 mod tests;
 
-/// Sets DATABASE_URL in `<project>/.env` (creating it if needed).
+/// What `<project>/.env` holds: nothing when there is none. One that is there but can't be read
+/// (not UTF-8, or not readable) is an error rather than nothing: DATABASE_URL written into what
+/// read as nothing would replace the whole file, every other key in it too.
+pub fn read_dotenv(project_dir: &std::path::Path) -> Result<String, String> {
+    let path = project_dir.join(".env");
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!(
+            "{} can't be read ({e}), so it was left as it is.",
+            path.display()
+        )),
+    }
+}
+
+/// Sets DATABASE_URL in `<project>/.env` (creating it if needed). A `.env` that can't be read is
+/// left as it is ([`read_dotenv`]).
 pub fn write_database_url(
     project_dir: &std::path::Path,
     url: &str,
@@ -55,7 +71,7 @@ pub fn write_database_url(
         return Err(format!("{} is not a folder.", project_dir.display()));
     }
     let path = project_dir.join(".env");
-    let current = std::fs::read_to_string(&path).unwrap_or_default();
+    let current = read_dotenv(project_dir)?;
     crate::files::write_text_atomic(&path, &dotenv_upsert(&current, "DATABASE_URL", url))
         .map_err(|e| e.to_string())?;
     Ok(path)

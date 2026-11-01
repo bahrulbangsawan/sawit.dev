@@ -756,7 +756,7 @@ impl Sawit {
         let dir = tri!(crate::existing_dir(project_dir));
         let inst = tri!(self.instance(instance));
         let url = instance_url(&inst);
-        let current = std::fs::read_to_string(dir.join(".env")).unwrap_or_default();
+        let current = tri!(db::read_dotenv(&dir));
         if let Some(old) = db::dotenv_value(&current, "DATABASE_URL").filter(|old| *old != url)
             && !confirm
         {
@@ -985,6 +985,20 @@ mod tests {
         std::fs::write(&env, "DATABASE_URL=mysql://root:s3cret@db/app\n").unwrap();
         let refused = server.write_env_tool("shop", &folder, false).await;
         assert!(!said(&refused).contains("s3cret"), "{}", said(&refused));
+        // A .env that can't be read is never written, even with confirm: read as empty, it was
+        // replaced by the one DATABASE_URL line.
+        let unreadable = b"API=1\nNAME=caf\xe9\n";
+        std::fs::write(&env, unreadable).unwrap();
+        for confirm in [false, true] {
+            let refused = server.write_env_tool("shop", &folder, confirm).await;
+            assert_eq!(refused.is_error, Some(true), "{}", said(&refused));
+            assert!(
+                said(&refused).contains("can't be read"),
+                "{}",
+                said(&refused)
+            );
+            assert_eq!(std::fs::read(&env).unwrap(), unreadable);
+        }
     }
 
     /// Removing a saved connection needs its name again; a refusal returns
