@@ -1,5 +1,6 @@
-//! The browser's toolbar: back, forward, reload, the address, the device
-//! menu, the Annotate and Design toggles, open externally and Web Inspector.
+//! The browser's toolbar: back, forward, reload, the address, Local Explorer while the page's dev
+//! server serves one, the device menu, the Annotate and Design toggles, open externally and Web
+//! Inspector.
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -26,6 +27,8 @@ impl BrowserView {
             }
         };
         let weak = cx.entity().downgrade();
+        let explorer = crate::local_explorer::for_page(&self.current_url(), cx)
+            .map(|(e, origin)| (e.port, origin.on_explorer));
         h_flex()
             .h(px(TOOLBAR_HEIGHT))
             .flex_none()
@@ -75,6 +78,9 @@ impl BrowserView {
                     })),
             )
             .child(div().flex_1().child(Input::new(&self.address).small()))
+            .when_some(explorer, |el, (port, on_explorer)| {
+                el.child(explorer_button(port, on_explorer, cx))
+            })
             .child(device_button(&self.viewport, weak))
             .child(
                 Button::new("browser-annotate")
@@ -128,6 +134,38 @@ impl BrowserView {
                     })),
             )
     }
+}
+
+/// The Explorer button, shown while the page's dev server serves Cloudflare's Local Explorer
+/// (`crate::local_explorer`): it opens the explorer, and on the explorer it is pressed and goes
+/// back to the app the dev server serves.
+fn explorer_button(
+    port: u16,
+    on_explorer: bool,
+    cx: &mut Context<BrowserView>,
+) -> impl IntoElement + use<> {
+    let (tip, url) = if on_explorer {
+        (
+            "Back to the App".to_string(),
+            format!("http://localhost:{port}/"),
+        )
+    } else {
+        (
+            "Local Explorer: this dev server's KV, R2, D1, Durable Objects and Workflows"
+                .to_string(),
+            sawit_core::cloudflare::explorer::page_url(port),
+        )
+    };
+    Button::new("browser-explorer")
+        .ghost()
+        .xsmall()
+        .child(crate::local_explorer::logo(14.))
+        .child("Explorer")
+        .accessibility_label("Local Explorer")
+        .toggled(on_explorer)
+        .selected(on_explorer)
+        .tooltip(tip)
+        .on_click(cx.listener(move |this, _, _, cx| this.navigate(&url, cx)))
 }
 
 /// The Annotate button's tooltip, with the key that toggles Annotate as the keymap is now

@@ -99,6 +99,9 @@ More lists, shown only when asked:
                            and the agents that have them (skill, bibit)
   sawit list config       shell startup files and coding agents' config
                            files, for this folder's project (configs, konfig)
+  sawit list explorer      Cloudflare Local Explorer: the ones Workers dev
+                           servers serve, and this folder's Workers, their
+                           bindings and Wrangler version (cf, jelajah)
 
 Keys (the app's Keymap Editor; Sawit must be running):
   sawit list keys          every shortcut: its keys, what it runs, where,
@@ -114,7 +117,8 @@ Aliases (every word has an English and an Indonesian name):
     databases, blok · ports = port, lahan · connections = connection,
     conn, koneksi, konsesi · tools = tool, alat, perkakas · mcp = colokan ·
     skills = skill, bibit ·
-    config = configs, konfig · keys = key, keymap, shortcuts, pintasan
+    config = configs, konfig · keys = key, keymap, shortcuts, pintasan ·
+    explorer = explorers, cloudflare, cf, jelajah, penjelajah
   bakar: ports = port, lahan · instances = instance, kebun
   -y = --yes, --ya (don't ask first) · --ulang = --restart
   `sawit ./panen` opens a folder named panen; so for every word here.
@@ -737,6 +741,8 @@ mod tests {
             "(colokan)",
             "sawit list config",
             "(configs, konfig)",
+            "sawit list explorer",
+            "(cf, jelajah)",
         ] {
             assert!(USAGE.contains(said), "no {said:?} in the help");
         }
@@ -867,6 +873,12 @@ mod tests {
             "keymap",
             "shortcuts",
             "pintasan",
+            "explorer",
+            "explorers",
+            "cloudflare",
+            "cf",
+            "jelajah",
+            "penjelajah",
         ] {
             assert!(ListWhat::parse(Some(target)).is_ok(), "{target}");
             assert!(named.contains(target), "--help doesn't name list {target}");

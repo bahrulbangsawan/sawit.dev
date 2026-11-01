@@ -27,6 +27,7 @@ pub mod files;
 pub mod git;
 pub mod instances;
 pub mod keymap;
+pub mod local_explorer;
 pub mod mcp_servers;
 pub mod network;
 pub mod ports;
@@ -77,6 +78,7 @@ Sawit is a macOS developer workbench. These tools work without the Sawit app run
 - Databases: detect every reachable database, list/create/drop databases, describe schemas and tables, `query` (always read-only) and `execute_sql` (read-write: can modify data), saved connections, writing DATABASE_URL to a project's .env; export tables or queries to CSV/Excel, pg_dump backups, CSV imports, drop/truncate (with confirm) and refresh relations.
 - Diagrams: render Mermaid to SVG, and draw a database schema as Mermaid, DBML or SVG.
 - Ports: list listening dev servers and stop them.
+- Cloudflare Local Explorer: local_explorer finds the explorers Workers dev servers (wrangler dev, vite with the Cloudflare plugin, cf dev) serve at http://localhost:<port>/cdn-cgi/local/explorer, the project's Workers, their bindings and whether the installed Wrangler or Vite plugin has it; local_explorer_request calls its API on loopback (GET reads; POST, PUT, PATCH and DELETE write local data and need confirm: true).
 - Network: diagnose the internet connection, ping a host.
 - SSH: saved servers and ~/.ssh/config hosts; add/update/remove, probe, run a non-interactive command.
 - Run: a project's scripts (package.json, Makefile, …) and saved run commands.
@@ -325,6 +327,7 @@ const READ_ONLY: &[&str] = &[
     "describe_table",
     "query",
     "list_ports",
+    "local_explorer",
     "diagnose_network",
     "ping",
     "list_ssh_hosts",
@@ -391,6 +394,7 @@ const DESTRUCTIVE: &[&str] = &[
     "render_mermaid",
     "schema_diagram",
     "stop_processes",
+    "local_explorer_request",
     "update_ssh_host",
     "remove_ssh_host",
     "ssh_exec",
@@ -481,6 +485,7 @@ const OPEN_WORLD: &[&str] = &[
     "schema_diagram",
     "diagnose_network",
     "ping",
+    "local_explorer_request",
     "probe_ssh_host",
     "ssh_exec",
     "list_dev_tools",
@@ -556,6 +561,7 @@ impl Sawit {
             + Self::db_admin_router()
             + Self::diagrams_router()
             + Self::ports_router()
+            + Self::local_explorer_router()
             + Self::network_router()
             + Self::ssh_router()
             + Self::scripts_router()
@@ -638,6 +644,9 @@ mod tests {
             // ports
             "list_ports",
             "stop_processes",
+            // cloudflare local explorer
+            "local_explorer",
+            "local_explorer_request",
             // network
             "diagnose_network",
             "ping",

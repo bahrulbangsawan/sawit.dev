@@ -64,7 +64,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with device sizes and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (126 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (128 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 | ✨ **Agent skills** | Superpowers, shadcn's improve, Cloudflare's skills, MCP Apps, unslop and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
 ## Install
@@ -556,8 +556,45 @@ explained. A conflict on the same address can't be forced.
 - **Stop** a row to stop the whole command, launcher and children, so nothing respawns. Select several rows to
   stop them together. Anything still running after a moment can be **force-stopped**.
 - Filter by port, command or folder. The list refreshes every few seconds.
+- A Cloudflare Workers dev server that serves Local Explorer gets a **Local Explorer** button beside its ports
+  (see [Cloudflare Local Explorer](#cloudflare-local-explorer)).
 - From the terminal, `sawit list ports` lists them and `sawit bakar ports` stops the dev servers
   (see [Databases, ports and instances from the terminal](#databases-ports-and-instances-from-the-terminal)).
+
+### Cloudflare Local Explorer
+
+[Local Explorer](https://developers.cloudflare.com/workers/local-development/local-explorer/) is the page a Workers
+dev server serves on its own origin at `/cdn-cgi/local/explorer`. You can browse and edit the data of your Worker's
+local bindings there (KV, R2, D1, Durable Objects, Workflows, sent email), trigger crons and read logs and traces.
+`wrangler dev`, `vite` with the Cloudflare plugin and `cf dev` serve it. Sawit finds it and puts it a click away:
+
+- **What Sawit detects.** A project (or a workspace package, or a folder right inside it) is a Worker when it has
+  a `wrangler.toml`, `wrangler.json` or `wrangler.jsonc`, a `cloudflare.config.ts`, or `@cloudflare/vite-plugin` in
+  its `package.json`. Sawit reads the bindings the config declares (JSON with comments, TOML, and the literal parts
+  of `cloudflare.config.ts`) and the version of Wrangler or the Vite plugin in `node_modules`. It never runs them.
+- **Which servers run one.** Every few seconds, each dev server the **Ports** tab lists that may be a Workers one
+  (Wrangler, `workerd`, Vite, `cf`, or a folder with a Worker config) is sent `GET /cdn-cgi/local/explorer/api` on
+  127.0.0.1 or ::1. A server that answers with an OpenAPI document serves an explorer. Answers are kept per port and
+  process, so a server is asked again only once it restarts or after a while. Sawit never asks addresses other than
+  loopback.
+- **Ports tab.** A dev server with an explorer gets a **Local Explorer** button with the Cloudflare logo. It opens
+  the explorer in the project's **Browser** tab; <kbd>⌘</kbd>-click opens it in your default browser.
+- **Browser.** On a page of a dev server that serves one, the toolbar shows an **Explorer** button that goes to it.
+  On the explorer itself the button is pressed and goes back to the app.
+- **Run tab.** A project with Workers gets a **Local Explorer** section at the top of the Run tab, with a row for
+  each Worker showing its bindings. While the dev server runs, **Open** shows the explorer. While it doesn't,
+  **Run** starts the script that serves it (`wrangler dev`, `vite`, `cf dev`). If the installed tool is too old,
+  the row says which version is needed and shows the upgrade command, in the project's package manager
+  (`pnpm add -D wrangler@latest`). You can copy it or run it in a terminal; Sawit never runs it on its own.
+- **Keyboard.** <kbd>⌃</kbd><kbd>⌘</kbd><kbd>E</kbd> (`workspace: open local explorer`, in the Keymap Editor) opens
+  the active project's explorer. With none running, it shows the Run tab.
+- **Versions.** Local Explorer needs Wrangler 4.118.0 or later, or the Cloudflare Vite plugin 1.50.0 or later.
+  Invoking Cron Triggers from it needs Wrangler 4.139.0 or later, or the Vite plugin 1.60.0 or later.
+- **Agents.** `local_explorer` lists the running explorers (URL, API, port, process, the Workers each runs) and the
+  project's Workers with their bindings, versions and the script that starts them. `local_explorer_request` calls
+  an explorer's API on loopback, under `/cdn-cgi/local/explorer/api` only. GET reads. POST, PUT, PATCH and DELETE
+  can change local data (and, through a binding marked remote, your Cloudflare account's), so they need
+  `confirm: true`. From the terminal, `sawit list explorer` shows the same as `local_explorer`.
 
 ### Network diagnosis
 
@@ -694,6 +731,7 @@ French…), the defaults move where macOS menus put them.
 | Terminal: rename pane / rename tab | <kbd>⌘</kbd><kbd>I</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>I</kbd> |
 | Terminal: send right-clicks to pane (on/off) | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>R</kbd> |
 | Terminal: close pane (the last one closes the tab) | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>W</kbd> |
+| Open the project's Cloudflare Local Explorer | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>E</kbd> |
 | Quit | <kbd>⌘</kbd><kbd>Q</kbd> |
 
 The canvas's keys are FigCraft's, which follow Figma's (the sheet, <kbd>⌃</kbd><kbd>⇧</kbd><kbd>?</kbd>, lists them).
@@ -775,7 +813,7 @@ sawit kyzn leads "phone is null"             # filter: SELECT * FROM leads WHERE
 sawit kyzn leads "select * from leads where phone is null"   # any SQL, like psql
 sawit kyzn "delete from leads where id = 3"  # SQL that writes is shown and asks first (-y: no question)
 sawit list                                   # instances, databases, ports and saved connections
-sawit list db                                # or: instances, ports, connections, tools, mcp, config, keys
+sawit list db                                # or: instances, ports, connections, tools, mcp, config, keys, explorer
 sawit bakar ports                            # "burn" dev servers: confirm, SIGTERM, then SIGKILL
 sawit bakar ports 3000 5173 -y               # whatever listens on these ports, without asking
 sawit bakar instances                        # stop running Sawit instances (data is kept)
@@ -795,6 +833,7 @@ sawit list mcp                               # the MCP page: servers and the AI 
 sawit list skills                            # the Skills page: skill packs, how each installs, the agents that have them
 sawit list config                            # shell startup files and coding agents' config files
 sawit list keys                              # every shortcut and what it runs (asks the running app)
+sawit list explorer                          # Cloudflare Local Explorers running, and this folder's Workers
 ```
 
 - `<db>` is looked up in this order: a Sawit instance or saved connection with that name, a database with that name in
@@ -807,7 +846,8 @@ sawit list keys                              # every shortcut and what it runs (
   `pasang`/`install`, `pupuk`/`upgrade` and `cabut`/`uninstall`. So do the targets, for `list`: `all`/`semua`,
   `instances`/`instance`/`kebun`, `db`/`dbs`/`database`/`databases`/`blok`, `ports`/`port`/`lahan`,
   `connections`/`connection`/`conn`/`koneksi`/`konsesi`, `tools`/`tool`/`alat`/`perkakas`, `mcp`/`colokan`,
-  `config`/`configs`/`konfig` and `keys`/`key`/`keymap`/`shortcuts`/`pintasan`; for `bakar`: `ports`/`port`/`lahan`
+  `config`/`configs`/`konfig`, `keys`/`key`/`keymap`/`shortcuts`/`pintasan` and
+  `explorer`/`explorers`/`cloudflare`/`cf`/`jelajah`/`penjelajah`; for `bakar`: `ports`/`port`/`lahan`
   and `instances`/`instance`/`kebun`; and the flags: `-y`/`--yes`/`--ya` and `--ulang`/`--restart`. `sawit --help`
   lists them all.
 - `panen` and `backup` ask before replacing an existing file; `-y` replaces it without asking. Without a terminal
@@ -836,7 +876,10 @@ sawit list keys                              # every shortcut and what it runs (
   skips the question; without a terminal it needs `-y`). Homebrew's uninstaller asks for a password, so `cabut`
   prints it for you to run. Afterwards it says if a tool is still found, because that copy was installed another
   way.
-- `list tools`, `list mcp`, `list config` and `list keys` show only when asked, not in a plain `sawit list`. `list mcp`
+- `list tools`, `list mcp`, `list config`, `list keys` and `list explorer` show only when asked, not in a plain
+  `sawit list`. `list explorer` asks the dev servers for Cloudflare's Local Explorer as the **Ports** tab does, and
+  lists the Workers of the current folder's project with their bindings and what their Wrangler or Vite plugin
+  needs. `list mcp`
   names each server's address, how it signs in (an environment variable by its name, never its value) and the clients
   and profiles that have it. `list config` is the **Config Files** tab for the current folder's project, dimming the
   shell files your login shell doesn't read. `list keys` is the only one that needs the app: the default shortcuts
@@ -846,7 +889,7 @@ sawit list keys                              # every shortcut and what it runs (
 
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 126 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 128 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
 the agent's project open (or the one `project` names), else the frontmost window. An agent's browser and canvas are
 its own project's, even while you look at another project of that window.
@@ -858,6 +901,7 @@ its own project's, even while you look at another project of that window.
 | Export, backup, import | `export_table`, `export_query` (CSV or Excel), `backup_database` (`pg_dump`), `import_csv`, `drop_relation`, `truncate_table`, `refresh_materialized_view` |
 | Diagrams | `render_mermaid` (SVG), `schema_diagram` (Mermaid, DBML or SVG) |
 | Ports | `list_ports`, `stop_processes` |
+| Cloudflare Local Explorer | `local_explorer` (the explorers Workers dev servers serve: URL, API, port, process and Workers; and the project's Workers with their bindings, Wrangler or Vite plugin version, upgrade command and the script that starts them), `local_explorer_request` (one call to an explorer's API on loopback, under `/cdn-cgi/local/explorer/api`; long answers are cut) |
 | Network | `diagnose_network`, `ping` |
 | SSH | `list_ssh_hosts`, `add_ssh_host`, `update_ssh_host`, `remove_ssh_host`, `probe_ssh_host`, `ssh_exec` |
 | Run commands | `list_scripts`, `save_command`, `remove_command` |
@@ -880,7 +924,8 @@ Destructive tools say so and need an explicit confirmation: `drop_database`, `dr
 `update_ssh_host` when it moves a host off password sign-in, which deletes its saved password). `install_dev_tools`,
 `upgrade_dev_tools` and `install_skill` need `confirm: true` because they run install scripts or download skills
 from the internet; so do `uninstall_dev_tools` (it deletes the
-tools' files), `stop_processes`, and `write_env` when it would replace a different `DATABASE_URL`. `terminal_close`
+tools' files), `stop_processes`, `local_explorer_request` for anything but GET (it writes to a dev server's
+local KV, R2, D1, Durable Objects or Workflows), and `write_env` when it would replace a different `DATABASE_URL`. `terminal_close`
 needs `confirm: true` while a program runs in that terminal or you're typing in it, and `keymap_bind` and
 `keymap_unbind` need it when keymap.json has comments. `browser_export_design` replaces an earlier export of the same
 host only with `replace: true`. Passwords never appear in a result. Every tool

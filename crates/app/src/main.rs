@@ -13,6 +13,7 @@ mod git;
 mod highlight;
 mod keymap;
 mod layout;
+mod local_explorer;
 mod mcp_page;
 mod network;
 mod package_managers;

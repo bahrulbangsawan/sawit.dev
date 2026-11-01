@@ -268,7 +268,10 @@ impl BrowserView {
             cx.new(|cx| InputState::new(window, cx).placeholder("Search or enter address"));
         let annotate = cx.new(|cx| AnnotatePanel::new(window, cx));
         let design_panel = cx.new(|_| DesignPanel::new());
+        cx.default_global::<crate::local_explorer::Running>();
         let subscriptions = vec![
+            // The Explorer button comes and goes with the page's dev server's Local Explorer.
+            cx.observe_global::<crate::local_explorer::Running>(|_, cx| cx.notify()),
             cx.subscribe_in(
                 &annotate,
                 window,

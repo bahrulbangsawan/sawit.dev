@@ -106,6 +106,18 @@ impl PackageManager {
         }
     }
 
+    /// The command that adds `package` (`wrangler@latest`) to the project in the folder it runs
+    /// in as a dev dependency, or brings it up to date there.
+    pub fn dev_install(self, package: &str) -> String {
+        let package = quote(package);
+        match self {
+            PackageManager::Npm => format!("npm install -D {package}"),
+            PackageManager::Pnpm => format!("pnpm add -D {package}"),
+            PackageManager::Bun => format!("bun add -d {package}"),
+            PackageManager::Yarn => format!("yarn add -D {package}"),
+        }
+    }
+
     /// The command that removes a package [`Self::global_install`] put in place.
     pub fn global_uninstall(self, package: &str) -> String {
         let package = quote(package);

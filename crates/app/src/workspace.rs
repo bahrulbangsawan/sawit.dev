@@ -59,6 +59,7 @@ use sawit_core::terminal::PaneId;
 use sawit_core::update::Version;
 
 mod control;
+mod explorer;
 mod project;
 
 pub use control::Answer;
@@ -100,7 +101,8 @@ actions!(
         OpenDevTools,
         OpenMcp,
         OpenChangelog,
-        InstallUpdate
+        InstallUpdate,
+        OpenLocalExplorer
     ]
 );
 
@@ -144,6 +146,7 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-cmd-m", OpenMcp, ctx),
         KeyBinding::new("ctrl-cmd-v", OpenChangelog, ctx),
         KeyBinding::new("ctrl-cmd-u", InstallUpdate, ctx),
+        KeyBinding::new("ctrl-cmd-e", OpenLocalExplorer, ctx),
         KeyBinding::new("ctrl-cmd-i", crate::cli::InstallCli, ctx),
         // Zed's.
         KeyBinding::new("cmd-k cmd-s", OpenKeymapEditor, ctx),
@@ -2019,6 +2022,10 @@ impl Workspace {
 
     /// Starts or shows scripts from the Run panel, showing the terminal.
     fn on_run_event(&mut self, event: &RunEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if let RunEvent::Browse(url) = event {
+            self.open_browser(Some(url.clone()), window, cx);
+            return;
+        }
         if !self.layout.terminal {
             self.layout.toggle(Area::Terminal);
         }
@@ -2031,6 +2038,7 @@ impl Workspace {
                 self.terminal
                     .update(cx, |t, cx| t.show_job(key, window, cx));
             }
+            RunEvent::Browse(_) => {}
         }
         cx.notify();
     }
@@ -3372,6 +3380,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &OpenCanvas, _, cx| this.show_canvas(cx)))
             .on_action(cx.listener(|this, _: &OpenDevTools, w, cx| this.open_tools_page(w, cx)))
             .on_action(cx.listener(|this, _: &OpenMcp, w, cx| this.open_mcp_page(w, cx)))
+            .on_action(
+                cx.listener(|this, _: &OpenLocalExplorer, w, cx| this.open_local_explorer(w, cx)),
+            )
             .on_action(cx.listener(|this, _: &OpenKeymapEditor, w, cx| {
                 this.show_center(cx);
                 this.open_keymap_editor(w, cx)

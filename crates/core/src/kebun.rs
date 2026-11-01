@@ -167,6 +167,9 @@ pub enum ListWhat {
     Config,
     /// Key bindings (only when asked: they need the running app).
     Keys,
+    /// Cloudflare Local Explorer: the ones running, and the Workers of this folder's project
+    /// (only when asked: it asks every dev server).
+    Explorer,
 }
 
 impl ListWhat {
@@ -184,9 +187,12 @@ impl ListWhat {
             Some("skills" | "skill" | "bibit") => ListWhat::Skills,
             Some("config" | "configs" | "konfig") => ListWhat::Config,
             Some("keys" | "key" | "keymap" | "shortcuts" | "pintasan") => ListWhat::Keys,
+            Some("explorer" | "explorers" | "cloudflare" | "cf" | "jelajah" | "penjelajah") => {
+                ListWhat::Explorer
+            }
             Some(other) => {
                 return Err(format!(
-                    "`sawit list {other}`? Tidak ada di peta. Pilih: instances, db, ports, connections, tools, mcp, skills, config, keys."
+                    "`sawit list {other}`? Tidak ada di peta. Pilih: instances, db, ports, connections, tools, mcp, skills, config, keys, explorer."
                 ));
             }
         })
@@ -202,6 +208,7 @@ impl ListWhat {
                         | ListWhat::Skills
                         | ListWhat::Config
                         | ListWhat::Keys
+                        | ListWhat::Explorer
                 ))
     }
 }
@@ -1060,6 +1067,9 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
     if what.shows(ListWhat::Config) {
         list_config(&ink, cwd);
     }
+    if what.shows(ListWhat::Explorer) {
+        list_explorer(&ink, cwd).await;
+    }
     if what.shows(ListWhat::Keys) {
         let code = list_keys(&ink, paths);
         if code != 0 {
@@ -1068,6 +1078,83 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
     }
     println!();
     0
+}
+
+/// `sawit list explorer`: the Local Explorers Workers dev servers serve (`wrangler dev`, `vite`
+/// with the Cloudflare plugin, `cf dev`), as `sawit-mcp`'s `local_explorer` finds them, and the
+/// Workers of the project in `cwd` with what their dev tool needs for one.
+async fn list_explorer(ink: &Ink, cwd: &Path) {
+    use crate::cloudflare::{self, explorer};
+    ink.section("🧭 Local Explorer (Cloudflare)");
+    let explorers = match probe::listening_jobs().await {
+        Ok(jobs) => explorer::find(&jobs).await,
+        Err(e) => {
+            println!("  {}", ink.red(&format!("lsof gagal: {e}")));
+            Vec::new()
+        }
+    };
+    if explorers.is_empty() {
+        ink.empty(
+            "tidak ada yang menyala. Jalankan dev server Workers-nya (wrangler dev, vite, cf dev).",
+        );
+    }
+    for e in &explorers {
+        println!(
+            "  {:<7} {}  {}  {}",
+            format!(":{}", e.port),
+            ink.green(&e.url()),
+            clip(&e.label, 40),
+            ink.gray(&format!("PID {}", e.pid))
+        );
+        if let Some(dir) = &e.cwd {
+            println!(
+                "  {:<7} {}",
+                "",
+                ink.gray(&format!("└ {}", tilde(Path::new(dir))))
+            );
+        }
+    }
+    let workers = cloudflare::detect_project(cwd);
+    if workers.is_empty() {
+        return;
+    }
+    ink.section("☁️ Workers di folder ini");
+    for w in &workers {
+        let tool = match &w.version {
+            Some(v) => format!("{} {v}", w.tool.name()),
+            None => w.tool.name().to_string(),
+        };
+        let rel = w
+            .root
+            .strip_prefix(cwd)
+            .ok()
+            .filter(|r| !r.as_os_str().is_empty())
+            .map(|r| format!("{}/", r.display()))
+            .unwrap_or_default();
+        let bindings = w
+            .bindings
+            .iter()
+            .map(|b| format!("{} {}", b.kind.label(), b.binding))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(
+            "  {:<22} {}  {}",
+            clip(w.name.as_deref().unwrap_or("(tanpa nama)"), 22),
+            ink.gray(&format!("{rel}{} · {tool}", w.config_name())),
+            bindings
+        );
+        let running = explorers.iter().any(|e| e.runs_in(&w.root));
+        if let Some(note) = cloudflare::requirement_note(w, cwd) {
+            println!("  {:<22} {}", "", ink.yellow(&format!("└ {note}")));
+        }
+        if !running && let Some(script) = cloudflare::dev_scripts(w).first() {
+            println!(
+                "  {:<22} {}",
+                "",
+                ink.gray(&format!("└ nyalakan: {} ({})", script.name, script.body))
+            );
+        }
+    }
 }
 
 /// `sawit list keys`: every key binding, as the Keymap Editor lists it, from the running app
@@ -2781,6 +2868,10 @@ mod tests {
         assert_eq!(ListWhat::parse(Some("lahan")), Ok(ListWhat::Ports));
         assert_eq!(ListWhat::parse(Some("kebun")), Ok(ListWhat::Instances));
         assert_eq!(ListWhat::parse(Some("konsesi")), Ok(ListWhat::Connections));
+        assert_eq!(ListWhat::parse(Some("explorer")), Ok(ListWhat::Explorer));
+        assert_eq!(ListWhat::parse(Some("jelajah")), Ok(ListWhat::Explorer));
+        // Asking every dev server takes a moment: only when asked.
+        assert!(!ListWhat::All.shows(ListWhat::Explorer));
         assert!(ListWhat::parse(Some("hutan")).is_err());
     }
 

@@ -3,7 +3,10 @@
 //! Make, composer, cargo) and for the user's saved commands, each one or
 //! more command lines run in order or all at once. Every script runs in its
 //! own terminal tab, which shows its output; a running one links the ports
-//! it listens on.
+//! it listens on. A project with Cloudflare Workers also gets a Local Explorer
+//! section ([`explorer`]).
+
+mod explorer;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -90,6 +93,8 @@ pub enum RunEvent {
     Start(Vec<Launch>, Origin),
     /// Show the terminal of the script with this key.
     Show(String),
+    /// Open this page in the project's browser tab (a dev server's Local Explorer).
+    Browse(String),
 }
 
 impl EventEmitter<RunEvent> for RunPanel {}
@@ -127,6 +132,8 @@ pub struct RunPanel {
     ports: Entity<PortsPanel>,
     root: Option<PathBuf>,
     groups: Vec<ScriptGroup>,
+    /// The project's Cloudflare Workers, read with its scripts.
+    workers: Vec<explorer::Worker>,
     scanned: bool,
     scanning: bool,
     scan_error: Option<String>,
@@ -186,6 +193,7 @@ impl RunPanel {
             ports,
             root: None,
             groups: Vec::new(),
+            workers: Vec::new(),
             scanned: false,
             scanning: false,
             scan_error: None,
@@ -205,6 +213,7 @@ impl RunPanel {
         }
         self.root = root;
         self.groups.clear();
+        self.workers.clear();
         self.scanned = false;
         self.editor = None;
         self.rescan(cx);
@@ -221,7 +230,7 @@ impl RunPanel {
         self.scanning = true;
         let rx = rt::spawn_blocking(cx, {
             let root = root.clone();
-            move || scan(&root)
+            move || (scan(&root), explorer::read(&root))
         });
         cx.spawn(async move |this, cx| {
             let result = rx.await;
@@ -233,11 +242,16 @@ impl RunPanel {
                     return;
                 }
                 match result {
-                    Ok(groups) => {
-                        if this.scanned && this.scan_error.is_none() && groups == this.groups {
+                    Ok((groups, workers)) => {
+                        if this.scanned
+                            && this.scan_error.is_none()
+                            && groups == this.groups
+                            && workers == this.workers
+                        {
                             return;
                         }
                         this.groups = groups;
+                        this.workers = workers;
                         this.scan_error = None;
                     }
                     Err(_) => {
@@ -1089,6 +1103,11 @@ impl Render for RunPanel {
         let query = self.filter.read(cx).value().trim().to_lowercase();
         let mut rows: Vec<AnyElement> = Vec::new();
         let mut ix = 0;
+
+        // Local Explorer first while nothing is filtered: what it needs is to be seen.
+        if query.is_empty() {
+            rows.extend(self.render_explorer(cx));
+        }
 
         // Saved commands first: they are what the user picked.
         let saved: Vec<Item> = self

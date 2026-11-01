@@ -7,6 +7,7 @@ pub mod app_control;
 pub mod binaries;
 pub mod browser;
 pub mod cli;
+pub mod cloudflare;
 mod cmd;
 pub mod control;
 pub mod date;

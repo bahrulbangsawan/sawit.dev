@@ -92,7 +92,7 @@ pub fn run_command(tool: &str, name: &str) -> String {
     format!("{tool} run {}", shell_word(name))
 }
 
-fn read_json(path: &Path) -> Option<Value> {
+pub(crate) fn read_json(path: &Path) -> Option<Value> {
     let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&text)
         .ok()
@@ -231,7 +231,7 @@ fn js_group(dir: &Path, root: &Path) -> Option<(ScriptGroup, Value)> {
 
 /// Workspace globs from `package.json` (`workspaces`, or
 /// `workspaces.packages`) and `pnpm-workspace.yaml`.
-fn workspace_patterns(root: &Path, manifest: &Value) -> Vec<String> {
+pub(crate) fn workspace_patterns(root: &Path, manifest: &Value) -> Vec<String> {
     let mut out = Vec::new();
     let list = manifest
         .get("workspaces")

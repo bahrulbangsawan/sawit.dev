@@ -3,7 +3,8 @@
 //! database, …) with its ports and project folder. Dev servers are shown by
 //! default, every listening app on request. Stopping a row stops the whole
 //! command (launcher and children, so nothing respawns) with SIGTERM; what
-//! is still alive shortly after can then be force-stopped (SIGKILL).
+//! is still alive shortly after can then be force-stopped (SIGKILL). A Workers dev server that
+//! serves Cloudflare's Local Explorer gets a button that opens it in Sawit's browser.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -14,6 +15,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use sawit_core::cloudflare::explorer::{self, Explorer};
 use sawit_core::ports::PortJob;
 use sawit_core::probe;
 
@@ -49,6 +51,10 @@ pub struct PortsPanel {
     loaded: bool,
     error: Option<String>,
     notice: Option<String>,
+    /// The Local Explorers the dev servers serve, as last asked.
+    explorers: Vec<Explorer>,
+    /// Asking the dev servers for Local Explorer.
+    probing: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -82,8 +88,38 @@ impl PortsPanel {
             loaded: false,
             error: None,
             notice: None,
+            explorers: Vec::new(),
+            probing: false,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// The Local Explorers running, as of the last check: one per dev server that serves one.
+    pub fn explorers(&self) -> &[Explorer] {
+        &self.explorers
+    }
+
+    /// Asks the dev servers among `jobs` whether they serve Local Explorer, then keeps what was
+    /// found here and for the browsers ([`crate::local_explorer::publish`]). The answers are kept
+    /// per port and process, so most checks ask no one.
+    fn find_explorers(&mut self, jobs: Vec<PortJob>, cx: &mut Context<Self>) {
+        if self.probing {
+            return;
+        }
+        self.probing = true;
+        let rx = rt::spawn(cx, async move { explorer::find(&jobs).await });
+        cx.spawn(async move |this, cx| {
+            let found = rx.await.unwrap_or_default();
+            let _ = this.update(cx, |this, cx| {
+                this.probing = false;
+                crate::local_explorer::publish(&found, cx);
+                if found != this.explorers {
+                    this.explorers = found;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Everything listening, as of the last check.
@@ -101,6 +137,9 @@ impl PortsPanel {
             let result = rx.await;
             let _ = this.update(cx, |this, cx| {
                 this.loading = false;
+                if let Ok(Ok(jobs)) = &result {
+                    this.find_explorers(jobs.clone(), cx);
+                }
                 // Every 3 s poll used to redraw; most find nothing new.
                 if this.loaded
                     && this.error.is_none()
@@ -222,6 +261,11 @@ impl PortsPanel {
             .ports
             .iter()
             .find_map(|(port, _)| sawit.get(port).cloned());
+        let explorer_url = self
+            .explorers
+            .iter()
+            .find(|e| e.pid == root)
+            .map(Explorer::url);
         let tag = |text: String, color: Hsla| {
             div()
                 .flex_none()
@@ -260,7 +304,10 @@ impl PortsPanel {
                             cx.emit(PortsEvent::OpenInBrowser(url));
                         }
                     }))
-            }));
+            }))
+            .when_some(explorer_url, |el, url| {
+                el.child(explorer_button(root, url, cx))
+            });
         // "my-app · node server.js · 612"
         let folder = j
             .cwd
@@ -370,6 +417,37 @@ impl PortsPanel {
             )
             .into_any_element()
     }
+}
+
+/// A dev server's "Local Explorer" action: Cloudflare's logo and its name, beside the ports.
+/// A click opens it in Sawit's browser, a ⌘-click in the default browser.
+fn explorer_button(root: u32, url: String, cx: &mut Context<PortsPanel>) -> impl IntoElement {
+    let tip = format!(
+        "Open Local Explorer ({url}) in Sawit's browser: browse and edit this dev server's KV, R2, D1, Durable Objects and Workflows. ⌘-click opens it in your default browser."
+    );
+    div()
+        .id(("port-explorer", root as usize))
+        .flex()
+        .items_center()
+        .gap_1()
+        .px_1()
+        .rounded(px(3.))
+        .text_xs()
+        .bg(cx.theme().secondary)
+        .cursor_pointer()
+        .hover(|el| el.bg(cx.theme().accent))
+        .child(crate::local_explorer::logo(12.))
+        .child("Local Explorer")
+        .tooltip(move |window, cx| {
+            gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+        })
+        .on_click(cx.listener(move |_, event: &ClickEvent, _, cx| {
+            if event.modifiers().platform {
+                cx.open_url(&url);
+            } else {
+                cx.emit(PortsEvent::OpenInBrowser(url.clone()));
+            }
+        }))
 }
 
 fn noun(n: usize) -> &'static str {

@@ -136,7 +136,7 @@ pub(crate) fn job_line(job: &PortJob, instance_ports: &[u16]) -> String {
     line
 }
 
-fn clip_line(text: &str, max: usize) -> String {
+pub(crate) fn clip_line(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         text.to_string()
     } else {
