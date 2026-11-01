@@ -43,6 +43,21 @@ fn browser_route(open: bool, shown: bool, shows_tab: bool) -> BrowserRoute {
     }
 }
 
+/// The project whose browser an agent's browser op goes to (`None`: the browser for no project),
+/// from the window's project folders, `roots`. With no project named, the one holding the folder
+/// the agent works in, `agent_folder`: its browser_navigate opens that project's dev server, and
+/// the page's cookies, screenshots and exports are that project's (final-seams m1). Else the
+/// active project's, which is the one it named, if it named one ([`crate::cli`] makes it active).
+fn browser_project(
+    roots: &[PathBuf],
+    agent_folder: Option<&Path>,
+    active: Option<PathBuf>,
+) -> Option<PathBuf> {
+    agent_folder
+        .and_then(|folder| crate::tabs::project_of(roots, folder))
+        .or(active)
+}
+
 fn panel_name(tab: SidebarTab) -> &'static str {
     match tab {
         SidebarTab::Servers => "instances",
@@ -188,10 +203,13 @@ impl Workspace {
     }
 
     /// Runs a window command. `State`, `Focus`, `Open` and `Reload` are
-    /// handled for the whole app by the caller.
+    /// handled for the whole app by the caller. `agent_folder` is the folder the agent works in,
+    /// when it named no project and a project of this window holds it: its browser is that
+    /// project's ([`browser_project`]).
     pub fn control(
         &mut self,
         command: Command,
+        agent_folder: Option<&Path>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Answer, String> {
@@ -237,13 +255,15 @@ impl Workspace {
                 done(json!({ "maximized": self.layout == TERMINAL_ONLY }))
             }
             Command::OpenPage { page } => {
-                self.open_page(page, window, cx)?;
+                self.open_page(page, agent_folder, window, cx)?;
                 done(json!({ "tab": self.active }))
             }
+            // As a click on the tab: its group unfolds, and its project becomes the active one.
+            // The keyboard stays where the user has it, a canvas's tab included.
             Command::ActivateTab { tab } => {
                 let ix = self.find_tab(&tab, cx)?;
                 self.show_center(cx);
-                self.active = ix;
+                self.activate_tab(ix, cx);
                 done(json!({ "tab": ix }))
             }
             Command::CloseTab { tab } => {
@@ -419,16 +439,19 @@ impl Workspace {
                 let board = self.open_canvas(cx).ok_or("The canvas didn't open.")?;
                 Ok(Answer::Now(board.update(cx, |b, cx| b.run_op(&op, cx))))
             }
-            // The active project's browser: the one for the project the agent named.
+            // The browser of the agent's project ([`browser_project`]). One brought forward comes
+            // with its project, as on a click on its tab; one used in the background changes
+            // nothing on screen.
             Command::Browser { op } => {
-                let open = self.browser_tab(self.root(cx).as_deref()).map(|(_, b)| b);
+                let root = browser_project(&self.roots(cx), agent_folder, self.root(cx));
+                let open = self.browser_tab(root.as_deref()).map(|(_, b)| b);
                 let shown = open.is_some() && open == self.active_browser();
                 let browser = match (browser_route(open.is_some(), shown, op.shows_tab()), open) {
                     (BrowserRoute::Use, Some(browser)) => browser,
                     (BrowserRoute::Closed, _) => {
                         return Err(sawit_core::browser::NOT_OPEN.into());
                     }
-                    _ => self.open_browser(None, window, cx),
+                    _ => self.open_browser_of(root, None, window, cx),
                 };
                 Ok(Answer::Later(browser.update(cx, |b, cx| b.apply(op, cx))))
             }
@@ -440,6 +463,7 @@ impl Workspace {
     fn open_page(
         &mut self,
         page: Page,
+        agent_folder: Option<&Path>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
@@ -447,8 +471,10 @@ impl Workspace {
             Page::Canvas => {
                 self.open_canvas(cx);
             }
+            // The agent's project's, as for its browser ops.
             Page::Browser => {
-                self.open_browser(None, window, cx);
+                let root = browser_project(&self.roots(cx), agent_folder, self.root(cx));
+                self.open_browser_of(root, None, window, cx);
             }
             // An agent's: the keyboard stays where the user has it.
             Page::Mcp => self.show_mcp_page(false, window, cx),
@@ -471,10 +497,8 @@ impl Workspace {
                 self.show_center(cx);
                 self.show_server_tab();
             }
-            Page::Keymap => {
-                self.show_center(cx);
-                self.open_keymap_editor(window, cx)
-            }
+            // An agent's too: a ⌫ meant for the terminal would remove the selected binding.
+            Page::Keymap => self.show_keymap_editor(false, window, cx),
         }
         Ok(())
     }
@@ -606,7 +630,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{BrowserRoute, browser_route, script_answer, shell_folder};
+    use super::{BrowserRoute, browser_project, browser_route, script_answer, shell_folder};
 
     /// MCP-4: a shell an agent starts in a folder starts there or not at all. The PTY ignores a
     /// `chdir` that fails, so a relative folder or one that isn't there started the shell in the
@@ -669,5 +693,42 @@ mod tests {
         assert_eq!(browser_route(true, false, true), Show, "brought forward");
         assert_eq!(browser_route(false, false, true), Show, "opened");
         assert_eq!(browser_route(false, false, false), Closed);
+    }
+
+    /// An agent's browser is the browser of the project it works in (final-seams m1), whose dev
+    /// server its browser_navigate opens: with projects A and B in one window and B shown, an
+    /// agent in A opened A's dev server in B's browser, with B's cookies, and its screenshots and
+    /// exports went into B's `.nyawit`. An agent that names its project, or runs in no project
+    /// of the window, gets the active project's: the one it named, made active.
+    #[test]
+    fn an_agents_browser_is_its_own_projects() {
+        let roots = [
+            PathBuf::from("/code/shop"),
+            PathBuf::from("/code/shop/admin"),
+            PathBuf::from("/code/blog"),
+        ];
+        let shown = Some(PathBuf::from("/code/blog"));
+        let browser =
+            |agent: Option<&str>| browser_project(&roots, agent.map(Path::new), shown.clone());
+        assert_eq!(
+            browser(Some("/code/shop/web")),
+            Some(PathBuf::from("/code/shop"))
+        );
+        assert_eq!(
+            browser(Some("/code/shop")),
+            Some(PathBuf::from("/code/shop"))
+        );
+        assert_eq!(
+            browser(Some("/code/shop/admin/src")),
+            Some(PathBuf::from("/code/shop/admin")),
+            "the deepest project holding it"
+        );
+        assert_eq!(browser(None), shown, "named, or run from no project");
+        assert_eq!(browser(Some("/elsewhere")), shown);
+        assert_eq!(
+            browser_project(&roots, None, None),
+            None,
+            "the browser for no project"
+        );
     }
 }

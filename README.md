@@ -273,7 +273,9 @@ explained. A conflict on the same address can't be forced.
 - AI agents drive it through the `browser_*` MCP tools: open pages, read the page as an accessibility outline,
   click, type, pick options, press keys, scroll, wait for text, run JavaScript, and read the console, failed
   requests and screenshots. They can also set a device size, read your annotations, and inspect, read or export
-  the page's design.
+  the page's design. An agent uses its own project's browser (the project it names, else the one it runs in),
+  even while you look at another project of the window, and in the background: only opening a page, a
+  screenshot or a device size brings it forward.
 
 ### Canvas
 

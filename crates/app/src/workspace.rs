@@ -644,8 +644,8 @@ impl Workspace {
                 .iter()
                 .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
             {
-                self.active = ix;
-                cx.notify();
+                // As a text file's tab: shown with its project.
+                self.activate_tab(ix, cx);
                 return;
             }
             let title: SharedString = path
@@ -2433,8 +2433,8 @@ impl Workspace {
             .iter()
             .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
         {
-            self.active = ix;
-            cx.notify();
+            // With its project: another project's canvas file opened by its path, say.
+            self.activate_tab(ix, cx);
             // The canvas is the tab's own view.
             let PaneItem::Other { view, .. } = &self.tabs[ix].item else {
                 return None;
@@ -2511,14 +2511,28 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<BrowserView> {
+        let root = self.root(cx);
+        self.open_browser_of(root, url, window, cx)
+    }
+
+    /// Opens the browser of the project at `root` (`None`: the one for no project), as
+    /// [`Self::open_browser`] opens the active project's, with its project, as a click on its
+    /// tab shows it: an agent's browser is the browser of the project it works in, which may not
+    /// be the one shown.
+    pub(super) fn open_browser_of(
+        &mut self,
+        root: Option<PathBuf>,
+        url: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<BrowserView> {
         self.leave_welcome(CENTER_ONLY, cx);
         if !self.layout.center {
             self.layout.toggle(Area::Center);
         }
-        let root = self.root(cx);
         let browser = match self.browser_tab(root.as_deref()) {
             Some((ix, browser)) => {
-                self.active = ix;
+                self.activate_tab(ix, cx);
                 browser.update(cx, |b, cx| b.show(url.as_deref(), cx));
                 browser
             }
@@ -2703,6 +2717,13 @@ impl Workspace {
     /// Shows the keymap editor (one tab), with the tab area, which may be hidden, and the
     /// keyboard.
     fn open_keymap_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_keymap_editor(true, window, cx);
+    }
+
+    /// Shows the keymap editor; `focus` gives it the keyboard. Not when an agent opens it: the
+    /// keyboard stays where the user has it, as for the Dev Tools and MCP pages. There, a ⌫
+    /// meant for the terminal would remove the selected binding from keymap.json.
+    fn show_keymap_editor(&mut self, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_welcome(CENTER_ONLY, cx);
         self.show_center(cx);
         let key: SharedString = "keymap".into();
@@ -2712,14 +2733,17 @@ impl Workspace {
             .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
         {
             self.active = ix;
-            if let PaneItem::Other { view, .. } = &self.tabs[ix].item
+            if focus
+                && let PaneItem::Other { view, .. } = &self.tabs[ix].item
                 && let Ok(editor) = view.clone().downcast::<KeymapEditor>()
             {
                 window.focus(&editor.focus_handle(cx), cx);
             }
         } else {
             let view = cx.new(|cx| KeymapEditor::new(window, cx));
-            window.focus(&view.focus_handle(cx), cx);
+            if focus {
+                window.focus(&view.focus_handle(cx), cx);
+            }
             self.push_tab(
                 PaneItem::Other {
                     view: view.into(),

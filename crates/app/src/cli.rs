@@ -26,6 +26,7 @@ use sawit_core::instances::AppPaths;
 use sawit_core::kebun;
 use sawit_core::probe::find_in_path;
 
+use crate::files::FilesPanel;
 use crate::rt;
 use crate::terminal::TerminalPanel;
 use crate::workspace::{Answer, Workspace};
@@ -647,7 +648,7 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
         .collect();
     let holding =
         |path: &Path| window_naming(&roots, path).map(|(ix, named)| (spaces[ix].clone(), named));
-    let ((handle, workspace), project) = match (&request.project, &request.agent_folder) {
+    let ((handle, workspace), project, own) = match (&request.project, &request.agent_folder) {
         (Some(project), _) => {
             let (window, named) = holding(project).ok_or_else(|| {
                 format!(
@@ -655,19 +656,20 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
                     project.display()
                 )
             })?;
-            (window, Some(named))
+            (window, Some(named), None)
         }
         // No project named: the window the agent's own folder is open in,
-        // else the frontmost one.
+        // else the frontmost one. The folder goes along, as that window
+        // names it: the agent's browser is its project's.
         (None, folder) => {
-            let window = folder
-                .as_deref()
-                .and_then(holding)
+            let found = folder.as_deref().and_then(holding);
+            let own = found.as_ref().map(|(_, named)| named.clone());
+            let window = found
                 .map(|(window, _)| window)
                 .or_else(|| frontmost(cx))
                 .or_else(|| open_window(None, cx))
                 .ok_or("Unable to open a Sawit window.")?;
-            (window, None)
+            (window, None, own)
         }
     };
     // Commands act on the project asked for: make it the active one.
@@ -681,7 +683,7 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
             if focus {
                 window.activate_window();
             }
-            workspace.update(cx, |w, cx| w.control(command, window, cx))
+            workspace.update(cx, |w, cx| w.control(command, own.as_deref(), window, cx))
         })
         .map_err(|_| "The Sawit window closed.".to_string())??;
     if focus {
@@ -795,15 +797,16 @@ pub fn open_folder_in(dir: PathBuf, prefer: Option<AnyWindowHandle>, cx: &mut Ap
     }
 }
 
-/// Opens a folder picked with a project's Files tab (its Open Project Folder button): shows it
-/// in the window that has it already, as ⌘O does, else puts it in the place of that project's
-/// folder in `workspace`, as `sawit -r` does ([`Workspace::replace_project`]), which shows a
-/// folder the window has in another project and ungroups the tabs of the folder it replaces.
-/// Must not run while a workspace is being updated (it reads them all).
+/// Opens a folder picked with a project's Files tab, `asking` (its Open Project Folder button):
+/// shows it in the window that has it already, as ⌘O does, else puts it in the place of that
+/// project's folder in `workspace`, as `sawit -r` does ([`Workspace::replace_project_of`]), which
+/// shows a folder the window has in another project and ungroups the tabs of the folder it
+/// replaces. Must not run while a workspace is being updated (it reads them all).
 pub fn open_folder_from_files(
     dir: PathBuf,
     window: AnyWindowHandle,
     workspace: WeakEntity<Workspace>,
+    asking: WeakEntity<FilesPanel>,
     cx: &mut App,
 ) {
     let elsewhere = window_with_project(&dir, cx).filter(|(handle, _)| *handle != window);
@@ -811,7 +814,7 @@ pub fn open_folder_from_files(
         (Some(found), _) => add_project(found, dir, cx),
         (None, Some(workspace)) => window
             .update(cx, |_, window, cx| {
-                workspace.update(cx, |w, cx| w.replace_project(dir, window, cx))
+                workspace.update(cx, |w, cx| w.replace_project_of(&asking, dir, window, cx))
             })
             .ok()
             .map(|()| (window, workspace)),

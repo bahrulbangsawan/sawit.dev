@@ -111,9 +111,11 @@ impl Workspace {
             FilesEvent::ViewHistory(path) => self.open_git_history(path.clone(), cx),
             FilesEvent::OpenFolder(dir) => {
                 let (dir, handle) = (dir.clone(), window.window_handle());
-                let workspace = cx.entity().downgrade();
+                let (workspace, asking) = (cx.entity().downgrade(), files.downgrade());
                 // Once this update is over: it looks at every window's projects.
-                cx.defer(move |cx| crate::cli::open_folder_from_files(dir, handle, workspace, cx));
+                cx.defer(move |cx| {
+                    crate::cli::open_folder_from_files(dir, handle, workspace, asking, cx)
+                });
             }
         }
     }
@@ -218,6 +220,30 @@ impl Workspace {
             .files
             .update(cx, |f, cx| f.set_root(root, cx));
         cx.notify();
+    }
+
+    /// [`Self::replace_project`] for the project whose Files tab is `files`, shown again first.
+    /// Its Open Project Folder button asks with a folder picker that leaves the window free, so
+    /// another project may be shown by the time a folder is picked, after a click on one of its
+    /// tabs or an agent's command; that one's folder was replaced (review-files M1). If the
+    /// project has closed meanwhile, nothing changes.
+    pub fn replace_project_of(
+        &mut self,
+        files: &WeakEntity<FilesPanel>,
+        root: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let asking = files.entity_id();
+        let Some(ix) = self
+            .projects
+            .iter()
+            .position(|p| p.files.entity_id() == asking)
+        else {
+            return;
+        };
+        self.activate_project(ix, cx);
+        self.replace_project(root, window, cx);
     }
 
     pub(super) fn activate_project(&mut self, ix: usize, cx: &mut Context<Self>) {

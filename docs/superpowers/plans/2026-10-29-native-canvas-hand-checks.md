@@ -1081,6 +1081,13 @@ There are 26 questions. They come from the ledger lines that leave a decision or
   open (else the frontmost window), while the closed-app path draws in the agent's working folder.
 - The fix is the browser tools' rule: only ops that show something bring the tab forward. That is a few lines in
   sawit-mcp or `control.rs`.
+- The browser follows that rule, and since final-seams m1 it no longer has the second inconsistency: with no
+  project named, an agent's `browser_*` ops and `app_open_page browser` use the browser of the project its
+  working folder is in, as `browser_navigate` opens that folder's dev server. Before, they used the active
+  project's browser, so with projects A and B in one window and B shown, an agent in A opened A's dev server in
+  B's browser, with B's cookies, and its screenshots and exports went into B's `.nyawit`. Ops in the background
+  change nothing on screen; one that shows a page brings that browser forward with its project. The canvas
+  could take the same rule.
 - Source: P1:186, P7:212.
 
 **Q13. May an agent's op open UI that takes the keyboard?**
@@ -1093,6 +1100,15 @@ There are 26 questions. They come from the ledger lines that leave a decision or
 - The run sent this to the controller for Plan 7's final review, and no ruling was recorded.
 - The terminal has since answered it for itself: an agent's terminal commands never take the keyboard, don't
   switch away from a terminal you're typing in, and never go into the shell you're typing in (H-TERM-5).
+- So have the pages an agent opens with `app_open_page`: Dev Tools and MCP (CATALOG-15), and the Keymap Editor,
+  where a ⌫ meant for the terminal removed the selected binding from `keymap.json` (final-seams m2).
+- One route still takes it, on purpose for now: `app_open` of a canvas file (`.figcraft`, `.excalidraw`) gives
+  that canvas the keyboard, from an agent too, also when its tab was open already and is only shown again
+  (review-canvas-ui m2). Typing in a terminal pane then goes to the canvas, where letters pick tools and ⌫
+  deletes the selection, until you click back. It is kept because a canvas file opened from Files or with
+  `sawit` should take the keyboard (CANVAS-UI-2), and the control socket's `open` runs the CLI's own open.
+  Narrowing it to the user's routes is a flag from `cli::handle` for the socket's `open`: a few lines. Decide it
+  with the rest of this question.
 - Source: P4:112.
 
 **Q14. Agent shapes with no `backgroundColor`: sticky yellow, or no fill?** (P7-1)
@@ -1445,8 +1461,9 @@ hand checks only into their own reports, which aren't in the repository. They ar
 reviews added. No test can build a `Workspace` (P8-C8), so for the workspace wiring of those fixes these checks are
 the only cover: the canvas taking the keyboard, a canvas file renamed under its tab, the hand-offs from Files, one
 browser per project, where the quit question goes up, the center bar's scroll and the restore warning on screen.
-- There are **41 checks**. F-1 to F-5 and H-MCP-n are the reports' own numbers (H-MCP-n after the finding MCP-n it
-  checks); H-CORE-n and H-UI-n are canvas core's and canvas UI's H-n; the others are numbered here.
+- There are **44 checks**. F-1 to F-5 and H-MCP-n are the reports' own numbers (H-MCP-n after the finding MCP-n it
+  checks); H-CORE-n and H-UI-n are canvas core's and canvas UI's H-n; the others are numbered here. H-WS-1 to
+  H-WS-3 came with the workspace fixes made after the hunt's final review (smoke m3, final-seams m1 and m2).
 - The fixers drove some of them over the control socket before their lanes merged. Nobody has run them by hand.
 - Each starts from a fresh launch of the merged main, as under "Before you start", with start state A unless it
   says otherwise. A debug build is enough.
@@ -1696,8 +1713,8 @@ Answer: ______
   forward.
 - With A shown, click the folder icon and, while the picker is open, click a tab of B's group. Then pick a new
   folder C.
-- Look for: A's folder becomes C, and B keeps its folder and tabs. Until review-files M1 is fixed, B's folder
-  becomes C instead, and B's tabs lose their group.
+- Look for: A is shown again with C as its folder, and A's tabs lose their group. B keeps its folder and tabs.
+  Before review-files M1 was fixed, B's folder became C instead.
 
 Answer: ______
 
@@ -1708,7 +1725,7 @@ Answer: ______
 
 Answer: ______
 
-### MCP: 3 checks
+### MCP: 6 checks
 
 **H-MCP-1. Two agents on one closed canvas** (MCP-1).
 - Quit Sawit. Run two Claude Code sessions in one project, with the scratch `SAWIT_HOME` so that they find no
@@ -1733,6 +1750,52 @@ Answer: ______
 - Start Sawit with `/` as its working folder: the installed Sawit.app from the Dock, or `cd /` before the recipe's
   launch line. Have an agent call `terminal_run {cwd: "web", command: "pwd"}`.
 - Look for: "Nothing was run", and no shell opens in `/`.
+
+Answer: ______
+
+The next three need a second project in the window, `proj2`, shown in front of `proj`:
+
+```bash
+mkdir -p "$S/proj2" && touch "$S/proj/f01.txt" "$S/proj2/g01.txt"
+ctl "{\"cmd\":\"open\",\"path\":\"$S/proj2\"}"
+ctl "{\"cmd\":\"open\",\"path\":\"$S/proj/f01.txt\"}"
+ctl "{\"cmd\":\"open\",\"path\":\"$S/proj2/g01.txt\"}"
+```
+
+**H-WS-1. An agent's tab switch brings the tab's project** (smoke m3).
+- Click into the terminal (⌘J shows it). Run `ctl '{"cmd":"activate_tab","tab":"f01.txt"}'`.
+- Look for: `f01.txt` is shown, with proj's Files tree in the sidebar and proj's chip active in the title bar, and
+  `ctl '{"cmd":"state"}'` names proj as `project`. Typing still goes to the terminal.
+- Click `g01.txt`'s tab, fold proj's group with a click on its header, and run the line again. Look for: the group
+  unfolds, with `f01.txt` active.
+
+Answer: ______
+
+**H-WS-2. The Keymap Editor an agent opens leaves your keyboard** (final-seams m2).
+- Open the Keymap Editor (⌘K ⌘S) and click a binding to select it. Click into the terminal and type `echo hi`,
+  without Enter.
+- Run `ctl '{"cmd":"open_page","page":"keymap"}'`, which is an agent's `app_open_page keymap`, then press ⌫ twice.
+- Look for: the Keymap Editor comes forward, and the ⌫s erase `hi` in the terminal. The binding you selected is
+  still there, and `$S/home/keymap.json` wasn't written.
+- Close the Keymap Editor's tab and do it again. Look for: it opens, and the keys still go to the terminal.
+
+Answer: ______
+
+**H-WS-3. An agent's browser is its own project's** (final-seams m1).
+- Serve the browser fixtures as for the Browser checks (`python3 -m http.server 8765 -d docs/fixtures/browser`),
+  with proj2 shown. Run what an agent working in `$S/proj` sends when it names no project:
+
+  ```bash
+  ctl "{\"agent_folder\":\"$S/proj\",\"cmd\":\"browser\",\"op\":{\"op\":\"navigate\",\"url\":\"http://localhost:8765/form.html\"}}"
+  ```
+- Look for: proj comes forward with a Browser tab of its own, in proj's group, showing `form.html`. proj2 has
+  no Browser tab.
+- Click `g01.txt`'s tab, then run the same line with `{\"op\":\"state\"}` as the op. Look for: the answer's
+  `url` is `form.html`, and nothing on screen changes: proj2 and `g01.txt` stay in front.
+- Run `ctl "{\"agent_folder\":\"$S/proj\",\"cmd\":\"open_page\",\"page\":\"browser\"}"`. Look for: proj's
+  Browser tab comes forward, and no second one opens.
+- Before final-seams m1 was fixed, the page opened in proj2's browser, with proj2's cookies, and the `state` op
+  answered from proj2's.
 
 Answer: ______
 

@@ -44,6 +44,22 @@ are the accepted trade-off.
 
 All take `project` (window selection) like the other `app_*` tools.
 
+**Whose browser (final-seams m1, 2026-11-01).** Each project has its own browser tab, and an agent's
+is the browser of its project:
+- the project it names, which becomes the window's active one, as for every app tool;
+- else the project holding the folder the agent works in (the folder `sawit-mcp` runs in), in the window
+  that has it open, even while another project of that window is the one shown. Its `browser_navigate`
+  with no URL opens that folder's dev server, and the page's cookies, screenshots and exports belong to
+  that project;
+- else, for an agent run from no open project, the active project of the front window.
+
+Ops that show a page (`browser_navigate`, `browser_screenshot`, `browser_resize`) bring that browser
+forward, with its project, as a click on its tab would. The others use it in the background and change
+nothing on screen; with no browser open for that project they say so rather than open one.
+`app_open_page browser` opens the same browser. Before, an agent's ops went to the active project's
+browser: with projects A and B in one window and B shown, an agent in A opened A's dev server in B's
+browser, with B's cookies, and wrote into B's `.nyawit`.
+
 | Tool | Does |
 |---|---|
 | `browser_navigate` | `url`, or `action` back / forward / reload. Opens the tab. Waits for load (≤ `timeout_ms`, default 15 s) and returns url, title, status |
