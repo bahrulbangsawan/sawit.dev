@@ -316,9 +316,10 @@ const READ_ONLY: &[&str] = &[
 ];
 
 /// The tools that can delete or replace what was there before the call (a database, rows, a file
-/// at a path given, a setting, the canvas, a running process), or run what they can't bound: SQL,
-/// a shell command, a script, JavaScript, an install script. MCP's `destructiveHint`, which a
-/// client may act on by asking first. Every other tool that isn't [`READ_ONLY`] only adds.
+/// at a path given, a setting, the canvas, a running process, the working tree's files and what
+/// was staged, the page the browser shows), or run what they can't bound: SQL, a shell command,
+/// a script, JavaScript, an install script. MCP's `destructiveHint`, which a client may act on by
+/// asking first. Every other tool that isn't [`READ_ONLY`] only adds.
 const DESTRUCTIVE: &[&str] = &[
     "stop_instance",
     "restart_instance",
@@ -341,7 +342,9 @@ const DESTRUCTIVE: &[&str] = &[
     "ssh_exec",
     "save_command",
     "remove_command",
+    "git_unstage",
     "git_commit",
+    "git_switch",
     "update_prompt",
     "delete_prompt",
     "install_dev_tools",
@@ -362,6 +365,7 @@ const DESTRUCTIVE: &[&str] = &[
     "canvas_load",
     "canvas_export",
     "canvas_command",
+    "browser_navigate",
     "browser_click",
     "browser_type",
     "browser_press_key",
@@ -373,9 +377,9 @@ const DESTRUCTIVE: &[&str] = &[
 ];
 
 /// The tools that change things but only add: a database, an instance, a prompt, rows, shapes on
-/// the canvas, a saved SSH host; or start something (the app, an instance, a session, a page). Not
-/// read-only, and not destructive ([`hints`]). Every tool is in one of [`READ_ONLY`],
-/// [`DESTRUCTIVE`] and this list, so a new one has to be placed.
+/// the canvas, a saved SSH host, the working tree's changes to what is staged; or start something
+/// (the app, an instance, a session). Not read-only, and not destructive ([`hints`]). Every tool
+/// is in one of [`READ_ONLY`], [`DESTRUCTIVE`] and this list, so a new one has to be placed.
 const ADDS: &[&str] = &[
     "create_instance",
     "start_instance",
@@ -384,15 +388,12 @@ const ADDS: &[&str] = &[
     "refresh_materialized_view",
     "add_ssh_host",
     "git_stage",
-    "git_unstage",
-    "git_switch",
     "create_prompt",
     "fill_prompt",
     "launch_app",
     "app_ssh_connect",
     "canvas_add_elements",
     "canvas_add_mermaid",
-    "browser_navigate",
 ];
 
 /// The tools that reach past this Mac's own state: the internet, a remote host, a database that
@@ -774,6 +775,10 @@ mod tests {
             "install_dev_tools",
             "terminal_run",
             "browser_evaluate",
+            // They replace what was there: the working tree's files, what was staged, the page.
+            "git_switch",
+            "git_unstage",
+            "browser_navigate",
         ] {
             assert_eq!(hints(name).0, Some(false), "{name} changes things");
             assert_eq!(hints(name).1, Some(true), "{name} can destroy");

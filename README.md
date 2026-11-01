@@ -169,7 +169,8 @@ explained. A conflict on the same address can't be forced.
 ### Project code editor
 
 - Open a project with `sawit <folder>`, the welcome screen, or the folder icon in the **Files** tab.
-  See [The `sawit` command](#the-sawit-command).
+  See [The `sawit` command](#the-sawit-command). A folder named through a symlink opens as the folder it leads to,
+  so it is one project however it is named.
 - **Virtual file tree** with a logo per file type. The tree updates when files are created or deleted
   from the terminal.
 - **Highlighting for about 200 languages** (syntect), including Dockerfile, Makefile, Vue, Svelte, Kotlin, and more.
@@ -256,6 +257,8 @@ explained. A conflict on the same address can't be forced.
   field (text that isn't a URL is searched), the device menu, **Annotate**, **Design**, **Open in Default Browser**
   and the Web Inspector.
 - Cookies and storage are kept per project, so being signed in to one app doesn't leak into another.
+- A link to another app (`mailto:`, `zoommtg:`, …) asks before it opens. After **Cancel**, the page's links to other
+  apps do nothing until you reload it or open another page.
 - **Keys**: once you click the page (or press Enter in the address field), <kbd>⌘</kbd><kbd>C</kbd>,
   <kbd>⌘</kbd><kbd>X</kbd>, <kbd>⌘</kbd><kbd>V</kbd> and <kbd>⌘</kbd><kbd>A</kbd> act in the page, through the
   **Edit** menu. Sawit's own shortcuts (<kbd>⌘</kbd><kbd>W</kbd>, <kbd>⌘</kbd><kbd>T</kbd>,
@@ -264,8 +267,9 @@ explained. A conflict on the same address can't be forced.
   Desktop, scaled to fit the tab. **Rotate** turns the device, and **Responsive** fills the tab again.
 - **Annotate** (<kbd>⇧</kbd><kbd>⌘</kbd><kbd>.</kbd>): click elements on the page and write what should change. Each
   note carries the element's selector, styles, a screenshot and, in a dev build, its source file. **Copy** the notes
-  as Markdown, or **Send to terminal** to paste them into Claude Code (or a shell) without pressing Enter; both can
-  add the page's console errors. Screenshots go to `.nyawit/annotations/`.
+  as Markdown, or **Send to terminal** to paste them into Claude Code (or a shell) without pressing Enter: the
+  project's own terminals first, never an SSH session. Both can add the page's console errors. Screenshots go to
+  `.nyawit/annotations/`.
 - **Design**: inspect any element (box model, typography, colors with contrast, hover and focus states) and copy it
   as CSS, Tailwind or HTML. The panel also lists the page's colors, fonts and assets, and derives its design system:
   palette ramps, type scale, spacing, radius and shadows. **Export** writes `DESIGN.md`, DTCG tokens, a Tailwind v4

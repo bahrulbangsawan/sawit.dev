@@ -54,6 +54,28 @@ fn once_stopped<T: 'static>(
     })
 }
 
+/// Starts the row whose first key is `key` again with `start` once `busy` says its old run has
+/// stopped ([`once_stopped`]), if it still waits to then: `pending` holds the rows waiting to
+/// start again, by first key, and a Stop meanwhile takes the row out, which calls the restart
+/// off.
+fn restart_once_stopped<T: 'static>(
+    key: String,
+    pending: fn(&mut T) -> &mut HashSet<String>,
+    busy: impl Fn(&T, &App) -> bool + 'static,
+    start: impl FnOnce(&mut T, &mut Context<T>) + 'static,
+    cx: &mut Context<T>,
+) -> Task<()> {
+    once_stopped(
+        busy,
+        move |this, cx| {
+            if pending(this).remove(&key) {
+                start(this, cx);
+            }
+        },
+        cx,
+    )
+}
+
 /// One terminal to start: what to type, where, under which tab.
 #[derive(Clone)]
 pub struct Launch {
@@ -428,7 +450,17 @@ impl RunPanel {
         cx.emit(RunEvent::Start(item.launches.clone(), origin));
     }
 
+    /// Stops the item (Ctrl-C), and calls off a restart of it that waits for its old run to stop:
+    /// Stop means stop.
     fn stop(&mut self, item: &Item, cx: &mut Context<Self>) {
+        if let Some(first) = item.keys().next() {
+            self.restarting.remove(first);
+        }
+        self.interrupt(item, cx);
+    }
+
+    /// Interrupts (Ctrl-C) what the item's terminals run.
+    fn interrupt(&mut self, item: &Item, cx: &mut Context<Self>) {
         self.terminal.update(cx, |t, cx| {
             for key in item.keys() {
                 t.stop_job(key, cx);
@@ -438,7 +470,8 @@ impl RunPanel {
     }
 
     /// Stops the item, waits for its commands to exit, then starts it again.
-    /// Its Restart button spins meanwhile; Stop interrupts the old run again.
+    /// Its Restart button spins meanwhile; Stop interrupts the old run again
+    /// and calls the restart off.
     fn restart(&mut self, item: &Item, cx: &mut Context<Self>) {
         let Some(first) = item.keys().next().map(str::to_string) else {
             return;
@@ -446,10 +479,12 @@ impl RunPanel {
         if !self.restarting.insert(first.clone()) {
             return;
         }
-        self.stop(item, cx);
+        self.interrupt(item, cx);
         let keys: Vec<String> = item.keys().map(str::to_string).collect();
         let launches = item.launches.clone();
-        once_stopped(
+        restart_once_stopped(
+            first,
+            |this: &mut Self| &mut this.restarting,
             move |this: &Self, cx| {
                 let terminal = this.terminal.read(cx);
                 keys.iter().any(|k| {
@@ -458,8 +493,7 @@ impl RunPanel {
                         .is_some_and(|s| s.running.is_some())
                 })
             },
-            move |this, cx| {
-                this.restarting.remove(&first);
+            move |_, cx| {
                 cx.emit(RunEvent::Start(launches, Origin::User));
                 cx.notify();
             },
@@ -1219,12 +1253,71 @@ impl Render for RunPanel {
 mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
 
-    use super::{Duration, RESTART_POLL, once_stopped};
+    use std::collections::HashSet;
+
+    use super::{Duration, RESTART_POLL, once_stopped, restart_once_stopped};
 
     /// A script's terminal, as a restart sees it.
     struct Job {
         busy: bool,
         started: u32,
+    }
+
+    /// A row of the Run panel, as a restart and a Stop see it.
+    struct Row {
+        busy: bool,
+        started: u32,
+        restarting: HashSet<String>,
+    }
+
+    impl Row {
+        /// Restart: the row waits to start again once its old run has stopped.
+        fn restart(&mut self, cx: &mut gpui_kit::Context<Self>) {
+            self.restarting.insert("k".into());
+            restart_once_stopped(
+                "k".into(),
+                |row: &mut Self| &mut row.restarting,
+                |row, _| row.busy,
+                |row, _| row.started += 1,
+                cx,
+            )
+            .detach();
+        }
+    }
+
+    /// Stop while a restart waits for the old run to stop calls the restart off: Stop means
+    /// stop. It only interrupted the old run again, so once that run stopped, the script started
+    /// again although the user had pressed Stop. A restart left alone still starts.
+    #[gpui_kit::test]
+    fn a_stop_while_a_restart_waits_calls_it_off(cx: &mut TestAppContext) {
+        let row = cx.new(|_| Row {
+            busy: true,
+            started: 0,
+            restarting: HashSet::new(),
+        });
+        row.update(cx, |row, cx| row.restart(cx));
+        cx.executor().advance_clock(Duration::from_secs(5));
+        cx.run_until_parked();
+        // Stop, as the Run panel's Stop does it, while the old run is still stopping.
+        row.update(cx, |row, _| row.restarting.remove("k"));
+        row.update(cx, |row, _| row.busy = false);
+        cx.executor().advance_clock(Duration::from_secs(5));
+        cx.run_until_parked();
+        assert_eq!(
+            row.read_with(cx, |row, _| row.started),
+            0,
+            "it started again after Stop"
+        );
+
+        row.update(cx, |row, cx| {
+            row.busy = true;
+            row.restart(cx);
+        });
+        row.update(cx, |row, _| row.busy = false);
+        cx.executor().advance_clock(RESTART_POLL);
+        cx.run_until_parked();
+        assert_eq!(row.read_with(cx, |row, _| row.started), 1);
+        assert!(row.read_with(cx, |row, _| row.restarting.is_empty()));
     }
 
     /// A restart starts the script again once its old run has stopped, however long the

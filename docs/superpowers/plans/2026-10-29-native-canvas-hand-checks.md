@@ -1487,8 +1487,10 @@ checkout of main), and `localhost:8765/annotate.html` open in the Browser.
   ```
 - Click the link. Look for: "Open this link in another app?", naming `mailto:me@example.com`. Open hands it to
   Mail, as a new message to that address.
-- Click it again and choose Cancel, then click it once more. Look for: nothing opens and nothing asks. Open the page
-  again from the address bar: the link asks again.
+- Click it again: the question also says "If you cancel, the page's links to other apps do nothing until you reload
+  it or open another page." Choose Cancel, then click it once more. Look for: nothing opens and nothing asks. Click
+  the toolbar's Reload: the link asks again (review-browser m5). Cancel, then open the page again from the address
+  bar: it asks again too.
 
 Answer: ______
 
@@ -1518,6 +1520,11 @@ Answer: ______
   terminal.
 - Run `claude` in a third tab too. With tab 2 in front again, Send goes to the third tab, the last one running an
   agent; with tab 1 in front, to tab 1.
+- Open a second project with the title bar's + and run `claude` in a terminal tab of its group, in front. Back in
+  the first project's Browser, click Send. Look for: it goes to the first project's Claude Code, not the second's
+  (review-browser m1).
+- Connect to a saved SSH server from the SSH sidebar and leave its tab in front. Click Send. Look for: nothing is
+  pasted at the server's prompt; the notes go to the project's Claude Code.
 
 Answer: ______
 
@@ -1736,13 +1743,15 @@ Answer: ______
 
 **H-MCP-2. A project opened through a linked folder** (MCP-2, and review-mcp M1).
 - Run `mkdir -p "$S/code/shop" && ln -s "$S/code" "$S/code-link"`. With the Open Folder dialog, open
-  `$S/code-link/shop`. From an agent, call `canvas_get {project: "$S/code/shop"}`, the other spelling.
-- Look for: it answers from that window.
+  `$S/code-link/shop`. Look for: the project is `shop`, and `app_state` and the status bar's Copy Path give it as
+  the folder on disk, `$S/code/shop` (with `/private` in front if `$S` is under `/tmp`).
+- From an agent, call `canvas_get {project: "$S/code-link/shop"}`, the other spelling. Look for: it answers from
+  that window.
 - From the agent, call `app_open` of `$S/code/shop`, the folder as it is on disk, which is what an agent's working
   folder is. Look for: that project shows, and no second project is added for it.
 - From the agent, call `save_command {project_dir: "$S/code/shop", name: "hello", commands: ["echo hi"]}`. Look
   for: the Run panel lists hello under that project.
-- Until review-mcp M1 is fixed, `app_open` adds the folder again, and hello doesn't show in the Run panel.
+- Open the welcome screen in a new window (⇧⌘N): Recent Projects lists the folder once.
 
 Answer: ______
 

@@ -1031,14 +1031,22 @@ impl Workspace {
     /// Closes tabs per `op` relative to `target`. Closing a single tab with
     /// unsaved changes (or a browser with notes not yet sent), or the Dev Tools
     /// tab while it installs, asks first; bulk closes leave such tabs open.
-    fn close(&mut self, op: CloseOp, target: usize, window: &mut Window, cx: &mut Context<Self>) {
+    /// Returns what the question that went up is about, if one did: the tab
+    /// then closes only once the user agrees.
+    fn close(
+        &mut self,
+        op: CloseOp,
+        target: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<&'static str> {
         let closing = to_close(op, target, &self.flags(cx));
         if let [ix] = closing[..]
             && let Some(PaneItem::File(editor)) = self.tabs.get(ix).map(|t| t.item.clone())
             && editor.read(cx).dirty
         {
             self.confirm_close_dirty(editor, window, cx);
-            return;
+            return Some("the file has unsaved changes");
         }
         if let [ix] = closing[..]
             && let Some(PaneItem::Other { view, .. }) = self.tabs.get(ix).map(|t| t.item.clone())
@@ -1046,15 +1054,16 @@ impl Workspace {
             && browser.read(cx).unsent_notes(cx) > 0
         {
             self.confirm_close_browser(browser, window, cx);
-            return;
+            return Some("the browser has annotations not yet copied or sent");
         }
         if let [ix] = closing[..]
             && let Some(work) = self.tabs.get(ix).and_then(|t| tools_work(&t.item, cx))
         {
             self.confirm_close_tools(work, window, cx);
-            return;
+            return Some("Dev Tools is installing, and closing the tab stops it");
         }
         self.remove_tabs(&closing, cx);
+        None
     }
 
     /// Asks before closing a browser whose annotation notes weren't copied or sent: they
@@ -2585,8 +2594,8 @@ impl Workspace {
         }
     }
 
-    /// Pastes annotations into the terminal running an agent; copies them
-    /// when no tab has bracketed paste on.
+    /// Pastes annotations into the terminal running an agent, the browser's project's first;
+    /// copies them when no tab has bracketed paste on.
     fn send_to_terminal(
         &mut self,
         browser: &Entity<BrowserView>,
@@ -2594,7 +2603,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let target = self.terminal.read(cx).paste_target(cx);
+        let project = browser.read(cx).project().map(Path::to_path_buf);
+        let target = self.terminal.read(cx).paste_target(project.as_deref(), cx);
         let sent = target.and_then(|ix| {
             if !self.layout.terminal {
                 self.layout.toggle(Area::Terminal);

@@ -481,14 +481,42 @@ pub struct SavedCommands {
 
 impl SavedCommands {
     /// A missing file is empty; a corrupt one is an error (so it is never
-    /// overwritten with nothing).
+    /// overwritten with nothing). Each project's commands are under its folder
+    /// as it is on disk ([`Self::keyed_on_disk`]).
     pub fn load(path: &Path) -> Result<SavedCommands> {
         match std::fs::read_to_string(path) {
-            Ok(text) => serde_json::from_str(&text)
+            Ok(text) => serde_json::from_str::<SavedCommands>(&text)
+                .map(SavedCommands::keyed_on_disk)
                 .map_err(|e| CoreError::Parse(format!("{}: {e}", path.display()))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(SavedCommands::default()),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// The commands keyed by each project's folder as it is on disk ([`crate::files::resolve`]),
+    /// which is how the app opens a project and sawit-mcp names one. Commands saved under
+    /// another name of a folder (a link to it, as a project opened through a link was keyed
+    /// before) join the folder's own, after them, and a command already there by id isn't
+    /// added twice.
+    fn keyed_on_disk(self) -> SavedCommands {
+        let mut projects: BTreeMap<String, Vec<SavedCommand>> = BTreeMap::new();
+        let (own, other): (Vec<_>, Vec<_>) = self
+            .projects
+            .into_iter()
+            .map(|(key, commands)| {
+                let real = crate::files::resolve(Path::new(&key));
+                (Self::key(&real), key, commands)
+            })
+            .partition(|(real, key, _)| real == key);
+        for (real, _, commands) in own.into_iter().chain(other) {
+            let list = projects.entry(real).or_default();
+            for command in commands {
+                if !list.iter().any(|c| c.id == command.id) {
+                    list.push(command);
+                }
+            }
+        }
+        SavedCommands { projects }
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -685,5 +713,40 @@ mod tests {
             SavedCommands::load(&dir.path().join("missing.json")).unwrap(),
             SavedCommands::default()
         );
+    }
+
+    /// The app opens a project at its folder as it is on disk (through the links, in the letter
+    /// case there), and keys its saved commands so; sawit-mcp does too. Commands saved for a
+    /// project opened through a link, before projects were opened so, are under the link's name:
+    /// they join the folder's own as the file is read, the folder's first, and the Run panel and
+    /// list_scripts still find them (review-mcp M1).
+    #[test]
+    fn commands_saved_under_a_links_name_are_the_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("shop");
+        std::fs::create_dir(&project).unwrap();
+        let project = project.canonicalize().unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&project, &link).unwrap();
+        let (own, linked, both) = (
+            SavedCommand::new("dev", vec!["bun dev".into()], RunMode::Sequence),
+            SavedCommand::new("up", vec!["docker compose up".into()], RunMode::Sequence),
+            SavedCommand::new("test", vec!["bun test".into()], RunMode::Sequence),
+        );
+        let mut saved = SavedCommands::default();
+        saved.upsert(&project, own.clone());
+        saved.upsert(&project, both.clone());
+        saved.upsert(&link, linked.clone());
+        saved.upsert(&link, both.clone());
+        let elsewhere = Path::new("/no/such/folder");
+        saved.upsert(elsewhere, own.clone());
+        let file = dir.path().join("run-commands.json");
+        saved.save(&file).unwrap();
+
+        let loaded = SavedCommands::load(&file).unwrap();
+        assert_eq!(loaded.for_project(&project), [own.clone(), both, linked]);
+        assert!(loaded.for_project(&link).is_empty());
+        assert_eq!(loaded.for_project(elsewhere), [own]);
+        assert_eq!(loaded.projects.len(), 2);
     }
 }

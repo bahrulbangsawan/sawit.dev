@@ -924,7 +924,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Close a center tab by index or title (a file with unsaved changes asks the user first)"
+        description = "Close a center tab by index or title. A tab that would lose something asks the user first, as their own close does: a file with unsaved changes, the browser with annotations not yet copied or sent, the Dev Tools page while it installs. The reply then says \"asking\", not \"closed\": the tab closes only if the user agrees (see app_state)"
     )]
     async fn app_close_tab(&self, Parameters(a): Parameters<TabArgs>) -> CallToolResult {
         self.app_tool(a.project, Command::CloseTab { tab: a.tab })

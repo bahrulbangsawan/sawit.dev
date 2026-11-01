@@ -18,6 +18,17 @@ impl Project {
     }
 }
 
+/// The folder a project opened at `dir` is: `dir` as it is on disk, through the links on its way
+/// and in the letter case there ([`sawit_core::files::resolve`]). The CLI and `app_open` name
+/// folders so, and so do agents, by their working folder; the Open dialog keeps a link picked
+/// there as the link, and Recent Projects reopens folders as they were remembered. Opened as
+/// named, one folder could be two projects of a window, and what is keyed by the project's
+/// folder (saved commands, the browser's cookies, which project a file or a dev server is in)
+/// didn't match what agents and the CLI name (review-mcp M1).
+fn project_folder(dir: &Path) -> PathBuf {
+    sawit_core::files::resolve(dir)
+}
+
 impl Workspace {
     /// A project with no folder yet, wired to this workspace.
     pub(super) fn new_project(
@@ -157,8 +168,10 @@ impl Workspace {
     }
 
     /// Opens `root` as a project of this window: shows it if it is open
-    /// already, else fills an empty project, else adds one.
+    /// already, else fills an empty project, else adds one. The project is
+    /// the folder as it is on disk ([`project_folder`]).
     pub fn open_project(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let root = project_folder(&root);
         self.leave_welcome(Layout::default(), cx);
         self.sidebar = SidebarTab::Files;
         if let Some(ix) = self
@@ -186,8 +199,10 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Shows `root` in the active project instead of its folder (`sawit -r`).
+    /// Shows `root` in the active project instead of its folder (`sawit -r`), as
+    /// it is on disk ([`project_folder`]).
     pub fn replace_project(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let root = project_folder(&root);
         let open = self
             .projects
             .iter()
