@@ -70,6 +70,19 @@ pub fn command_line() -> OpenRequest {
         Ok(Invocation::Nyalakan(args)) => {
             std::process::exit(kebun::block_on(kebun::nyalakan(args, &paths)));
         }
+        // The page goes to the running app, started first as `send` starts it.
+        Ok(Invocation::Browse(target)) => {
+            let socket = paths.cli_socket();
+            let start =
+                || {
+                    launch_app().map_err(|e| format!("unable to start Sawit: {e}"))?;
+                    connect_when_ready(&socket, Duration::from_secs(20)).map(drop).ok_or_else(|| {
+                    "Sawit isn't responding. Open the app from Applications, then try again."
+                        .to_string()
+                })
+                };
+            std::process::exit(kebun::browse(target, &paths, &cwd, start));
+        }
         Ok(Invocation::Help) => {
             print!("{USAGE}");
             std::process::exit(0);

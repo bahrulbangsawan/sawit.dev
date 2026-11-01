@@ -2,7 +2,9 @@
 //! `sawit <db> [table] ["sql"]` like psql, `sawit list`, `sawit bakar`
 //! ("burn": stop dev servers or instances, like the `kill-dev` script),
 //! `sawit panen|backup|tanam` (export, `pg_dump`, CSV import) and
-//! `sawit pasang|pupuk` (install or upgrade developer tools).
+//! `sawit pasang|pupuk` (install or upgrade developer tools), `sawit nyalakan`
+//! (start instances) and `sawit browse` (a page in the app's browser: the one
+//! tool here that needs the app, which it starts first).
 //! The wording riffs on Indonesia's forest fires (karhutla) and the palm-oil
 //! plantations (kebun sawit) behind them.
 
@@ -11,6 +13,9 @@ use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::app_control::{self, Command, Request};
+use crate::browser::{self, BrowserOp};
+use crate::cli::BrowseTarget;
 use crate::control::{self, Preflight, StartOutcome};
 use crate::db::{
     self, ConnProfile, Profiles, format_table, parse_database_url, read_dotenv_database_url,
@@ -41,6 +46,8 @@ const SUBCOMMANDS: &[&str] = &[
     "pupuk",
     "start",
     "nyalakan",
+    "browse",
+    "intip",
 ];
 
 /// Rows printed per result set at most.
@@ -1373,6 +1380,134 @@ pub async fn nyalakan(args: NyalakanArgs, paths: &AppPaths) -> i32 {
     i32::from(failed > 0)
 }
 
+/// How long `sawit browse` waits for each answer of the app, which gives a page op 30 s.
+const BROWSE_TIMEOUT: Duration = Duration::from_secs(35);
+
+/// `sawit browse [url|port]` (`intip`), and `sawit <url>`: opens the page in Sawit's browser and
+/// brings Sawit forward. It sends what `browser_navigate` sends for an agent working in `cwd`, so
+/// the browser is that of the open project that holds `cwd` (else the front window's). With no
+/// address, the dev server running in `cwd`, else in that project ([`dev_server_in`]).
+/// `start_app` starts Sawit when it isn't running, as `sawit <path>` does.
+pub fn browse(
+    target: BrowseTarget,
+    paths: &AppPaths,
+    cwd: &Path,
+    start_app: impl FnOnce() -> Result<(), String>,
+) -> i32 {
+    let ink = Ink::stderr();
+    if !app_control::is_running(paths)
+        && let Err(e) = start_app()
+    {
+        eprintln!("{} Sawit tidak mau menyala: {e}", ink.red("🔥"));
+        return 1;
+    }
+    let folder = own_folder(cwd);
+    let ask = |command| {
+        let request = Request {
+            project: None,
+            agent_folder: folder.clone(),
+            command,
+        };
+        app_control::send(paths, &request, BROWSE_TIMEOUT)
+    };
+    let url = match target {
+        BrowseTarget::Address(address) => browser::normalize_address(&address),
+        BrowseTarget::DevServer => {
+            let found = ask(Command::State).and_then(|state| {
+                let folders = dev_server_folders(&state, folder.as_deref())?;
+                let jobs =
+                    block_on(probe::listening_jobs()).map_err(|e| format!("lsof gagal: {e}"))?;
+                dev_server_in(&jobs, &folders)
+            });
+            match found {
+                Ok(url) => url,
+                Err(e) => {
+                    eprintln!("{} {e}", ink.red("🔥"));
+                    return 1;
+                }
+            }
+        }
+    };
+    let op = BrowserOp::Navigate { url: url.clone() };
+    if let Err(e) = ask(Command::Browser { op }) {
+        eprintln!("{} {url} tidak bisa diintip: {e}", ink.red("🔥"));
+        return 1;
+    }
+    let _ = ask(Command::Focus);
+    eprintln!(
+        "{}",
+        ink.gray(&format!("🌐 {url} · terbuka di browser Sawit"))
+    );
+    0
+}
+
+/// The folder `sawit browse` works in, as an agent's would be: its own, unless that is `/` or
+/// the home folder, which hold no one project.
+fn own_folder(cwd: &Path) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    (cwd.parent().is_some() && Some(cwd) != home.as_deref()).then(|| cwd.to_path_buf())
+}
+
+/// Where `sawit browse` looks for the dev server, nearest first, from the app's `state`: `folder`,
+/// then the open project that holds it; with no folder of its own, the front window's project,
+/// whose browser shows the page.
+fn dev_server_folders(
+    state: &serde_json::Value,
+    folder: Option<&Path>,
+) -> Result<Vec<PathBuf>, String> {
+    let Some(folder) = folder else {
+        return browser::front_project(state).map(|project| vec![project]).ok_or_else(|| {
+            "Jendela Sawit di depan tidak punya proyek, jadi tidak ada dev server-nya. Sebut alamatnya: `sawit browse 5173`."
+                .to_string()
+        });
+    };
+    let mut folders = vec![folder.to_path_buf()];
+    if let Some(project) = browser::project_holding(state, folder)
+        && !folders.contains(&project)
+    {
+        folders.push(project);
+    }
+    Ok(folders)
+}
+
+/// The address of the dev server running in the first of `folders` that runs any
+/// ([`browser::dev_servers`]); several there, or none in any, is an error that says what to type.
+fn dev_server_in(jobs: &[PortJob], folders: &[PathBuf]) -> Result<String, String> {
+    for folder in folders {
+        let found = browser::dev_servers(jobs, folder);
+        match found.as_slice() {
+            [] => continue,
+            [job] => {
+                if let Some(url) = browser::dev_server_url(job) {
+                    return Ok(url);
+                }
+            }
+            several => {
+                let named: Vec<String> = several
+                    .iter()
+                    .map(|job| format!("{} ({})", ports_of(job), clip(&job.label, 30)))
+                    .collect();
+                let port = several[0]
+                    .ports
+                    .iter()
+                    .map(|(p, _)| *p)
+                    .min()
+                    .unwrap_or_default();
+                return Err(format!(
+                    "Ada {} dev server di {}: {}. Sebut salah satu: `sawit browse {port}`.",
+                    several.len(),
+                    tilde(folder),
+                    named.join(", ")
+                ));
+            }
+        }
+    }
+    let place = folders.last().map(|f| tilde(f)).unwrap_or_default();
+    Err(format!(
+        "Tidak ada dev server yang menyala di {place}. Jalankan dulu (`npm run dev`, `bun dev`, …), atau sebut alamatnya: `sawit browse 5173`. Lihat `sawit list ports`."
+    ))
+}
+
 /// Whether `path` may be written: new, or replacing it was allowed.
 fn may_write(path: &Path, yes: bool, ink: &Ink) -> bool {
     if yes || !path.exists() {
@@ -2120,6 +2255,158 @@ mod tests {
         assert_eq!(q(&["nyalakan", "kyzn"]), None);
         assert_eq!(q(&["start", "kyzn"]), None);
         assert_eq!(q(&["nyalakan"]), None);
+    }
+
+    /// A stand-in for the running app, listening where `paths` says the app does: it keeps each
+    /// request, and answers `state` for `state` and `{}` for the others.
+    fn fake_app(
+        paths: &AppPaths,
+        state: serde_json::Value,
+    ) -> std::sync::Arc<std::sync::Mutex<Vec<Request>>> {
+        use std::io::Read as _;
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        // In the test's own folder, never the shared one a long path falls back to.
+        assert!(paths.cli_socket().starts_with(&paths.root));
+        std::fs::create_dir_all(&paths.root).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(paths.cli_socket()).unwrap();
+        let kept = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut bytes = Vec::new();
+                // `is_running` only connects.
+                if stream.read_to_end(&mut bytes).is_err() || bytes.is_empty() {
+                    continue;
+                }
+                let Some(Ok(request)) = app_control::decode(&bytes) else {
+                    continue;
+                };
+                let answer = match request.command {
+                    Command::State => state.clone(),
+                    _ => serde_json::json!({}),
+                };
+                kept.lock().unwrap().push(request);
+                let _ = writeln!(stream, "{}", app_control::reply_ok(&answer));
+            }
+        });
+        seen
+    }
+
+    /// `sawit browse` sends what browser_navigate sends for an agent working in its folder, so
+    /// the page opens in the browser of the project that holds it, then brings Sawit forward. A
+    /// port is localhost's; an address is read as the address field reads it. Sawit is started
+    /// first when it isn't running, and when it won't start nothing is sent.
+    #[test]
+    fn browse_opens_the_page_in_the_folders_browser() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = AppPaths {
+            root: dir.path().join("home"),
+        };
+        let cwd = dir.path().join("shop");
+        let navigate = |url: &str| Command::Browser {
+            op: BrowserOp::Navigate { url: url.into() },
+        };
+        let sent = |seen: &std::sync::Mutex<Vec<Request>>| -> Vec<(Option<PathBuf>, Command)> {
+            let seen = seen.lock().unwrap();
+            seen.iter()
+                .map(|r| (r.agent_folder.clone(), r.command.clone()))
+                .collect()
+        };
+        let page = |a: &str| BrowseTarget::Address(a.into());
+
+        assert_eq!(
+            browse(
+                page("localhost:5173"),
+                &paths,
+                &cwd,
+                || Err("no app".into())
+            ),
+            1
+        );
+        let mut started = None;
+        let code = browse(page("localhost:5173"), &paths, &cwd, || {
+            started = Some(fake_app(&paths, serde_json::json!({})));
+            Ok(())
+        });
+        assert_eq!(code, 0);
+        let seen = started.expect("Sawit was started");
+        assert_eq!(
+            sent(&seen),
+            [
+                (Some(cwd.clone()), navigate("http://localhost:5173")),
+                (Some(cwd.clone()), Command::Focus),
+            ]
+        );
+        seen.lock().unwrap().clear();
+        let code = browse(page("https://example.com/a"), &paths, &cwd, || {
+            panic!("started while it runs")
+        });
+        assert_eq!(code, 0);
+        assert_eq!(sent(&seen)[0].1, navigate("https://example.com/a"));
+    }
+
+    /// With no address, `sawit browse` looks for the dev server in its folder, then in the open
+    /// project that holds it: the nearest one wins, two in one place are named for the user to
+    /// pick, and none says how to start one or give an address. In `/` or the home folder it
+    /// has no folder of its own, as an agent hasn't: the front window's project is used.
+    #[test]
+    fn browse_finds_the_nearest_dev_server() {
+        let job = |cwd: &str, port: u16| PortJob {
+            root: 1,
+            pids: vec![1],
+            label: "bun run dev".into(),
+            tool: "bun".into(),
+            cmdline: "bun run dev".into(),
+            listeners: vec![(2, "bun".into())],
+            ports: vec![(port, crate::ports::BindAddr::LoopbackV4)],
+            cwd: Some(cwd.into()),
+            dev: true,
+        };
+        let jobs = [job("/code/shop/web", 5173), job("/code/shop/api", 3000)];
+        let folders = |list: &[&str]| list.iter().map(PathBuf::from).collect::<Vec<_>>();
+        assert_eq!(
+            dev_server_in(&jobs, &folders(&["/code/shop/web", "/code/shop"])),
+            Ok("http://localhost:5173".into())
+        );
+        let two = dev_server_in(&jobs, &folders(&["/code/shop/docs", "/code/shop"])).unwrap_err();
+        assert!(
+            two.starts_with("Ada 2 dev server di /code/shop: :5173 (bun run dev), :3000")
+                && two.ends_with("`sawit browse 5173`."),
+            "{two}"
+        );
+        let none = dev_server_in(&jobs, &folders(&["/code/blog"])).unwrap_err();
+        assert!(
+            none.starts_with("Tidak ada dev server yang menyala di /code/blog."),
+            "{none}"
+        );
+
+        let state = serde_json::json!({"windows": [
+            {"project": "/code/shop", "projects": ["/code/shop"], "frontmost": true},
+        ]});
+        assert_eq!(
+            dev_server_folders(&state, Some(Path::new("/code/shop/docs"))),
+            Ok(folders(&["/code/shop/docs", "/code/shop"]))
+        );
+        assert_eq!(
+            dev_server_folders(&state, Some(Path::new("/code/shop"))),
+            Ok(folders(&["/code/shop"]))
+        );
+        assert_eq!(
+            dev_server_folders(&state, None),
+            Ok(folders(&["/code/shop"]))
+        );
+        assert!(dev_server_folders(&serde_json::json!({"windows": []}), None).is_err());
+        assert_eq!(own_folder(Path::new("/")), None);
+        if let Some(home) = std::env::var_os("HOME") {
+            assert_eq!(own_folder(Path::new(&home)), None);
+        }
+        assert_eq!(
+            own_folder(Path::new("/code/shop")),
+            Some(PathBuf::from("/code/shop"))
+        );
+        // Its words are never databases.
+        assert_eq!(q(&["browse"]), None);
+        assert_eq!(q(&["intip", "5173"]), None);
     }
 
     #[test]

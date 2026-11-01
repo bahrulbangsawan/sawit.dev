@@ -285,6 +285,8 @@ explained. A conflict on the same address can't be forced.
   the page's design. An agent uses its own project's browser (the project it names, else the one it runs in),
   even while you look at another project of the window, and in the background: only opening a page, a
   screenshot or a device size brings it forward.
+- From the terminal: `sawit browse` opens the project's dev server here, `sawit browse 5173` a port, and
+  `sawit https://example.com` any page.
 - The requests an agent reads keep no secrets: what you type into a password field, and the values of fields named
   like secrets (password, token, API key, authorization, cookie, session, …) in URLs and bodies, read `[redacted]`.
 
@@ -504,6 +506,9 @@ sawit -n ~/code/other    # always in a new window
 sawit -r ~/code/other    # replace the project in the frontmost window
 ls -la | sawit -         # open stdin as a file
 git config --global core.editor "sawit --wait"   # wait until the file tab is closed
+sawit browse             # this project's running dev server, in Sawit's browser tab (also: intip)
+sawit browse 5173        # a port on localhost, or any address: sawit browse example.com
+sawit https://example.com   # a URL on its own opens in the browser too
 ```
 
 - If Sawit is already running, paths are sent to it over a Unix socket and the command returns right away.
@@ -513,6 +518,9 @@ git config --global core.editor "sawit --wait"   # wait until the file tab is cl
 - `--wait` returns after all opened files are closed (or the app quits).
 - `--foreground` runs the app in that terminal itself (for debugging). `sawit --help` lists
   all options.
+- `sawit browse` opens the page in the browser of the open project that holds the current folder (else the front
+  window's), as an agent's `browser_navigate` does, and brings Sawit forward. With no address it opens the dev server
+  running in the current folder, else in that project; with several there it lists them for you to pick a port.
 
 ### Databases, ports and instances from the terminal
 

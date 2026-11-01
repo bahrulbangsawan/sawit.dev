@@ -13,7 +13,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock as Content};
 use rmcp::{schemars, tool, tool_router};
 use sawit_core::app_control::Command;
-use sawit_core::browser::{BrowserOp, Target, pick_dev_server, resize_mode};
+use sawit_core::browser::{BrowserOp, Target, front_project, pick_dev_server, resize_mode};
 use serde_json::{Value, json};
 
 use crate::app::{base64_decode, pretty};
@@ -354,16 +354,11 @@ impl Sawit {
             return Ok(folder);
         }
         let state = self.app_call(None, Command::State).await?;
-        let windows = state["windows"].as_array().map_or(&[][..], Vec::as_slice);
-        let front = windows.iter().find(|window| window["frontmost"] == true);
-        front
-            .and_then(|window| window["project"].as_str())
-            .map(PathBuf::from)
-            .ok_or_else(|| {
-                "Give a url, or the project whose dev server to open: the front Sawit window has \
-                 no project."
-                    .into()
-            })
+        front_project(&state).ok_or_else(|| {
+            "Give a url, or the project whose dev server to open: the front Sawit window has no \
+             project."
+                .into()
+        })
     }
 }
 

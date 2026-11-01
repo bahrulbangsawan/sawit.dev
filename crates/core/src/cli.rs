@@ -23,6 +23,7 @@ Usage:
   sawit bakar ports [port ...] [-y]
   sawit bakar instances [name ...] [-y]
   sawit nyalakan [name ...] [--ulang] [-y]
+  sawit browse [url|port]
   sawit panen <db> <table|\"sql\"> <file.csv|file.xlsx> [-y]
   sawit backup <db> [schema|schema.table] <file.sql|file.dump> [-y]
   sawit tanam <db> <table> <file.csv>
@@ -35,6 +36,13 @@ Examples:
   sawit src/main.rs:42     open a file at line 42
   sawit -w COMMIT_EDITMSG  wait until the file's tab is closed (git core.editor)
   ls | sawit -             open stdin as a new file
+
+Browser (the project's tab in Sawit, which starts if it isn't running):
+  sawit browse             this project's running dev server
+  sawit browse 5173        http://localhost:5173
+  sawit browse example.com any address, as the address field takes it
+  sawit https://example.com
+                           a URL on its own opens there too
 
 Kebun (databases), no app needed:
   sawit kyzn                               list tables
@@ -130,6 +138,49 @@ pub enum Invocation {
     },
     /// `sawit nyalakan …` (`start`).
     Nyalakan(NyalakanArgs),
+    /// `sawit browse [url|port]` (`intip`), and `sawit <url>`.
+    Browse(BrowseTarget),
+}
+
+/// What `sawit browse` opens in Sawit's browser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrowseTarget {
+    /// The dev server running in this folder, or in the open project that holds it.
+    DevServer,
+    /// An address as the browser's address field takes it: a URL, `localhost:5173`, a host; a
+    /// port on its own is already `http://localhost:<port>`.
+    Address(String),
+}
+
+impl BrowseTarget {
+    /// `sawit browse`'s arguments: nothing, a port, or one address.
+    pub fn parse(args: &[&str]) -> std::result::Result<BrowseTarget, String> {
+        match args {
+            [] => Ok(BrowseTarget::DevServer),
+            [arg] if arg.starts_with('-') => Err(format!(
+                "opsi tak dikenal: {arg} (`sawit browse` cuma butuh alamat atau port)"
+            )),
+            [port] if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+                match port.parse::<u16>() {
+                    Ok(port) if port > 0 => {
+                        Ok(BrowseTarget::Address(format!("http://localhost:{port}")))
+                    }
+                    _ => Err(format!("“{port}” bukan nomor port.")),
+                }
+            }
+            [address] if !address.trim().is_empty() => {
+                Ok(BrowseTarget::Address(address.trim().to_string()))
+            }
+            _ => Err("intip satu alamat saja: `sawit browse [url|port]`.".into()),
+        }
+    }
+}
+
+/// Whether `arg` is a web page's address (`http://…`, `https://…`), which `sawit` opens in its
+/// browser rather than as a file.
+fn web_address(arg: &str) -> bool {
+    let lower = arg.trim_start().to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
 }
 
 /// Parses `args` (without the program name); relative paths resolve
@@ -156,6 +207,12 @@ pub fn parse_args(
         Some("start" | "nyalakan") if words.len() == args.len() => {
             return NyalakanArgs::parse(&words[1..]).map(Invocation::Nyalakan);
         }
+        Some("browse" | "intip") if words.len() == args.len() => {
+            return BrowseTarget::parse(&words[1..]).map(Invocation::Browse);
+        }
+        Some(url) if args.len() == 1 && web_address(url) => {
+            return Ok(Invocation::Browse(BrowseTarget::Address(url.trim().into())));
+        }
         Some(word) if words.len() == args.len() && DbJob::kind(word).is_some() => {
             let kind = DbJob::kind(word).expect("checked");
             return DbJob::parse(kind, &words[1..], cwd).map(Invocation::DbJob);
@@ -167,6 +224,12 @@ pub fn parse_args(
     for arg in args {
         let bytes = arg.as_bytes();
         if options_done || !bytes.starts_with(b"-") {
+            // A URL opens in the browser, alone; past `--` it is a path.
+            if let Some(url) = arg.to_str().filter(|a| !options_done && web_address(a)) {
+                return Err(format!(
+                    "{url} is a web address: open it on its own, `sawit {url}` or `sawit browse {url}`"
+                ));
+            }
             request
                 .targets
                 .push(parse_target(&arg, cwd, |p| p.exists()));
@@ -581,6 +644,46 @@ mod tests {
             parse(&["./nyalakan"]),
             Ok(Invocation::Open { .. })
         ));
+    }
+
+    /// `sawit browse` (`intip`) opens this project's dev server, a port or an address in Sawit's
+    /// browser, and so does a URL on its own. With anything else a URL is refused, where it was
+    /// opened as an empty file `http:/…` at the port's line.
+    #[test]
+    fn browse_opens_pages() {
+        let address = |a: &str| Ok(Invocation::Browse(BrowseTarget::Address(a.into())));
+        assert_eq!(
+            parse(&["browse"]),
+            Ok(Invocation::Browse(BrowseTarget::DevServer))
+        );
+        assert_eq!(parse(&["intip", "5173"]), address("http://localhost:5173"));
+        assert_eq!(
+            parse(&["browse", "example.com/a"]),
+            address("example.com/a")
+        );
+        assert_eq!(
+            parse(&["http://localhost:5173/x"]),
+            address("http://localhost:5173/x")
+        );
+        assert_eq!(parse(&["HTTPS://x.dev"]), address("HTTPS://x.dev"));
+        for bad in [
+            &["browse", "0"][..],
+            &["browse", "70000"],
+            &["browse", ""],
+            &["browse", "a.dev", "b.dev"],
+            &["intip", "-y"],
+            &["-n", "http://x.dev"],
+            &["a.rs", "https://x.dev"],
+        ] {
+            assert!(parse(bad).is_err(), "{bad:?}");
+        }
+        // Past `--` it is a path, and `./browse` is a folder.
+        assert!(matches!(
+            parse(&["--", "http://x.dev"]),
+            Ok(Invocation::Open { .. })
+        ));
+        assert!(matches!(parse(&["./browse"]), Ok(Invocation::Open { .. })));
+        assert!(matches!(parse(&["./intip"]), Ok(Invocation::Open { .. })));
     }
 
     #[test]

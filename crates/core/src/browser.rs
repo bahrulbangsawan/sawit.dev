@@ -1077,21 +1077,55 @@ pub fn data_store_id(project: &Path) -> [u8; 16] {
 
 /// The project's dev server when exactly one is running from inside it.
 pub fn pick_dev_server(jobs: &[PortJob], project: &Path) -> Option<String> {
-    let mut found = jobs.iter().filter(|j| {
-        j.dev
-            && !j.is_daemon()
-            && !j.is_docker()
-            && j.cwd
-                .as_deref()
-                .is_some_and(|c| Path::new(c).starts_with(project))
-            && !j.ports.is_empty()
-    });
-    let job = found.next()?;
-    if found.next().is_some() {
-        return None;
+    match dev_servers(jobs, project).as_slice() {
+        [job] => dev_server_url(job),
+        _ => None,
     }
+}
+
+/// The dev servers running from inside `folder` (what `npm run dev` and the like start, not a
+/// database, a daemon or Docker), with a port.
+pub fn dev_servers<'a>(jobs: &'a [PortJob], folder: &Path) -> Vec<&'a PortJob> {
+    jobs.iter()
+        .filter(|j| {
+            j.dev
+                && !j.is_daemon()
+                && !j.is_docker()
+                && j.cwd
+                    .as_deref()
+                    .is_some_and(|c| Path::new(c).starts_with(folder))
+                && !j.ports.is_empty()
+        })
+        .collect()
+}
+
+/// Where the browser opens `job`, a dev server: its lowest port on localhost.
+pub fn dev_server_url(job: &PortJob) -> Option<String> {
     let port = job.ports.iter().map(|(p, _)| *p).min()?;
     Some(format!("http://localhost:{port}"))
+}
+
+/// The front window's project, from the app's `state` (its answer to `Command::State`): its
+/// browser shows the page `browser_navigate` and `sawit browse` open for no project of their own.
+pub fn front_project(state: &Value) -> Option<std::path::PathBuf> {
+    let windows = state["windows"].as_array()?;
+    let front = windows.iter().find(|window| window["frontmost"] == true)?;
+    front["project"].as_str().map(std::path::PathBuf::from)
+}
+
+/// The open project that holds `folder`, from the app's `state`: the deepest of the windows'
+/// projects, as the app picks the window and the browser for a folder, and as it is on disk
+/// (through the links on its way, [`crate::files::resolve`]), as `lsof` lists a dev server's.
+pub fn project_holding(state: &Value, folder: &Path) -> Option<std::path::PathBuf> {
+    let folder = crate::files::resolve(folder);
+    state["windows"]
+        .as_array()?
+        .iter()
+        .flat_map(|window| window["projects"].as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .map(|root| crate::files::resolve(Path::new(root)))
+        .filter(|root| folder.starts_with(root))
+        .max_by_key(|root| root.components().count())
 }
 
 #[cfg(test)]
@@ -1510,6 +1544,53 @@ mod tests {
             None
         );
         assert_eq!(pick_dev_server(&[], project), None);
+    }
+
+    #[test]
+    fn dev_servers_in_a_folder() {
+        let mut api = job("/code/shop/api", 3000);
+        api.ports.push((3001, crate::ports::BindAddr::LoopbackV4));
+        let mut database = job("/code/shop", 5432);
+        database.dev = false;
+        let jobs = [job("/code/shop/web", 5173), api, database];
+        let found = |folder: &str| -> Vec<u16> {
+            dev_servers(&jobs, Path::new(folder))
+                .iter()
+                .map(|j| j.ports[0].0)
+                .collect()
+        };
+        assert_eq!(found("/code/shop"), [5173, 3000]);
+        assert_eq!(found("/code/shop/api"), [3000]);
+        assert_eq!(found("/code/blog"), Vec::<u16>::new());
+        // The lowest port of a server with several.
+        assert_eq!(
+            dev_server_url(dev_servers(&jobs, Path::new("/code/shop/api"))[0]),
+            Some("http://localhost:3000".into())
+        );
+    }
+
+    /// What `sawit browse` reads of the app's state: the front window's project, and the open
+    /// project that holds a folder, the deepest of any window's.
+    #[test]
+    fn projects_in_the_apps_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let (shop, api) = (root.join("shop"), root.join("shop").join("api"));
+        std::fs::create_dir_all(api.join("src")).unwrap();
+        let state = json!({"windows": [
+            {"project": shop, "projects": [shop], "frontmost": false},
+            {"project": api, "projects": [root.join("blog"), api], "frontmost": true},
+        ]});
+        assert_eq!(front_project(&state), Some(api.clone()));
+        assert_eq!(project_holding(&state, &api.join("src")), Some(api.clone()));
+        assert_eq!(project_holding(&state, &shop), Some(shop.clone()));
+        assert_eq!(project_holding(&state, &root), None);
+        // A folder named through a link is the project the link leads to.
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&shop, &link).unwrap();
+        assert_eq!(project_holding(&state, &link), Some(shop));
+        assert_eq!(front_project(&json!({"windows": []})), None);
+        assert_eq!(project_holding(&json!({}), &api), None);
     }
 
     #[test]
