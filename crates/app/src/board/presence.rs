@@ -656,6 +656,43 @@ impl BoardView {
         Answer::Later(answer)
     }
 
+    /// An agent's diagram op, whose Pele render and conversion `prepare` runs off the UI thread:
+    /// its placeholder shows at once (on a canvas on screen, with agents' cursors shown), and the
+    /// diagram is drawn once it is ready, with the agent's pointer, outlines and announcement as
+    /// for any op ([`Self::run_agent_op`]). Its answer comes then.
+    pub fn agent_diagram_op(
+        &mut self,
+        op: Value,
+        identity: Option<&AgentIdentity>,
+        prepare: impl std::future::Future<Output = sawit_board::ops::PreparedDiagram> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) -> Answer {
+        let look = crate::agents::meet(identity, cx);
+        let now = cx.background_executor().now();
+        let ghost = (self.shown && crate::agents::shown(cx))
+            .then(|| self.place_ghost(&op, &look, now))
+            .flatten();
+        let ready = cx.background_executor().spawn(prepare);
+        let (reply, answer) = oneshot::channel();
+        cx.spawn(async move |this, cx| {
+            let prepared = ready.await;
+            let drawn = this.update(cx, |this, cx| {
+                this.run_agent_op_with(
+                    &op,
+                    &look,
+                    ghost,
+                    |this, cx| this.run_prepared_op(prepared, cx),
+                    cx,
+                )
+            });
+            let _ = reply.send(drawn.map_err(|_| "The canvas closed.".to_string()));
+        })
+        .detach();
+        self.keep_agents_ticking(cx);
+        cx.notify();
+        Answer::Later(answer)
+    }
+
     /// A placeholder for `look`'s slow op `op` on the page on show ([`ghost_rect`]).
     fn place_ghost(&mut self, op: &Value, look: &Look, now: Instant) -> Option<u64> {
         let ds = self.board()?.session.ds().ok()?;
@@ -680,9 +717,22 @@ impl BoardView {
         ghost: Option<u64>,
         cx: &mut Context<Self>,
     ) -> Value {
+        self.run_agent_op_with(op, look, ghost, |this, cx| this.run_op(op, cx), cx)
+    }
+
+    /// [`Self::run_agent_op`], with `run` running the op: [`Self::run_op`], or for a diagram
+    /// rendered off the UI thread, [`BoardView::run_prepared_op`].
+    fn run_agent_op_with(
+        &mut self,
+        op: &Value,
+        look: &Look,
+        ghost: Option<u64>,
+        run: impl FnOnce(&mut Self, &mut Context<Self>) -> Value,
+        cx: &mut Context<Self>,
+    ) -> Value {
         let action = model::canvas_action(op);
         let before = self.document();
-        let reply = self.run_op(op, cx);
+        let reply = run(self, cx);
         let after = self.document();
         let now = cx.background_executor().now();
         let ok = reply.get("ok") == Some(&Value::Bool(true));
@@ -1241,6 +1291,86 @@ mod tests {
         });
         wait(cx, FAILED_TIME);
         view.read_with(cx, |view, _| assert!(view.agents.ghosts.is_empty()));
+    }
+
+    /// `op`'s diagram, rendered and converted as the control op does it off the UI thread.
+    fn prepared(
+        op: &Value,
+    ) -> impl std::future::Future<Output = sawit_board::ops::PreparedDiagram> + Send + 'static {
+        let op = op.clone();
+        async move { sawit_board::ops::prepare_diagram(&op).expect("a mermaid op") }
+    }
+
+    /// An agent's diagram, rendered off the UI thread, shows its placeholder at once and lands
+    /// with the agent's pointer and what it did, as any slow op does.
+    #[gpui_kit::test]
+    fn a_diagram_rendered_off_the_ui_thread_shows_its_placeholder_then_lands(
+        cx: &mut TestAppContext,
+    ) {
+        let tmp = Scratch::new("agent-diagram-op");
+        cx.update(gpui_kit::init);
+        let (_window, view) = open_in_window(cx, &tmp.0.join("canvas.sawit"));
+        let first = next_frame(cx, &view, None);
+        let op = json!({"op": "mermaid", "source": "graph TD\nA-->B", "x": 0, "y": 0});
+        let prepare = prepared(&op);
+        let answer = view.update(cx, |view, cx| {
+            view.agent_diagram_op(op, Some(&codex()), prepare, cx)
+        });
+        let Answer::Later(mut answer) = answer else {
+            panic!("a diagram answers once it is drawn");
+        };
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.agents.ghosts.len(), 1, "the placeholder shows at once");
+            assert!(matches!(view.agents.ghosts[0].state, GhostState::Waiting));
+        });
+        cx.run_until_parked();
+        let reply = answered(&mut answer).expect("the diagram was drawn");
+        assert_eq!(reply["ok"], true, "{reply}");
+        view.read_with(cx, |view, _| {
+            let agent = &view.agents.agents[0];
+            assert_eq!(agent.look.label.as_ref(), "Codex");
+            assert!(agent.at.is_some(), "the pointer went to the diagram");
+        });
+        let mut last = first;
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while view.read_with(cx, |view, _| !view.agents.ghosts.is_empty()) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the placeholder stayed"
+            );
+            last = next_frame(cx, &view, Some(&last));
+        }
+    }
+
+    /// A diagram rendered off the UI thread that can't be drawn leaves the error mark, as a slow
+    /// op that fails does.
+    #[gpui_kit::test]
+    fn a_diagram_that_cant_be_drawn_off_the_ui_thread_shows_an_error_mark(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("agent-diagram-failed");
+        cx.update(gpui_kit::init);
+        let (_window, view) = open_in_window(cx, &tmp.0.join("canvas.sawit"));
+        next_frame(cx, &view, None);
+        let op = json!({"op": "mermaid", "source": "this is not a diagram ((("});
+        let prepare = prepared(&op);
+        let answer = view.update(cx, |view, cx| {
+            view.agent_diagram_op(op, Some(&codex()), prepare, cx)
+        });
+        let Answer::Later(mut answer) = answer else {
+            panic!("a diagram answers once it is drawn");
+        };
+        cx.run_until_parked();
+        let reply = answered(&mut answer).expect("the op ran");
+        assert_eq!(reply["ok"], false, "{reply}");
+        view.read_with(cx, |view, _| {
+            assert!(matches!(
+                view.agents.ghosts[0].state,
+                GhostState::Failed { .. }
+            ));
+            assert_eq!(
+                view.agents.agents[0].doing,
+                "couldn't finish drawing a diagram"
+            );
+        });
     }
 
     /// With agents' cursors turned off, a slow op runs at once, with no placeholder.

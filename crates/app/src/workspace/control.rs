@@ -563,6 +563,11 @@ impl Workspace {
                         board.ok_or("The canvas didn't open.")?
                     }
                 };
+                // A diagram is rendered off the UI thread, and drawn once it is ready, with the
+                // agent's placeholder on the canvas meanwhile.
+                if let Some(prepare) = mermaid_op(&op) {
+                    return Ok(board.update(cx, |b, cx| b.agent_diagram_op(op, agent, prepare, cx)));
+                }
                 Ok(board.update(cx, |b, cx| b.agent_op(op, agent, cx)))
             }
             // The browser of the agent's project ([`agent_project`]). One brought forward comes
