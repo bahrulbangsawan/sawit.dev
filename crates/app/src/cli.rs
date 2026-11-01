@@ -75,15 +75,7 @@ pub fn command_line() -> OpenRequest {
         }
         // The page goes to the running app, started first as `send` starts it.
         Ok(Invocation::Browse(target)) => {
-            let socket = paths.cli_socket();
-            let start =
-                || {
-                    launch_app().map_err(|e| format!("unable to start Sawit: {e}"))?;
-                    connect_when_ready(&socket, Duration::from_secs(20)).map(drop).ok_or_else(|| {
-                    "Sawit isn't responding. Open the app from Applications, then try again."
-                        .to_string()
-                })
-                };
+            let start = || start_app(&paths.cli_socket()).map(drop);
             std::process::exit(kebun::browse(target, &paths, &cwd, start));
         }
         Ok(Invocation::Help) => {
@@ -151,11 +143,7 @@ fn send(request: &OpenRequest) -> Result<(), String> {
     let socket = AppPaths::default_macos().cli_socket();
     let mut stream = match UnixStream::connect(&socket) {
         Ok(stream) => stream,
-        Err(_) => {
-            launch_app().map_err(|e| format!("unable to start Sawit: {e}"))?;
-            connect_when_ready(&socket, Duration::from_secs(20))
-                .ok_or("Sawit isn't responding. Open the app from Applications, then try again.")?
-        }
+        Err(_) => start_app(&socket)?,
     };
     stream
         .write_all(&encode(request))
@@ -178,6 +166,15 @@ fn send(request: &OpenRequest) -> Result<(), String> {
     } else {
         Err("Sawit closed the connection. Try again.".into())
     }
+}
+
+/// Starts the app ([`launch_app`]) and waits for it to listen on `socket`: the connection, or why
+/// there is none.
+fn start_app(socket: &Path) -> Result<UnixStream, String> {
+    launch_app().map_err(|e| format!("unable to start Sawit: {e}"))?;
+    connect_when_ready(socket, Duration::from_secs(20)).ok_or_else(|| {
+        "Sawit isn't responding. Open the app from Applications, then try again.".to_string()
+    })
 }
 
 /// Starts the app detached from this terminal: through LaunchServices for
