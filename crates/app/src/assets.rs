@@ -137,6 +137,11 @@ gpui_kit::assets::icon_assets!(
         Group,
         Component,
         Diamond,
+        // The pictures of the canvas's choices (src/board/option_icons.rs).
+        Diff,
+        RulerDimensionLine,
+        FoldHorizontal,
+        ScanSearch,
         // The browser's device menu (src/browser/toolbar.rs).
         Smartphone,
         Tablet,
@@ -252,6 +257,9 @@ impl AssetSource for AppAssets {
         }
         if let Some(svg) = crate::file_icons::asset(path) {
             return Ok(Some(Cow::Borrowed(svg)));
+        }
+        if let Some(svg) = crate::board::option_icons::asset(path) {
+            return Ok(Some(svg));
         }
         if path == LOGO_MARK {
             return Ok(Some(Cow::Borrowed(include_bytes!(

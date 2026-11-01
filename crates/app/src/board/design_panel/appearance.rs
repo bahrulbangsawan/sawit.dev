@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use super::number_field::NumberField;
 use super::{icon_button, row, section};
 use crate::board::BoardView;
+use crate::board::option_icons;
 
 /// The opacity field's picture.
 pub(super) const OPACITY_ICON: Lucide = Lucide::Contrast;
@@ -125,8 +126,9 @@ fn blend_of(sel: &DesignSelection) -> Option<BlendMode> {
 }
 
 /// The blend mode menu: its button shows the layers' mode ("Mixed" when they differ), and its
-/// items are every mode, theirs checked. Pass through, which a frame or a group composites with
-/// unless it is told otherwise, is among them.
+/// items are every mode, with the picture of its group (`option_icons::blend`), theirs checked.
+/// Pass through, which a frame or a group composites with unless it is told otherwise, is among
+/// them.
 fn blend_menu(sel: &Rc<DesignSelection>, view: &WeakEntity<BoardView>) -> AnyElement {
     let current = blend_of(sel);
     let label = current.map_or("Mixed", BlendMode::label);
@@ -144,10 +146,10 @@ fn blend_menu(sel: &Rc<DesignSelection>, view: &WeakEntity<BoardView>) -> AnyEle
             for mode in BlendMode::ALL {
                 let (sel, view) = (sel.clone(), view.clone());
                 let label = mode.label();
+                let picture = Some(option_icons::blend(mode));
                 let item = PopupMenuItem::element(move |_, _| {
-                    div()
+                    option_icons::menu_row(picture, label)
                         .debug_selector(move || format!("design-blend-{label}"))
-                        .child(label)
                 })
                 .checked(current == Some(mode))
                 .on_click(move |_, _, cx| {

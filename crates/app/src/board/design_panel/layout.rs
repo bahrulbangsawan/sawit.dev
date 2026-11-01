@@ -13,6 +13,7 @@ use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::*;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_board::design::layout::{add_layout, align_cell, remove_layout};
 use sawit_board::design::{DesignSelection, Edit, Mixed};
@@ -21,6 +22,7 @@ use serde_json::{Value, json};
 use super::number_field::NumberField;
 use super::{icon_button, row, section, set_props};
 use crate::board::BoardView;
+use crate::board::option_icons;
 
 /// The pictures of the buttons that add and remove auto layout.
 pub(super) const ADD_ICON: Lucide = Lucide::Plus;
@@ -58,7 +60,7 @@ const SIDES: [(&str, &str); 4] = [
 
 /// How a frame can size itself along an axis: what `node.set` takes, what the button shows, and
 /// what the menu says.
-const SIZINGS: [(&str, &str, &str); 3] = [
+pub(super) const SIZINGS: [(&str, &str, &str); 3] = [
     ("fixed", "Fixed", "Fixed"),
     ("hug", "Hug", "Hug contents"),
     ("fill", "Fill", "Fill container"),
@@ -330,10 +332,14 @@ fn sizing_menu(
         .iter()
         .find(|(name, ..)| Some(*name) == current)
         .map_or("Mixed", |(_, short, _)| *short);
+    // The heights' pictures are the widths' turned upright.
+    let vertical = key == "sizingV";
+    let shown = current.and_then(|sizing| option_icons::sizing(sizing, vertical));
     let (sel, view) = (sel.clone(), view.clone());
     let menu = Button::new(key)
         .ghost()
         .small()
+        .when_some(shown, |button, shown| button.icon(shown.icon()))
         .label(label)
         .dropdown_caret(true)
         .flex_1()
@@ -346,10 +352,10 @@ fn sizing_menu(
         .dropdown_menu(move |mut menu: PopupMenu, _, _| {
             for (name, _, long) in SIZINGS {
                 let (sel, view) = (sel.clone(), view.clone());
+                let picture = option_icons::sizing(name, vertical);
                 let item = PopupMenuItem::element(move |_, _| {
-                    div()
+                    option_icons::menu_row(picture, long)
                         .debug_selector(move || format!("design-{key}-{name}"))
-                        .child(long)
                 })
                 .checked(current == Some(name))
                 .on_click(move |_, _, cx| {

@@ -52,7 +52,7 @@ use gpui_kit::*;
 use sawit_board::layers::{self, DropPos, LayerIcon, LayerRow, PageRow, Reparent};
 use serde_json::{Value, json};
 
-use super::BoardView;
+use super::{BoardView, option_icons};
 
 /// The panel's width (spec D11).
 pub(super) const WIDTH: f32 = 240.;
@@ -1190,7 +1190,7 @@ fn rename_field(input: &Entity<InputState>, cx: &mut Context<BoardView>) -> AnyE
         .into_any_element()
 }
 
-/// The context menu of page `id`'s row: rename, duplicate and delete it.
+/// The context menu of page `id`'s row: rename, duplicate and delete it, each with its picture.
 fn page_menu(menu: PopupMenu, view: WeakEntity<BoardView>, id: NodeId) -> PopupMenu {
     let act = |action: fn(&mut BoardView, NodeId, &mut Context<BoardView>)| {
         let view = view.clone();
@@ -1199,19 +1199,25 @@ fn page_menu(menu: PopupMenu, view: WeakEntity<BoardView>, id: NodeId) -> PopupM
         }
     };
     menu.item(
-        PopupMenuItem::new("Rename page").on_click(act(|view, id, cx| {
-            view.start_page_rename(id, cx);
-        })),
+        PopupMenuItem::new("Rename page")
+            .icon(option_icons::RENAME_PAGE)
+            .on_click(act(|view, id, cx| {
+                view.start_page_rename(id, cx);
+            })),
     )
     .item(
-        PopupMenuItem::new("Duplicate page").on_click(act(|view, id, cx| {
-            view.page_action(PageAction::Duplicate(id), cx);
-        })),
+        PopupMenuItem::new("Duplicate page")
+            .icon(option_icons::DUPLICATE_PAGE)
+            .on_click(act(|view, id, cx| {
+                view.page_action(PageAction::Duplicate(id), cx);
+            })),
     )
     .item(
-        PopupMenuItem::new("Delete page").on_click(act(|view, id, cx| {
-            view.page_action(PageAction::Delete(id), cx);
-        })),
+        PopupMenuItem::new("Delete page")
+            .icon(option_icons::DELETE_PAGE)
+            .on_click(act(|view, id, cx| {
+                view.page_action(PageAction::Delete(id), cx);
+            })),
     )
 }
 

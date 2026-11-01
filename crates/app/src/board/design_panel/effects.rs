@@ -29,12 +29,13 @@ use super::{
     row_button, section,
 };
 use crate::board::BoardView;
+use crate::board::option_icons;
 
 /// The picture of the button that opens and closes an effect's editor.
 pub(super) const EDIT_ICON: Lucide = Lucide::Settings2;
 
 /// The kinds an effect row can be switched to, and what the menu calls them.
-const KINDS: [(&str, &str); 4] = [
+pub(super) const KINDS: [(&str, &str); 4] = [
     ("dropShadow", "Drop shadow"),
     ("innerShadow", "Inner shadow"),
     ("layerBlur", "Layer blur"),
@@ -183,7 +184,8 @@ fn kind_menu(
         });
     };
     let menu_id = format!("{id}-kind");
-    let choices = Choices::new(choices, Some(kind.clone()), pick);
+    let choices = Choices::new(choices, Some(kind.clone()), pick)
+        .with_pictures(|kind: &EffectKind| option_icons::effect(tag(kind)?));
     choice_menu(&menu_id, kind_name(kind), "Effect", choices, false).into_any_element()
 }
 
@@ -332,6 +334,17 @@ fn kind_of(tag: &str) -> EffectKind {
         "layerBlur" => EffectKind::LayerBlur,
         "backgroundBlur" => EffectKind::BackgroundBlur,
         other => EffectKind::Other(other.to_string()),
+    }
+}
+
+/// The engine's tag of an effect of `kind`, for a kind the panel edits.
+fn tag(kind: &EffectKind) -> Option<&'static str> {
+    match kind {
+        EffectKind::DropShadow => Some("dropShadow"),
+        EffectKind::InnerShadow => Some("innerShadow"),
+        EffectKind::LayerBlur => Some("layerBlur"),
+        EffectKind::BackgroundBlur => Some("backgroundBlur"),
+        EffectKind::Other(_) => None,
     }
 }
 

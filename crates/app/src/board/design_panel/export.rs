@@ -34,9 +34,10 @@ use super::{
     Choices, choice_menu, guarded, icon_button, mixed_row, on_click_edit, row, row_button, section,
 };
 use crate::board::BoardView;
+use crate::board::option_icons;
 
 /// The formats a row can be set to: each one's extension, and what the menu calls it.
-const FORMATS: [(&str, &str); 4] = [
+pub(super) const FORMATS: [(&str, &str); 4] = [
     ("png", "PNG"),
     ("jpg", "JPG"),
     ("svg", "SVG"),
@@ -136,7 +137,8 @@ fn format_menu(
     };
     let menu = format!("{id}-format");
     let label = shown.format.to_uppercase();
-    let choices = Choices::new(choices, current, pick);
+    let choices = Choices::new(choices, current, pick)
+        .with_pictures(|format: &&'static str| option_icons::export_format(format));
     choice_menu(&menu, label, "Format", choices, false).into_any_element()
 }
 

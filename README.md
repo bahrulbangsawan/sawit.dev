@@ -388,6 +388,11 @@ explained. A conflict on the same address can't be forced.
     (straight, elbow or curved), Text and Text on a path, Frame, Section and Slice, Rectangle, Line, Arrow, Ellipse,
     Polygon and Star (with **Place image…** at the end of their list), Pen and Pencil, Stamps, and a picker for
     templates and tables. A bar over the selection offers its colour, shape, text size and connector style and ends.
+  - Every choice shows a picture beside its name: the stamps' badges, the shapes' outlines, a straight, elbow or
+    curved line for the connector styles, and the arrowhead itself for a connector's ends. On the bar over a
+    connector, the line style and the two ends are pictures alone, in the order of the line: the start's
+    arrowheads face left and the end's face right, and pointing at one names it ("Start: None", "End: Triangle
+    arrow"). The bar shows **Mixed** in words when the selected items differ.
   - A design file has Move, Scale and Hand, Frame, Section and Slice, the same shapes and Place image…, Pen and
     Pencil, and Text and Text on a path. The board's own tools (stickies, shapes with text, connectors, ink, stamps)
     aren't there: they only work on a board.
@@ -402,7 +407,9 @@ explained. A conflict on the same address can't be forced.
   Click to select, double-click to rename, hide or lock a layer, drag layers to reorder or nest them, and filter by
   name. The Design panel on the right (<kbd>⌥</kbd><kbd>8</kbd>) edits the selection: position and size, auto layout,
   appearance, fill, stroke, effects, typography and export. A board opens with both panels hidden and a design file
-  with both shown, and the top bar toggles them.
+  with both shown, and the top bar toggles them. Its menus picture their choices too: the blend modes by group
+  (darken, lighten, contrast, difference, colour), the stroke inside, on or outside the edge, fixed, hug and fill
+  sizing, the four effects, and the export formats.
 - **Menus and shortcuts**: the ≡ button opens the main menu, and a right-click opens the context menu.
   <kbd>⌘</kbd><kbd>K</kbd> (or <kbd>⌘</kbd><kbd>/</kbd>) opens the **Actions** palette, which finds any menu command
   by name, and <kbd>⌃</kbd><kbd>⇧</kbd><kbd>?</kbd> lists every shortcut. A command that has nothing to act on is

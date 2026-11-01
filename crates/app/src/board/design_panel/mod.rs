@@ -47,12 +47,14 @@ use gpui_kit::base::actions::Cancel;
 use gpui_kit::component::button::*;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::*;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_board::BoardError;
 use sawit_board::design::{DesignSelection, Edit, Mixed, Section};
 use serde_json::{Value, json};
 
 use super::BoardView;
+use super::option_icons::{self, OptionIcon};
 use number_field::{Field, LabelDrag};
 
 /// The panel's width (spec D11).
@@ -508,18 +510,24 @@ fn mixed_row(
 }
 
 /// What a menu of choices ([`choice_menu`]) offers and does: its items, each a value and its name,
-/// which it asks for when it opens; the value the layers hold, if they hold one; and what a pick
-/// does with its value.
+/// which it asks for when it opens; the value the layers hold, if they hold one; what a pick
+/// does with its value; and the picture of each value, if the menu has them.
 struct Choices<T> {
     items: Box<Offer<T>>,
     current: Option<T>,
     pick: Rc<Pick<T>>,
+    /// The picture of a value, drawn before its name on the button and in the menu
+    /// ([`super::option_icons`]). `None` for a menu whose names are their own picture: a scale
+    /// ("2×"), a font's style ("Bold").
+    picture: Option<Rc<Picture<T>>>,
 }
 
 /// What a menu of choices offers: each value and its name.
 type Offer<T> = dyn Fn() -> Vec<(T, SharedString)>;
 /// What a pick from a menu of choices does with the value picked.
 type Pick<T> = dyn Fn(&T, &mut App);
+/// The picture of a value of a menu of choices.
+type Picture<T> = dyn Fn(&T) -> Option<OptionIcon>;
 
 impl<T> Choices<T> {
     fn new(
@@ -531,14 +539,22 @@ impl<T> Choices<T> {
             items: Box::new(items),
             current,
             pick: Rc::new(pick),
+            picture: None,
         }
+    }
+
+    /// The menu with `picture` of each value before its name.
+    fn with_pictures(mut self, picture: impl Fn(&T) -> Option<OptionIcon> + 'static) -> Self {
+        self.picture = Some(Rc::new(picture));
+        self
     }
 }
 
 /// A menu of choices for a property of the layers, drawn as `design-<id>`, taking an equal share
 /// of its row with the others: its button shows `label` (the layers' choice, or "Mixed" when they
-/// differ) and `tooltip`, and its items are the ones `choices` offers, each drawn as
-/// `design-<id>-<name>`, the one the layers hold checked. Like the blend mode and sizing menus, it
+/// differ), with the choice's picture when the menu has them, and `tooltip`, and its items are the
+/// ones `choices` offers, each drawn as `design-<id>-<name>` with its picture before its name, the
+/// one the layers hold checked. Like the blend mode and sizing menus, it
 /// leaves the keyboard where it was when it opened (delegate ruling on P5.T4). An `off` menu
 /// doesn't open.
 fn choice_menu<T: Clone + PartialEq + 'static>(
@@ -550,10 +566,12 @@ fn choice_menu<T: Clone + PartialEq + 'static>(
 ) -> Div {
     let selector = format!("design-{id}");
     let prefix = selector.clone();
+    let shown = (choices.picture.as_ref()).and_then(|picture| picture(choices.current.as_ref()?));
     let button = Button::new(SharedString::from(selector.clone()))
         .ghost()
         .small()
         .w_full()
+        .when_some(shown, |button, shown| button.icon(shown.icon()))
         .label(label)
         .dropdown_caret(true)
         .tooltip(tooltip)
@@ -565,16 +583,17 @@ fn choice_menu<T: Clone + PartialEq + 'static>(
             items: offered,
             current,
             pick,
+            picture,
         } = choices;
         let menu = button.dropdown_menu(move |mut menu: PopupMenu, _, _| {
             for (value, name) in offered() {
                 let checked = current.as_ref() == Some(&value);
                 let selector = format!("{prefix}-{name}");
                 let pick = pick.clone();
+                let shown = picture.as_ref().and_then(|picture| picture(&value));
                 let item = PopupMenuItem::element(move |_, _| {
-                    div()
-                        .debug_selector(|| selector.clone())
-                        .child(name.clone())
+                    let selector = selector.clone();
+                    option_icons::menu_row(shown, name.clone()).debug_selector(move || selector)
                 })
                 .checked(checked)
                 .on_click(move |_, _, cx| pick(&value, cx));
@@ -1532,6 +1551,42 @@ mod tests {
             let path = icon.path();
             let svg = crate::assets::AppAssets.load(&path).unwrap();
             assert!(svg.is_some(), "{path} isn't embedded");
+        }
+    }
+
+    /// Every choice of the panel's menus has a picture Sawit embeds, so that a choice added without
+    /// one fails here: the blend modes, the stroke positions, the sizings of both axes, the effect
+    /// kinds and the export formats. The scales ("2×") and the font's styles ("Bold") are words
+    /// that are their own picture, and have none.
+    #[test]
+    fn every_choice_of_the_design_panels_menus_has_a_picture() {
+        use figcraft_doc::color::BlendMode;
+        use gpui_kit::assets::IconNamed as _;
+
+        use super::super::option_icons::{self, OptionIcon};
+        use super::{effects, export, layout, paints};
+
+        let embedded = |icon: Option<OptionIcon>, what: &str| {
+            let icon = icon.unwrap_or_else(|| panic!("{what} has no picture"));
+            let path = icon.glyph.path();
+            let svg = crate::assets::AppAssets.load(&path).unwrap();
+            assert!(svg.is_some(), "{what}: {path} isn't embedded");
+        };
+        for mode in BlendMode::ALL {
+            embedded(Some(option_icons::blend(mode)), mode.label());
+        }
+        for (align, name) in paints::STROKE_ALIGNS {
+            embedded(option_icons::stroke_align(align), name);
+        }
+        for (sizing, _, name) in layout::SIZINGS {
+            embedded(option_icons::sizing(sizing, false), name);
+            embedded(option_icons::sizing(sizing, true), name);
+        }
+        for (kind, name) in effects::KINDS {
+            embedded(option_icons::effect(kind), name);
+        }
+        for (format, name) in export::FORMATS {
+            embedded(option_icons::export_format(format), name);
         }
     }
 }

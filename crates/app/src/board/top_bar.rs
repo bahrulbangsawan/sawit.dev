@@ -18,7 +18,7 @@ use gpui_kit::*;
 use sawit_core::nyawit;
 use serde_json::json;
 
-use super::{BoardView, TITLE, ToggleCanvasMaximize, command_keys, menus};
+use super::{BoardView, TITLE, ToggleCanvasMaximize, command_keys, menus, option_icons};
 
 /// The bar's height.
 pub(super) const HEIGHT: f32 = 36.;
@@ -223,7 +223,8 @@ fn design_toggle(shown: bool, tooltip: String, view: WeakEntity<BoardView>) -> B
         })
 }
 
-/// The zoom menu's item for `command`: the engine's label for it, and its `keys` on the right.
+/// The zoom menu's item for `command`: its picture, the engine's label for it, and its `keys` on
+/// the right.
 fn zoom_item(
     command: &'static str,
     keys: Option<String>,
@@ -240,6 +241,9 @@ fn zoom_item(
             .when_some(keys.clone(), |row, keys| {
                 row.child(div().text_color(cx.theme().muted_foreground).child(keys))
             })
+    })
+    .when_some(option_icons::zoom(command), |item, picture| {
+        item.icon(picture.icon())
     })
     .on_click(move |_, _, cx| {
         let _ = view.update(cx, |view, cx| view.choose(command, json!({}), cx));

@@ -6,6 +6,13 @@
 //! [`BoardView::choose`], but for the shape the selection has already: the engine refuses that
 //! one, so picking it does nothing (ruling P3-C2).
 //!
+//! Each menu's button shows the picture of the selection's choice ([`super::option_icons`]), and
+//! each item its picture beside its words. The shape and the text size show their words on the
+//! button too; how connectors run and their two caps are the picture alone, as FigJam's bar draws
+//! them, with their words in the tooltip and the name VoiceOver reads ("Line: Elbow", "Start:
+//! None", "End: Triangle arrow"). The start cap's pictures face left and the end cap's right, so
+//! the two buttons read as the two ends of the line.
+//!
 //! The bar's bottom goes 12 px above the selection, and the bar stays inside the canvas
 //! (`context_bar::clamp_anchor`, ruling P3-C3), over the toolbar that floats at the canvas's
 //! bottom: under it, the toolbar would cover the bar. It is never wider than the canvas less 8 px
@@ -21,6 +28,7 @@ use gpui_kit::*;
 use sawit_board::context_bar::{self as model, Control, ControlOption};
 
 use super::BoardView;
+use super::option_icons::{self, OptionIcon};
 use super::toolbar::{self, SWATCH, divider, swatch};
 
 /// The bar's height.
@@ -36,24 +44,36 @@ const GAP: f64 = 2.;
 /// ([`divider`]).
 const DIVIDER: f64 = 9.;
 
-/// How wide `control` is: its swatches side by side, or its menu's button. A button fits the
-/// longest label it can show, "Mixed" included, in 14 px text (a small button's text at a 16 px
+/// The side of a choice's picture on a button that shows the picture alone.
+const GLYPH: f32 = 16.;
+/// The side of a choice's picture beside words, on a button that shows its words too.
+const SMALL_GLYPH: f32 = option_icons::MENU_GLYPH;
+
+/// What the bar shows when the selected items' choices differ.
+const MIXED: &str = "Mixed";
+
+/// How wide `control` is: its swatches side by side, or its menu's button. A button with words
+/// fits the longest it can show, "Mixed" included, in 14 px text (a small button's text at a 16 px
 /// rem; Sawit's 13 px rem draws it at 11.375 px), plus 34 px for its padding, the gap and the
-/// caret. A longer label is cut short with an ellipsis.
+/// caret, and the picture and its gap. A longer label is cut short with an ellipsis. A button of a
+/// picture alone (how connectors run, their caps) is the picture, its padding and the caret, or as
+/// wide as "Mixed" when the items differ.
 fn width(control: &Control) -> f64 {
+    let picture = f64::from(SMALL_GLYPH) + 4.0;
     match control {
         Control::Colors { items, .. } => {
             let swatches = items.len() as f64;
             swatches * f64::from(SWATCH) + (swatches - 1.0).max(0.0) * GAP
         }
         // "Rounded rectangle", "Speech bubble".
-        Control::Shape { .. } => 160.,
+        Control::Shape { .. } => 160. + picture,
         // "Mixed", which it shows when the selected texts' sizes differ or aren't S, M, L or XL:
-        // 38.5 px in 14 px text, over twice the longest size, "XL".
+        // 38.5 px in 14 px text, over twice the longest size, "XL", and its picture.
         Control::FontSize { .. } => 76.,
-        Control::Routing { .. } => 92.,
-        // "Reversed triangle", "Triangle arrow".
-        Control::StartCap { .. } | Control::EndCap { .. } => 156.,
+        Control::Routing { current: None }
+        | Control::StartCap { current: None }
+        | Control::EndCap { current: None } => 68.,
+        Control::Routing { .. } | Control::StartCap { .. } | Control::EndCap { .. } => 48.,
     }
 }
 
@@ -66,16 +86,34 @@ pub(super) fn size(controls: &[Control]) -> (f64, f64) {
     (widths + lines + 2.0 * (PADDING + BORDER), HEIGHT)
 }
 
-/// What the tooltip of `control`'s menu calls it.
+/// What the tooltip of `control`'s menu calls it, before the choice it shows ("Start: None").
 fn name(control: &Control) -> &'static str {
     match control {
         Control::Colors { .. } => "Color",
         Control::Shape { .. } => "Shape",
         Control::FontSize { .. } => "Text size",
-        Control::Routing { .. } => "Line style",
-        Control::StartCap { .. } => "Line start",
-        Control::EndCap { .. } => "Line end",
+        Control::Routing { .. } => "Line",
+        Control::StartCap { .. } => "Start",
+        Control::EndCap { .. } => "End",
     }
+}
+
+/// The heading of `control`'s menu, for the two cap menus, whose items are alike but for the way
+/// their pictures face.
+fn heading(control: &Control) -> Option<&'static str> {
+    match control {
+        Control::StartCap { .. } => Some("Line start"),
+        Control::EndCap { .. } => Some("Line end"),
+        _ => None,
+    }
+}
+
+/// Whether `control`'s button shows its choice's picture alone, its words going to its tooltip.
+fn picture_alone(control: &Control) -> bool {
+    matches!(
+        control,
+        Control::Routing { .. } | Control::StartCap { .. } | Control::EndCap { .. }
+    )
 }
 
 /// The context bar over the selection of `view`'s board, if it has one to show: not while a
@@ -192,8 +230,31 @@ fn swatches(options: Vec<ControlOption>, view: &WeakEntity<BoardView>) -> Div {
     h_flex().gap(px(GAP as f32)).children(swatches)
 }
 
-/// The menu of `control`: its button shows the selection's value ("Mixed" when the items differ),
-/// and its items are `options`, the selection's one checked.
+/// The picture and the words of the choice a menu's button shows: `picture` at `side` px, drawn
+/// as `<id>-picture`, then `words` when given.
+fn face(id: &'static str, picture: Option<OptionIcon>, side: f32, words: Option<String>) -> Div {
+    h_flex()
+        .min_w_0()
+        .gap_1()
+        .children(picture.map(|picture| {
+            div()
+                .flex_none()
+                .debug_selector(move || format!("{id}-picture"))
+                .child(picture.element(px(side)))
+        }))
+        .children(words.map(|words| {
+            div()
+                .min_w_0()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .child(words)
+        }))
+}
+
+/// The menu of `control`: its button shows the picture of the selection's choice, with its words
+/// unless [`picture_alone`], or "Mixed" when the items differ, and is named "Shape: Rectangle" in
+/// its tooltip and to VoiceOver. Its items are `options`, each with its picture before its words
+/// and the selection's checked.
 fn menu(
     control: &Control,
     options: Vec<ControlOption>,
@@ -207,29 +268,50 @@ fn menu(
         Control::StartCap { .. } => "board-context-start",
         Control::EndCap { .. } => "board-context-end",
     };
-    let current = (options.iter())
-        .find(|option| option.selected)
-        .map_or_else(|| "Mixed".to_owned(), |option| option.label.clone());
+    let current = options.iter().find(|option| option.selected);
+    let named = format!(
+        "{}: {}",
+        name(control),
+        current.map_or(MIXED, |option| option.label.as_str())
+    );
+    let shown = match current {
+        Some(option) if picture_alone(control) => {
+            face(id, option_icons::of_params(&option.params), GLYPH, None)
+        }
+        Some(option) => face(
+            id,
+            option_icons::of_params(&option.params),
+            SMALL_GLYPH,
+            Some(option.label.clone()),
+        ),
+        None => face(id, None, SMALL_GLYPH, Some(MIXED.to_owned())),
+    };
     // The engine refuses the shape the selection has already: picking it does nothing.
     let shape = matches!(control, Control::Shape { .. });
+    let heading = heading(control);
     let view = view.clone();
     Button::new(id)
         .ghost()
         .small()
-        .label(current)
+        .child(shown)
         .dropdown_caret(true)
         .w(px(width(control) as f32))
-        .tooltip(name(control))
+        .accessibility_label(named.clone())
+        .tooltip(named)
         .debug_selector(move || id.to_owned())
         .dropdown_menu(move |mut menu: PopupMenu, _, _| {
+            if let Some(heading) = heading {
+                menu = menu.label(heading);
+            }
             for option in &options {
                 let runs = !(shape && option.selected);
                 let (command, params, view) = (option.command, option.params.clone(), view.clone());
                 let label = option.label.clone();
+                let picture = option_icons::of_params(&params);
                 let item = PopupMenuItem::element(move |_, _| {
-                    div()
-                        .debug_selector(|| format!("{id}-{label}"))
-                        .child(label.clone())
+                    let label = label.clone();
+                    option_icons::menu_row(picture, label.clone())
+                        .debug_selector(move || format!("{id}-{label}"))
                 })
                 .checked(option.selected)
                 .on_click(move |_, _, cx| {
@@ -242,4 +324,104 @@ fn menu(
             }
             menu
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::{TestAppContext, VisualTestContext, px};
+    use sawit_board::context_bar::{Control, context_bar};
+    use serde_json::json;
+
+    use super::super::tests::{Scratch, chrome_canvas, click, run_op};
+    use super::{GLYPH, width};
+
+    /// The value the context bar's end cap control shows for the selection.
+    fn end_cap(
+        view: &gpui_kit::Entity<super::BoardView>,
+        cx: &VisualTestContext,
+    ) -> Option<String> {
+        view.read_with(cx, |view, _| {
+            let bar = context_bar(&view.board().unwrap().session)?;
+            bar.controls.into_iter().find_map(|control| match control {
+                Control::EndCap { current } => current,
+                _ => None,
+            })
+        })
+    }
+
+    /// The bug the user saw: three text dropdowns, nothing saying which end each cap is. Each now
+    /// shows its choice's picture, at a size of its own, the caps' facing their ends, and a pick
+    /// from the end cap's menu sets the end cap.
+    #[gpui_kit::test]
+    fn the_connector_menus_show_their_choices_pictures(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("context-pictures");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        let connector = json!({
+            "op": "command", "command": "board.connector",
+            "params": {"from": {"x": -200, "y": 100}, "to": {"x": 200, "y": 100}},
+        });
+        run_op(&view, connector, &mut cx);
+        cx.run_until_parked();
+        // The picture alone, and the caret: no words.
+        let alone = width(&Control::EndCap {
+            current: Some("none".into()),
+        });
+        for (id, picture) in [
+            ("board-context-routing", "board-context-routing-picture"),
+            ("board-context-start", "board-context-start-picture"),
+            ("board-context-end", "board-context-end-picture"),
+        ] {
+            let button = cx
+                .debug_bounds(id)
+                .unwrap_or_else(|| panic!("{id} isn't drawn"));
+            assert_eq!(f64::from(button.size.width), alone, "{id}");
+            let drawn = cx
+                .debug_bounds(picture)
+                .unwrap_or_else(|| panic!("{picture}"));
+            assert_eq!(drawn.size.width, px(GLYPH), "{id}");
+            assert!(button.contains(&drawn.center()), "{id}");
+        }
+
+        // The end cap's menu lists the caps with their pictures; Circle sets it.
+        click(&mut cx, "board-context-end");
+        cx.run_until_parked();
+        click(&mut cx, "board-context-end-Circle");
+        cx.run_until_parked();
+        assert_eq!(end_cap(&view, &cx).as_deref(), Some("circleFilled"));
+        assert!(cx.debug_bounds("board-context-end-picture").is_some());
+    }
+
+    /// Connectors whose caps differ show "Mixed", in words, on a button wide enough for them, and
+    /// no picture.
+    #[gpui_kit::test]
+    fn a_mixed_choice_shows_its_words(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("context-mixed");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        let mut ids = Vec::new();
+        for (y, cap) in [(0, "none"), (120, "triangleArrow")] {
+            let connector = json!({
+                "op": "command", "command": "board.connector",
+                "params": {"from": {"x": -200, "y": y}, "to": {"x": 200, "y": y}},
+            });
+            // The new connector is selected, and the style goes to it.
+            run_op(&view, connector, &mut cx);
+            let style = json!({
+                "op": "command", "command": "board.setStyle", "params": {"endCap": cap},
+            });
+            run_op(&view, style, &mut cx);
+            let id = view.read_with(&cx, |view, _| {
+                let ds = view.board().unwrap().session.ds().unwrap();
+                ds.selection.first().copied().unwrap()
+            });
+            ids.push(id);
+        }
+        let select = json!({"op": "command", "command": "select.set", "params": {"ids": ids}});
+        run_op(&view, select, &mut cx);
+        cx.run_until_parked();
+        assert_eq!(end_cap(&view, &cx), None);
+        let button = cx.debug_bounds("board-context-end").expect("the end cap");
+        let mixed = width(&Control::EndCap { current: None });
+        assert_eq!(f64::from(button.size.width), mixed);
+        assert!(cx.debug_bounds("board-context-end-picture").is_none());
+    }
 }

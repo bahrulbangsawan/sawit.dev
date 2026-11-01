@@ -40,6 +40,7 @@ use super::{
     row_button, section,
 };
 use crate::board::BoardView;
+use crate::board::option_icons;
 
 /// The picture of the buttons that add a paint or an effect, and of those that remove one.
 pub(super) const ADD_ICON: Lucide = Lucide::Plus;
@@ -59,7 +60,7 @@ const SWATCH: f32 = 20.;
 const DASHES: [f64; 2] = [4.0, 4.0];
 
 /// Where a stroke can sit on the layer's edge: what `node.set` takes, and what the menu says.
-const STROKE_ALIGNS: [(&str, &str); 3] = [
+pub(super) const STROKE_ALIGNS: [(&str, &str); 3] = [
     ("inside", "Inside"),
     ("center", "Center"),
     ("outside", "Outside"),
@@ -313,7 +314,8 @@ fn stroke_align(sel: &DesignSelection, view: &WeakEntity<BoardView>) -> AnyEleme
             view.edit_layers(|sel| Some(sel.set("strokeAlign", json!(align))), cx);
         });
     };
-    let choices = Choices::new(choices, current, pick);
+    let choices = Choices::new(choices, current, pick)
+        .with_pictures(|align: &&'static str| option_icons::stroke_align(align));
     choice_menu("strokeAlign", label, "Stroke position", choices, false).into_any_element()
 }
 

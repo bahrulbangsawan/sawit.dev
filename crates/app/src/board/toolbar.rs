@@ -63,35 +63,15 @@ pub(super) struct Picker {
     pub(super) hover: Option<(u32, u32)>,
 }
 
-/// The Lucide icon that pictures a tool: the nearest one Sawit's set has.
+/// The Lucide icon that pictures a tool, from the canvas's one mapping of pictures
+/// ([`super::option_icons::tool`]).
 pub(super) fn tool_icon(icon: ToolIcon) -> Lucide {
-    match icon {
-        ToolIcon::Move => Lucide::MousePointer2,
-        ToolIcon::Hand => Lucide::Hand,
-        ToolIcon::Scale => Lucide::Scaling,
-        ToolIcon::Frame => Lucide::Frame,
-        ToolIcon::Section => Lucide::SquareDashed,
-        ToolIcon::Slice => Lucide::Slice,
-        ToolIcon::Rectangle => Lucide::Square,
-        ToolIcon::Line => Lucide::Slash,
-        ToolIcon::Arrow => Lucide::ArrowUpRight,
-        ToolIcon::Ellipse => Lucide::Circle,
-        ToolIcon::Polygon => Lucide::Triangle,
-        ToolIcon::Star => Lucide::Star,
-        ToolIcon::Pen => Lucide::PenTool,
-        ToolIcon::Pencil => Lucide::Pencil,
-        ToolIcon::Text => Lucide::Type,
-        ToolIcon::Marker => Lucide::PenLine,
-        ToolIcon::Highlighter => Lucide::Highlighter,
-        ToolIcon::Eraser => Lucide::Eraser,
-        ToolIcon::Sticky => Lucide::StickyNote,
-        ToolIcon::Shapes => Lucide::Shapes,
-        ToolIcon::Connector => Lucide::Spline,
-        ToolIcon::Stamp => Lucide::Stamp,
-        ToolIcon::TextOnPath => Lucide::Signature,
-        ToolIcon::Image => Lucide::ImagePlus,
-    }
+    super::option_icons::tool(icon)
 }
+
+/// The side of a choice's picture in a flyout: a stamp's badge, a shape's outline, a connector's
+/// line.
+const OPTION_GLYPH: f32 = 16.;
 
 impl BoardView {
     /// The picker opens: the engine lists the templates now, once, for as long as it stays open
@@ -331,6 +311,7 @@ fn flyout(
         .icon(CHEVRON_ICON)
         .w(px(CHEVRON))
         .h(px(BUTTON))
+        .accessibility_label(flyout_name(f))
         .tooltip(flyout_name(f))
         .debug_selector(move || format!("board-flyout-{name}"));
     let (on_change, view) = (view.clone(), view.clone());
@@ -355,8 +336,8 @@ fn flyout(
     .content(move |_, _, cx| flyout_items(&items, &view, cx))
 }
 
-/// A flyout's choices: a row of swatches for colours, else a list of labels with the one the
-/// tool makes now checked, and for a group's tools each tool's picture and keys. Picking one closes
+/// A flyout's choices: a row of swatches for colours, else a list of pictures and labels with the
+/// one the tool makes now checked, and for a group's tools each tool's keys. Picking one closes
 /// the flyout and runs its command with its params; Place image… asks for the file, as its menu
 /// item does.
 fn flyout_items(
@@ -411,8 +392,14 @@ fn flyout_items(
             .child(div().w(px(14.)).when(item.selected, |slot| {
                 slot.child(Icon::new(CHECK_ICON).xsmall())
             }))
+            // The choice's picture before its words: a tool's icon, or a stamp's badge, a shape's
+            // outline, a connector's line (`option_icons`).
             .when_some(item.icon, |row, icon| {
                 row.child(Icon::new(tool_icon(icon)).small())
+            })
+            .when(item.icon.is_none(), |row| {
+                let picture = super::option_icons::of_params(&item.params);
+                row.children(picture.map(|picture| picture.element(px(OPTION_GLYPH))))
             })
             .child(div().flex_1().child(item.label.clone()))
             .when_some(keys.clone(), |row, keys| {

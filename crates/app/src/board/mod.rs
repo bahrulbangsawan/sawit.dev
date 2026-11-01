@@ -33,6 +33,7 @@ mod design_panel;
 mod events;
 mod layers_panel;
 mod menus;
+pub(crate) mod option_icons;
 mod overlay_paint;
 mod paint;
 mod text_input;
@@ -5735,10 +5736,11 @@ mod tests {
         let bar = whole(&mut cx);
         assert!(bar.size.width < canvas.size.width - px(16.));
 
-        // A 400 px canvas, narrower than the bar: the bar is as wide as the canvas less 8 px at
-        // each side, and its controls keep their size, the end cap's menu past its right edge.
-        let canvas = resize(&mut cx, 400.);
-        assert_eq!(canvas.size.width, px(400.));
+        // A 300 px canvas, narrower than the bar (391 px, its menus' buttons pictures alone): the
+        // bar is as wide as the canvas less 8 px at each side, and its controls keep their size,
+        // the end cap's menu past its right edge.
+        let canvas = resize(&mut cx, 300.);
+        assert_eq!(canvas.size.width, px(300.));
         let inside = |bounds: Bounds<Pixels>| {
             bounds.left() >= canvas.left() + px(8.) && bounds.right() <= canvas.right() - px(8.)
         };
