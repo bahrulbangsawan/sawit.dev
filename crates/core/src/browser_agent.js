@@ -95,14 +95,36 @@
   // ---- Network ----
 
   const TEXTUAL = /json|text|xml|javascript|graphql|x-www-form-urlencoded/i;
+  // What is typed into the page's password fields, as a request carries it: as typed, in a form's
+  // encoding, URL-encoded and inside a JSON string, longest first. A request is logged with
+  // "[redacted]" there, whatever the field's name; Sawit then hides the values of fields named
+  // like secrets (password, token, api_key, …). Values shorter than 4 characters are left: they
+  // would hide the same letters everywhere else.
+  const typedPasswords = () => {
+    const found = [];
+    try {
+      for (const field of document.querySelectorAll('input[type="password"]')) {
+        const value = field.value;
+        if (typeof value !== "string" || value.length < 4) continue;
+        const forms = [value, encodeURIComponent(value), JSON.stringify(value).slice(1, -1)];
+        if (typeof URLSearchParams === "function") forms.push(new URLSearchParams([["", value]]).toString().slice(1));
+        for (const form of forms) if (!found.includes(form)) found.push(form);
+      }
+    } catch (_) {}
+    return found.sort((a, b) => b.length - a.length);
+  };
+  const hideTyped = (text) => {
+    for (const value of typedPasswords()) text = text.split(value).join("[redacted]");
+    return text;
+  };
   const bodyText = (body) => {
     if (body == null) return undefined;
-    if (typeof body === "string") return clip(body, 2048);
-    if (body instanceof URLSearchParams) return clip(body.toString(), 2048);
+    if (typeof body === "string") return clip(hideTyped(body), 2048);
+    if (body instanceof URLSearchParams) return clip(hideTyped(body.toString()), 2048);
     if (body instanceof FormData) {
       const parts = [];
       for (const [key, value] of body.entries()) parts.push(key + "=" + (typeof value === "string" ? value : "[file " + value.name + "]"));
-      return clip(parts.join("&"), 2048);
+      return clip(hideTyped(parts.join("&")), 2048);
     }
     return "[" + (body.constructor ? body.constructor.name : "binary") + "]";
   };
@@ -112,7 +134,7 @@
       const start = now();
       const request = input instanceof Request ? input : null;
       const method = String((init && init.method) || (request && request.method) || "GET").toUpperCase();
-      const url = absolute(request ? request.url : String(input));
+      const url = hideTyped(absolute(request ? request.url : String(input)));
       const entry = { method, url, kind: "fetch", request_body: bodyText(init && init.body), time_ms: start };
       const promise = originalFetch.apply(this, arguments);
       promise.then(
@@ -158,7 +180,7 @@
     // A call on something that isn't a request gets the browser's own error: in strict mode
     // `this` isn't made an object, and a WeakMap would throw first.
     try {
-      xhrs.set(this, { method: String(method).toUpperCase(), url: absolute(String(url)) });
+      xhrs.set(this, { method: String(method).toUpperCase(), url: hideTyped(absolute(String(url))) });
     } catch (_) {}
     return xhrOpen.apply(this, arguments);
   };

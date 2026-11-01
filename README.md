@@ -281,6 +281,8 @@ explained. A conflict on the same address can't be forced.
   the page's design. An agent uses its own project's browser (the project it names, else the one it runs in),
   even while you look at another project of the window, and in the background: only opening a page, a
   screenshot or a device size brings it forward.
+- The requests an agent reads keep no secrets: what you type into a password field, and the values of fields named
+  like secrets (password, token, API key, authorization, cookie, session, …) in URLs and bodies, read `[redacted]`.
 
 ### Canvas
 

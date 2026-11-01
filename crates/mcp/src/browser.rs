@@ -608,7 +608,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Read the browser tab's requests: fetch/XHR with method, status, duration and (cut) request and response bodies, plus scripts, styles and images; filter by URL text or failures. With clear: true it then empties the tab's network log, all of it"
+        description = "Read the browser tab's requests: fetch/XHR with method, status, duration and (cut) request and response bodies, plus scripts, styles and images; filter by URL text or failures. Secrets read [redacted]: what is typed into the page's password fields, and the values of fields named like secrets (password, token, api_key, authorization, cookie, session, …) in URLs and bodies. With clear: true it then empties the tab's network log, all of it"
     )]
     async fn browser_network(&self, Parameters(a): Parameters<NetworkArgs>) -> CallToolResult {
         let op = BrowserOp::Network {
