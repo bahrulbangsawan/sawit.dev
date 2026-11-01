@@ -867,3 +867,19 @@ fn rename_trims_and_clears() {
     t.toggle_right_clicks(1);
     assert!(t.panes[&1].send_right_clicks);
 }
+
+/// A tab's own name is apart from its panes': splitting, focusing another pane or closing one
+/// leaves it as it is.
+#[test]
+fn a_tab_name_stays_with_the_tab() {
+    let mut t = TabState::new(1);
+    t.rename_tab("  server  ");
+    assert_eq!(t.name.as_deref(), Some("server"));
+    assert_eq!(t.panes[&1].name, None, "the pane took the tab's name");
+    assert!(t.split(SplitDir::Right, 2, tab_area(), TAB_MIN));
+    t.focus(1);
+    t.close(2);
+    assert_eq!(t.name.as_deref(), Some("server"));
+    t.rename_tab(" ");
+    assert_eq!(t.name, None);
+}

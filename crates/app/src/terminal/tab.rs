@@ -2,7 +2,9 @@
 //! `TabState` split layout. A tab with one pane shows it full size; with
 //! more, each pane gets a header and a border, and the dividers between
 //! them can be dragged. Right-clicking a pane opens its menu (rename,
-//! split, zoom, right-click routing, close). When a pane's process ends, a
+//! split, zoom, right-click routing, close), each item with its key. A tab
+//! can have a name of its own, which the tab strip shows whichever pane has
+//! focus. When a pane's process ends, a
 //! plain shell in a split closes its pane; any other pane says so in a
 //! banner, with what can be done next.
 
@@ -25,7 +27,10 @@ use sawit_core::terminal::{
 };
 
 use super::view::{PAD_X, TerminalEvent, TerminalView, cell_size};
-use super::{FocusDown, FocusLeft, FocusRight, FocusUp, SplitDown, SplitRight, ZoomPane};
+use super::{
+    ClosePane, FocusDown, FocusLeft, FocusRight, FocusUp, RenamePane, RenameTab, SplitDown,
+    SplitRight, ToggleSendRightClicks, ZoomPane,
+};
 use crate::states::Banner;
 
 /// Height of a pane's header, its bottom border included (boxes are
@@ -40,18 +45,31 @@ const PANE_BORDER: Pixels = px(1.);
 const ROUNDING: f32 = 1.;
 /// Width of the grab strip centred on each divider.
 const DIVIDER_HIT: f32 = 5.;
-/// Width of the field that renames a pane.
+/// Width of the field that renames a pane or the tab.
 const RENAME_W: Pixels = px(160.);
 
-/// The pane menu, in order: each label, with `Some(checked)` for a toggle.
-pub fn pane_menu_items(zoomed: bool, send_right_clicks: bool) -> Vec<(&'static str, Option<bool>)> {
+/// One item of the pane menu: its label, `Some(checked)` for a toggle, and
+/// the action whose key the menu shows beside it.
+pub type PaneMenuItem = (&'static str, Option<bool>, Box<dyn Action>);
+
+/// The pane menu, in order. A click on an item acts on the pane the menu
+/// was opened for; its key acts on the pane with the keyboard.
+pub fn pane_menu_items(zoomed: bool, send_right_clicks: bool) -> Vec<PaneMenuItem> {
     vec![
-        ("Rename pane", None),
-        ("Split right", None),
-        ("Split down", None),
-        (if zoomed { "Unzoom" } else { "Zoom" }, None),
-        ("Send right-clicks to pane", Some(send_right_clicks)),
-        ("Close pane", None),
+        ("Rename pane", None, Box::new(RenamePane)),
+        ("Split right", None, Box::new(SplitRight)),
+        ("Split down", None, Box::new(SplitDown)),
+        (
+            if zoomed { "Unzoom" } else { "Zoom" },
+            None,
+            Box::new(ZoomPane),
+        ),
+        (
+            "Send right-clicks to pane",
+            Some(send_right_clicks),
+            Box::new(ToggleSendRightClicks),
+        ),
+        ("Close pane", None, Box::new(ClosePane)),
     ]
 }
 
@@ -103,7 +121,7 @@ pub struct TerminalTab {
     drag: Option<Drag>,
     /// The pane menu while it is open.
     menu: Option<Menu>,
-    /// The pane being renamed, if any.
+    /// The pane or the tab being renamed, if any.
     renaming: Option<Rename>,
     /// The window the tab last drew in, where its pane menu opens.
     window: Option<AnyWindowHandle>,
@@ -120,9 +138,18 @@ struct Menu {
     _dismiss: Subscription,
 }
 
-/// A pane being renamed.
+/// What a rename field names.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Renamed {
+    /// A pane, in its header.
+    Pane(PaneId),
+    /// The tab, in the tab strip.
+    Tab,
+}
+
+/// A pane or the tab being renamed.
 struct Rename {
-    pane: PaneId,
+    what: Renamed,
     input: Entity<InputState>,
     _events: Subscription,
 }
@@ -298,9 +325,22 @@ impl TerminalTab {
             .and_then(|meta| meta.name.as_deref())
     }
 
-    /// The focused pane's name, else its program's title.
+    /// The tab's name, else the focused pane's name, else its program's
+    /// title.
     pub fn title(&self, cx: &App) -> SharedString {
-        self.pane_title(self.state.focused, self.focused_view().read(cx))
+        match &self.state.name {
+            Some(name) => name.clone().into(),
+            None => self.pane_title(self.state.focused, self.focused_view().read(cx)),
+        }
+    }
+
+    /// What the tab strip calls the tab, before the state it adds (`(exited)`):
+    /// the tab's name, else what its focused pane's header would.
+    pub fn label(&self, cx: &App) -> SharedString {
+        match &self.state.name {
+            Some(name) => name.clone().into(),
+            None => self.pane_label(self.state.focused, self.focused_view().read(cx)),
+        }
     }
 
     /// Gives the keyboard to the focused pane.
@@ -453,7 +493,11 @@ impl TerminalTab {
             }
             Removed::Focus(_) => {
                 self.views.remove(&pane);
-                if self.renaming.as_ref().is_some_and(|r| r.pane == pane) {
+                if self
+                    .renaming
+                    .as_ref()
+                    .is_some_and(|r| r.what == Renamed::Pane(pane))
+                {
                     self.renaming = None;
                 }
                 if refocus {
@@ -493,12 +537,13 @@ impl TerminalTab {
         let tab = cx.entity().downgrade();
         let menu = PopupMenu::build(window, cx, move |mut menu, _, _| {
             menu = menu.action_context(back);
-            for (label, checked) in pane_menu_items(zoomed, send) {
+            for (label, checked, action) in pane_menu_items(zoomed, send) {
                 let tab = tab.clone();
                 let item = match checked {
                     Some(checked) => PopupMenuItem::new(label).checked(checked),
                     None => PopupMenuItem::new(label),
                 }
+                .action(action)
                 // One pane has nothing to zoom over.
                 .disabled(!split && label == "Zoom");
                 menu = menu.item(item.on_click(move |_, window, cx| {
@@ -531,7 +576,7 @@ impl TerminalTab {
         cx: &mut Context<Self>,
     ) {
         match label {
-            "Rename pane" => self.start_rename(pane, window, cx),
+            "Rename pane" => self.rename_pane(pane, window, cx),
             "Split right" => {
                 self.focus_pane(pane, window, cx);
                 window.dispatch_action(Box::new(SplitRight), cx);
@@ -541,36 +586,59 @@ impl TerminalTab {
                 window.dispatch_action(Box::new(SplitDown), cx);
             }
             "Zoom" | "Unzoom" => self.toggle_zoom(pane, window, cx),
-            "Send right-clicks to pane" => {
-                self.state.toggle_right_clicks(pane);
-                let send = self
-                    .state
-                    .panes
-                    .get(&pane)
-                    .is_some_and(|meta| meta.send_right_clicks);
-                if let Some(view) = self.views.get(&pane) {
-                    view.update(cx, |v, _| v.send_right_clicks = send);
-                }
-            }
+            "Send right-clicks to pane" => self.toggle_right_clicks(pane, cx),
             "Close pane" => self.close_pane(pane, window, cx),
             _ => {}
         }
     }
 
-    /// Puts a field for `pane`'s name in its header (in the tab strip when
-    /// the tab has one pane), filled with its title and selected. Enter
-    /// names the pane; Escape or leaving the field keeps the old name.
-    pub(super) fn start_rename(
+    /// Flips whether `pane`'s right-clicks go to its program.
+    fn toggle_right_clicks(&mut self, pane: PaneId, cx: &mut Context<Self>) {
+        self.state.toggle_right_clicks(pane);
+        let send = self
+            .state
+            .panes
+            .get(&pane)
+            .is_some_and(|meta| meta.send_right_clicks);
+        if let Some(view) = self.views.get(&pane) {
+            view.update(cx, |v, _| v.send_right_clicks = send);
+        }
+    }
+
+    /// Puts a field for `pane`'s name in its header. A tab of one pane has
+    /// no header, and its pane is all there is to see of it, so the tab is
+    /// renamed instead: the name then stays on the tab when it is split.
+    pub(super) fn rename_pane(
         &mut self,
         pane: PaneId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(view) = self.views.get(&pane) else {
-            return;
+        if self.state.is_split() {
+            self.start_rename(Renamed::Pane(pane), window, cx);
+        } else {
+            self.start_rename(Renamed::Tab, window, cx);
+        }
+    }
+
+    /// Puts a field for the tab's name in the tab strip.
+    pub fn rename_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_rename(Renamed::Tab, window, cx);
+    }
+
+    /// Puts a field for a pane's name in its header, or for the tab's in the
+    /// tab strip, filled with the name shown there and selected. Enter names
+    /// the pane or the tab (an empty name clears it); Escape or leaving the
+    /// field keeps the old name.
+    fn start_rename(&mut self, what: Renamed, window: &mut Window, cx: &mut Context<Self>) {
+        let shown = match what {
+            Renamed::Pane(pane) => match self.views.get(&pane) {
+                Some(view) => self.pane_label(pane, view.read(cx)),
+                None => return,
+            },
+            Renamed::Tab => self.label(cx),
         };
-        let title = self.pane_label(pane, view.read(cx));
-        let input = cx.new(|cx| InputState::new(window, cx).default_value(title));
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(shown));
         input.update(cx, |s, cx| {
             s.focus(window, cx);
             s.select_all(window, cx);
@@ -578,7 +646,10 @@ impl TerminalTab {
         let events = cx.subscribe_in(&input, window, move |this, input, e, window, cx| match e {
             InputEvent::PressEnter { .. } => {
                 let name = input.read(cx).value();
-                this.state.rename(pane, &name);
+                match what {
+                    Renamed::Pane(pane) => this.state.rename(pane, &name),
+                    Renamed::Tab => this.state.rename_tab(&name),
+                }
                 this.end_rename(window, cx);
             }
             InputEvent::Blur => {
@@ -589,7 +660,7 @@ impl TerminalTab {
             InputEvent::Change | InputEvent::Focus => {}
         });
         self.renaming = Some(Rename {
-            pane,
+            what,
             input,
             _events: events,
         });
@@ -607,7 +678,17 @@ impl TerminalTab {
 
     /// The field renaming `pane`, while it is open.
     pub fn rename_field(&self, tab: WeakEntity<Self>, pane: PaneId) -> Option<AnyElement> {
-        let rename = self.renaming.as_ref().filter(|r| r.pane == pane)?;
+        self.field(tab, Renamed::Pane(pane))
+    }
+
+    /// The field renaming the tab, while it is open.
+    pub fn tab_rename_field(&self, tab: WeakEntity<Self>) -> Option<AnyElement> {
+        self.field(tab, Renamed::Tab)
+    }
+
+    /// The field renaming `what`, while it is open.
+    fn field(&self, tab: WeakEntity<Self>, what: Renamed) -> Option<AnyElement> {
+        let rename = self.renaming.as_ref().filter(|r| r.what == what)?;
         Some(
             div()
                 .w(RENAME_W)
@@ -913,6 +994,19 @@ impl Render for TerminalTab {
                     cx.propagate();
                 }
             }))
+            .on_action(cx.listener(|this, _: &RenamePane, window, cx| {
+                let pane = this.state.focused;
+                this.rename_pane(pane, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &RenameTab, window, cx| this.rename_tab(window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleSendRightClicks, _, cx| {
+                let pane = this.state.focused;
+                this.toggle_right_clicks(pane, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
+                let pane = this.state.focused;
+                this.close_pane(pane, window, cx)
+            }))
             .child(
                 canvas(
                     move |area, _, _| bounds.set(Some(area)),
@@ -1019,17 +1113,18 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use gpui_kit::{
-        AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, ExternalPaths,
-        FileDropEvent, Focusable as _, InteractiveElement as _, IntoElement, Modifiers,
-        MouseButton, ParentElement as _, Pixels, Point, Render, Styled as _, TestAppContext,
-        VisualTestContext, Window, WindowBounds, WindowOptions, div, point, px, size,
+        Action, AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, ExternalPaths,
+        FileDropEvent, Focusable as _, InteractiveElement as _, IntoElement, KeyContext, Keystroke,
+        Modifiers, MouseButton, ParentElement as _, Pixels, Point, Render, Styled as _,
+        TestAppContext, VisualTestContext, Window, WindowBounds, WindowOptions, div, point, px,
+        size,
     };
     use sawit_core::terminal::{Layout, MIN_COLS, MIN_ROWS, SplitDir};
 
     use super::super::TerminalPanel;
 
     use super::super::testing::{
-        SHELLS, focus_terminal, init, open_panel, scratch_dir, wait_until,
+        SHELLS, focus_terminal, init, open_panel, ready, scratch_dir, wait_until,
     };
     use super::super::view::FOLDER_TTL;
     use super::pane_menu_items;
@@ -1391,8 +1486,7 @@ mod tests {
         });
         let file = scratch_dir("dropped").join("notes.txt");
         let mut vcx = VisualTestContext::from_window(w, cx);
-        // The pointer comes over the window (GPUI ignores drops while the last input was a key).
-        vcx.simulate_mouse_move(at, None, Modifiers::default());
+        // Straight after the keys, as a drag from Finder comes.
         vcx.simulate_event(FileDropEvent::Entered {
             position: at,
             paths: ExternalPaths(vec![file.clone()].into()),
@@ -1413,6 +1507,45 @@ mod tests {
             .unwrap();
         assert!(typed, "the drop didn't give the pane the keyboard");
         assert_eq!(focused, panes[1], "the tab still focuses the first pane");
+    }
+
+    /// A file dragged in from Finder (a screenshot for Claude Code, say) right after typing in
+    /// the terminal: macOS sends the window no mouse move while another app drags, only the
+    /// drag's own events, so the last input the window saw is still a key. The drop types the
+    /// file's path all the same.
+    #[gpui_kit::test]
+    fn a_file_dropped_right_after_typing_types_its_path(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        let tab = cx.update(|cx| panel.read(cx).tab(0).clone());
+        let view = cx.update(|cx| tab.read(cx).focused_view().clone());
+        ready(cx, &view);
+        cx.simulate_keystrokes(w, "e c h o space");
+        let at = cx.update(|cx| {
+            tab.read(cx)
+                .bounds
+                .get()
+                .expect("the tab was drawn")
+                .center()
+        });
+        let dir = scratch_dir("drop");
+        let file = dir.join("Screenshot 1.png");
+        std::fs::write(&file, b"").unwrap();
+        let mut vcx = VisualTestContext::from_window(w, cx);
+        vcx.simulate_event(FileDropEvent::Entered {
+            position: at,
+            paths: ExternalPaths(vec![file.clone()].into()),
+        });
+        vcx.simulate_event(FileDropEvent::Pending { position: at });
+        vcx.simulate_event(FileDropEvent::Submit { position: at });
+        vcx.simulate_event(FileDropEvent::Exited);
+        vcx.run_until_parked();
+        // Quoted, for its space; the space typed after it isn't on screen yet.
+        let typed = format!("echo '{}'", file.display());
+        wait_until(cx, "the dropped file's path is typed", |cx| {
+            view.read(cx).text_tail(5).contains(&typed)
+        });
     }
 
     #[gpui_kit::test]
@@ -1490,7 +1623,7 @@ mod tests {
     fn pane_menu_lists_the_planned_items() {
         let labels: Vec<_> = pane_menu_items(false, true)
             .into_iter()
-            .map(|(l, _)| l)
+            .map(|(l, _, _)| l)
             .collect();
         assert_eq!(
             labels,
@@ -1505,6 +1638,161 @@ mod tests {
         );
         assert_eq!(pane_menu_items(true, false)[3].0, "Unzoom");
         assert_eq!(pane_menu_items(false, true)[4].1, Some(true));
+    }
+
+    /// The keys of the terminal's menus as a terminal sees them: each item of the pane menu
+    /// and the tab menu's Rename Tab, with the first keys bound to it that run it there.
+    fn menu_keys(cx: &mut TestAppContext) -> Vec<(String, Option<String>)> {
+        let terminal: Vec<KeyContext> = ["Root", "Workspace", "Terminal"]
+            .iter()
+            .map(|c| KeyContext::parse(c).unwrap())
+            .collect();
+        cx.update(|cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let mut actions: Vec<Box<dyn Action>> = pane_menu_items(false, false)
+                .into_iter()
+                .map(|(_, _, action)| action)
+                .collect();
+            actions.push(Box::new(super::super::RenameTab));
+            actions
+                .iter()
+                .map(|action| {
+                    let keys = keymap.bindings_for_action(action.as_ref()).find_map(|b| {
+                        let typed: Vec<Keystroke> = b
+                            .keystrokes()
+                            .iter()
+                            .map(|k| Keystroke {
+                                modifiers: *k.modifiers(),
+                                key: k.key().to_string(),
+                                key_char: None,
+                            })
+                            .collect();
+                        let (runs, _) = keymap.bindings_for_input(&typed, &terminal);
+                        runs.first()
+                            .is_some_and(|run| run.action().partial_eq(action.as_ref()))
+                            .then(|| {
+                                typed
+                                    .iter()
+                                    .map(|k| k.unparse(gpui_kit::OperatingSystem::Mac))
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            })
+                    });
+                    (action.name().to_string(), keys)
+                })
+                .collect()
+        })
+    }
+
+    /// Every item of the pane menu, and the tab menu's Rename Tab, has a key that runs it in a
+    /// terminal, which the menu shows beside it, and no two items share one.
+    #[gpui_kit::test]
+    fn every_menu_item_has_its_own_key(cx: &mut TestAppContext) {
+        cx.update(init);
+        let keys = menu_keys(cx);
+        assert_eq!(
+            keys,
+            [
+                ("terminal::RenamePane", Some("cmd-i")),
+                ("terminal::SplitRight", Some("cmd-d")),
+                ("terminal::SplitDown", Some("cmd-shift-d")),
+                ("terminal::ZoomPane", Some("cmd-shift-enter")),
+                ("terminal::ToggleSendRightClicks", Some("alt-cmd-r")),
+                ("terminal::ClosePane", Some("alt-cmd-w")),
+                ("terminal::RenameTab", Some("cmd-shift-i")),
+            ]
+            .map(|(action, keys)| (action.to_string(), keys.map(String::from)))
+        );
+    }
+
+    /// The keymap editor lists the new keys as the terminal's defaults, so they can be changed
+    /// there (and the menus then show the keys as changed).
+    #[gpui_kit::test]
+    fn the_keymap_editor_lists_the_menu_keys(cx: &mut TestAppContext) {
+        let file = scratch_dir("menu-keymap").join("keymap.json");
+        cx.update(|cx| {
+            init(cx);
+            crate::keymap::init_at(file, cx);
+            let rows = crate::keymap::store(cx).read(cx).rows(false, cx);
+            for (action, keys) in [
+                ("terminal::RenamePane", "cmd-i"),
+                ("terminal::RenameTab", "cmd-shift-i"),
+                ("terminal::ToggleSendRightClicks", "alt-cmd-r"),
+                ("terminal::ClosePane", "alt-cmd-w"),
+            ] {
+                let row = rows
+                    .iter()
+                    .find(|r| r.action.as_ref() == action)
+                    .unwrap_or_else(|| panic!("the keymap editor doesn't list {action}"));
+                assert_eq!(row.keystrokes.as_ref(), keys, "{action}");
+                assert_eq!(row.context.as_deref(), Some("Terminal"), "{action}");
+                assert!(
+                    matches!(row.source, crate::keymap::Source::Default(_)),
+                    "{action} isn't a default"
+                );
+            }
+        });
+    }
+
+    /// The pane menu's keys act on the pane with the keyboard: ⌘I names it in its header, ⌥⌘R
+    /// sends its right-clicks on and ⌥⌘W closes it. ⇧⌘I names the tab, which keeps the name
+    /// whichever pane has focus, and after its other panes close.
+    #[gpui_kit::test]
+    fn the_menu_keys_act_on_the_focused_pane_and_its_tab(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let tab = cx.update(|cx| panel.read(cx).tab(0).clone());
+        let panes = cx.update(|cx| tab.read(cx).state.layout.panes());
+        assert_eq!(panes.len(), 2);
+        let rename = |cx: &mut TestAppContext, keys: &str, name: &str| {
+            cx.simulate_keystrokes(w, keys);
+            cx.run_until_parked();
+            cx.simulate_input(w, name);
+            cx.simulate_keystrokes(w, "enter");
+            cx.run_until_parked();
+        };
+
+        rename(cx, "cmd-i", "api");
+        cx.update(|cx| {
+            let t = tab.read(cx);
+            assert_eq!(t.state.panes[&panes[1]].name.as_deref(), Some("api"));
+            assert_eq!(t.state.panes[&panes[0]].name, None);
+            assert_eq!(t.state.name, None, "⌘I in a split named the tab");
+        });
+        rename(cx, "cmd-shift-i", "server");
+        cx.update(|cx| assert_eq!(tab.read(cx).title(cx), "server"));
+        cx.simulate_keystrokes(w, "cmd-alt-left");
+        cx.update(|cx| {
+            let t = tab.read(cx);
+            assert_eq!(t.state.focused, panes[0]);
+            assert_eq!(t.title(cx), "server", "the tab's name followed the focus");
+        });
+
+        cx.simulate_keystrokes(w, "cmd-alt-r");
+        let sent = |cx: &mut TestAppContext, pane| {
+            cx.update(|cx| tab.read(cx).view(pane).unwrap().read(cx).send_right_clicks)
+        };
+        assert!(
+            sent(cx, panes[0]),
+            "⌥⌘R left the focused pane's right-clicks"
+        );
+        assert!(!sent(cx, panes[1]), "⌥⌘R sent another pane's right-clicks");
+
+        cx.simulate_keystrokes(w, "cmd-alt-w");
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let t = tab.read(cx);
+            assert_eq!(t.state.layout.panes(), [panes[1]]);
+            assert_eq!(t.title(cx), "server");
+        });
+        let kept = cx
+            .update_window(w, |_, window, cx| tab.read(cx).has_focus(window, cx))
+            .unwrap();
+        assert!(kept, "the keyboard did not go to the pane left");
     }
 
     #[gpui_kit::test]
@@ -1538,15 +1826,17 @@ mod tests {
         cx.update(|cx| assert_eq!(panel.read(cx).tab_count(), 0));
     }
 
+    /// A tab of one pane shows no header, so renaming its pane names the tab, over the program's
+    /// title; the name stays on the tab once it is split and the new pane has focus.
     #[gpui_kit::test]
-    fn renaming_a_pane_names_it_over_the_program_title(cx: &mut TestAppContext) {
+    fn renaming_the_pane_of_a_one_pane_tab_names_the_tab(cx: &mut TestAppContext) {
         cx.update(init);
         let (w, panel) = open_panel(cx);
         focus_terminal(cx, w, &panel);
         let tab = cx.update(|cx| panel.read(cx).tab(0).clone());
         let pane = cx.update(|cx| tab.read(cx).state.focused);
         cx.update_window(w, |_, window, cx| {
-            tab.update(cx, |t, cx| t.start_rename(pane, window, cx))
+            tab.update(cx, |t, cx| t.rename_pane(pane, window, cx))
         })
         .unwrap();
         cx.run_until_parked();
@@ -1557,11 +1847,19 @@ mod tests {
             let t = tab.read(cx);
             assert!(t.renaming.is_none());
             assert_eq!(t.title(cx), "build");
+            assert_eq!(t.state.name.as_deref(), Some("build"));
         });
         let back = cx
             .update_window(w, |_, window, cx| tab.read(cx).has_focus(window, cx))
             .unwrap();
         assert!(back, "the keyboard did not go back to the pane");
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let t = tab.read(cx);
+            assert_ne!(t.state.focused, pane);
+            assert_eq!(t.title(cx), "build", "the split lost the tab's name");
+        });
     }
 
     #[gpui_kit::test]

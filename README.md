@@ -213,8 +213,16 @@ explained. A conflict on the same address can't be forced.
   key moves between panes. <kbd>⇧⌘↩</kbd> zooms the focused pane of a split (and maximizes the dock when the tab has
   one pane). Splitting and dragging a divider stop at 20 columns by 4 rows; shrinking the dock or the window can still
   make panes smaller.
-- Right-click a pane (or Shift+right-click, even while a program uses the mouse) for the pane menu: Rename pane,
-  Split right, Split down, Zoom, Send right-clicks to pane, and Close pane.
+- Right-click a pane (or Shift+right-click, even while a program uses the mouse) for the pane menu: Rename pane
+  (<kbd>⌘I</kbd>), Split right (<kbd>⌘D</kbd>), Split down (<kbd>⇧⌘D</kbd>), Zoom (<kbd>⇧⌘↩</kbd>), Send right-clicks
+  to pane (<kbd>⌥⌘R</kbd>), and Close pane (<kbd>⌥⌘W</kbd>). The menu shows each item's key, and the keys act on the
+  pane you're typing in; change them in the Keymap Editor. A pane's name shows in its header; in a tab of one pane,
+  which has no header, Rename pane names the tab.
+- Right-click a tab for its menu: **Rename Tab** (<kbd>⇧⌘I</kbd>, or double-click the tab), Move to Project, Remove from
+  Group, and Close. A tab's name stays whichever pane has focus, and when you split it; clear the name to show the
+  focused pane's title again. `app_state` lists the tab by its name.
+- Drop files on a terminal, from Finder or the file tree, to type their paths, quoted where they need it. Claude Code
+  takes a dropped image as an attachment (`[Image #1]`). This works right after you type, too.
 - The **Maximize Terminal** button fills the window with the terminal; click it again to restore the layout you had.
 - Full emulation via `alacritty_terminal`: 256/truecolor, alt-screen, SGR mouse, bracketed paste,
   and resize.
@@ -589,6 +597,12 @@ French…), the defaults move where macOS menus put them.
 | Files: undo / redo | <kbd>⌘</kbd><kbd>Z</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>Z</kbd> |
 | Files: copy relative path | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>C</kbd> |
 | Files: find in folder | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>F</kbd> |
+| Terminal: split right / split down | <kbd>⌘</kbd><kbd>D</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>D</kbd> |
+| Terminal: move to the pane left / right / above / below | <kbd>⌥</kbd><kbd>⌘</kbd> + <kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd> |
+| Terminal: zoom pane (one pane: maximize the terminal) | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>↩</kbd> |
+| Terminal: rename pane / rename tab | <kbd>⌘</kbd><kbd>I</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>I</kbd> |
+| Terminal: send right-clicks to pane (on/off) | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>R</kbd> |
+| Terminal: close pane (the last one closes the tab) | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>W</kbd> |
 | Quit | <kbd>⌘</kbd><kbd>Q</kbd> |
 
 The canvas's keys are FigCraft's, which follow Figma's (the sheet, <kbd>⌃</kbd><kbd>⇧</kbd><kbd>?</kbd>, lists them).

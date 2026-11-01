@@ -20,7 +20,7 @@ use sawit_core::terminal::{
 
 use super::tab::{TabEvent, TerminalTab, Unsplit};
 use super::view::TerminalView;
-use super::{SplitDown, SplitRight};
+use super::{RenameTab, SplitDown, SplitRight};
 use crate::states::{Banner, Placeholder};
 use crate::tab_groups::{group_color, group_header, group_stripe, project_name};
 use crate::tabs::{Drawn, Slot, insert_index, project_of, strip};
@@ -254,6 +254,14 @@ impl TerminalPanel {
         }
         self.focus_active(window, cx);
         cx.notify();
+    }
+
+    /// Shows the tab at `ix` and puts a field for its name in its label.
+    fn rename_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.activate(ix, window, cx);
+        if let Some(tab) = self.tabs.get(ix) {
+            tab.update(cx, |t, cx| t.rename_tab(window, cx));
+        }
     }
 
     pub fn open_shell(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
@@ -1236,6 +1244,11 @@ impl Render for TerminalPanel {
         let mut tabs: Vec<AnyElement> = Vec::with_capacity(drawn.len());
         // The active tab's place among the strip's children, which a scroll goes by.
         let mut active_child = None;
+        // A pane on screen, where the tab menus look up the terminal's keys to show them.
+        let keys_in = self
+            .tabs
+            .get(self.active)
+            .map(|t| t.read(cx).focused_view().focus_handle(cx));
         for item in drawn {
             let ix = match item {
                 Drawn::Tab(ix) => ix,
@@ -1262,17 +1275,21 @@ impl Render for TerminalPanel {
                 .cloned()
                 .collect();
             let weak = weak.clone();
+            let keys_in = keys_in.clone();
             let this_tab = tab.downgrade();
             let grouped = group.is_some();
-            // A one-pane tab is renamed in its label.
-            let rename = (!t.state.is_split())
-                .then(|| t.rename_field(tab.downgrade(), t.state.focused))
-                .flatten();
-            let named = t.pane_name();
+            // The tab is renamed in its label; so is a one-pane tab's pane
+            // that was being renamed when the tab's other panes closed.
+            let rename = t.tab_rename_field(tab.downgrade()).or_else(|| {
+                (!t.state.is_split())
+                    .then(|| t.rename_field(tab.downgrade(), t.state.focused))
+                    .flatten()
+            });
+            let named = t.state.name.as_deref().or(t.pane_name());
             tabs.push({
                 // SSH tabs keep the server's name (the remote shell's title
                 // says little across servers), numbered when it is open twice.
-                // A name the user gave the pane goes over either.
+                // A name the user gave the tab or its pane goes over either.
                 let (icon, label) = match &v.remote {
                     Some(r) => {
                         let same = |w: &Entity<TerminalTab>| {
@@ -1293,7 +1310,7 @@ impl Render for TerminalPanel {
                         (Lucide::Server, format!("{name}{state}"))
                     }
                     None if v.job.is_some() => {
-                        let name = t.pane_label(t.state.focused, v);
+                        let name = t.label(cx);
                         let state = if v.exited {
                             " (exited)"
                         } else if v.foreground_job().is_none() {
@@ -1353,9 +1370,13 @@ impl Render for TerminalPanel {
                     .when_some(color, |el, color| el.child(group_stripe(color, active)))
                     .on_click(cx.listener({
                         let tab = this_tab.clone();
-                        move |this, _, window, cx| {
+                        move |this, e: &ClickEvent, window, cx| {
                             if let Some(ix) = this.index_of(&tab) {
-                                this.activate(ix, window, cx)
+                                this.activate(ix, window, cx);
+                                // A double-click renames the tab.
+                                if e.click_count() >= 2 {
+                                    this.rename_tab(ix, window, cx);
+                                }
                             }
                         }
                     }))
@@ -1365,9 +1386,27 @@ impl Render for TerminalPanel {
                         let had_keyboard = this_tab
                             .upgrade()
                             .is_some_and(|t| t.read(cx).has_focus(window, cx));
+                        let rename_weak = weak.clone();
+                        let rename_tab = this_tab.clone();
                         let move_weak = weak.clone();
                         let move_tab = this_tab.clone();
                         let others = others.clone();
+                        // Its keys are the terminal's: they show as a pane on screen has them.
+                        let menu = match &keys_in {
+                            Some(pane) => menu.action_context(pane.clone()),
+                            None => menu,
+                        }
+                        .item(
+                            PopupMenuItem::new("Rename Tab")
+                                .action(Box::new(RenameTab))
+                                .on_click(move |_, window, cx| {
+                                    let _ = rename_weak.update(cx, |p, cx| {
+                                        if let Some(ix) = p.index_of(&rename_tab) {
+                                            p.rename_tab(ix, window, cx)
+                                        }
+                                    });
+                                }),
+                        );
                         let menu = menu.when(!others.is_empty(), |menu| {
                             menu.submenu("Move to Project", window, cx, move |mut menu, _, _| {
                                 for root in &others {
@@ -1506,17 +1545,27 @@ fn focused<'a>(tab: &Entity<TerminalTab>, cx: &'a App) -> &'a TerminalView {
 }
 
 /// What runs in `pane` of `tab`, whose terminal is `view`, that closing it would end, by name: a
-/// command in the foreground (by the pane's name, its script's, else the program's) or a live SSH
-/// session. `None` for a shell at its prompt, a script's terminal between runs or an ended session.
+/// command in the foreground (by the pane's name, the name of a tab it is alone in, its script's,
+/// else the program's) or a live SSH session. `None` for a shell at its prompt, a script's terminal
+/// between runs or an ended session.
 fn running_in(tab: &TerminalTab, pane: PaneId, view: &TerminalView) -> Option<String> {
     if view.exited {
         return None;
     }
+    let alone = (!tab.state.is_split())
+        .then(|| tab.state.name.clone())
+        .flatten();
     if view.remote.is_some() {
-        return Some(format!("{} (SSH)", tab.pane_label(pane, view)));
+        let name = alone.unwrap_or_else(|| tab.pane_label(pane, view).to_string());
+        return Some(format!("{name} (SSH)"));
     }
     view.foreground_job()?;
-    let named = tab.state.panes.get(&pane).and_then(|m| m.name.clone());
+    let named = tab
+        .state
+        .panes
+        .get(&pane)
+        .and_then(|m| m.name.clone())
+        .or(alone);
     Some(
         named
             .or_else(|| view.job.as_ref().map(|j| j.name.clone()))
@@ -1755,8 +1804,8 @@ mod helper_tests {
 #[cfg(test)]
 mod tests {
     use gpui_kit::{
-        AnyWindowHandle, AppContext as _, Entity, Modifiers, MouseButton, TestAppContext,
-        VisualTestContext,
+        AnyWindowHandle, AppContext as _, Entity, Modifiers, MouseButton, MouseDownEvent,
+        MouseUpEvent, TestAppContext, VisualTestContext,
     };
     use sawit_core::terminal::{run_bytes, shell_quote};
 
@@ -2145,6 +2194,100 @@ mod tests {
         cx.run_until_parked();
         assert!(active(cx, &panel) == c);
         assert!(has_keyboard(cx, w, &c), "the keyboard went nowhere");
+    }
+
+    /// Right-clicks tab `ix` in the strip, opening its menu.
+    fn open_tab_menu(cx: &mut TestAppContext, w: AnyWindowHandle, ix: usize) {
+        let mut vcx = VisualTestContext::from_window(w, cx);
+        vcx.run_until_parked();
+        let at = vcx
+            .debug_bounds(selector(format!("term-tab-{ix}")))
+            .expect("the tab is drawn")
+            .center();
+        vcx.simulate_mouse_down(at, MouseButton::Right, Modifiers::default());
+        vcx.simulate_mouse_up(at, MouseButton::Right, Modifiers::default());
+        vcx.run_until_parked();
+    }
+
+    /// Double-clicks tab `ix` in the strip.
+    fn double_click_tab(cx: &mut TestAppContext, w: AnyWindowHandle, ix: usize) {
+        let mut vcx = VisualTestContext::from_window(w, cx);
+        vcx.run_until_parked();
+        let position = vcx
+            .debug_bounds(selector(format!("term-tab-{ix}")))
+            .expect("the tab is drawn")
+            .center();
+        for click_count in [1, 2] {
+            vcx.simulate_event(MouseDownEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers: Modifiers::default(),
+                click_count,
+                first_mouse: false,
+            });
+            vcx.simulate_event(MouseUpEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers: Modifiers::default(),
+                click_count,
+            });
+        }
+        vcx.run_until_parked();
+    }
+
+    /// Types `name` in the open rename field and presses Enter.
+    fn enter_name(cx: &mut TestAppContext, w: AnyWindowHandle, name: &str) {
+        if !name.is_empty() {
+            cx.simulate_input(w, name);
+        } else {
+            cx.simulate_keystrokes(w, "backspace");
+        }
+        cx.simulate_keystrokes(w, "enter");
+        cx.run_until_parked();
+    }
+
+    /// A tab's menu starts with Rename Tab, which names the tab it was opened for and shows it;
+    /// a double-click on a tab does the same. An empty name gives the tab its pane's title back.
+    #[gpui_kit::test]
+    fn a_tabs_menu_and_a_double_click_rename_the_tab(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        open_tabs(cx, &panel, 1);
+        let [a, b] = cx.update(|cx| {
+            let p = panel.read(cx);
+            [0, 1].map(|ix| p.tab(ix).clone())
+        });
+        assert!(active(cx, &panel) == b);
+
+        open_tab_menu(cx, w, 0);
+        cx.simulate_keystrokes(w, "down enter");
+        cx.run_until_parked();
+        enter_name(cx, w, "server");
+        assert!(active(cx, &panel) == a, "the renamed tab isn't shown");
+        cx.update(|cx| {
+            assert_eq!(a.read(cx).state.name.as_deref(), Some("server"));
+            assert_eq!(a.read(cx).title(cx), "server");
+            assert_eq!(b.read(cx).state.name, None, "another tab was renamed");
+        });
+        assert!(
+            has_keyboard(cx, w, &a),
+            "the keyboard didn't go back to the tab"
+        );
+        double_click_tab(cx, w, 1);
+        enter_name(cx, w, "db");
+        assert!(active(cx, &panel) == b);
+        cx.update(|cx| assert_eq!(b.read(cx).state.name.as_deref(), Some("db")));
+
+        double_click_tab(cx, w, 0);
+        enter_name(cx, w, "");
+        cx.update(|cx| {
+            let t = a.read(cx);
+            assert_eq!(t.state.name, None, "an empty name didn't clear it");
+            assert_eq!(
+                t.title(cx),
+                t.pane_title(t.state.focused, t.focused_view().read(cx))
+            );
+        });
     }
 
     /// Closing a tab left of the active one keeps the active tab (and the keyboard in it), as

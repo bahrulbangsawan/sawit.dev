@@ -30,6 +30,18 @@ actions!(
         /// Zooms the focused pane to fill its tab, or unzooms it. With one
         /// pane the key goes on to the workspace, which maximizes the dock.
         ZoomPane,
+        /// Names the focused pane, in its header. A tab of one pane has no
+        /// header: the tab is named instead, as `RenameTab` does.
+        RenamePane,
+        /// Names the tab, in the tab strip: the name stays whichever pane
+        /// has focus.
+        RenameTab,
+        /// Sends the focused pane's right-clicks to its program instead of
+        /// opening the pane menu, or stops sending them.
+        ToggleSendRightClicks,
+        /// Closes the focused pane, ending what runs there; the last pane
+        /// closes the tab.
+        ClosePane,
     ]
 );
 

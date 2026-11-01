@@ -18,7 +18,10 @@ use sawit_core::terminal::{
     mouse_report, paste_bytes,
 };
 
-use super::{FocusDown, FocusLeft, FocusRight, FocusUp, SplitDown, SplitRight, ZoomPane};
+use super::{
+    ClosePane, FocusDown, FocusLeft, FocusRight, FocusUp, RenamePane, RenameTab, SplitDown,
+    SplitRight, ToggleSendRightClicks, ZoomPane,
+};
 use crate::files::DraggedFile;
 
 const FONT_SIZE: f32 = 13.;
@@ -38,7 +41,11 @@ type GridLayout = (Point<Pixels>, Size<Pixels>);
 /// terminal (and Tab is completion), Root's Cmd-C copies a stale selection
 /// elsewhere in the window. Unbinding them here hands them to `on_key`.
 /// App shortcuts (Ctrl-Tab, Cmd-…) stay with the workspace. The pane keys
-/// (split, move focus, zoom) live here too, so they only act in a terminal.
+/// (split, move focus, zoom, and the rest of the pane and tab menus) live
+/// here too, so they only act in a terminal. Renaming follows Terminal.app's
+/// Edit Title (⇧⌘I, the tab) and iTerm2's Edit Session (⌘I, the pane). ⌘W
+/// stays the workspace's (it closes the center tab), so a pane closes with
+/// ⌥⌘W.
 pub(super) fn bindings() -> Vec<KeyBinding> {
     let ctx = Some("Terminal");
     vec![
@@ -52,6 +59,10 @@ pub(super) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-alt-up", FocusUp, ctx),
         KeyBinding::new("cmd-alt-down", FocusDown, ctx),
         KeyBinding::new("cmd-shift-enter", ZoomPane, ctx),
+        KeyBinding::new("cmd-i", RenamePane, ctx),
+        KeyBinding::new("cmd-shift-i", RenameTab, ctx),
+        KeyBinding::new("cmd-alt-r", ToggleSendRightClicks, ctx),
+        KeyBinding::new("cmd-alt-w", ClosePane, ctx),
     ]
 }
 
@@ -477,6 +488,32 @@ impl TerminalView {
     }
 }
 
+/// Files dragged in from another app (a screenshot from Finder, for Claude Code) come with no
+/// mouse move: while another app drags, macOS sends the window only the drag's own events, and
+/// GPUI turns those into mouse moves and a mouse up without counting them as the mouse being
+/// used. After typing it still takes the keyboard to be in use, so nothing reads as hovered
+/// and a drop let go of straight away types nothing (one held still over the terminal for a
+/// moment got through). A mouse move where the drag is, sent before the drop comes, tells GPUI
+/// the pointer is in use again.
+fn pointer_moved_for_drop(position: Point<Pixels>, window: &mut Window, cx: &mut App) {
+    if !window.last_input_was_keyboard() {
+        return;
+    }
+    window.defer(cx, move |window, cx| {
+        // Every pane on screen sees the drag: the first one's move is enough.
+        if window.last_input_was_keyboard() {
+            window.dispatch_event(
+                PlatformInput::MouseMove(MouseMoveEvent {
+                    position,
+                    pressed_button: Some(MouseButton::Left),
+                    modifiers: Modifiers::default(),
+                }),
+                cx,
+            );
+        }
+    });
+}
+
 fn to_term_button(button: MouseButton) -> Option<TermButton> {
     match button {
         MouseButton::Left => Some(TermButton::Left),
@@ -664,6 +701,9 @@ impl Render for TerminalView {
             .bg(hsla(self.palette.background))
             .on_key_down(cx.listener(Self::on_key))
             .on_scroll(cx.listener(Self::on_scroll))
+            .on_drag_move(|e: &DragMoveEvent<ExternalPaths>, window, cx| {
+                pointer_moved_for_drop(e.event.position, window, cx)
+            })
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 this.drop_paths(paths.paths(), window, cx)
             }))

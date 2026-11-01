@@ -22,6 +22,10 @@ pub struct PaneMeta {
 /// Layout, focus and zoom of one terminal tab.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TabState {
+    /// The name the user gave the tab, which the tab strip shows whichever
+    /// pane has focus. `None` shows the focused pane's name or title.
+    #[serde(default)]
+    pub name: Option<String>,
     /// The split tree.
     pub layout: Layout,
     /// The pane that receives keyboard input.
@@ -36,6 +40,7 @@ impl TabState {
     /// A tab with a single pane.
     pub fn new(first: PaneId) -> Self {
         Self {
+            name: None,
             layout: Layout::Pane(first),
             focused: first,
             zoomed: None,
@@ -139,9 +144,13 @@ impl TabState {
     /// Names a pane. A blank name clears it.
     pub fn rename(&mut self, pane: PaneId, name: &str) {
         if let Some(meta) = self.panes.get_mut(&pane) {
-            let name = name.trim();
-            meta.name = (!name.is_empty()).then(|| name.to_string());
+            meta.name = clean_name(name);
         }
+    }
+
+    /// Names the tab. A blank name clears it.
+    pub fn rename_tab(&mut self, name: &str) {
+        self.name = clean_name(name);
     }
 
     /// Flips whether right-clicks go to the program in this pane.
@@ -163,4 +172,10 @@ impl TabState {
     pub fn is_split(&self) -> bool {
         self.panes.len() > 1
     }
+}
+
+/// `name` without the spaces around it; `None` when nothing is left.
+fn clean_name(name: &str) -> Option<String> {
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_string())
 }
