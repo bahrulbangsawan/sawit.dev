@@ -13,6 +13,7 @@ use sawit_board::store::{self, Stamp, Writer};
 use sawit_board::{BoardDoc, ops};
 use sawit_core::app_control::{self, Command, InstanceAction, Page, Panel, Request};
 use sawit_core::files::FileKind;
+use sawit_core::update::Version;
 use serde_json::{Value, json};
 
 use crate::{Sawit, blocking, fail, ok, tri};
@@ -22,6 +23,11 @@ use crate::{Sawit, blocking, fail, ok, tri};
 const REPLY_TIMEOUT: Duration = Duration::from_secs(40);
 /// How long `launch_app` waits for the app to listen.
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(20);
+/// The first version of the app that runs a canvas op on the canvas file it names
+/// ([`Command::Canvas`]'s `file`). An older one ignores the field, which it doesn't know, and runs
+/// the op on the project's canvas: a clear or a deletion meant for a design file would take layers
+/// off the project's board, whose ids the design file's can match ([`app_reads_canvas_files`]).
+const APP_WITH_CANVAS_FILES: Version = Version(0, 0, 8);
 /// `terminal_run` waits at most this long for output.
 const MAX_WAIT: Duration = Duration::from_secs(120);
 
@@ -440,7 +446,30 @@ impl Sawit {
             let lock = self.paths.root.join(CANVAS_LOCK);
             return blocking(move || headless(&named, &lock, &op)).await?;
         }
+        if let Some(file) = &file {
+            self.refuse_an_app_without_canvas_files(file).await?;
+        }
         op_reply(self.app_call(project, Command::Canvas { op, file }).await?)
+    }
+
+    /// Refuses an op on the canvas file `file`, before it is sent, when the running app is older
+    /// than one that runs it there ([`app_reads_canvas_files`]): it would run the op on the
+    /// project's canvas. The app's version is the one app_state answers with. An app updated on
+    /// disk runs its old version until it restarts, while an agent started since runs the new
+    /// sawit-mcp.
+    async fn refuse_an_app_without_canvas_files(&self, file: &Path) -> Result<(), String> {
+        let state = self.app_call(None, Command::State).await?;
+        let version = state["version"].as_str().unwrap_or("an unknown version");
+        if app_reads_canvas_files(version) {
+            return Ok(());
+        }
+        Err(format!(
+            "Nothing was changed: the Sawit app that is running ({version}) is older than this \
+             sawit-mcp ({}), and would run the op on the project's canvas instead of {}. Quit \
+             Sawit and open it again, so that it runs the version installed, then call again.",
+            env!("CARGO_PKG_VERSION"),
+            file.display()
+        ))
     }
 
     /// The file `project`'s canvas is saved in while the app is closed: its
@@ -545,6 +574,14 @@ impl Sawit {
             json!({ "count": elements.len(), "elements": elements, "source": "file (Sawit isn't running)" }),
         )
     }
+}
+
+/// Whether the app of `version` (as app_state gives it) runs a canvas op on the canvas file it
+/// names: one of [`APP_WITH_CANVAS_FILES`] or later. So is one of this sawit-mcp's own version,
+/// while that is older: a build from before the release that brings `file` has it too.
+fn app_reads_canvas_files(version: &str) -> bool {
+    let since = APP_WITH_CANVAS_FILES.min(Version::current());
+    Version::parse(version).is_some_and(|app| app >= since)
 }
 
 /// The fields `canvas_get` shows for one saved element.
@@ -3621,9 +3658,9 @@ mod tests {
     }
 
     /// With Sawit running, a canvas tool's `file` goes to the app with the op, as the file it is
-    /// on disk, for the app to run the op on that file's canvas tab; without one the op is the
-    /// project canvas's, as before. A file that is no canvas file is refused here, and the app
-    /// isn't asked.
+    /// on disk, for the app to run the op on that file's canvas tab, once the app's version says
+    /// it runs it there; without one the op is the project canvas's, as before. A file that is no
+    /// canvas file is refused here, and the app isn't asked.
     #[tokio::test]
     async fn a_running_app_is_sent_the_canvas_file_an_agent_names() {
         let dir = tempfile::tempdir().unwrap();
@@ -3633,9 +3670,14 @@ mod tests {
         write_design(&design);
         let link = dir.path().join("link");
         std::os::unix::fs::symlink(&project, &link).unwrap();
+        let state = json!({"version": env!("CARGO_PKG_VERSION"), "windows": []});
         let asked = fake_app_answering(
             &server.paths,
-            vec![json!({"ok": true, "elements": []}), json!({"ok": true})],
+            vec![
+                state,
+                json!({"ok": true, "elements": []}),
+                json!({"ok": true}),
+            ],
         );
         let sent = |asked: &Receiver<Request>| {
             let request = asked.recv_timeout(Duration::from_secs(5)).expect("asked");
@@ -3653,6 +3695,8 @@ mod tests {
             .await;
         assert_ne!(got.is_error, Some(true), "{}", said(&got));
         let real = design.canonicalize().unwrap();
+        let first = asked.recv_timeout(Duration::from_secs(5)).expect("asked");
+        assert_eq!(first.command, Command::State, "the app's version first");
         assert_eq!(sent(&asked), (json!({"op": "get"}), Some(real)));
         let cleared = server
             .canvas_clear(Parameters(CanvasTargetArgs {
@@ -3676,6 +3720,74 @@ mod tests {
             said(&refused)
         );
         assert!(asked.recv_timeout(Duration::from_millis(300)).is_err());
+    }
+
+    /// An app older than this sawit-mcp ignores `file`, a field it doesn't know, and runs the op
+    /// on the project's canvas: a canvas_clear meant for a design file cleared the project's
+    /// board. Such an app is asked its version, and sent nothing else; an op on the project's
+    /// canvas, which names no file, goes to it as it always did.
+    #[tokio::test]
+    async fn an_app_too_old_to_know_a_canvas_file_is_never_sent_an_op_on_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let design = project.join("home.figcraft");
+        write_design(&design);
+        let state = json!({"version": "0.0.6", "windows": []});
+        let asked = fake_app_answering(&server.paths, vec![state, json!({"ok": true})]);
+        let clear = |file: Option<String>| CanvasTargetArgs {
+            file,
+            project: project_arg(&project),
+        };
+
+        let refused = server
+            .canvas_clear(Parameters(clear(Some(design.display().to_string()))))
+            .await;
+        assert_eq!(refused.is_error, Some(true), "{}", said(&refused));
+        let says = said(&refused);
+        for said in [
+            "Nothing was changed",
+            "(0.0.6)",
+            "home.figcraft",
+            "Quit Sawit",
+        ] {
+            assert!(says.contains(said), "no {said:?} in {says}");
+        }
+        let request = asked.recv_timeout(Duration::from_secs(5)).expect("asked");
+        assert_eq!(request.command, Command::State);
+
+        let cleared = server.canvas_clear(Parameters(clear(None))).await;
+        assert_ne!(cleared.is_error, Some(true), "{}", said(&cleared));
+        let request = asked.recv_timeout(Duration::from_secs(5)).expect("asked");
+        assert_eq!(
+            request.command,
+            Command::Canvas {
+                op: json!({"op": "clear"}),
+                file: None
+            }
+        );
+    }
+
+    /// The apps that run an op on the canvas file it names: 0.0.8 and later, and any of this
+    /// sawit-mcp's own version or later, a build from before the release that brings `file`. One
+    /// older than both, or that names no version, doesn't.
+    #[test]
+    fn an_app_reads_canvas_files_from_the_version_that_brings_them() {
+        for version in [
+            "0.0.8",
+            "v0.0.9",
+            "0.1.0",
+            "1.0.0",
+            env!("CARGO_PKG_VERSION"),
+        ] {
+            assert!(app_reads_canvas_files(version), "{version}");
+        }
+        for version in ["0.0.6", "0.0", "an unknown version", ""] {
+            assert!(!app_reads_canvas_files(version), "{version}");
+        }
+        if Version::current() >= APP_WITH_CANVAS_FILES {
+            assert!(!app_reads_canvas_files("0.0.7"));
+        }
     }
 
     /// `file` names a canvas file by its absolute path (or `~/…`): a `.figcraft` file that is
