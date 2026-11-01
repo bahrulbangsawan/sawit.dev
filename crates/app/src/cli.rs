@@ -67,6 +67,9 @@ pub fn command_line() -> OpenRequest {
         Ok(Invocation::Pupuk(args)) => {
             std::process::exit(kebun::block_on(kebun::pupuk(args)));
         }
+        Ok(Invocation::Cabut(args)) => {
+            std::process::exit(kebun::block_on(kebun::cabut(args)));
+        }
         Ok(Invocation::Help) => {
             print!("{USAGE}");
             std::process::exit(0);

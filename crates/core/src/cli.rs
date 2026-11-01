@@ -7,7 +7,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
-use crate::kebun::{BakarArgs, DbJob, ListWhat, PasangArgs, PupukArgs};
+use crate::kebun::{BakarArgs, CabutArgs, DbJob, ListWhat, PasangArgs, PupukArgs};
 use crate::{CoreError, Result, cmd};
 
 /// Where "Install CLI" puts the command.
@@ -27,6 +27,7 @@ Usage:
   sawit tanam <db> <table> <file.csv>
   sawit pasang <tool ...> [-y]
   sawit pupuk [tool ...] [-y]
+  sawit cabut <tool ...> [-y]
 
 Examples:
   sawit .                  open this folder as a project (joins the open
@@ -59,7 +60,8 @@ Kebun (databases), no app needed:
   sawit tanam kyzn leads leads.csv         load a CSV file into a table
   An existing file is replaced only after asking (or with -y).
   Aliases: panen = export, ekspor · backup = dump, cadangkan ·
-  tanam = import, impor · pasang = install · pupuk = upgrade.
+  tanam = import, impor · pasang = install · pupuk = upgrade ·
+  cabut = uninstall.
   `sawit ./panen` opens a
   folder named panen.
 
@@ -70,6 +72,8 @@ Tools (the app's Tools page):
   sawit pupuk              upgrade every installed tool with a newer
                            release (shown as → in `list tools`)
   sawit pupuk bun          upgrade just bun (asks first; -y to skip)
+  sawit cabut bun          uninstall bun: only the copy its own installer,
+                           Homebrew or npm put there (asks first; -y to skip)
 
 Options:
   -n, --new         always open in a new window
@@ -112,6 +116,8 @@ pub enum Invocation {
     Pasang(PasangArgs),
     /// `sawit pupuk …`.
     Pupuk(PupukArgs),
+    /// `sawit cabut …`.
+    Cabut(CabutArgs),
     Open {
         request: OpenRequest,
         /// `-` was given: the CLI turns stdin into a file target.
@@ -141,6 +147,9 @@ pub fn parse_args(
         }
         Some("upgrade" | "pupuk") if words.len() == args.len() => {
             return PupukArgs::parse(&words[1..]).map(Invocation::Pupuk);
+        }
+        Some("uninstall" | "cabut") if words.len() == args.len() => {
+            return CabutArgs::parse(&words[1..]).map(Invocation::Cabut);
         }
         Some(word) if words.len() == args.len() && DbJob::kind(word).is_some() => {
             let kind = DbJob::kind(word).expect("checked");
@@ -547,6 +556,35 @@ mod tests {
         assert!(matches!(parse(&["pupuk"]), Ok(Invocation::Pupuk(_))));
         assert!(parse(&["pupuk", "nope-tool"]).is_err());
         assert!(matches!(parse(&["./pupuk"]), Ok(Invocation::Open { .. })));
+        let Ok(Invocation::Cabut(c)) = parse(&["uninstall", id, "-y"]) else {
+            panic!()
+        };
+        assert_eq!(c.tools, [id]);
+        assert!(c.yes);
+        let Ok(Invocation::Cabut(c)) = parse(&["cabut", id]) else {
+            panic!()
+        };
+        assert!(!c.yes);
+        assert!(parse(&["cabut"]).is_err());
+        assert!(parse(&["cabut", "nope-tool"]).is_err());
+        assert!(parse(&["cabut", id, "--force"]).is_err());
+        assert!(matches!(parse(&["./cabut"]), Ok(Invocation::Open { .. })));
+        assert!(matches!(
+            parse(&["./uninstall"]),
+            Ok(Invocation::Open { .. })
+        ));
+    }
+
+    /// `sawit --help` names `cabut`, its alias and an example.
+    #[test]
+    fn help_names_cabut() {
+        for said in [
+            "sawit cabut <tool ...> [-y]",
+            "cabut = uninstall",
+            "sawit cabut bun",
+        ] {
+            assert!(USAGE.contains(said), "no {said:?} in the help");
+        }
     }
 
     #[test]

@@ -62,7 +62,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with device sizes and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (117 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (118 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 
 ## Install
 
@@ -244,9 +244,14 @@ explained. A conflict on the same address can't be forced.
   installed, the page says so instead of showing them as not installed.
 - Homebrew asks for your password, so it runs in the terminal. Open a new terminal tab afterwards so it sees the
   new `PATH`.
+- The trash button uninstalls a tool, asking first and naming the installed tools that need it. It removes only the
+  copy that the tool's own installer, Homebrew (`brew uninstall`) or npm (`npm uninstall -g`) put in place; a copy
+  installed another way is left alone, and the tool says so if it's still found afterwards. Homebrew's own
+  uninstaller asks for your password, so it runs in the terminal.
 - Closing the tab or its window, quitting and **Restart to Update** ask first while something installs, and stop it.
-  One tool is installed, upgraded or removed at a time, whether from this page, an agent or `sawit pasang`.
-- From the terminal: `sawit list tools`, `sawit pasang bun uv` and `sawit pupuk`.
+  One tool is installed, upgraded or removed at a time, whether from this page, an agent, `sawit pasang`,
+  `sawit pupuk` or `sawit cabut`.
+- From the terminal: `sawit list tools`, `sawit pasang bun uv`, `sawit pupuk` and `sawit cabut bun`.
 
 ### Browser
 
@@ -486,7 +491,7 @@ Both create a symlink `/usr/local/bin/sawit` to the app and ask for an admin pas
 root.
 
 Besides opening files, the command can query databases like `psql`, export, back up and import tables, list
-instances, databases, ports and dev tools, stop dev servers or instances, and install or upgrade dev tools, all without the app (see
+instances, databases, ports and dev tools, stop dev servers or instances, and install, upgrade or uninstall dev tools, all without the app (see
 [below](#databases-ports-and-instances-from-the-terminal)).
 
 ```bash
@@ -532,15 +537,16 @@ sawit list tools                             # dev tools and whether they're ins
 sawit pasang bun uv                          # "plant": install dev tools, prerequisites first (asks; -y skips)
 sawit pupuk                                  # "fertilize": upgrade every tool with a newer release (asks; -y skips)
 sawit pupuk bun -y                           # upgrade one tool without asking
+sawit cabut bun                              # "uproot": uninstall a dev tool, its installer's copy only (asks; -y skips)
 ```
 
 - `<db>` is looked up in this order: a Sawit instance or saved connection with that name, a database with that name in
   a saved connection, `DATABASE_URL` in `.env` in the current folder or one above it, then the databases of every
   Postgres running locally. A unique prefix also works (`kyzn` finds `kyzn_crm`). If a file or folder with that name
   exists, it's opened instead. To open a folder named after a subcommand (`list`, `bakar`, `panen`, `backup`,
-  `tanam`, `pasang`, `pupuk`, …), use `sawit ./list`.
+  `tanam`, `pasang`, `pupuk`, `cabut`, …), use `sawit ./list`.
 - Every word has an English and an Indonesian name: `list`/`ls`, `panen`/`export`/`ekspor`,
-  `backup`/`dump`/`cadangkan`, `tanam`/`import`/`impor`, `pasang`/`install`, `pupuk`/`upgrade`, and for `list`: `db`/`blok`,
+  `backup`/`dump`/`cadangkan`, `tanam`/`import`/`impor`, `pasang`/`install`, `pupuk`/`upgrade`, `cabut`/`uninstall`, and for `list`: `db`/`blok`,
   `ports`/`lahan`, `instances`/`kebun`, `connections`/`konsesi`, `tools`/`alat`/`perkakas`.
 - `panen` and `backup` ask before replacing an existing file; `-y` replaces it without asking. Without a terminal
   they refuse instead of prompting. `panen` with SQL runs it read-only.
@@ -555,12 +561,18 @@ sawit pupuk bun -y                           # upgrade one tool without asking
 - `list tools` marks a tool with a newer release as `terpasang 0.12.1 → 0.13.6`. `pupuk` with no tools upgrades all
   of those, the same as **Upgrade All**; named tools are upgraded unless they're already the latest. It asks first
   like `pasang`, and without a terminal it needs `-y`.
+- `cabut` uninstalls the tools named, the same as the **Tools** page's trash button: only the copy each one's own
+  installer, Homebrew or npm put in place (`list tools` shows where each was found), the tools that need another
+  first. It lists every command and the installed tools that need what goes, and asks first like `pasang` (`-y`
+  skips the question; without a terminal it needs `-y`). Homebrew's uninstaller asks for a password, so `cabut`
+  prints it for you to run. Afterwards it says if a tool is still found, because that copy was installed another
+  way.
 
 ## MCP for AI agents
 
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 117 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 118 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
 the agent's project open (or the one `project` names), else the frontmost window.
 
@@ -577,7 +589,7 @@ the agent's project open (or the one `project` names), else the frontmost window
 | Git | `git_status`, `git_log`, `git_diff`, `git_show`, `git_branches`, `git_stage`, `git_unstage`, `git_commit`, `git_switch` |
 | Prompts | `list_prompts`, `get_prompt`, `create_prompt`, `update_prompt`, `delete_prompt`, `fill_prompt` |
 | Files | `search_files` |
-| Dev tools | `list_dev_tools` (with newer releases), `install_dev_tools`, `upgrade_dev_tools` |
+| Dev tools | `list_dev_tools` (with newer releases, where each was found and its uninstall command), `install_dev_tools`, `upgrade_dev_tools`, `uninstall_dev_tools` (the copy its own installer, Homebrew or npm put in place) |
 | MCP servers | `list_mcp_servers`, `install_mcp_server`, `uninstall_mcp_server` |
 | App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, changelog, git_graph, github, instance, keymap), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
 | Terminal (app running) | `terminal_run`, `terminal_read`, `terminal_input`, `terminal_close` (`terminal_run`, `app_run_script` and `app_ssh_connect` return the tab and `pane` they used; `terminal_input` needs the tab, and a split tab needs its pane) |
@@ -586,7 +598,8 @@ the agent's project open (or the one `project` names), else the frontmost window
 
 Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`
 and `uninstall_mcp_server` take the name again as `confirm` (so does `remove_instance` when it deletes the data), and `install_dev_tools` and `upgrade_dev_tools` need
-`confirm: true` because they run install scripts from the internet. Passwords never appear in a result. Every tool
+`confirm: true` because they run install scripts from the internet; so does `uninstall_dev_tools`, which deletes
+the tools' files. Passwords never appear in a result. Every tool
 also carries MCP's hints (`readOnlyHint`, `destructiveHint`, `openWorldHint`), for clients that let read-only tools
 through or ask before destructive ones.
 
@@ -713,13 +726,13 @@ crates/core   sawit-core — no GPUI, tested with plain cargo test
   ssh, shell_config      saved SSH hosts and ~/.ssh/config; shell startup files
   agent_config           coding agents' config files on this Mac and in projects
   scripts, search        a project's run scripts and saved commands; text search in a folder
-  dev_tools              the Tools page catalog, detection, latest releases, install and upgrade
+  dev_tools              the Tools page catalog, detection, latest releases, install, upgrade and uninstall
   browser                the browser tab's agent ops and page scripts, device sizes, console and network logs
   annotations, date      Annotate's notes, their Markdown and screenshot names; calendar dates
   site_design            the Design panel's colors (OKLCH, contrast, ramps), tokens, Tailwind classes and export files
   mcp_clients, mcp_catalog, mcp_auth   MCP install into AI clients, the server catalog, client sign-in
   app_control, update, cli    control socket for agents, self-update, the sawit command
-  kebun                  sawit <db>, list, bakar, panen, backup, tanam, pasang, pupuk (no app needed)
+  kebun                  sawit <db>, list, bakar, panen, backup, tanam, pasang, pupuk, cabut (no app needed)
   rt                     Tokio runtime on its own thread
 crates/board  sawit-board — the canvas's document logic around the FigCraft engine; no GPUI, tested with
               plain cargo test (its GPUI views are in crates/app/src/board)

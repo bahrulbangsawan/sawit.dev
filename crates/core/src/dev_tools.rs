@@ -1,7 +1,8 @@
 //! Developer tools that install with a one-line cURL script (Claude Code,
 //! Bun, uv, …): the catalog, which of them are already installed, the order
 //! to install a selection in (prerequisites first), the latest released
-//! versions, and running an installer or upgrade while streaming its output.
+//! versions, and running an installer, upgrade or uninstaller while
+//! streaming its output.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -979,10 +980,117 @@ pub async fn uninstall(
     run_locked(tool.id, tool.name, command, on_line).await
 }
 
+/// Whether the uninstall `command` of `tool` asks for the user's password,
+/// which only a terminal can answer: Homebrew's own uninstaller does, a
+/// `brew uninstall` of one formula doesn't.
+pub fn in_terminal(tool: &Tool, command: &str) -> bool {
+    tool.interactive && !command.starts_with("brew ")
+}
+
+/// How [`uninstall_plan`] removes one tool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Removal {
+    /// Detection found no copy: there is nothing to remove.
+    Missing,
+    /// The copy found wasn't put there by the tool's installer, Homebrew or
+    /// npm (pyenv's Python, Capistrano's `cap`, …): Sawit leaves it alone
+    /// ([`uninstall_command`]).
+    LeftAlone,
+    /// The tool has no uninstaller of its own: it comes with the tools it
+    /// needs, named here (npm with Node.js), and goes when they go.
+    Bundled(Vec<&'static str>),
+    /// Its uninstaller asks for the user's password ([`in_terminal`]): the
+    /// command, for the user to run in a terminal.
+    Terminal(String),
+    /// The command that removes the copy found.
+    Run(String),
+}
+
+/// One tool of an uninstall, worked out as the Dev Tools page's trash button
+/// works it out, for `uninstall_dev_tools` and `sawit cabut`.
+#[derive(Debug, Clone)]
+pub struct Uninstall {
+    pub tool: &'static Tool,
+    /// Where detection found it.
+    pub found: Option<PathBuf>,
+    pub removal: Removal,
+    /// The installed tools that need it and stay, so they stop working once
+    /// it's gone (the page names them before it asks). Empty when nothing is
+    /// removed.
+    pub needed_by: Vec<&'static Tool>,
+}
+
+/// What uninstalling the tools `wanted` does, given what [`detect`] found:
+/// each tool of the catalog once, a tool before the ones it needs (Python's
+/// uninstaller is `uv python uninstall`, so uv goes after it; Gemini CLI's
+/// is `npm uninstall`, so nvm and Node.js go after it). Ids not in the
+/// catalog are left out.
+pub fn uninstall_plan(wanted: &[&str], found: &HashMap<&'static str, Found>) -> Vec<Uninstall> {
+    uninstall_plan_with(wanted, found, &|tool, path| uninstall_command(tool, path))
+}
+
+/// [`uninstall_plan`] with `command` for [`uninstall_command`].
+fn uninstall_plan_with(
+    wanted: &[&str],
+    found: &HashMap<&'static str, Found>,
+    command: &dyn Fn(&Tool, &Path) -> Option<String>,
+) -> Vec<Uninstall> {
+    let mut tools: Vec<&'static Tool> = Vec::new();
+    for tool in wanted.iter().filter_map(|id| find(id)) {
+        if !tools.iter().any(|t| t.id == tool.id) {
+            tools.push(tool);
+        }
+    }
+    // A tool needs fewer tools, directly or through another, than any tool
+    // that needs it; the sort keeps the order given otherwise.
+    tools.sort_by_key(|t| std::cmp::Reverse(plan(&[t.id], &|_| false).len()));
+    let mut out: Vec<Uninstall> = tools
+        .into_iter()
+        .map(|tool| {
+            let path = found.get(tool.id).map(|f| f.path.clone());
+            let removal = match &path {
+                None => Removal::Missing,
+                Some(_) if tool.uninstall.is_none() => Removal::Bundled(
+                    tool.needs
+                        .iter()
+                        .filter_map(|id| find(id))
+                        .map(|t| t.name)
+                        .collect(),
+                ),
+                Some(path) => match command(tool, path) {
+                    None => Removal::LeftAlone,
+                    Some(c) if in_terminal(tool, &c) => Removal::Terminal(c),
+                    Some(c) => Removal::Run(c),
+                },
+            };
+            Uninstall {
+                tool,
+                found: path,
+                removal,
+                needed_by: Vec::new(),
+            }
+        })
+        .collect();
+    let removed: Vec<&str> = out
+        .iter()
+        .filter(|u| matches!(u.removal, Removal::Run(_) | Removal::Terminal(_)))
+        .map(|u| u.tool.id)
+        .collect();
+    for u in out.iter_mut().filter(|u| removed.contains(&u.tool.id)) {
+        u.needed_by = dependents(u.tool.id)
+            .into_iter()
+            .filter(|t| found.contains_key(t.id) && !removed.contains(&t.id))
+            .collect();
+    }
+    out
+}
+
 /// Runs `command` for the tool `id` while holding that tool's lock: one
 /// installer, upgrade or uninstaller per tool at a time, whether the Dev
-/// Tools page, an agent (`install_dev_tools`) or `sawit pasang` runs it. Two
-/// at once would write the same folders (rustup, nvm's clone, uv's).
+/// Tools page, an agent (`install_dev_tools`, `upgrade_dev_tools`,
+/// `uninstall_dev_tools`), `sawit pasang`, `sawit pupuk` or `sawit cabut`
+/// runs it. Two at once would write the same folders (rustup, nvm's clone,
+/// uv's).
 async fn run_locked(
     id: &str,
     name: &str,
@@ -1007,7 +1115,7 @@ fn lock_tool(id: &str, name: &str) -> Result<std::fs::File> {
         let e = std::io::Error::last_os_error();
         if e.raw_os_error() == Some(libc::EWOULDBLOCK) {
             return Err(CoreError::Config(format!(
-                "{name} is already being installed, upgraded or removed (from the Dev Tools page, an agent or `sawit pasang`). Try again when that's done."
+                "{name} is already being installed, upgraded or removed (from the Dev Tools page, an agent, `sawit pasang`, `sawit pupuk` or `sawit cabut`). Try again when that's done."
             )));
         }
         return Err(e.into());
@@ -1341,6 +1449,101 @@ mod tests {
         assert_eq!(uninstall_command_in(npm, p(nvm), p(nvm), home), None);
     }
 
+    /// `uninstall_dev_tools` and `sawit cabut` run only what the page's trash
+    /// button would: the command for the copy the tool's installer, Homebrew
+    /// or npm put in place, never one for a copy installed another way.
+    /// Homebrew's own uninstaller goes to a terminal, a tool goes before the
+    /// tools it needs, and the installed tools left behind that need one are
+    /// named.
+    #[test]
+    fn an_uninstall_runs_only_what_the_page_would_and_in_order() {
+        let home = std::path::Path::new("/Users/me");
+        let gemini = "/Users/me/.nvm/versions/node/v22.11.0/bin/gemini";
+        // What a found path leads to, as canonicalize would say.
+        let real = |path: &Path| match path.to_str() {
+            Some(p) if p == gemini => PathBuf::from(
+                "/Users/me/.nvm/versions/node/v22.11.0/lib/node_modules/@google/gemini-cli/dist/index.js",
+            ),
+            _ => path.to_path_buf(),
+        };
+        let command =
+            |tool: &Tool, path: &Path| uninstall_command_in(tool, path, &real(path), home);
+        let at = |path: &str| Found {
+            path: PathBuf::from(path),
+            version: None,
+        };
+        let found: HashMap<&'static str, Found> = HashMap::from([
+            ("homebrew", at("/opt/homebrew/bin/brew")),
+            ("nvm", at("/Users/me/.nvm/nvm.sh")),
+            ("node", at("/Users/me/.nvm/versions/node/v22.11.0/bin/node")),
+            ("npm", at("/Users/me/.nvm/versions/node/v22.11.0/bin/npm")),
+            ("gemini", at(gemini)),
+            ("uv", at("/Users/me/.local/bin/uv")),
+            ("python", at("/Users/me/.local/bin/python3")),
+            // Capistrano's, from rbenv: not Cap's.
+            ("cap", at("/Users/me/.rbenv/shims/cap")),
+            ("bun", at("/Users/me/.bun/bin/bun")),
+        ]);
+        let own = |id: &str| find(id).unwrap().uninstall.unwrap().to_string();
+        let ids = |tools: &[&'static Tool]| tools.iter().map(|t| t.id).collect::<Vec<_>>();
+
+        let wanted = [
+            "uv", "cap", "homebrew", "nvm", "gemini", "npm", "bun", "bun", "nope", "deno",
+        ];
+        let plan = uninstall_plan_with(&wanted, &found, &command);
+        let got: Vec<(&str, Removal)> = plan
+            .iter()
+            .map(|u| (u.tool.id, u.removal.clone()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                // They need Node.js, which nvm installs: before both.
+                (
+                    "gemini",
+                    Removal::Run("npm uninstall -g @google/gemini-cli".into())
+                ),
+                ("npm", Removal::Bundled(vec!["Node.js"])),
+                ("uv", Removal::Run(own("uv"))),
+                ("cap", Removal::LeftAlone),
+                ("homebrew", Removal::Terminal(own("homebrew"))),
+                ("nvm", Removal::Run(own("nvm"))),
+                ("bun", Removal::Run(own("bun"))),
+                ("deno", Removal::Missing),
+            ]
+        );
+        assert_eq!(
+            plan[3].found,
+            Some(PathBuf::from("/Users/me/.rbenv/shims/cap"))
+        );
+        assert_eq!(plan[7].found, None);
+        // uv's Python and nvm's Node.js stay, and stop working.
+        let needed: Vec<(&str, Vec<&str>)> = plan
+            .iter()
+            .map(|u| (u.tool.id, ids(&u.needed_by)))
+            .collect();
+        assert_eq!(
+            needed,
+            vec![
+                ("gemini", vec![]),
+                ("npm", vec![]),
+                ("uv", vec!["python"]),
+                ("cap", vec![]),
+                ("homebrew", vec![]),
+                ("nvm", vec!["node"]),
+                ("bun", vec![]),
+                ("deno", vec![]),
+            ]
+        );
+
+        // Removed together, nothing is left needing them but npm, which comes with Node.js.
+        let plan = uninstall_plan_with(&["nvm", "node", "gemini"], &found, &command);
+        let order: Vec<&str> = plan.iter().map(|u| u.tool.id).collect();
+        assert_eq!(order, ["gemini", "node", "nvm"]);
+        assert_eq!(ids(&plan[1].needed_by), ["npm"]);
+        assert!(plan[0].needed_by.is_empty() && plan[2].needed_by.is_empty());
+    }
+
     #[tokio::test]
     async fn dropping_a_run_stops_everything_it_started() {
         let marker = format!("sleep 31.{}", std::process::id());
@@ -1459,7 +1662,8 @@ mod tests {
     }
 
     /// Two runs for one tool (the page, an agent, `sawit pasang`) never
-    /// overlap: the second says the first is running.
+    /// overlap: the second says the first is running, and names every place
+    /// a run can come from.
     #[tokio::test]
     async fn one_run_per_tool_at_a_time() {
         let id = format!("test-{}", std::process::id());
@@ -1472,6 +1676,9 @@ mod tests {
         first.unwrap();
         let err = second.expect_err("ran alongside the first");
         assert!(err.to_string().contains("already"), "{err}");
+        for word in ["sawit pasang", "sawit pupuk", "sawit cabut"] {
+            assert!(err.to_string().contains(word), "{err}");
+        }
         // Once the first is done, the next runs. A process another test forked while the lock
         // was held has the lock's file too until it execs, and so holds the lock until then;
         // under load that can outlast the first run by a moment. So the next run may say

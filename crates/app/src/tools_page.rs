@@ -21,8 +21,8 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::dev_tools::{
-    Category, Detection, Found, TOOLS, Tool, dependents, detect, find, is_newer, latest_versions,
-    plan, run, uninstall, uninstall_command,
+    Category, Detection, Found, TOOLS, Tool, dependents, detect, find, in_terminal, is_newer,
+    latest_versions, plan, run, uninstall, uninstall_command,
 };
 
 use crate::catalog::{self, Mark, tilde};
@@ -584,7 +584,7 @@ impl ToolsPage {
         cx.spawn(async move |this, cx| {
             if matches!(answer.await, Ok(0)) {
                 let _ = this.update(cx, |this, cx| {
-                    if tool.interactive && !command.starts_with("brew ") {
+                    if in_terminal(tool, &command) {
                         this.states.insert(tool.id, State::InTerminal);
                         cx.emit(ToolsEvent::RunInTerminal(command));
                         cx.notify();

@@ -2,7 +2,8 @@
 //! `sawit <db> [table] ["sql"]` like psql, `sawit list`, `sawit bakar`
 //! ("burn": stop dev servers or instances, like the `kill-dev` script),
 //! `sawit panen|backup|tanam` (export, `pg_dump`, CSV import) and
-//! `sawit pasang|pupuk` (install or upgrade developer tools).
+//! `sawit pasang|pupuk|cabut` (install, upgrade or uninstall developer
+//! tools).
 //! The wording riffs on Indonesia's forest fires (karhutla) and the palm-oil
 //! plantations (kebun sawit) behind them.
 
@@ -39,6 +40,8 @@ const SUBCOMMANDS: &[&str] = &[
     "pasang",
     "upgrade",
     "pupuk",
+    "uninstall",
+    "cabut",
 ];
 
 /// Rows printed per result set at most.
@@ -345,6 +348,38 @@ impl PupukArgs {
             }
         }
         Ok(PupukArgs { tools, yes })
+    }
+}
+
+/// `sawit cabut <tool…> [-y]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CabutArgs {
+    pub tools: Vec<String>,
+    pub yes: bool,
+}
+
+impl CabutArgs {
+    pub fn parse(args: &[&str]) -> Result<CabutArgs, String> {
+        let mut tools = Vec::new();
+        let mut yes = false;
+        for &arg in args {
+            match arg {
+                "-y" | "--yes" | "--ya" => yes = true,
+                _ if arg.starts_with('-') => {
+                    return Err(format!("opsi tak dikenal: {arg} (yang ada cuma -y)"));
+                }
+                _ if crate::dev_tools::find(arg).is_none() => {
+                    return Err(format!(
+                        "“{arg}” tidak ada di katalog bibit. Lihat `sawit list tools`."
+                    ));
+                }
+                _ => tools.push(arg.to_string()),
+            }
+        }
+        if tools.is_empty() {
+            return Err("cabut apa? Contoh: `sawit cabut bun`. Lihat `sawit list tools`.".into());
+        }
+        Ok(CabutArgs { tools, yes })
     }
 }
 
@@ -809,7 +844,11 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
                     }
                     None => ink.gray("belum"),
                 };
-                println!("  {:<14} {:<22} {state}", t.id, clip(t.name, 22));
+                let place = found
+                    .get(t.id)
+                    .map(|f| format!("  {}", ink.gray(&tilde(&f.path))))
+                    .unwrap_or_default();
+                println!("  {:<14} {:<22} {state}{place}", t.id, clip(t.name, 22));
             }
         }
         println!(
@@ -819,6 +858,10 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
         println!(
             "  {}",
             ink.gray("Yang bertanda → ada versi baru: `sawit pupuk` memupuk semuanya.")
+        );
+        println!(
+            "  {}",
+            ink.gray("Cabut dengan `sawit cabut <id…>`: hanya salinan dari installer-nya, Homebrew atau npm.")
         );
     }
     println!();
@@ -1403,6 +1446,139 @@ pub async fn pupuk(args: PupukArgs) -> i32 {
     code
 }
 
+/// `sawit cabut <tool…>`: what the Dev Tools page's trash button runs, and
+/// only that ([`crate::dev_tools::uninstall_plan`]).
+pub async fn cabut(args: CabutArgs) -> i32 {
+    use crate::dev_tools::{self, Removal};
+    let ink = Ink::stdout();
+    ink.header(
+        "🪓 Cabut Bibit (uninstall tools)",
+        "hanya salinan dari installer-nya sendiri, Homebrew atau npm. Sisanya dibiarkan tumbuh",
+    );
+    let detection = dev_tools::detect().await;
+    if let Some(problem) = &detection.problem {
+        // Which copy is the one in use is unknown: don't remove one the user
+        // didn't mean.
+        println!(
+            "  {} Shell login tidak menjawab ({problem}), jadi tak ada yang dicabut. Coba lagi.",
+            ink.red("✗")
+        );
+        return 1;
+    }
+    let wanted: Vec<&str> = args.tools.iter().map(|t| t.as_str()).collect();
+    let plan = dev_tools::uninstall_plan(&wanted, &detection.found);
+    let mut code = 0;
+    for step in &plan {
+        let id = step.tool.id;
+        let at = step.found.as_deref().map(tilde).unwrap_or_default();
+        match &step.removal {
+            Removal::Missing => ink.empty(&format!("{id} belum terpasang")),
+            Removal::LeftAlone => ink.empty(&format!(
+                "{id} di {at} bukan tanaman installer-nya, Homebrew atau npm: dibiarkan"
+            )),
+            Removal::Bundled(with) => ink.empty(&format!(
+                "{id} tumbuh bersama {}: ikut tercabut kalau itu dicabut, tidak sendirian",
+                with.join(", ")
+            )),
+            Removal::Terminal(command) => {
+                // It asks for a password, which the uninstaller can't read here.
+                ink.warn(&format!(
+                    "{id} minta kata sandi. Jalankan sendiri:\n      {}",
+                    command.replace('\n', "\n      ")
+                ));
+                code = 1;
+            }
+            Removal::Run(_) => {}
+        }
+    }
+    let runs: Vec<(&dev_tools::Uninstall, &str)> = plan
+        .iter()
+        .filter_map(|step| match &step.removal {
+            Removal::Run(command) => Some((step, command.as_str())),
+            _ => None,
+        })
+        .collect();
+    if runs.is_empty() {
+        ink.footer("Tidak ada yang perlu dicabut.");
+        return code;
+    }
+    ink.section(&format!("Bibit ({})", runs.len()));
+    for (ix, (step, command)) in runs.iter().enumerate() {
+        let at = step.found.as_deref().map(tilde).unwrap_or_default();
+        println!(
+            "  {} {:<14} {}",
+            ink.gray(&format!("{:>3}.", ix + 1)),
+            step.tool.id,
+            ink.gray(&at)
+        );
+        for line in command.lines() {
+            println!("       {}", ink.gray(line));
+        }
+        if !step.needed_by.is_empty() {
+            let names: Vec<&str> = step.needed_by.iter().map(|t| t.name).collect();
+            ink.warn(&format!(
+                "{} butuh {}; ikut layu kalau dicabut.",
+                names.join(", "),
+                step.tool.name
+            ));
+        }
+    }
+    println!();
+    if !args.yes {
+        match confirm(&format!(
+            "Cabut {} bibit di atas sampai ke akarnya? Tidak bisa ditanam balik tanpa pasang ulang.",
+            runs.len()
+        )) {
+            Some(true) => {}
+            Some(false) => {
+                ink.footer("Batal. Bibitnya tetap tumbuh, untuk musim ini.");
+                return 0;
+            }
+            None => {
+                println!(
+                    "  {} Tidak ada saksi (stdin bukan terminal). Tambahkan -y kalau memang mau mencabut.",
+                    ink.red("✗")
+                );
+                return 1;
+            }
+        }
+    }
+    let mut removed = Vec::new();
+    for (step, command) in &runs {
+        println!("  {} {}", ink.yellow("⏳"), step.tool.name);
+        let gray = |line: String| println!("     {}", ink.gray(&clip(&line, 100)));
+        match dev_tools::uninstall(step.tool, command, gray).await {
+            Ok(()) => {
+                println!("  {} {} dicabut", ink.green("✓"), step.tool.id);
+                removed.push(step.tool.id);
+            }
+            Err(e) => {
+                println!("  {} {}: {e}", ink.red("✗"), step.tool.id);
+                code = 1;
+            }
+        }
+    }
+    if !removed.is_empty() {
+        // As the page does: a copy installed another way is still found.
+        let after = dev_tools::detect().await;
+        for id in removed {
+            if let Some(f) = after.found.get(id) {
+                ink.warn(&format!(
+                    "{id} masih tumbuh di {}: salinan itu dipasang dengan cara lain (Homebrew, misalnya).",
+                    tilde(&f.path)
+                ));
+                code = 1;
+            }
+        }
+    }
+    ink.footer(if code == 0 {
+        "Selesai. Lahan kosong lagi; buka terminal baru supaya PATH-nya ikut segar."
+    } else {
+        "Sebagian masih berakar; lihat di atas."
+    });
+    code
+}
+
 /// Asks on the terminal; `None` when stdin isn't one.
 fn confirm(question: &str) -> Option<bool> {
     if !std::io::stdin().is_terminal() {
@@ -1730,10 +1906,37 @@ mod tests {
     }
 
     #[test]
+    fn cabut_words() {
+        let id = crate::dev_tools::TOOLS[0].id;
+        assert_eq!(
+            CabutArgs::parse(&[id, "-y"]),
+            Ok(CabutArgs {
+                tools: vec![id.into()],
+                yes: true
+            })
+        );
+        assert_eq!(
+            CabutArgs::parse(&["--ya", id, "bun"]),
+            Ok(CabutArgs {
+                tools: vec![id.into(), "bun".into()],
+                yes: true
+            })
+        );
+        assert_eq!(CabutArgs::parse(&["bun"]).map(|a| a.yes), Ok(false));
+        // Something to uproot must be named: no "every tool".
+        assert!(CabutArgs::parse(&[]).is_err());
+        assert!(CabutArgs::parse(&["-y"]).is_err());
+        assert!(CabutArgs::parse(&["sawit-palsu"]).is_err());
+        assert!(CabutArgs::parse(&[id, "--force"]).is_err());
+    }
+
+    #[test]
     fn job_words_are_not_databases() {
         assert_eq!(q(&["panen", "kyzn", "a.csv"]), None);
         assert_eq!(q(&["backup", "kyzn"]), None);
         assert_eq!(q(&["pasang", "bun"]), None);
         assert_eq!(q(&["pupuk", "bun"]), None);
+        assert_eq!(q(&["cabut", "bun"]), None);
+        assert_eq!(q(&["uninstall", "bun"]), None);
     }
 }
