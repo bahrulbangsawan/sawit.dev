@@ -24,7 +24,7 @@ use gpui_kit::*;
 use sawit_board::ops::{self, Copied};
 use sawit_board::store::{self, Writer};
 use sawit_board::{BoardDoc, BoardError};
-use sawit_core::files::{CANVAS_EXTENSION, LEGACY_CANVAS_EXTENSION};
+use sawit_core::files::CANVAS_EXTENSION;
 use sawit_core::instances::AppPaths;
 use sawit_core::nyawit;
 
@@ -129,7 +129,7 @@ fn import_files(view: &mut BoardView, paths: &[PathBuf], place: bool, cx: &mut C
 fn save_as(view: &BoardView, window: &mut Window, cx: &mut Context<BoardView>) {
     let canvas = view.path();
     let folder = save_as_folder(canvas, || AppPaths::default_macos().root, home);
-    // A copy is a `.sawit` file, a canvas opened from a `.figcraft` file's too.
+    // A copy is a `.sawit` file.
     let name = Path::new(canvas.file_name().unwrap_or_default()).with_extension(CANVAS_EXTENSION);
     let name = name.to_string_lossy();
     let picked = cx.prompt_for_new_path(&folder, Some(name.as_ref()));
@@ -189,13 +189,11 @@ fn save_copy(view: &mut BoardView, path: PathBuf, cx: &mut Context<BoardView>) {
 
 /// `path` as the file Save as… writes, as FigCraft's own Save as takes it: one without an
 /// extension gets `.sawit`, unless a file of that name is there already, which only its full name
-/// replaces (the dialog asked about the name without it). A `.figcraft` name, the extension canvas
-/// files had before (the name of a file opened from before, say), is written as it is named. Any
-/// other extension is refused.
+/// replaces (the dialog asked about the name without it). Any other extension is refused.
 fn canvas_path(mut path: PathBuf) -> Result<PathBuf, String> {
     let is = |ext: &OsStr, wanted: &str| ext.eq_ignore_ascii_case(wanted);
     match path.extension() {
-        Some(ext) if is(ext, CANVAS_EXTENSION) || is(ext, LEGACY_CANVAS_EXTENSION) => Ok(path),
+        Some(ext) if is(ext, CANVAS_EXTENSION) => Ok(path),
         Some(ext) if !ext.is_empty() => Err(format!("Use the .{CANVAS_EXTENSION} extension.")),
         _ => {
             path.set_extension(CANVAS_EXTENSION);
@@ -461,8 +459,7 @@ mod tests {
     }
 
     /// Save as… onto the canvas's own file saves it, as Save does. A name without an extension
-    /// is given `.sawit`, one with `.figcraft` (canvas files' extension before) is written as it
-    /// is named, and another extension is refused.
+    /// is given `.sawit`, and another extension is refused, the canvas engine's own included.
     #[gpui_kit::test]
     fn save_as_writes_only_canvas_files(cx: &mut TestAppContext) {
         let tmp = Scratch::new("save-as-names");
@@ -484,16 +481,13 @@ mod tests {
         // That name again: the file is there now, and only its full name replaces it.
         let refused = save_as(&view, bare, &mut cx).unwrap_or_default();
         assert!(refused.contains("already"), "{refused}");
-        let before = tmp.0.join("copy.figcraft");
-        assert_eq!(
-            save_as(&view, before.clone(), &mut cx).as_deref(),
-            Some("Saved a copy as copy.figcraft")
-        );
-        assert_eq!(saved_layers(&before), 1);
-        let png = tmp.0.join("copy.png");
-        let refused = save_as(&view, png.clone(), &mut cx).unwrap_or_default();
-        assert!(refused.contains(".sawit"), "{refused}");
-        assert!(!png.exists());
+        // Regression: the engine's own extension is refused like any other, not written.
+        for name in ["copy.png", "copy.figcraft"] {
+            let other = tmp.0.join(name);
+            let refused = save_as(&view, other.clone(), &mut cx).unwrap_or_default();
+            assert!(refused.contains(".sawit"), "{name}: {refused}");
+            assert!(!other.exists(), "{name}");
+        }
     }
 
     /// Every command the policy hands to the canvas has its own arm in `run_ui`: on an empty

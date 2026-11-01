@@ -235,8 +235,8 @@ pub enum Command {
     },
     /// Changes the canvas (opening it if needed): one op of `sawit_board::ops`, answered at once.
     /// The canvas is the one of the agent's project, or with `file` the canvas of that file (an
-    /// absolute path to a `.sawit` file, a `.figcraft` one from before, or an `.excalidraw`
-    /// file), in a canvas tab of its own as `sawit <file>` opens it.
+    /// absolute path to a `.sawit` or an `.excalidraw` file), in a canvas tab of its own as
+    /// `sawit <file>` opens it.
     Canvas {
         op: Value,
         #[serde(default, skip_serializing_if = "Option::is_none")]

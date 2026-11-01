@@ -33,66 +33,6 @@ pub fn board_file(project: Option<&Path>, app_root: &Path) -> PathBuf {
     }
 }
 
-/// The canvas file of `project` (or of Sawit's own folder), as [`board_file`] names it, once a
-/// canvas kept there under the name it had before (`canvas.figcraft`) has moved to it
-/// ([`nyawit::migrate_canvas`], which says what happens when both are there). The app's canvas
-/// tab and `sawit-mcp` with the app closed take the file of the canvas they open from here, so
-/// whichever comes first moves it, once, and the other finds it moved.
-///
-/// A move that fails is logged, and the file under the old name stays the canvas while there is
-/// nothing at the new one: it holds the canvas, which a new, empty file at the new name would
-/// hide.
-pub fn migrated_board_file(project: Option<&Path>, app_root: &Path) -> PathBuf {
-    migrated(board_file(project, app_root))
-}
-
-/// The canvas file `file` ([`nyawit::BOARD_FILE`] in its folder) once the canvas beside it under
-/// the old name has moved to it, as [`migrated_board_file`] gives it.
-fn migrated(file: PathBuf) -> PathBuf {
-    let Some(folder) = file.parent() else {
-        return file;
-    };
-    match nyawit::migrate_canvas(folder) {
-        Ok(_) => file,
-        Err(e) => {
-            let old = folder.join(nyawit::LEGACY_BOARD_FILE);
-            log::warn!(
-                "couldn't move the canvas {} to {}: {e}",
-                old.display(),
-                file.display()
-            );
-            if taken(&old) && !taken(&file) {
-                old
-            } else {
-                file
-            }
-        }
-    }
-}
-
-/// The canvas file `path` names now. A project's canvas named by the name it had before
-/// (`.nyawit/canvas.figcraft`) is moved to its name now ([`migrated_board_file`]), whose file is
-/// given, unless a file is still at the old name (one was at both, or the move failed): that file
-/// is then the one named. Any other path, a `.figcraft` file of the user's included, is given as
-/// it is: only the canvas Sawit keeps in `.nyawit/` moves.
-pub fn current_canvas_file(path: &Path) -> PathBuf {
-    let in_nyawit = path.parent().and_then(Path::file_name) == Some(OsStr::new(nyawit::DIR));
-    if !in_nyawit || path.file_name() != Some(OsStr::new(nyawit::LEGACY_BOARD_FILE)) {
-        return path.to_path_buf();
-    }
-    let file = migrated(path.with_file_name(nyawit::BOARD_FILE));
-    if taken(path) {
-        path.to_path_buf()
-    } else {
-        file
-    }
-}
-
-/// Whether something is at `path`: a file, a folder, or a link, wherever it points.
-fn taken(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok()
-}
-
 /// Opens the canvas at `path`, as [`open_with_issues`] does (so it imports the old canvas too), and
 /// only logs its notes.
 pub fn open(path: &Path) -> Result<BoardDoc, BoardError> {
@@ -199,21 +139,11 @@ fn import_old_canvas(old: &Path) -> Result<(BoardDoc, Vec<String>), BoardError> 
 /// The canvas file that a canvas opened on the file at `path` is bound to, and saves to (spec
 /// D14): for an `.excalidraw` file the `<stem>.sawit` beside it (so the old project canvas is
 /// bound to the canvas file), for any other file the file itself.
-///
-/// What came before the `.sawit` extension stays where it is: an `.excalidraw` file imported into
-/// a `<stem>.figcraft` beside it, with no `<stem>.sawit` there, is bound to that file still, so
-/// its edits aren't lost to a new import. Only a project's canvas by its old name moves
-/// ([`current_canvas_file`]), wherever it is named from.
 pub fn bound_file(path: &Path) -> PathBuf {
-    if !is_excalidraw(path) {
-        return current_canvas_file(path);
-    }
-    let file = path.with_extension(files::CANVAS_EXTENSION);
-    let before = path.with_extension(files::LEGACY_CANVAS_EXTENSION);
-    if !taken(&file) && taken(&before) {
-        current_canvas_file(&before)
+    if is_excalidraw(path) {
+        path.with_extension(files::CANVAS_EXTENSION)
     } else {
-        file
+        path.to_path_buf()
     }
 }
 
@@ -322,10 +252,9 @@ pub fn backup_after(op: &str, before: &Document, after: &Document) -> Backup {
 
 /// Opens the canvas a canvas tab shows for the file at `path` (spec D14), as [`open`] opens one:
 /// an `.excalidraw` file's scene, imported ([`import_file`]), while the `.sawit` file it is
-/// bound to ([`bound_file`]) isn't there, and that file once it is; any other file itself (a
-/// project's canvas by its old name as moved to its new one). What the import left out is only
-/// logged. Nothing is written, the `.excalidraw` file least of all: the first save of the canvas
-/// makes the `.sawit` file, so the scene is imported once.
+/// bound to ([`bound_file`]) isn't there, and that file once it is; any other file itself. What
+/// the import left out is only logged. Nothing is written, the `.excalidraw` file least of all:
+/// the first save of the canvas makes the `.sawit` file, so the scene is imported once.
 pub fn open_bound(path: &Path) -> Result<BoardDoc, BoardError> {
     let file = bound_file(path);
     if !is_excalidraw(path) || file.exists() {
@@ -898,71 +827,31 @@ mod tests {
         assert_eq!(board_file(None, root), root.join("canvas.sawit"));
     }
 
-    /// A project's canvas, and the canvas in Sawit's own folder, kept under the old name moves to
-    /// the new one with its backups the first time it is asked for, and opens there with what it
-    /// held. A move that fails leaves the old file the canvas.
+    /// Regression: a project that only holds a canvas file named with the canvas engine's own
+    /// extension has a blank canvas. That file isn't read, and nothing moves, renames or deletes
+    /// it: the first save writes `canvas.sawit` beside it, which stays as it was.
     #[test]
-    fn the_canvas_under_its_old_name_moves_before_it_opens() {
+    fn a_file_by_the_engines_own_name_is_left_alone() {
         let dir = tempdir().unwrap();
         let project = dir.path().join("shop");
         let nyawit = project.join(".nyawit");
         std::fs::create_dir_all(&nyawit).unwrap();
-        std::fs::write(nyawit.join("canvas.figcraft"), bytes_with(&["kept"])).unwrap();
-        std::fs::write(nyawit.join("canvas.figcraft.bak"), bytes_with(&["cleared"])).unwrap();
-        let root = dir.path().join("support");
-        std::fs::create_dir(&root).unwrap();
-        std::fs::write(root.join("canvas.figcraft"), bytes_with(&["mine"])).unwrap();
-
-        let file = migrated_board_file(Some(&project), &root);
-        assert_eq!(file, nyawit.join("canvas.sawit"));
-        assert_eq!(names(&nyawit), ["canvas.sawit", "canvas.sawit.bak"]);
-        assert!(has_text(&open(&file).unwrap(), "kept"));
-        assert!(has_text(&open(&backup_file(&file, 0)).unwrap(), "cleared"));
-
-        let own = migrated_board_file(None, &root);
-        assert_eq!(own, root.join("canvas.sawit"));
-        assert!(has_text(&open(&own).unwrap(), "mine"));
-
-        // A folder the canvas can't be moved in: the old file is the canvas still.
-        use std::os::unix::fs::PermissionsExt as _;
-        let locked = dir.path().join("locked");
-        let locked_nyawit = locked.join(".nyawit");
-        std::fs::create_dir_all(&locked_nyawit).unwrap();
-        std::fs::write(locked_nyawit.join("canvas.figcraft"), bytes_with(&["old"])).unwrap();
-        let permissions = |mode| std::fs::Permissions::from_mode(mode);
-        std::fs::set_permissions(&locked_nyawit, permissions(0o555)).unwrap();
-        let file = migrated_board_file(Some(&locked), &root);
-        std::fs::set_permissions(&locked_nyawit, permissions(0o755)).unwrap();
-        assert_eq!(file, locked_nyawit.join("canvas.figcraft"));
-        assert_eq!(names(&locked_nyawit), ["canvas.figcraft"]);
-    }
-
-    /// A project's canvas named by its old name (an agent's `file`, the Files tab, `sawit <file>`)
-    /// is the project's canvas, moved: it opens under its new name. Once both names are there,
-    /// the old one names the file left there; any other `.figcraft` file is itself.
-    #[test]
-    fn a_projects_canvas_named_by_its_old_name_is_the_canvas_now() {
-        let dir = tempdir().unwrap();
-        let nyawit = dir.path().join(".nyawit");
-        std::fs::create_dir(&nyawit).unwrap();
         let old = nyawit.join("canvas.figcraft");
-        std::fs::write(&old, bytes_with(&["kept"])).unwrap();
-        let new = nyawit.join("canvas.sawit");
+        let held = bytes_with(&["kept"]);
+        std::fs::write(&old, &held).unwrap();
 
-        assert_eq!(current_canvas_file(&old), new);
-        assert_eq!(bound_file(&old), new);
-        assert!(has_text(&open_bound(&old).unwrap(), "kept"));
-        assert_eq!(names(&nyawit), ["canvas.sawit"]);
+        let file = board_file(Some(&project), dir.path());
+        assert_eq!(file, nyawit.join("canvas.sawit"));
+        let board = open(&file).unwrap();
+        assert_eq!(top_level(&board), 0);
+        assert_eq!(names(&nyawit), ["canvas.figcraft"]);
 
-        std::fs::write(&old, bytes_with(&["left"])).unwrap();
-        assert_eq!(current_canvas_file(&old), old);
-        assert!(has_text(&open_bound(&old).unwrap(), "left"));
-        assert!(has_text(&open_bound(&new).unwrap(), "kept"));
-
-        let design = dir.path().join("canvas.figcraft");
-        std::fs::write(&design, bytes_with(&["design"])).unwrap();
-        assert_eq!(current_canvas_file(&design), design);
-        assert_eq!(names(dir.path()), [".nyawit", "canvas.figcraft"]);
+        let writer = Writer::spawn();
+        writer.save(file.clone(), bytes_with(&["new"]), false);
+        writer.flush();
+        assert_eq!(writer.last_error(), None);
+        assert!(has_text(&open(&file).unwrap(), "new"));
+        assert_eq!(std::fs::read(&old).unwrap(), held);
     }
 
     #[test]
@@ -1165,37 +1054,8 @@ mod tests {
             bound("/p/.nyawit/canvas.excalidraw"),
             nyawit::board_file(Path::new("/p"))
         );
-        // A canvas file is bound to itself, by either extension.
+        // A canvas file is bound to itself.
         assert_eq!(bound("/p/board.sawit"), Path::new("/p/board.sawit"));
-        assert_eq!(bound("/p/board.figcraft"), Path::new("/p/board.figcraft"));
-    }
-
-    /// An `.excalidraw` file imported before canvas files took the `.sawit` extension saved into
-    /// the `.figcraft` file beside it: that file is the one it stays bound to, where its edits are,
-    /// until a `.sawit` one is there. The project's old canvas goes to the project's canvas, moved.
-    #[test]
-    fn an_excalidraw_file_imported_before_stays_bound_to_its_figcraft_file() {
-        let dir = tempdir().unwrap();
-        let scene = dir.path().join("flow.excalidraw");
-        std::fs::write(&scene, FIXTURE).unwrap();
-        let before = dir.path().join("flow.figcraft");
-        std::fs::write(&before, bytes_with(&["edited"])).unwrap();
-        assert_eq!(bound_file(&scene), before);
-        assert!(has_text(&open_bound(&scene).unwrap(), "edited"));
-        std::fs::write(dir.path().join("flow.sawit"), bytes_with(&["newer"])).unwrap();
-        assert_eq!(bound_file(&scene), dir.path().join("flow.sawit"));
-
-        let nyawit = dir.path().join(".nyawit");
-        std::fs::create_dir(&nyawit).unwrap();
-        std::fs::write(nyawit.join("canvas.excalidraw"), FIXTURE).unwrap();
-        std::fs::write(nyawit.join("canvas.figcraft"), bytes_with(&["kept"])).unwrap();
-        let canvas = bound_file(&nyawit.join("canvas.excalidraw"));
-        assert_eq!(canvas, nyawit.join("canvas.sawit"));
-        assert_eq!(names(&nyawit), ["canvas.excalidraw", "canvas.sawit"]);
-        assert!(has_text(
-            &open_bound(&nyawit.join("canvas.excalidraw")).unwrap(),
-            "kept"
-        ));
     }
 
     #[test]

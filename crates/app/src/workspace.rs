@@ -691,16 +691,15 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Opens a canvas file in a canvas tab (spec D14): a `.sawit` file (or a `.figcraft` one, as
-    /// canvas files were named before) bound to itself, or an `.excalidraw` file imported and
-    /// bound to the `<stem>.sawit` beside it ([`BoardView::import`]).
+    /// Opens a canvas file in a canvas tab (spec D14): a `.sawit` file bound to itself, or an
+    /// `.excalidraw` file imported and bound to the `<stem>.sawit` beside it
+    /// ([`BoardView::import`]).
     ///
     /// A file has one canvas in the window, whichever of its two names opens it, because two
     /// canvases of one file would each save over the other's edits. A project's canvas file is
-    /// that project's canvas tab ([`Self::open_canvas_of`]), its old name
-    /// (`.nyawit/canvas.figcraft`) too, which moves it to its new one ([`store::bound_file`]); any
-    /// other file's tab is keyed by the canvas file it is bound to, and shown again when the file
-    /// is opened again. The canvas shown.
+    /// that project's canvas tab ([`Self::open_canvas_of`]); any other file's tab is keyed by the
+    /// canvas file it is bound to ([`store::bound_file`]), and shown again when the file is opened
+    /// again. The canvas shown.
     fn open_board_file(
         &mut self,
         path: PathBuf,
@@ -2500,8 +2499,7 @@ impl Workspace {
             };
             return view.clone().downcast::<BoardView>().ok();
         }
-        // A canvas kept under the name it had before moves to its name now first, with its backups.
-        let file = store::migrated_board_file(root.as_deref(), &AppPaths::default_macos().root);
+        let file = board_file(root.as_deref(), &AppPaths::default_macos().root);
         if let Some((ix, board)) = self.board_tab(&file, cx) {
             self.activate_tab(ix, cx);
             return Some(board);

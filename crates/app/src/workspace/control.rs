@@ -61,8 +61,7 @@ fn agent_project(
 }
 
 /// The kind of canvas file `file` is, which an agent's canvas op names: an absolute path to a
-/// `.sawit` file (or a `.figcraft` one, as canvas files were named before) or an `.excalidraw`
-/// file. Anything else is the op's error, and no tab opens for it.
+/// `.sawit` or an `.excalidraw` file. Anything else is the op's error, and no tab opens for it.
 fn canvas_file_kind(file: &Path) -> Result<FileKind, String> {
     if !file.is_absolute() {
         return Err(format!(
@@ -948,19 +947,23 @@ mod tests {
         );
     }
 
-    /// An agent's canvas op names a canvas file by its absolute path: a `.sawit` file (or a
-    /// `.figcraft` one from before), or an `.excalidraw` file, whose canvas is bound to the
-    /// `.sawit` file beside it. Anything else is the op's error, and no tab opens for it.
+    /// An agent's canvas op names a canvas file by its absolute path: a `.sawit` file, or an
+    /// `.excalidraw` file, whose canvas is bound to the `.sawit` file beside it. Anything else is
+    /// the op's error, and no tab opens for it.
     #[test]
     fn an_agents_canvas_file_is_a_sawit_or_excalidraw_file_by_its_absolute_path() {
         let kind = |file: &str| canvas_file_kind(Path::new(file));
         assert_eq!(kind("/p/design/home.sawit"), Ok(FileKind::Canvas));
-        assert_eq!(kind("/p/design/home.figcraft"), Ok(FileKind::Canvas));
         assert_eq!(kind("/p/Old.EXCALIDRAW"), Ok(FileKind::Excalidraw));
         for (file, says) in [
             ("design/home.sawit", "isn't an absolute path"),
             ("/p/notes.md", "isn't a canvas file"),
             ("/p/.nyawit/canvas.sawit.bak", "isn't a canvas file"),
+            // Regression: the canvas engine's own extension is refused like any other file.
+            (
+                "/p/design/home.figcraft",
+                "name a .sawit or .excalidraw file",
+            ),
         ] {
             let refused = kind(file).unwrap_err();
             assert!(refused.contains(says), "{file}: {refused}");

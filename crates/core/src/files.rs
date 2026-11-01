@@ -530,8 +530,7 @@ pub enum FileKind {
     Image,
     Pdf,
     Video,
-    /// A Sawit canvas file (`.sawit`, or `.figcraft`, the extension it had before), shown on a
-    /// canvas bound to the file.
+    /// A Sawit canvas file (`.sawit`), shown on a canvas bound to the file.
     Canvas,
     /// An Excalidraw scene (`.excalidraw`), imported onto a canvas that is saved as the
     /// `.sawit` file beside it.
@@ -541,12 +540,6 @@ pub enum FileKind {
 /// The extension of Sawit's canvas files: the project's `canvas.sawit`, and every file Save as…
 /// writes.
 pub const CANVAS_EXTENSION: &str = "sawit";
-
-/// The extension canvas files had before they took Sawit's own: `.figcraft`, the name the canvas
-/// engine (FigCraft) gives its format, which the files still are. Such a file opens on a canvas
-/// and saves where it is; only a project's canvas moves to the new name
-/// ([`crate::nyawit::migrate_canvas`]).
-pub const LEGACY_CANVAS_EXTENSION: &str = "figcraft";
 
 fn extension(path: &Path) -> String {
     path.extension()
@@ -565,7 +558,7 @@ pub fn classify(path: &Path) -> FileKind {
         | "heif" | "avif" => FileKind::Image,
         "pdf" => FileKind::Pdf,
         "mp4" | "m4v" | "mov" | "webm" | "mkv" | "avi" => FileKind::Video,
-        CANVAS_EXTENSION | LEGACY_CANVAS_EXTENSION => FileKind::Canvas,
+        CANVAS_EXTENSION => FileKind::Canvas,
         "excalidraw" => FileKind::Excalidraw,
         _ => FileKind::Text,
     }
@@ -986,6 +979,12 @@ mod tests {
         let t = read_text(&f).unwrap();
         assert!(t.text.is_empty());
         assert!(t.read_only_reason.unwrap().contains("Binary"));
+        // A zip archive with an extension the editor doesn't know: read-only, nothing shown.
+        let zip = d.path().join("archive.unknown");
+        fs::write(&zip, b"PK\x03\x04\x14\x00\x00\x00\x08\x00\xff\xfe").unwrap();
+        let t = read_text(&zip).unwrap();
+        assert!(t.text.is_empty());
+        assert!(t.read_only_reason.unwrap().contains("Binary"));
     }
 
     #[test]
@@ -1318,23 +1317,20 @@ mod tests {
     }
 
     #[test]
-    fn classify_canvas_files_by_either_extension_and_excalidraw() {
+    fn classify_canvas_files_and_excalidraw() {
         use FileKind::*;
         for (file, kind) in [
             ("board.sawit", Canvas),
             ("/p/.nyawit/canvas.sawit", Canvas),
             ("Board.SAWIT", Canvas),
-            // The extension canvas files had before names a canvas file still.
-            ("board.figcraft", Canvas),
-            ("/p/.nyawit/canvas.figcraft", Canvas),
-            ("Board.FIGCRAFT", Canvas),
             ("sketch.excalidraw", Excalidraw),
             ("/p/.nyawit/canvas.excalidraw", Excalidraw),
             ("Sketch.Excalidraw", Excalidraw),
             // An Excalidraw library, and names without the extension, are something else.
             ("shapes.excalidrawlib", Text),
             ("sawit", Text),
-            ("figcraft", Text),
+            // Regression: the canvas engine's own extension is no canvas file, just an unknown one.
+            ("board.figcraft", Text),
             ("canvas.sawit.bak", Text),
             (".excalidraw", Text),
         ] {

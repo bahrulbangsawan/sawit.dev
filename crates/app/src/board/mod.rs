@@ -413,8 +413,8 @@ fn let_through() -> Vec<KeyBinding> {
     ]
 }
 
-/// A canvas tab: the board in one `.sawit` file (or a `.figcraft` one from before), drawn as its
-/// view and its document change, and saved as it is edited. An `.excalidraw` file opens
+/// A canvas tab: the board in one `.sawit` file, drawn as its view and its document change, and
+/// saved as it is edited. An `.excalidraw` file opens
 /// imported, in the `.sawit` file beside it ([`BoardView::import`]).
 pub struct BoardView {
     /// The canvas file the canvas is bound to: the one it opened, or the one an imported

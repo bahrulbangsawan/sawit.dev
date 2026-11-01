@@ -184,9 +184,8 @@ pub fn logo_for(path: &Path) -> Option<&'static str> {
     })
 }
 
-/// Whether `path` is a file that opens on a canvas: a Sawit canvas file (`.sawit`, or `.figcraft`
-/// as they were named before) or an `.excalidraw` scene. It shows the canvas's own glyph, as its
-/// tab does.
+/// Whether `path` is a file that opens on a canvas: a Sawit canvas file (`.sawit`) or an
+/// `.excalidraw` scene. It shows the canvas's own glyph, as its tab does.
 pub fn opens_on_canvas(path: &Path) -> bool {
     use sawit_core::files::{FileKind, classify};
     matches!(classify(path), FileKind::Canvas | FileKind::Excalidraw)
@@ -218,16 +217,11 @@ mod tests {
     use super::{LOGOS, PREFIX, asset, logo_for, opens_on_canvas};
     use std::path::Path;
 
-    /// Canvas files show the canvas's glyph, by either extension, and so does a scene that opens
-    /// on a canvas; the copies kept of a canvas file and its exports don't.
+    /// Canvas files show the canvas's glyph, and so does a scene that opens on a canvas; the
+    /// copies kept of a canvas file and its exports don't.
     #[test]
     fn canvas_files_show_the_canvas_glyph() {
-        for file in [
-            "canvas.sawit",
-            "Design.SAWIT",
-            "home.figcraft",
-            "flow.excalidraw",
-        ] {
+        for file in ["canvas.sawit", "Design.SAWIT", "flow.excalidraw"] {
             assert!(opens_on_canvas(Path::new(file)), "{file}");
         }
         for file in ["canvas.sawit.bak", "canvas.sawit.png", "sawit", "main.rs"] {
