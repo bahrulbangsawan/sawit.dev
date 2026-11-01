@@ -18,6 +18,7 @@ use sawit_core::instances::{AppPaths, Instance};
 pub mod app;
 pub mod browser;
 pub mod browser_design;
+pub mod config_files;
 pub mod db;
 pub mod db_admin;
 pub mod dev_tools;
@@ -80,6 +81,7 @@ Sawit is a macOS developer workbench. These tools work without the Sawit app run
 - Git: status, log, diff, show, branches, stage/unstage, commit, switch.
 - Prompts: the prompt library (with {{variables}}).
 - Files: text search in a folder.
+- Config files: the Config Files panel's list (shell startup files, and every coding agent's config files on this Mac and in the project), as paths and what each is, never contents: list_config_files.
 - Dev tools: the Tools page catalog (Homebrew, Bun, uv, Claude Code, …), what is installed (and where) and what has a newer release, installing with prerequisites, upgrading and uninstalling (confirm=true).
 - MCP servers: the MCP page catalog and the AI clients on this Mac; install or remove a server in a client's config.
 These control the running Sawit app (start it with launch_app; app_state shows windows, tabs and terminals):
@@ -288,6 +290,7 @@ const READ_ONLY: &[&str] = &[
     "search_files",
     "list_dev_tools",
     "list_mcp_servers",
+    "list_config_files",
     "app_state",
     "app_open",
     "app_focus",
@@ -501,6 +504,7 @@ impl Sawit {
             + Self::files_router()
             + Self::dev_tools_router()
             + Self::mcp_servers_router()
+            + Self::config_files_router()
             // App-control tools (need the app running).
             + Self::app_router()
             + Self::browser_router()
@@ -614,6 +618,8 @@ mod tests {
             "list_mcp_servers",
             "install_mcp_server",
             "uninstall_mcp_server",
+            // config files
+            "list_config_files",
             // app control
             "launch_app",
             "app_state",
@@ -761,6 +767,7 @@ mod tests {
             "list_dev_tools",
             "app_state",
             "browser_snapshot",
+            "list_config_files",
         ] {
             assert_eq!(hints(name).0, Some(true), "{name} only reads");
         }
@@ -810,6 +817,7 @@ mod tests {
             "git_status",
             "list_prompts",
             "search_files",
+            "list_config_files",
             "uninstall_dev_tools",
         ] {
             assert_eq!(hints(name).2, Some(false), "{name} stays on this Mac");

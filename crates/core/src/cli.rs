@@ -19,7 +19,7 @@ sawit — open folders and files in Sawit, query databases, clear ports
 Usage:
   sawit [options] [path[:line[:column]] ...]
   sawit <db> [table] [\"sql\"]
-  sawit list [instances|db|ports|connections|tools]
+  sawit list [instances|db|ports|connections|tools|mcp|config]
   sawit bakar ports [port ...] [-y]
   sawit bakar instances [name ...] [-y]
   sawit panen <db> <table|\"sql\"> <file.csv|file.xlsx> [-y]
@@ -74,6 +74,12 @@ Tools (the app's Tools page):
   sawit pupuk bun          upgrade just bun (asks first; -y to skip)
   sawit cabut bun          uninstall bun: only the copy its own installer,
                            Homebrew or npm put there (asks first; -y to skip)
+
+More lists, shown only when asked:
+  sawit list mcp           the MCP page: servers and the AI clients that
+                           have them (colokan)
+  sawit list config        shell startup files and coding agents' config
+                           files, for this folder's project (configs, konfig)
 
 Options:
   -n, --new         always open in a new window
@@ -517,6 +523,14 @@ mod tests {
             parse(&["ls", "alat"]),
             Ok(Invocation::List(ListWhat::Tools))
         );
+        assert_eq!(
+            parse(&["list", "colokan"]),
+            Ok(Invocation::List(ListWhat::Mcp))
+        );
+        assert_eq!(
+            parse(&["ls", "konfig"]),
+            Ok(Invocation::List(ListWhat::Config))
+        );
     }
 
     #[test]
@@ -582,6 +596,21 @@ mod tests {
             "sawit cabut <tool ...> [-y]",
             "cabut = uninstall",
             "sawit cabut bun",
+        ] {
+            assert!(USAGE.contains(said), "no {said:?} in the help");
+        }
+    }
+
+    /// `sawit --help` names the lists shown only when asked, with their
+    /// aliases.
+    #[test]
+    fn help_names_the_mcp_and_config_lists() {
+        for said in [
+            "tools|mcp|config]",
+            "sawit list mcp",
+            "(colokan)",
+            "sawit list config",
+            "(configs, konfig)",
         ] {
             assert!(USAGE.contains(said), "no {said:?} in the help");
         }

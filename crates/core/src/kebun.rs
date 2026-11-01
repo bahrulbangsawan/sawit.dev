@@ -138,6 +138,12 @@ pub enum ListWhat {
     Connections,
     /// Developer tools (only when asked: detecting them takes a moment).
     Tools,
+    /// The MCP page: the catalog's servers and the AI clients that have
+    /// them (only when asked, like tools).
+    Mcp,
+    /// The Config Files panel: shell startup files and coding agents' config
+    /// files (only when asked, like tools).
+    Config,
 }
 
 impl ListWhat {
@@ -151,16 +157,20 @@ impl ListWhat {
                 ListWhat::Connections
             }
             Some("tools" | "tool" | "alat" | "perkakas") => ListWhat::Tools,
+            Some("mcp" | "colokan") => ListWhat::Mcp,
+            Some("config" | "configs" | "konfig") => ListWhat::Config,
             Some(other) => {
                 return Err(format!(
-                    "`sawit list {other}`? Tidak ada di peta. Pilih: instances, db, ports, connections, tools."
+                    "`sawit list {other}`? Tidak ada di peta. Pilih: instances, db, ports, connections, tools, mcp, config."
                 ));
             }
         })
     }
 
     fn shows(self, part: ListWhat) -> bool {
-        self == part || (self == ListWhat::All && part != ListWhat::Tools)
+        self == part
+            || (self == ListWhat::All
+                && !matches!(part, ListWhat::Tools | ListWhat::Mcp | ListWhat::Config))
     }
 }
 
@@ -864,8 +874,188 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
             ink.gray("Cabut dengan `sawit cabut <id…>`: hanya salinan dari installer-nya, Homebrew atau npm.")
         );
     }
+    if what.shows(ListWhat::Mcp) {
+        list_mcp(&ink);
+    }
+    if what.shows(ListWhat::Config) {
+        list_config(&ink, cwd);
+    }
     println!();
     0
+}
+
+/// The `sawit-mcp` next to this program, which the MCP page installs as
+/// Sawit's own server: the app's binary, also when `sawit` is reached
+/// through the `/usr/local/bin/sawit` link.
+fn own_mcp_server() -> PathBuf {
+    std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("sawit-mcp")))
+        .unwrap_or_else(|| PathBuf::from("sawit-mcp"))
+}
+
+/// A client as `sawit list mcp` names it: "Codex", "Claude Code (profil work)".
+fn client_name(target: &crate::mcp_clients::Target) -> String {
+    match target.profile.as_str() {
+        "default" => target.client.name().to_string(),
+        profile => format!("{} (profil {profile})", target.client.name()),
+    }
+}
+
+/// `sawit list mcp`: the MCP page's servers and the clients that have them.
+fn list_mcp(ink: &Ink) {
+    use crate::mcp_catalog::{self, Auth, DEFAULT_AWS_REGION, Source};
+    use crate::mcp_clients::Status;
+    let report = mcp_catalog::report(&own_mcp_server());
+    ink.section("🔌 Colokan MCP (servers)");
+    let clients: Vec<String> = report.targets.iter().map(client_name).collect();
+    if clients.is_empty() {
+        ink.empty("belum ada klien AI di Mac ini. Kebunnya masih digarap tangan manusia.");
+    } else {
+        println!("  {} {}", ink.gray("klien:"), clients.join(", "));
+    }
+    // A config that can't be read, or that Sawit doesn't edit (YAML, a
+    // script), is so for every server: said once, here, not under each.
+    let mut noted: Vec<usize> = Vec::new();
+    for (ix, status) in report.servers.iter().flat_map(|l| &l.installed) {
+        let note = match status {
+            Status::Unreadable(why) => format!("config tak terbaca ({why}): periksa sendiri"),
+            Status::Manual => "config-nya YAML atau skrip: server ditambahkan sendiri".to_string(),
+            _ => continue,
+        };
+        if !noted.contains(ix) {
+            noted.push(*ix);
+            ink.warn(&format!("{}: {note}", client_name(&report.targets[*ix])));
+        }
+    }
+    for listed in &report.servers {
+        let server = listed.server;
+        let address = match server.source {
+            Source::Bundled => "bawaan Sawit".to_string(),
+            _ => server.address(DEFAULT_AWS_REGION),
+        };
+        println!(
+            "  {:<24} {:<20} {}",
+            server.id,
+            clip(server.name, 20),
+            ink.gray(&address)
+        );
+        let pad = " ".repeat(24);
+        // Only names: what a key holds never comes near this list.
+        let sign_in = match server.auth {
+            Auth::None => None,
+            Auth::Browser => Some("masuk lewat browser dari kliennya".to_string()),
+            Auth::EnvKey(var) => Some(format!("butuh variabel {var} sebelum kliennya dibuka")),
+            Auth::Program => Some("pakai login programnya sendiri".to_string()),
+        };
+        if let Some(sign_in) = sign_in {
+            println!("  {pad} {}", ink.gray(&sign_in));
+        }
+        if let Some(program) = listed.missing_program {
+            println!(
+                "  {pad} {}",
+                ink.yellow(&format!("! {program} belum terpasang"))
+            );
+        }
+        // The clients that have it; the ones noted above are left out.
+        let installed: Vec<String> = listed
+            .installed
+            .iter()
+            .filter_map(|(ix, status)| {
+                let name = client_name(&report.targets[*ix]);
+                match status {
+                    Status::Installed => Some(name),
+                    Status::Outdated(sig) => Some(match server.region_in(sig) {
+                        Some(region) => format!("{name} (region {region})"),
+                        None => format!("{name} (menunjuk ke tempat lain; pasang ulang)"),
+                    }),
+                    _ => None,
+                }
+            })
+            .collect();
+        if installed.is_empty() {
+            println!("  {pad} {}", ink.gray("belum di klien mana pun"));
+        } else {
+            println!("  {pad} {} {}", ink.green("✓"), installed.join(", "));
+        }
+    }
+    println!(
+        "  {}",
+        ink.gray("Pasang dari halaman MCP di app; agen pakai `install_mcp_server`.")
+    );
+}
+
+/// `sawit list config`: the Config Files panel, for the current folder's
+/// project. Paths only: what a file holds (API keys, say) isn't shown.
+fn list_config(ink: &Ink, cwd: &Path) {
+    use crate::{agent_config, shell_config};
+    let login = shell_config::login_shell();
+    let shells = shell_config::detect();
+    ink.section(&match &login {
+        Some(login) => format!("🐚 Startup shell (login: {login})"),
+        None => "🐚 Startup shell".to_string(),
+    });
+    if shells.is_empty() {
+        ink.empty("tidak ada berkas startup shell. Lahan bersih, tanpa dokumen AMDAL.");
+    }
+    for c in &shells {
+        let read = shell_config::reads(login.as_deref(), c.shell);
+        let mut notes = vec![c.note.to_string()];
+        if !read {
+            notes.push(format!(
+                "tidak dibaca {}",
+                login.as_deref().unwrap_or("shell login")
+            ));
+        }
+        if !c.writable {
+            notes.push("simpan butuh sandi admin".into());
+        }
+        let notes = notes.join(" · ");
+        if read {
+            println!("  {:<34} {}", tilde(&c.path), ink.gray(&notes));
+        } else {
+            // Dimmed, like the panel's row: the login shell never reads it.
+            println!("  {}", ink.gray(&format!("{:<34} {notes}", tilde(&c.path))));
+        }
+    }
+    // The current folder is the project, unless it is the home folder or `/`.
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let projects: Vec<PathBuf> = (cwd.parent().is_some() && Some(cwd) != home.as_deref())
+        .then(|| cwd.to_path_buf())
+        .into_iter()
+        .collect();
+    let agents = agent_config::detect(&projects);
+    ink.section("🤖 Agen AI (prioritas tertinggi duluan)");
+    if agents.is_empty() {
+        ink.empty("tidak ada agen AI terpasang. Kebun ini masih dikerjakan tangan manusia.");
+    }
+    for (client, profile, files) in agent_config::groups(&agents) {
+        println!("  {}", agent_config::group_title(client, profile));
+        for f in files {
+            // A project's file by the project's name: `app/CLAUDE.md`.
+            let name = match &f.project {
+                Some(project) => format!(
+                    "{}/{}",
+                    project
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    f.path.strip_prefix(project).unwrap_or(&f.path).display()
+                ),
+                None => tilde(&f.path),
+            };
+            let mut notes = format!("{} · {}", f.layer.label(), f.note);
+            if !f.writable {
+                notes.push_str(" · simpan butuh sandi admin");
+            }
+            println!("    {:<40} {}", name, ink.gray(&notes));
+        }
+    }
+    println!(
+        "  {}",
+        ink.gray("Buka dengan `sawit <path>`. Isinya tidak ditampilkan: bisa ada kunci API.")
+    );
 }
 
 /// What `bakar ports` takes when no port is named: dev servers, never
@@ -1831,6 +2021,23 @@ mod tests {
         assert!(ListWhat::Tools.shows(ListWhat::Tools));
         assert!(!ListWhat::All.shows(ListWhat::Tools));
         assert!(ListWhat::All.shows(ListWhat::Ports));
+    }
+
+    #[test]
+    fn list_mcp_and_config_only_when_asked() {
+        for word in ["mcp", "colokan"] {
+            assert_eq!(ListWhat::parse(Some(word)), Ok(ListWhat::Mcp), "{word}");
+        }
+        for word in ["config", "configs", "konfig"] {
+            assert_eq!(ListWhat::parse(Some(word)), Ok(ListWhat::Config), "{word}");
+        }
+        for what in [ListWhat::Mcp, ListWhat::Config] {
+            assert!(what.shows(what));
+            assert!(!what.shows(ListWhat::Ports), "{what:?}");
+            assert!(!ListWhat::All.shows(what), "{what:?}");
+        }
+        let unknown = ListWhat::parse(Some("hutan")).unwrap_err();
+        assert!(unknown.contains("mcp, config"), "{unknown}");
     }
 
     #[test]

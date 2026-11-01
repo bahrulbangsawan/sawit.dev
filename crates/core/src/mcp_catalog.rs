@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::mcp_clients::Spec;
+use crate::mcp_clients::{self, Entries, Spec, Status, Target};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
@@ -350,9 +350,123 @@ pub fn valid_region(region: &str) -> bool {
     }
 }
 
+/// The MCP page's list, as `list_mcp_servers` and `sawit list mcp` show it:
+/// the AI clients (and profiles) on this Mac, and every server of the
+/// catalog with the clients that have it.
+#[derive(Debug, Clone)]
+pub struct Report {
+    pub targets: Vec<Target>,
+    pub servers: Vec<Listed>,
+}
+
+/// One server of a [`Report`].
+#[derive(Debug, Clone)]
+pub struct Listed {
+    pub server: &'static Server,
+    /// The program a local server runs, when it isn't installed.
+    pub missing_program: Option<&'static str>,
+    /// The clients that have it, by their place in [`Report::targets`], each
+    /// with how: every status but [`Status::NotInstalled`].
+    pub installed: Vec<(usize, Status)>,
+}
+
+/// The [`Report`] for this Mac. `sawit_mcp` is the bundled server that
+/// Sawit's own entry points at.
+pub fn report(sawit_mcp: &Path) -> Report {
+    report_for(
+        mcp_clients::targets(),
+        sawit_mcp,
+        crate::dev_tools::find_program,
+    )
+}
+
+/// [`report`] for the clients `targets`, with `find` looking programs up.
+fn report_for(
+    targets: Vec<Target>,
+    sawit_mcp: &Path,
+    find: impl Fn(&str) -> Option<PathBuf> + Copy,
+) -> Report {
+    // Each config is read once for the whole catalog.
+    let configs: Vec<Entries> = targets.iter().map(mcp_clients::read_entries).collect();
+    let servers = SERVERS
+        .iter()
+        .map(|server| {
+            let spec = server.spec(sawit_mcp, DEFAULT_AWS_REGION, find);
+            Listed {
+                server,
+                missing_program: server.missing_program(find),
+                installed: configs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(ix, config)| match mcp_clients::status_in(config, &spec) {
+                        Status::NotInstalled => None,
+                        status => Some((ix, status)),
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+    Report { targets, servers }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The list reads each client's config once and says, per server, which
+    /// clients have it and how; a server no client has lists none.
+    #[test]
+    fn the_report_names_the_clients_that_have_each_server() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        std::fs::create_dir_all(h.join(".codex")).unwrap();
+        std::fs::write(
+            h.join(".codex/config.toml"),
+            "[mcp_servers.aws]\nurl = \"https://aws-mcp.eu-west-1.api.aws/mcp\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            h.join(".claude.json"),
+            r#"{"mcpServers": {"sawit": {"command": "/Apps/Sawit.app/sawit-mcp"}}}"#,
+        )
+        .unwrap();
+        let targets = mcp_clients::discover(h, None);
+        let none = |_: &str| None;
+        let report = report_for(targets, Path::new("/Apps/Sawit.app/sawit-mcp"), none);
+        let clients = |id: &str| -> Vec<(String, Status)> {
+            let listed = report.servers.iter().find(|l| l.server.id == id).unwrap();
+            listed
+                .installed
+                .iter()
+                .map(|(ix, status)| {
+                    (
+                        report.targets[*ix].client.name().to_string(),
+                        status.clone(),
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(report.servers.len(), SERVERS.len());
+        assert_eq!(
+            clients("sawit"),
+            [("Claude Code".to_string(), Status::Installed)]
+        );
+        let aws = clients("aws");
+        assert_eq!(aws.len(), 1);
+        assert_eq!(aws[0].0, "Codex");
+        assert!(
+            matches!(&aws[0].1, Status::Outdated(sig) if get("aws").unwrap().region_in(sig).as_deref() == Some("eu-west-1")),
+            "{aws:?}"
+        );
+        assert!(clients("neon").is_empty());
+        // A local server's program that isn't installed is named.
+        let cap = report
+            .servers
+            .iter()
+            .find(|l| l.server.id == "cap")
+            .unwrap();
+        assert_eq!(cap.missing_program, Some("cap"));
+    }
 
     #[test]
     fn ids_are_unique_and_specs_build() {

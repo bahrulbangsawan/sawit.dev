@@ -62,7 +62,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with device sizes and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (118 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (119 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 
 ## Install
 
@@ -396,6 +396,8 @@ explained. A conflict on the same address can't be forced.
   user, …) and what they hold. Each other profile (`~/.claude-work`, a `CLAUDE_CONFIG_DIR` or `CODEX_HOME`
   elsewhere) is a group of its own, "Claude Code · work": profiles are alternatives, not layers.
 - Search by file, path, description or agent. Click a file to edit it.
+- From the terminal, `sawit list config` lists the same files for the current folder's project; agents get them
+  from `list_config_files`. Both give paths and what each file is, never what it holds.
 - Right-click a file to reveal it in Finder, open it in its default app, duplicate it (`.zshrc copy`, a quick
   backup), copy its path, move it to the Trash or delete it. The Files tab's shortcuts work here too.
 - **Save Shell Files to GitHub** commits your own startup files to a private repository (`sawit-shell-config`). Each
@@ -491,7 +493,7 @@ Both create a symlink `/usr/local/bin/sawit` to the app and ask for an admin pas
 root.
 
 Besides opening files, the command can query databases like `psql`, export, back up and import tables, list
-instances, databases, ports and dev tools, stop dev servers or instances, and install, upgrade or uninstall dev tools, all without the app (see
+instances, databases, ports, dev tools, MCP servers and config files, stop dev servers or instances, and install, upgrade or uninstall dev tools, all without the app (see
 [below](#databases-ports-and-instances-from-the-terminal)).
 
 ```bash
@@ -524,7 +526,7 @@ sawit kyzn leads                             # first 100 rows
 sawit kyzn leads "phone is null"             # filter: SELECT * FROM leads WHERE phone is null
 sawit kyzn leads "select * from leads where phone is null"   # any SQL, like psql (writes too)
 sawit list                                   # instances, databases, ports and saved connections
-sawit list db                                # or: instances, ports, connections, tools
+sawit list db                                # or: instances, ports, connections, tools, mcp, config
 sawit bakar ports                            # "burn" dev servers: confirm, SIGTERM, then SIGKILL
 sawit bakar ports 3000 5173 -y               # whatever listens on these ports, without asking
 sawit bakar instances                        # stop running Sawit instances (data is kept)
@@ -538,6 +540,8 @@ sawit pasang bun uv                          # "plant": install dev tools, prere
 sawit pupuk                                  # "fertilize": upgrade every tool with a newer release (asks; -y skips)
 sawit pupuk bun -y                           # upgrade one tool without asking
 sawit cabut bun                              # "uproot": uninstall a dev tool, its installer's copy only (asks; -y skips)
+sawit list mcp                               # the MCP page: servers and the AI clients that have them
+sawit list config                            # shell startup files and coding agents' config files
 ```
 
 - `<db>` is looked up in this order: a Sawit instance or saved connection with that name, a database with that name in
@@ -547,7 +551,8 @@ sawit cabut bun                              # "uproot": uninstall a dev tool, i
   `tanam`, `pasang`, `pupuk`, `cabut`, …), use `sawit ./list`.
 - Every word has an English and an Indonesian name: `list`/`ls`, `panen`/`export`/`ekspor`,
   `backup`/`dump`/`cadangkan`, `tanam`/`import`/`impor`, `pasang`/`install`, `pupuk`/`upgrade`, `cabut`/`uninstall`, and for `list`: `db`/`blok`,
-  `ports`/`lahan`, `instances`/`kebun`, `connections`/`konsesi`, `tools`/`alat`/`perkakas`.
+  `ports`/`lahan`, `instances`/`kebun`, `connections`/`konsesi`, `tools`/`alat`/`perkakas`, `mcp`/`colokan`,
+  `config`/`configs`/`konfig`.
 - `panen` and `backup` ask before replacing an existing file; `-y` replaces it without asking. Without a terminal
   they refuse instead of prompting. `panen` with SQL runs it read-only.
 - Table output goes to stdout, while the "connected to" line and timing go to stderr, so `sawit kyzn leads | less`
@@ -567,12 +572,16 @@ sawit cabut bun                              # "uproot": uninstall a dev tool, i
   skips the question; without a terminal it needs `-y`). Homebrew's uninstaller asks for a password, so `cabut`
   prints it for you to run. Afterwards it says if a tool is still found, because that copy was installed another
   way.
+- `list tools`, `list mcp` and `list config` show only when asked, not in a plain `sawit list`. `list mcp` names each
+  server's address, how it signs in (an environment variable by its name, never its value) and the clients and
+  profiles that have it. `list config` is the **Config Files** tab for the current folder's project, dimming the shell
+  files your login shell doesn't read.
 
 ## MCP for AI agents
 
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 118 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 119 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
 the agent's project open (or the one `project` names), else the frontmost window.
 
@@ -589,6 +598,7 @@ the agent's project open (or the one `project` names), else the frontmost window
 | Git | `git_status`, `git_log`, `git_diff`, `git_show`, `git_branches`, `git_stage`, `git_unstage`, `git_commit`, `git_switch` |
 | Prompts | `list_prompts`, `get_prompt`, `create_prompt`, `update_prompt`, `delete_prompt`, `fill_prompt` |
 | Files | `search_files` |
+| Config files | `list_config_files` (the Config Files tab's shell and coding-agent config files, as paths: never their contents) |
 | Dev tools | `list_dev_tools` (with newer releases, where each was found and its uninstall command), `install_dev_tools`, `upgrade_dev_tools`, `uninstall_dev_tools` (the copy its own installer, Homebrew or npm put in place) |
 | MCP servers | `list_mcp_servers`, `install_mcp_server`, `uninstall_mcp_server` |
 | App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, changelog, git_graph, github, instance, keymap), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
@@ -621,6 +631,7 @@ keeping other settings, their order and the file's indentation (a TOML file keep
 comments is left for you to edit, with the entry to paste), and each file is copied next to it (`.sawit-backup`)
 before every change. Updating an entry changes only where it points: what you added to it (Cline's auto-approved
 tools, `env`, timeouts, …) stays. **Remove from N** in a server's sheet asks first, like its row's trash button.
+`sawit list mcp` shows the same list in a terminal.
 
 To add it by hand:
 

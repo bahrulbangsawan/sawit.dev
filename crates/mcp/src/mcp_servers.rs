@@ -8,7 +8,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
 use sawit_core::dev_tools::find_program;
-use sawit_core::mcp_catalog::{self, Auth, DEFAULT_AWS_REGION, SERVERS, Server};
+use sawit_core::mcp_catalog::{self, Auth, DEFAULT_AWS_REGION, Server};
 use sawit_core::mcp_clients::{self, Spec, Status, Target};
 
 use crate::{Sawit, blocking, fail, ok, tri};
@@ -90,12 +90,6 @@ fn own_server() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("sawit-mcp"))
 }
 
-fn targets() -> Vec<Target> {
-    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-    let claude_dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from);
-    mcp_clients::discover(&home, claude_dir)
-}
-
 fn spec(server: &Server, region: &str) -> Spec {
     server.spec(&own_server(), region, find_program)
 }
@@ -127,7 +121,7 @@ fn pick(
     let entry = mcp_catalog::get(server)
         .ok_or_else(|| format!("Unknown server \"{server}\". See list_mcp_servers."))?;
     let profile = profile.unwrap_or("default");
-    let target = targets()
+    let target = mcp_clients::targets()
         .into_iter()
         .find(|t| same_name(t.client.name(), client) && t.profile == profile)
         .ok_or_else(|| {
@@ -140,16 +134,18 @@ impl Sawit {
     pub async fn list_mcp_servers_tool(&self) -> CallToolResult {
         let text = tri!(
             blocking(|| {
-                let targets = targets();
+                let report = mcp_catalog::report(&own_server());
                 let mut out = vec![format!(
                     "Clients found: {}",
-                    targets
+                    report
+                        .targets
                         .iter()
                         .map(target_label)
                         .collect::<Vec<_>>()
                         .join(", ")
                 )];
-                for server in SERVERS {
+                for listed in &report.servers {
+                    let server = listed.server;
                     out.push(String::new());
                     out.push(format!(
                         "{} ({}) · {}",
@@ -164,15 +160,15 @@ impl Sawit {
                     if let Some(note) = server.note {
                         out.push(format!("  note: {note}"));
                     }
-                    if let Some(program) = server.missing_program(find_program) {
+                    if let Some(program) = listed.missing_program {
                         out.push(format!("  missing program: {program} is not installed"));
                     }
-                    let spec = spec(server, DEFAULT_AWS_REGION);
-                    let installed: Vec<String> = targets
+                    let installed: Vec<String> = listed
+                        .installed
                         .iter()
-                        .filter_map(|t| match mcp_clients::status(t, &spec) {
-                            Status::NotInstalled => None,
-                            s => Some(format!("{} ({})", target_label(t), status_text(server, &s))),
+                        .map(|(ix, status)| {
+                            let target = &report.targets[*ix];
+                            format!("{} ({})", target_label(target), status_text(server, status))
                         })
                         .collect();
                     out.push(format!(
@@ -330,7 +326,7 @@ mod tests {
 
     #[test]
     fn every_catalog_server_has_an_id_and_known_auth_text() {
-        for s in SERVERS {
+        for s in mcp_catalog::SERVERS {
             assert!(!s.id.is_empty());
             assert!(mcp_catalog::get(s.id).is_some());
             let _ = auth_text(s.auth);

@@ -119,6 +119,16 @@ pub fn login_shell() -> Option<String> {
         .map(|n| n.to_string_lossy().into_owned())
 }
 
+/// Whether the login shell `login` ([`login_shell`]) reads the files meant
+/// for `shell`: its own, and bash reads `sh`'s `.profile` too. When the
+/// login shell isn't known, every file counts as read.
+pub fn reads(login: Option<&str>, shell: &str) -> bool {
+    match login {
+        Some(login) => login == shell || (login == "bash" && shell == "sh"),
+        None => true,
+    }
+}
+
 /// Whether a save can replace the file: it and its folder are writable.
 pub(crate) fn writable(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt as _;
@@ -537,6 +547,16 @@ export EDITOR=vim
                 "11 SOMETHING",
             ]
         );
+    }
+
+    #[test]
+    fn the_login_shell_reads_its_own_files_and_bash_reads_profile() {
+        assert!(reads(Some("zsh"), "zsh"));
+        assert!(!reads(Some("zsh"), "bash"));
+        assert!(!reads(Some("zsh"), "sh"));
+        assert!(reads(Some("bash"), "sh"));
+        assert!(!reads(Some("fish"), "sh"));
+        assert!(reads(None, "pwsh"));
     }
 
     #[test]

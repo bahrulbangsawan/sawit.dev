@@ -228,6 +228,14 @@ pub(crate) fn profiles(home: &Path, prefix: &str, marker: &str) -> Vec<(String, 
     found
 }
 
+/// Every installed client (and profile) on this Mac: [`discover`] in the
+/// home folder, with this process's `CLAUDE_CONFIG_DIR`.
+pub fn targets() -> Vec<Target> {
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    let claude_dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from);
+    discover(&home, claude_dir)
+}
+
 /// Every installed client (and profile) under `home`. `claude_config_dir`
 /// is the app's `CLAUDE_CONFIG_DIR`, included when it lives elsewhere.
 pub fn discover(home: &Path, claude_config_dir: Option<PathBuf>) -> Vec<Target> {
