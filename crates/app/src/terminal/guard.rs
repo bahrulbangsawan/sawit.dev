@@ -259,6 +259,7 @@ pub fn end_all(
     let unsaved = crate::editor::unsaved(cx);
     let mut installs = crate::tools_page::at_work(cx);
     installs.extend(crate::skills_page::at_work(cx));
+    installs.extend(crate::new_project_page::at_work(cx));
     let mut running = Vec::new();
     let mut ask_in = None;
     for (handle, panel) in &windows {
@@ -325,6 +326,7 @@ pub fn ask_before_closing(window: &mut Window, panel: WeakEntity<TerminalPanel>,
         let tools: Vec<String> = crate::tools_page::at_work(cx)
             .into_iter()
             .chain(crate::skills_page::at_work(cx))
+            .chain(crate::new_project_page::at_work(cx))
             .filter(|(window, _)| *window == handle)
             .map(|(_, work)| work)
             .collect();

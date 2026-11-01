@@ -60,6 +60,7 @@ use sawit_core::update::Version;
 
 mod control;
 mod explorer;
+mod new_project;
 mod project;
 
 pub use control::Answer;
@@ -100,6 +101,7 @@ actions!(
         OpenCanvas,
         OpenDevTools,
         OpenMcp,
+        OpenNewProject,
         OpenChangelog,
         InstallUpdate,
         OpenLocalExplorer
@@ -144,6 +146,7 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-cmd-c", OpenCanvas, ctx),
         KeyBinding::new("ctrl-cmd-t", OpenDevTools, ctx),
         KeyBinding::new("ctrl-cmd-m", OpenMcp, ctx),
+        KeyBinding::new("ctrl-cmd-n", OpenNewProject, ctx),
         KeyBinding::new("ctrl-cmd-v", OpenChangelog, ctx),
         KeyBinding::new("ctrl-cmd-u", InstallUpdate, ctx),
         KeyBinding::new("ctrl-cmd-e", OpenLocalExplorer, ctx),
@@ -1038,6 +1041,7 @@ impl Workspace {
                             .is_ok_and(|b| b.read(cx).unsent_notes(cx) > 0)
                             || tools_work(&t.item, cx).is_some()
                             || skills_work(&t.item, cx).is_some()
+                            || new_project::new_project_work(&t.item, cx).is_some()
                     }
                     PaneItem::Server => false,
                 },
@@ -1084,6 +1088,15 @@ impl Workspace {
         {
             self.confirm_close_skills(work, window, cx);
             return Some("Skills is installing, and closing the tab stops it");
+        }
+        if let [ix] = closing[..]
+            && let Some(work) = self
+                .tabs
+                .get(ix)
+                .and_then(|t| new_project::new_project_work(&t.item, cx))
+        {
+            self.confirm_close_new_project(work, window, cx);
+            return Some("New Project is creating a project, which it opens when it's done");
         }
         self.remove_tabs(&closing, cx);
         None
@@ -2020,6 +2033,7 @@ impl Workspace {
                 self.leave_welcome(TERMINAL_ONLY, cx);
                 self.terminal.update(cx, |t, cx| t.focus_active(window, cx));
             }
+            WelcomeEvent::NewProject => self.open_new_project_page(window, cx),
             WelcomeEvent::Dismiss => self.leave_welcome(PANEL_AND_TABS, cx),
             WelcomeEvent::SignInToGitHub => self.sign_in_to_github(window, cx),
             WelcomeEvent::OpenGitHub => {
@@ -3216,6 +3230,22 @@ impl Workspace {
                             ),
                     )
                     .child(
+                        Button::new("open-new-project")
+                            .ghost()
+                            .xsmall()
+                            .icon(Lucide::FolderPlus)
+                            .label("New")
+                            .accessibility_label("New Project")
+                            .tooltip_with_action(
+                                "New Project from a TypeScript Stack",
+                                &OpenNewProject,
+                                Some("Workspace"),
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_new_project_page(window, cx)
+                            })),
+                    )
+                    .child(
                         Button::new("open-keymap")
                             .ghost()
                             .xsmall()
@@ -3440,6 +3470,9 @@ impl Render for Workspace {
             )
             .on_action(cx.listener(|this, _: &OpenCanvas, _, cx| this.show_canvas(cx)))
             .on_action(cx.listener(|this, _: &OpenDevTools, w, cx| this.open_tools_page(w, cx)))
+            .on_action(
+                cx.listener(|this, _: &OpenNewProject, w, cx| this.open_new_project_page(w, cx)),
+            )
             .on_action(cx.listener(|this, _: &OpenMcp, w, cx| this.open_mcp_page(w, cx)))
             .on_action(
                 cx.listener(|this, _: &OpenLocalExplorer, w, cx| this.open_local_explorer(w, cx)),

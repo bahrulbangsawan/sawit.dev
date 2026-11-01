@@ -24,6 +24,7 @@ Usage:
   sawit bakar instances [name ...] [-y]
   sawit nyalakan [name ...] [--ulang] [-y]
   sawit browse [url|port]
+  sawit new [name] [--template t3] [stack flags] [--dir <folder>] [--create]
   sawit panen <db> <table|\"sql\"> <file.csv|file.xlsx> [-y]
   sawit backup <db> [schema|schema.table] <file.sql|file.dump> [-y]
   sawit tanam <db> <table> <file.csv>
@@ -47,6 +48,19 @@ Browser (the project's tab in Sawit, which starts if it isn't running):
   sawit browse example.com any address, as the address field takes it
   sawit https://example.com
                            a URL on its own opens there too
+
+New project (the app's New Project page: Better-T-Stack, its CLI 3.49.0):
+  sawit new                the page in Sawit (starts it if it isn't running)
+  sawit new shop --template t3
+                           print the command for a preset, named shop
+  sawit new shop --frontend next --backend self --database postgres
+                           print the command for a stack; the flags are
+                           create-better-t-stack's (--runtime, --api, --auth,
+                           --orm, --db-setup, --addons a b, --examples todo,
+                           --package-manager pnpm, --no-git, …), and what the
+                           compatibility rules change is said first
+  sawit new shop --create  create it in this folder (--dir <folder> for
+                           another), then: sawit shop
 
 Kebun (databases), no app needed:
   sawit kyzn                               list tables
@@ -111,6 +125,7 @@ Keys (the app's Keymap Editor; Sawit must be running):
 
 Aliases (every word has an English and an Indonesian name):
   list = ls, daftar · bakar = stop · nyalakan = start · browse = intip
+  new = semai · --create = --buat · --dir = --lokasi
   panen = export, ekspor · backup = dump, cadangkan · tanam = import, impor
   pasang = install · pupuk = upgrade · cabut = uninstall
   list: all = semua · instances = instance, kebun · db = dbs, database,
@@ -178,6 +193,8 @@ pub enum Invocation {
     Nyalakan(NyalakanArgs),
     /// `sawit browse [url|port]` (`intip`), and `sawit <url>`.
     Browse(BrowseTarget),
+    /// `sawit new …` (`semai`): the New Project page, or its command.
+    Semai(Box<crate::semai::SemaiArgs>),
 }
 
 /// What `sawit browse` opens in Sawit's browser.
@@ -247,6 +264,10 @@ pub fn parse_args(
         }
         Some("start" | "nyalakan") if words.len() == args.len() => {
             return NyalakanArgs::parse(&words[1..]).map(Invocation::Nyalakan);
+        }
+        Some("new" | "semai") if words.len() == args.len() => {
+            return crate::semai::SemaiArgs::parse(&words[1..])
+                .map(|args| Invocation::Semai(Box::new(args)));
         }
         Some("browse" | "intip") if words.len() == args.len() => {
             return BrowseTarget::parse(&words[1..]).map(Invocation::Browse);
@@ -766,6 +787,33 @@ mod tests {
             parse(&["./nyalakan"]),
             Ok(Invocation::Open { .. })
         ));
+    }
+
+    /// `sawit new` (`semai`) opens the New Project page, or with flags prints or creates a
+    /// stack; `./new` and `./semai` are still folders, and the help says how.
+    #[test]
+    fn semai_sows_a_new_project() {
+        assert_eq!(parse(&["new"]), Ok(Invocation::Semai(Box::default())));
+        let Ok(Invocation::Semai(args)) = parse(&["semai", "shop", "--template", "t3", "--buat"])
+        else {
+            panic!()
+        };
+        assert_eq!(args.choices.name.as_deref(), Some("shop"));
+        assert!(args.create);
+        assert!(parse(&["new", "--orm", "sequelize"]).is_err());
+        assert!(parse(&["new", "--nope"]).is_err());
+        assert!(matches!(parse(&["./new"]), Ok(Invocation::Open { .. })));
+        assert!(matches!(parse(&["./semai"]), Ok(Invocation::Open { .. })));
+        for said in [
+            "sawit new [name]",
+            "sawit new shop --template t3",
+            "--create",
+            "new = semai",
+        ] {
+            assert!(USAGE.contains(said), "no {said:?} in the help");
+        }
+        assert!(crate::kebun::SUBCOMMANDS.contains(&"new"));
+        assert!(crate::kebun::SUBCOMMANDS.contains(&"semai"));
     }
 
     /// `sawit browse` (`intip`) opens this project's dev server, a port or an address in Sawit's

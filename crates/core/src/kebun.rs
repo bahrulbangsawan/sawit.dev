@@ -53,6 +53,8 @@ pub(crate) const SUBCOMMANDS: &[&str] = &[
     "intip",
     "daftar",
     "stop",
+    "new",
+    "semai",
 ];
 
 /// Rows printed per result set at most.

@@ -50,6 +50,7 @@ pub mod keymap;
 pub mod local_explorer;
 pub mod mcp_servers;
 pub mod network;
+pub mod new_project;
 pub mod ports;
 pub mod prompts;
 pub mod scripts;
@@ -108,6 +109,7 @@ Sawit is a macOS developer workbench. These tools work without the Sawit app run
 - Config files: the Config Files panel's list (shell startup files, and every coding agent's config files on this Mac and in the project), as paths and what each is, never contents: list_config_files.
 - Dev tools: the Tools page catalog (Homebrew, Bun, uv, Claude Code, …), what is installed (and where) and what has a newer release, installing with prerequisites, upgrading and uninstalling (confirm=true).
 - MCP servers: the MCP page catalog and the AI clients on this Mac; install or remove a server in a client's config (local servers and the remote bridge run with npx, pnpm dlx, bunx or yarn dlx: package_manager).
+- New project: the New Project page's stack builder (Better-T-Stack, create-better-t-stack 3.49.0): stack_options lists every category, option and preset and the default stack; stack_check resolves a stack by the CLI's flag names (what the compatibility rules change, every disabled option and why, the command); stack_create creates the project (confirm=true), in a Sawit terminal that opens it as a project when the app runs, else here.
 - Skills: the Skills page catalog of agent skill packs (Superpowers, Cloudflare, MCP Apps, …) and which agents on this Mac have each; install, update or remove one for chosen agents, with the skills CLI (package_manager), a Claude Code plugin or a clone and copy.
 These control the running Sawit app (start it with launch_app; app_state shows windows, tabs and terminals):
 - app_*: open files/folders, show panels, layout, tabs, pages (canvas, MCP, tools, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
@@ -367,6 +369,8 @@ const READ_ONLY: &[&str] = &[
     "list_mcp_servers",
     "list_skills",
     "list_config_files",
+    "stack_options",
+    "stack_check",
     "app_state",
     "app_open",
     "app_focus",
@@ -435,6 +439,7 @@ const DESTRUCTIVE: &[&str] = &[
     "uninstall_mcp_server",
     "install_skill",
     "uninstall_skill",
+    "stack_create",
     "app_close_tab",
     "app_run_script",
     "app_stop_script",
@@ -516,6 +521,7 @@ const OPEN_WORLD: &[&str] = &[
     "install_dev_tools",
     "upgrade_dev_tools",
     "install_skill",
+    "stack_create",
     "app_run_script",
     "app_ssh_connect",
     "app_open_table",
@@ -596,6 +602,7 @@ impl Sawit {
             + Self::dev_tools_router()
             + Self::mcp_servers_router()
             + Self::skills_router()
+            + Self::new_project_router()
             + Self::config_files_router()
             // App-control tools (need the app running).
             + Self::app_router()
@@ -733,6 +740,10 @@ mod tests {
             "uninstall_skill",
             // config files
             "list_config_files",
+            // new project
+            "stack_options",
+            "stack_check",
+            "stack_create",
             // app control
             "launch_app",
             "app_state",

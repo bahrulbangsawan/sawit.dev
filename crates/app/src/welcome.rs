@@ -25,6 +25,8 @@ pub enum WelcomeEvent {
     OpenFolder,
     OpenRecent(PathBuf),
     NewInstance,
+    /// "New Project…": the New Project page.
+    NewProject,
     OpenServer(String),
     OpenDatabase(String),
     OpenTerminal,
@@ -341,6 +343,14 @@ impl Render for Welcome {
                 "Open Folder…",
                 keys(&crate::cli::OpenFolder),
                 || WelcomeEvent::OpenFolder,
+                cx,
+            ))
+            .child(self.action(
+                "welcome-new-project",
+                Lucide::FolderPlus,
+                "New Project…",
+                keys(&crate::workspace::OpenNewProject),
+                || WelcomeEvent::NewProject,
                 cx,
             ))
             .child(self.action(

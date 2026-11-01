@@ -64,7 +64,8 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with device sizes and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (130 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (133 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🌱 **New projects from a stack** | Pick a TypeScript stack from Better-T-Stack's builder (TanStack, Next.js, Hono, Convex, Drizzle, Better Auth, …); Sawit shows what doesn't fit and why, runs `create-better-t-stack` in its terminal and opens the project. |
 | ✨ **Agent skills** | Superpowers, shadcn's improve, Cloudflare's skills, MCP Apps, unslop and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
 ## Install
@@ -91,8 +92,8 @@ macOS 15, right-click → **Open** no longer gets past the warning.
 
 <img src="docs/media/welcome.png" alt="Welcome screen with start actions, recent folders, PostgreSQL instances and database connections" width="100%">
 
-A new window opens on a welcome screen, like Zed's: **Open Folder…**, **New PostgreSQL Instance…** and
-**Open Terminal** on the left, and your recent folders, instances and database connections on the right.
+A new window opens on a welcome screen, like Zed's: **Open Folder…**, **New Project…**, **New PostgreSQL
+Instance…** and **Open Terminal** on the left, and your recent folders, instances and database connections on the right.
 Picking anything lays the window out for that job. **Continue Without a Project** goes straight to the workspace.
 
 The window is split into a sidebar with ten tabs (**Instances**, **Files**, **Git**, **Database**, **Run**, **Ports**,
@@ -381,6 +382,34 @@ explained. A conflict on the same address can't be forced.
   with the **Installed** and **Not Installed** tabs or to one category, and sort it; from the keyboard as on the
   Dev Tools page. Closing the tab or its window and quitting ask first while something installs, and stop it.
 - From the terminal: `sawit list skills`. Agents use `list_skills`, `install_skill` and `uninstall_skill`.
+
+### New project
+
+<img src="docs/media/new-project.png" alt="New Project page: the project name, location, command and stack on the left, and the stack's categories as cards on the right" width="100%">
+
+- **New** in the title bar (<kbd>⌃</kbd><kbd>⌘</kbd><kbd>N</kbd>), **New Project…** on the welcome screen or in the
+  File menu opens a page to start a TypeScript project with
+  [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack)'s builder: one section of cards per
+  category (web and native frontend, backend, runtime, API, database, ORM, database setup, web and server deploy,
+  auth, payments, package manager, addons, examples, Git, install), with every option of
+  `create-better-t-stack` 3.49.0. **Presets** has MERN, PERN, T3 and Uniwind, and **Reset** goes back to the
+  default stack.
+- Options that don't fit the stack stay on the page, greyed, with the reason as their tooltip. A pick that needs
+  others to change (Convex brings its own database, Workers needs Hono) changes them and says what it changed under
+  the command, as the builder does. The rules are Better-T-Stack's own, ported to Rust and tested against its code.
+- On the left: the project's name and the folder it goes in (beside the open project, else `~/Developer`, else
+  home), the command with **Copy Command** and the package manager that runs it (npm, pnpm or bun, the ones
+  installed), the stack as tags (× takes one out) and the categories to jump to.
+- **Create Project** runs the command in a terminal tab of its own, never over a folder that exists, and opens the
+  folder as a project once it has a `package.json`. It passes `--directory-conflict error --open none` (and
+  `--manual-db` for a cloud database that would ask how to set it up) so the CLI doesn't stop to ask. If it fails,
+  the terminal says why and **Try Again** runs it again. Closing the tab or its window, and quitting, ask first
+  while it creates.
+- ⌘F filters the cards, ↑ and ↓ move through them and ↩ picks one. The page remembers the last stack, folder and
+  package manager.
+- From the terminal: `sawit new` opens the page, `sawit new shop --template t3` prints the command for a stack
+  (with `create-better-t-stack`'s own flags), and `--create` creates it here. Agents use `stack_options`,
+  `stack_check` and `stack_create`.
 
 ### Browser
 
@@ -802,6 +831,7 @@ French…), the defaults move where macOS menus put them.
 |---|---|
 | Keymap Editor | <kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd> |
 | Open folder | <kbd>⌘</kbd><kbd>O</kbd> |
+| New Project page | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>N</kbd> |
 | New window | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>N</kbd> |
 | Run SQL (selection or all) | <kbd>⌘</kbd><kbd>↩</kbd> |
 | Save file | <kbd>⌘</kbd><kbd>S</kbd> |
@@ -892,6 +922,8 @@ git config --global core.editor "sawit --wait"   # wait until the file tab is cl
 sawit browse             # this project's running dev server, in Sawit's browser tab (also: intip)
 sawit browse 5173        # a port on localhost, or any address: sawit browse example.com
 sawit https://example.com   # a URL on its own opens in the browser too
+sawit new                # the New Project page (also: semai)
+sawit new shop --template t3     # print the create-better-t-stack command for a stack; --create runs it here
 ```
 
 - If Sawit is already running, paths are sent to it over a Unix socket and the command returns right away.
@@ -993,7 +1025,7 @@ sawit list explorer                          # Cloudflare Local Explorers runnin
 
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 130 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 133 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
 the agent's project open (or the one `project` names), else the frontmost window. An agent's browser and canvas are
 its own project's, even while you look at another project of that window.
@@ -1023,8 +1055,9 @@ work in the last 30 seconds, with its `id`, `name` (its label on screen), `color
 | Config files | `list_config_files` (the Config Files tab's shell and coding-agent config files, as paths: never their contents) |
 | Dev tools | `list_dev_tools` (with newer releases, where each was found and its uninstall command), `install_dev_tools` (`package_manager`: npm, pnpm, bun or yarn for the tools npm installs globally), `upgrade_dev_tools` (with the package manager that installed the copy), `uninstall_dev_tools` (the copy its own installer, Homebrew or the package manager put in place) |
 | MCP servers | `list_mcp_servers`, `install_mcp_server` (`package_manager`: a local server and the remote bridge run with `npx -y`, `pnpm dlx`, `bunx` or `yarn dlx`), `uninstall_mcp_server` |
+| New project | `stack_options` (every category, option and preset, and the default stack), `stack_check` (a stack by `create-better-t-stack`'s flag names, resolved: what the compatibility rules change, every disabled option and why, the command), `stack_create` (in `<location>/<name>`, never over a folder that exists; in a Sawit terminal that opens the project when the app runs, else here) |
 | Skills | `list_skills` (each pack, its skills, source and install commands per package manager, and the agents that have it), `install_skill` (into the agents given: the skills CLI with `package_manager`, a Claude Code plugin, or a clone and copy), `uninstall_skill` |
-| App control (app running) | `launch_app`, `app_state` (with `github: {signed_in, login}`), `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, skills, changelog, git_graph, github: the sign-in card while signed out, instance, keymap), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
+| App control (app running) | `launch_app`, `app_state` (with `github: {signed_in, login}`), `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, skills, changelog, git_graph, github: the sign-in card while signed out, instance, keymap, new_project), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
 | Terminal (app running) | `terminal_run`, `terminal_split` (a pane split right or down, with a command in the new half), `terminal_read`, `terminal_input`, `terminal_close` (`terminal_run`, `terminal_split`, `app_run_script` and `app_ssh_connect` return the tab and `pane` they used; `terminal_input` needs the tab, and a split tab needs its pane; `app_state` names the coding agent running in each tab and pane, as `agent`: `claude-code`, `codex`, …) |
 | Keymap (app running) | `keymap_list` (every binding: what a key does, which key runs an action, what clashes), `keymap_bind`, `keymap_unbind` (with the Keymap Editor's checks; `restore` brings back a default) |
 | Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (the user's notes as Markdown: each element's selector, path, attributes, role, box, styles, neighbours, source file and screenshot), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`; replacing an earlier export needs `replace: true`) |
@@ -1034,8 +1067,8 @@ Destructive tools say so and need an explicit confirmation: `drop_database`, `dr
 `uninstall_mcp_server`, `uninstall_skill`, `remove_connection`, `remove_ssh_host`, `delete_prompt` and
 `remove_command` take the name or id again as `confirm` (so do `remove_instance` when it deletes the data, and
 `update_ssh_host` when it moves a host off password sign-in, which deletes its saved password). `install_dev_tools`,
-`upgrade_dev_tools` and `install_skill` need `confirm: true` because they run install scripts or download skills
-from the internet; so do `uninstall_dev_tools` (it deletes the
+`upgrade_dev_tools`, `install_skill` and `stack_create` need `confirm: true` because they run install scripts or
+download from the internet; so do `uninstall_dev_tools` (it deletes the
 tools' files), `stop_processes`, `local_explorer_request` for anything but GET (it writes to a dev server's
 local KV, R2, D1, Durable Objects or Workflows), and `write_env` when it would replace a different `DATABASE_URL`. `terminal_close`
 needs `confirm: true` while a program runs in that terminal or you're typing in it, and `keymap_bind` and
@@ -1097,6 +1130,7 @@ App data is stored in `~/Library/Application Support/sawit/`:
 
 - `instances.toml`, `profiles.toml`, `prompts.json` and `recent.toml`
 - `keymap.json`, your key bindings over the defaults (the Keymap Editor writes it)
+- `new-project.json`, the New Project page's last stack, folder and package manager
 - `clusters/` and `logs/`
 - `bin/` for downloaded binaries
 - `run/` for sockets
@@ -1243,6 +1277,8 @@ crates/core   sawit-core — no GPUI, tested with plain cargo test
   mcp_clients, mcp_catalog, mcp_auth   MCP install into AI clients, the server catalog, client sign-in
   app_control, update, cli    control socket for agents, self-update, the sawit command
   kebun                  sawit <db>, list, bakar, panen, backup, tanam, pasang, pupuk, cabut (no app needed)
+  stack_builder          Better-T-Stack's options, presets, compatibility rules and command (New Project page)
+  new_project, semai     a project's create: location, checks, remembered stack; sawit new (no app needed)
   rt                     Tokio runtime on its own thread
 crates/board  sawit-board — the canvas's document logic around the FigCraft engine; no GPUI, tested with
               plain cargo test (its GPUI views are in crates/app/src/board)
@@ -1323,6 +1359,10 @@ Figures for other apps are not listed because they have not been measured on the
   Brunsfeld, and its grammars for Rust, TypeScript/TSX, JavaScript, JSON, Python, Go, Bash, TOML, YAML, Markdown,
   HTML, CSS, SQL ([tree-sitter-sql](https://github.com/derekstride/tree-sitter-sql)), C and Java, each licensed under
   MIT. See [`NOTICE`](NOTICE) for each grammar's authors.
+- The New Project page ports the stack builder of [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack)
+  (its options, presets, compatibility rules and command, from revision `a9bd456ccc9d`, CLI 3.49.0), Copyright (c)
+  2025 Better T Stack, licensed under MIT. See [`NOTICE`](NOTICE). Its stack logos are
+  [Simple Icons](https://simpleicons.org) (CC0); see [`assets/stack_logos/SOURCES.md`](assets/stack_logos/SOURCES.md).
 
 <sub>Screenshots and video in `docs/media/` were recorded from a release build with demo data (separate `SAWIT_HOME`,
 Homebrew PostgreSQL 16).</sub>

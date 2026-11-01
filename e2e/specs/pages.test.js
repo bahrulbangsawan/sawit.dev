@@ -10,6 +10,13 @@ const PAGES = [
   { button: "Tools", kind: "tools", tab: "Dev Tools", landmark: { role: "textfield", name: "Search tools" } },
   { button: "MCP", kind: "mcp", tab: "MCP", landmark: { role: "textfield", name: "Search servers" } },
   { button: "Skills", kind: "skills", tab: "Skills", landmark: { role: "textfield", name: "Search skills" } },
+  // Only opened: never press its Create Project, which really runs create-better-t-stack.
+  {
+    button: "New Project",
+    kind: "new_project",
+    tab: "New Project",
+    landmark: { role: "textfield", name: "Filter Options" },
+  },
   { button: "Canvas", kind: "canvas", tab: "Canvas", landmark: { name: "Canvas tools" } },
   {
     button: "Browser",

@@ -36,7 +36,8 @@ actions!(
 
 /// The catalog pages' keys. The list's plain keys act while the search field doesn't have
 /// the keyboard (↩ there moves it to the first row), and the MCP page's while its sheet is
-/// closed; in the sheet, ↩ installs.
+/// closed; in the sheet, ↩ installs. The New Project page's move through its cards, and ↩ picks
+/// one.
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-f", FocusSearch, Some("ToolsPage")),
@@ -59,6 +60,10 @@ pub fn init(cx: &mut App) {
             Some("SkillsPage && !Input && !SkillsSheet"),
         ),
         KeyBinding::new("enter", Confirm, Some("SkillsPage && !Input")),
+        KeyBinding::new("cmd-f", FocusSearch, Some("NewProjectPage")),
+        KeyBinding::new("down", SelectNext, Some("NewProjectPage && !Input")),
+        KeyBinding::new("up", SelectPrevious, Some("NewProjectPage && !Input")),
+        KeyBinding::new("enter", Confirm, Some("NewProjectPage && !Input")),
     ]);
 }
 

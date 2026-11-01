@@ -161,7 +161,10 @@ gpui_kit::assets::icon_assets!(
         Sparkles,
         Workflow,
         Blocks,
-        Clapperboard
+        Clapperboard,
+        // The New Project page (src/new_project_page.rs).
+        FolderPlus,
+        ListChecks
     ]
 );
 
@@ -280,6 +283,70 @@ fn agent_logo(path: &str) -> Option<&'static [u8]> {
         .map(|(_, b)| *b)
 }
 
+macro_rules! stack_logos {
+    ($($name:literal),* $(,)?) => {
+        /// Logos for the New Project page's stack cards (see assets/stack_logos/SOURCES.md).
+        const STACK_LOGOS: &[(&str, &[u8])] = &[
+            $(($name, include_bytes!(concat!("../../../assets/stack_logos/", $name, ".svg")))),*
+        ];
+    };
+}
+
+stack_logos!(
+    "astro",
+    "betterauth",
+    "biome",
+    "bun",
+    "clerk",
+    "cloudflare",
+    "cloudflareworkers",
+    "convex",
+    "docker",
+    "drizzle",
+    "expo",
+    "express",
+    "fastify",
+    "git",
+    "hono",
+    "lefthook",
+    "modelcontextprotocol",
+    "mongodb",
+    "mongoose",
+    "mysql",
+    "neon",
+    "nextdotjs",
+    "nodedotjs",
+    "npm",
+    "nuxt",
+    "nx",
+    "oxc",
+    "planetscale",
+    "pnpm",
+    "postgresql",
+    "prisma",
+    "pwa",
+    "reactrouter",
+    "solid",
+    "sqlite",
+    "supabase",
+    "svelte",
+    "tanstack",
+    "tauri",
+    "trpc",
+    "turborepo",
+    "turso",
+    "vercel",
+    "wxt",
+);
+
+fn stack_logo(path: &str) -> Option<&'static [u8]> {
+    let name = path.strip_prefix("stack_logos/")?.strip_suffix(".svg")?;
+    STACK_LOGOS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, b)| *b)
+}
+
 /// The Sawit mark (title bar).
 pub const LOGO_MARK: &str = "logo/sawit-mark.svg";
 
@@ -288,6 +355,7 @@ impl AssetSource for AppAssets {
         if let Some(svg) = agent_logo(path)
             .or_else(|| tool_logo(path))
             .or_else(|| db_logo(path))
+            .or_else(|| stack_logo(path))
         {
             return Ok(Some(Cow::Borrowed(svg)));
         }

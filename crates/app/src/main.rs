@@ -17,6 +17,7 @@ mod layout;
 mod local_explorer;
 mod mcp_page;
 mod network;
+mod new_project_page;
 mod package_managers;
 mod ports;
 mod prompts;

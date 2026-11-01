@@ -78,6 +78,11 @@ pub fn command_line() -> OpenRequest {
             let start = || start_app(&paths.cli_socket()).map(drop);
             std::process::exit(kebun::browse(target, &paths, &cwd, start));
         }
+        // The page goes to the running app, started first as `send` starts it.
+        Ok(Invocation::Semai(args)) => {
+            let start = || start_app(&paths.cli_socket()).map(drop);
+            std::process::exit(sawit_core::semai::semai(*args, &paths, &cwd, start));
+        }
         Ok(Invocation::Help) => {
             print!("{USAGE}");
             std::process::exit(0);
@@ -318,6 +323,7 @@ fn menus(cx: &App) -> Vec<Menu> {
         ]),
         Menu::new("File").items([
             MenuItem::action("New Window", NewWindow),
+            MenuItem::action("New Project…", crate::workspace::OpenNewProject),
             MenuItem::action("Open Folder…", OpenFolder),
         ]),
         Menu::new("Edit").items([

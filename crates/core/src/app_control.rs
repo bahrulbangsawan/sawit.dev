@@ -67,6 +67,8 @@ pub enum Page {
     Github,
     Instance,
     Keymap,
+    /// The New Project page: a TypeScript stack from Better-T-Stack's builder.
+    NewProject,
 }
 
 /// Data the app keeps in memory and saves itself; after another process
@@ -277,6 +279,13 @@ pub enum Command {
     /// [`crate::keymap`].
     Keymap {
         op: crate::keymap::KeymapOp,
+    },
+    /// Creates a project with the New Project page, as Create Project does: the page shows
+    /// `stack` (resolved, named by its `project_name`), runs its create in a terminal tab of its
+    /// own in `location`, and opens the project once it is made.
+    NewProject {
+        location: PathBuf,
+        stack: crate::stack_builder::Stack,
     },
 }
 
@@ -571,6 +580,60 @@ mod tests {
             br#"{"cmd":"open_page","page":"skills"}"#
         );
         assert_eq!(decode(&bytes), Some(Ok(skills)));
+    }
+
+    /// The New Project page opens by name, and an agent's create carries its stack with
+    /// upstream's ids.
+    #[test]
+    fn new_project_round_trips() {
+        let page = Request {
+            project: None,
+            agent_folder: None,
+            agent: None,
+            command: Command::OpenPage {
+                page: Page::NewProject,
+            },
+        };
+        let bytes = encode(&page);
+        assert_eq!(
+            &bytes[MAGIC.len()..],
+            br#"{"cmd":"open_page","page":"new_project"}"#
+        );
+        assert_eq!(decode(&bytes), Some(Ok(page)));
+        let stack = crate::stack_builder::Stack {
+            project_name: "shop".into(),
+            backend: crate::stack_builder::Backend::Convex,
+            ..Default::default()
+        };
+        let create = Request {
+            project: None,
+            agent_folder: None,
+            agent: None,
+            command: Command::NewProject {
+                location: "/Users/me/Developer".into(),
+                stack,
+            },
+        };
+        let bytes = encode(&create);
+        let wire = String::from_utf8_lossy(&bytes[MAGIC.len()..]).into_owned();
+        assert!(
+            wire.starts_with(r#"{"cmd":"new_project","location":"/Users/me/Developer","stack":{"#),
+            "{wire}"
+        );
+        assert!(wire.contains(r#""backend":"convex""#), "{wire}");
+        assert_eq!(decode(&bytes), Some(Ok(create)));
+        // A stack given in part reads as the default for the rest.
+        let partial = br#"sawit-control/1
+{"cmd":"new_project","location":"/tmp","stack":{"backend":"express"}}"#;
+        let Some(Ok(Request {
+            command: Command::NewProject { stack, .. },
+            ..
+        })) = decode(partial)
+        else {
+            panic!("a partial stack didn't read");
+        };
+        assert_eq!(stack.backend, crate::stack_builder::Backend::Express);
+        assert_eq!(stack.runtime, crate::stack_builder::Runtime::Bun);
     }
 
     #[test]

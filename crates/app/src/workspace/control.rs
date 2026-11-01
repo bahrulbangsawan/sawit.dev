@@ -621,6 +621,9 @@ impl Workspace {
             }
             // The keymap is every window's: the caller answers it for the whole app.
             Command::Keymap { .. } => done(json!({})),
+            Command::NewProject { location, stack } => {
+                done(self.agent_new_project(location, stack, window, cx)?)
+            }
         };
         cx.notify();
         result
@@ -668,6 +671,9 @@ impl Workspace {
             }
             // An agent's too: a ⌫ meant for the terminal would remove the selected binding.
             Page::Keymap => self.show_keymap_editor(false, window, cx),
+            Page::NewProject => {
+                self.show_new_project_page(false, window, cx);
+            }
         }
         Ok(())
     }
