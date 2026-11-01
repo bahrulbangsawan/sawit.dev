@@ -7,7 +7,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
-use crate::kebun::{BakarArgs, DbJob, ListWhat, PasangArgs, PupukArgs};
+use crate::kebun::{BakarArgs, CabutArgs, DbJob, ListWhat, PasangArgs, PupukArgs};
 use crate::{CoreError, Result, cmd};
 
 /// Where "Install CLI" puts the command.
@@ -19,7 +19,7 @@ sawit — open folders and files in Sawit, query databases, clear ports
 Usage:
   sawit [options] [path[:line[:column]] ...]
   sawit <db> [table] [\"sql\"]
-  sawit list [instances|db|ports|connections|tools|keys]
+  sawit list [instances|db|ports|connections|tools|mcp|config|keys]
   sawit bakar ports [port ...] [-y]
   sawit bakar instances [name ...] [-y]
   sawit panen <db> <table|\"sql\"> <file.csv|file.xlsx> [-y]
@@ -27,6 +27,7 @@ Usage:
   sawit tanam <db> <table> <file.csv>
   sawit pasang <tool ...> [-y]
   sawit pupuk [tool ...] [-y]
+  sawit cabut <tool ...> [-y]
 
 Examples:
   sawit .                  open this folder as a project (joins the open
@@ -59,7 +60,8 @@ Kebun (databases), no app needed:
   sawit tanam kyzn leads leads.csv         load a CSV file into a table
   An existing file is replaced only after asking (or with -y).
   Aliases: panen = export, ekspor · backup = dump, cadangkan ·
-  tanam = import, impor · pasang = install · pupuk = upgrade.
+  tanam = import, impor · pasang = install · pupuk = upgrade ·
+  cabut = uninstall.
   `sawit ./panen` opens a
   folder named panen.
 
@@ -70,6 +72,14 @@ Tools (the app's Tools page):
   sawit pupuk              upgrade every installed tool with a newer
                            release (shown as → in `list tools`)
   sawit pupuk bun          upgrade just bun (asks first; -y to skip)
+  sawit cabut bun          uninstall bun: only the copy its own installer,
+                           Homebrew or npm put there (asks first; -y to skip)
+
+More lists, shown only when asked:
+  sawit list mcp           the MCP page: servers and the AI clients that
+                           have them (colokan)
+  sawit list config        shell startup files and coding agents' config
+                           files, for this folder's project (configs, konfig)
 
 Keys (the app's Keymap Editor; Sawit must be running):
   sawit list keys          every shortcut: its keys, what it runs, where,
@@ -118,6 +128,8 @@ pub enum Invocation {
     Pasang(PasangArgs),
     /// `sawit pupuk …`.
     Pupuk(PupukArgs),
+    /// `sawit cabut …`.
+    Cabut(CabutArgs),
     Open {
         request: OpenRequest,
         /// `-` was given: the CLI turns stdin into a file target.
@@ -147,6 +159,9 @@ pub fn parse_args(
         }
         Some("upgrade" | "pupuk") if words.len() == args.len() => {
             return PupukArgs::parse(&words[1..]).map(Invocation::Pupuk);
+        }
+        Some("uninstall" | "cabut") if words.len() == args.len() => {
+            return CabutArgs::parse(&words[1..]).map(Invocation::Cabut);
         }
         Some(word) if words.len() == args.len() && DbJob::kind(word).is_some() => {
             let kind = DbJob::kind(word).expect("checked");
@@ -514,6 +529,14 @@ mod tests {
             parse(&["ls", "alat"]),
             Ok(Invocation::List(ListWhat::Tools))
         );
+        assert_eq!(
+            parse(&["list", "colokan"]),
+            Ok(Invocation::List(ListWhat::Mcp))
+        );
+        assert_eq!(
+            parse(&["ls", "konfig"]),
+            Ok(Invocation::List(ListWhat::Config))
+        );
     }
 
     /// `sawit list keys` lists the key bindings under each of its names, `sawit --help` names
@@ -534,7 +557,7 @@ mod tests {
         assert!(matches!(parse(&["./keys"]), Ok(Invocation::Open { .. })));
         assert!(matches!(parse(&["keys"]), Ok(Invocation::Open { .. })));
         for said in [
-            "sawit list [instances|db|ports|connections|tools|keys]",
+            "sawit list [instances|db|ports|connections|tools|mcp|config|keys]",
             "sawit list keys ",
             "Sawit must be running",
             "pintasan, keymap, shortcuts",
@@ -580,6 +603,50 @@ mod tests {
         assert!(matches!(parse(&["pupuk"]), Ok(Invocation::Pupuk(_))));
         assert!(parse(&["pupuk", "nope-tool"]).is_err());
         assert!(matches!(parse(&["./pupuk"]), Ok(Invocation::Open { .. })));
+        let Ok(Invocation::Cabut(c)) = parse(&["uninstall", id, "-y"]) else {
+            panic!()
+        };
+        assert_eq!(c.tools, [id]);
+        assert!(c.yes);
+        let Ok(Invocation::Cabut(c)) = parse(&["cabut", id]) else {
+            panic!()
+        };
+        assert!(!c.yes);
+        assert!(parse(&["cabut"]).is_err());
+        assert!(parse(&["cabut", "nope-tool"]).is_err());
+        assert!(parse(&["cabut", id, "--force"]).is_err());
+        assert!(matches!(parse(&["./cabut"]), Ok(Invocation::Open { .. })));
+        assert!(matches!(
+            parse(&["./uninstall"]),
+            Ok(Invocation::Open { .. })
+        ));
+    }
+
+    /// `sawit --help` names `cabut`, its alias and an example.
+    #[test]
+    fn help_names_cabut() {
+        for said in [
+            "sawit cabut <tool ...> [-y]",
+            "cabut = uninstall",
+            "sawit cabut bun",
+        ] {
+            assert!(USAGE.contains(said), "no {said:?} in the help");
+        }
+    }
+
+    /// `sawit --help` names the lists shown only when asked, with their
+    /// aliases.
+    #[test]
+    fn help_names_the_mcp_and_config_lists() {
+        for said in [
+            "tools|mcp|config|keys]",
+            "sawit list mcp",
+            "(colokan)",
+            "sawit list config",
+            "(configs, konfig)",
+        ] {
+            assert!(USAGE.contains(said), "no {said:?} in the help");
+        }
     }
 
     #[test]

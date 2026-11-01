@@ -1,14 +1,14 @@
 //! The Tools page: developer tools that install with a one-line script
-//! (Homebrew, Bun, uv, Claude Code, …), which are installed and which have a
-//! newer release, installing a selection with its prerequisites first, and
-//! upgrading installed ones.
+//! (Homebrew, Bun, uv, Claude Code, …), which are installed (and where) and
+//! which have a newer release, installing a selection with its prerequisites
+//! first, upgrading installed ones, and uninstalling them.
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
-use sawit_core::dev_tools::{self, Category, TOOLS};
+use sawit_core::dev_tools::{self, Category, Removal, TOOLS, Tool};
 
-use crate::{Sawit, fail, ok};
+use crate::{Sawit, fail, ok, tilde};
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct InstallToolsArgs {
@@ -33,6 +33,18 @@ pub struct UpgradeToolsArgs {
     pub confirm: bool,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct UninstallToolsArgs {
+    #[schemars(
+        description = "Installed tool ids from list_dev_tools, e.g. [\"bun\"]; its `uninstall` line says what each runs"
+    )]
+    pub tools: Vec<String>,
+    #[schemars(
+        description = "Must be true: uninstalling deletes each tool's files (and what it installed: nvm's Node.js versions, uv's Pythons, …), which can't be undone"
+    )]
+    pub confirm: bool,
+}
+
 /// Ids in `wanted` that aren't in the catalog.
 fn unknown(wanted: &[String]) -> Vec<&str> {
     wanted
@@ -40,6 +52,36 @@ fn unknown(wanted: &[String]) -> Vec<&str> {
         .map(|w| w.as_str())
         .filter(|w| dev_tools::find(w).is_none())
         .collect()
+}
+
+/// "Gemini CLI needs it", "npm (latest), Gemini CLI need it".
+fn needs_it(tools: &[&Tool]) -> String {
+    let names: Vec<&str> = tools.iter().map(|t| t.name).collect();
+    let s = if names.len() == 1 { "s" } else { "" };
+    format!("{} need{s} it and will stop working", names.join(", "))
+}
+
+/// What `list_dev_tools` says about removing an installed tool: what
+/// [`dev_tools::uninstall_plan`] would do with it alone.
+fn uninstall_line(step: &dev_tools::Uninstall) -> String {
+    let mut line = match &step.removal {
+        Removal::Missing => return String::new(),
+        Removal::LeftAlone => {
+            "none: this copy was installed another way, so Sawit leaves it alone".to_string()
+        }
+        Removal::Bundled(with) => format!(
+            "none: it comes with {}, and goes when that is uninstalled",
+            with.join(", ")
+        ),
+        Removal::Terminal(command) => {
+            format!("{command} (asks for a password: run it in a terminal)")
+        }
+        Removal::Run(command) => format!("{command} (uninstall_dev_tools)"),
+    };
+    if !step.needed_by.is_empty() {
+        line.push_str(&format!("; {}", needs_it(&step.needed_by)));
+    }
+    format!("\n    uninstall: {}", line.replace('\n', "\n      "))
 }
 
 impl Sawit {
@@ -76,13 +118,20 @@ impl Sawit {
                 } else {
                     format!(" · needs {}", t.needs.join(", "))
                 };
-                let upgrade = if found.contains_key(t.id) {
-                    format!("\n    upgrade: {}", t.upgrade_command())
-                } else {
-                    String::new()
+                let installed = match found.get(t.id) {
+                    Some(f) => format!(
+                        "\n    found: {}\n    upgrade: {}{}",
+                        tilde(&f.path),
+                        t.upgrade_command(),
+                        dev_tools::uninstall_plan(&[t.id], &found)
+                            .first()
+                            .map(uninstall_line)
+                            .unwrap_or_default()
+                    ),
+                    None => String::new(),
                 };
                 out.push(format!(
-                    "- {} ({}) · {state}{needs}\n    {}\n    install: {}{upgrade}",
+                    "- {} ({}) · {state}{needs}\n    {}\n    install: {}{installed}",
                     t.id, t.name, t.description, t.install
                 ));
             }
@@ -209,12 +258,103 @@ impl Sawit {
         let text = out.join("\n");
         if failed { fail(text) } else { ok(text) }
     }
+
+    pub async fn uninstall_dev_tools_tool(&self, a: UninstallToolsArgs) -> CallToolResult {
+        if !a.confirm {
+            return fail(
+                "Refused: uninstalling deletes each tool's files, which can't be undone. list_dev_tools shows what each uninstall runs and what needs the tool; pass confirm=true.",
+            );
+        }
+        if a.tools.is_empty() {
+            return fail("Name the tools to uninstall: ids from list_dev_tools.");
+        }
+        let bad = unknown(&a.tools);
+        if !bad.is_empty() {
+            return fail(format!(
+                "Unknown tool {}. See list_dev_tools.",
+                bad.join(", ")
+            ));
+        }
+        let detection = dev_tools::detect().await;
+        if let Some(problem) = &detection.problem {
+            // Which copy is the one in use is unknown: an uninstaller could
+            // remove one the user didn't mean.
+            return fail(format!(
+                "Refused: the login shell couldn't say where the tools are ({problem}), so nothing was removed. Try again."
+            ));
+        }
+        let wanted: Vec<&str> = a.tools.iter().map(|t| t.as_str()).collect();
+        let plan = dev_tools::uninstall_plan(&wanted, &detection.found);
+        // One line per tool, in the order they ran; `None` until detection
+        // says what a run uninstaller left.
+        let mut lines: Vec<Option<String>> = Vec::new();
+        let mut failed = false;
+        for step in &plan {
+            let id = step.tool.id;
+            lines.push(match &step.removal {
+                Removal::Missing => Some(format!("- {id}: not installed; nothing to remove")),
+                Removal::LeftAlone => Some(format!(
+                    "- {id}: found at {}, which its installer, Homebrew or npm didn't put there; Sawit leaves it alone",
+                    step.found.as_deref().map(tilde).unwrap_or_default()
+                )),
+                Removal::Bundled(with) => Some(format!(
+                    "- {id}: it comes with {}, so it isn't uninstalled on its own; uninstalling that removes it",
+                    with.join(", ")
+                )),
+                Removal::Terminal(command) => {
+                    failed = true;
+                    Some(format!(
+                        "- {id}: not run, it asks for a password. Run it in a terminal (terminal_run): {command}"
+                    ))
+                }
+                Removal::Run(command) => match dev_tools::uninstall(step.tool, command, |_| {}).await
+                {
+                    Ok(()) => None,
+                    Err(e) => {
+                        failed = true;
+                        Some(format!("- {id}: failed. {e}"))
+                    }
+                },
+            });
+        }
+        if lines.iter().any(Option::is_none) {
+            // As the page does: a copy installed another way is still found.
+            let after = dev_tools::detect().await;
+            for (step, line) in plan.iter().zip(lines.iter_mut()) {
+                if line.is_some() {
+                    continue;
+                }
+                let id = step.tool.id;
+                let mut text = match after.found.get(id) {
+                    Some(f) => {
+                        failed = true;
+                        format!(
+                            "- {id}: its uninstaller ran, but it is still found at {}: that copy was installed another way (Homebrew, say)",
+                            tilde(&f.path)
+                        )
+                    }
+                    None => format!("- {id}: removed"),
+                };
+                if !step.needed_by.is_empty() {
+                    text.push_str(&format!(". {}", needs_it(&step.needed_by)));
+                }
+                *line = Some(text);
+            }
+            if let Some(problem) = &after.problem {
+                lines.push(Some(format!(
+                    "Note: the login shell couldn't check again ({problem}); only the usual places were looked at."
+                )));
+            }
+        }
+        let text = lines.into_iter().flatten().collect::<Vec<_>>().join("\n");
+        if failed { fail(text) } else { ok(text) }
+    }
 }
 
 #[tool_router(router = dev_tools_router, vis = "pub(crate)")]
 impl Sawit {
     #[tool(
-        description = "List the developer tools of Sawit's Tools page (package managers, runtimes, AI agents, terminal apps) with whether each is installed, its version, the newer release when there is one, prerequisites, and its install and upgrade commands. Reads the latest versions from npm/GitHub. Works without the app"
+        description = "List the developer tools of Sawit's Tools page (package managers, runtimes, AI agents, terminal apps) with whether each is installed, its version, the newer release when there is one, prerequisites, and its install command; for an installed one also where it was found and its upgrade and uninstall commands (with the installed tools that need it). Reads the latest versions from npm/GitHub. Works without the app"
     )]
     async fn list_dev_tools(&self) -> CallToolResult {
         self.list_dev_tools_tool().await
@@ -238,6 +378,16 @@ impl Sawit {
         Parameters(a): Parameters<UpgradeToolsArgs>,
     ) -> CallToolResult {
         self.upgrade_dev_tools_tool(a).await
+    }
+
+    #[tool(
+        description = "Uninstall developer tools by id, as the Tools page's trash button does. DESTRUCTIVE: deletes each tool's files (and what it installed: nvm's Node.js versions, uv's Pythons, …), which can't be undone: needs confirm=true. Removes only the copy the tool's own installer, Homebrew (brew uninstall) or npm (npm uninstall -g) put in place, with the command list_dev_tools shows as `uninstall`; a copy installed another way is left alone. Homebrew's own uninstaller asks for a password, so its command is returned for a terminal. Installed tools that need a removed one are named: they stop working. Detects again and returns one line per tool: removed, still found (another copy), not installed or left alone. Works without the app"
+    )]
+    async fn uninstall_dev_tools(
+        &self,
+        Parameters(a): Parameters<UninstallToolsArgs>,
+    ) -> CallToolResult {
+        self.uninstall_dev_tools_tool(a).await
     }
 }
 
@@ -272,5 +422,95 @@ mod tests {
         })
         .await;
         assert_eq!(r.is_error, Some(true));
+    }
+
+    fn said(result: &CallToolResult) -> String {
+        let texts = result.content.iter().filter_map(|c| c.as_text());
+        texts.map(|t| t.text.clone()).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn uninstall_args_need_confirm() {
+        let a: UninstallToolsArgs =
+            serde_json::from_str(r#"{"tools":["bun"],"confirm":true}"#).unwrap();
+        assert_eq!(a.tools, ["bun"]);
+        assert!(a.confirm);
+        assert!(serde_json::from_str::<UninstallToolsArgs>(r#"{"tools":["bun"]}"#).is_err());
+    }
+
+    /// Nothing is detected, let alone run, until the agent confirms and names
+    /// tools of the catalog.
+    #[tokio::test]
+    async fn uninstall_refuses_before_anything_runs() {
+        let sawit = Sawit::new(sawit_core::instances::AppPaths {
+            root: std::env::temp_dir(),
+        });
+        let refused = |tools: &[&str], confirm: bool| {
+            let tools = tools.iter().map(|t| t.to_string()).collect();
+            sawit.uninstall_dev_tools_tool(UninstallToolsArgs { tools, confirm })
+        };
+        let r = refused(&["bun"], false).await;
+        assert_eq!(r.is_error, Some(true));
+        assert!(said(&r).contains("confirm=true"), "{}", said(&r));
+        let r = refused(&[], true).await;
+        assert_eq!(r.is_error, Some(true));
+        assert!(said(&r).contains("Name the tools"), "{}", said(&r));
+        let r = refused(&["bun", "sawit-palsu"], true).await;
+        assert_eq!(r.is_error, Some(true));
+        assert!(
+            said(&r).contains("Unknown tool sawit-palsu"),
+            "{}",
+            said(&r)
+        );
+    }
+
+    /// list_dev_tools tells an agent what uninstall_dev_tools would run for an
+    /// installed tool, and what would stop working, before it asks the user.
+    #[test]
+    fn the_list_says_how_each_tool_is_removed() {
+        let tool = |id: &str| dev_tools::find(id).unwrap();
+        let line = |id: &str, removal: Removal, needed_by: Vec<&'static Tool>| {
+            uninstall_line(&dev_tools::Uninstall {
+                tool: tool(id),
+                found: Some("/nonexistent-sawit-test/bin/x".into()),
+                removal,
+                needed_by,
+            })
+        };
+        assert_eq!(
+            line(
+                "nvm",
+                Removal::Run(r#"rm -rf "$NVM_DIR""#.into()),
+                vec![tool("node")]
+            ),
+            "\n    uninstall: rm -rf \"$NVM_DIR\" (uninstall_dev_tools); Node.js needs it and will stop working"
+        );
+        // Each line of a longer uninstaller under the first.
+        assert_eq!(
+            line(
+                "uv",
+                Removal::Run("uv cache clean\nrm -f uv".into()),
+                vec![]
+            ),
+            "\n    uninstall: uv cache clean\n      rm -f uv (uninstall_dev_tools)"
+        );
+        assert!(
+            line("homebrew", Removal::Terminal("uninstall.sh".into()), vec![])
+                .contains("asks for a password: run it in a terminal")
+        );
+        assert!(
+            line("python", Removal::LeftAlone, vec![]).contains("Sawit leaves it alone"),
+            "{}",
+            line("python", Removal::LeftAlone, vec![])
+        );
+        assert_eq!(
+            line("npm", Removal::Bundled(vec!["Node.js"]), vec![]),
+            "\n    uninstall: none: it comes with Node.js, and goes when that is uninstalled"
+        );
+        assert_eq!(line("bun", Removal::Missing, vec![]), "");
+        assert_eq!(
+            needs_it(&[tool("npm"), tool("gemini")]),
+            "npm (latest), Gemini CLI need it and will stop working"
+        );
     }
 }

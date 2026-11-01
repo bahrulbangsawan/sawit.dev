@@ -2,7 +2,8 @@
 //! `sawit <db> [table] ["sql"]` like psql, `sawit list`, `sawit bakar`
 //! ("burn": stop dev servers or instances, like the `kill-dev` script),
 //! `sawit panen|backup|tanam` (export, `pg_dump`, CSV import) and
-//! `sawit pasang|pupuk` (install or upgrade developer tools).
+//! `sawit pasang|pupuk|cabut` (install, upgrade or uninstall developer
+//! tools).
 //! The wording riffs on Indonesia's forest fires (karhutla) and the palm-oil
 //! plantations (kebun sawit) behind them.
 
@@ -39,6 +40,8 @@ const SUBCOMMANDS: &[&str] = &[
     "pasang",
     "upgrade",
     "pupuk",
+    "uninstall",
+    "cabut",
 ];
 
 /// Rows printed per result set at most.
@@ -135,6 +138,12 @@ pub enum ListWhat {
     Connections,
     /// Developer tools (only when asked: detecting them takes a moment).
     Tools,
+    /// The MCP page: the catalog's servers and the AI clients that have
+    /// them (only when asked, like tools).
+    Mcp,
+    /// The Config Files panel: shell startup files and coding agents' config
+    /// files (only when asked, like tools).
+    Config,
     /// Key bindings (only when asked: they need the running app).
     Keys,
 }
@@ -150,17 +159,24 @@ impl ListWhat {
                 ListWhat::Connections
             }
             Some("tools" | "tool" | "alat" | "perkakas") => ListWhat::Tools,
+            Some("mcp" | "colokan") => ListWhat::Mcp,
+            Some("config" | "configs" | "konfig") => ListWhat::Config,
             Some("keys" | "key" | "keymap" | "shortcuts" | "pintasan") => ListWhat::Keys,
             Some(other) => {
                 return Err(format!(
-                    "`sawit list {other}`? Tidak ada di peta. Pilih: instances, db, ports, connections, tools, keys."
+                    "`sawit list {other}`? Tidak ada di peta. Pilih: instances, db, ports, connections, tools, mcp, config, keys."
                 ));
             }
         })
     }
 
     fn shows(self, part: ListWhat) -> bool {
-        self == part || (self == ListWhat::All && !matches!(part, ListWhat::Tools | ListWhat::Keys))
+        self == part
+            || (self == ListWhat::All
+                && !matches!(
+                    part,
+                    ListWhat::Tools | ListWhat::Mcp | ListWhat::Config | ListWhat::Keys
+                ))
     }
 }
 
@@ -348,6 +364,38 @@ impl PupukArgs {
             }
         }
         Ok(PupukArgs { tools, yes })
+    }
+}
+
+/// `sawit cabut <tool…> [-y]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CabutArgs {
+    pub tools: Vec<String>,
+    pub yes: bool,
+}
+
+impl CabutArgs {
+    pub fn parse(args: &[&str]) -> Result<CabutArgs, String> {
+        let mut tools = Vec::new();
+        let mut yes = false;
+        for &arg in args {
+            match arg {
+                "-y" | "--yes" | "--ya" => yes = true,
+                _ if arg.starts_with('-') => {
+                    return Err(format!("opsi tak dikenal: {arg} (yang ada cuma -y)"));
+                }
+                _ if crate::dev_tools::find(arg).is_none() => {
+                    return Err(format!(
+                        "“{arg}” tidak ada di katalog bibit. Lihat `sawit list tools`."
+                    ));
+                }
+                _ => tools.push(arg.to_string()),
+            }
+        }
+        if tools.is_empty() {
+            return Err("cabut apa? Contoh: `sawit cabut bun`. Lihat `sawit list tools`.".into());
+        }
+        Ok(CabutArgs { tools, yes })
     }
 }
 
@@ -812,7 +860,11 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
                     }
                     None => ink.gray("belum"),
                 };
-                println!("  {:<14} {:<22} {state}", t.id, clip(t.name, 22));
+                let place = found
+                    .get(t.id)
+                    .map(|f| format!("  {}", ink.gray(&tilde(&f.path))))
+                    .unwrap_or_default();
+                println!("  {:<14} {:<22} {state}{place}", t.id, clip(t.name, 22));
             }
         }
         println!(
@@ -823,6 +875,16 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
             "  {}",
             ink.gray("Yang bertanda → ada versi baru: `sawit pupuk` memupuk semuanya.")
         );
+        println!(
+            "  {}",
+            ink.gray("Cabut dengan `sawit cabut <id…>`: hanya salinan dari installer-nya, Homebrew atau npm.")
+        );
+    }
+    if what.shows(ListWhat::Mcp) {
+        list_mcp(&ink);
+    }
+    if what.shows(ListWhat::Config) {
+        list_config(&ink, cwd);
     }
     if what.shows(ListWhat::Keys) {
         let code = list_keys(&ink, paths);
@@ -922,6 +984,180 @@ fn key_line(ink: &Ink, row: &crate::keymap::KeymapRow) -> String {
         clip(&row.label, 44),
         ink.gray(&format!("{} · {}", row.keys, clip(context, 40))),
     )
+}
+
+/// The `sawit-mcp` next to this program, which the MCP page installs as
+/// Sawit's own server: the app's binary, also when `sawit` is reached
+/// through the `/usr/local/bin/sawit` link.
+fn own_mcp_server() -> PathBuf {
+    std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("sawit-mcp")))
+        .unwrap_or_else(|| PathBuf::from("sawit-mcp"))
+}
+
+/// A client as `sawit list mcp` names it: "Codex", "Claude Code (profil work)".
+fn client_name(target: &crate::mcp_clients::Target) -> String {
+    match target.profile.as_str() {
+        "default" => target.client.name().to_string(),
+        profile => format!("{} (profil {profile})", target.client.name()),
+    }
+}
+
+/// `sawit list mcp`: the MCP page's servers and the clients that have them.
+fn list_mcp(ink: &Ink) {
+    use crate::mcp_catalog::{self, Auth, DEFAULT_AWS_REGION, Source};
+    use crate::mcp_clients::Status;
+    let report = mcp_catalog::report(&own_mcp_server());
+    ink.section("🔌 Colokan MCP (servers)");
+    let clients: Vec<String> = report.targets.iter().map(client_name).collect();
+    if clients.is_empty() {
+        ink.empty("belum ada klien AI di Mac ini. Kebunnya masih digarap tangan manusia.");
+    } else {
+        println!("  {} {}", ink.gray("klien:"), clients.join(", "));
+    }
+    // A config that can't be read, or that Sawit doesn't edit (YAML, a
+    // script), is so for every server: said once, here, not under each.
+    let mut noted: Vec<usize> = Vec::new();
+    for (ix, status) in report.servers.iter().flat_map(|l| &l.installed) {
+        let note = match status {
+            Status::Unreadable(why) => format!("config tak terbaca ({why}): periksa sendiri"),
+            Status::Manual => "config-nya YAML atau skrip: server ditambahkan sendiri".to_string(),
+            _ => continue,
+        };
+        if !noted.contains(ix) {
+            noted.push(*ix);
+            ink.warn(&format!("{}: {note}", client_name(&report.targets[*ix])));
+        }
+    }
+    for listed in &report.servers {
+        let server = listed.server;
+        let address = match server.source {
+            Source::Bundled => "bawaan Sawit".to_string(),
+            _ => server.address(DEFAULT_AWS_REGION),
+        };
+        println!(
+            "  {:<24} {:<20} {}",
+            server.id,
+            clip(server.name, 20),
+            ink.gray(&address)
+        );
+        let pad = " ".repeat(24);
+        // Only names: what a key holds never comes near this list.
+        let sign_in = match server.auth {
+            Auth::None => None,
+            Auth::Browser => Some("masuk lewat browser dari kliennya".to_string()),
+            Auth::EnvKey(var) => Some(format!("butuh variabel {var} sebelum kliennya dibuka")),
+            Auth::Program => Some("pakai login programnya sendiri".to_string()),
+        };
+        if let Some(sign_in) = sign_in {
+            println!("  {pad} {}", ink.gray(&sign_in));
+        }
+        if let Some(program) = listed.missing_program {
+            println!(
+                "  {pad} {}",
+                ink.yellow(&format!("! {program} belum terpasang"))
+            );
+        }
+        // The clients that have it; the ones noted above are left out.
+        let installed: Vec<String> = listed
+            .installed
+            .iter()
+            .filter_map(|(ix, status)| {
+                let name = client_name(&report.targets[*ix]);
+                match status {
+                    Status::Installed => Some(name),
+                    Status::Outdated(sig) => Some(match server.region_in(sig) {
+                        Some(region) => format!("{name} (region {region})"),
+                        None => format!("{name} (menunjuk ke tempat lain; pasang ulang)"),
+                    }),
+                    _ => None,
+                }
+            })
+            .collect();
+        if installed.is_empty() {
+            println!("  {pad} {}", ink.gray("belum di klien mana pun"));
+        } else {
+            println!("  {pad} {} {}", ink.green("✓"), installed.join(", "));
+        }
+    }
+    println!(
+        "  {}",
+        ink.gray("Pasang dari halaman MCP di app; agen pakai `install_mcp_server`.")
+    );
+}
+
+/// `sawit list config`: the Config Files panel, for the current folder's
+/// project. Paths only: what a file holds (API keys, say) isn't shown.
+fn list_config(ink: &Ink, cwd: &Path) {
+    use crate::{agent_config, shell_config};
+    let login = shell_config::login_shell();
+    let shells = shell_config::detect();
+    ink.section(&match &login {
+        Some(login) => format!("🐚 Startup shell (login: {login})"),
+        None => "🐚 Startup shell".to_string(),
+    });
+    if shells.is_empty() {
+        ink.empty("tidak ada berkas startup shell. Lahan bersih, tanpa dokumen AMDAL.");
+    }
+    for c in &shells {
+        let read = shell_config::reads(login.as_deref(), c.shell);
+        let mut notes = vec![c.note.to_string()];
+        if !read {
+            notes.push(format!(
+                "tidak dibaca {}",
+                login.as_deref().unwrap_or("shell login")
+            ));
+        }
+        if !c.writable {
+            notes.push("simpan butuh sandi admin".into());
+        }
+        let notes = notes.join(" · ");
+        if read {
+            println!("  {:<34} {}", tilde(&c.path), ink.gray(&notes));
+        } else {
+            // Dimmed, like the panel's row: the login shell never reads it.
+            println!("  {}", ink.gray(&format!("{:<34} {notes}", tilde(&c.path))));
+        }
+    }
+    // The current folder is the project, unless it is the home folder or `/`.
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let projects: Vec<PathBuf> = (cwd.parent().is_some() && Some(cwd) != home.as_deref())
+        .then(|| cwd.to_path_buf())
+        .into_iter()
+        .collect();
+    let agents = agent_config::detect(&projects);
+    ink.section("🤖 Agen AI (prioritas tertinggi duluan)");
+    if agents.is_empty() {
+        ink.empty("tidak ada agen AI terpasang. Kebun ini masih dikerjakan tangan manusia.");
+    }
+    for (client, profile, files) in agent_config::groups(&agents) {
+        println!("  {}", agent_config::group_title(client, profile));
+        for f in files {
+            // A project's file by the project's name: `app/CLAUDE.md`.
+            let name = match &f.project {
+                Some(project) => format!(
+                    "{}/{}",
+                    project
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    f.path.strip_prefix(project).unwrap_or(&f.path).display()
+                ),
+                None => tilde(&f.path),
+            };
+            let mut notes = format!("{} · {}", f.layer.label(), f.note);
+            if !f.writable {
+                notes.push_str(" · simpan butuh sandi admin");
+            }
+            println!("    {:<40} {}", name, ink.gray(&notes));
+        }
+    }
+    println!(
+        "  {}",
+        ink.gray("Buka dengan `sawit <path>`. Isinya tidak ditampilkan: bisa ada kunci API.")
+    );
 }
 
 /// What `bakar ports` takes when no port is named: dev servers, never
@@ -1502,6 +1738,139 @@ pub async fn pupuk(args: PupukArgs) -> i32 {
     code
 }
 
+/// `sawit cabut <tool…>`: what the Dev Tools page's trash button runs, and
+/// only that ([`crate::dev_tools::uninstall_plan`]).
+pub async fn cabut(args: CabutArgs) -> i32 {
+    use crate::dev_tools::{self, Removal};
+    let ink = Ink::stdout();
+    ink.header(
+        "🪓 Cabut Bibit (uninstall tools)",
+        "hanya salinan dari installer-nya sendiri, Homebrew atau npm. Sisanya dibiarkan tumbuh",
+    );
+    let detection = dev_tools::detect().await;
+    if let Some(problem) = &detection.problem {
+        // Which copy is the one in use is unknown: don't remove one the user
+        // didn't mean.
+        println!(
+            "  {} Shell login tidak menjawab ({problem}), jadi tak ada yang dicabut. Coba lagi.",
+            ink.red("✗")
+        );
+        return 1;
+    }
+    let wanted: Vec<&str> = args.tools.iter().map(|t| t.as_str()).collect();
+    let plan = dev_tools::uninstall_plan(&wanted, &detection.found);
+    let mut code = 0;
+    for step in &plan {
+        let id = step.tool.id;
+        let at = step.found.as_deref().map(tilde).unwrap_or_default();
+        match &step.removal {
+            Removal::Missing => ink.empty(&format!("{id} belum terpasang")),
+            Removal::LeftAlone => ink.empty(&format!(
+                "{id} di {at} bukan tanaman installer-nya, Homebrew atau npm: dibiarkan"
+            )),
+            Removal::Bundled(with) => ink.empty(&format!(
+                "{id} tumbuh bersama {}: ikut tercabut kalau itu dicabut, tidak sendirian",
+                with.join(", ")
+            )),
+            Removal::Terminal(command) => {
+                // It asks for a password, which the uninstaller can't read here.
+                ink.warn(&format!(
+                    "{id} minta kata sandi. Jalankan sendiri:\n      {}",
+                    command.replace('\n', "\n      ")
+                ));
+                code = 1;
+            }
+            Removal::Run(_) => {}
+        }
+    }
+    let runs: Vec<(&dev_tools::Uninstall, &str)> = plan
+        .iter()
+        .filter_map(|step| match &step.removal {
+            Removal::Run(command) => Some((step, command.as_str())),
+            _ => None,
+        })
+        .collect();
+    if runs.is_empty() {
+        ink.footer("Tidak ada yang perlu dicabut.");
+        return code;
+    }
+    ink.section(&format!("Bibit ({})", runs.len()));
+    for (ix, (step, command)) in runs.iter().enumerate() {
+        let at = step.found.as_deref().map(tilde).unwrap_or_default();
+        println!(
+            "  {} {:<14} {}",
+            ink.gray(&format!("{:>3}.", ix + 1)),
+            step.tool.id,
+            ink.gray(&at)
+        );
+        for line in command.lines() {
+            println!("       {}", ink.gray(line));
+        }
+        if !step.needed_by.is_empty() {
+            let names: Vec<&str> = step.needed_by.iter().map(|t| t.name).collect();
+            ink.warn(&format!(
+                "{} butuh {}; ikut layu kalau dicabut.",
+                names.join(", "),
+                step.tool.name
+            ));
+        }
+    }
+    println!();
+    if !args.yes {
+        match confirm(&format!(
+            "Cabut {} bibit di atas sampai ke akarnya? Tidak bisa ditanam balik tanpa pasang ulang.",
+            runs.len()
+        )) {
+            Some(true) => {}
+            Some(false) => {
+                ink.footer("Batal. Bibitnya tetap tumbuh, untuk musim ini.");
+                return 0;
+            }
+            None => {
+                println!(
+                    "  {} Tidak ada saksi (stdin bukan terminal). Tambahkan -y kalau memang mau mencabut.",
+                    ink.red("✗")
+                );
+                return 1;
+            }
+        }
+    }
+    let mut removed = Vec::new();
+    for (step, command) in &runs {
+        println!("  {} {}", ink.yellow("⏳"), step.tool.name);
+        let gray = |line: String| println!("     {}", ink.gray(&clip(&line, 100)));
+        match dev_tools::uninstall(step.tool, command, gray).await {
+            Ok(()) => {
+                println!("  {} {} dicabut", ink.green("✓"), step.tool.id);
+                removed.push(step.tool.id);
+            }
+            Err(e) => {
+                println!("  {} {}: {e}", ink.red("✗"), step.tool.id);
+                code = 1;
+            }
+        }
+    }
+    if !removed.is_empty() {
+        // As the page does: a copy installed another way is still found.
+        let after = dev_tools::detect().await;
+        for id in removed {
+            if let Some(f) = after.found.get(id) {
+                ink.warn(&format!(
+                    "{id} masih tumbuh di {}: salinan itu dipasang dengan cara lain (Homebrew, misalnya).",
+                    tilde(&f.path)
+                ));
+                code = 1;
+            }
+        }
+    }
+    ink.footer(if code == 0 {
+        "Selesai. Lahan kosong lagi; buka terminal baru supaya PATH-nya ikut segar."
+    } else {
+        "Sebagian masih berakar; lihat di atas."
+    });
+    code
+}
+
 /// Asks on the terminal; `None` when stdin isn't one.
 fn confirm(question: &str) -> Option<bool> {
     if !std::io::stdin().is_terminal() {
@@ -1884,6 +2253,23 @@ mod tests {
     }
 
     #[test]
+    fn list_mcp_and_config_only_when_asked() {
+        for word in ["mcp", "colokan"] {
+            assert_eq!(ListWhat::parse(Some(word)), Ok(ListWhat::Mcp), "{word}");
+        }
+        for word in ["config", "configs", "konfig"] {
+            assert_eq!(ListWhat::parse(Some(word)), Ok(ListWhat::Config), "{word}");
+        }
+        for what in [ListWhat::Mcp, ListWhat::Config] {
+            assert!(what.shows(what));
+            assert!(!what.shows(ListWhat::Ports), "{what:?}");
+            assert!(!ListWhat::All.shows(what), "{what:?}");
+        }
+        let unknown = ListWhat::parse(Some("hutan")).unwrap_err();
+        assert!(unknown.contains("mcp, config"), "{unknown}");
+    }
+
+    #[test]
     fn db_job_words() {
         let cwd = Path::new("/w");
         assert_eq!(DbJob::kind("panen"), Some(DbJobKind::Export));
@@ -1956,10 +2342,37 @@ mod tests {
     }
 
     #[test]
+    fn cabut_words() {
+        let id = crate::dev_tools::TOOLS[0].id;
+        assert_eq!(
+            CabutArgs::parse(&[id, "-y"]),
+            Ok(CabutArgs {
+                tools: vec![id.into()],
+                yes: true
+            })
+        );
+        assert_eq!(
+            CabutArgs::parse(&["--ya", id, "bun"]),
+            Ok(CabutArgs {
+                tools: vec![id.into(), "bun".into()],
+                yes: true
+            })
+        );
+        assert_eq!(CabutArgs::parse(&["bun"]).map(|a| a.yes), Ok(false));
+        // Something to uproot must be named: no "every tool".
+        assert!(CabutArgs::parse(&[]).is_err());
+        assert!(CabutArgs::parse(&["-y"]).is_err());
+        assert!(CabutArgs::parse(&["sawit-palsu"]).is_err());
+        assert!(CabutArgs::parse(&[id, "--force"]).is_err());
+    }
+
+    #[test]
     fn job_words_are_not_databases() {
         assert_eq!(q(&["panen", "kyzn", "a.csv"]), None);
         assert_eq!(q(&["backup", "kyzn"]), None);
         assert_eq!(q(&["pasang", "bun"]), None);
         assert_eq!(q(&["pupuk", "bun"]), None);
+        assert_eq!(q(&["cabut", "bun"]), None);
+        assert_eq!(q(&["uninstall", "bun"]), None);
     }
 }

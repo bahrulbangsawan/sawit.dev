@@ -170,10 +170,19 @@ impl Sawit {
             Ok(StartOutcome::AlreadyRunning { pid }) => {
                 ok(format!("{name} is already running (PID {pid})."))
             }
-            Ok(StartOutcome::Blocked(report)) => fail(format!(
-                "Start held back because of a port conflict. Resolve it first (see list_ports / stop_processes), or ask the user to use \"Start Anyway\" in Sawit.\n{}",
-                report.explain()
-            )),
+            // The app offers Start Anyway only when the start can work.
+            Ok(StartOutcome::Blocked(report)) => fail(match &report.verdict {
+                PortVerdict::Conflict { .. } => format!(
+                    "Not started: port {} is taken on the same address, so the start would fail. Stop what holds it first (list_ports shows it; stop_processes, or stop_instance for a Sawit instance), then start again.\n{}",
+                    report.port,
+                    report.explain()
+                ),
+                _ => format!(
+                    "Start held back: another process also listens on port {}, on another address, so clients could reach either server. Stop it first (list_ports, stop_processes), or ask the user whether to start anyway: app_instance with action start shows the conflict on the instance's tab in Sawit, with a Start Anyway button.\n{}",
+                    report.port,
+                    report.explain()
+                ),
+            }),
             Err(e) => fail(e.to_string()),
         }
     }
@@ -413,7 +422,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Start a Sawit instance. Refuses (and explains) when another process already listens on its port, e.g. a Docker container"
+        description = "Start a Sawit instance. Refuses (and explains) when another process already listens on its port, e.g. a Docker container: on the same address the start would fail, so that process has to stop first; on another address the user can still start it anyway in Sawit"
     )]
     async fn start_instance(&self, Parameters(a): Parameters<InstanceArgs>) -> CallToolResult {
         self.start_instance_tool(&a.name).await
@@ -470,6 +479,47 @@ mod tests {
             port: 5432,
             listen: ListenScope::Localhost,
             managed,
+        }
+    }
+
+    /// The app offers Start Anyway only when the port is held on another
+    /// address: a start that would fail sends the agent to stop what holds
+    /// the port, and only the other kind mentions starting anyway.
+    #[test]
+    fn a_held_start_says_what_can_be_done() {
+        use sawit_core::ports::{BindAddr, Listener};
+        use sawit_core::probe::PortReport;
+        let listener = |addr| Listener {
+            pid: 42,
+            command: "postgres".into(),
+            addr,
+            port: 5432,
+        };
+        let said = |verdict| {
+            let report = PortReport {
+                port: 5432,
+                intended: vec![BindAddr::LoopbackV4],
+                verdict,
+                owners: vec![],
+            };
+            let r = Sawit::start_text("shop", &inst(true), Ok(StartOutcome::Blocked(report)));
+            assert_eq!(r.is_error, Some(true));
+            let texts = r.content.iter().filter_map(|c| c.as_text());
+            texts.map(|t| t.text.clone()).collect::<String>()
+        };
+        let conflict = said(PortVerdict::Conflict {
+            same_addr: vec![listener(BindAddr::LoopbackV4)],
+            shadowing: vec![],
+        });
+        for word in ["start would fail", "stop_processes", "stop_instance"] {
+            assert!(conflict.contains(word), "{conflict}");
+        }
+        assert!(!conflict.contains("Start Anyway"), "{conflict}");
+        let shadowing = said(PortVerdict::Shadowing {
+            listeners: vec![listener(BindAddr::AnyV6)],
+        });
+        for word in ["Start Anyway", "app_instance", "stop_processes"] {
+            assert!(shadowing.contains(word), "{shadowing}");
         }
     }
 

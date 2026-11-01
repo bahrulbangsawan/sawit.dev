@@ -77,8 +77,7 @@ impl Group {
     fn title(&self) -> String {
         match self {
             Group::Shell => "Shell".into(),
-            Group::Agent(client, None) => client.name().into(),
-            Group::Agent(client, Some(profile)) => format!("{} · {profile}", client.name()),
+            Group::Agent(client, profile) => agent_config::group_title(*client, profile.as_deref()),
         }
     }
 }
@@ -161,10 +160,7 @@ impl ShellConfigPanel {
 
     /// Whether the login shell reads files meant for `shell`.
     fn reads(&self, shell: &str) -> bool {
-        match self.login_shell.as_deref() {
-            Some(login) => login == shell || (login == "bash" && shell == "sh"),
-            None => true,
-        }
+        shell_config::reads(self.login_shell.as_deref(), shell)
     }
 
     /// Every group that has files, with its rows.

@@ -10,6 +10,7 @@ use rmcp::{schemars, tool, tool_router};
 use sawit_core::app_control::Store;
 use sawit_core::prompts::{self, Library, Prompt};
 
+use crate::db::check_confirm;
 use crate::{Sawit, fail, ok, tri};
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -22,6 +23,16 @@ pub struct ListArgs {
 pub struct IdArgs {
     #[schemars(description = "Prompt id (see list_prompts)")]
     pub id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct DeleteArgs {
+    #[schemars(description = "Prompt id (see list_prompts)")]
+    pub id: String,
+    #[schemars(
+        description = "Must equal `id` exactly, to confirm: the prompt is deleted for good"
+    )]
+    pub confirm: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -171,9 +182,14 @@ impl Sawit {
         ok(format!("Updated.\n{}", summary(p)))
     }
 
-    async fn delete_prompt_tool(&self, id: &str) -> CallToolResult {
+    async fn delete_prompt_tool(&self, id: &str, confirm: &str) -> CallToolResult {
         let mut lib = tri!(self.library());
         let title = tri!(Self::prompt(&lib, id)).title.clone();
+        tri!(check_confirm(
+            id,
+            confirm,
+            &format!("delete the prompt “{title}”, id")
+        ));
         lib.remove(id);
         tri!(self.save_library(&lib).await);
         ok(format!("Deleted prompt “{title}”."))
@@ -220,9 +236,11 @@ impl Sawit {
         self.update_prompt_tool(a).await
     }
 
-    #[tool(description = "Delete a prompt from the library")]
-    async fn delete_prompt(&self, Parameters(a): Parameters<IdArgs>) -> CallToolResult {
-        self.delete_prompt_tool(&a.id).await
+    #[tool(
+        description = "Delete a prompt from the library. DESTRUCTIVE, can't be undone: `confirm` must equal `id`, otherwise nothing happens"
+    )]
+    async fn delete_prompt(&self, Parameters(a): Parameters<DeleteArgs>) -> CallToolResult {
+        self.delete_prompt_tool(&a.id, &a.confirm).await
     }
 
     #[tool(
@@ -284,7 +302,15 @@ mod tests {
         );
         assert!(filled.contains("Check main.rs"), "{filled}");
         assert_eq!(sawit.library().unwrap().items[0].used_count, 1);
-        sawit.delete_prompt_tool(&id).await;
+        // Deleting needs the id again; until then the prompt stays.
+        for confirm in ["", "Review"] {
+            let refused = sawit.delete_prompt_tool(&id, confirm).await;
+            assert_eq!(refused.is_error, Some(true));
+            assert!(text(refused).contains(&format!("confirm=\\\"{id}\\\"")));
+        }
+        assert_eq!(sawit.library().unwrap().items.len(), 1);
+        let deleted = sawit.delete_prompt_tool(&id, &id).await;
+        assert_ne!(deleted.is_error, Some(true));
         assert!(sawit.library().unwrap().items.is_empty());
     }
 }

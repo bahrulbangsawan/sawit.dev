@@ -228,6 +228,14 @@ pub(crate) fn profiles(home: &Path, prefix: &str, marker: &str) -> Vec<(String, 
     found
 }
 
+/// Every installed client (and profile) on this Mac: [`discover`] in the
+/// home folder, with this process's `CLAUDE_CONFIG_DIR`.
+pub fn targets() -> Vec<Target> {
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    let claude_dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from);
+    discover(&home, claude_dir)
+}
+
 /// Every installed client (and profile) under `home`. `claude_config_dir`
 /// is the app's `CLAUDE_CONFIG_DIR`, included when it lives elsewhere.
 pub fn discover(home: &Path, claude_config_dir: Option<PathBuf>) -> Vec<Target> {
@@ -702,7 +710,19 @@ fn read_toml(path: &Path) -> std::result::Result<toml_edit::DocumentMut, String>
         Err(e) => return Err(e.to_string()),
     };
     text.parse::<toml_edit::DocumentMut>()
-        .map_err(|e| e.to_string())
+        .map_err(|e| toml_error(&e))
+}
+
+/// Where a config's TOML goes wrong, without the line itself: toml_edit
+/// quotes the line it stopped at, and in a client's config that line can
+/// hold an API key or a bearer token, which would reach the MCP page, an
+/// agent's tool result and `sawit list mcp`.
+fn toml_error(e: &toml_edit::TomlError) -> String {
+    let text = e.to_string();
+    match text.lines().next() {
+        Some(first) if first.starts_with("TOML parse error at line ") => first.to_string(),
+        _ => "TOML parse error".into(),
+    }
 }
 
 /// A target's config, read once: what every server in it points at, so
@@ -1601,6 +1621,45 @@ mod tests {
         find(&targets, Client::Zed, "default");
         // Clients that aren't there aren't offered.
         assert!(!targets.iter().any(|t| t.client == Client::Cursor));
+    }
+
+    /// A Codex config that doesn't parse says where, never what the line
+    /// holds: here an MCP server's key. Its status, an install and an
+    /// uninstall all keep it out of what they say.
+    #[test]
+    fn a_broken_toml_line_is_never_quoted() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.toml");
+        fs::write(
+            &config,
+            "[mcp_servers.exa]\nurl = \"https://mcp.exa.ai/mcp\"\nenv = { EXA_API_KEY = \"exa-sawit-secret-0123\" \n",
+        )
+        .unwrap();
+        let codex = Target {
+            client: Client::Codex,
+            profile: "default".into(),
+            config: config.clone(),
+            profile_dir: None,
+        };
+        let spec = Spec::http("exa", "https://mcp.exa.ai/mcp");
+        let Status::Unreadable(why) = status(&codex, &spec) else {
+            panic!("{:?}", status(&codex, &spec))
+        };
+        assert!(why.starts_with("TOML parse error at line "), "{why}");
+        assert!(why.contains(", column "), "{why}");
+        assert!(!why.contains('\n'), "{why}");
+        let install = install_file(&codex, &spec).unwrap_err().to_string();
+        let uninstall = uninstall_file(&codex, "exa").unwrap_err().to_string();
+        for said in [&why, &install, &uninstall] {
+            assert!(!said.contains("exa-sawit-secret"), "{said}");
+        }
+        assert!(install.contains(&why), "{install}");
+        // Nothing was written over it.
+        assert!(
+            fs::read_to_string(&config)
+                .unwrap()
+                .contains("exa-sawit-secret")
+        );
     }
 
     #[test]

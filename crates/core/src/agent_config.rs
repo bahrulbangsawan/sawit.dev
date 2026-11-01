@@ -626,6 +626,32 @@ fn detect_with(
     out
 }
 
+/// [`detect`]'s files in the groups the Config Files panel shows them in, as
+/// `(agent, profile, files)`: each agent's files, then each of its other
+/// profiles' own, every group highest priority first.
+pub fn groups(configs: &[AgentConfig]) -> Vec<(Client, Option<&str>, Vec<&AgentConfig>)> {
+    let mut out: Vec<(Client, Option<&str>, Vec<&AgentConfig>)> = Vec::new();
+    for config in configs {
+        let profile = config.profile.as_deref();
+        match out.last_mut() {
+            Some((client, p, files)) if *client == config.client && *p == profile => {
+                files.push(config)
+            }
+            _ => out.push((config.client, profile, vec![config])),
+        }
+    }
+    out
+}
+
+/// A group's name: the agent's, with a profile its name too ("Claude Code ·
+/// work").
+pub fn group_title(client: Client, profile: Option<&str>) -> String {
+    match profile {
+        None => client.name().into(),
+        Some(profile) => format!("{} · {profile}", client.name()),
+    }
+}
+
 /// A profile's name (`None` for the default one) and its folder.
 type Profile = (Option<String>, PathBuf);
 
@@ -775,6 +801,19 @@ mod tests {
                 (Some("work"), home.join(".claude-work/.claude.json")),
                 (Some("claude"), elsewhere.join("settings.json")),
                 (Some("claude"), elsewhere.join(".claude.json")),
+            ]
+        );
+        // The panel's groups, as `list_config_files` and `sawit list config` show them too.
+        let titles: Vec<(String, usize)> = groups(&found)
+            .into_iter()
+            .map(|(client, profile, files)| (group_title(client, profile), files.len()))
+            .collect();
+        assert_eq!(
+            titles,
+            [
+                ("Claude Code".to_string(), 2),
+                ("Claude Code · work".to_string(), 2),
+                ("Claude Code · claude".to_string(), 2),
             ]
         );
     }

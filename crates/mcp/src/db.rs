@@ -122,9 +122,13 @@ pub struct SaveConnectionArgs {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct NameArgs {
+pub struct RemoveConnectionArgs {
     #[schemars(description = "Saved connection name")]
     pub name: String,
+    #[schemars(
+        description = "Must equal `name` exactly, to confirm: the connection and its Keychain password are deleted for good"
+    )]
+    pub confirm: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -133,6 +137,11 @@ pub struct WriteEnvArgs {
     pub instance: String,
     #[schemars(description = "Project folder whose .env gets DATABASE_URL (absolute path)")]
     pub project_dir: String,
+    #[schemars(
+        description = "Needed (true) only when the .env already sets a different DATABASE_URL, which this replaces. Default false"
+    )]
+    #[serde(default)]
+    pub confirm: bool,
 }
 
 /// Query results as text: each result set as a table, then the row counts
@@ -170,6 +179,15 @@ pub(crate) fn check_confirm(name: &str, confirm: &str, what: &str) -> Result<(),
         Err(format!(
             "Refused: to {what} “{name}”, pass confirm=\"{name}\" (got \"{confirm}\")."
         ))
+    }
+}
+
+/// A `DATABASE_URL` as an agent may see it: without its password, or not at
+/// all when it doesn't read as a PostgreSQL URL.
+fn shown_url(url: &str) -> String {
+    match parse_database_url(url) {
+        Ok((profile, _password)) => profile.url(),
+        Err(_) => "another value".into(),
     }
 }
 
@@ -702,13 +720,14 @@ impl Sawit {
         ))
     }
 
-    pub async fn remove_connection_tool(&self, name: &str) -> CallToolResult {
+    pub async fn remove_connection_tool(&self, name: &str, confirm: &str) -> CallToolResult {
         let mut profiles = tri!(self.profiles());
         let Some(profile) = profiles.items.iter().find(|p| p.name == name).cloned() else {
             return fail(format!(
                 "No saved connection named \"{name}\". See list_connections."
             ));
         };
+        tri!(check_confirm(name, confirm, "remove the saved connection"));
         profiles.remove(name);
         tri!(
             profiles
@@ -727,11 +746,27 @@ impl Sawit {
         ok(format!("Removed connection {name}."))
     }
 
-    pub async fn write_env_tool(&self, instance: &str, project_dir: &str) -> CallToolResult {
+    pub async fn write_env_tool(
+        &self,
+        instance: &str,
+        project_dir: &str,
+        confirm: bool,
+    ) -> CallToolResult {
         // Read as every folder an agent names (MCP-7): a relative one would be sawit-mcp's folder.
         let dir = tri!(crate::existing_dir(project_dir));
         let inst = tri!(self.instance(instance));
-        match write_database_url(&dir, &instance_url(&inst)) {
+        let url = instance_url(&inst);
+        let current = std::fs::read_to_string(dir.join(".env")).unwrap_or_default();
+        if let Some(old) = db::dotenv_value(&current, "DATABASE_URL").filter(|old| *old != url)
+            && !confirm
+        {
+            return fail(format!(
+                "Refused: {} already sets DATABASE_URL to {}, and this would replace it with {url}. Nothing was written. Pass confirm=true to replace it.",
+                tilde(&dir.join(".env")),
+                shown_url(&old)
+            ));
+        }
+        match write_database_url(&dir, &url) {
             Ok(path) => ok(format!("DATABASE_URL written to {}", tilde(&path))),
             Err(e) => fail(e),
         }
@@ -813,16 +848,22 @@ impl Sawit {
         self.save_connection_tool(a).await
     }
 
-    #[tool(description = "Remove a saved connection (and its Keychain password)")]
-    async fn remove_connection(&self, Parameters(a): Parameters<NameArgs>) -> CallToolResult {
-        self.remove_connection_tool(&a.name).await
+    #[tool(
+        description = "Remove a saved connection and its Keychain password (kept while another saved connection uses the same one). DESTRUCTIVE, can't be undone: `confirm` must equal `name`, otherwise nothing happens"
+    )]
+    async fn remove_connection(
+        &self,
+        Parameters(a): Parameters<RemoveConnectionArgs>,
+    ) -> CallToolResult {
+        self.remove_connection_tool(&a.name, &a.confirm).await
     }
 
     #[tool(
-        description = "Write DATABASE_URL for a Sawit instance into <project_dir>/.env, e.g. for a TanStack Start app"
+        description = "Write DATABASE_URL for a Sawit instance into <project_dir>/.env, e.g. for a TanStack Start app; the rest of the file stays. DESTRUCTIVE when the .env already sets a different DATABASE_URL: replacing it needs confirm=true (the refusal shows the current one, without its password)"
     )]
     async fn write_env(&self, Parameters(a): Parameters<WriteEnvArgs>) -> CallToolResult {
-        self.write_env_tool(&a.instance, &a.project_dir).await
+        self.write_env_tool(&a.instance, &a.project_dir, a.confirm)
+            .await
     }
 }
 
@@ -861,7 +902,7 @@ mod tests {
         let project = dir.path().join("project");
         std::fs::create_dir_all(&project).unwrap();
         let written = server
-            .write_env_tool("shop", &format!(" {} ", project.display()))
+            .write_env_tool("shop", &format!(" {} ", project.display()), false)
             .await;
         assert_ne!(written.is_error, Some(true), "{}", said(&written));
         let env = std::fs::read_to_string(project.join(".env")).unwrap();
@@ -870,13 +911,104 @@ mod tests {
             "{env}"
         );
 
-        let refused = server.write_env_tool("shop", "no-such-folder").await;
+        let refused = server.write_env_tool("shop", "no-such-folder", false).await;
         assert_eq!(refused.is_error, Some(true));
         assert!(
             said(&refused).contains("must be an absolute path"),
             "{}",
             said(&refused)
         );
+    }
+
+    /// A server for a scratch data folder with one instance, `shop` on port
+    /// 54329.
+    fn shop_server(dir: &std::path::Path) -> Sawit {
+        use sawit_core::instances::{AppPaths, ListenScope};
+        let server = Sawit::new(AppPaths {
+            root: dir.join("home"),
+        });
+        let mut registry = Registry::default();
+        registry
+            .add(Instance {
+                name: "shop".into(),
+                bin_dir: dir.join("bin"),
+                data_dir: dir.join("data"),
+                port: 54329,
+                listen: ListenScope::Localhost,
+                managed: true,
+            })
+            .unwrap();
+        registry.save(&server.paths.instances_file()).unwrap();
+        server
+    }
+
+    fn said(result: &CallToolResult) -> String {
+        let texts = result.content.iter().filter_map(|c| c.as_text());
+        texts.map(|t| t.text.clone()).collect::<Vec<_>>().join("\n")
+    }
+
+    /// write_env never replaces another database's URL unasked, and says
+    /// which one it would replace without the password in it.
+    #[tokio::test]
+    async fn write_env_asks_before_replacing_another_database_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = shop_server(dir.path());
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let env = project.join(".env");
+        let theirs = "API=1\nDATABASE_URL=postgres://app:hunter2@db.example.com:5432/app\n";
+        std::fs::write(&env, theirs).unwrap();
+        let folder = project.display().to_string();
+
+        let refused = server.write_env_tool("shop", &folder, false).await;
+        assert_eq!(refused.is_error, Some(true));
+        let text = said(&refused);
+        assert!(
+            text.contains("postgres://app@db.example.com:5432/app"),
+            "{text}"
+        );
+        assert!(text.contains("confirm=true"), "{text}");
+        assert!(!text.contains("hunter2"), "{text}");
+        assert_eq!(std::fs::read_to_string(&env).unwrap(), theirs);
+
+        let replaced = server.write_env_tool("shop", &folder, true).await;
+        assert_ne!(replaced.is_error, Some(true), "{}", said(&replaced));
+        let now = std::fs::read_to_string(&env).unwrap();
+        assert_eq!(
+            now,
+            "API=1\nDATABASE_URL=postgres://postgres@localhost:54329/postgres\n"
+        );
+        // The same URL again replaces nothing, so it needs no yes.
+        let again = server.write_env_tool("shop", &folder, false).await;
+        assert_ne!(again.is_error, Some(true), "{}", said(&again));
+        // Nor does a value that doesn't read as a URL show up in the refusal.
+        std::fs::write(&env, "DATABASE_URL=mysql://root:s3cret@db/app\n").unwrap();
+        let refused = server.write_env_tool("shop", &folder, false).await;
+        assert!(!said(&refused).contains("s3cret"), "{}", said(&refused));
+    }
+
+    /// Removing a saved connection needs its name again; a refusal returns
+    /// before the Keychain is touched.
+    #[tokio::test]
+    async fn removing_a_connection_needs_its_name_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = shop_server(dir.path());
+        let (mut profile, _) =
+            parse_database_url("postgres://app@db.example.com:5432/app").unwrap();
+        profile.name = "prod".into();
+        let mut profiles = Profiles::default();
+        profiles.upsert(profile);
+        profiles.save(&server.profiles_file()).unwrap();
+        for confirm in ["", "Prod"] {
+            let refused = server.remove_connection_tool("prod", confirm).await;
+            assert_eq!(refused.is_error, Some(true));
+            assert!(
+                said(&refused).contains("confirm=\"prod\""),
+                "{}",
+                said(&refused)
+            );
+        }
+        assert_eq!(server.profiles().unwrap().items.len(), 1);
     }
 
     #[test]
