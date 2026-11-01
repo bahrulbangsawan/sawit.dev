@@ -1,0 +1,15 @@
+{
+  "name": "sawit-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Sawit's end-to-end tests: the real app, driven through the macOS accessibility tree with agent-desktop.",
+  "scripts": {
+    "test": "./run.sh"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "agent-desktop": "1.0.2"
+  }
+}

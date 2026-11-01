@@ -1,0 +1,4 @@
+# Installed from package-lock.json by `npm ci` (run.sh does it when missing).
+node_modules/
+# Screenshots, accessibility trees and app logs of failed tests, per run.
+artifacts/

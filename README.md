@@ -913,6 +913,68 @@ from the MCP page replaces the old `pgdesk` entry in each client. Run **Install 
 `sawit` command, and delete the old `/usr/local/bin/pgdesk` link. Updating from PG Desk 0.0.2 can't
 happen in the app: download `Sawit.dmg` once from Releases.
 
+### End-to-end tests
+
+`e2e/` drives the real app the way a person does: each test starts its own Sawit, finds its window and
+presses its buttons, fills its fields and reads them back through the macOS accessibility tree, with
+[agent-desktop](https://github.com/vercel-labs/agent-desktop) (Vercel Labs). Sawit's control socket sets
+things up and reads state back (`app_state`, `terminal_read`); the UI under test is always driven
+through accessibility.
+
+```bash
+e2e/run.sh                      # build target/debug/sawit, then every test that doesn't move the pointer
+e2e/run.sh --filter terminal    # the tests whose name matches (a regular expression)
+e2e/run.sh --headed             # also the tests that move the real pointer: drags, right-clicks, a file drop
+e2e/run.sh --keep               # keep every test's artifacts, not only the failed ones'
+e2e/run.sh --no-build --idle 0  # use the binary as it is; don't wait for the Mac to be idle (a VM, CI)
+cd e2e && npm test              # the same as e2e/run.sh
+```
+
+A full run takes about 10 minutes with a debug build: each test starts a Sawit of its own.
+It needs Node.js 22 or later and npm. `run.sh` installs agent-desktop into `e2e/node_modules` from
+`e2e/package-lock.json` (nothing global), and for `--headed` builds the drag source in
+`e2e/tools/drag-source.swift` with the Command Line Tools' `swiftc`.
+
+**Permissions.** agent-desktop reads other apps through the **Accessibility** permission of the app it
+runs in: grant it to your terminal (Terminal, iTerm2, VS Code, …) in System Settings > Privacy & Security
+> Accessibility, and to `e2e/node_modules/agent-desktop/bin/agent-desktop` if it is listed there too.
+**Screen & System Audio Recording** for the same app is optional: without it a failed test keeps no
+screenshot. The suite never asks for a permission or changes one; `run.sh` stops and names the one
+missing.
+
+**While it runs it uses the Mac.** Each test brings its Sawit window to the front and makes it as large
+as the screen. Buttons, menu items and fields are pressed and filled through accessibility actions,
+without the pointer; key presses (Return, ⌘S, the text typed into a terminal or the editor, and Return on
+a focused dropdown button, which is how one opens without a click) are real key events, sent to that
+Sawit process only, so they never land in another app. They do count as input for the Mac's idle clock.
+The tests run with `--headed` move the real pointer (drawing on the canvas, right-click menus, dropping
+a file on the terminal), so they need a Mac nobody is using, or a separate user session or VM. A run
+first waits until the keyboard and mouse have been idle for 60 s, waits again (15 s) before each test
+while someone is using the Mac, and puts back the app that was in front.
+
+**Isolation.** Each test gets a temp folder holding a home, a Sawit data folder and a fixture project (a
+few files, a git repository of one commit, `.nyawit/`, and a static site served on a loopback port). Sawit
+starts as `env -i HOME=… SAWIT_HOME=… TMPDIR=… PATH=/usr/bin:/bin:/usr/sbin:/sbin target/debug/sawit
+--foreground <project>`, so it reads and writes none of your data, agent configs or saved logins, and never
+hands off to the Sawit you have open. Its control socket is found from its own pid (`lsof -p`), never by
+looking around `/tmp`. Teardown always runs: the app is killed by its pid, the site closed, the temp folder
+removed. The Tools page still sees what Homebrew installed in `/opt/homebrew`, which isn't in any home, so
+the harness refuses to press anything that installs, updates or removes (and any button without a name).
+
+**When a test fails** its artifacts are kept in `e2e/artifacts/<run>/<test>/`: `window.png`, `ax-tree.json`
+(the window's accessibility tree), `app-state.json`, `app.log`, `agent-desktop.log` (every command the test
+ran), and `project/` as the test left it.
+
+**Writing a test.** A spec in `e2e/specs/` declares `sawitTest(name, opts, async (ctx) => …)`; `ctx.win`
+finds elements by role and accessible name (`win.click({ role: "button", name: "Tools" })`,
+`win.setValue(…)`, `win.waitFor(…)`, `win.press("cmd+s")`, `win.typeKeys("echo hi")`), and `ctx.call`
+sends a control request to this test's Sawit. Waits poll a condition with a deadline, never a fixed
+sleep. A dropdown button (Show 8, a device, Run with npm, a canvas flyout) opens with
+`win.openMenu(…)`, focus then Return, as from the keyboard: GPUI's dropdowns have no accessibility press.
+A right-click menu needs a real right-click (`--headed`): macOS's accessibility "show menu" doesn't
+reach GPUI. An element a test can't find by name is an accessibility bug to fix in Sawit (give it a role
+and a name), not a reason to click at coordinates.
+
 ## Versions & releases
 
 - Versions start at **0.0.1** and bump one patch on **every push to `main`**. The history is in
