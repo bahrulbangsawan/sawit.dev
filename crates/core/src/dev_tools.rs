@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 
+use crate::package_manager::PackageManager;
 use crate::{CoreError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -464,7 +465,46 @@ rm -rf "/Applications/Zed.app" "$HOME/Applications/Zed.app""#,
             "curl -L https://fly.io/install.sh | sh",
         )
     },
+    Tool {
+        latest: Latest::Npm("cf"),
+        uninstall: Some("npm uninstall -g cf"),
+        needs: &["node"],
+        ..tool(
+            "cf",
+            "Cloudflare CLI",
+            "cf (beta): the whole Cloudflare API and Workers projects from the terminal, installed with npm.",
+            Category::Other,
+            "cf",
+            "npm install -g cf",
+        )
+    },
 ];
+
+/// The npm package a tool installs with `npm install -g` (Gemini CLI, the
+/// Cloudflare CLI): those install with whichever package manager is picked.
+/// Not npm's own update.
+pub fn npm_package(tool: &Tool) -> Option<&'static str> {
+    let package = tool.install.strip_prefix("npm install -g ")?;
+    (tool.id != "npm" && !package.contains(char::is_whitespace)).then_some(package)
+}
+
+/// `tool`'s install command with `pm` (`npm install -g x` → `bun add -g
+/// x`); the catalog's own for a tool npm doesn't install, or without `pm`.
+pub fn install_command(tool: &Tool, pm: Option<PackageManager>) -> String {
+    match (npm_package(tool), pm) {
+        (Some(package), Some(pm)) => pm.global_install(package),
+        _ => tool.install.to_string(),
+    }
+}
+
+/// `tool`'s upgrade command with `pm`, like [`install_command`]: installing
+/// the package again brings the latest.
+pub fn upgrade_command(tool: &Tool, pm: Option<PackageManager>) -> String {
+    match (npm_package(tool), pm) {
+        (Some(package), Some(pm)) => pm.global_install(package),
+        _ => tool.upgrade_command().to_string(),
+    }
+}
 
 pub fn find(id: &str) -> Option<&'static Tool> {
     TOOLS.iter().find(|t| t.id == id)
@@ -495,15 +535,18 @@ pub fn plan(wanted: &[&str], installed: &dyn Fn(&str) -> bool) -> Vec<&'static T
 /// Put in front of every command: the folders installers use
 /// ([`INSTALL_DIRS`]), and nvm, so a tool installed a moment ago is found
 /// even before the shell profile picks it up.
-const PRELUDE: &str = r#"export PATH="$HOME/.local/bin:$HOME/.claude/local:$HOME/.npm-global/bin:$HOME/.cargo/bin:$HOME/.bun/bin:$HOME/.deno/bin:$HOME/.fly/bin:$HOME/.opencode/bin:$HOME/.amp/bin:$HOME/Library/pnpm:/opt/homebrew/bin:/usr/local/bin:$PATH"
+/// pnpm's global installs need `PNPM_HOME`, which `pnpm setup` exports in
+/// `~/.zshrc` (macOS's default folder when it's unset here).
+const PRELUDE: &str = r#"export PATH="$HOME/.local/bin:$HOME/.claude/local:$HOME/.npm-global/bin:$HOME/.cargo/bin:$HOME/.bun/bin:$HOME/.deno/bin:$HOME/.fly/bin:$HOME/.opencode/bin:$HOME/.amp/bin:$HOME/Library/pnpm:$HOME/.yarn/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+export PNPM_HOME="${PNPM_HOME:-$HOME/Library/pnpm}"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
 "#;
 
 /// The folders installers put programs in. A login shell's `PATH`, which
 /// the app adopts, often misses them: their installers add them in
 /// `~/.zshrc`, which only interactive shells read.
-const INSTALL_DIRS: [&str; 10] = [
+const INSTALL_DIRS: [&str; 11] = [
     "~/.local/bin",
     "~/.claude/local",
     "~/.npm-global/bin",
@@ -514,6 +557,8 @@ const INSTALL_DIRS: [&str; 10] = [
     "~/.opencode/bin",
     "~/.amp/bin",
     "~/Library/pnpm",
+    // Yarn 1's global packages.
+    "~/.yarn/bin",
 ];
 
 /// Homebrew's folders, searched after nvm's Node.js: a terminal with nvm
@@ -951,12 +996,13 @@ fn uninstall_command_in(tool: &Tool, found: &Path, real: &Path, home: &Path) -> 
         return formula_like.then(|| format!("brew uninstall {formula}"));
     }
     let real_text = real.to_string_lossy();
-    // An npm package installed globally: npm removes it.
+    // An npm package installed globally: the package manager that put it
+    // there (npm, pnpm, Bun, Yarn) removes it.
     if let Latest::Npm(package) = tool.latest
         && tool.id != "npm"
         && real_text.contains(&format!("/node_modules/{package}/"))
     {
-        return Some(format!("npm uninstall -g {package}"));
+        return Some(PackageManager::owning(&real_text).global_uninstall(package));
     }
     // An `also` path is the copy itself (an app bundle there may be
     // Homebrew's cask, its CLI linked from elsewhere: not this one).
@@ -969,6 +1015,14 @@ fn uninstall_command_in(tool: &Tool, found: &Path, real: &Path, home: &Path) -> 
             }
         });
     ours.then(|| own.to_string())
+}
+
+/// The package manager that installed the copy of an npm tool found at
+/// `found` (its links followed): what upgrades it, so an upgrade doesn't put
+/// a second copy beside it with another one.
+pub fn installed_with(found: &Path) -> PackageManager {
+    let real = std::fs::canonicalize(found).unwrap_or_else(|_| found.to_path_buf());
+    PackageManager::owning(&real.to_string_lossy())
 }
 
 /// Runs an uninstall `command` for `tool`, like [`install`].
@@ -1099,6 +1153,19 @@ async fn run_locked(
 ) -> Result<()> {
     let _lock = lock_tool(id, name)?;
     run_script(name, command, on_line).await
+}
+
+/// Runs `command` in the login shell as the Dev Tools page runs an installer
+/// (its output streamed to `on_line`, stopped with everything it started when
+/// dropped), under the lock `id`: what the Skills page runs to install, update
+/// or remove a pack. `name` says what is busy when the lock is held.
+pub async fn run_shell(
+    id: &str,
+    name: &str,
+    command: &str,
+    on_line: impl Fn(String) + Send + Sync,
+) -> Result<()> {
+    run_locked(id, name, command, on_line).await
 }
 
 /// Holds tool `id`'s lock until dropped; fails at once when it's held.
@@ -1285,7 +1352,45 @@ mod tests {
             assert_eq!(t.uninstall.is_none(), t.id == "npm", "{}", t.id);
         }
         let ids: Vec<_> = dependents("node").iter().map(|t| t.id).collect();
-        assert_eq!(ids, ["npm", "gemini"]);
+        assert_eq!(ids, ["npm", "gemini", "cf"]);
+    }
+
+    /// The tools npm installs globally install with the package manager picked, the way the cf
+    /// docs list them; npm's own update and the curl installers stay as they are.
+    #[test]
+    fn npm_tools_install_with_the_package_manager_picked() {
+        let tool = |id: &str| find(id).unwrap();
+        let npm_tools: Vec<&str> = TOOLS
+            .iter()
+            .filter(|t| npm_package(t).is_some())
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(npm_tools, ["gemini", "cf"]);
+        assert_eq!(
+            install_command(tool("cf"), Some(PackageManager::Bun)),
+            "bun add -g cf"
+        );
+        assert_eq!(
+            install_command(tool("gemini"), Some(PackageManager::Pnpm)),
+            "pnpm add -g @google/gemini-cli"
+        );
+        assert_eq!(
+            upgrade_command(tool("gemini"), Some(PackageManager::Yarn)),
+            "yarn global add @google/gemini-cli"
+        );
+        assert_eq!(install_command(tool("cf"), None), "npm install -g cf");
+        assert_eq!(
+            install_command(tool("npm"), Some(PackageManager::Bun)),
+            "npm install -g npm@latest"
+        );
+        assert_eq!(
+            install_command(tool("bun"), Some(PackageManager::Pnpm)),
+            tool("bun").install
+        );
+        assert_eq!(
+            upgrade_command(tool("bun"), Some(PackageManager::Pnpm)),
+            "bun upgrade"
+        );
     }
 
     #[test]
@@ -1369,6 +1474,25 @@ mod tests {
             )
             .as_deref(),
             Some("npm uninstall -g @anthropic-ai/claude-code")
+        );
+        // Installed with Bun or pnpm: that one removes it.
+        assert_eq!(
+            script(
+                "gemini",
+                "/Users/me/.bun/bin/gemini",
+                "/Users/me/.bun/install/global/node_modules/@google/gemini-cli/dist/index.js"
+            )
+            .as_deref(),
+            Some("bun remove -g @google/gemini-cli")
+        );
+        assert_eq!(
+            script(
+                "cf",
+                "/Users/me/Library/pnpm/cf",
+                "/Users/me/Library/pnpm/global/5/node_modules/cf/bin/cf"
+            )
+            .as_deref(),
+            Some("pnpm remove -g cf")
         );
         assert_eq!(
             script(

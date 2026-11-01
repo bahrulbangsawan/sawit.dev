@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::mcp_clients::{self, Entries, Spec, Status, Target};
+use crate::package_manager::PackageManager;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
@@ -269,10 +270,28 @@ impl Server {
 
     /// The URL or command line, for display.
     pub fn address(&self, region: &str) -> String {
+        self.address_with(region, PackageManager::Npm)
+    }
+
+    /// [`Self::address`], a package run with `pm` (`bunx rea-agents mcp`).
+    pub fn address_with(&self, region: &str, pm: PackageManager) -> String {
         match self.source {
             Source::Bundled => "built in".into(),
             Source::Http { url, .. } => url.replace("{region}", region),
+            Source::Stdio { .. } if let Some(package) = self.package() => pm.run_line(package),
             Source::Stdio { command, args } => format!("{command} {}", args.join(" ")),
+        }
+    }
+
+    /// For a local server that runs a package with `npx -y`, the package and
+    /// what it's given: any package manager can run it.
+    pub fn package(&self) -> Option<&'static [&'static str]> {
+        match self.source {
+            Source::Stdio {
+                command: "npx",
+                args,
+            } => Some(args.strip_prefix(&["-y"]).unwrap_or(args)),
+            _ => None,
         }
     }
 
@@ -291,7 +310,19 @@ impl Server {
 
     /// The program a local server needs, when it isn't found.
     pub fn missing_program(&self, find: impl Fn(&str) -> Option<PathBuf>) -> Option<&'static str> {
+        self.missing_program_with(find, PackageManager::Npm)
+    }
+
+    /// [`Self::missing_program`], a package run with `pm`: its runner.
+    pub fn missing_program_with(
+        &self,
+        find: impl Fn(&str) -> Option<PathBuf>,
+        pm: PackageManager,
+    ) -> Option<&'static str> {
         match self.source {
+            Source::Stdio { .. } if self.package().is_some() => {
+                find(pm.runner()).is_none().then_some(pm.runner())
+            }
             Source::Stdio { command, .. } if find(command).is_none() => Some(command),
             _ => None,
         }
@@ -306,16 +337,40 @@ impl Server {
         region: &str,
         find: impl Fn(&str) -> Option<PathBuf>,
     ) -> Spec {
+        self.spec_with(server, region, find, PackageManager::Npm)
+    }
+
+    /// [`Self::spec`], packages (a local server's, the `mcp-remote` bridge)
+    /// run with `pm`: `npx -y pkg` becomes `bunx pkg`, `pnpm dlx pkg` or
+    /// `yarn dlx pkg`.
+    pub fn spec_with(
+        &self,
+        server: &Path,
+        region: &str,
+        find: impl Fn(&str) -> Option<PathBuf>,
+        pm: PackageManager,
+    ) -> Spec {
         let resolve = |cmd: &str| {
             find(cmd)
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| cmd.to_string())
         };
+        let runner = resolve(pm.runner());
+        let runner_args: Vec<String> = pm.runner_args().iter().map(|a| a.to_string()).collect();
         let spec = match self.source {
             Source::Bundled => Spec::sawit(server),
             Source::Http { url, headers } => headers.iter().fold(
                 Spec::http(self.id, url.replace("{region}", region)),
                 |spec, (k, v)| spec.header(k, v),
+            ),
+            Source::Stdio { .. } if let Some(package) = self.package() => Spec::stdio(
+                self.id,
+                runner.clone(),
+                runner_args
+                    .iter()
+                    .cloned()
+                    .chain(package.iter().map(|a| a.to_string()))
+                    .collect(),
             ),
             Source::Stdio { command, args } => Spec::stdio(
                 self.id,
@@ -323,7 +378,12 @@ impl Server {
                 args.iter().map(|a| a.to_string()).collect(),
             ),
         };
-        spec.with_npx(resolve("npx"))
+        // npx has its node beside it (nvm's, Homebrew's); the others don't.
+        let node_dir = (pm != PackageManager::Npm)
+            .then(|| find("node"))
+            .flatten()
+            .and_then(|node| Some(node.parent()?.display().to_string()));
+        spec.with_runner(runner, runner_args, node_dir)
     }
 }
 
@@ -566,5 +626,82 @@ mod tests {
         assert_eq!(rea.npx, "/opt/homebrew/bin/npx");
         assert_eq!(get("cap").unwrap().missing_program(find), Some("cap"));
         assert_eq!(get("rea").unwrap().missing_program(find), None);
+    }
+
+    /// A server the catalog runs with `npx -y` runs with the package manager picked: `bunx pkg`,
+    /// `pnpm dlx pkg`, `yarn dlx pkg`, its runner found where it is, nvm's node named for it; and
+    /// the remote bridge with it too. What it needs is that runner, not npx.
+    #[test]
+    fn local_servers_run_with_the_package_manager_picked() {
+        let find = |c: &str| match c {
+            "bunx" => Some(PathBuf::from("/Users/me/.bun/bin/bunx")),
+            "pnpm" => Some(PathBuf::from("/opt/homebrew/bin/pnpm")),
+            "node" => Some(PathBuf::from(
+                "/Users/me/.nvm/versions/node/v22.11.0/bin/node",
+            )),
+            _ => None,
+        };
+        let rea = get("rea").unwrap();
+        let program = |pm| {
+            let spec = rea.spec_with(Path::new("/x"), DEFAULT_AWS_REGION, find, pm);
+            match spec.transport {
+                crate::mcp_clients::Transport::Stdio { command, args, .. } => {
+                    (command, args, spec.node_dir)
+                }
+                _ => unreachable!(),
+            }
+        };
+        assert_eq!(
+            program(PackageManager::Bun),
+            (
+                "/Users/me/.bun/bin/bunx".to_string(),
+                vec!["rea-agents@6.3.0".to_string(), "mcp".into()],
+                Some("/Users/me/.nvm/versions/node/v22.11.0/bin".to_string())
+            )
+        );
+        assert_eq!(
+            program(PackageManager::Pnpm).1,
+            ["dlx", "rea-agents@6.3.0", "mcp"]
+        );
+        // Not found: written bare, as npx was.
+        assert_eq!(program(PackageManager::Yarn).0, "yarn");
+        assert_eq!(
+            program(PackageManager::Yarn).1,
+            ["dlx", "rea-agents@6.3.0", "mcp"]
+        );
+        assert_eq!(
+            program(PackageManager::Npm).1,
+            ["-y", "rea-agents@6.3.0", "mcp"]
+        );
+        assert_eq!(program(PackageManager::Npm).2, None);
+        assert_eq!(
+            rea.address_with(DEFAULT_AWS_REGION, PackageManager::Bun),
+            "bunx rea-agents@6.3.0 mcp"
+        );
+        assert_eq!(
+            rea.address(DEFAULT_AWS_REGION),
+            "npx -y rea-agents@6.3.0 mcp"
+        );
+        assert_eq!(rea.missing_program_with(find, PackageManager::Bun), None);
+        assert_eq!(
+            rea.missing_program_with(find, PackageManager::Npm),
+            Some("npx")
+        );
+        // Cap runs its own program, whatever is picked.
+        let cap = get("cap").unwrap();
+        assert_eq!(cap.package(), None);
+        assert_eq!(
+            cap.missing_program_with(find, PackageManager::Bun),
+            Some("cap")
+        );
+        // The bridge runs with it too.
+        let mobbin = get("mobbin").unwrap().spec_with(
+            Path::new("/x"),
+            DEFAULT_AWS_REGION,
+            find,
+            PackageManager::Pnpm,
+        );
+        assert_eq!(mobbin.npx, "/opt/homebrew/bin/pnpm");
+        assert_eq!(mobbin.npx_args, ["dlx"]);
     }
 }

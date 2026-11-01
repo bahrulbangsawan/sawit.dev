@@ -47,6 +47,18 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("down", SelectNext, Some("McpPage && !Input && !McpSheet")),
         KeyBinding::new("up", SelectPrevious, Some("McpPage && !Input && !McpSheet")),
         KeyBinding::new("enter", Confirm, Some("McpPage && !Input")),
+        KeyBinding::new("cmd-f", FocusSearch, Some("SkillsPage && !SkillsSheet")),
+        KeyBinding::new(
+            "down",
+            SelectNext,
+            Some("SkillsPage && !Input && !SkillsSheet"),
+        ),
+        KeyBinding::new(
+            "up",
+            SelectPrevious,
+            Some("SkillsPage && !Input && !SkillsSheet"),
+        ),
+        KeyBinding::new("enter", Confirm, Some("SkillsPage && !Input")),
     ]);
 }
 

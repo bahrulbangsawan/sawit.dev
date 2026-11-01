@@ -7,6 +7,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
 use sawit_core::dev_tools::{self, Category, Removal, TOOLS, Tool};
+use sawit_core::package_manager::{self, PackageManager, Use};
 
 use crate::{Sawit, fail, ok, tilde};
 
@@ -18,6 +19,10 @@ pub struct InstallToolsArgs {
         description = "Must be true: installing runs each tool's official install script from the internet"
     )]
     pub confirm: bool,
+    #[schemars(
+        description = "For the tools npm installs globally (Gemini CLI, the Cloudflare CLI): \"npm\" (npm install -g), \"pnpm\" (pnpm add -g), \"bun\" (bun add -g) or \"yarn\" (yarn global add, Yarn 1). Default: the one picked last in Sawit, else npm"
+    )]
+    pub package_manager: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -130,8 +135,24 @@ impl Sawit {
                     ),
                     None => String::new(),
                 };
+                // The other package managers' commands, for package_manager.
+                let others = match dev_tools::npm_package(t) {
+                    Some(_) => format!(
+                        " (package_manager: {})",
+                        [
+                            PackageManager::Pnpm,
+                            PackageManager::Bun,
+                            PackageManager::Yarn
+                        ]
+                        .into_iter()
+                        .map(|pm| dev_tools::install_command(t, Some(pm)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                    ),
+                    None => String::new(),
+                };
                 out.push(format!(
-                    "- {} ({}) · {state}{needs}\n    {}\n    install: {}{installed}",
+                    "- {} ({}) · {state}{needs}\n    {}\n    install: {}{others}{installed}",
                     t.id, t.name, t.description, t.install
                 ));
             }
@@ -151,6 +172,42 @@ impl Sawit {
             return fail(format!(
                 "Unknown tool {}. See list_dev_tools.",
                 bad.join(", ")
+            ));
+        }
+        let wanted_pm = match a.package_manager.as_deref() {
+            None => None,
+            Some(name) => match PackageManager::parse(name) {
+                Some(pm) => Some(pm),
+                None => {
+                    return fail(format!(
+                        "\"{name}\" isn't a package manager: npm, pnpm, bun or yarn."
+                    ));
+                }
+            },
+        };
+        let available = package_manager::detect().await;
+        let pm = package_manager::choose(
+            &available,
+            wanted_pm,
+            package_manager::remembered(&self.paths),
+            Use::Global,
+        );
+        if let Some(w) = wanted_pm
+            && pm != Some(w)
+            && a.tools.iter().any(|id| {
+                dev_tools::find(id)
+                    .and_then(dev_tools::npm_package)
+                    .is_some()
+            })
+        {
+            return fail(format!(
+                "{} isn't installed here (or, for Yarn 2+, has no global installs). Installed: {}.",
+                w.id(),
+                package_manager::usable(&available, Use::Global)
+                    .iter()
+                    .map(|a| a.pm.id())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
         let detection = dev_tools::detect().await;
@@ -179,7 +236,11 @@ impl Sawit {
                 failed = true;
                 break;
             }
-            match dev_tools::install(tool, |_| {}).await {
+            let command = dev_tools::install_command(tool, pm);
+            match dev_tools::run(tool, &command, |_| {}).await {
+                Ok(()) if command != tool.install => {
+                    out.push(format!("- {}: installed ({command})", tool.id))
+                }
                 Ok(()) => out.push(format!("- {}: installed", tool.id)),
                 Err(e) => {
                     out.push(format!("- {}: failed. {e}", tool.id));
@@ -247,7 +308,14 @@ impl Sawit {
                 failed = true;
                 continue;
             }
-            match dev_tools::run(tool, tool.upgrade_command(), |_| {}).await {
+            // An npm tool upgrades with the package manager that installed it.
+            let command = match found.get(tool.id) {
+                Some(f) => {
+                    dev_tools::upgrade_command(tool, Some(dev_tools::installed_with(&f.path)))
+                }
+                None => tool.upgrade_command().to_string(),
+            };
+            match dev_tools::run(tool, &command, |_| {}).await {
                 Ok(()) => out.push(format!("- {}: upgraded{to}", tool.id)),
                 Err(e) => {
                     out.push(format!("- {}: failed. {e}", tool.id));

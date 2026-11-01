@@ -64,7 +64,8 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with device sizes and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (123 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (126 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| ✨ **Agent skills** | Superpowers, Cloudflare's skills, MCP Apps, unslop and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
 ## Install
 
@@ -238,8 +239,14 @@ explained. A conflict on the same address can't be forced.
 <img src="docs/media/tools.png" alt="Dev Tools page: package managers such as Homebrew, nvm, pnpm, npm and uv, and runtimes such as Node.js, Bun and Deno, each with its install status, version and install command" width="100%">
 
 - Click **Tools** in the title bar for package managers (Homebrew, nvm, pnpm, npm, uv), languages and runtimes
-  (Node.js, Bun, Deno, Python, Rust), AI agents (Claude Code, Codex, OpenCode, Amp, …) and terminal apps.
+  (Node.js, Bun, Deno, Python, Rust), AI agents (Claude Code, Codex, OpenCode, Amp, …) and terminal apps (Zed,
+  Starship, the Fly.io CLI, Cloudflare's `cf`, …).
 - Each tool shows whether it's installed, its version and where it lives, and the exact command that installs it.
+- The tools npm installs for every project (Gemini CLI, Cloudflare's `cf`) have a package manager menu beside their
+  command: **npm** (`npm install -g cf`), **pnpm** (`pnpm add -g cf`), **bun** (`bun add -g cf`) or **yarn**
+  (`yarn global add cf`, Yarn 1). It lists only the ones installed, and the command shown changes with it before
+  anything runs. The pick is remembered, for the Skills and MCP pages too. An upgrade uses the package manager that
+  installed the copy found, and the trash button removes it with that one (`bun remove -g cf`).
 - Search the list, narrow it with the **Installed**, **Updates** and **Not Installed** tabs or to one category, and
   sort it by category, by name or by what needs attention. It shows eight tools a page; **Show** under the list
   picks 8, 16, 32 or 64 a page, or all of them, and the page keeps the tool you selected in sight. Sawit remembers
@@ -264,6 +271,42 @@ explained. A conflict on the same address can't be forced.
   One tool is installed, upgraded or removed at a time, whether from this page, an agent, `sawit pasang`,
   `sawit pupuk` or `sawit cabut`.
 - From the terminal: `sawit list tools`, `sawit pasang bun uv`, `sawit pupuk` and `sawit cabut bun`.
+
+### Skills
+
+- Click **Skills** in the title bar for agent skills from their official sources:
+  - **Interface Skills** and **Make Interfaces Feel Better** by Jakub Krehel ([jakub.kr/skills](https://jakub.kr/skills)):
+    `better-ui`, `better-typography`, `interface-review`, `state-machine`, `teardown` and more, with the `skills` CLI
+    (`npx skills add jakubkrehel/skills`).
+  - **unslop** by Damir Sokolovsky ([heydamir/unslop](https://github.com/heydamir/unslop)): cloned and its
+    `skills/unslop` folder copied into each agent's skills folder, as its README says.
+  - **Animate** ([cth9191/animate](https://github.com/cth9191/animate)): the Claude Code plugin
+    (`claude plugin install animate@animate`), or its skill folder copied by hand.
+  - **Superpowers** by Jesse Vincent ([obra/superpowers](https://github.com/obra/superpowers)): the plugin from the
+    official Claude plugin marketplace (`superpowers@claude-plugins-official`).
+  - **MCP Apps** ([modelcontextprotocol.io](https://modelcontextprotocol.io/extensions/apps/build)):
+    `create-mcp-app` and its three siblings, as the `mcp-apps` plugin or with the `skills` CLI.
+  - **cf CLI** and **Cloudflare Skills** ([developers.cloudflare.com/cf](https://developers.cloudflare.com/cf/agents/)):
+    the `cf-cli` skill alone, or all of `cloudflare/skills` as the `cloudflare` plugin (which also adds Cloudflare's
+    MCP server) or with the `skills` CLI. `cf` itself installs from the Dev Tools page.
+- The page finds the skills folder of each agent on your Mac: Claude Code's (every profile, `~/.claude/skills` and each
+  `CLAUDE_CONFIG_DIR` folder such as `~/.claude-work/skills`), `~/.agents/skills` (Codex, Cline, Warp, Zed), Cursor,
+  Gemini CLI, GitHub Copilot, opencode and the rest, and Codex's older `~/.codex/skills`. Each pack shows how many of
+  them have it, and a Claude Code profile has it too when its plugin is installed there.
+- **Install** (or **Manage**) opens the pack's sheet: pick how it installs when its source offers more than one way,
+  tick the agents, and read the exact commands before they run. A `skills` CLI install has a package manager menu,
+  **npm** (`npx -y skills add …`), **pnpm** (`pnpm dlx skills add …`), **bun** (`bunx skills add …`) or **yarn**
+  (`yarn dlx skills add …`, Yarn 2 and later), listing only the ones installed. It runs globally (`-g`) for the agents
+  ticked (`-a claude-code -a codex`) without questions (`-y`); another Claude Code profile gets its own run with its
+  `CLAUDE_CONFIG_DIR`. A plugin adds its marketplace to the profile when it isn't there yet, then installs; it goes
+  only into Claude Code.
+- **Update** fetches the latest where the pack is installed (a plugin's `claude plugin update`, else the install
+  again). **Remove from N** and the row's trash button ask first and show what runs: the plugin uninstalled where
+  it's installed, and the pack's own skill folders (or links) deleted from the agents ticked, nothing else.
+- Everything runs in your login shell, one pack at a time, with its output under the row. Search the list, narrow it
+  with the **Installed** and **Not Installed** tabs or to one category, and sort it; from the keyboard as on the
+  Dev Tools page. Closing the tab or its window and quitting ask first while something installs, and stop it.
+- From the terminal: `sawit list skills`. Agents use `list_skills`, `install_skill` and `uninstall_skill`.
 
 ### Browser
 
@@ -585,7 +628,7 @@ Both create a symlink `/usr/local/bin/sawit` to the app and ask for an admin pas
 root.
 
 Besides opening files, the command can query databases like `psql`, export, back up and import tables, list
-instances, databases, ports, dev tools, MCP servers and config files, start or stop instances, stop dev servers, and
+instances, databases, ports, dev tools, MCP servers, skills and config files, start or stop instances, stop dev servers, and
 install, upgrade or uninstall dev tools, all without the app (see
 [below](#databases-ports-and-instances-from-the-terminal)).
 
@@ -644,6 +687,7 @@ sawit pupuk                                  # "fertilize": upgrade every tool w
 sawit pupuk bun -y                           # upgrade one tool without asking
 sawit cabut bun                              # "uproot": uninstall a dev tool, its installer's copy only (asks; -y skips)
 sawit list mcp                               # the MCP page: servers and the AI clients that have them
+sawit list skills                            # the Skills page: skill packs, how each installs, the agents that have them
 sawit list config                            # shell startup files and coding agents' config files
 sawit list keys                              # every shortcut and what it runs (asks the running app)
 ```
@@ -697,7 +741,7 @@ sawit list keys                              # every shortcut and what it runs (
 
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 123 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 126 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
 the agent's project open (or the one `project` names), else the frontmost window. An agent's browser and canvas are
 its own project's, even while you look at another project of that window.
@@ -716,19 +760,21 @@ its own project's, even while you look at another project of that window.
 | Prompts | `list_prompts`, `get_prompt`, `create_prompt`, `update_prompt`, `delete_prompt`, `fill_prompt` |
 | Files | `search_files` |
 | Config files | `list_config_files` (the Config Files tab's shell and coding-agent config files, as paths: never their contents) |
-| Dev tools | `list_dev_tools` (with newer releases, where each was found and its uninstall command), `install_dev_tools`, `upgrade_dev_tools`, `uninstall_dev_tools` (the copy its own installer, Homebrew or npm put in place) |
-| MCP servers | `list_mcp_servers`, `install_mcp_server`, `uninstall_mcp_server` |
-| App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, changelog, git_graph, github, instance, keymap), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
+| Dev tools | `list_dev_tools` (with newer releases, where each was found and its uninstall command), `install_dev_tools` (`package_manager`: npm, pnpm, bun or yarn for the tools npm installs globally), `upgrade_dev_tools` (with the package manager that installed the copy), `uninstall_dev_tools` (the copy its own installer, Homebrew or the package manager put in place) |
+| MCP servers | `list_mcp_servers`, `install_mcp_server` (`package_manager`: a local server and the remote bridge run with `npx -y`, `pnpm dlx`, `bunx` or `yarn dlx`), `uninstall_mcp_server` |
+| Skills | `list_skills` (each pack, its skills, source and install commands per package manager, and the agents that have it), `install_skill` (into the agents given: the skills CLI with `package_manager`, a Claude Code plugin, or a clone and copy), `uninstall_skill` |
+| App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, skills, changelog, git_graph, github, instance, keymap), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
 | Terminal (app running) | `terminal_run`, `terminal_split` (a pane split right or down, with a command in the new half), `terminal_read`, `terminal_input`, `terminal_close` (`terminal_run`, `terminal_split`, `app_run_script` and `app_ssh_connect` return the tab and `pane` they used; `terminal_input` needs the tab, and a split tab needs its pane) |
 | Keymap (app running) | `keymap_list` (every binding: what a key does, which key runs an action, what clashes), `keymap_bind`, `keymap_unbind` (with the Keymap Editor's checks; `restore` brings back a default) |
 | Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (what the user annotated), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`; replacing an earlier export needs `replace: true`) |
 | Canvas | `canvas_get` (the top-level layers of the page on show), `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear` (the page on show), `canvas_load`, `canvas_export` (the page on show, as SVG or PNG), `canvas_command` (any command of the canvas engine, by id: `page.list` and `node.get` reach the other pages), `canvas_commands` (lists them; pass a `filter` to see what each takes). Each takes `file`, a `.sawit` file (a design file, say; a `.figcraft` one from before works too) or an `.excalidraw` file to work on instead of the project's canvas, in a canvas tab of its own. All of them work on the saved canvas file when the app is closed; then each call starts from that file, so no undo or selection carries over to the next: pass `canvas_command` the ids, or its steps in one `command.batch` |
 
 Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`,
-`uninstall_mcp_server`, `remove_connection`, `remove_ssh_host`, `delete_prompt` and `remove_command` take the name
-or id again as `confirm` (so do `remove_instance` when it deletes the data, and `update_ssh_host` when it moves a
-host off password sign-in, which deletes its saved password). `install_dev_tools` and `upgrade_dev_tools` need
-`confirm: true` because they run install scripts from the internet; so do `uninstall_dev_tools` (it deletes the
+`uninstall_mcp_server`, `uninstall_skill`, `remove_connection`, `remove_ssh_host`, `delete_prompt` and
+`remove_command` take the name or id again as `confirm` (so do `remove_instance` when it deletes the data, and
+`update_ssh_host` when it moves a host off password sign-in, which deletes its saved password). `install_dev_tools`,
+`upgrade_dev_tools` and `install_skill` need `confirm: true` because they run install scripts or download skills
+from the internet; so do `uninstall_dev_tools` (it deletes the
 tools' files), `stop_processes`, and `write_env` when it would replace a different `DATABASE_URL`. `terminal_close`
 needs `confirm: true` while a program runs in that terminal or you're typing in it, and `keymap_bind` and
 `keymap_unbind` need it when keymap.json has comments. `browser_export_design` replaces an earlier export of the same
@@ -750,7 +796,12 @@ where the Dev Tools page finds them (`~/.local/bin`, nvm's Node.js, …), not on
 and Codex are changed through their own CLI when it's installed. Claude Desktop and LM Studio start without your
 shell's PATH, so their `npx` entries say which folder has `node` (VS Code, Cursor, Zed and the like read your shell's
 PATH, and their entries leave it alone); clients that reach remote servers only through
-`npx` (Claude Desktop, LM Studio and others) say so when Node.js isn't installed. Other configs are edited in place,
+`npx` (Claude Desktop, LM Studio and others) say so when Node.js isn't installed. A server that runs a package
+(api-anything, REA) and the `mcp-remote` bridge can run with another package manager: the sheet's **Run with** menu
+lists the ones installed, **npm** (`npx -y rea-agents@6.3.0 mcp`), **pnpm** (`pnpm dlx …`), **bun** (`bunx …`) or
+**yarn** (`yarn dlx …`, Yarn 2 and later), shows the command it writes into each client's config, and remembers the
+pick. For Claude Desktop and LM Studio the entry's `PATH` then names that program's folder and the folder of your
+`node`. An entry written with any of them reads as the same server. Other configs are edited in place,
 keeping other settings, their order and the file's indentation (a TOML file keeps its comments too; a JSON file with
 comments is left for you to edit, with the entry to paste), and each file is copied next to it (`.sawit-backup`)
 before every change. Updating an entry changes only where it points: what you added to it (Cline's auto-approved

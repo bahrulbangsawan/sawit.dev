@@ -597,6 +597,7 @@ impl Workspace {
             // An agent's: the keyboard stays where the user has it.
             Page::Mcp => self.show_mcp_page(false, window, cx),
             Page::Tools => self.show_tools_page(false, window, cx),
+            Page::Skills => self.show_skills_page(false, window, cx),
             Page::Changelog => {
                 self.show_center(cx);
                 self.open_changelog_page(cx)

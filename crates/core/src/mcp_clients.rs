@@ -412,10 +412,18 @@ pub enum Transport {
 pub struct Spec {
     pub name: String,
     pub transport: Transport,
-    /// `npx` for the `mcp-remote` bridge, which clients without remote
-    /// support use. An absolute path when found: apps such as Claude Desktop
-    /// get a minimal `PATH`.
+    /// The program that runs packages (`npx`, or the `pnpm`, `bunx` or `yarn`
+    /// picked instead): the `mcp-remote` bridge's, which clients without
+    /// remote support use, and a local server's that runs a package. An
+    /// absolute path when found: apps such as Claude Desktop get a minimal
+    /// `PATH`.
     pub npx: String,
+    /// What goes between `npx` and the package: `-y` for npx, `dlx` for pnpm
+    /// and Yarn, nothing for bunx.
+    pub npx_args: Vec<String>,
+    /// The folder of the `node` found, when `npx` isn't npx (nvm's node isn't
+    /// beside bunx): an app started with launchd's `PATH` is told it too.
+    pub node_dir: Option<String>,
 }
 
 impl Spec {
@@ -433,6 +441,8 @@ impl Spec {
                 env: Vec::new(),
             },
             npx: "npx".into(),
+            npx_args: vec!["-y".into()],
+            node_dir: None,
         }
     }
 
@@ -444,6 +454,8 @@ impl Spec {
                 headers: Vec::new(),
             },
             npx: "npx".into(),
+            npx_args: vec!["-y".into()],
+            node_dir: None,
         }
     }
 
@@ -454,8 +466,22 @@ impl Spec {
         self
     }
 
-    pub fn with_npx(mut self, npx: impl Into<String>) -> Spec {
-        self.npx = npx.into();
+    pub fn with_npx(self, npx: impl Into<String>) -> Spec {
+        self.with_runner(npx, vec!["-y".into()], None)
+    }
+
+    /// Runs packages with `program` and `args` before the package (`bunx`
+    /// and nothing, `pnpm` and `dlx`) instead of `npx -y`; `node_dir` is the
+    /// folder of the `node` found.
+    pub fn with_runner(
+        mut self,
+        program: impl Into<String>,
+        args: Vec<String>,
+        node_dir: Option<String>,
+    ) -> Spec {
+        self.npx = program.into();
+        self.npx_args = args;
+        self.node_dir = node_dir;
         self
     }
 
@@ -464,12 +490,18 @@ impl Spec {
     }
 
     /// What identifies this server in a config entry: the URL; else the
-    /// arguments, since the command may be found at another path; else, for
-    /// a server without arguments, the command itself.
+    /// arguments, since the command may be found at another path, without
+    /// the runner's own (`-y`, `dlx`), so an entry another package manager
+    /// runs is the same server; else, for a server without arguments, the
+    /// command itself.
     fn key(&self) -> String {
         match &self.transport {
             Transport::Http { url, .. } => url.clone(),
             Transport::Stdio { command, args, .. } if args.is_empty() => command.clone(),
+            Transport::Stdio { command, args, .. } if *command == self.npx => args
+                .strip_prefix(self.npx_args.as_slice())
+                .unwrap_or(args)
+                .join(" "),
             Transport::Stdio { args, .. } => args.join(" "),
         }
     }
@@ -493,7 +525,8 @@ impl Spec {
         match &self.transport {
             Transport::Stdio { command, args, env } => (command.clone(), args.clone(), env.clone()),
             Transport::Http { url, headers } => {
-                let mut args = vec!["-y".to_string(), "mcp-remote".into(), url.clone()];
+                let mut args = self.npx_args.clone();
+                args.extend(["mcp-remote".to_string(), url.clone()]);
                 for (k, v) in headers {
                     args.push("--header".into());
                     args.push(format!("{k}:{v}"));
@@ -571,7 +604,7 @@ pub fn entry(client: Client, spec: &Spec) -> (&'static str, Value) {
     // PATH: `env` goes over it, and would hide the rest of it from the server.
     if client.without_shell_path()
         && cmd == spec.npx
-        && let Some(path) = node_path(&cmd)
+        && let Some(path) = node_path(&cmd, spec.node_dir.as_deref())
         && !env.iter().any(|(k, _)| k == "PATH")
     {
         env.push(("PATH".into(), path));
@@ -620,27 +653,41 @@ pub fn entry(client: Client, spec: &Spec) -> (&'static str, Value) {
     (key, v)
 }
 
+/// Folders launchd's `PATH` has, or Homebrew's.
+const USUAL: [&str; 6] = [
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+];
+
 /// The `PATH` an app started with launchd's ([`Client::without_shell_path`])
-/// must give `npx` at `program`, so that its `#!/usr/bin/env node` finds the
-/// node beside it (nvm's, Homebrew's): that folder, then the usual ones.
-/// `None` for a bare `npx`, or one in a folder launchd's PATH has.
-fn node_path(program: &str) -> Option<String> {
-    const USUAL: [&str; 6] = [
-        "/usr/local/bin",
-        "/opt/homebrew/bin",
-        "/usr/bin",
-        "/bin",
-        "/usr/sbin",
-        "/sbin",
-    ];
+/// must give the runner at `program` (`npx`, `bunx`, `pnpm`), so that a
+/// package's `#!/usr/bin/env node` finds a node: the runner's folder (nvm
+/// keeps node beside npx), then `node_dir` when it is another one (nvm's node
+/// for bunx), then the usual ones. `None` for a bare program, or one in a
+/// folder launchd's PATH has.
+fn node_path(program: &str, node_dir: Option<&str>) -> Option<String> {
     let dir = Path::new(program).parent().filter(|d| d.is_absolute())?;
     let dir = dir.to_str()?;
     if matches!(dir, "/usr/bin" | "/bin") {
         return None;
     }
+    let node = node_dir.filter(|n| Path::new(n).is_absolute() && *n != dir && !USUAL.contains(n));
     let mut parts = vec![dir];
+    parts.extend(node);
     parts.extend(USUAL.iter().filter(|d| **d != dir));
     Some(parts.join(":"))
+}
+
+/// Whether `path` is one [`node_path`] works out for `program`, with or
+/// without a node folder: Sawit's, not the user's.
+fn own_path(path: &str, program: &str) -> bool {
+    let node = path.split(':').nth(1);
+    node_path(program, None).as_deref() == Some(path)
+        || node_path(program, node).as_deref() == Some(path)
 }
 
 /// Every command, argument and URL in a JSON entry, space-separated.
@@ -945,14 +992,15 @@ fn follow_own_path(
         Some(Value::Array(command)) => command.first().and_then(Value::as_str).unwrap_or_default(),
         _ => return,
     };
-    let Some(own) = node_path(program) else {
-        return;
-    };
     for key in ["env", "environment"] {
         let Some(Value::Object(env)) = out.get_mut(key) else {
             continue;
         };
-        if env.get("PATH").and_then(Value::as_str) != Some(own.as_str()) {
+        if !env
+            .get("PATH")
+            .and_then(Value::as_str)
+            .is_some_and(|path| own_path(path, program))
+        {
             continue;
         }
         match fresh.get(key).and_then(|map| map.get("PATH")) {
@@ -2294,7 +2342,7 @@ mod tests {
         assert_eq!(mobbin()["command"], npx("v22.11.0"));
         assert_eq!(
             mobbin()["env"],
-            json!({"PATH": node_path(&npx("v22.11.0")).unwrap()})
+            json!({"PATH": node_path(&npx("v22.11.0"), None).unwrap()})
         );
 
         // An npx where launchd's PATH finds node needs none: Sawit's goes, and with it the
@@ -2322,7 +2370,7 @@ mod tests {
         let rea = |npx: &str| {
             Spec::stdio("rea", npx, args.iter().map(|a| a.to_string()).collect()).with_npx(npx)
         };
-        let old_path = node_path(&npx("v20.0.0")).unwrap();
+        let old_path = node_path(&npx("v20.0.0"), None).unwrap();
         fs::create_dir_all(h.path().join(".cursor")).unwrap();
         fs::create_dir_all(h.path().join(".config/kilo")).unwrap();
         let targets = discover(h.path(), None);
@@ -2584,6 +2632,67 @@ mod tests {
         // npx in /usr/bin finds a node there.
         let system = Spec::http("x", "https://x.dev/mcp").with_npx("/usr/bin/npx");
         assert!(entry(Client::ClaudeDesktop, &system).1.get("env").is_none());
+    }
+
+    /// A server run with `bunx` or `pnpm dlx` instead of `npx -y` is written with that runner,
+    /// starts in an app with launchd's PATH (the runner's folder, then nvm's node), and reads as
+    /// the same server whichever package manager wrote it.
+    #[test]
+    fn another_package_manager_runs_the_same_server() {
+        let node = Some("/Users/me/.nvm/versions/node/v22.11.0/bin".to_string());
+        let bunx = "/Users/me/.bun/bin/bunx";
+        let rea_with = |program: &str, runner: &[&str]| {
+            let mut args: Vec<String> = runner.iter().map(|a| a.to_string()).collect();
+            args.extend(["rea-agents@6.3.0".into(), "mcp".into()]);
+            Spec::stdio("rea", program, args).with_runner(
+                program,
+                runner.iter().map(|a| a.to_string()).collect(),
+                node.clone(),
+            )
+        };
+        let rea = rea_with(bunx, &[]);
+        let (_, v) = entry(Client::ClaudeDesktop, &rea);
+        assert_eq!(v["command"], bunx);
+        assert_eq!(v["args"], json!(["rea-agents@6.3.0", "mcp"]));
+        assert_eq!(
+            v["env"]["PATH"],
+            "/Users/me/.bun/bin:/Users/me/.nvm/versions/node/v22.11.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        );
+        // The bridge to a remote server, with pnpm.
+        let bridge = Spec::http("mobbin", "https://api.mobbin.com/mcp").with_runner(
+            "/opt/homebrew/bin/pnpm",
+            vec!["dlx".into()],
+            None,
+        );
+        let (_, v) = entry(Client::LmStudio, &bridge);
+        assert_eq!(v["command"], "/opt/homebrew/bin/pnpm");
+        assert_eq!(
+            v["args"],
+            json!(["dlx", "mcp-remote", "https://api.mobbin.com/mcp"])
+        );
+        // Written by npx, read with pnpm picked (and the other way round): installed.
+        let npx = "/opt/homebrew/bin/npx";
+        let config = |command: &str, args: &[&str]| {
+            Entries::Servers([("rea".to_string(), format!("{command} {}", args.join(" ")))].into())
+        };
+        let by_npx = config(npx, &["-y", "rea-agents@6.3.0", "mcp"]);
+        let by_pnpm = config(
+            "/opt/homebrew/bin/pnpm",
+            &["dlx", "rea-agents@6.3.0", "mcp"],
+        );
+        let pnpm = rea_with("/opt/homebrew/bin/pnpm", &["dlx"]);
+        let npx_spec = rea_with(npx, &["-y"]);
+        assert_eq!(status_in(&by_npx, &pnpm), Status::Installed);
+        assert_eq!(status_in(&by_pnpm, &npx_spec), Status::Installed);
+        assert_eq!(status_in(&by_npx, &rea), Status::Installed);
+        // Another version is still another.
+        let old = config(npx, &["-y", "rea-agents@6.2.0", "mcp"]);
+        assert!(matches!(status_in(&old, &rea), Status::Outdated(_)));
+        // The PATH Sawit wrote for bunx with nvm's node is Sawit's: an update moves it.
+        let written = node_path(bunx, node.as_deref()).unwrap();
+        assert!(own_path(&written, bunx));
+        assert!(own_path(&node_path(bunx, None).unwrap(), bunx));
+        assert!(!own_path("/Users/me/bin:/usr/bin", bunx));
     }
 
     /// CATALOG M2: only apps that start with launchd's `PATH` (Claude Desktop, LM Studio) are

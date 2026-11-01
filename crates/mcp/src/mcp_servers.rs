@@ -10,6 +10,7 @@ use rmcp::{schemars, tool, tool_router};
 use sawit_core::dev_tools::find_program;
 use sawit_core::mcp_catalog::{self, Auth, DEFAULT_AWS_REGION, Server};
 use sawit_core::mcp_clients::{self, Spec, Status, Target};
+use sawit_core::package_manager::{self, PackageManager, Use};
 
 use crate::{Sawit, blocking, fail, ok, tri};
 
@@ -29,6 +30,10 @@ pub struct ServerArgs {
         description = "AWS Region for servers whose URL has one, like eu-west-1 (default: the one the client already has it in, else us-east-1)"
     )]
     pub region: Option<String>,
+    #[schemars(
+        description = "The package manager that runs a local server's package and the mcp-remote bridge: \"npm\" (npx -y pkg), \"pnpm\" (pnpm dlx pkg), \"bun\" (bunx pkg) or \"yarn\" (yarn dlx pkg, Yarn 2+). Written into the client's config. Default: the one picked last in Sawit, else npx"
+    )]
+    pub package_manager: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -131,6 +136,39 @@ fn pick(
 }
 
 impl Sawit {
+    /// The package manager that runs packages for an install: the one named
+    /// when it's installed, else the one picked last in Sawit, else npm (npx,
+    /// as before there was a choice).
+    async fn package_manager_for(&self, named: Option<&str>) -> Result<PackageManager, String> {
+        let wanted = match named {
+            None => None,
+            Some(name) => Some(PackageManager::parse(name).ok_or_else(|| {
+                format!("\"{name}\" isn't a package manager: npm, pnpm, bun or yarn.")
+            })?),
+        };
+        let available = package_manager::detect().await;
+        let last = package_manager::remembered(&self.paths);
+        match (
+            wanted,
+            package_manager::choose(&available, wanted, last, Use::Run),
+        ) {
+            (Some(w), Some(pm)) if w != pm => Err(format!(
+                "{} isn't installed here (or, for Yarn 1, has no dlx). Installed: {}.",
+                w.id(),
+                package_manager::usable(&available, Use::Run)
+                    .iter()
+                    .map(|a| a.pm.id())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            (Some(w), None) => Err(format!(
+                "{} isn't installed here, nor is any other package manager.",
+                w.id()
+            )),
+            (_, pm) => Ok(pm.unwrap_or(PackageManager::Npm)),
+        }
+    }
+
     pub async fn list_mcp_servers_tool(&self) -> CallToolResult {
         let text = tri!(
             blocking(|| {
@@ -154,6 +192,23 @@ impl Sawit {
                         server.address(DEFAULT_AWS_REGION)
                     ));
                     out.push(format!("  {}", server.about));
+                    if server.package().is_some() {
+                        let others: Vec<String> = [
+                            PackageManager::Pnpm,
+                            PackageManager::Bun,
+                            PackageManager::Yarn,
+                        ]
+                        .into_iter()
+                        .map(|pm| {
+                            format!(
+                                "{}: {}",
+                                pm.id(),
+                                server.address_with(DEFAULT_AWS_REGION, pm)
+                            )
+                        })
+                        .collect();
+                        out.push(format!("  package_manager: {}", others.join(", ")));
+                    }
                     if let Some(auth) = auth_text(server.auth) {
                         out.push(format!("  auth: {auth}"));
                     }
@@ -190,16 +245,27 @@ impl Sawit {
     pub async fn install_mcp_server_tool(&self, a: ServerArgs) -> CallToolResult {
         let (server, target) = tri!(pick(&a.server, &a.client, a.profile.as_deref()));
         let region = tri!(region_for(server, &target, a.region.as_deref()));
+        let pm = tri!(self.package_manager_for(a.package_manager.as_deref()).await);
         if server.is_remote()
             && mcp_clients::needs_bridge(target.client)
-            && find_program("npx").is_none()
+            && find_program(pm.runner()).is_none()
         {
             return fail(format!(
-                "{} reaches remote servers only through npx (mcp-remote), and `npx` isn't installed. Install Node.js first (install_dev_tools with \"node\").",
-                target.client.name()
+                "{} reaches remote servers only through the mcp-remote bridge, which `{}` runs, and it isn't installed. Install Node.js first (install_dev_tools with \"node\"), or pass another package_manager.",
+                target.client.name(),
+                pm.runner()
             ));
         }
-        let spec = spec(server, &region);
+        // A package run by a runner that isn't here would never start.
+        if server.package().is_some()
+            && let Some(program) = server.missing_program_with(find_program, pm)
+        {
+            return fail(format!(
+                "{} runs with `{program}`, which isn't installed here: the client couldn't start it. Install it first, or pass another package_manager.",
+                server.id
+            ));
+        }
+        let spec = server.spec_with(&own_server(), &region, find_program, pm);
         if !target.client.editable() {
             return ok(format!(
                 "{} keeps its config in a format Sawit doesn't edit. Add this to {}:\n\n{}",

@@ -19,7 +19,7 @@ sawit — open folders and files in Sawit, query databases, clear ports
 Usage:
   sawit [options] [path[:line[:column]] ...]
   sawit <db> [table] [\"sql\"] [-y]
-  sawit list [instances|db|ports|connections|tools|mcp|config|keys]
+  sawit list [instances|db|ports|connections|tools|mcp|skills|config|keys]
   sawit bakar ports [port ...] [-y]
   sawit bakar instances [name ...] [-y]
   sawit nyalakan [name ...] [--ulang] [-y]
@@ -95,7 +95,9 @@ Tools (the app's Tools page):
 More lists, shown only when asked:
   sawit list mcp           the MCP page: servers and the AI clients that
                            have them (colokan)
-  sawit list config        shell startup files and coding agents' config
+  sawit list skills        the Skills page: skill packs, how each installs
+                           and the agents that have them (skill, bibit)
+  sawit list config       shell startup files and coding agents' config
                            files, for this folder's project (configs, konfig)
 
 Keys (the app's Keymap Editor; Sawit must be running):
@@ -111,6 +113,7 @@ Aliases (every word has an English and an Indonesian name):
   list: all = semua · instances = instance, kebun · db = dbs, database,
     databases, blok · ports = port, lahan · connections = connection,
     conn, koneksi, konsesi · tools = tool, alat, perkakas · mcp = colokan ·
+    skills = skill, bibit ·
     config = configs, konfig · keys = key, keymap, shortcuts, pintasan
   bakar: ports = port, lahan · instances = instance, kebun
   -y = --yes, --ya (don't ask first) · --ulang = --restart
@@ -647,7 +650,7 @@ mod tests {
         assert!(matches!(parse(&["./keys"]), Ok(Invocation::Open { .. })));
         assert!(matches!(parse(&["keys"]), Ok(Invocation::Open { .. })));
         for said in [
-            "sawit list [instances|db|ports|connections|tools|mcp|config|keys]",
+            "sawit list [instances|db|ports|connections|tools|mcp|skills|config|keys]",
             "sawit list keys ",
             "Sawit must be running",
             "key, keymap, shortcuts, pintasan",
@@ -729,7 +732,7 @@ mod tests {
     #[test]
     fn help_names_the_mcp_and_config_lists() {
         for said in [
-            "tools|mcp|config|keys]",
+            "tools|mcp|skills|config|keys]",
             "sawit list mcp",
             "(colokan)",
             "sawit list config",
@@ -853,6 +856,9 @@ mod tests {
             "perkakas",
             "mcp",
             "colokan",
+            "skills",
+            "skill",
+            "bibit",
             "config",
             "configs",
             "konfig",

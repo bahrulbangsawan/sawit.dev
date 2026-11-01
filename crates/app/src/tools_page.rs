@@ -21,9 +21,11 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::dev_tools::{
-    Category, Detection, Found, TOOLS, Tool, dependents, detect, find, in_terminal, is_newer,
-    latest_versions, plan, run, uninstall, uninstall_command,
+    Category, Detection, Found, TOOLS, Tool, dependents, detect, find, in_terminal,
+    install_command, installed_with, is_newer, latest_versions, npm_package, plan, run, uninstall,
+    uninstall_command, upgrade_command,
 };
+use sawit_core::package_manager::{self, Available, PackageManager, Use};
 
 use crate::catalog::{self, Mark, tilde};
 use crate::rt;
@@ -184,6 +186,10 @@ pub struct ToolsPage {
     /// Made with the page when it has a window, else on the first render.
     search: Option<Entity<InputState>>,
     _search: Option<Subscription>,
+    /// The package managers on this Mac, and the one the tools npm installs
+    /// globally (Gemini CLI, the Cloudflare CLI) install with.
+    pms: Vec<Available>,
+    pm: Option<PackageManager>,
 }
 
 /// The tool's logo, 20 px: colour logos as images, one-colour ones tinted
@@ -198,6 +204,7 @@ fn logo(id: &str, size: f32, cx: &App) -> AnyElement {
         "opencode" => ("agent_logos/opencode.svg", false),
         "cursor" => ("agent_logos/cursor.svg", false),
         "zed" => ("agent_logos/zed.svg", false),
+        "cf" => ("agent_logos/cloudflare-color.svg", true),
         "bun" | "deno" | "rust" | "flyio" => {
             return svg()
                 .path(SharedString::from(format!("tool_logos/{id}.svg")))
@@ -348,6 +355,8 @@ impl ToolsPage {
             focus: cx.focus_handle(),
             search: None,
             _search: None,
+            pms: Vec::new(),
+            pm: None,
         }
     }
 
@@ -387,14 +396,27 @@ impl ToolsPage {
         }
     }
 
-    /// Detects again and rereads the latest versions.
+    /// Detects again and rereads the latest versions and the package managers.
     fn refresh(&mut self, cx: &mut Context<Self>) {
         self.reload(cx);
         let rx = rt::spawn(cx, latest_versions());
+        let pms = rt::spawn(cx, package_manager::detect());
         cx.spawn(async move |this, cx| {
             if let Ok(latest) = rx.await {
                 let _ = this.update(cx, |this, cx| {
                     this.latest = latest;
+                    cx.notify();
+                });
+            }
+            if let Ok(pms) = pms.await {
+                let _ = this.update(cx, |this, cx| {
+                    this.pm = package_manager::choose(
+                        &pms,
+                        this.pm,
+                        crate::package_managers::remembered(),
+                        Use::Global,
+                    );
+                    this.pms = pms;
                     cx.notify();
                 });
             }
@@ -471,13 +493,23 @@ impl ToolsPage {
             .collect()
     }
 
-    /// The command a run of `tool` uses: its upgrade or its installer.
-    fn command(&self, tool: &Tool) -> &'static str {
+    /// The command a run of `tool` uses: its upgrade or its installer. A tool
+    /// npm installs globally installs with the package manager picked, and
+    /// upgrades (or installs again) with the one that installed it.
+    fn command(&self, tool: &Tool) -> String {
         if self.upgrades.contains(tool.id) {
-            tool.upgrade_command()
+            self.upgrade_line(tool)
         } else {
-            tool.install
+            let owner = self.found.get(tool.id).map(|f| installed_with(&f.path));
+            install_command(tool, owner.or(self.pm))
         }
+    }
+
+    /// `tool`'s upgrade: with the package manager that installed the copy
+    /// found, for one npm installs globally.
+    fn upgrade_line(&self, tool: &Tool) -> String {
+        let owner = self.found.get(tool.id).map(|f| installed_with(&f.path));
+        upgrade_command(tool, owner)
     }
 
     fn upgrade(&mut self, ids: &[&'static str], cx: &mut Context<Self>) {
@@ -517,7 +549,7 @@ impl ToolsPage {
             self.selected.remove(tool.id);
             if tool.interactive {
                 self.states.insert(tool.id, State::InTerminal);
-                cx.emit(ToolsEvent::RunInTerminal(self.command(tool).to_string()));
+                cx.emit(ToolsEvent::RunInTerminal(self.command(tool)));
                 self.upgrades.remove(tool.id);
                 continue;
             }
@@ -655,7 +687,7 @@ impl ToolsPage {
         let id = tool.id;
         self.running = Some((id, job.clone()));
         let (state, command) = match &job {
-            Job::Install => (State::Installing, self.command(tool).to_string()),
+            Job::Install => (State::Installing, self.command(tool)),
             Job::Uninstall(command) => (State::Uninstalling, command.clone()),
         };
         self.states.insert(id, state);
@@ -1314,7 +1346,7 @@ impl ToolsPage {
                     .small()
                     .icon(Lucide::CircleArrowUp)
                     .label("Upgrade")
-                    .tooltip(tool.upgrade_command())
+                    .tooltip(self.upgrade_line(tool))
                     .on_click(cx.listener(move |this, _, _, cx| this.upgrade(&[id], cx))),
             ),
             _ if installed => Some(
@@ -1388,11 +1420,28 @@ impl ToolsPage {
         let running = matches!(state, Some(State::Installing | State::Uninstalling));
         let last_line = log.filter(|_| running).and_then(|l| l.last().cloned());
         let expanded = self.expanded.contains(id) && log.is_some();
-        let command = if newer.is_some() || upgrading {
-            tool.upgrade_command()
+        let upgrade_shown = newer.is_some() || upgrading;
+        let command = if upgrade_shown {
+            self.upgrade_line(tool)
         } else {
-            tool.install
+            install_command(tool, self.pm)
         };
+        // A tool npm installs globally, not yet installed: the package manager to install it with.
+        let pm_menu = (npm_package(tool).is_some() && found.is_none())
+            .then(|| {
+                crate::package_managers::menu(
+                    ("tool-pm", ix),
+                    &self.pms,
+                    Use::Global,
+                    self.pm,
+                    cx.listener(|this, pm: &PackageManager, _, cx| {
+                        this.pm = Some(*pm);
+                        crate::package_managers::remember(*pm);
+                        cx.notify();
+                    }),
+                )
+            })
+            .flatten();
         // Under the name: past the checkbox, the tile and their gaps.
         let indent = px(16. + catalog::TILE + 24.);
 
@@ -1444,7 +1493,7 @@ impl ToolsPage {
                                     .text_color(muted)
                                     .child(match found {
                                         Some(f) => tilde(&f.path),
-                                        None => command.to_string(),
+                                        None => command.clone(),
                                     }),
                             )
                             .child(
@@ -1452,17 +1501,18 @@ impl ToolsPage {
                                     .ghost()
                                     .xsmall()
                                     .icon(Lucide::Copy)
-                                    .tooltip(if command == tool.install {
-                                        "Copy Install Command"
-                                    } else {
+                                    .tooltip(if upgrade_shown {
                                         "Copy Upgrade Command"
+                                    } else {
+                                        "Copy Install Command"
                                     })
                                     .on_click(move |_, _, cx| {
                                         cx.write_to_clipboard(ClipboardItem::new_string(
-                                            command.to_string(),
+                                            command.clone(),
                                         ))
                                     }),
-                            ),
+                            )
+                            .children(pm_menu),
                     ),
                 catalog::pill(mark, badge, color),
                 h_flex()
@@ -1834,6 +1884,38 @@ mod tests {
             page.read_with(cx, |page, _| page.states.get("bun").cloned()),
             None
         );
+    }
+
+    /// A tool npm installs globally installs with the package manager picked; over a copy found
+    /// (Reinstall, Upgrade) it runs with the one that installed that copy, so no second copy
+    /// lands beside it. Other tools keep their own installers.
+    #[gpui_kit::test]
+    fn npm_tools_install_with_the_package_manager_picked(cx: &mut TestAppContext) {
+        use sawit_core::package_manager::PackageManager;
+        let page = cx.new(|cx| {
+            let mut page = ToolsPage::blank(cx);
+            page.pm = Some(PackageManager::Pnpm);
+            page
+        });
+        let cf = find("cf").unwrap();
+        page.update(cx, |page, _| {
+            assert_eq!(page.command(cf), "pnpm add -g cf");
+            assert_eq!(
+                page.command(find("bun").unwrap()),
+                find("bun").unwrap().install
+            );
+            page.found.insert(
+                "cf",
+                Found {
+                    path: "/nonexistent-sawit-test/.bun/install/global/node_modules/cf/bin/cf"
+                        .into(),
+                    version: Some("1.0.0".into()),
+                },
+            );
+            assert_eq!(page.command(cf), "bun add -g cf");
+            page.upgrades.insert("cf");
+            assert_eq!(page.command(cf), "bun add -g cf");
+        });
     }
 
     /// Closing the Dev Tools tab drops the page: the installer it runs stops with it, instead

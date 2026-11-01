@@ -159,6 +159,9 @@ pub enum ListWhat {
     /// The MCP page: the catalog's servers and the AI clients that have
     /// them (only when asked, like tools).
     Mcp,
+    /// The Skills page: the skill packs and the agents that have them (only
+    /// when asked, like tools).
+    Skills,
     /// The Config Files panel: shell startup files and coding agents' config
     /// files (only when asked, like tools).
     Config,
@@ -178,11 +181,12 @@ impl ListWhat {
             }
             Some("tools" | "tool" | "alat" | "perkakas") => ListWhat::Tools,
             Some("mcp" | "colokan") => ListWhat::Mcp,
+            Some("skills" | "skill" | "bibit") => ListWhat::Skills,
             Some("config" | "configs" | "konfig") => ListWhat::Config,
             Some("keys" | "key" | "keymap" | "shortcuts" | "pintasan") => ListWhat::Keys,
             Some(other) => {
                 return Err(format!(
-                    "`sawit list {other}`? Tidak ada di peta. Pilih: instances, db, ports, connections, tools, mcp, config, keys."
+                    "`sawit list {other}`? Tidak ada di peta. Pilih: instances, db, ports, connections, tools, mcp, skills, config, keys."
                 ));
             }
         })
@@ -193,7 +197,11 @@ impl ListWhat {
             || (self == ListWhat::All
                 && !matches!(
                     part,
-                    ListWhat::Tools | ListWhat::Mcp | ListWhat::Config | ListWhat::Keys
+                    ListWhat::Tools
+                        | ListWhat::Mcp
+                        | ListWhat::Skills
+                        | ListWhat::Config
+                        | ListWhat::Keys
                 ))
     }
 }
@@ -1037,6 +1045,9 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
     if what.shows(ListWhat::Mcp) {
         list_mcp(&ink);
     }
+    if what.shows(ListWhat::Skills) {
+        list_skills(&ink, paths).await;
+    }
     if what.shows(ListWhat::Config) {
         list_config(&ink, cwd);
     }
@@ -1239,6 +1250,69 @@ fn list_mcp(ink: &Ink) {
     println!(
         "  {}",
         ink.gray("Pasang dari halaman MCP di app; agen pakai `install_mcp_server`.")
+    );
+}
+
+/// `sawit list skills`: the Skills page's packs, how each installs (the
+/// skills CLI with the package manager picked last, a Claude Code plugin, a
+/// clone and copy) and the agents that have it.
+async fn list_skills(ink: &Ink, paths: &AppPaths) {
+    use crate::package_manager::{self, PackageManager, Use};
+    use crate::skills::{self, Status};
+    let available = package_manager::detect().await;
+    let pm = package_manager::choose(
+        &available,
+        None,
+        package_manager::remembered(paths),
+        Use::Run,
+    )
+    .unwrap_or(PackageManager::Npm);
+    let report = skills::report();
+    ink.section("🌱 Bibit (skills)");
+    if report.targets.is_empty() {
+        ink.empty("belum ada agen dengan folder skills di Mac ini.");
+    } else {
+        let agents: Vec<String> = report
+            .targets
+            .iter()
+            .map(|t| format!("{} ({})", t.label, tilde(&t.dir)))
+            .collect();
+        println!("  {} {}", ink.gray("agen:"), agents.join("; "));
+    }
+    for pack in skills::PACKS {
+        println!(
+            "  {:<28} {:<26} {}",
+            pack.id,
+            clip(pack.name, 26),
+            ink.gray(&format!("{} · {}", pack.by, pack.repo))
+        );
+        let pad = " ".repeat(28);
+        for method in pack.methods {
+            println!("  {pad} {}", ink.gray(&skills::sample(pack, *method, pm)));
+        }
+        let have: Vec<String> = (0..report.targets.len())
+            .filter_map(|t| {
+                let label = &report.targets[t].label;
+                match report.status(pack, t) {
+                    Status::Installed { plugin: true } => Some(format!("{label} (plugin)")),
+                    Status::Installed { plugin: false } => Some(label.clone()),
+                    Status::Partial { have, of } => Some(format!("{label} ({have}/{of})")),
+                    Status::Missing => None,
+                }
+            })
+            .collect();
+        if have.is_empty() {
+            println!("  {pad} {}", ink.gray("belum di agen mana pun"));
+        } else {
+            println!("  {pad} {} {}", ink.green("✓"), have.join(", "));
+        }
+    }
+    println!(
+        "  {}",
+        ink.gray(&format!(
+            "Pasang dari halaman Skills di app (skills CLI lewat {}); agen pakai `install_skill`.",
+            pm.runner()
+        ))
     );
 }
 
@@ -2778,7 +2852,17 @@ mod tests {
             assert!(!ListWhat::All.shows(what), "{what:?}");
         }
         let unknown = ListWhat::parse(Some("hutan")).unwrap_err();
-        assert!(unknown.contains("mcp, config"), "{unknown}");
+        assert!(unknown.contains("mcp, skills, config"), "{unknown}");
+    }
+
+    #[test]
+    fn list_skills_only_when_asked() {
+        for word in ["skills", "skill", "bibit"] {
+            assert_eq!(ListWhat::parse(Some(word)), Ok(ListWhat::Skills), "{word}");
+        }
+        assert!(ListWhat::Skills.shows(ListWhat::Skills));
+        assert!(!ListWhat::All.shows(ListWhat::Skills));
+        assert!(!ListWhat::Skills.shows(ListWhat::Mcp));
     }
 
     #[test]

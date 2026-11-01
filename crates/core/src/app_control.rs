@@ -55,6 +55,7 @@ pub enum Page {
     Browser,
     Mcp,
     Tools,
+    Skills,
     Changelog,
     GitGraph,
     Github,
@@ -482,6 +483,17 @@ mod tests {
             br#"{"cmd":"open_page","page":"tools"}"#
         );
         assert_eq!(decode(&bytes), Some(Ok(request)));
+        let skills = Request {
+            project: None,
+            agent_folder: None,
+            command: Command::OpenPage { page: Page::Skills },
+        };
+        let bytes = encode(&skills);
+        assert_eq!(
+            &bytes[MAGIC.len()..],
+            br#"{"cmd":"open_page","page":"skills"}"#
+        );
+        assert_eq!(decode(&bytes), Some(Ok(skills)));
     }
 
     #[test]

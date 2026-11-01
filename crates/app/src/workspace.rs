@@ -39,6 +39,7 @@ use crate::prompts::{PromptStore, PromptStoreEvent, PromptView, PromptsEvent, Pr
 use crate::run::{Launch, RunEvent, RunPanel, RunStore};
 use crate::servers::{ServerDetail, ServerList, ServerStore, ShowServerTab};
 use crate::shell_config::{ShellConfigEvent, ShellConfigPanel};
+use crate::skills_page::SkillsPage;
 use crate::ssh::{SshEvent, SshHostEvent, SshHostView, SshPanel, SshStore, SshStoreEvent};
 use crate::states::Placeholder;
 use crate::tab_groups::{group_header, group_stripe, project_name};
@@ -1029,6 +1030,7 @@ impl Workspace {
                             .downcast::<BrowserView>()
                             .is_ok_and(|b| b.read(cx).unsent_notes(cx) > 0)
                             || tools_work(&t.item, cx).is_some()
+                            || skills_work(&t.item, cx).is_some()
                     }
                     PaneItem::Server => false,
                 },
@@ -1069,6 +1071,12 @@ impl Workspace {
         {
             self.confirm_close_tools(work, window, cx);
             return Some("Dev Tools is installing, and closing the tab stops it");
+        }
+        if let [ix] = closing[..]
+            && let Some(work) = self.tabs.get(ix).and_then(|t| skills_work(&t.item, cx))
+        {
+            self.confirm_close_skills(work, window, cx);
+            return Some("Skills is installing, and closing the tab stops it");
         }
         self.remove_tabs(&closing, cx);
         None
@@ -1122,6 +1130,31 @@ impl Workspace {
                 let _ = this.update(cx, |this, cx| {
                     if let Some(ix) = this.tabs.iter().position(
                         |t| matches!(&t.item, PaneItem::Other { key, .. } if key.as_ref() == "tools"),
+                    ) {
+                        this.remove_tabs(&[ix], cx);
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Asks before closing the Skills tab while it installs: closing it stops that.
+    fn confirm_close_skills(&mut self, work: String, window: &mut Window, cx: &mut Context<Self>) {
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            "Stop the skill installs?",
+            Some(&format!(
+                "{work}. Closing the tab stops it, and what's queued doesn't run."
+            )),
+            &["Stop and Close", "Cancel"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if matches!(answer.await, Ok(0)) {
+                let _ = this.update(cx, |this, cx| {
+                    if let Some(ix) = this.tabs.iter().position(
+                        |t| matches!(&t.item, PaneItem::Other { key, .. } if key.as_ref() == "skills"),
                     ) {
                         this.remove_tabs(&[ix], cx);
                     }
@@ -2846,6 +2879,50 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Shows the Skills page (one tab), with the tab area, which may be hidden, and the keyboard
+    /// in its search.
+    fn open_skills_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_skills_page(true, window, cx);
+    }
+
+    /// Shows the Skills page; `focus` gives its search the keyboard (not when an agent opens it:
+    /// the keyboard stays where the user has it).
+    fn show_skills_page(&mut self, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_welcome(CENTER_ONLY, cx);
+        self.show_center(cx);
+        let key: SharedString = "skills".into();
+        if let Some(ix) = self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
+        {
+            self.active = ix;
+            if focus
+                && let PaneItem::Other { view, .. } = &self.tabs[ix].item
+                && let Ok(page) = view.clone().downcast::<SkillsPage>()
+            {
+                page.update(cx, |page, cx| page.focus_search(window, cx));
+            }
+        } else {
+            let view = cx.new(|cx| SkillsPage::new(window, cx));
+            if focus {
+                view.update(cx, |page, cx| page.focus_search(window, cx));
+            }
+            self.push_tab(
+                PaneItem::Other {
+                    view: view.into(),
+                    key,
+                    title: "Skills".into(),
+                    icon: Lucide::Sparkles,
+                    file: None,
+                },
+                None,
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
     /// One chip per open project (click to switch, × to close) and a +
     /// that adds another; just the tagline while no project is open.
     fn render_project_switcher(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -3020,6 +3097,21 @@ impl Workspace {
                             )
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.open_mcp_page(window, cx)),
+                            ),
+                    )
+                    .child(
+                        Button::new("open-skills")
+                            .ghost()
+                            .xsmall()
+                            .icon(Lucide::Sparkles)
+                            .label("Skills")
+                            .tooltip(
+                                "Install Agent Skills: Superpowers, Cloudflare, MCP Apps and More",
+                            )
+                            .on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    this.open_skills_page(window, cx)
+                                }),
                             ),
                     )
                     .child(
@@ -3420,6 +3512,18 @@ fn tools_work(item: &PaneItem, cx: &App) -> Option<String> {
         return None;
     }
     view.clone().downcast::<ToolsPage>().ok()?.read(cx).work()
+}
+
+/// What the Skills page in `item` runs and has queued, when it is that page and it runs
+/// something.
+fn skills_work(item: &PaneItem, cx: &App) -> Option<String> {
+    let PaneItem::Other { view, key, .. } = item else {
+        return None;
+    };
+    if key.as_ref() != "skills" {
+        return None;
+    }
+    view.clone().downcast::<SkillsPage>().ok()?.read(cx).work()
 }
 
 #[cfg(test)]

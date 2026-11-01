@@ -151,7 +151,12 @@ gpui_kit::assets::icon_assets!(
         CircleDashed,
         CircleMinus,
         Clock,
-        SearchX
+        SearchX,
+        // The Skills page (src/skills_page.rs).
+        Sparkles,
+        Workflow,
+        Blocks,
+        Clapperboard
     ]
 );
 

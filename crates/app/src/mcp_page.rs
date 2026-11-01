@@ -29,6 +29,7 @@ use sawit_core::mcp_clients::{
     Category, Client, Entries, Spec, Status, Target, discover, install, needs_bridge, read_entries,
     snippet, status_in, uninstall,
 };
+use sawit_core::package_manager::{self, Available, PackageManager, Use};
 
 use crate::catalog::{self, Mark, tilde};
 use crate::rt;
@@ -46,8 +47,9 @@ struct Detected {
     server_exists: bool,
 }
 
-/// Programs local servers and the remote bridge run.
-const PROGRAMS: [&str; 2] = ["npx", "cap"];
+/// Programs local servers and the remote bridge run (with the package manager
+/// picked), and `node`, whose folder an app without the shell's PATH is told.
+const PROGRAMS: [&str; 6] = ["npx", "pnpm", "bunx", "yarn", "node", "cap"];
 
 pub struct McpPage {
     /// `sawit-mcp` next to the running app (inside the .app bundle, or the
@@ -90,6 +92,10 @@ pub struct McpPage {
     /// Made with the page when it has a window, else on the first render.
     search: Option<Entity<InputState>>,
     _search: Option<Subscription>,
+    /// The package managers on this Mac, and the one that runs a local
+    /// server's package and the remote bridge (npx, pnpm dlx, bunx, yarn dlx).
+    pms: Vec<Available>,
+    pm: Option<PackageManager>,
 }
 
 /// Which servers the filter tabs show.
@@ -430,14 +436,32 @@ impl McpPage {
             refocus: false,
             search: None,
             _search: None,
+            pms: Vec::new(),
+            pm: None,
         }
+    }
+
+    /// The package manager that runs packages: the one picked, npm's npx until
+    /// one is.
+    fn run_pm(&self) -> PackageManager {
+        self.pm.unwrap_or(PackageManager::Npm)
     }
 
     fn spec(&self, ix: usize) -> Spec {
         let programs = self.programs.clone();
-        SERVERS[ix].spec(&self.server, &self.region, move |c| {
-            programs.get(c).cloned()
-        })
+        SERVERS[ix].spec_with(
+            &self.server,
+            &self.region,
+            move |c| programs.get(c).cloned(),
+            self.run_pm(),
+        )
+    }
+
+    /// Whether server `s` runs through a package manager: a local server's
+    /// package, or the bridge some of the clients here need.
+    fn uses_runner(&self, s: usize) -> bool {
+        SERVERS[s].package().is_some()
+            || (SERVERS[s].is_remote() && self.targets.iter().any(|t| needs_bridge(t.client)))
     }
 
     fn cli_for(&self, client: Client) -> Option<PathBuf> {
@@ -470,9 +494,20 @@ impl McpPage {
                 server_exists: server.is_file(),
             }
         });
+        let pms = rt::spawn(cx, package_manager::detect());
         cx.spawn(async move |this, cx| {
             if let Ok(detected) = rx.await {
-                let _ = this.update(cx, |this, cx| this.apply(detected, cx));
+                let pms = pms.await.unwrap_or_default();
+                let _ = this.update(cx, |this, cx| {
+                    this.pm = package_manager::choose(
+                        &pms,
+                        this.pm,
+                        crate::package_managers::remembered(),
+                        Use::Run,
+                    );
+                    this.pms = pms;
+                    this.apply(detected, cx)
+                });
             }
         })
         .detach();
@@ -550,15 +585,16 @@ impl McpPage {
         (s == 0 && !self.server_exists)
             || region_invalid
             || SERVERS[s]
-                .missing_program(|c| self.programs.get(c).cloned())
+                .missing_program_with(|c| self.programs.get(c).cloned(), self.run_pm())
                 .is_some()
     }
 
     /// A remote server can't go into a client that only runs programs: it
-    /// would get the `mcp-remote` bridge, and `npx` to run it isn't found.
+    /// would get the `mcp-remote` bridge, and the runner (npx, bunx, …) to
+    /// run it isn't found.
     fn bridge_blocked(&self, (s, t): Pair) -> bool {
         SERVERS[s].is_remote()
-            && !self.programs.contains_key("npx")
+            && !self.programs.contains_key(self.run_pm().runner())
             && self.targets.get(t).is_some_and(|x| needs_bridge(x.client))
     }
 
@@ -1415,7 +1451,7 @@ impl McpPage {
         let to_sign_in = self.pending_sign_ins(Some(s)).len();
         let checking = server.auth == Auth::Browser
             && (0..total).any(|t| self.checking.contains(&t) && self.is_installed((s, t)));
-        let missing = server.missing_program(|c| self.programs.get(c).cloned());
+        let missing = server.missing_program_with(|c| self.programs.get(c).cloned(), self.run_pm());
         let bundled_missing = s == 0 && !self.server_exists;
         let busy = (0..total).any(|t| self.busy.contains(&(s, t)));
         let none = installed + other + in_other_regions == 0;
@@ -1478,8 +1514,9 @@ impl McpPage {
             notes.push((
                 Lucide::TriangleAlert,
                 format!(
-                    "{} reach remote servers through npx, and `npx` isn't installed: install Node.js.",
-                    bridge_only.join(", ")
+                    "{} reach remote servers through `{runner}`, which isn't installed: install Node.js, or pick another package manager.",
+                    bridge_only.join(", "),
+                    runner = self.run_pm().runner()
                 ),
                 theme.warning,
             ));
@@ -1546,7 +1583,7 @@ impl McpPage {
                         .text_color(muted)
                         .font_family(theme.mono_font_family.clone())
                         .whitespace_normal()
-                        .child(server.address(&self.region)),
+                        .child(server.address_with(&self.region, self.run_pm())),
                 )
                 .children(notes.into_iter().map(|(icon, text, color)| {
                     h_flex()
@@ -1774,6 +1811,23 @@ impl McpPage {
             .collect();
         let busy = (0..self.targets.len()).any(|t| self.busy.contains(&(s, t)));
         let blocked = self.install_blocked(s);
+        let pm_menu = self
+            .uses_runner(s)
+            .then(|| {
+                crate::package_managers::menu(
+                    "mcp-pm",
+                    &self.pms,
+                    Use::Run,
+                    self.pm,
+                    cx.listener(|this, pm: &PackageManager, _, cx| {
+                        this.pm = Some(*pm);
+                        crate::package_managers::remember(*pm);
+                        this.recompute();
+                        cx.notify();
+                    }),
+                )
+            })
+            .flatten();
 
         // Targets grouped under their client: agents first, then editors.
         let mut groups: Vec<(Client, Vec<usize>)> = Vec::new();
@@ -1869,7 +1923,7 @@ impl McpPage {
                             .font_family(theme.mono_font_family.clone())
                             .text_color(muted)
                             .whitespace_normal()
-                            .child(server.address(&self.region)),
+                            .child(server.address_with(&self.region, self.run_pm())),
                     )
                     .when_some(sheet.region.as_ref(), |el, region| {
                         el.child(
@@ -1889,6 +1943,22 @@ impl McpPage {
                                         .text_color(muted)
                                         .child("The AWS Region the server works in.")
                                 }),
+                        )
+                    })
+                    .when_some(pm_menu, |el, menu| {
+                        el.child(
+                            h_flex()
+                                .pt_2()
+                                .gap_2()
+                                .child(div().text_sm().child("Run with"))
+                                .child(menu)
+                                .child(div().text_xs().text_color(muted).child(
+                                    if server.package().is_some() {
+                                        "The package manager written into each client's config to start it."
+                                    } else {
+                                        "Runs the mcp-remote bridge for clients that only start programs."
+                                    },
+                                )),
                         )
                     }),
             )
@@ -2815,6 +2885,34 @@ mod tests {
             cx.debug_bounds("mcp-row-error").is_some(),
             "the row doesn't say"
         );
+    }
+
+    /// The package manager picked runs a local server's package and the remote bridge: the
+    /// entry written for REA starts `bunx rea-agents@… mcp`, the row and sheet say so, and with
+    /// bunx found nothing blocks the install though npx isn't there.
+    #[gpui_kit::test]
+    fn the_package_manager_picked_runs_the_server(cx: &mut TestAppContext) {
+        use sawit_core::mcp_catalog::SERVERS;
+        use sawit_core::package_manager::PackageManager;
+        let (page, cx) = open(cx, vec![], |page| {
+            page.programs
+                .insert("bunx", std::path::PathBuf::from("/Users/me/.bun/bin/bunx"));
+            page.pm = Some(PackageManager::Bun);
+        });
+        let rea = SERVERS.iter().position(|s| s.id == "rea").unwrap();
+        page.read_with(cx, |page, _| {
+            let spec = page.spec(rea);
+            assert!(matches!(
+                spec.transport,
+                sawit_core::mcp_clients::Transport::Stdio { ref command, ref args, .. }
+                    if command == "/Users/me/.bun/bin/bunx" && args[0] == "rea-agents@6.3.0"
+            ));
+            assert!(!page.install_blocked(rea));
+            assert_eq!(
+                SERVERS[rea].address_with("us-east-1", page.run_pm()),
+                "bunx rea-agents@6.3.0 mcp"
+            );
+        });
     }
 
     /// The search finds what the rows show, their tags too: "sign" finds the servers tagged

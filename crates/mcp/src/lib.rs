@@ -32,6 +32,7 @@ pub mod network;
 pub mod ports;
 pub mod prompts;
 pub mod scripts;
+pub mod skills;
 pub mod ssh;
 
 pub use ssh::askpass;
@@ -84,7 +85,8 @@ Sawit is a macOS developer workbench. These tools work without the Sawit app run
 - Files: text search in a folder.
 - Config files: the Config Files panel's list (shell startup files, and every coding agent's config files on this Mac and in the project), as paths and what each is, never contents: list_config_files.
 - Dev tools: the Tools page catalog (Homebrew, Bun, uv, Claude Code, …), what is installed (and where) and what has a newer release, installing with prerequisites, upgrading and uninstalling (confirm=true).
-- MCP servers: the MCP page catalog and the AI clients on this Mac; install or remove a server in a client's config.
+- MCP servers: the MCP page catalog and the AI clients on this Mac; install or remove a server in a client's config (local servers and the remote bridge run with npx, pnpm dlx, bunx or yarn dlx: package_manager).
+- Skills: the Skills page catalog of agent skill packs (Superpowers, Cloudflare, MCP Apps, …) and which agents on this Mac have each; install, update or remove one for chosen agents, with the skills CLI (package_manager), a Claude Code plugin or a clone and copy.
 These control the running Sawit app (start it with launch_app; app_state shows windows, tabs and terminals):
 - app_*: open files/folders, show panels, layout, tabs, pages (canvas, MCP, tools, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
 - terminal_*: run commands in Sawit's terminal and read their output, split a pane to run something beside it (terminal_split), type keys (ctrl-c), close tabs or panes. terminal_run, terminal_split, app_run_script and app_ssh_connect return the terminal (tab) and `pane` they used: pass both to terminal_read, terminal_input and terminal_close, since the user may be typing in another terminal, which stays in front (app_state lists tabs and panes). terminal_input and terminal_split need the tab, and a split tab needs its pane; terminal_read without a tab reads the pane the user has in front, and terminal_close without a pane closes the whole tab. terminal_close ends what runs there: while a program runs or the user types there it needs confirm: true.
@@ -340,6 +342,7 @@ const READ_ONLY: &[&str] = &[
     "search_files",
     "list_dev_tools",
     "list_mcp_servers",
+    "list_skills",
     "list_config_files",
     "app_state",
     "app_open",
@@ -405,6 +408,8 @@ const DESTRUCTIVE: &[&str] = &[
     "uninstall_dev_tools",
     "install_mcp_server",
     "uninstall_mcp_server",
+    "install_skill",
+    "uninstall_skill",
     "app_close_tab",
     "app_run_script",
     "app_stop_script",
@@ -483,6 +488,7 @@ const OPEN_WORLD: &[&str] = &[
     "list_dev_tools",
     "install_dev_tools",
     "upgrade_dev_tools",
+    "install_skill",
     "app_run_script",
     "app_ssh_connect",
     "app_open_table",
@@ -560,6 +566,7 @@ impl Sawit {
             + Self::files_router()
             + Self::dev_tools_router()
             + Self::mcp_servers_router()
+            + Self::skills_router()
             + Self::config_files_router()
             // App-control tools (need the app running).
             + Self::app_router()
@@ -675,6 +682,10 @@ mod tests {
             "list_mcp_servers",
             "install_mcp_server",
             "uninstall_mcp_server",
+            // skills
+            "list_skills",
+            "install_skill",
+            "uninstall_skill",
             // config files
             "list_config_files",
             // app control
