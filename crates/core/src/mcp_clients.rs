@@ -14,6 +14,12 @@
 //! `env`, timeouts, …) stay, through the CLI too. Remote servers are written
 //! in each client's own format; clients that only run local programs get
 //! the `mcp-remote` bridge.
+//!
+//! GitHub's server takes Sawit's own GitHub sign-in, and no config ever holds
+//! the token: each client is given a command that hands it over as it
+//! connects ([`handover`]): Claude Code's `headersHelper`, Codex's
+//! `http_headers_helper`, or the bridge started through `sawit github token
+//! --exec`; VS Code and Copilot CLI sign in to GitHub themselves.
 
 use std::path::{Path, PathBuf};
 
@@ -424,6 +430,45 @@ pub struct Spec {
     /// The folder of the `node` found, when `npx` isn't npx (nvm's node isn't
     /// beside bunx): an app started with launchd's `PATH` is told it too.
     pub node_dir: Option<String>,
+    /// For a remote server that takes Sawit's GitHub sign-in (GitHub's own): the `sawit` command,
+    /// by its absolute path, that hands it to the client each time it connects
+    /// (`sawit github token`), so no config holds the token. See [`handover`].
+    pub token_helper: Option<String>,
+}
+
+/// How a client gets Sawit's GitHub sign-in for a server that takes it ([`Spec::token_helper`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Handover {
+    /// The client runs `sawit github token --header` for the request headers each time it
+    /// connects: Claude Code's `headersHelper`, Codex's `http_headers_helper`.
+    Helper,
+    /// The client starts `sawit github token --exec`, which runs the `mcp-remote` bridge with the
+    /// header in its environment: clients that only run programs, and those whose remote support
+    /// has no header helper (Cursor, Zed, …) and that GitHub doesn't offer its sign-in to.
+    Bridge,
+    /// The client signs in to GitHub itself, with its own GitHub account: VS Code (its built-in
+    /// GitHub sign-in) and GitHub Copilot CLI, the hosts GitHub's server offers OAuth to.
+    ClientSignIn,
+}
+
+/// How `client` gets the sign-in for a server that takes Sawit's ([`Handover`]).
+pub fn handover(client: Client) -> Handover {
+    match client {
+        Client::ClaudeCode | Client::Codex => Handover::Helper,
+        Client::VsCode | Client::VsCodeInsiders | Client::CopilotCli => Handover::ClientSignIn,
+        _ => Handover::Bridge,
+    }
+}
+
+/// Whether `client` reaches the remote server `spec` through the `mcp-remote` bridge: one that
+/// only runs programs, or, for a server that takes Sawit's GitHub sign-in, one it is handed to
+/// through the bridge ([`Handover::Bridge`]).
+pub fn bridged(client: Client, spec: &Spec) -> bool {
+    spec.is_remote()
+        && match spec.token_helper {
+            Some(_) => handover(client) == Handover::Bridge,
+            None => needs_bridge(client),
+        }
 }
 
 impl Spec {
@@ -443,6 +488,7 @@ impl Spec {
             npx: "npx".into(),
             npx_args: vec!["-y".into()],
             node_dir: None,
+            token_helper: None,
         }
     }
 
@@ -456,7 +502,14 @@ impl Spec {
             npx: "npx".into(),
             npx_args: vec!["-y".into()],
             node_dir: None,
+            token_helper: None,
         }
+    }
+
+    /// A remote server that takes Sawit's GitHub sign-in, handed over by the `sawit` at `sawit`.
+    pub fn with_token_helper(mut self, sawit: impl Into<String>) -> Spec {
+        self.token_helper = Some(sawit.into());
+        self
     }
 
     pub fn header(mut self, key: &str, value: &str) -> Spec {
@@ -520,10 +573,16 @@ impl Spec {
     }
 
     /// The server as a program to run: itself, or for a remote server the
-    /// `mcp-remote` bridge.
+    /// `mcp-remote` bridge; for one that takes Sawit's GitHub sign-in, the bridge
+    /// started by `sawit github token --exec`, which gives it the header.
     fn as_stdio(&self) -> (String, Vec<String>, Vec<(String, String)>) {
         match &self.transport {
             Transport::Stdio { command, args, env } => (command.clone(), args.clone(), env.clone()),
+            Transport::Http { url, .. } if let Some(sawit) = &self.token_helper => (
+                sawit.clone(),
+                crate::github_token::bridge_args(&self.npx, &self.npx_args, url),
+                Vec::new(),
+            ),
             Transport::Http { url, headers } => {
                 let mut args = self.npx_args.clone();
                 args.extend(["mcp-remote".to_string(), url.clone()]);
@@ -535,7 +594,17 @@ impl Spec {
             }
         }
     }
+
+    /// Whether `command`, what [`Self::as_stdio`] runs, starts a package with the runner
+    /// (`npx`, `bunx`, …): itself, or behind `sawit github token --exec`.
+    fn starts_runner(&self, command: &str) -> bool {
+        command == self.npx || (self.is_remote() && self.token_helper.as_deref() == Some(command))
+    }
 }
+
+/// What Claude Code's and Codex's entries hold once Sawit hands them its GitHub sign-in, and the
+/// bridge's arguments: an entry that holds it runs some `sawit`'s helper.
+const HELPER_MARK: &str = " github token ";
 
 /// The key holding the servers in a JSON client config.
 fn servers_key(client: Client) -> &'static str {
@@ -590,21 +659,39 @@ pub fn needs_bridge(client: Client) -> bool {
     client != Client::Codex && http_entry(client, "", &[]).is_none()
 }
 
-/// Where the server entry lives in a JSON client config, and its value.
+/// Where the server entry lives in a JSON client config, and its value. A server that takes
+/// Sawit's GitHub sign-in goes to Claude Code with a `headersHelper`, to the clients that sign in
+/// to GitHub themselves as a bare URL, and to the others through the bridge ([`handover`]).
 pub fn entry(client: Client, spec: &Spec) -> (&'static str, Value) {
     let key = servers_key(client);
-    if let Transport::Http { url, headers } = &spec.transport
-        && let Some(v) = http_entry(client, url, headers)
-    {
-        return (key, v);
+    if let Transport::Http { url, headers } = &spec.transport {
+        match &spec.token_helper {
+            Some(sawit) if handover(client) == Handover::Helper => {
+                if let Some(mut v) = http_entry(client, url, &[]) {
+                    v["headersHelper"] = Value::String(crate::github_token::headers_helper(sawit));
+                    return (key, v);
+                }
+            }
+            Some(_) if handover(client) == Handover::ClientSignIn => {
+                if let Some(v) = http_entry(client, url, &[]) {
+                    return (key, v);
+                }
+            }
+            Some(_) => {}
+            None => {
+                if let Some(v) = http_entry(client, url, headers) {
+                    return (key, v);
+                }
+            }
+        }
     }
     let (cmd, args, mut env) = spec.as_stdio();
     // An app started with launchd's PATH: npx's `#!/usr/bin/env node` needs
     // to be told where node is. Not the clients that have the login shell's
     // PATH: `env` goes over it, and would hide the rest of it from the server.
     if client.without_shell_path()
-        && cmd == spec.npx
-        && let Some(path) = node_path(&cmd, spec.node_dir.as_deref())
+        && spec.starts_runner(&cmd)
+        && let Some(path) = node_path(&spec.npx, spec.node_dir.as_deref())
         && !env.iter().any(|(k, _)| k == "PATH")
     {
         env.push(("PATH".into(), path));
@@ -690,10 +777,17 @@ fn own_path(path: &str, program: &str) -> bool {
         || node_path(program, node).as_deref() == Some(path)
 }
 
-/// Every command, argument and URL in a JSON entry, space-separated.
+/// Every command, argument, URL and header helper in a JSON entry, space-separated.
 fn signature(v: &Value) -> String {
     let mut parts: Vec<String> = Vec::new();
-    for key in ["command", "args", "url", "httpUrl", "serverUrl"] {
+    for key in [
+        "command",
+        "args",
+        "url",
+        "httpUrl",
+        "serverUrl",
+        "headersHelper",
+    ] {
         match v.get(key) {
             Some(Value::String(s)) => parts.push(s.clone()),
             Some(Value::Array(a)) => {
@@ -707,7 +801,7 @@ fn signature(v: &Value) -> String {
 
 fn toml_signature(item: &toml_edit::Item) -> String {
     let mut parts: Vec<String> = Vec::new();
-    for key in ["command", "args", "url"] {
+    for key in ["command", "args", "url", "http_headers_helper"] {
         match item.get(key) {
             Some(i) if i.is_str() => parts.push(i.as_str().unwrap_or_default().into()),
             Some(i) => {
@@ -837,6 +931,17 @@ pub fn status_in(entries: &Entries, spec: &Spec) -> Status {
     };
     match found {
         None => Status::NotInstalled,
+        // Handed the sign-in by another `sawit` (an older build, an app since moved), whose
+        // helper may no longer be there: installing again points it at this one.
+        Some(sig)
+            if sig.contains(&wanted)
+                && spec
+                    .token_helper
+                    .as_deref()
+                    .is_some_and(|sawit| sig.contains(HELPER_MARK) && !sig.contains(sawit)) =>
+        {
+            Status::Outdated(sig.clone())
+        }
         Some(sig) if sig.contains(&wanted) => Status::Installed,
         Some(sig) => Status::Outdated(sig.clone()),
     }
@@ -959,8 +1064,14 @@ fn merge_entry(old: &Value, fresh: Value) -> Value {
             out.shift_remove(key);
         }
     }
+    // The `headersHelper` Sawit writes is how the server is reached, like the URL: it follows
+    // `fresh`, and goes when `fresh` has none. One of the user's own stays.
+    let own_helper = |v: &Value| v.as_str().is_some_and(|h| h.contains(HELPER_MARK));
+    if !fresh.contains_key("headersHelper") && old.get("headersHelper").is_some_and(own_helper) {
+        out.shift_remove("headersHelper");
+    }
     for (key, value) in fresh {
-        if TRANSPORT_KEYS.contains(&key.as_str()) {
+        if TRANSPORT_KEYS.contains(&key.as_str()) || key == "headersHelper" {
             // In place: the entry's keys keep their order.
             out.insert(key.clone(), value.clone());
         } else if let (Some(Value::Object(mine)), Value::Object(theirs)) = (out.get_mut(key), value)
@@ -992,6 +1103,15 @@ fn follow_own_path(
         Some(Value::Array(command)) => command.first().and_then(Value::as_str).unwrap_or_default(),
         _ => return,
     };
+    // The bridge behind `sawit github token --exec`: the runner is what it starts.
+    let args = old.get("args").and_then(Value::as_array);
+    let program = args
+        .filter(|args| args.first().is_some_and(|a| a == "github"))
+        .and_then(|args| {
+            let at = args.iter().position(|a| a == "--exec")?;
+            args.get(at + 1)?.as_str()
+        })
+        .unwrap_or(program);
     for key in ["env", "environment"] {
         let Some(Value::Object(env)) = out.get_mut(key) else {
             continue;
@@ -1020,23 +1140,44 @@ fn follow_own_path(
 /// Codex's keys for a program, and for a URL: an entry switching kinds
 /// drops the other kind's.
 const CODEX_PROGRAM_KEYS: [&str; 5] = ["command", "args", "env", "env_vars", "cwd"];
-const CODEX_URL_KEYS: [&str; 4] = [
+const CODEX_URL_KEYS: [&str; 5] = [
     "url",
     "bearer_token_env_var",
     "http_headers",
     "env_http_headers",
+    "http_headers_helper",
 ];
 
 /// Lays `spec` over Codex's `[mcp_servers.<name>]` table in place, like
-/// [`merge_entry`]: `command` and `args` (or `url`) are replaced, keeping
-/// their comments; the user's other keys, their order and comments stay.
+/// [`merge_entry`]: `command` and `args` (or `url`, and the header helper Sawit
+/// writes) are replaced, keeping their comments; the user's other keys, their
+/// order and comments stay. A `bearer_token_env_var` goes when Sawit hands over its
+/// GitHub sign-in: Codex would send that token instead of the helper's.
 fn update_codex_table(table: &mut dyn toml_edit::TableLike, spec: &Spec) {
     let (other_kind, owned): (&[&str], &[&str]) = match spec.transport {
         Transport::Stdio { .. } => (&CODEX_URL_KEYS, &["command", "args"]),
+        Transport::Http { .. } if spec.token_helper.is_some() => (
+            &[
+                "command",
+                "args",
+                "env",
+                "env_vars",
+                "cwd",
+                "bearer_token_env_var",
+            ],
+            &["url", "http_headers_helper"],
+        ),
         Transport::Http { .. } => (&CODEX_PROGRAM_KEYS, &["url"]),
     };
     for key in other_kind {
         table.remove(key);
+    }
+    let own_helper = table
+        .get("http_headers_helper")
+        .and_then(|i| i.as_str())
+        .is_some_and(|h| h.contains(HELPER_MARK));
+    if spec.token_helper.is_none() && own_helper {
+        table.remove("http_headers_helper");
     }
     for (key, item) in codex_table(spec).iter() {
         if owned.contains(&key) {
@@ -1097,7 +1238,11 @@ fn codex_table(spec: &Spec) -> toml_edit::Table {
         }
         Transport::Http { url, headers } => {
             table["url"] = toml_edit::value(url.as_str());
-            if let Some(var) = spec.bearer_env() {
+            if let Some(sawit) = &spec.token_helper {
+                // Codex runs it (`sh -c`) for the headers each time it connects.
+                table["http_headers_helper"] =
+                    toml_edit::value(crate::github_token::headers_helper(sawit));
+            } else if let Some(var) = spec.bearer_env() {
                 table["bearer_token_env_var"] = toml_edit::value(var);
             } else if !headers.is_empty() {
                 table["http_headers"] = toml_edit::value(toml_table(headers));
@@ -1354,6 +1499,15 @@ pub fn cli_add(target: &Target, spec: &Spec, cli: &Path) -> Option<CliCall> {
             v.extend(args.iter().cloned());
             v
         }
+        // `mcp add` takes no `headersHelper`; `add-json` takes the entry whole. It names the
+        // helper, never the token.
+        (Client::ClaudeCode, Transport::Http { .. }) if spec.token_helper.is_some() => {
+            let mut v = s(&["mcp", "add-json", "--scope", "user"]);
+            v.extend([name, entry(Client::ClaudeCode, spec).1.to_string()]);
+            v
+        }
+        // `codex mcp add` takes no `http_headers_helper`: only the config file can hold it.
+        (Client::Codex, Transport::Http { .. }) if spec.token_helper.is_some() => return None,
         (Client::ClaudeCode, Transport::Http { url, headers }) => {
             let mut v = s(&["mcp", "add", "--scope", "user", "--transport", "http"]);
             v.extend([name, url.clone()]);
@@ -2827,5 +2981,187 @@ mod tests {
         // Codex's CLI can't take other headers: the file is edited instead.
         let custom = Spec::http("x", "https://x.dev/mcp").header("X-Team", "a");
         assert!(cli_add(codex, &custom, Path::new("/bin/codex")).is_none());
+    }
+
+    const SAWIT: &str = "/Applications/Sawit.app/Contents/MacOS/sawit";
+    const GITHUB_URL: &str = "https://api.githubcopilot.com/mcp/";
+
+    fn github() -> Spec {
+        Spec::http("github", GITHUB_URL)
+            .with_npx("/opt/homebrew/bin/npx")
+            .with_token_helper(SAWIT)
+    }
+
+    fn target_at(client: Client, config: PathBuf) -> Target {
+        Target {
+            client,
+            profile: "default".into(),
+            config,
+            profile_dir: None,
+        }
+    }
+
+    /// GitHub's server takes Sawit's sign-in, and no client's config holds the token: Claude Code
+    /// and Codex name the helper by its absolute path, the clients that run the bridge start it
+    /// through `sawit github token --exec` with the header's variable by name, and VS Code and
+    /// Copilot CLI get the bare URL, to sign in to GitHub themselves. Every client, every format.
+    #[test]
+    fn github_is_handed_the_sign_in_by_the_helper_never_the_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = github();
+        let helper = format!("'{SAWIT}' github token --header");
+        for client in Client::ALL {
+            let file = if client == Client::Codex {
+                "config.toml"
+            } else {
+                "mcp.json"
+            };
+            let t = target_at(client, dir.path().join(format!("{client:?}")).join(file));
+            let text = if client.editable() {
+                install_file(&t, &spec).unwrap();
+                assert_eq!(status(&t, &spec), Status::Installed, "{client:?}");
+                fs::read_to_string(&t.config).unwrap()
+            } else {
+                snippet(&t, &spec)
+            };
+            for secret in ["Bearer", "gho_", "\"headers\"", "http_headers ="] {
+                assert!(!text.contains(secret), "{client:?} holds {secret}: {text}");
+            }
+            assert!(text.contains(GITHUB_URL), "{client:?}: {text}");
+            match handover(client) {
+                Handover::Helper => assert!(text.contains(&helper), "{client:?}: {text}"),
+                Handover::Bridge => {
+                    for part in [
+                        SAWIT,
+                        "--exec",
+                        "/opt/homebrew/bin/npx",
+                        "mcp-remote",
+                        "Authorization:${SAWIT_GITHUB_AUTHORIZATION}",
+                    ] {
+                        assert!(text.contains(part), "{client:?} lacks {part}: {text}");
+                    }
+                }
+                Handover::ClientSignIn => {
+                    assert!(!text.contains("sawit"), "{client:?}: {text}")
+                }
+            }
+        }
+        let at = |c: Client, f: &str| dir.path().join(format!("{c:?}")).join(f);
+        assert_eq!(
+            json_at(&at(Client::ClaudeCode, "mcp.json"))["mcpServers"]["github"],
+            json!({"type": "http", "url": GITHUB_URL, "headersHelper": helper})
+        );
+        let codex = fs::read_to_string(at(Client::Codex, "config.toml")).unwrap();
+        assert!(
+            codex.contains(&format!("http_headers_helper = \"{helper}\"")),
+            "{codex}"
+        );
+        assert!(!codex.contains("command"), "{codex}");
+        // An app started with launchd's PATH is told where node is, for the bridge behind sawit.
+        let desktop =
+            json_at(&at(Client::ClaudeDesktop, "mcp.json"))["mcpServers"]["github"].clone();
+        assert_eq!(desktop["command"], SAWIT);
+        assert!(
+            desktop["env"]["PATH"]
+                .as_str()
+                .unwrap()
+                .starts_with("/opt/homebrew/bin:")
+        );
+        assert_eq!(
+            json_at(&at(Client::VsCode, "mcp.json"))["servers"]["github"],
+            json!({"type": "http", "url": GITHUB_URL})
+        );
+    }
+
+    /// An entry another `sawit` hands the sign-in to (an older build, an app since moved) is out
+    /// of date, and installing again points its helper here, keeping the user's own keys. One
+    /// that signs in some other way (an entry made by hand, VS Code's) is the server installed.
+    #[test]
+    fn a_helper_of_another_sawit_is_out_of_date_and_moves_here() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude = target_at(Client::ClaudeCode, dir.path().join(".claude.json"));
+        fs::write(
+            &claude.config,
+            format!(
+                r#"{{"mcpServers": {{"github": {{"type": "http", "url": "{GITHUB_URL}", "headersHelper": "'/old/sawit' github token --header", "timeout": 30}}}}}}"#
+            ),
+        )
+        .unwrap();
+        assert!(matches!(status(&claude, &github()), Status::Outdated(_)));
+        install_file(&claude, &github()).unwrap();
+        let entry = json_at(&claude.config)["mcpServers"]["github"].clone();
+        assert_eq!(
+            entry["headersHelper"],
+            format!("'{SAWIT}' github token --header")
+        );
+        assert_eq!(entry["timeout"], 30);
+        assert_eq!(status(&claude, &github()), Status::Installed);
+
+        let codex = target_at(Client::Codex, dir.path().join("config.toml"));
+        fs::write(
+            &codex.config,
+            format!(
+                "[mcp_servers.github]\nurl = \"{GITHUB_URL}\" # GitHub\nbearer_token_env_var = \"GITHUB_PAT\"\nstartup_timeout_sec = 20\n"
+            ),
+        )
+        .unwrap();
+        // Made by hand with a token of the user's: installed, though not through Sawit's sign-in.
+        assert_eq!(status(&codex, &github()), Status::Installed);
+        install_file(&codex, &github()).unwrap();
+        let text = fs::read_to_string(&codex.config).unwrap();
+        // Codex would send that variable's token instead of the helper's.
+        assert!(!text.contains("bearer_token_env_var"), "{text}");
+        assert!(text.contains("# GitHub"), "{text}");
+        assert!(text.contains("startup_timeout_sec = 20"), "{text}");
+        assert!(text.contains("http_headers_helper"), "{text}");
+
+        // Sawit's helper goes when the server no longer takes the sign-in; a user's own stays.
+        let plain = Spec::http("github", GITHUB_URL);
+        install_file(&claude, &plain).unwrap();
+        assert!(
+            json_at(&claude.config)["mcpServers"]["github"]
+                .get("headersHelper")
+                .is_none()
+        );
+        install_file(&codex, &plain).unwrap();
+        assert!(
+            !fs::read_to_string(&codex.config)
+                .unwrap()
+                .contains("http_headers_helper")
+        );
+        let mine = merge_entry(
+            &json!({"url": "https://x.dev", "headersHelper": "~/bin/my-headers"}),
+            json!({"type": "http", "url": "https://x.dev"}),
+        );
+        assert_eq!(mine["headersHelper"], "~/bin/my-headers");
+    }
+
+    /// Through Claude Code's CLI the entry goes in whole (`mcp add-json`: `mcp add` takes no
+    /// `headersHelper`), naming the helper and no token; Codex's CLI can't take the helper, so its
+    /// file is edited instead.
+    #[test]
+    fn github_goes_through_claudes_add_json_and_codexs_file() {
+        let h = home();
+        let targets = discover(h.path(), None);
+        let claude = find(&targets, Client::ClaudeCode, "work");
+        let call = cli_add(claude, &github(), Path::new("/bin/claude")).unwrap();
+        assert_eq!(
+            call.args[..5],
+            ["mcp", "add-json", "--scope", "user", "github"]
+        );
+        let added: Value = serde_json::from_str(&call.args[5]).unwrap();
+        assert_eq!(
+            added,
+            json!({"type": "http", "url": GITHUB_URL, "headersHelper": format!("'{SAWIT}' github token --header")})
+        );
+        assert_eq!(call.args.len(), 6);
+        let codex = find(&targets, Client::Codex, "default");
+        assert!(cli_add(codex, &github(), Path::new("/bin/codex")).is_none());
+        // Which clients take which way, as the MCP page says.
+        assert!(bridged(Client::Cursor, &github()));
+        assert!(bridged(Client::ClaudeDesktop, &github()));
+        assert!(!bridged(Client::ClaudeCode, &github()));
+        assert!(!bridged(Client::VsCode, &github()));
+        assert!(!bridged(Client::Cursor, &Spec::http("x", "https://x.dev")));
     }
 }

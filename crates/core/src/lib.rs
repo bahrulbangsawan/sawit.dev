@@ -20,6 +20,7 @@ pub mod files;
 pub mod format;
 pub mod git;
 pub mod github;
+pub mod github_token;
 pub mod instances;
 pub mod kebun;
 pub mod keychain;

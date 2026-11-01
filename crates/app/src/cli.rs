@@ -83,6 +83,10 @@ pub fn command_line() -> OpenRequest {
             let start = || start_app(&paths.cli_socket()).map(drop);
             std::process::exit(sawit_core::semai::semai(*args, &paths, &cwd, start));
         }
+        // A client connecting to GitHub's MCP server asks for the sign-in: nothing else runs.
+        Ok(Invocation::GitHub(args)) => {
+            std::process::exit(sawit_core::github_token::run(args));
+        }
         Ok(Invocation::Help) => {
             print!("{USAGE}");
             std::process::exit(0);

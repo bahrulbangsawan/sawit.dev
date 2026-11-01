@@ -196,6 +196,7 @@ agent_logos!(
     "factory-color",
     "figma-color",
     "geminicli-color",
+    "github",
     "githubcopilot",
     "goose",
     "junie-color",

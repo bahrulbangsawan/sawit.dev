@@ -55,6 +55,8 @@ pub(crate) const SUBCOMMANDS: &[&str] = &[
     "stop",
     "new",
     "semai",
+    // `sawit github token`: never a database named github.
+    "github",
 ];
 
 /// Rows printed per result set at most.
@@ -1316,6 +1318,10 @@ fn list_mcp(ink: &Ink) {
             Auth::Browser => Some("masuk lewat browser dari kliennya".to_string()),
             Auth::EnvKey(var) => Some(format!("butuh variabel {var} sebelum kliennya dibuka")),
             Auth::Program => Some("pakai login programnya sendiri".to_string()),
+            Auth::GitHub => Some(
+                "pakai login GitHub Sawit lewat `sawit github token`; tokennya tak ditulis di config"
+                    .to_string(),
+            ),
         };
         if let Some(sign_in) = sign_in {
             println!("  {pad} {}", ink.gray(&sign_in));

@@ -24,14 +24,17 @@ use sawit_core::dev_tools::find_program;
 use sawit_core::mcp_auth::{
     self, Login, LoginEvent, SignIn, is_callback_url, login_call, sign_in_states,
 };
-use sawit_core::mcp_catalog::{Auth, DEFAULT_AWS_REGION, SERVERS, Server, valid_region};
+use sawit_core::mcp_catalog::{
+    Auth, DEFAULT_AWS_REGION, GITHUB_SCOPES, SERVERS, Server, valid_region,
+};
 use sawit_core::mcp_clients::{
-    Category, Client, Entries, Spec, Status, Target, discover, install, needs_bridge, read_entries,
-    snippet, status_in, uninstall,
+    Category, Client, Entries, Handover, Spec, Status, Target, discover, handover, install,
+    read_entries, snippet, status_in, uninstall,
 };
 use sawit_core::package_manager::{self, Available, PackageManager, Use};
 
 use crate::catalog::{self, Mark, tilde};
+use crate::git::account::{self, GitHubAccount, SignInToGitHub};
 use crate::rt;
 
 /// A server in the catalog and a target, by index.
@@ -96,6 +99,9 @@ pub struct McpPage {
     /// server's package and the remote bridge (npx, pnpm dlx, bunx, yarn dlx).
     pms: Vec<Available>,
     pm: Option<PackageManager>,
+    /// The app's one GitHub sign-in, which GitHub's server is handed: installing it waits for it.
+    github: Entity<GitHubAccount>,
+    _github: Subscription,
 }
 
 /// Which servers the filter tabs show.
@@ -305,6 +311,17 @@ fn target_label(t: &Target) -> String {
     }
 }
 
+/// How `client` gets Sawit's GitHub sign-in for GitHub's server, as its row in the sheet says.
+fn handover_note(client: Client) -> &'static str {
+    match handover(client) {
+        Handover::Helper => "Asks `sawit github token` for Sawit's sign-in each time it connects",
+        Handover::Bridge => {
+            "Gets Sawit's sign-in through the mcp-remote bridge, started by `sawit github token`"
+        }
+        Handover::ClientSignIn => "Signs in to GitHub itself, with its own GitHub account",
+    }
+}
+
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
@@ -381,7 +398,7 @@ impl McpPage {
             Some(Sheet::Install(sheet)) => {
                 let s = sheet.server;
                 let busy = (0..self.targets.len()).any(|t| self.busy.contains(&(s, t)));
-                if !busy && !self.install_blocked(s) && !self.selected_for(false).is_empty() {
+                if !busy && !self.install_blocked(s, cx) && !self.selected_for(false).is_empty() {
                     self.install_selected(cx);
                 }
             }
@@ -395,6 +412,8 @@ impl McpPage {
                 if !self.loading
                     && !self.targets.is_empty()
                     && let Some(&s) = self.cursor.and_then(|ix| rows.get(ix))
+                    // As the row's Install: off for GitHub's server while signed out.
+                    && !self.row_gated(s, cx)
                 {
                     self.open_install(s, window, cx);
                 }
@@ -408,7 +427,12 @@ impl McpPage {
             .ok()
             .and_then(|exe| exe.parent().map(|d| d.join("sawit-mcp")))
             .unwrap_or_else(|| PathBuf::from("sawit-mcp"));
+        let github = account::global(cx);
+        // GitHub's Install turns on and off with the one sign-in.
+        let github_sub = cx.observe(&github, |_, _, cx| cx.notify());
         Self {
+            github,
+            _github: github_sub,
             server_exists: false,
             server,
             targets: Vec::new(),
@@ -461,7 +485,38 @@ impl McpPage {
     /// package, or the bridge some of the clients here need.
     fn uses_runner(&self, s: usize) -> bool {
         SERVERS[s].package().is_some()
-            || (SERVERS[s].is_remote() && self.targets.iter().any(|t| needs_bridge(t.client)))
+            || self
+                .targets
+                .iter()
+                .any(|t| SERVERS[s].bridged_for(t.client))
+    }
+
+    /// Why server `s` can't be installed while Sawit isn't signed in to GitHub, as its Install
+    /// says it: GitHub's server is handed that sign-in. `None` for the others, and once signed in.
+    fn github_gate(&self, s: usize, cx: &App) -> Option<SharedString> {
+        (SERVERS[s].auth == Auth::GitHub)
+            .then(|| self.github.read(cx).blocked("install"))
+            .flatten()
+    }
+
+    /// The scopes GitHub's server needs that the sign-in lacks (one from before Sawit asked for
+    /// `workflow`): none for the other servers, or while signed out.
+    fn github_lacks(&self, s: usize, cx: &App) -> Vec<&'static str> {
+        if SERVERS[s].auth != Auth::GitHub {
+            return Vec::new();
+        }
+        self.github
+            .read(cx)
+            .missing_scopes()
+            .into_iter()
+            .filter(|scope| GITHUB_SCOPES.contains(scope))
+            .collect()
+    }
+
+    /// Whether the row's Install is off: nothing installed yet, and GitHub's server while signed
+    /// out. Once it's in a client, Manage still opens, so it can be removed signed out.
+    fn row_gated(&self, s: usize, cx: &App) -> bool {
+        self.installs(s) == 0 && self.github_gate(s, cx).is_some()
     }
 
     fn cli_for(&self, client: Client) -> Option<PathBuf> {
@@ -576,26 +631,31 @@ impl McpPage {
     }
 
     /// Why server `s` can't be installed at all now: its program isn't
-    /// there, or the sheet's Region isn't one.
-    fn install_blocked(&self, s: usize) -> bool {
+    /// there, the sheet's Region isn't one, or it is GitHub's and Sawit isn't
+    /// signed in to GitHub.
+    fn install_blocked(&self, s: usize, cx: &App) -> bool {
         let region_invalid = matches!(
             &self.sheet,
             Some(Sheet::Install(sheet)) if sheet.server == s && sheet.region_invalid
         );
         (s == 0 && !self.server_exists)
             || region_invalid
+            || self.github_gate(s, cx).is_some()
             || SERVERS[s]
                 .missing_program_with(|c| self.programs.get(c).cloned(), self.run_pm())
                 .is_some()
     }
 
-    /// A remote server can't go into a client that only runs programs: it
-    /// would get the `mcp-remote` bridge, and the runner (npx, bunx, …) to
-    /// run it isn't found.
+    /// A remote server can't go into a client that reaches it through the
+    /// `mcp-remote` bridge (one that only runs programs; for GitHub's, one it
+    /// is handed the sign-in through the bridge) when the runner (npx, bunx,
+    /// …) to run it isn't found.
     fn bridge_blocked(&self, (s, t): Pair) -> bool {
-        SERVERS[s].is_remote()
-            && !self.programs.contains_key(self.run_pm().runner())
-            && self.targets.get(t).is_some_and(|x| needs_bridge(x.client))
+        !self.programs.contains_key(self.run_pm().runner())
+            && self
+                .targets
+                .get(t)
+                .is_some_and(|x| SERVERS[s].bridged_for(x.client))
     }
 
     /// Every status, from the configs as read.
@@ -679,6 +739,10 @@ impl McpPage {
         let Some(target) = self.targets.get(t).cloned() else {
             return;
         };
+        // GitHub's server is handed the sign-in: none, nothing to install. Removing still works.
+        if !remove && self.github_gate(s, cx).is_some() {
+            return;
+        }
         if !self.busy.insert(pair) {
             return;
         }
@@ -1312,6 +1376,7 @@ impl McpPage {
         match server.auth {
             Auth::Browser => vec!["Sign-in"],
             Auth::EnvKey(_) => vec!["API key"],
+            Auth::GitHub => vec!["GitHub sign-in"],
             Auth::None | Auth::Program => Vec::new(),
         }
     }
@@ -1539,6 +1604,27 @@ impl McpPage {
                 muted,
             ));
         }
+        // GitHub's server: what the one sign-in lacks, or that there is none.
+        let lacks = self.github_lacks(s, cx);
+        let signed_out = self.github_gate(s, cx).is_some();
+        let gated = self.row_gated(s, cx);
+        if !lacks.is_empty() {
+            notes.push((
+                Lucide::TriangleAlert,
+                format!(
+                    "Your GitHub sign-in lacks {}, which GitHub's server needs (workflow: changing files in .github/workflows). Sign in again to allow it.",
+                    lacks.join(", ")
+                ),
+                theme.warning,
+            ));
+        }
+        if signed_out && !none {
+            notes.push((
+                Lucide::TriangleAlert,
+                "Sawit is signed out of GitHub: the clients it hands its sign-in to can't reach GitHub until you sign in again. Nothing was uninstalled.".to_string(),
+                theme.warning,
+            ));
+        }
         // What failed or was stopped, where it was started: the row's Uninstall
         // and Install don't open the sheet that lists errors per client.
         let failures: Vec<String> = (0..total)
@@ -1592,7 +1678,9 @@ impl McpPage {
                         .text_xs()
                         .text_color(color)
                         .child(div().pt(px(1.)).child(Icon::new(icon).xsmall()))
-                        .child(div().whitespace_normal().child(text))
+                        // Wraps in the column rather than running under Status: a flex row
+                        // lays its text out whole unless it may shrink.
+                        .child(div().flex_1().min_w_0().whitespace_normal().child(text))
                 }))
                 .when(!failures.is_empty(), |el| {
                     let more = failures.len().saturating_sub(2);
@@ -1684,34 +1772,64 @@ impl McpPage {
                             })),
                     )
                 })
-                .child(
-                    Button::new(("mcp-open", s))
-                        .when(none, |b| {
-                            b.primary().icon(Lucide::Download).label("Install")
-                        })
-                        .when(!none, |b| {
-                            b.outline().icon(Lucide::Settings2).label("Manage")
-                        })
-                        .small()
-                        // It opens the sheet that installs, which the ellipsis says, as a Mac
-                        // button that opens a dialog does.
-                        .accessibility_label(if none {
-                            format!("Install {}…", server.name)
-                        } else {
-                            format!("Manage {}…", server.name)
-                        })
-                        .tooltip(if none {
-                            "Choose the Clients to Install Into"
-                        } else {
-                            "Install, Update or Remove per Client"
-                        })
-                        .disabled(self.loading || self.targets.is_empty())
-                        .on_click(
-                            cx.listener(move |this, _, window, cx| {
-                                this.open_install(s, window, cx)
+                .when(!lacks.is_empty() && !signed_out, |el| {
+                    el.child(
+                        Button::new(("mcp-github-sign-in-again", s))
+                            .debug_selector(|| "mcp-github-sign-in-again".into())
+                            .outline()
+                            .small()
+                            .icon(Lucide::KeyRound)
+                            .label("Sign In Again")
+                            .tooltip(format!(
+                                "Sign In to GitHub Again to Allow {}",
+                                lacks.join(", ")
+                            ))
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(SignInToGitHub), cx)
                             }),
-                        ),
-                ),
+                    )
+                })
+                .when(signed_out, |el| {
+                    el.child(
+                        account::sign_in_link(("mcp-github-sign-in", s))
+                            .debug_selector(|| "mcp-github-sign-in".into()),
+                    )
+                })
+                .child({
+                    let open =
+                        Button::new(("mcp-open", s))
+                            .debug_selector(move || format!("mcp-open-{s}"))
+                            .when(none, |b| {
+                                b.primary().icon(Lucide::Download).label("Install")
+                            })
+                            .when(!none, |b| {
+                                b.outline().icon(Lucide::Settings2).label("Manage")
+                            })
+                            .small()
+                            // It opens the sheet that installs, which the ellipsis says, as a Mac
+                            // button that opens a dialog does.
+                            .accessibility_label(if none {
+                                format!("Install {}…", server.name)
+                            } else {
+                                format!("Manage {}…", server.name)
+                            })
+                            .tooltip(if none {
+                                "Choose the Clients to Install Into"
+                            } else {
+                                "Install, Update or Remove per Client"
+                            })
+                            .disabled(self.loading || self.targets.is_empty())
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_install(s, window, cx)
+                            }));
+                    // GitHub's Install while signed out: off, saying "Sign in to GitHub to
+                    // install", with Sign In to GitHub beside it.
+                    if gated {
+                        account::gate(open, self.github.read(cx), "install", cx)
+                    } else {
+                        open
+                    }
+                }),
         );
         catalog::list_item(row, ("mcp-row", s), server.name)
             .px_4()
@@ -1822,7 +1940,8 @@ impl McpPage {
             .filter(|(_, t)| selected.contains(t))
             .collect();
         let busy = (0..self.targets.len()).any(|t| self.busy.contains(&(s, t)));
-        let blocked = self.install_blocked(s);
+        let blocked = self.install_blocked(s, cx);
+        let github_gate = self.github_gate(s, cx);
         let pm_menu = self
             .uses_runner(s)
             .then(|| {
@@ -1971,6 +2090,8 @@ impl McpPage {
                                 .child(div().text_xs().text_color(muted).child(
                                     if server.package().is_some() {
                                         "The package manager written into each client's config to start it."
+                                    } else if server.auth == Auth::GitHub {
+                                        "Runs the mcp-remote bridge for the clients that get Sawit's sign-in through it."
                                     } else {
                                         "Runs the mcp-remote bridge for clients that only start programs."
                                     },
@@ -2021,6 +2142,9 @@ impl McpPage {
                                 })),
                         )
                     })
+                    .when(github_gate.is_some(), |el| {
+                        el.child(account::sign_in_link("mcp-sheet-github-sign-in"))
+                    })
                     .child(div().flex_1())
                     .child(
                         Button::new("mcp-sheet-remove")
@@ -2034,16 +2158,22 @@ impl McpPage {
                                 this.confirm_remove_selected(window, cx)
                             })),
                     )
-                    .child(
-                        Button::new("mcp-sheet-install")
+                    .child({
+                        let install = Button::new("mcp-sheet-install")
                             .debug_selector(|| "mcp-sheet-install".into())
                             .primary()
                             .small()
                             .label(format!("Install to {to_install}"))
                             .loading(busy)
                             .disabled(to_install == 0 || busy || blocked)
-                            .on_click(cx.listener(|this, _, _, cx| this.install_selected(cx))),
-                    ),
+                            .on_click(cx.listener(|this, _, _, cx| this.install_selected(cx)));
+                        // Off with why while signed out, as every GitHub control is.
+                        if github_gate.is_some() {
+                            account::gate(install, self.github.read(cx), "install", cx)
+                        } else {
+                            install
+                        }
+                    }),
             )
             .into_any_element()
     }
@@ -2095,6 +2225,7 @@ impl McpPage {
         let detail = match &state {
             Status::Outdated(other) => Some(format!("Points to {other}")),
             Status::Unreadable(why) => Some(why.clone()),
+            _ if SERVERS[s].auth == Auth::GitHub => Some(handover_note(target.client).into()),
             _ => None,
         };
         let via = match self.cli_for(target.client) {
@@ -2916,19 +3047,153 @@ mod tests {
             page.pm = Some(PackageManager::Bun);
         });
         let rea = SERVERS.iter().position(|s| s.id == "rea").unwrap();
-        page.read_with(cx, |page, _| {
+        page.read_with(cx, |page, cx| {
             let spec = page.spec(rea);
             assert!(matches!(
                 spec.transport,
                 sawit_core::mcp_clients::Transport::Stdio { ref command, ref args, .. }
                     if command == "/Users/me/.bun/bin/bunx" && args[0] == "rea-agents@6.3.0"
             ));
-            assert!(!page.install_blocked(rea));
+            assert!(!page.install_blocked(rea, cx));
             assert_eq!(
                 SERVERS[rea].address_with("us-east-1", page.run_pm()),
                 "bunx rea-agents@6.3.0 mcp"
             );
         });
+    }
+
+    fn github_account(scopes: &[&str]) -> sawit_core::github::Account {
+        sawit_core::github::Account {
+            login: "me".into(),
+            name: None,
+            avatar_url: None,
+            scopes: Some(scopes.iter().map(|s| s.to_string()).collect()),
+        }
+    }
+
+    /// GitHub's row follows the one sign-in: signed out, its Install is off ("Sign in to GitHub
+    /// to install", Sign In to GitHub beside it), ↩ doesn't open its sheet and nothing installs.
+    /// Signed in, it installs, and the config names the helper, never the token. Signing out
+    /// again uninstalls nothing: the row says so, and Manage still opens to remove it. The
+    /// sign-in here is the test's own, in memory.
+    #[gpui_kit::test]
+    fn github_installs_only_once_signed_in(cx: &mut TestAppContext) {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".claude.json");
+        std::fs::write(&config, "{}").unwrap();
+        let claude = target(Client::ClaudeCode, &config);
+        let read = sawit_core::mcp_clients::read_entries(&claude);
+        let gh = super::SERVERS
+            .iter()
+            .position(|s| s.id == sawit_core::mcp_catalog::GITHUB_ID)
+            .unwrap();
+        let (page, cx) = open(cx, vec![claude], |page| {
+            page.entries = vec![read];
+            page.recompute();
+            page.server_exists = true;
+        });
+        cx.update(|_, cx| crate::catalog::init(cx));
+        let account = cx.update(|_, cx| crate::git::account::global(cx));
+        page.read_with(cx, |page, cx| {
+            assert_eq!(
+                page.github_gate(gh, cx).as_deref(),
+                Some("Sign in to GitHub to install")
+            );
+            assert!(page.row_gated(gh, cx) && page.install_blocked(gh, cx));
+            // Only GitHub's: the others install signed out.
+            assert_eq!(page.github_gate(0, cx), None);
+        });
+        let open_selector: &'static str = format!("mcp-open-{gh}").leak();
+        assert!(cx.debug_bounds(open_selector).is_some());
+        assert!(
+            cx.debug_bounds("mcp-github-sign-in").is_some(),
+            "no Sign In beside it"
+        );
+
+        // Neither the keyboard nor an install by any other way gets past it.
+        page.update_in(cx, |page, window, cx| {
+            page.cursor = page.shown("").iter().position(|s| *s == gh);
+            page.confirm(window, cx);
+            assert!(page.sheet.is_none(), "↩ opened the sheet signed out");
+            page.act((gh, 0), false, cx);
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        cx.run_until_parked();
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), "{}");
+
+        account.update(cx, |a, cx| {
+            a.signed_in(
+                "gho_secret".into(),
+                github_account(&["repo", "workflow", "read:user"]),
+                None,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("mcp-github-sign-in").is_none());
+        page.read_with(cx, |page, cx| {
+            assert_eq!(page.github_gate(gh, cx), None);
+            assert!(page.github_lacks(gh, cx).is_empty());
+        });
+        page.update(cx, |page, cx| page.act((gh, 0), false, cx));
+        let installed = (0..50).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            cx.run_until_parked();
+            std::fs::read_to_string(&config)
+                .unwrap()
+                .contains("headersHelper")
+        });
+        assert!(installed, "it didn't install signed in");
+        let text = std::fs::read_to_string(&config).unwrap();
+        assert!(text.contains("github token --header"), "{text}");
+        assert!(
+            !text.contains("gho_secret") && !text.contains("Bearer"),
+            "{text}"
+        );
+
+        // Signed out again: nothing is uninstalled, the row says why its clients can't connect,
+        // and Manage (not Install) still opens to remove it.
+        account.update(cx, |a, cx| a.sign_out(cx));
+        cx.run_until_parked();
+        assert!(
+            std::fs::read_to_string(&config)
+                .unwrap()
+                .contains("headersHelper")
+        );
+        page.update_in(cx, |page, window, cx| {
+            assert!(!page.row_gated(gh, cx));
+            page.open_install(gh, window, cx);
+            assert!(page.install_blocked(gh, cx));
+            assert_eq!(page.selected_for(true), [0], "it can't be removed");
+        });
+    }
+
+    /// A sign-in from before Sawit asked for `workflow` lacks what GitHub's server needs: its
+    /// row says so with Sign In Again. Other rows say nothing of it.
+    #[gpui_kit::test]
+    fn github_says_what_the_sign_in_lacks(cx: &mut TestAppContext) {
+        let gh = super::SERVERS
+            .iter()
+            .position(|s| s.id == sawit_core::mcp_catalog::GITHUB_ID)
+            .unwrap();
+        let (page, cx) = open(cx, vec![], |_| {});
+        let account = cx.update(|_, cx| crate::git::account::global(cx));
+        assert!(cx.debug_bounds("mcp-github-sign-in-again").is_none());
+        account.update(cx, |a, cx| {
+            a.signed_in(
+                "gho_1".into(),
+                github_account(&["repo", "read:user"]),
+                None,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        page.read_with(cx, |page, cx| {
+            assert_eq!(page.github_lacks(gh, cx), ["workflow"]);
+            assert!(page.github_lacks(0, cx).is_empty());
+            assert_eq!(page.github_gate(gh, cx), None);
+        });
+        assert!(cx.debug_bounds("mcp-github-sign-in-again").is_some());
     }
 
     /// The search finds what the rows show, their tags too: "sign" finds the servers tagged

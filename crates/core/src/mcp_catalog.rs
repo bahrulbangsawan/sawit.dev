@@ -33,7 +33,19 @@ pub enum Auth {
     EnvKey(&'static str),
     /// The program keeps its own sign-in (e.g. `cap login`).
     Program,
+    /// Sawit's one GitHub sign-in, handed to the client each time it connects by
+    /// `sawit github token` ([`crate::mcp_clients::Handover`]): installing needs it, and no
+    /// config holds the token.
+    GitHub,
 }
+
+/// The scopes of Sawit's sign-in that GitHub's MCP server needs: `repo` for nearly every tool
+/// (Actions included), `workflow` for its file writes that touch `.github/workflows`. A sign-in
+/// without one of them says so on the server's row, with Sign In Again.
+pub const GITHUB_SCOPES: &[&str] = &["repo", "workflow"];
+
+/// The id of GitHub's server: its tools are GitHub's, its token Sawit's sign-in.
+pub const GITHUB_ID: &str = "github";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Server {
@@ -61,6 +73,20 @@ pub const SERVERS: &[Server] = &[
         auth: Auth::None,
         note: None,
         logo: None,
+    },
+    Server {
+        id: GITHUB_ID,
+        name: "GitHub",
+        about: "GitHub's official server: repositories, issues, pull requests, Actions and code search, as you.",
+        source: Source::Http {
+            url: "https://api.githubcopilot.com/mcp/",
+            headers: &[],
+        },
+        auth: Auth::GitHub,
+        note: Some(
+            "Uses Sawit's GitHub sign-in, handed to each client by `sawit github token` as it connects: no config holds the token. VS Code and Copilot CLI sign in to GitHub themselves.",
+        ),
+        logo: Some(("github", false)),
     },
     Server {
         id: "aws",
@@ -263,6 +289,16 @@ impl Server {
         matches!(self.source, Source::Http { .. })
     }
 
+    /// Whether `client` reaches this server through the `mcp-remote` bridge, as
+    /// [`mcp_clients::bridged`] says of its spec.
+    pub fn bridged_for(&self, client: mcp_clients::Client) -> bool {
+        self.is_remote()
+            && match self.auth {
+                Auth::GitHub => mcp_clients::handover(client) == mcp_clients::Handover::Bridge,
+                _ => mcp_clients::needs_bridge(client),
+            }
+    }
+
     /// Whether the URL has a `{region}` to fill in.
     pub fn has_region(&self) -> bool {
         matches!(self.source, Source::Http { url, .. } if url.contains("{region}"))
@@ -383,8 +419,18 @@ impl Server {
             .then(|| find("node"))
             .flatten()
             .and_then(|node| Some(node.parent()?.display().to_string()));
-        spec.with_runner(runner, runner_args, node_dir)
+        let spec = spec.with_runner(runner, runner_args, node_dir);
+        match self.auth {
+            Auth::GitHub => spec.with_token_helper(sawit_beside(server).display().to_string()),
+            _ => spec,
+        }
     }
+}
+
+/// The `sawit` command beside `server`, the `sawit-mcp` the MCP page installs: the app's binary
+/// (`sawit-mcp` is a link to it in the bundle), which hands over the GitHub sign-in.
+pub fn sawit_beside(server: &Path) -> PathBuf {
+    server.with_file_name("sawit")
 }
 
 pub fn get(id: &str) -> Option<&'static Server> {
@@ -526,6 +572,48 @@ mod tests {
             .find(|l| l.server.id == "cap")
             .unwrap();
         assert_eq!(cap.missing_program, Some("cap"));
+    }
+
+    /// GitHub's server is GitHub's own (its documented name and URL), takes Sawit's sign-in, and
+    /// is handed it by the `sawit` beside the `sawit-mcp` the page installs: the spec says which
+    /// clients reach it through the bridge as the row does.
+    #[test]
+    fn github_takes_sawits_sign_in_from_the_sawit_beside_the_server() {
+        let github = get(GITHUB_ID).unwrap();
+        assert_eq!(github.name, "GitHub");
+        assert_eq!(github.auth, Auth::GitHub);
+        assert_eq!(
+            github.address(DEFAULT_AWS_REGION),
+            "https://api.githubcopilot.com/mcp/"
+        );
+        assert_eq!(github.logo, Some(("github", false)));
+        let spec = github.spec(
+            Path::new("/Applications/Sawit.app/Contents/MacOS/sawit-mcp"),
+            DEFAULT_AWS_REGION,
+            |_| None,
+        );
+        assert_eq!(
+            spec.token_helper.as_deref(),
+            Some("/Applications/Sawit.app/Contents/MacOS/sawit")
+        );
+        for client in mcp_clients::Client::ALL {
+            assert_eq!(
+                github.bridged_for(client),
+                mcp_clients::bridged(client, &spec),
+                "{client:?}"
+            );
+        }
+        // Only GitHub's: no other server is handed Sawit's sign-in.
+        for s in SERVERS.iter().filter(|s| s.id != GITHUB_ID) {
+            let spec = s.spec(Path::new("/x/sawit-mcp"), DEFAULT_AWS_REGION, |_| None);
+            assert_eq!(spec.token_helper, None, "{}", s.id);
+            for client in mcp_clients::Client::ALL {
+                assert_eq!(s.bridged_for(client), mcp_clients::bridged(client, &spec));
+            }
+        }
+        // The scopes it needs are ones the one sign-in asks for, so Sign In Again grants them.
+        let asked: Vec<&str> = crate::github::SCOPES.iter().map(|(s, _)| *s).collect();
+        assert!(GITHUB_SCOPES.iter().all(|s| asked.contains(s)));
     }
 
     #[test]

@@ -31,6 +31,7 @@ Usage:
   sawit pasang <tool ...> [-y]
   sawit pupuk [tool ...] [-y]
   sawit cabut <tool ...> [-y]
+  sawit github token --header | --exec <program> [args ...]
 
 Examples:
   sawit .                  open this folder as a project (joins the open
@@ -117,6 +118,17 @@ More lists, shown only when asked:
                            servers serve, and this folder's Workers, their
                            bindings and Wrangler version (cf, jelajah)
 
+GitHub's MCP server (the MCP page writes these into AI clients' configs):
+  sawit github token --header
+                           print {\"Authorization\":\"Bearer …\"}, the app's
+                           GitHub sign-in, for Claude Code's headersHelper
+                           and Codex's http_headers_helper
+  sawit github token --exec npx -y mcp-remote <url> \\
+      --header 'Authorization:${SAWIT_GITHUB_AUTHORIZATION}'
+                           run a program with \"Bearer …\" in that variable
+  Signed out, it prints nothing and exits 1. Any program that can run it as
+  you gets the token, as it can read the Keychain item it comes from.
+
 Keys (the app's Keymap Editor; Sawit must be running):
   sawit list keys          every shortcut: its keys, what it runs, where,
                            and whether it's a default, yours or turned off
@@ -195,6 +207,8 @@ pub enum Invocation {
     Browse(BrowseTarget),
     /// `sawit new …` (`semai`): the New Project page, or its command.
     Semai(Box<crate::semai::SemaiArgs>),
+    /// `sawit github token …`: the GitHub sign-in, handed to an MCP client.
+    GitHub(crate::github_token::TokenArgs),
 }
 
 /// What `sawit browse` opens in Sawit's browser.
@@ -245,6 +259,11 @@ pub fn parse_args(
     cwd: &Path,
 ) -> std::result::Result<Invocation, String> {
     let args: Vec<OsString> = args.into_iter().collect();
+    // `sawit github token …`; `sawit github` alone is still a folder or file. What `--exec` runs
+    // may be any path, so its words needn't be UTF-8.
+    if args.first().is_some_and(|a| a == "github") && args.get(1).is_some_and(|a| a == "token") {
+        return crate::github_token::TokenArgs::parse(&args[1..]).map(Invocation::GitHub);
+    }
     let words: Vec<&str> = args.iter().filter_map(|a| a.to_str()).collect();
     match words.first().copied() {
         Some("list" | "ls" | "daftar") if words.len() == args.len() && words.len() <= 2 => {
@@ -854,6 +873,50 @@ mod tests {
         ));
         assert!(matches!(parse(&["./browse"]), Ok(Invocation::Open { .. })));
         assert!(matches!(parse(&["./intip"]), Ok(Invocation::Open { .. })));
+    }
+
+    /// `sawit github token` hands the sign-in over (`--header`, `--exec` with a program whose
+    /// path needn't be UTF-8); `sawit github` alone, or `./github`, is still a folder; `github` is
+    /// never a database; and the help says how, and what it exposes.
+    #[test]
+    fn github_token_hands_the_sign_in_over() {
+        use crate::github_token::TokenArgs;
+        assert_eq!(
+            parse(&["github", "token", "--header"]),
+            Ok(Invocation::GitHub(TokenArgs::Header))
+        );
+        let odd = OsString::from_vec(b"/x/\xffnpx".to_vec());
+        let Ok(Invocation::GitHub(TokenArgs::Exec(program))) = parse_args(
+            [
+                OsString::from("github"),
+                "token".into(),
+                "--exec".into(),
+                odd.clone(),
+                "-y".into(),
+            ],
+            Path::new("/nope"),
+        ) else {
+            panic!()
+        };
+        assert_eq!(program, [odd, OsString::from("-y")]);
+        assert!(parse(&["github", "token"]).is_err());
+        assert!(parse(&["github", "token", "--exec"]).is_err());
+        assert!(matches!(parse(&["github"]), Ok(Invocation::Open { .. })));
+        assert!(matches!(
+            parse(&["./github", "token"]),
+            Ok(Invocation::Open { .. })
+        ));
+        assert!(crate::kebun::SUBCOMMANDS.contains(&"github"));
+        for said in [
+            "sawit github token --header",
+            "--exec <program>",
+            "headersHelper",
+            "SAWIT_GITHUB_AUTHORIZATION",
+            "prints nothing and exits 1",
+            "gets the token",
+        ] {
+            assert!(USAGE.contains(said), "no {said:?} in the help");
+        }
     }
 
     /// `list` and `bakar` have their names in both languages: `daftar` and `stop`. Neither is a

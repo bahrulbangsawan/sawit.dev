@@ -8,8 +8,9 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
 use sawit_core::dev_tools::find_program;
+use sawit_core::github::{Keychain, TokenStore};
 use sawit_core::mcp_catalog::{self, Auth, DEFAULT_AWS_REGION, Server};
-use sawit_core::mcp_clients::{self, Spec, Status, Target};
+use sawit_core::mcp_clients::{self, Handover, Spec, Status, Target};
 use sawit_core::package_manager::{self, PackageManager, Use};
 
 use crate::{Sawit, blocking, fail, ok, tri};
@@ -87,6 +88,41 @@ fn auth_text(auth: Auth) -> Option<String> {
         Auth::Browser => Some("signs in through the browser from the client".into()),
         Auth::EnvKey(var) => Some(format!("needs {var} set before starting the client")),
         Auth::Program => Some("uses the program's own sign-in".into()),
+        Auth::GitHub => Some(
+            "uses Sawit's GitHub sign-in, which installing needs: Claude Code and Codex run `sawit github token --header` each time they connect, clients that run the mcp-remote bridge get it through `sawit github token --exec`, and VS Code and GitHub Copilot CLI sign in to GitHub themselves. No config holds the token".into(),
+        ),
+    }
+}
+
+/// What installing GitHub's server says when Sawit isn't signed in to GitHub.
+const SIGN_IN_FIRST: &str = "Sign in to GitHub in Sawit first: GitHub's MCP server uses Sawit's one GitHub sign-in (Sign In to GitHub in the app's title bar, or app_open_page github to show the user the sign-in card). Agents can't sign in for the user.";
+
+/// Whether `server` can be installed with the sign-in `store` holds: GitHub's needs Sawit's.
+fn signed_in_for(server: &Server, store: &dyn TokenStore) -> Result<(), String> {
+    if server.auth != Auth::GitHub {
+        return Ok(());
+    }
+    match store.load() {
+        Ok(Some(token)) if !token.trim().is_empty() => Ok(()),
+        Ok(_) => Err(SIGN_IN_FIRST.into()),
+        Err(e) => Err(format!(
+            "Couldn't read Sawit's GitHub sign-in from the Keychain: {e}"
+        )),
+    }
+}
+
+/// How `target`'s client gets the sign-in of a server that takes Sawit's, as an install says it.
+fn handover_text(target: &Target) -> &'static str {
+    match mcp_clients::handover(target.client) {
+        Handover::Helper => {
+            "It gets Sawit's GitHub sign-in from `sawit github token --header` each time it connects; signed out, it can't connect until you sign in again."
+        }
+        Handover::Bridge => {
+            "It gets Sawit's GitHub sign-in through the mcp-remote bridge, started by `sawit github token --exec`; signed out, it can't connect until you sign in again."
+        }
+        Handover::ClientSignIn => {
+            "It signs in to GitHub itself, with its own GitHub account, the first time it connects."
+        }
     }
 }
 
@@ -244,12 +280,13 @@ impl Sawit {
 
     pub async fn install_mcp_server_tool(&self, a: ServerArgs) -> CallToolResult {
         let (server, target) = tri!(pick(&a.server, &a.client, a.profile.as_deref()));
+        // Read in the Keychain off the async workers, as `security` runs.
+        let signed_in = blocking(move || signed_in_for(server, &Keychain::user())).await;
+        tri!(tri!(signed_in));
         let region = tri!(region_for(server, &target, a.region.as_deref()));
         let pm = tri!(self.package_manager_for(a.package_manager.as_deref()).await);
-        if server.is_remote()
-            && mcp_clients::needs_bridge(target.client)
-            && find_program(pm.runner()).is_none()
-        {
+        let spec = server.spec_with(&own_server(), &region, find_program, pm);
+        if mcp_clients::bridged(target.client, &spec) && find_program(pm.runner()).is_none() {
             return fail(format!(
                 "{} reaches remote servers only through the mcp-remote bridge, which `{}` runs, and it isn't installed. Install Node.js first (install_dev_tools with \"node\"), or pass another package_manager.",
                 target.client.name(),
@@ -265,7 +302,6 @@ impl Sawit {
                 server.id
             ));
         }
-        let spec = server.spec_with(&own_server(), &region, find_program, pm);
         if !target.client.editable() {
             return ok(format!(
                 "{} keeps its config in a format Sawit doesn't edit. Add this to {}:\n\n{}",
@@ -285,8 +321,13 @@ impl Sawit {
             target.config.display(),
             status_text(server, &mcp_clients::status(&target, &spec))
         );
-        if let Some(auth) = auth_text(server.auth) {
-            text.push_str(&format!(" It {auth}."));
+        match server.auth {
+            Auth::GitHub => text.push_str(&format!(" {}", handover_text(&target))),
+            auth => {
+                if let Some(auth) = auth_text(auth) {
+                    text.push_str(&format!(" It {auth}."));
+                }
+            }
         }
         text.push_str(" Restart the client (or reload its MCP servers) to use it.");
         ok(text)
@@ -329,7 +370,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Install (or update) an MCP server from list_mcp_servers in one AI client's config, through the client's own CLI when it has one. Edits that client's config file (a backup is kept). Works without the app"
+        description = "Install (or update) an MCP server from list_mcp_servers in one AI client's config, through the client's own CLI when it has one. Edits that client's config file (a backup is kept). GitHub's server (\"github\") uses Sawit's GitHub sign-in and is refused while Sawit is signed out; no config holds its token. Works without the app"
     )]
     async fn install_mcp_server(&self, Parameters(a): Parameters<ServerArgs>) -> CallToolResult {
         self.install_mcp_server_tool(a).await
@@ -380,6 +421,39 @@ mod tests {
                 &mcp_clients::status(&codex, &spec(aws, DEFAULT_AWS_REGION))
             ),
             "installed in region eu-west-1"
+        );
+    }
+
+    /// GitHub's server installs only with Sawit signed in to GitHub: signed out, the tool refuses
+    /// and says to sign in in Sawit (agents can't). Other servers don't ask. The sign-in here is a
+    /// test's own, in memory, never the user's Keychain item.
+    #[test]
+    fn github_installs_only_once_signed_in() {
+        use sawit_core::github::MemoryStore;
+        let github = mcp_catalog::get(mcp_catalog::GITHUB_ID).unwrap();
+        let said = signed_in_for(github, &MemoryStore::default()).unwrap_err();
+        assert!(
+            said.starts_with("Sign in to GitHub in Sawit first"),
+            "{said}"
+        );
+        assert!(signed_in_for(github, &MemoryStore::with("  ")).is_err());
+        assert_eq!(signed_in_for(github, &MemoryStore::with("gho_1")), Ok(()));
+        let neon = mcp_catalog::get("neon").unwrap();
+        assert_eq!(signed_in_for(neon, &MemoryStore::default()), Ok(()));
+        // What an install tells the agent of each client's way to the sign-in.
+        let at = |client| Target {
+            client,
+            profile: "default".into(),
+            config: PathBuf::from("/x"),
+            profile_dir: None,
+        };
+        assert!(handover_text(&at(mcp_clients::Client::Codex)).contains("--header"));
+        assert!(handover_text(&at(mcp_clients::Client::Cursor)).contains("--exec"));
+        assert!(handover_text(&at(mcp_clients::Client::VsCode)).contains("itself"));
+        assert!(
+            auth_text(Auth::GitHub)
+                .unwrap()
+                .contains("No config holds the token")
         );
     }
 

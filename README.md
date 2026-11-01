@@ -64,7 +64,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with device sizes and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (133 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (133 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 | 🌱 **New projects from a stack** | Pick a TypeScript stack from Better-T-Stack's builder (TanStack, Next.js, Hono, Convex, Drizzle, Better Auth, …); Sawit shows what doesn't fit and why, runs `create-better-t-stack` in its terminal and opens the project. |
 | ✨ **Agent skills** | Superpowers, shadcn's improve, Cloudflare's skills, MCP Apps, unslop and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
@@ -675,6 +675,8 @@ Agents that work on the canvas while Sawit is closed have no cursor: there is no
   without it) and `read:user` (your name and avatar). A sign-in from before Sawit asked for `workflow` says so,
   with **Sign In Again**.
 - Release notes and the update check read public GitHub pages and need no sign-in.
+- **GitHub's MCP server** on the MCP page uses the same sign-in: your AI clients get it each time they connect,
+  and no client's config holds the token (see [MCP for AI agents](#github-mcp-server)).
 - Agents can't sign in for you: `app_state` reports `github: {signed_in, login}`, and `app_open_page github` while
   you're signed out shows you the sign-in card and tells the agent to wait for you.
 
@@ -970,6 +972,7 @@ sawit list skills                            # the Skills page: skill packs, how
 sawit list config                            # shell startup files and coding agents' config files
 sawit list keys                              # every shortcut and what it runs (asks the running app)
 sawit list explorer                          # Cloudflare Local Explorers running, and this folder's Workers
+sawit github token --header                  # the GitHub sign-in as {"Authorization":"Bearer …"}, for an AI client's header helper
 ```
 
 - `<db>` is looked up in this order: a Sawit instance or saved connection with that name, a database with that name in
@@ -1020,6 +1023,16 @@ sawit list explorer                          # Cloudflare Local Explorers runnin
   and profiles that have it. `list config` is the **Config Files** tab for the current folder's project, dimming the
   shell files your login shell doesn't read. `list keys` is the only one that needs the app: the default shortcuts
   live in it, so without Sawit running it says so (and where your keymap.json is) instead of starting it.
+- `sawit github token` hands the app's GitHub sign-in to an AI client for [GitHub's MCP
+  server](#github-mcp-server); the MCP page writes it into the clients' configs, so you rarely run it yourself.
+  `--header` prints `{"Authorization":"Bearer <token>"}`, the JSON object of headers Claude Code's `headersHelper`
+  and Codex's `http_headers_helper` read. `--exec <program> [args …]` runs the program (the `mcp-remote` bridge)
+  in its place, with `Bearer <token>` in its `SAWIT_GITHUB_AUTHORIZATION` variable: never on a command line. It
+  reads the Keychain item the app signs in to each time, the scratch one under a `SAWIT_HOME` of its own. Signed
+  out, it prints nothing on stdout, says how to sign in on stderr and exits 1. `sawit github` alone, or
+  `sawit ./github`, opens a folder named github; `github` is never taken for a database. **Any program that can
+  run this command as you gets the token**: the same as the Keychain item itself, which macOS's `security` tool
+  reads without asking.
 
 ## MCP for AI agents
 
@@ -1054,7 +1067,7 @@ work in the last 30 seconds, with its `id`, `name` (its label on screen), `color
 | Files | `search_files` |
 | Config files | `list_config_files` (the Config Files tab's shell and coding-agent config files, as paths: never their contents) |
 | Dev tools | `list_dev_tools` (with newer releases, where each was found and its uninstall command), `install_dev_tools` (`package_manager`: npm, pnpm, bun or yarn for the tools npm installs globally), `upgrade_dev_tools` (with the package manager that installed the copy), `uninstall_dev_tools` (the copy its own installer, Homebrew or the package manager put in place) |
-| MCP servers | `list_mcp_servers`, `install_mcp_server` (`package_manager`: a local server and the remote bridge run with `npx -y`, `pnpm dlx`, `bunx` or `yarn dlx`), `uninstall_mcp_server` |
+| MCP servers | `list_mcp_servers`, `install_mcp_server` (`package_manager`: a local server and the remote bridge run with `npx -y`, `pnpm dlx`, `bunx` or `yarn dlx`; `github` is refused with "Sign in to GitHub in Sawit first" while Sawit is signed out, since agents can't sign in for you), `uninstall_mcp_server` |
 | New project | `stack_options` (every category, option and preset, and the default stack), `stack_check` (a stack by `create-better-t-stack`'s flag names, resolved: what the compatibility rules change, every disabled option and why, the command), `stack_create` (in `<location>/<name>`, never over a folder that exists; in a Sawit terminal that opens the project when the app runs, else here) |
 | Skills | `list_skills` (each pack, its skills, source and install commands per package manager, and the agents that have it), `install_skill` (into the agents given: the skills CLI with `package_manager`, a Claude Code plugin, or a clone and copy), `uninstall_skill` |
 | App control (app running) | `launch_app`, `app_state` (with `github: {signed_in, login}`), `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, skills, changelog, git_graph, github: the sign-in card while signed out, instance, keymap, new_project), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
@@ -1077,13 +1090,13 @@ host only with `replace: true`. Passwords never appear in a result. Every tool
 also carries MCP's hints (`readOnlyHint`, `destructiveHint`, `openWorldHint`), for clients that let read-only tools
 through or ask before destructive ones.
 
-Click **MCP** in the title bar to install it, along with a catalog of other servers: AWS, Cloudflare, Neon, Postman,
-Figma, Mobbin, Exa and more. Search the catalog, narrow it with the **Installed**, **Not Installed** and **Needs
+Click **MCP** in the title bar to install it, along with a catalog of other servers: GitHub, AWS, Cloudflare, Neon,
+Postman, Figma, Mobbin, Exa and more. Search the catalog, narrow it with the **Installed**, **Not Installed** and **Needs
 Sign-In** tabs or by where a server runs (built in, remote, on this Mac), and sort it. **Show** under the list sets how
 many servers a page holds (8 to 64, or all), as on the Tools page, and Sawit remembers it. From the keyboard: ⌘F
 searches, ↩ in the search moves to the first server, ↑ and ↓ select, ↩ opens the server's sheet, and ↩ there
 installs. Servers that need an account sign in through the client's own sign-in, which the page can start for Claude
-Code and Codex. The page finds the AI clients on this Mac: Claude Code (every profile, including `CLAUDE_CONFIG_DIR`
+Code and Codex; GitHub's uses Sawit's own GitHub sign-in ([below](#github-mcp-server)). The page finds the AI clients on this Mac: Claude Code (every profile, including `CLAUDE_CONFIG_DIR`
 folders), Codex (and `CODEX_HOME` profiles), Claude Desktop, Cursor, Windsurf, Gemini CLI, Zed, opencode and VS
 Code. It installs into each with one click and shows where each config lives. The AWS server shows the Region your
 clients have it in, and an install in another Region reads as installed there. It finds `claude`, `codex` and `npx`
@@ -1103,11 +1116,41 @@ before every change. Updating an entry changes only where it points: what you ad
 tools, `env`, timeouts, …) stays. **Remove from N** in a server's sheet asks first, like its row's trash button.
 `sawit list mcp` shows the same list in a terminal.
 
-To add it by hand:
+To add Sawit's own server by hand:
 
 ```bash
 claude mcp add sawit -- /Applications/Sawit.app/Contents/MacOS/sawit-mcp
 ```
+
+### GitHub MCP server
+
+The catalog's **GitHub** entry is [GitHub's official server](https://github.com/github/github-mcp-server)
+(`https://api.githubcopilot.com/mcp/`: repositories, issues, pull requests, Actions, code search), and it runs on
+Sawit's [one GitHub sign-in](#github). The token stays in the Keychain: no client's config holds it, and it's never
+on a command line. Each client is given a command that hands it over as the client connects, `sawit github token`
+by the app's absolute path (`/Applications/Sawit.app/Contents/MacOS/sawit`):
+
+| Clients | How they get the sign-in |
+|---|---|
+| Claude Code (every profile) | `headersHelper: '…/sawit' github token --header`, run each time it connects (written with `claude mcp add-json --scope user`) |
+| Codex (every profile) | `http_headers_helper = "'…/sawit' github token --header"` in `config.toml`, run each time it connects (Codex releases from August 2026 on; its CLI has no flag for it, so the file is edited) |
+| Cursor, Zed, Windsurf, Gemini CLI, opencode, Claude Desktop, LM Studio and the others | the `mcp-remote` bridge, started by `'…/sawit' github token --exec npx -y mcp-remote <url> --header 'Authorization:${SAWIT_GITHUB_AUTHORIZATION}'`: Sawit puts the header in the bridge's environment and the bridge fills it in. They have no header helper of their own, and GitHub's server offers its OAuth sign-in only to GitHub's own hosts. Needs Node.js, like every bridge |
+| VS Code, VS Code Insiders, GitHub Copilot CLI | the bare URL: they sign in to GitHub themselves, with their own GitHub account |
+
+- The **Install** on GitHub's row is off until you sign in to GitHub, saying "Sign in to GitHub to install", with
+  **Sign In to GitHub** beside it; so is the sheet's Install. `install_mcp_server` refuses `github` the same way.
+- Signing out uninstalls nothing. The clients that get Sawit's sign-in then can't reach GitHub (the helper prints
+  nothing and says to sign in), the row says so, and **Manage** still opens to remove the server.
+- A sign-in without a scope the server needs (`repo` for nearly every tool, `workflow` for changing files under
+  `.github/workflows`) shows on the row with **Sign In Again**. Sawit's sign-in doesn't ask for `read:org`,
+  `notifications`, `gist` or `project`, so the server's team and organization, notification, gist and project tools
+  answer with a scope error.
+- An entry another `sawit` hands the sign-in to (an older build, an app since moved) reads as out of date;
+  installing again points it here. Codex sends a `bearer_token_env_var` token, or one from `codex mcp login`, in
+  place of the helper's, so Sawit removes the former from the entry; log out of the latter yourself.
+- **What this exposes:** any program that can run `sawit github token` as you gets the token. That is the same
+  exposure as the Keychain item it comes from, which any program of yours can read with macOS's `security` tool
+  without being asked.
 
 ## Build & run
 
@@ -1267,6 +1310,7 @@ crates/core   sawit-core — no GPUI, tested with plain cargo test
   network                connection diagnosis and ping
   prompts                prompt library and {{variables}}
   git, github            status, diff, log graph, commits, branches; GitHub pull requests and checks
+  github_token           `sawit github token`: the GitHub sign-in handed to AI clients for GitHub's MCP server
   ssh, shell_config      saved SSH hosts and ~/.ssh/config; shell startup files
   agent_config           coding agents' config files on this Mac and in projects
   scripts, search        a project's run scripts and saved commands; text search in a folder
