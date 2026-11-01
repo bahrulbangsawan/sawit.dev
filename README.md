@@ -30,9 +30,9 @@
 </p>
 
 <p align="center">
-  <img src="docs/media/demo.gif" alt="Sawit demo: welcome screen, instances, port conflict detection, table with export, SQL editor, schema diagram, code editor with terminal, Markdown preview, listening ports, network diagnosis, git graph, Dev Tools, MCP servers and the canvas" width="100%">
+  <img src="docs/media/demo.gif" alt="Sawit demo: instances, port conflict detection, table with export, SQL editor, schema diagram, code editor with terminal, Markdown preview, listening ports, the browser with Annotate, network diagnosis, git graph, Dev Tools, MCP servers and the canvas" width="100%">
   <br>
-  <sub>▶︎ <a href="docs/media/demo.mp4">Watch the demo video (MP4)</a>: welcome → instance → port conflict → table → SQL → schema diagram → code + terminal → Markdown → ports → network → git → dev tools → MCP → canvas</sub>
+  <sub>▶︎ <a href="docs/media/demo.mp4">Watch the demo video (MP4)</a>: instance → port conflict → table → SQL → schema diagram → code + terminal → Markdown → ports → browser → network → git → dev tools → MCP → canvas</sub>
 </p>
 
 ---
@@ -73,7 +73,7 @@ curl -fsSL https://raw.githubusercontent.com/bahrulbangsawan/sawit.dev/main/scri
 ```
 
 This installs the latest release into `/Applications` (or `~/Applications`). To install a given release instead, add
-`SAWIT_VERSION=vX.Y.Z` (a tag from [Releases](https://github.com/bahrulbangsawan/sawit.dev/releases)) before `sh`.
+`SAWIT_VERSION=v0.0.8` (or another tag from [Releases](https://github.com/bahrulbangsawan/sawit.dev/releases)) before `sh`.
 After that, the app updates itself. A running Sawit is quit before it is replaced, so run the command from another
 terminal app: in Sawit's own terminal, the script stops and says so.
 
@@ -262,7 +262,7 @@ explained. A conflict on the same address can't be forced.
 
 ### Browser
 
-<img src="docs/media/browser.png" alt="Browser tab showing the acme-store demo shop on localhost:5173, with back, forward, reload, the address field and a Web Inspector button above the page" width="100%">
+<img src="docs/media/browser.png" alt="Browser tab showing the acme-store demo shop on localhost:3000, with the Annotate panel open beside it; the toolbar has back, forward, reload, the address field, the device menu, Annotate, Design, Open in Default Browser and the Web Inspector" width="100%">
 
 - Click **Browser** in the title bar for the project's web browser tab (WebKit; each project has its own). With
   nothing typed, it opens the project's running dev server. The toolbar has back, forward, reload, an address
@@ -304,7 +304,6 @@ explained. A conflict on the same address can't be forced.
 ### Canvas
 
 <img src="docs/media/canvas.png" alt="Canvas: a Mermaid flowchart of the demo app turned into editable shapes, with boxes for the browser, acme-store, the checkout API, payments, acme-admin, an AI agent and the shop database" width="100%">
-<br><sub>This screenshot still shows the old Excalidraw canvas until the media is recorded again.</sub>
 
 - Click **Canvas** in the title bar, or press <kbd>⌃</kbd><kbd>⌘</kbd><kbd>C</kbd>, for a native whiteboard and
   design canvas on the [FigCraft](https://github.com/storytold/figcraft) engine. It saves by itself.
@@ -463,6 +462,8 @@ explained. A conflict on the same address can't be forced.
   the panes of a split terminal, for one.
 
 ## Keyboard shortcuts
+
+<img src="docs/media/keymap.png" alt="Keymap Editor: each binding's action, arguments, keystrokes, context and source, with a filter field, Edit in JSON and Create Keybinding" width="100%">
 
 These are the defaults. Most shortcuts can be changed in the **Keymap Editor**
 (<kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd>, the keyboard button in the title bar,
@@ -844,12 +845,12 @@ Measured on an Apple Silicon MacBook (M3, macOS 26.6.1) on 2026-11-01, release b
 
 | | |
 |---|---|
-| `sawit` | 59.8 MiB (single file, no JVM/Chromium/Node runtime; includes the MCP server, reached as `sawit-mcp` through a symlink, the FigCraft canvas engine and the canvas's Inter fonts) |
-| `Sawit.app` installed · DMG · update zip | 62.8 MB · 22.6 MB · 29.6 MB |
+| `sawit` | 60.5 MiB (single file, no JVM/Chromium/Node runtime; includes the MCP server, reached as `sawit-mcp` through a symlink, the FigCraft canvas engine and the canvas's Inter fonts) |
+| `Sawit.app` installed · DMG · update zip | 63.6 MB · 22.7 MB · 29.9 MB |
 | Idle memory (1 window, 1 terminal tab, 10 seconds after launch) | RSS 114 MB · physical footprint 73 MB (peak 121 MB during startup); the same a minute later |
 | The same with an empty canvas open | Physical footprint 160 MB; up to 380 MB for about half a minute after the first canvas opens, which reads the system's fonts |
 | Memory with a large canvas board open (776 layers, measured on 2026-10-31) | RSS 532 MiB |
-| Clean release build | 14 min 7 s, on a busy machine |
+| Clean release build | 12 min 8 s, on a busy machine |
 
 Figures for other apps are not listed because they have not been measured on the same machine.
 
@@ -879,5 +880,4 @@ Figures for other apps are not listed because they have not been measured on the
   Copyright (c) 2026 wernerstrauch, licensed under MIT. See [`NOTICE`](NOTICE).
 
 <sub>Screenshots and video in `docs/media/` were recorded from a release build with demo data (separate `SAWIT_HOME`,
-Homebrew PostgreSQL 16). The canvas screenshot and the end of the demo show the Excalidraw canvas that the native
-canvas replaced, and the browser screenshot predates the toolbar's device menu, Annotate and Design.</sub>
+Homebrew PostgreSQL 16).</sub>

@@ -23,8 +23,6 @@ and minor items nobody has fixed yet. The hand checks to run before a release ar
   front. Which canvas the ops use is settled for a project opened at its repository's root: the agent's own
   project's, with Sawit open or closed. The cases where the two still differ are under Minor, still open.
 - **`app_open` of a canvas file** takes the keyboard when its tab only shows again (Q13).
-- **Media.** README and the site still show the Excalidraw canvas until they are re-recorded. Seven unused site images
-  (`site/public/media/{canvas,instances,mcp,network,port-conflict,prompts,tools}.jpg`) were left out of the repository.
 
 ## Releasing
 
