@@ -3,6 +3,7 @@
 
 use rmcp::model::CallToolResult;
 use sawit_core::db::{self, Conn};
+use tokio_postgres::types::ToSql;
 
 use super::TableArgs;
 use crate::{Sawit, fail, ok, tri};
@@ -190,59 +191,39 @@ impl Sawit {
         let estimate: Option<i64> = row.get(2);
         let comment: Option<String> = row.get(3);
         let rel = "format('%I.%I', $1::text, $2::text)::regclass";
-        let columns = tri!(
-            client
-                .query(
-                    &format!(
-                    "SELECT a.attname::text, format_type(a.atttypid, a.atttypmod), a.attnotnull,
+        let columns_sql = format!(
+            "SELECT a.attname::text, format_type(a.atttypid, a.atttypmod), a.attnotnull,
                             pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum)
                      FROM pg_attribute a
                      LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
                      WHERE a.attrelid = {rel} AND a.attnum > 0 AND NOT a.attisdropped
                      ORDER BY a.attnum"
-                ),
-                    &[&schema, &a.table],
-                )
-                .await
-                .map_err(err)
         );
-        let constraints = tri!(
-            client
-                .query(
-                    &format!(
-                        "SELECT conname::text, contype::text, pg_get_constraintdef(oid)
+        let constraints_sql = format!(
+            "SELECT conname::text, contype::text, pg_get_constraintdef(oid)
                      FROM pg_constraint WHERE conrelid = {rel}
                      ORDER BY array_position(ARRAY['p','f','u','c','x'], contype::text), conname"
-                    ),
-                    &[&schema, &a.table],
-                )
-                .await
-                .map_err(err)
         );
-        let indexes = tri!(
-            client
-                .query(
-                    &format!(
-                        "SELECT i.relname::text, pg_get_indexdef(x.indexrelid)
+        let indexes_sql = format!(
+            "SELECT i.relname::text, pg_get_indexdef(x.indexrelid)
                      FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid
                      WHERE x.indrelid = {rel} ORDER BY x.indisprimary DESC, i.relname"
-                    ),
-                    &[&schema, &a.table],
-                )
-                .await
-                .map_err(err)
         );
-        let referenced = tri!(
-            client
-                .query(
-                    &format!(
-                        "SELECT conname::text, conrelid::regclass::text, pg_get_constraintdef(oid)
+        let referenced_sql = format!(
+            "SELECT conname::text, conrelid::regclass::text, pg_get_constraintdef(oid)
                      FROM pg_constraint WHERE confrelid = {rel} AND contype = 'f' ORDER BY 2, 1"
-                    ),
-                    &[&schema, &a.table],
-                )
-                .await
-                .map_err(err)
+        );
+        let on: [&(dyn ToSql + Sync); 2] = [&schema, &a.table];
+        // The four go to the server together, in this order, rather than each one after the
+        // answer to the one before, so their round trips (a prepare and an execute each) overlap.
+        let (columns, constraints, indexes, referenced) = tri!(
+            tokio::try_join!(
+                client.query(&columns_sql, &on),
+                client.query(&constraints_sql, &on),
+                client.query(&indexes_sql, &on),
+                client.query(&referenced_sql, &on),
+            )
+            .map_err(err)
         );
 
         let mut out = vec![format!(
