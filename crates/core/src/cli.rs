@@ -7,7 +7,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
-use crate::kebun::{BakarArgs, DbJob, ListWhat, PasangArgs, PupukArgs};
+use crate::kebun::{BakarArgs, DbJob, ListWhat, NyalakanArgs, PasangArgs, PupukArgs};
 use crate::{CoreError, Result, cmd};
 
 /// Where "Install CLI" puts the command.
@@ -22,6 +22,7 @@ Usage:
   sawit list [instances|db|ports|connections|tools]
   sawit bakar ports [port ...] [-y]
   sawit bakar instances [name ...] [-y]
+  sawit nyalakan [name ...] [--ulang] [-y]
   sawit panen <db> <table|\"sql\"> <file.csv|file.xlsx> [-y]
   sawit backup <db> [schema|schema.table] <file.sql|file.dump> [-y]
   sawit tanam <db> <table> <file.csv>
@@ -53,6 +54,10 @@ Kebun (databases), no app needed:
                            SIGTERM, then SIGKILL for the stubborn)
   sawit bakar ports 3000   stop whatever listens on :3000
   sawit bakar instances    stop running Sawit instances (data is kept)
+  sawit nyalakan           start every stopped Sawit instance; a port
+                           another process holds is explained, not taken
+  sawit nyalakan kyzn --ulang
+                           restart kyzn (asks first while it runs; -y)
 
   sawit panen kyzn leads leads.xlsx        export a table (CSV or Excel)
   sawit panen kyzn \"select * from leads where phone is null\" x.csv
@@ -123,6 +128,8 @@ pub enum Invocation {
         /// Run the app in this process instead of handing off to it.
         foreground: bool,
     },
+    /// `sawit nyalakan …` (`start`).
+    Nyalakan(NyalakanArgs),
 }
 
 /// Parses `args` (without the program name); relative paths resolve
@@ -145,6 +152,9 @@ pub fn parse_args(
         }
         Some("upgrade" | "pupuk") if words.len() == args.len() => {
             return PupukArgs::parse(&words[1..]).map(Invocation::Pupuk);
+        }
+        Some("start" | "nyalakan") if words.len() == args.len() => {
+            return NyalakanArgs::parse(&words[1..]).map(Invocation::Nyalakan);
         }
         Some(word) if words.len() == args.len() && DbJob::kind(word).is_some() => {
             let kind = DbJob::kind(word).expect("checked");
@@ -551,6 +561,26 @@ mod tests {
         assert!(matches!(parse(&["pupuk"]), Ok(Invocation::Pupuk(_))));
         assert!(parse(&["pupuk", "nope-tool"]).is_err());
         assert!(matches!(parse(&["./pupuk"]), Ok(Invocation::Open { .. })));
+    }
+
+    /// `sawit nyalakan` (`start`) starts instances; `./start` is still a folder.
+    #[test]
+    fn nyalakan_starts_instances() {
+        assert_eq!(
+            parse(&["start"]),
+            Ok(Invocation::Nyalakan(NyalakanArgs::default()))
+        );
+        let Ok(Invocation::Nyalakan(args)) = parse(&["nyalakan", "kyzn", "--ulang", "-y"]) else {
+            panic!()
+        };
+        assert_eq!(args.names, ["kyzn"]);
+        assert!(args.again && args.yes);
+        assert!(parse(&["start", "--nope"]).is_err());
+        assert!(matches!(parse(&["./start"]), Ok(Invocation::Open { .. })));
+        assert!(matches!(
+            parse(&["./nyalakan"]),
+            Ok(Invocation::Open { .. })
+        ));
     }
 
     #[test]

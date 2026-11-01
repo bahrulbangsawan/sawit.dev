@@ -110,6 +110,8 @@ while the `sawit` command isn't installed, and the version.
   so TanStack Start, Next.js, Rails, and other apps connect right away.
 - New instances listen only on `localhost`, with the `postgres` superuser and `trust` authentication
   (local use only).
+- From the terminal: `sawit list instances`, `sawit nyalakan` (start, with the same port check) and
+  `sawit bakar instances` (stop).
 
 ### Port conflict detection before start
 
@@ -490,7 +492,7 @@ Both create a symlink `/usr/local/bin/sawit` to the app and ask for an admin pas
 root.
 
 Besides opening files, the command can query databases like `psql`, export, back up and import tables, list
-instances, databases, ports and dev tools, stop dev servers or instances, and install or upgrade dev tools, all without the app (see
+instances, databases, ports and dev tools, start or stop instances, stop dev servers, and install or upgrade dev tools, all without the app (see
 [below](#databases-ports-and-instances-from-the-terminal)).
 
 ```bash
@@ -528,6 +530,8 @@ sawit list db                                # or: instances, ports, connections
 sawit bakar ports                            # "burn" dev servers: confirm, SIGTERM, then SIGKILL
 sawit bakar ports 3000 5173 -y               # whatever listens on these ports, without asking
 sawit bakar instances                        # stop running Sawit instances (data is kept)
+sawit nyalakan                               # "light up": start every stopped instance, port checked first
+sawit nyalakan kyzn --ulang                  # restart one (asks first while it runs; -y skips)
 sawit panen kyzn leads leads.xlsx            # "harvest": export a table to Excel (or .csv)
 sawit panen kyzn "select * from leads where phone is null" nophone.csv   # export a query (read-only)
 sawit backup kyzn kyzn.dump                  # pg_dump the database (.dump/.backup for pg_restore, else SQL)
@@ -554,6 +558,9 @@ sawit pupuk bun -y                           # upgrade one tool without asking
   unless given `-y`.
 - Table output goes to stdout, while the "connected to" line and timing go to stderr, so `sawit kyzn leads | less`
   stays clean. Up to 10,000 rows are printed per result.
+- `nyalakan` starts instances as their **Start** button does: when another process holds the port, it explains who
+  and leaves the instance stopped (exit 1); it never forces a start. One already running is just noted. `--ulang`
+  (`--restart`) restarts the running ones too, after asking (`-y` skips; without a terminal it needs `-y`).
 - `bakar ports` with no ports only takes dev servers (tools such as `npm run dev`, `vite` or `bun`). It skips databases,
   Docker, Sawit's instances and protected tools (Claude, MCP servers, language servers, Electron), the same rules as
   the `kill-dev` script. Without a terminal it asks for `-y` instead of prompting.

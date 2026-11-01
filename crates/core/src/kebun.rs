@@ -11,12 +11,12 @@ use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::control;
+use crate::control::{self, Preflight, StartOutcome};
 use crate::db::{
     self, ConnProfile, Profiles, format_table, parse_database_url, read_dotenv_database_url,
     resolve_password,
 };
-use crate::instances::{AppPaths, Registry};
+use crate::instances::{AppPaths, Instance, Registry};
 use crate::pgctl::PgCtlStatus;
 use crate::ports::PortJob;
 use crate::probe;
@@ -39,6 +39,8 @@ const SUBCOMMANDS: &[&str] = &[
     "pasang",
     "upgrade",
     "pupuk",
+    "start",
+    "nyalakan",
 ];
 
 /// Rows printed per result set at most.
@@ -216,6 +218,37 @@ impl BakarArgs {
             return Err(format!("“{bad}” bukan nomor port."));
         }
         Ok(BakarArgs { what, targets, yes })
+    }
+}
+
+/// `sawit nyalakan [name…] [--ulang] [-y]` (`start`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NyalakanArgs {
+    /// Instance names; empty means every stopped one (with `again`, every one).
+    pub names: Vec<String>,
+    /// `--ulang` (`--restart`): restart the running ones too.
+    pub again: bool,
+    /// Restart running ones without asking.
+    pub yes: bool,
+}
+
+impl NyalakanArgs {
+    pub fn parse(args: &[&str]) -> Result<NyalakanArgs, String> {
+        let mut out = NyalakanArgs::default();
+        for &arg in args {
+            match arg {
+                "--ulang" | "--restart" => out.again = true,
+                "-y" | "--yes" | "--ya" => out.yes = true,
+                _ if arg.starts_with('-') => {
+                    return Err(format!(
+                        "opsi tak dikenal: {arg} (yang ada cuma --ulang dan -y)"
+                    ));
+                }
+                _ if !out.names.iter().any(|n| n == arg) => out.names.push(arg.to_string()),
+                _ => {}
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -654,6 +687,9 @@ pub async fn query(args: QueryArgs, paths: &AppPaths, cwd: &Path) -> Option<i32>
         Ok(client) => client,
         Err(e) => {
             eprintln!("{} Gagal masuk kebun {}: {e}", ink.red("🔥"), p.database);
+            if let Some(name) = stopped_instance(p, paths).await {
+                eprintln!("   Kebun {name} padam. Nyalakan dulu: `sawit nyalakan {name}`");
+            }
             return Some(1);
         }
     };
@@ -690,6 +726,21 @@ pub async fn query(args: QueryArgs, paths: &AppPaths, cwd: &Path) -> Option<i32>
             Some(1)
         }
     }
+}
+
+/// The name of the Sawit instance `profile` connects to, when it is one and it is stopped: a
+/// connection that failed then needs `sawit nyalakan <name>`.
+async fn stopped_instance(profile: &ConnProfile, paths: &AppPaths) -> Option<String> {
+    if !matches!(profile.host.as_str(), "localhost" | "127.0.0.1" | "::1") {
+        return None;
+    }
+    let registry = Registry::load(&paths.instances_file()).ok()?;
+    let inst = registry
+        .instances
+        .iter()
+        .find(|inst| inst.port == profile.port)?;
+    let stopped = matches!(control::status(inst).await, Ok(PgCtlStatus::Stopped));
+    stopped.then(|| inst.name.clone())
 }
 
 /// Whether `sql`, which the read-only try refused (`why`), may run in `database` as it is: with
@@ -769,10 +820,14 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
         if registry.instances.is_empty() {
             ink.empty("belum ada kebun. Hutannya masih utuh, untuk sementara.");
         }
+        let mut padam = false;
         for inst in &registry.instances {
             let status = match control::status(inst).await {
                 Ok(PgCtlStatus::Running { pid }) => ink.green(&format!("menyala (PID {pid})")),
-                Ok(PgCtlStatus::Stopped) => ink.gray("padam"),
+                Ok(PgCtlStatus::Stopped) => {
+                    padam = true;
+                    ink.gray("padam")
+                }
                 Ok(other) => ink.yellow(&format!("{other:?}")),
                 Err(e) => ink.red(&format!("error: {e}")),
             };
@@ -784,6 +839,12 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
                     "postgres://postgres@localhost:{}/postgres",
                     inst.port
                 ))
+            );
+        }
+        if padam {
+            println!(
+                "  {}",
+                ink.gray("Yang padam dinyalakan lagi dengan `sawit nyalakan <nama>`.")
             );
         }
     }
@@ -1155,6 +1216,163 @@ async fn bakar_instances(args: BakarArgs, paths: &AppPaths) -> i32 {
     i32::from(out > 0)
 }
 
+/// `sawit nyalakan …`: starts Sawit instances as their Start button and the `start_instance` tool
+/// do, never over a port another process holds (`Preflight::Check`): that one's report says who
+/// holds it, and the exit code is 1. No names: every stopped instance. `--ulang` restarts the
+/// running ones too, as `restart_instance` does, which drops their connections, so it asks first
+/// as `bakar instances` does (`-y` doesn't; without a terminal it needs `-y`).
+pub async fn nyalakan(args: NyalakanArgs, paths: &AppPaths) -> i32 {
+    let ink = Ink::stdout();
+    ink.header(
+        if args.again {
+            "🔥 Nyalakan Ulang Kebun (instances)"
+        } else {
+            "🔥 Nyalakan Kebun (instances)"
+        },
+        if args.again {
+            "pg_ctl stop lalu start, port diperiksa dulu: lahan orang tidak diserobot (kali ini)"
+        } else {
+            "pg_ctl start, port diperiksa dulu: lahan orang tidak diserobot (kali ini)"
+        },
+    );
+    let registry = match Registry::load(&paths.instances_file()) {
+        Ok(registry) => registry,
+        Err(e) => {
+            println!("  {} {e}", ink.red("✗"));
+            return 1;
+        }
+    };
+    if let Some(unknown) = args.names.iter().find(|n| registry.get(n).is_none()) {
+        println!(
+            "  {} Kebun “{unknown}” tidak terdaftar. Ilegal, ya? Lihat `sawit list instances`.",
+            ink.red("✗")
+        );
+        return 1;
+    }
+    let mut running = Vec::new();
+    let mut stopped = Vec::new();
+    for inst in &registry.instances {
+        if !args.names.is_empty() && !args.names.contains(&inst.name) {
+            continue;
+        }
+        // One whose status can't be read is tried: starting it says why it can't.
+        match control::status(inst).await {
+            Ok(PgCtlStatus::Running { pid }) => running.push((inst, pid)),
+            _ => stopped.push(inst),
+        }
+    }
+    if running.is_empty() && stopped.is_empty() {
+        ink.empty("belum ada kebun. Hutannya masih utuh, untuk sementara.");
+        ink.footer("Tidak ada yang dinyalakan.");
+        return 0;
+    }
+    if !args.again {
+        for (inst, pid) in &running {
+            ink.empty(&format!("{} sudah menyala, PID {pid}", inst.name));
+        }
+        if stopped.is_empty() {
+            ink.footer("Semua sudah menyala. Asapnya sudah sampai negeri tetangga.");
+            return 0;
+        }
+    } else if !running.is_empty() {
+        ink.section(&format!(
+            "Kebun menyala, dinyalakan ulang ({})",
+            running.len()
+        ));
+        for (ix, (inst, pid)) in running.iter().enumerate() {
+            println!(
+                "  {} {:<16} :{:<6} {}",
+                ink.gray(&format!("{:>3}.", ix + 1)),
+                inst.name,
+                inst.port,
+                ink.gray(&format!("PID {pid}"))
+            );
+        }
+        println!();
+        if !args.yes {
+            match confirm(&format!(
+                "Nyalakan ulang {} kebun di atas? Koneksinya putus sebentar.",
+                running.len()
+            )) {
+                Some(true) => {}
+                Some(false) => {
+                    ink.footer("Batal. Kebun tetap menyala seperti tadi.");
+                    return 0;
+                }
+                None => {
+                    println!(
+                        "  {} Tidak ada saksi (stdin bukan terminal). Tambahkan -y untuk menyalakan ulang.",
+                        ink.red("✗")
+                    );
+                    return 1;
+                }
+            }
+        }
+    }
+    let restarts = running
+        .iter()
+        .filter(|_| args.again)
+        .map(|(inst, _)| (*inst, true));
+    let plan: Vec<(&Instance, bool)> = restarts
+        .chain(stopped.iter().map(|inst| (*inst, false)))
+        .collect();
+    let mut failed = 0;
+    for &(inst, restart) in &plan {
+        let managed = registry.data_dirs();
+        let outcome = match restart {
+            true => control::restart(inst, paths, managed, Preflight::Check).await,
+            false => control::start(inst, paths, managed, Preflight::Check).await,
+        };
+        match outcome {
+            Ok(StartOutcome::Started) => println!(
+                "  {} {} menyala  {}",
+                ink.green("✓"),
+                inst.name,
+                ink.gray(&format!(
+                    "postgres://postgres@localhost:{}/postgres",
+                    inst.port
+                ))
+            ),
+            Ok(StartOutcome::AlreadyRunning { pid }) => {
+                ink.empty(&format!("{} sudah menyala, PID {pid}", inst.name));
+            }
+            Ok(StartOutcome::Blocked(report)) => {
+                failed += 1;
+                println!(
+                    "  {} {} tidak dinyalakan: lahan :{} sudah ada yang menggarap.",
+                    ink.red("✗"),
+                    inst.name,
+                    inst.port
+                );
+                for line in report.explain().lines() {
+                    println!("      {line}");
+                }
+                println!(
+                    "      {}",
+                    ink.gray(
+                        "Lihat siapa di sana: `sawit list ports`. Padamkan dulu, atau pakai Start Anyway di Sawit."
+                    )
+                );
+            }
+            Err(e) => {
+                failed += 1;
+                println!("  {} {}: {e}", ink.red("✗"), inst.name);
+            }
+        }
+    }
+    println!();
+    ink.kv(
+        "Menyala",
+        &format!("{} / {} kebun", plan.len() - failed, plan.len()),
+    );
+    ink.footer(if failed == 0 {
+        "Selesai. Kebun menyala; asapnya urusan musim depan."
+    } else {
+        "Sebagian tidak menyala; lihat di atas."
+    });
+    i32::from(failed > 0)
+}
+
 /// Whether `path` may be written: new, or replacing it was allowed.
 fn may_write(path: &Path, yes: bool, ink: &Ink) -> bool {
     if yes || !path.exists() {
@@ -1206,6 +1424,9 @@ pub async fn db_job(job: DbJob, paths: &AppPaths, cwd: &Path) -> i32 {
         Ok(client) => client,
         Err(e) => {
             eprintln!("{} Gagal masuk kebun {}: {e}", ink.red("🔥"), p.database);
+            if let Some(name) = stopped_instance(p, paths).await {
+                eprintln!("   Kebun {name} padam. Nyalakan dulu: `sawit nyalakan {name}`");
+            }
             return 1;
         }
     };
@@ -1872,6 +2093,33 @@ mod tests {
         );
         assert!(PupukArgs::parse(&["sawit-palsu"]).is_err());
         assert!(PupukArgs::parse(&["--force"]).is_err());
+    }
+
+    #[test]
+    fn nyalakan_words() {
+        assert_eq!(NyalakanArgs::parse(&[]), Ok(NyalakanArgs::default()));
+        assert_eq!(
+            NyalakanArgs::parse(&["kyzn", "--ulang", "shop", "-y", "kyzn"]),
+            Ok(NyalakanArgs {
+                names: vec!["kyzn".into(), "shop".into()],
+                again: true,
+                yes: true,
+            })
+        );
+        assert_eq!(
+            NyalakanArgs::parse(&["--restart", "--ya"]),
+            Ok(NyalakanArgs {
+                names: vec![],
+                again: true,
+                yes: true,
+            })
+        );
+        assert!(NyalakanArgs::parse(&["kyzn", "--force"]).is_err());
+        assert!(NyalakanArgs::parse(&["-u"]).is_err());
+        // Its words are never databases.
+        assert_eq!(q(&["nyalakan", "kyzn"]), None);
+        assert_eq!(q(&["start", "kyzn"]), None);
+        assert_eq!(q(&["nyalakan"]), None);
     }
 
     #[test]

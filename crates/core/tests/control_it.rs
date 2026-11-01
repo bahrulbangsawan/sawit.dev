@@ -119,3 +119,68 @@ async fn start_blocked_by_foreign_listener() {
     let _ = control::start(&f.inst, &f.paths, vec![], Preflight::Force).await;
     let _ = control::stop(&f.inst).await;
 }
+
+/// `sawit nyalakan` starts instances as the Start button does: a port another process holds is
+/// explained and the start held (exit 1, still stopped); once free, it starts; started, it is a
+/// note; `--ulang -y` restarts it; and a name that isn't an instance's is refused.
+#[tokio::test]
+async fn nyalakan_starts_held_and_running_instances() {
+    use sawit_core::instances::Registry;
+    use sawit_core::kebun::{NyalakanArgs, nyalakan};
+
+    /// Stops the instance however the test ends.
+    struct Stop(Instance);
+    impl Drop for Stop {
+        fn drop(&mut self) {
+            let inst = self.0.clone();
+            let _ = std::thread::spawn(move || {
+                tokio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(control::stop(&inst))
+            })
+            .join();
+        }
+    }
+
+    let Some(f) = fixture().await else { return };
+    control::init_cluster(&f.inst).await.unwrap();
+    let _stop = Stop(f.inst.clone());
+    let mut registry = Registry::default();
+    registry.add(f.inst.clone()).unwrap();
+    registry.save(&f.paths.instances_file()).unwrap();
+    let every = NyalakanArgs::default();
+
+    let squatter = std::net::TcpListener::bind(("127.0.0.1", f.inst.port)).unwrap();
+    assert_eq!(nyalakan(every.clone(), &f.paths).await, 1);
+    assert_eq!(
+        control::status(&f.inst).await.unwrap(),
+        PgCtlStatus::Stopped
+    );
+    drop(squatter);
+
+    assert_eq!(nyalakan(every.clone(), &f.paths).await, 0);
+    let Ok(PgCtlStatus::Running { pid }) = control::status(&f.inst).await else {
+        panic!("not started");
+    };
+    // Already running: a note, and nothing changes.
+    assert_eq!(nyalakan(every, &f.paths).await, 0);
+    assert_eq!(
+        control::status(&f.inst).await.unwrap(),
+        PgCtlStatus::Running { pid }
+    );
+    let again = NyalakanArgs {
+        names: vec!["it".into()],
+        again: true,
+        yes: true,
+    };
+    assert_eq!(nyalakan(again, &f.paths).await, 0);
+    assert!(matches!(
+        control::status(&f.inst).await.unwrap(),
+        PgCtlStatus::Running { pid: new } if new != pid
+    ));
+    let unknown = NyalakanArgs {
+        names: vec!["nope".into()],
+        ..NyalakanArgs::default()
+    };
+    assert_eq!(nyalakan(unknown, &f.paths).await, 1);
+}
