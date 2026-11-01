@@ -144,16 +144,22 @@ impl Sawit {
         if reg.instances.is_empty() {
             return ok("No Sawit instances yet. Create one with create_instance.");
         }
-        let mut lines = Vec::new();
-        for inst in &reg.instances {
-            lines.push(format!(
-                "- {} · port {} · {} · {}",
-                inst.name,
-                inst.port,
-                status_text(&control::status(inst).await),
-                instance_url(inst)
-            ));
-        }
+        // Every instance's `pg_ctl status` at once: each is a process of its own.
+        let statuses = futures::future::join_all(reg.instances.iter().map(control::status)).await;
+        let lines: Vec<String> = reg
+            .instances
+            .iter()
+            .zip(&statuses)
+            .map(|(inst, status)| {
+                format!(
+                    "- {} · port {} · {} · {}",
+                    inst.name,
+                    inst.port,
+                    status_text(status),
+                    instance_url(inst)
+                )
+            })
+            .collect();
         ok(lines.join("\n"))
     }
 
