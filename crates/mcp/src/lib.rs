@@ -366,11 +366,10 @@ const READ_ONLY: &[&str] = &[
 
 /// The tools that can delete or replace what was there before the call (a database, rows, a file
 /// at a path given, a setting, the canvas, a running process, the working tree's files and what
-/// was staged, the page the browser shows), or run what they can't bound: SQL, a shell command,
-/// a script, JavaScript, an install script. MCP's `destructiveHint`, which a client may act on by
-/// asking first. Every other tool that isn't [`READ_ONLY`] only adds.
-/// The browser's console and network logs are such a thing: browser_console and browser_network
-/// read them, and empty them when asked to.
+/// was staged, the page the browser shows, the browser's console and network logs, which
+/// browser_console and browser_network empty when asked to), or run what they can't bound: SQL, a
+/// shell command, a script, JavaScript, an install script. MCP's `destructiveHint`, which a client
+/// may act on by asking first. Every other tool that isn't [`READ_ONLY`] only adds.
 const DESTRUCTIVE: &[&str] = &[
     "stop_instance",
     "restart_instance",
@@ -411,6 +410,7 @@ const DESTRUCTIVE: &[&str] = &[
     "terminal_run",
     "terminal_input",
     "terminal_close",
+    "terminal_split",
     "canvas_update",
     "canvas_delete",
     "canvas_clear",
@@ -423,14 +423,13 @@ const DESTRUCTIVE: &[&str] = &[
     "browser_press_key",
     "browser_select_option",
     "browser_screenshot",
+    "browser_console",
+    "browser_network",
     "browser_evaluate",
     "browser_annotations",
     "browser_export_design",
-    "terminal_split",
     "keymap_bind",
     "keymap_unbind",
-    "browser_console",
-    "browser_network",
 ];
 
 /// The tools that change things but only add: a database, an instance, a prompt, rows, shapes on
@@ -489,6 +488,7 @@ const OPEN_WORLD: &[&str] = &[
     "app_open_diagram",
     "terminal_run",
     "terminal_input",
+    "terminal_split",
     "canvas_command",
     "browser_navigate",
     "browser_snapshot",
@@ -507,7 +507,6 @@ const OPEN_WORLD: &[&str] = &[
     "browser_inspect",
     "browser_design",
     "browser_export_design",
-    "terminal_split",
 ];
 
 /// MCP's hints for the tool `name`, from [`READ_ONLY`], [`DESTRUCTIVE`], [`ADDS`] and
@@ -697,6 +696,7 @@ mod tests {
             "app_open_diagram",
             "app_open_prompt",
             "terminal_run",
+            "terminal_split",
             "terminal_read",
             "terminal_input",
             "terminal_close",
@@ -729,8 +729,6 @@ mod tests {
             "browser_inspect",
             "browser_design",
             "browser_export_design",
-            // terminal splits
-            "terminal_split",
             // keymap
             "keymap_list",
             "keymap_bind",
