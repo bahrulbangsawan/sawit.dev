@@ -77,8 +77,8 @@ pub struct McpPage {
     filter: Filter,
     kind: Option<Kind>,
     sort: Sort,
-    /// The page of the list shown, from 0.
-    page: usize,
+    /// The page of the list shown, and the rows a page holds.
+    paging: catalog::Paging,
     /// The search as the list last filtered by it.
     last_query: String,
     /// The row ↑ and ↓ select and ↩ opens, by its place in the list.
@@ -322,7 +322,7 @@ impl McpPage {
                 // keyboard.
                 InputEvent::Change if this.query(cx) != this.last_query => {
                     this.last_query = this.query(cx);
-                    this.page = 0;
+                    this.paging.page = 0;
                     this.cursor = None;
                     cx.notify();
                 }
@@ -362,7 +362,7 @@ impl McpPage {
         let len = self.shown(&self.query(cx)).len();
         self.cursor = catalog::step(self.cursor, len, down);
         if let Some(ix) = self.cursor {
-            self.page = ix / catalog::PER_PAGE;
+            self.paging.show(ix);
         }
         window.focus(&self.page_focus, cx);
         cx.notify();
@@ -423,7 +423,7 @@ impl McpPage {
             filter: Filter::All,
             kind: None,
             sort: Sort::Catalog,
-            page: 0,
+            paging: catalog::Paging::new("mcp", cx),
             cursor: None,
             last_query: String::new(),
             page_focus: cx.focus_handle(),
@@ -1347,7 +1347,7 @@ impl McpPage {
                 current,
                 cx.listener(|this, ix: &usize, _, cx| {
                     this.filter = Filter::ALL[*ix];
-                    this.page = 0;
+                    this.paging.page = 0;
                     this.cursor = None;
                     cx.notify();
                 }),
@@ -1365,7 +1365,7 @@ impl McpPage {
                         kind,
                         cx.listener(|this, ix: &usize, _, cx| {
                             this.kind = ix.checked_sub(1).map(|ix| Kind::ALL[ix]);
-                            this.page = 0;
+                            this.paging.page = 0;
                             this.cursor = None;
                             cx.notify();
                         }),
@@ -1378,7 +1378,7 @@ impl McpPage {
                         sort,
                         cx.listener(|this, ix: &usize, _, cx| {
                             this.sort = Sort::ALL[*ix];
-                            this.page = 0;
+                            this.paging.page = 0;
                             this.cursor = None;
                             cx.notify();
                         }),
@@ -1721,20 +1721,25 @@ impl McpPage {
                 .into_any_element();
         }
         let selected = self.cursor.and_then(|c| rows.get(c)).copied();
-        let (rows, page) = catalog::page_of(rows, self.page);
+        let (rows, paging) = catalog::page_of(rows, self.paging);
         card.child(catalog::header(None, "Server", cx))
             .children(
                 rows.into_iter()
                     .map(|s| self.render_server(s, selected == Some(s), cx)),
             )
             .child(catalog::pager(
-                "mcp-pages",
-                page,
+                "mcp",
+                paging,
                 total,
                 if total == 1 { "server" } else { "servers" },
-                cx.listener(|this, page: &usize, _, cx| {
-                    this.page = *page;
-                    this.cursor = None;
+                self.cursor,
+                cx.listener(|this, paging: &catalog::Paging, _, cx| {
+                    // A turn of the page leaves the selected row behind; a new size keeps it
+                    // shown.
+                    if paging.size == this.paging.size {
+                        this.cursor = None;
+                    }
+                    this.paging = *paging;
                     cx.notify();
                 }),
                 cx,
@@ -1745,7 +1750,7 @@ impl McpPage {
     fn clear_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.filter = Filter::All;
         self.kind = None;
-        self.page = 0;
+        self.paging.page = 0;
         if let Some(search) = &self.search {
             search.update(cx, |s, cx| s.set_value("", window, cx));
         }

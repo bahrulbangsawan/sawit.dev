@@ -1,4 +1,5 @@
-//! Read-only table/view browser: pages of 50 rows ordered by the primary
+//! Read-only table/view browser: pages of 50 rows (or the 100 to 1000 picked
+//! in the toolbar's Show menu, kept for every table) ordered by the primary
 //! key, fetched over a read-only connection. The key and row estimate come
 //! from the schema tree, the count rides behind the first page on the same
 //! connection, and the next page is fetched ahead, so a remote database
@@ -38,11 +39,24 @@ use tokio_postgres::Client;
 
 use super::DbEvent;
 use super::store::DbStore;
+use crate::catalog::{self, PageSize};
 use crate::rt;
 use crate::states::{Banner, Placeholder};
 
-/// Rows per page (the most a page ever shows).
+/// Rows per page until the user picks another size.
 pub const PAGE_SIZE: u64 = 50;
+
+/// The sizes the toolbar's Show menu offers; never every row, as a table can hold millions.
+const PAGE_SIZES: [PageSize; 5] = [
+    PageSize::Rows(50),
+    PageSize::Rows(100),
+    PageSize::Rows(250),
+    PageSize::Rows(500),
+    PageSize::Rows(1000),
+];
+
+/// The Show menu's list (`page-sizes.json`): one size for every table.
+const PAGE_SIZE_LIST: &str = "table";
 
 /// Typing pause before the row search runs.
 const SEARCH_DELAY: Duration = Duration::from_millis(400);
@@ -112,25 +126,38 @@ fn plural(n: u64, one: &str) -> String {
     format!("{n} {one}{}", if n == 1 { "" } else { "s" })
 }
 
-/// Which page is shown and what is known about the total.
-#[derive(Debug, Default, Clone)]
+/// Which page is shown, how many rows a page holds, and what is known about the total.
+#[derive(Debug, Clone)]
 pub struct Pager {
     pub page: u64,
+    /// Rows per page (the most a page ever shows).
+    pub size: u64,
     /// `None` while the count is still running.
     pub total: Option<RowCount>,
     /// Rows on the current page.
     pub page_rows: usize,
 }
 
+impl Default for Pager {
+    fn default() -> Self {
+        Self {
+            page: 0,
+            size: PAGE_SIZE,
+            total: None,
+            page_rows: 0,
+        }
+    }
+}
+
 impl Pager {
     pub fn offset(&self) -> u64 {
-        self.page * PAGE_SIZE
+        self.page * self.size
     }
 
     /// Index of the last page, when the total is exact.
     pub fn last_page(&self) -> Option<u64> {
         match self.total {
-            Some(RowCount { rows, exact: true }) => Some(rows.saturating_sub(1) / PAGE_SIZE),
+            Some(RowCount { rows, exact: true }) => Some(rows.saturating_sub(1) / self.size),
             _ => None,
         }
     }
@@ -142,7 +169,17 @@ impl Pager {
     pub fn has_next(&self) -> bool {
         match self.last_page() {
             Some(last) => self.page < last,
-            None => self.page_rows as u64 == PAGE_SIZE,
+            None => self.page_rows as u64 == self.size,
+        }
+    }
+
+    /// The page holding the row first on the page shown, at `size` rows a page.
+    fn resized(&self, size: u64) -> Self {
+        let size = size.max(1);
+        Self {
+            page: self.offset() / size,
+            size,
+            ..self.clone()
         }
     }
 
@@ -275,7 +312,10 @@ impl TableView {
             schema,
             table,
             order_by: None,
-            pager: Pager::default(),
+            pager: Pager {
+                size: saved_page_size(cx),
+                ..Pager::default()
+            },
             grid: None,
             loading: false,
             error: None,
@@ -376,6 +416,7 @@ impl TableView {
         let count = self.pager.total.is_none() && !self.counted;
         self.counted = true;
         let query = self.query.clone();
+        let size = self.pager.size;
         let (page_tx, page_rx) = oneshot::channel();
         let count_rx = rt::spawn(cx, async move {
             let pipelined = known_order.is_some();
@@ -385,16 +426,9 @@ impl TableView {
                         Some(o) => o,
                         None => db::primary_key(&client, &schema, &table).await?,
                     };
-                    let set = db::fetch_rows(
-                        &client,
-                        &schema,
-                        &table,
-                        &order,
-                        &query,
-                        page * PAGE_SIZE,
-                        PAGE_SIZE,
-                    )
-                    .await?;
+                    let set =
+                        db::fetch_rows(&client, &schema, &table, &order, &query, page * size, size)
+                            .await?;
                     Ok::<_, sawit_core::CoreError>((order, set))
                 }
                 .await;
@@ -491,17 +525,9 @@ impl TableView {
         };
         let generation = self.generation;
         let (schema, table, query) = (self.schema.clone(), self.table.clone(), self.query.clone());
+        let size = self.pager.size;
         let rx = rt::spawn(cx, async move {
-            db::fetch_rows(
-                &client,
-                &schema,
-                &table,
-                &order,
-                &query,
-                next * PAGE_SIZE,
-                PAGE_SIZE,
-            )
-            .await
+            db::fetch_rows(&client, &schema, &table, &order, &query, next * size, size).await
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(set)) = rx.await {
@@ -646,6 +672,33 @@ impl TableView {
         if page != self.pager.page || self.error.is_some() {
             self.load_page(page, window, cx);
         }
+    }
+
+    /// Shows `size` rows a page, from the page holding the row that was first on the page shown.
+    /// The ticked rows stay ticked: they go by key, not by page.
+    fn set_page_size(&mut self, size: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if size == self.pager.size {
+            return;
+        }
+        self.pager = self.pager.resized(size);
+        // The page fetched ahead, and one loading, are the old size's.
+        self.prefetched = None;
+        self.in_flight = None;
+        self.queued = None;
+        self.load_page(self.pager.page, window, cx);
+    }
+}
+
+/// The size the user last picked for tables, among the Show menu's; else [`PAGE_SIZE`].
+fn saved_page_size(cx: &App) -> u64 {
+    match catalog::saved_size(
+        PAGE_SIZE_LIST,
+        &PAGE_SIZES,
+        PageSize::Rows(PAGE_SIZE as usize),
+        cx,
+    ) {
+        PageSize::Rows(n) => n as u64,
+        PageSize::All => PAGE_SIZE,
     }
 }
 
@@ -1187,6 +1240,17 @@ impl Render for TableView {
                         .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
                 )
             })
+            .child(catalog::page_size_menu(
+                PAGE_SIZE_LIST,
+                PageSize::Rows(pager.size as usize),
+                &PAGE_SIZES,
+                Anchor::TopRight,
+                cx.listener(|this, size: &PageSize, window, cx| {
+                    if let PageSize::Rows(n) = *size {
+                        this.set_page_size(n as u64, window, cx);
+                    }
+                }),
+            ))
             .child(if self.waiting_reconnect {
                 "Reconnecting…".to_string()
             } else if busy {
@@ -1837,7 +1901,7 @@ fn cell_preview(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     // Not a glob: `gpui_kit::*` exports a `test` macro that shadows #[test].
-    use super::{CELL_PREVIEW_CHARS, PAGE_SIZE, Pager, cell_preview};
+    use super::{CELL_PREVIEW_CHARS, PAGE_SIZE, PAGE_SIZES, Pager, cell_preview, saved_page_size};
 
     #[test]
     fn cell_preview_is_one_short_line() {
@@ -1862,6 +1926,61 @@ mod tests {
     #[test]
     fn page_size_is_fifty() {
         assert_eq!(PAGE_SIZE, 50);
+        assert_eq!(Pager::default().size, 50);
+    }
+
+    /// A page holds the rows the Show menu says; a new size shows the page with the row that was
+    /// first on the page before.
+    #[test]
+    fn a_new_size_keeps_the_first_row_shown() {
+        let p = Pager {
+            page: 3,
+            total: exact(1234),
+            page_rows: 50,
+            ..Default::default()
+        };
+        assert_eq!(p.offset(), 150);
+        let bigger = p.resized(100);
+        assert_eq!((bigger.page, bigger.offset()), (1, 100));
+        assert_eq!(bigger.last_page(), Some(12));
+        assert_eq!(
+            bigger.label(),
+            "101–150 of 1234",
+            "rows shown until the page loads"
+        );
+        let all_but = p.resized(1000);
+        assert_eq!((all_but.page, all_but.last_page()), (0, Some(1)));
+        // Back to 50 from page 1 of 100 (rows 101–200): row 101 is on page 2.
+        assert_eq!(bigger.resized(50).page, 2);
+        // Unknown total: a full page means "maybe more".
+        let p = Pager {
+            size: 250,
+            page_rows: 250,
+            ..Default::default()
+        };
+        assert!(p.has_next());
+        assert_eq!(p.label(), "1–250");
+    }
+
+    /// The Show menu offers sizes, never every row, and a size picked for one table is every
+    /// table's; any other size kept (an older menu's, a file edited by hand) is 50.
+    #[gpui_kit::test]
+    fn tables_start_at_the_size_last_picked(cx: &mut gpui_kit::TestAppContext) {
+        use crate::catalog::{PageSize, keep_page_sizes};
+        assert!(!PAGE_SIZES.contains(&PageSize::All));
+        let file = crate::testing::scratch_dir("table-page-size").join("page-sizes.json");
+        for (saved, size) in [
+            (r#"{"table": {"rows": 250}}"#, 250),
+            (r#"{"table": {"rows": 7}}"#, 50),
+            (r#"{"table": "all"}"#, 50),
+            (r#"{"tools": {"rows": 16}}"#, 50),
+        ] {
+            std::fs::write(&file, saved).unwrap();
+            cx.update(|cx| {
+                keep_page_sizes(file.clone(), cx);
+                assert_eq!(saved_page_size(cx), size, "{saved}");
+            });
+        }
     }
 
     #[test]

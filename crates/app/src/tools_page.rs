@@ -174,8 +174,8 @@ pub struct ToolsPage {
     filter: Filter,
     category: Option<Category>,
     sort: Sort,
-    /// The page of the list shown, from 0.
-    page: usize,
+    /// The page of the list shown, and the rows a page holds.
+    paging: catalog::Paging,
     /// The search as the list last filtered by it.
     last_query: String,
     /// The row ↑ and ↓ select and ↩ acts on, by its place in the list.
@@ -262,7 +262,7 @@ impl ToolsPage {
                 // keyboard.
                 InputEvent::Change if this.query(cx) != this.last_query => {
                     this.last_query = this.query(cx);
-                    this.page = 0;
+                    this.paging.page = 0;
                     this.cursor = None;
                     cx.notify();
                 }
@@ -292,7 +292,7 @@ impl ToolsPage {
         let len = self.shown(&self.query(cx)).len();
         self.cursor = catalog::step(self.cursor, len, down);
         if let Some(ix) = self.cursor {
-            self.page = ix / catalog::PER_PAGE;
+            self.paging.show(ix);
         }
         window.focus(&self.focus, cx);
         cx.notify();
@@ -342,7 +342,7 @@ impl ToolsPage {
             filter: Filter::All,
             category: None,
             sort: Sort::Category,
-            page: 0,
+            paging: catalog::Paging::new("tools", cx),
             cursor: None,
             last_query: String::new(),
             focus: cx.focus_handle(),
@@ -987,7 +987,7 @@ impl ToolsPage {
                 current,
                 cx.listener(|this, ix: &usize, _, cx| {
                     this.filter = Filter::ALL[*ix];
-                    this.page = 0;
+                    this.paging.page = 0;
                     this.cursor = None;
                     cx.notify();
                 }),
@@ -1005,7 +1005,7 @@ impl ToolsPage {
                         category,
                         cx.listener(|this, ix: &usize, _, cx| {
                             this.category = ix.checked_sub(1).map(|ix| Category::ALL[ix]);
-                            this.page = 0;
+                            this.paging.page = 0;
                             this.cursor = None;
                             cx.notify();
                         }),
@@ -1018,7 +1018,7 @@ impl ToolsPage {
                         sort,
                         cx.listener(|this, ix: &usize, _, cx| {
                             this.sort = Sort::ALL[*ix];
-                            this.page = 0;
+                            this.paging.page = 0;
                             this.cursor = None;
                             cx.notify();
                         }),
@@ -1578,7 +1578,7 @@ impl ToolsPage {
                 cx.notify();
             }));
         let selected = self.cursor.and_then(|c| rows.get(c)).map(|(_, t)| t.id);
-        let (rows, page) = catalog::page_of(rows, self.page);
+        let (rows, paging) = catalog::page_of(rows, self.paging);
         let card = v_flex()
             .rounded(theme.radius_lg)
             .border_1()
@@ -1610,13 +1610,17 @@ impl ToolsPage {
                 .map(|(ix, t)| self.render_row(ix, t, selected == Some(t.id), cx)),
         )
         .child(catalog::pager(
-            "tools-pages",
-            page,
+            "tools",
+            paging,
             total,
             if total == 1 { "tool" } else { "tools" },
-            cx.listener(|this, page: &usize, _, cx| {
-                this.page = *page;
-                this.cursor = None;
+            self.cursor,
+            cx.listener(|this, paging: &catalog::Paging, _, cx| {
+                // A turn of the page leaves the selected row behind; a new size keeps it shown.
+                if paging.size == this.paging.size {
+                    this.cursor = None;
+                }
+                this.paging = *paging;
                 cx.notify();
             }),
             cx,
@@ -1626,7 +1630,7 @@ impl ToolsPage {
     fn clear_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.filter = Filter::All;
         self.category = None;
-        self.page = 0;
+        self.paging.page = 0;
         if let Some(search) = &self.search {
             search.update(cx, |s, cx| s.set_value("", window, cx));
         }

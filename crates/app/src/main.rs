@@ -135,6 +135,12 @@ fn main() -> std::process::ExitCode {
         files::init(cx);
         shell_config::init(cx);
         catalog::init(cx);
+        catalog::keep_page_sizes(
+            sawit_core::instances::AppPaths::default_macos()
+                .root
+                .join("page-sizes.json"),
+            cx,
+        );
         db::init(cx);
         git::init(cx);
         workspace::init(cx);

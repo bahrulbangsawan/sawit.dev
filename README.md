@@ -139,7 +139,8 @@ explained. A conflict on the same address can't be forced.
 - **Tree** of connection → schema → table/view → columns & types. The tree is virtual and stays smooth with
   thousands of tables. Tables without `SELECT` permission are disabled and say why.
 - **Paged read-only grid**: 50 rows per page, ordered by primary key so pages stay stable,
-  over a separate read-only connection. The first page shows before the row count finishes.
+  over a separate read-only connection. **Show** in the toolbar picks 100, 250, 500 or 1000 rows a page instead,
+  for every table, and Sawit remembers it. The first page shows before the row count finishes.
   Counting stops after 3 seconds; after that an estimate is shown.
 - **Select rows** with their checkboxes, or every row the search and filters match, then **Delete Rows** or set a
   column to one value. Sawit says how many rows change and asks first.
@@ -240,7 +241,9 @@ explained. A conflict on the same address can't be forced.
   (Node.js, Bun, Deno, Python, Rust), AI agents (Claude Code, Codex, OpenCode, Amp, …) and terminal apps.
 - Each tool shows whether it's installed, its version and where it lives, and the exact command that installs it.
 - Search the list, narrow it with the **Installed**, **Updates** and **Not Installed** tabs or to one category, and
-  sort it by category, by name or by what needs attention. It shows eight tools a page.
+  sort it by category, by name or by what needs attention. It shows eight tools a page; **Show** under the list
+  picks 8, 16, 32 or 64 a page, or all of them, and the page keeps the tool you selected in sight. Sawit remembers
+  the size, across restarts too.
 - The keyboard starts in the search (⌘F goes back to it); ↩ there moves to the first tool, ↑ and ↓ select, and ↩
   installs, upgrades or retries the selected one. It never removes anything: a failed uninstall's **Retry** asks
   before it runs that uninstall again.
@@ -690,7 +693,8 @@ through or ask before destructive ones.
 
 Click **MCP** in the title bar to install it, along with a catalog of other servers: AWS, Cloudflare, Neon, Postman,
 Figma, Mobbin, Exa and more. Search the catalog, narrow it with the **Installed**, **Not Installed** and **Needs
-Sign-In** tabs or by where a server runs (built in, remote, on this Mac), and sort it. From the keyboard: ⌘F
+Sign-In** tabs or by where a server runs (built in, remote, on this Mac), and sort it. **Show** under the list sets how
+many servers a page holds (8 to 64, or all), as on the Tools page, and Sawit remembers it. From the keyboard: ⌘F
 searches, ↩ in the search moves to the first server, ↑ and ↓ select, ↩ opens the server's sheet, and ↩ there
 installs. Servers that need an account sign in through the client's own sign-in, which the page can start for Claude
 Code and Codex. The page finds the AI clients on this Mac: Claude Code (every profile, including `CLAUDE_CONFIG_DIR`
