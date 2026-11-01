@@ -65,6 +65,17 @@ fn agent_project(
         .or(active)
 }
 
+/// For a canvas `mermaid` op, the work that renders its diagram and makes it into skeletons
+/// (`sawit_board::ops::prepare_diagram`), to run off the UI thread; `None` for any other op.
+fn mermaid_op(
+    op: &Value,
+) -> Option<impl Future<Output = sawit_board::ops::PreparedDiagram> + use<>> {
+    (op.get("op").and_then(Value::as_str) == Some("mermaid")).then(|| {
+        let op = op.clone();
+        async move { sawit_board::ops::prepare_diagram(&op).expect("a mermaid op") }
+    })
+}
+
 /// The kind of canvas file `file` is, which an agent's canvas op names: an absolute path to a
 /// `.sawit` or an `.excalidraw` file. Anything else is the op's error, and no tab opens for it.
 fn canvas_file_kind(file: &Path) -> Result<FileKind, String> {

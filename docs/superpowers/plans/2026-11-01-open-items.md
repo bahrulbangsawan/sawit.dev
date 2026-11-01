@@ -63,7 +63,8 @@ Small, rare or untested-wiring items. Most of the untested wiring has one root c
   the editor closes without it (its scrollback goes). A `terminal_split` refused for its tab, pane or size still shows
   the dock, and a tab behind another is measured for a split with the size it last had.
 - **Canvas.** The refusal toast doesn't mention the unsaved copy; Save As then close makes a second copy; backup
-  rotation isn't all-or-nothing; a Mermaid diagram of thousands of edges stalls the worker for seconds.
+  rotation isn't all-or-nothing. (A diagram of thousands of edges no longer stalls the worker: Pele refuses one past
+  2,000 edges at once, and the canvas renders a diagram off the UI thread.)
 - **An agent's canvas, open or closed** (Q12's second half). With no `project`, Sawit closed can still pick another
   canvas than Sawit open in these cases: a project outside a git repository with the agent in a subfolder (no
   walk-up there), a Sawit project folder above nested repositories (several repositories in one folder, or a

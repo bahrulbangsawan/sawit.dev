@@ -1,13 +1,22 @@
-//! Mermaid diagrams to SVG with Pele (https://pele.run), the MIT-licensed
-//! renderer from Obsidian. Pele is JavaScript, so it runs in an embedded
-//! QuickJS engine on its own thread; the bundle is compiled into the binary,
-//! so diagrams render offline.
+//! Diagrams written in Mermaid syntax, drawn to SVG by Pele (https://pele.run),
+//! the MIT-licensed renderer from Obsidian. Mermaid is only the syntax here:
+//! no part of mermaid.js is bundled or called. Pele is JavaScript, so it runs
+//! in an embedded QuickJS engine on its own thread; the bundle is compiled into
+//! the binary, so diagrams render offline. Every type Pele draws ([`TYPES`]) is
+//! drawn here, and so by every user of [`render`]: the canvas, the Markdown and
+//! `.mmd` previews, the schema diagram and the MCP tools.
 //!
 //! Pele themes its SVG with CSS variables (and a `color-mix()` or two), which
 //! the SVG rasterizer behind GPUI images (usvg) doesn't understand, so
 //! [`flatten`] bakes the theme's colors into the markup. The result is a
 //! standalone SVG that any viewer draws the same way, which is also what
 //! "Save Diagram as SVG…" saves.
+//!
+//! Pele's own limits bound what one render costs: the source's length, the
+//! edges of a flowchart or an agentflow, and the SVG's length ([`SOURCE_LIMIT`],
+//! [`MAX_EDGES`], [`OUTPUT_LIMIT`]). A diagram past one of them is refused at
+//! once, in words that say so, instead of holding the worker until
+//! [`RENDER_TIMEOUT`] stops it.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -15,12 +24,86 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-/// Pele 1.12.0, `dist/pele.global.js` (defines the global `pele`). The canvas
+/// The version of Pele that [`PELE_JS`] is.
+pub const PELE_VERSION: &str = "1.13.0";
+
+/// Pele 1.13.0, `dist/pele.global.js` (defines the global `pele`). The canvas
 /// turns the SVG this copy draws into shapes (`sawit_board::mermaid`).
 pub const PELE_JS: &str = include_str!("../assets/pele/pele.global.js");
 
+/// Every diagram type Pele draws, by the keyword its Mermaid source starts
+/// with, and Pele's name for the type, which [`Diagram::kind`] is (Pele's
+/// compatibility table, https://pele.run/compatibility). ZenUML and other
+/// Mermaid plugins aren't among them.
+pub const TYPES: &[(&str, &str)] = &[
+    ("flowchart", "flowchart"),
+    ("graph", "flowchart"),
+    ("flowchart-elk", "flowchart"),
+    ("swimlane-beta", "swimlane"),
+    ("sequenceDiagram", "sequence"),
+    ("classDiagram", "class"),
+    ("stateDiagram", "state"),
+    ("stateDiagram-v2", "state"),
+    ("erDiagram", "er"),
+    ("gantt", "gantt"),
+    ("gitGraph", "gitGraph"),
+    ("pie", "pie"),
+    ("mindmap", "mindmap"),
+    ("kanban", "kanban"),
+    ("timeline", "timeline"),
+    ("journey", "journey"),
+    ("quadrantChart", "quadrantChart"),
+    ("xychart", "xychart"),
+    ("xychart-beta", "xychart"),
+    ("requirementDiagram", "requirement"),
+    ("sankey", "sankey"),
+    ("sankey-beta", "sankey"),
+    ("architecture-beta", "architecture"),
+    ("C4Context", "c4"),
+    ("C4Container", "c4"),
+    ("C4Component", "c4"),
+    ("C4Dynamic", "c4"),
+    ("C4Deployment", "c4"),
+    ("block", "block"),
+    ("block-beta", "block"),
+    ("agentflow-beta", "agentflow"),
+    ("railroad-beta", "railroad"),
+    ("railroad-ebnf-beta", "railroad"),
+    ("railroad-abnf-beta", "railroad"),
+    ("railroad-peg-beta", "railroad"),
+    ("treeView-beta", "treeView"),
+    ("cynefin-beta", "cynefin"),
+    ("wardley-beta", "wardley"),
+    ("eventmodeling", "eventmodeling"),
+    ("usecase-beta", "usecase"),
+    ("venn-beta", "venn"),
+    ("ishikawa", "ishikawa"),
+    ("ishikawa-beta", "ishikawa"),
+    ("packet", "packet"),
+    ("packet-beta", "packet"),
+    ("radar-beta", "radar"),
+    ("treemap", "treemap"),
+    ("treemap-beta", "treemap"),
+    ("info", "info"),
+];
+
 /// A runaway diagram is interrupted after this long.
 const RENDER_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The longest source Pele takes, in characters (Pele's own default): a longer
+/// one is refused before it is parsed.
+pub const SOURCE_LIMIT: u32 = 50_000;
+
+/// The most edges a flowchart or an agentflow may have. Pele's default is
+/// 5,000, but Pele runs here in QuickJS's interpreter, much slower than a
+/// browser's JIT: a flowchart of a few thousand edges held the worker for
+/// seconds, and every diagram behind it waited. Past this many it is refused at
+/// once, and the layout of one at the limit stays well inside [`RENDER_TIMEOUT`].
+pub const MAX_EDGES: u32 = 2_000;
+
+/// The longest SVG Pele writes, in characters (Pele's own default). A bigger
+/// one is no picture a preview or the canvas can show in one piece.
+pub const OUTPUT_LIMIT: u32 = 4_000_000;
 
 /// How a [`render`] error ends when the diagram ran past [`RENDER_TIMEOUT`] and was stopped
 /// ([`took_too_long`]).
@@ -151,7 +234,7 @@ fn worker(jobs: mpsc::Receiver<Job>) {
         let cx = Context::full(&rt).map_err(|e| e.to_string())?;
         cx.with(|cx| {
             cx.eval::<(), _>(PELE_JS)
-                .map_err(|e| exception(&cx, e, "Pele failed to load"))
+                .map_err(|e| exception(&cx, e, "Pele failed to load", ""))
         })?;
         Ok::<_, String>((rt, cx))
     })();
@@ -177,13 +260,16 @@ fn worker(jobs: mpsc::Receiver<Job>) {
 fn call_render(cx: &rquickjs::Ctx<'_>, source: &str) -> Result<Raw, String> {
     use rquickjs::{Function, Object};
 
-    let err = |e| exception(cx, e, "The diagram can't be drawn");
+    let err = |e| exception(cx, e, "The diagram can't be drawn", source);
     let pele: Object = cx.globals().get("pele").map_err(err)?;
     let render: Function = pele.get("render").map_err(err)?;
     let options = Object::new(cx.clone()).map_err(err)?;
     // A fixed pixel size: the preview scales it down to fit.
     options.set("responsive", false).map_err(err)?;
     options.set("idPrefix", "mermaid").map_err(err)?;
+    options.set("limit", SOURCE_LIMIT).map_err(err)?;
+    options.set("maxEdges", MAX_EDGES).map_err(err)?;
+    options.set("outputLimit", OUTPUT_LIMIT).map_err(err)?;
     let result: Object = render.call((source, options)).map_err(err)?;
     Ok(Raw {
         svg: result.get("svg").map_err(err)?,
@@ -193,23 +279,76 @@ fn call_render(cx: &rquickjs::Ctx<'_>, source: &str) -> Result<Raw, String> {
     })
 }
 
-/// The pending JS exception's message, or `fallback` with the engine error.
-fn exception(cx: &rquickjs::Ctx<'_>, e: rquickjs::Error, fallback: &str) -> String {
+/// What went wrong, in Sawit's words where Pele's would leave the reader
+/// guessing, from the pending JS exception: a `PeleError`'s `code` and
+/// `message`, or `fallback` with the engine's error.
+///
+/// - `unsupported-diagram`: the type isn't one Pele draws ([`unsupported`]).
+/// - `limit`: the diagram is too big, and Pele's message says which limit.
+/// - `syntax` and `semantic`: Pele's own message, which quotes the line.
+fn exception(cx: &rquickjs::Ctx<'_>, e: rquickjs::Error, fallback: &str, source: &str) -> String {
     if !e.is_exception() {
         return format!("{fallback}: {e}");
     }
     let thrown = cx.catch();
-    let message = thrown
-        .as_object()
-        .and_then(|o| o.get::<_, String>("message").ok())
+    let field = |name: &str| {
+        thrown
+            .as_object()
+            .and_then(|o| o.get::<_, String>(name).ok())
+            .filter(|m| !m.is_empty())
+    };
+    let message = field("message")
         .or_else(|| thrown.as_string().and_then(|s| s.to_string().ok()))
         .filter(|m| !m.is_empty());
-    match message {
+    match (field("code").as_deref(), message) {
         // QuickJS throws "interrupted" once the deadline passes.
-        Some(m) if m == "interrupted" => format!("{fallback}: {TOOK_TOO_LONG}"),
-        Some(m) => m,
-        None => format!("{fallback}."),
+        (_, Some(m)) if m == "interrupted" => format!("{fallback}: {TOOK_TOO_LONG}"),
+        (Some("unsupported-diagram"), _) => unsupported(source),
+        (Some("limit"), Some(m)) => format!("The diagram is too big to draw: {m}"),
+        (_, Some(m)) => m,
+        (_, None) => format!("{fallback}."),
     }
+}
+
+/// Why `source` can't be drawn when Pele finds no type it draws in it: what
+/// the source starts with, and the types it can start with instead. ZenUML,
+/// which mermaid.js draws with a plugin, is named as such.
+pub fn unsupported(source: &str) -> String {
+    let keywords: Vec<&str> = TYPES.iter().map(|(keyword, _)| *keyword).collect();
+    let types = keywords.join(", ");
+    match first_word(source) {
+        None => format!("The diagram is empty. Start it with its type: {types}."),
+        Some(word) if word.eq_ignore_ascii_case("zenuml") => format!(
+            "ZenUML diagrams can't be drawn: Sawit draws Mermaid syntax with Pele, which has no \
+             ZenUML or other Mermaid plugins. Start the diagram with one of: {types}."
+        ),
+        Some(word) => format!(
+            "“{word}” isn't a diagram type Sawit can draw. Start the diagram with one of: {types}."
+        ),
+    }
+}
+
+/// The first word of a Mermaid source, past its front matter (`---` … `---`),
+/// its `%%` comments and directives and its blank lines: the diagram's type.
+fn first_word(source: &str) -> Option<&str> {
+    let mut lines = source.lines().map(str::trim);
+    let mut in_front_matter = false;
+    let mut first = true;
+    for line in lines.by_ref() {
+        if std::mem::take(&mut first) && line == "---" {
+            in_front_matter = true;
+            continue;
+        }
+        if in_front_matter {
+            in_front_matter = line != "---";
+            continue;
+        }
+        if line.is_empty() || line.starts_with("%%") {
+            continue;
+        }
+        return line.split_whitespace().next();
+    }
+    None
 }
 
 // --- Flattening -----------------------------------------------------------
@@ -557,12 +696,12 @@ pub fn rewrite_markdown(
         out.push_str(&markdown[copied..fence.range.start]);
         match result {
             Ok(_) => out.push_str(&format!(
-                "![Mermaid diagram]({IMAGE_SCHEME}{ix})\n\n[Save Diagram as SVG…]({SAVE_SCHEME}{ix})\n"
+                "![Diagram]({IMAGE_SCHEME}{ix})\n\n[Save Diagram as SVG…]({SAVE_SCHEME}{ix})\n"
             )),
             Err(e) => {
                 let ticks = "`".repeat(longest_run(e, '`').max(2) + 1);
                 out.push_str(&format!(
-                    "**Mermaid diagram can't be drawn:**\n\n{ticks}text\n{}\n{ticks}\n",
+                    "**The diagram can't be drawn:**\n\n{ticks}text\n{}\n{ticks}\n",
                     e.trim_end()
                 ));
             }
@@ -619,6 +758,33 @@ mod tests {
         assert!(out.contains(r##"<rect width="100%" height="100%" fill="#000000"/>"##));
     }
 
+    /// Pele 1.13's series palettes: a diagram's `themeVariables` palette is declared on the root
+    /// as `--pele-series-*`, which may name a theme variable (that then follows the palette given
+    /// here); and a label on a fill the diagram sets names `--pele-fg-on-dark` or `-light`, which
+    /// the palette leaves to Pele's own.
+    #[test]
+    fn flatten_bakes_series_palettes_and_text_on_fills() {
+        let palette = Palette {
+            accent: "#123456".into(),
+            ..Palette::default()
+        };
+        let source = "---\nconfig:\n  themeVariables:\n    pie1: \"var(--pele-accent)\"\n    \
+                      pie2: \"#205ea6\"\n---\npie\n  \"A\": 1\n  \"B\": 2\n  \"C\": 3\n";
+        let d = render(source, &palette).unwrap();
+        assert!(!d.svg.contains("var("), "{}", d.svg);
+        assert!(
+            d.svg.contains("#123456") && d.svg.contains("#205ea6"),
+            "{}",
+            d.svg
+        );
+        // The third slice keeps the theme's own third colour.
+        assert!(d.svg.contains("#54a24b"), "{}", d.svg);
+        let block = "block\n  a[\"A\"]\n  style a fill:#333,stroke:#000\n";
+        let d = render(block, &palette).unwrap();
+        assert!(!d.svg.contains("var("), "{}", d.svg);
+        assert!(d.svg.contains(r##"fill="#fff""##), "{}", d.svg);
+    }
+
     #[test]
     fn mix_weights() {
         assert_eq!(
@@ -660,7 +826,7 @@ mod tests {
         let out = rewrite_markdown(md, &found, &[Ok(diagram), Err("bad ``` thing".into())]);
         assert_eq!(
             out,
-            "a\n![Mermaid diagram](sawit-mermaid:0)\n\n[Save Diagram as SVG…](sawit-mermaid-save:0)\n\nb\n**Mermaid diagram can't be drawn:**\n\n````text\nbad ``` thing\n````\n\n"
+            "a\n![Diagram](sawit-mermaid:0)\n\n[Save Diagram as SVG…](sawit-mermaid-save:0)\n\nb\n**The diagram can't be drawn:**\n\n````text\nbad ``` thing\n````\n\n"
         );
         assert_eq!(index_in("sawit-mermaid-save:12", SAVE_SCHEME), Some(12));
         assert_eq!(index_in("sawit-mermaid:x", IMAGE_SCHEME), None);
@@ -674,5 +840,89 @@ mod tests {
         assert!(d.svg.starts_with("<svg") && !d.svg.contains("var("));
         assert!(render("flowchart LR\n  A[unclosed --> B", &Palette::default()).is_err());
         assert!(render("notADiagram", &Palette::default()).is_err());
+    }
+
+    /// The bundle is the Pele that [`PELE_VERSION`] names, with its licence beside it.
+    #[test]
+    fn the_bundle_is_the_pele_version_named() {
+        let banner = format!("/*! Pele {PELE_VERSION} | MIT License");
+        assert!(PELE_JS.starts_with(&banner), "{}", &PELE_JS[..80]);
+        let licence = include_str!("../assets/pele/LICENSE");
+        assert!(licence.starts_with("MIT License\n\nCopyright (c) 2026 kepano"));
+    }
+
+    /// A source whose type Pele doesn't draw is told so in Sawit's words: what it starts with,
+    /// and the types it can start with. ZenUML, a mermaid.js plugin, is named as such.
+    #[test]
+    fn an_unsupported_type_is_told_in_sawits_words() {
+        let palette = Palette::default();
+        let zen = render("zenuml\n  title Demo\n  Alice->John: Hello", &palette).unwrap_err();
+        assert!(zen.starts_with("ZenUML diagrams can't be drawn"), "{zen}");
+        assert!(zen.contains("Pele"), "{zen}");
+        let other = render("---\ntitle: T\n---\n%% note\n\nnotADiagram\n  a", &palette);
+        let other = other.unwrap_err();
+        assert!(
+            other.starts_with("“notADiagram” isn't a diagram type Sawit can draw"),
+            "{other}"
+        );
+        for (keyword, _) in TYPES {
+            assert!(other.contains(keyword), "{other} names {keyword}");
+        }
+        assert!(unsupported(" \n%%{init: {}}%%\n").starts_with("The diagram is empty"));
+    }
+
+    /// A diagram past one of Pele's limits is refused at once, saying it is too big and which
+    /// limit it passed, instead of holding the worker (open items: "a Mermaid diagram of
+    /// thousands of edges stalls the worker for seconds").
+    #[test]
+    fn a_diagram_past_a_limit_is_refused_at_once() {
+        let palette = Palette::default();
+        let mut many = String::from("flowchart LR\n");
+        for i in 0..=MAX_EDGES {
+            many.push_str(&format!("  a{i} --> b{i}\n"));
+        }
+        let started = Instant::now();
+        let error = render(&many, &palette).unwrap_err();
+        assert!(
+            error.starts_with("The diagram is too big to draw: "),
+            "{error}"
+        );
+        assert!(error.contains(&MAX_EDGES.to_string()), "{error}");
+        assert!(
+            started.elapsed() < RENDER_TIMEOUT / 2,
+            "{:?}",
+            started.elapsed()
+        );
+        let long = format!("flowchart LR\n  A[{}]", "x".repeat(SOURCE_LIMIT as usize));
+        let error = render(&long, &palette).unwrap_err();
+        assert!(
+            error.starts_with("The diagram is too big to draw: "),
+            "{error}"
+        );
+        // Neither is a render stopped for time, which the canvas would not try again.
+        assert!(!took_too_long(&error));
+    }
+
+    /// How long QuickJS takes to lay out flowcharts of growing size, which [`MAX_EDGES`] is
+    /// chosen by: `cargo test -p sawit-core --release -- --ignored --nocapture edges_take`.
+    #[test]
+    #[ignore]
+    fn edges_take() {
+        for edges in [250u32, 500, 1000, 1500, 2000, 3000] {
+            let mut source = String::from("flowchart LR\n");
+            let nodes = edges.div_ceil(2);
+            for i in 0..edges {
+                source.push_str(&format!("  n{} --> n{}\n", i % nodes, (i * 7 + 3) % nodes));
+            }
+            let started = Instant::now();
+            let result = run(source);
+            println!(
+                "{edges} edges: {:?} {}",
+                started.elapsed(),
+                result
+                    .as_ref()
+                    .map_or_else(|e| e.clone(), |r| r.svg.len().to_string())
+            );
+        }
     }
 }

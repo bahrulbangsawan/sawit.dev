@@ -64,7 +64,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with device sizes and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (128 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (130 tools) and a catalog of MCP servers (AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 | ✨ **Agent skills** | Superpowers, shadcn's improve, Cloudflare's skills, MCP Apps, unslop and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
 ## Install
@@ -202,8 +202,12 @@ explained. A conflict on the same address can't be forced.
 
 - **Markdown, HTML, and SVG**: Code / Split / Preview modes with a live preview. Relative
   images and tables are shown too.
-- **Mermaid**: ` ```mermaid ` blocks in Markdown become diagrams, and `.mmd` files preview as their diagram.
-  **Save Diagram as SVG…** exports one. Colors follow the app theme.
+- **Diagrams (Mermaid syntax)**: ` ```mermaid ` blocks in Markdown become diagrams, and `.mmd` files preview as
+  their diagram. [Pele](https://pele.run) draws them, offline, in every type it supports (flowchart, swimlane,
+  sequence, class, state, ER, Gantt, git graph, pie, mindmap, kanban, timeline, journey, quadrant, XY, requirement,
+  Sankey, architecture, C4, block, agentflow, railroad, tree view, Cynefin, Wardley, event modeling, use case, Venn,
+  Ishikawa, packet, radar, treemap, info); mermaid.js isn't used, so ZenUML and other Mermaid plugins aren't
+  drawn. **Save Diagram as SVG…** exports one. Colors follow the app theme.
 - **Code blocks** in previews get a **Copy** button. Shell blocks (`bash`, `zsh`, `sh`, …) also get **Run**,
   which types the commands into a shell waiting at its prompt in the same window's terminal, or a new terminal tab
   when every shell is running something.
@@ -508,9 +512,12 @@ explained. A conflict on the same address can't be forced.
   time. The `.excalidraw` file is never changed, and the canvas says what the import left out (the hand-drawn look
   doesn't carry over). An `.excalidraw` file in the Files tab opens the same way and saves as `<name>.sawit`
   beside it.
-- Agents draw on it through the `canvas_*` MCP tools. `canvas_add_mermaid` turns Mermaid into **editable shapes**:
-  boxes, connectors joined to them, and labels. Charts (pie, Gantt, XY, quadrant, journey, Sankey, architecture) are
-  placed as one picture. Pele, the renderer the rest of the app uses, lays the diagram out. `canvas_command` runs any
+- Agents draw on it through the `canvas_*` MCP tools. `canvas_add_diagram` (`canvas_add_mermaid` is its deprecated
+  old name) turns a diagram written in Mermaid syntax into **editable shapes**: boxes, connectors joined to them,
+  and labels. Pele, the renderer the rest of the app uses, lays the diagram out, and every type it draws comes in,
+  each in the way that keeps it editable where editing makes sense (see the table below). Icons and text Pele turned
+  (a lane's title, an axis's) come in as small pictures. The diagram is rendered off the UI thread, and one past
+  Pele's limits (2,000 edges, 50,000 characters) is refused at once instead of stalling the window. `canvas_command` runs any
   other canvas command by its id. With no `project`, an agent draws on the canvas of the project it works in, with
   Sawit open or closed. With Sawit closed, that is, within the agent's git repository, the nearest folder up from
   the agent's whose `.nyawit/` holds a canvas, else the repository's root (outside a repository, the agent's own
@@ -519,6 +526,27 @@ explained. A conflict on the same address can't be forced.
   file in the repository: the agent works on it in its own canvas tab, which opens without taking your keyboard,
   or on the file while Sawit is closed. An `.excalidraw` file is imported once into the `.sawit` file beside it,
   as the Files tab opens it.
+
+How each diagram type comes onto the canvas:
+
+| Type | Comes in as | Why |
+| --- | --- | --- |
+| Flowchart, swimlane, sequence, class, state, ER, mindmap, kanban, block, requirement, C4 (all five), git graph, timeline | Shapes | Nodes, edges and boxes: what a canvas draws. |
+| Architecture | Shapes | Groups and services are boxes, links connectors; each service's icon is a small picture. |
+| Agentflow | Shapes | Steps, decisions and tools are shapes, each agent's flow a group, joined by connectors. |
+| Use case | Shapes | Actors, use cases and system boundaries, joined by connectors. |
+| Event modeling | Shapes | Commands, events and views are boxes in their lanes, joined by connectors. |
+| Ishikawa | Shapes | The head, the categories and each cause are texts and lines to rewrite. |
+| Packet | Shapes | Each field is a box holding its name; the bit numbers are texts. |
+| Quadrant chart | Shapes | Quadrants are boxes, points dots with their labels. |
+| Tree view | Shapes on a picture | File names are texts; the guides between them a picture under them. |
+| Railroad (all four syntaxes) | Shapes on a picture | Terminals and rules are boxes and texts; the tracks, which branch and loop, a picture under them. |
+| Wardley map | Shapes on a picture | Components, links and moves are shapes; the axes and stages a picture under them. |
+| Cynefin | Shapes on a picture | Each domain's names and items are shapes; the curved, see-through regions a picture under them. |
+| Venn | Shapes on a picture | The labels are texts; the see-through sets, whose overlaps would hide each other as shapes, a picture. |
+| Journey, pie, Gantt, XY, Sankey, radar, treemap, info | One picture | Charts: where a shape sits and how big it is is the data, so moving one would only misstate it. |
+
+A picture is an SVG the canvas imports as its own layers, drawn as Pele drew it.
 
 ### Agent cursors
 
@@ -938,7 +966,7 @@ sawit list explorer                          # Cloudflare Local Explorers runnin
 
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 128 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 130 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
 the agent's project open (or the one `project` names), else the frontmost window. An agent's browser and canvas are
 its own project's, even while you look at another project of that window.
@@ -955,7 +983,7 @@ work in the last 30 seconds, with its `id`, `name` (its label on screen), `color
 | Instances | `list_instances`, `create_instance`, `start_instance` (refused with an explanation when the port is in use), `stop_instance`, `restart_instance`, `remove_instance`, `instance_logs`, `check_port`, `list_postgres_binaries` |
 | Databases | `list_connections`, `detect_databases`, `list_databases`, `create_database`, `drop_database`, `describe_schema`, `describe_table`, `query` (**always read-only**, up to 500 rows), `execute_sql` (read-write), `save_connection`, `remove_connection`, `write_env` |
 | Export, backup, import | `export_table`, `export_query` (CSV or Excel), `backup_database` (`pg_dump`), `import_csv`, `drop_relation`, `truncate_table`, `refresh_materialized_view` |
-| Diagrams | `render_mermaid` (SVG), `schema_diagram` (Mermaid, DBML or SVG) |
+| Diagrams | `render_diagram` (a diagram in Mermaid syntax, any type Pele draws, to SVG; `render_mermaid` is its deprecated old name), `schema_diagram` (Mermaid, DBML or SVG) |
 | Ports | `list_ports`, `stop_processes` |
 | Cloudflare Local Explorer | `local_explorer` (the explorers Workers dev servers serve: URL, API, port, process and Workers; and the project's Workers with their bindings, Wrangler or Vite plugin version, upgrade command and the script that starts them), `local_explorer_request` (one call to an explorer's API on loopback, under `/cdn-cgi/local/explorer/api`; long answers are cut) |
 | Network | `diagnose_network`, `ping` |
@@ -972,7 +1000,7 @@ work in the last 30 seconds, with its `id`, `name` (its label on screen), `color
 | Terminal (app running) | `terminal_run`, `terminal_split` (a pane split right or down, with a command in the new half), `terminal_read`, `terminal_input`, `terminal_close` (`terminal_run`, `terminal_split`, `app_run_script` and `app_ssh_connect` return the tab and `pane` they used; `terminal_input` needs the tab, and a split tab needs its pane; `app_state` names the coding agent running in each tab and pane, as `agent`: `claude-code`, `codex`, …) |
 | Keymap (app running) | `keymap_list` (every binding: what a key does, which key runs an action, what clashes), `keymap_bind`, `keymap_unbind` (with the Keymap Editor's checks; `restore` brings back a default) |
 | Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (the user's notes as Markdown: each element's selector, path, attributes, role, box, styles, neighbours, source file and screenshot), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`; replacing an earlier export needs `replace: true`) |
-| Canvas | `canvas_get` (the top-level layers of the page on show), `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear` (the page on show), `canvas_load`, `canvas_export` (the page on show, as SVG or PNG), `canvas_command` (any command of the canvas engine, by id: `page.list` and `node.get` reach the other pages), `canvas_commands` (lists them; pass a `filter` to see what each takes). Each takes `file`, a `.sawit` file (a design file, say) or an `.excalidraw` file to work on instead of the project's canvas, in a canvas tab of its own. All of them work on the saved canvas file when the app is closed; then each call starts from that file, so no undo or selection carries over to the next: pass `canvas_command` the ids, or its steps in one `command.batch` |
+| Canvas | `canvas_get` (the top-level layers of the page on show), `canvas_add_elements`, `canvas_add_diagram` (a diagram in Mermaid syntax as editable shapes; `canvas_add_mermaid` is its deprecated old name), `canvas_update`, `canvas_delete`, `canvas_clear` (the page on show), `canvas_load`, `canvas_export` (the page on show, as SVG or PNG), `canvas_command` (any command of the canvas engine, by id: `page.list` and `node.get` reach the other pages), `canvas_commands` (lists them; pass a `filter` to see what each takes). Each takes `file`, a `.sawit` file (a design file, say) or an `.excalidraw` file to work on instead of the project's canvas, in a canvas tab of its own. All of them work on the saved canvas file when the app is closed; then each call starts from that file, so no undo or selection carries over to the next: pass `canvas_command` the ids, or its steps in one `command.batch` |
 
 Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`,
 `uninstall_mcp_server`, `uninstall_skill`, `remove_connection`, `remove_ssh_host`, `delete_prompt` and
@@ -1171,7 +1199,7 @@ crates/core   sawit-core — no GPUI, tested with plain cargo test
   db                     profiles, DATABASE_URL/.env, TLS, schema, paging, SQL, read-only, diagrams,
                          bulk edits, CSV/Excel export, pg_dump backups, CSV import
   keychain               passwords in the macOS Keychain
-  mermaid                Mermaid → SVG with Pele in embedded QuickJS
+  mermaid                diagrams in Mermaid syntax → SVG with Pele 1.13 in embedded QuickJS
   files, format, media, pdf   folder listing, safe reads, atomic saves, formatters, image & PDF rendering
   terminal               PTY + alacritty_terminal → snapshot, keyboard/mouse encoding
   network                connection diagnosis and ping
@@ -1208,7 +1236,7 @@ crates/mcp    sawit-mcp — stdio MCP server on top of core and board
 | PATH from the login shell at startup | Apps opened from Finder get a minimal PATH; without this, `docker` and `brew` are not found. |
 | Terminal: `alacritty_terminal` + canvas | Like Zed's terminal; core produces snapshots, the app only draws. `HERDR_*`/`TMUX`/`ZELLIJ*` variables from the parent process are dropped so programs don't refuse to run as "nested". |
 | Highlighting: tree-sitter, then syntect | Tree-sitter for the 16 languages developers open most: it reparses only what an edit changed, parses embedded languages (Markdown fences, `<script>`, macros) on their own, and folds along the syntax tree. Each grammar is compiled into the binary, so C++, Swift, Ruby and PHP (1–4 MiB each) stay on syntect, which covers about 200 languages at a small size. Sawit runs both off the UI thread; gpui-component's own tree-sitter highlighter parses on it. |
-| Diagrams: Pele in QuickJS | Mermaid and schema diagrams render offline, without a browser engine. |
+| Diagrams: Pele in QuickJS | Diagrams in Mermaid syntax, every type Pele draws, and schema diagrams render offline, without a browser engine or mermaid.js. |
 | Network checks: system `ping` and `route` | No raw sockets, so no admin rights; a plain HTTP check detects Wi-Fi sign-in pages. |
 | Keychain via `/usr/bin/security` | Sawit is ad-hoc signed, so each build is a new app to macOS and asked for the login password again; items the `security` tool saves, it reads back without asking. |
 | Icons: only the ones used | The full Lucide bundle adds about 1 MiB. |
@@ -1254,6 +1282,8 @@ Figures for other apps are not listed because they have not been measured on the
   [`NOTICE`](NOTICE).
 - Sawit embeds [Inter](https://github.com/rsms/inter), Copyright 2020 The Inter Project Authors, licensed under the
   SIL Open Font License 1.1. See [`NOTICE`](NOTICE).
+- Sawit embeds [Pele](https://pele.run) 1.13.0 (https://github.com/obsidianmd/pele), Copyright (c) 2026 kepano,
+  licensed under MIT, which draws every diagram written in Mermaid syntax. See [`NOTICE`](NOTICE).
 - The browser tab's page picker adapts [Visual Annotator](https://github.com/wernerstrauch/visual-annotator),
   Copyright (c) 2026 wernerstrauch, licensed under MIT. See [`NOTICE`](NOTICE).
 - The code editors parse with [tree-sitter](https://github.com/tree-sitter/tree-sitter), Copyright (c) 2018 Max

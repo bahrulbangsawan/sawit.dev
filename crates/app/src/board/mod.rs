@@ -870,6 +870,28 @@ impl BoardView {
     /// was before that edit. The user's own deletions keep none: they have undo, and a backup at
     /// each ⌫ would soon push the ones an agent's ops kept out of the five there are.
     pub fn run_op(&mut self, op: &Value, cx: &mut Context<Self>) -> Value {
+        self.run_op_with(op, |board| ops::run(board, op), cx)
+    }
+
+    /// Draws a `mermaid` op's diagram that was rendered and made into skeletons off the UI thread
+    /// (`sawit_board::ops::prepare_diagram`), as [`Self::run_op`] runs the op: Pele takes up to
+    /// its time limit, 5 s, over a big diagram, which the window would freeze for.
+    pub fn run_prepared_op(
+        &mut self,
+        prepared: ops::PreparedDiagram,
+        cx: &mut Context<Self>,
+    ) -> Value {
+        let op = json!({"op": "mermaid"});
+        self.run_op_with(&op, |board| ops::run_prepared(board, prepared), cx)
+    }
+
+    /// [`Self::run_op`], with `run` running `op` on the document.
+    fn run_op_with(
+        &mut self,
+        op: &Value,
+        run: impl FnOnce(&mut BoardDoc) -> Value,
+        cx: &mut Context<Self>,
+    ) -> Value {
         if let Some(reply) = self.close_menus_for_op(op, cx) {
             return reply;
         }
@@ -882,7 +904,7 @@ impl BoardView {
         }
         let before = self.document();
         let reply = match self.board_mut() {
-            Some(board) => ops::run(board, op),
+            Some(board) => run(board),
             None => self.not_opened(),
         };
         if let (Some(before), Some(after)) = (&before, self.document())

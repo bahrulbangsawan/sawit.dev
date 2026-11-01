@@ -255,7 +255,8 @@ const MERMAID_GAP: f64 = 100.0;
 ///   the button down (`move`), its release (`up`), a double-click (`double`) or a move without a
 ///   button (`hover`) at page point (`x`, `y`), with the modifier keys given held, and answers
 ///   `{ok, selection, tool}`: the ids selected then, and the tool on.
-/// - `mermaid` (`{source, x?, y?}`) draws Mermaid `source` as board shapes that can be edited, in
+/// - `mermaid` (`{source, x?, y?}`) draws `source`, a diagram in Mermaid syntax of any type Pele
+///   draws, as board shapes that can be edited (a chart as one picture, `crate::mermaid::WAYS`), in
 ///   one undo step, and answers `{ok, added, ids}`, with `notes` on what couldn't be drawn. The
 ///   diagram's top left corner goes to `x`, `y`; what they leave out is 100 px right of what the
 ///   page holds and level with its top, or 0 on an empty page. Every error starts "mermaid: ".
@@ -299,15 +300,8 @@ fn run_guarded(
 /// [`run`], without its guard against a panic.
 fn run_unguarded(board: &mut BoardDoc, op: &Value) -> Value {
     let name = op.get("op").and_then(Value::as_str);
-    if let Some(name) = name
-        && let Some(wait) = waits_for_the_drag(board, name)
-    {
-        return failure(format!("{name}: {wait}"));
-    }
-    if let Some(name) = name
-        && let Err(error) = end_text_edit_before_op(board, name, op)
-    {
-        return failure(format!("{name}: {error}"));
+    if let Some(refused) = name.and_then(|name| before_op(board, name, op)) {
+        return refused;
     }
     match name {
         Some("get") => get(board),
@@ -327,6 +321,18 @@ fn run_unguarded(board: &mut BoardDoc, op: &Value) -> Value {
         Some(other) => failure(format!("{other} is not supported yet")),
         None => failure(r#"an op needs a name, like {"op": "get"}"#),
     }
+}
+
+/// What every op named `name` does first: waits for a drag on the canvas to end, and ends the
+/// text being typed in. The refusal when it can't, else `None`.
+fn before_op(board: &mut BoardDoc, name: &str, op: &Value) -> Option<Value> {
+    if let Some(wait) = waits_for_the_drag(board, name) {
+        return Some(failure(format!("{name}: {wait}")));
+    }
+    if let Err(error) = end_text_edit_before_op(board, name, op) {
+        return Some(failure(format!("{name}: {error}")));
+    }
+    None
 }
 
 /// `{ok: false, error}`.
@@ -1346,12 +1352,49 @@ fn leave_for_the_view(board: &mut BoardDoc, requests: &[UiRequest]) {
     board.session.ui_requests = rest;
 }
 
+/// A `mermaid` op whose diagram is rendered and made into skeletons ([`prepare_diagram`]), for
+/// [`run_prepared`] to draw.
+pub struct PreparedDiagram {
+    op: Value,
+    items: Result<Vec<Skeleton>, String>,
+}
+
+/// For a `mermaid` op, the part of it that takes time and needs no board: its diagram rendered by
+/// Pele and made into skeletons. A caller that holds the board on a thread that mustn't wait (the
+/// app's UI thread) runs this elsewhere and hands what it made to [`run_prepared`]: rendering
+/// takes well under a millisecond for a typical diagram, about 60 ms the first time, while Pele
+/// loads, but up to 5 s for a big one, when `sawit_core::mermaid` stops it. `None` for any other
+/// op.
+pub fn prepare_diagram(op: &Value) -> Option<PreparedDiagram> {
+    (op.get("op").and_then(Value::as_str) == Some("mermaid")).then(|| PreparedDiagram {
+        op: op.clone(),
+        items: diagram_skeletons(op),
+    })
+}
+
+/// Draws a `mermaid` op's diagram that [`prepare_diagram`] made ready, and answers the op as
+/// [`run`] does. It is the part of the op that needs the board, run as `run` runs every op.
+pub fn run_prepared(board: &mut BoardDoc, prepared: PreparedDiagram) -> Value {
+    let PreparedDiagram { op, items } = prepared;
+    run_guarded(board, &op, |board, op| {
+        before_op(board, "mermaid", op).unwrap_or_else(|| draw_diagram(board, op, items))
+    })
+}
+
 fn mermaid(board: &mut BoardDoc, op: &Value) -> Value {
-    let source = op.get("source").and_then(Value::as_str);
-    let Some(source) = source.filter(|source| !source.trim().is_empty()) else {
-        return failure("mermaid: `source` must be a non-empty string");
-    };
-    match draw_mermaid(board, source, op) {
+    let items = diagram_skeletons(op);
+    draw_diagram(board, op, items)
+}
+
+/// Draws `items`, the skeletons of the diagram of `op` (or why there are none), where `op` says,
+/// and answers the op.
+fn draw_diagram(board: &mut BoardDoc, op: &Value, items: Result<Vec<Skeleton>, String>) -> Value {
+    let drawn = items.and_then(|items| {
+        let (left, top, _, _) = skeleton::bounds(&items).ok_or("the diagram is empty")?;
+        let (x, y) = diagram_corner(board, op).map_err(|error| error.to_string())?;
+        skeleton::apply(board, &items, (x - left, y - top)).map_err(|error| error.to_string())
+    });
+    match drawn {
         Ok(applied) => {
             let mut reply = json!({"ok": true, "added": applied.ids.len(), "ids": applied.ids});
             if !applied.notes.is_empty() {
@@ -1364,13 +1407,14 @@ fn mermaid(board: &mut BoardDoc, op: &Value) -> Value {
     }
 }
 
-/// Renders `source`, makes board shapes of it and draws them where `op` says.
-///
-/// Rendering blocks, and the app answers ops on its UI thread, because the canvas answers
-/// synchronously: well under a millisecond for a typical diagram, about 60 ms the first time,
-/// while Pele loads, and at most 5 s, when `sawit_core::mermaid` stops a runaway diagram, which
-/// isn't tried a second time ([`second_try`]).
-fn draw_mermaid(board: &mut BoardDoc, source: &str, op: &Value) -> Result<Applied, String> {
+/// The skeletons of the diagram in `op`'s `source`: rendered by Pele and made into board shapes
+/// (`crate::mermaid::to_skeletons`). A diagram stopped for taking too long isn't tried a second
+/// time ([`second_try`]).
+fn diagram_skeletons(op: &Value) -> Result<Vec<Skeleton>, String> {
+    let source = op.get("source").and_then(Value::as_str);
+    let Some(source) = source.filter(|source| !source.trim().is_empty()) else {
+        return Err("`source` must be a non-empty string".into());
+    };
     let palette = Palette::default();
     let diagram = match render(source, &palette) {
         Ok(diagram) => diagram,
@@ -1380,10 +1424,7 @@ fn draw_mermaid(board: &mut BoardDoc, source: &str, op: &Value) -> Result<Applie
             None => return Err(first),
         },
     };
-    let items = crate::mermaid::to_skeletons(&diagram)?;
-    let (left, top, _, _) = skeleton::bounds(&items).ok_or("the diagram is empty")?;
-    let (x, y) = diagram_corner(board, op).map_err(|error| error.to_string())?;
-    skeleton::apply(board, &items, (x - left, y - top)).map_err(|error| error.to_string())
+    crate::mermaid::to_skeletons(&diagram)
 }
 
 /// The Mermaid `source` to try again, after its first render failed with `error`: double quotes
@@ -4779,6 +4820,37 @@ mod tests {
             second_try(quoted, "The diagram can't be drawn: it took too long."),
             None
         );
+    }
+
+    /// A `mermaid` op made ready off the board's thread ([`prepare_diagram`]) draws and answers as
+    /// the op does when run at once ([`run`]), its errors and its refusals too; no other op is
+    /// made ready. What it carries between threads can be sent there.
+    #[test]
+    fn a_diagram_made_ready_elsewhere_draws_as_the_op_does() {
+        fn sendable<T: Send + 'static>(_: &T) {}
+        let source = "flowchart LR\n  A[Start] --> B{Ok?}\n  B -->|yes| C[Done]\n";
+        let op = json!({"op": "mermaid", "source": source, "x": 10, "y": 20});
+        let (mut now, mut later) = (board(), board());
+        let ran = run(&mut now, &op);
+        let prepared = prepare_diagram(&op).expect("a mermaid op is made ready");
+        sendable(&prepared);
+        let drawn = run_prepared(&mut later, prepared);
+        assert_eq!(ran["ok"], json!(true), "{ran}");
+        assert_eq!(drawn["added"], ran["added"], "{drawn}");
+        assert_eq!(elements(&mut now).len(), elements(&mut later).len());
+        assert_eq!(later.session.undo_depth(), (1, 0), "one undo step");
+        for bad in [
+            json!({"op": "mermaid", "source": "flowchart LR\n  A[unclosed --> B"}),
+            json!({"op": "mermaid", "source": " "}),
+            json!({"op": "mermaid", "source": "zenuml\n  A->B: hi"}),
+        ] {
+            let ran = run(&mut board(), &bad);
+            let drawn = run_prepared(&mut board(), prepare_diagram(&bad).unwrap());
+            assert_eq!(drawn, ran, "{bad}");
+            assert_eq!(drawn["ok"], json!(false), "{drawn}");
+        }
+        assert!(prepare_diagram(&json!({"op": "get"})).is_none());
+        assert!(prepare_diagram(&json!({"op": "add", "elements": []})).is_none());
     }
 
     /// CANVAS-CORE-8: between the Pen's clicks no button is held, but the path being drawn is an

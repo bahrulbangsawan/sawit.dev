@@ -1,0 +1,6 @@
+erDiagram
+  CUSTOMER ||--o{ ORDER : places
+  ORDER ||--|{ LINE_ITEM : contains
+  CUSTOMER }|..|{ ADDRESS : uses
+  ORDER }o--|| ADDRESS : "ships to"
+  PRODUCT ||--o{ LINE_ITEM : "appears in"

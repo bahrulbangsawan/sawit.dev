@@ -1,0 +1,16 @@
+requirementDiagram
+  requirement fast {
+    id: 1
+    text: Renders quickly
+  }
+  requirement small {
+    id: 2
+    text: Ships little code
+  }
+  element layout {
+    type: module
+  }
+  layout - satisfies -> fast
+  layout - satisfies -> small
+  fast - derives -> small
+  small - refines -> fast

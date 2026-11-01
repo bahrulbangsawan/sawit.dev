@@ -1,5 +1,5 @@
-//! Mermaid diagrams in previews, drawn by Pele (`sawit_core::mermaid`):
-//! ```` ```mermaid ```` blocks in Markdown become the diagram plus a
+//! Diagrams written in Mermaid syntax in previews, drawn by Pele (`sawit_core::mermaid`), of every
+//! type Pele draws: ```` ```mermaid ```` blocks in Markdown become the diagram plus a
 //! "Save Diagram as SVG…" link, and a `.mmd` file previews as its diagram with a
 //! download button in the toolbar. Colors follow the app theme.
 
@@ -248,5 +248,78 @@ impl FileEditor {
                     .when_some(image, |el, image| el.child(img(image).max_w_full())),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use sawit_core::mermaid::{self, Palette};
+
+    // Not `super::*`: GPUI's `test` would stand in for the standard one.
+    use super::render_all;
+
+    /// The canvas's fixture of each keyword a diagram can start with (`mermaid::TYPES`).
+    fn fixtures() -> Vec<(&'static str, String)> {
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../board/tests/fixtures/mermaid/types");
+        mermaid::TYPES
+            .iter()
+            .map(|(keyword, _)| {
+                let file = dir.join(format!("{keyword}.mmd"));
+                let source = std::fs::read_to_string(&file)
+                    .unwrap_or_else(|e| panic!("{} can't be read: {e}", file.display()));
+                (*keyword, source)
+            })
+            .collect()
+    }
+
+    /// The previews draw every type Pele draws: a Markdown file with a ```` ```mermaid ```` fence
+    /// of each becomes each diagram's image and its save link, and a `.mmd` file of each previews
+    /// as its diagram, in the app's dark colours.
+    #[test]
+    fn every_diagram_type_previews_in_markdown_and_as_a_mmd_file() {
+        let palette = Palette {
+            background: "#282c33".into(),
+            foreground: "#dce0e5".into(),
+            ..Palette::default()
+        };
+        let all = fixtures();
+        let markdown: String = all
+            .iter()
+            .map(|(keyword, source)| format!("## {keyword}\n\n```mermaid\n{source}```\n\n"))
+            .collect();
+        let (shown, results) = render_all(&markdown, false, &palette);
+        assert_eq!(results.len(), all.len());
+        for (ix, ((keyword, _), result)) in all.iter().zip(&results).enumerate() {
+            let diagram = result.as_ref().unwrap_or_else(|e| panic!("{keyword}: {e}"));
+            assert!(diagram.svg.starts_with("<svg"), "{keyword}");
+            let image = format!("]({}{ix})", mermaid::IMAGE_SCHEME);
+            let save = format!("]({}{ix})", mermaid::SAVE_SCHEME);
+            assert!(shown.contains(&image) && shown.contains(&save), "{keyword}");
+        }
+        assert!(!shown.contains("can't be drawn"), "{shown}");
+
+        for (keyword, source) in &all {
+            let (_, results) = render_all(source, true, &palette);
+            let [Ok(diagram)] = results.as_slice() else {
+                panic!("{keyword}: {results:?}");
+            };
+            assert!(diagram.width > 0.0 && diagram.height > 0.0, "{keyword}");
+        }
+    }
+
+    /// A fence that can't be drawn says why in the preview, in Sawit's words for a type Pele
+    /// doesn't draw, and the fences around it still draw.
+    #[test]
+    fn a_fence_that_cannot_be_drawn_says_why_in_the_preview() {
+        let markdown =
+            "```mermaid\nzenuml\n  A->B: hi\n```\n\n```mermaid\nflowchart LR\n  A --> B\n```\n";
+        let (shown, results) = render_all(markdown, false, &Palette::default());
+        assert!(results[0].is_err() && results[1].is_ok(), "{results:?}");
+        assert!(shown.contains("ZenUML diagrams can't be drawn"), "{shown}");
+        let image = format!("]({}1)", mermaid::IMAGE_SCHEME);
+        assert!(shown.contains(&image), "{shown}");
     }
 }

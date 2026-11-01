@@ -85,6 +85,10 @@ pub struct Skeleton {
     pub label: Option<Label>,
     /// The text of a `text` or a `sticky`.
     pub text: Option<String>,
+    /// The font size of a `text`, in px (Excalidraw's `fontSize`); the engine's default without
+    /// one.
+    #[serde(rename = "fontSize", skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<f64>,
     /// Where an `arrow` or a `line` starts and ends.
     pub start: Option<End>,
     pub end: Option<End>,
@@ -105,6 +109,11 @@ pub struct Skeleton {
     pub data: Option<String>,
     /// The file name of an `image`, or the title of a `frame`.
     pub name: Option<String>,
+    /// Whether an SVG `image` comes in as a group of its layers rather than a frame: the pictures
+    /// the Mermaid converter cuts from a diagram (an icon, a turned text, the picture under its
+    /// shapes), on which a frame's title, the file's name, would label every one. Not on the wire.
+    #[serde(skip)]
+    pub as_group: bool,
 }
 
 /// The text inside a shape, or on an arrow or a line.
@@ -112,6 +121,10 @@ pub struct Skeleton {
 #[serde(default)]
 pub struct Label {
     pub text: String,
+    /// The font size of a shape's label, in px (Excalidraw's `label.fontSize`); the engine's
+    /// default, 16, without one.
+    #[serde(rename = "fontSize", skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<f64>,
 }
 
 /// One end of an arrow or a line: attached to the element whose `id` it names, else a free point.
@@ -622,9 +635,28 @@ impl<'a> Maker<'a> {
         put(&mut args, "width", item.width);
         put(&mut args, "height", item.height);
         put(&mut args, "text", label_or_text(item));
-        let id = self.create("board.shape", &args)?;
+        let made = self.session.execute("board.shape", &args)?;
+        let id = made
+            .get("id")
+            .and_then(id_of)
+            .ok_or_else(|| EngineError::Other("`board.shape` made no layer".into()))?;
+        let size = item.label.as_ref().and_then(|label| label.font_size);
+        if let Some(label) = made.get("text").and_then(id_of) {
+            self.font_size(label, size)?;
+        }
         self.colour(id, item)?;
         Ok(id)
+    }
+
+    /// Sets text `id` in `size` px, when that is a size the engine takes.
+    fn font_size(&mut self, id: NodeId, size: Option<f64>) -> EngineResult<()> {
+        let Some(size) = size.filter(|size| size.is_finite() && *size > 0.0) else {
+            return Ok(());
+        };
+        let props = json!({"fontSize": size});
+        self.session
+            .execute("node.set", &json!({"ids": [id], "props": props}))?;
+        Ok(())
     }
 
     fn sticky(&mut self, item: &Skeleton) -> EngineResult<NodeId> {
@@ -644,6 +676,7 @@ impl<'a> Maker<'a> {
         // A width makes the text wrap at it; without one it is as wide as it is long.
         put(&mut args, "width", item.width.filter(|w| *w > 0.0));
         let id = self.create("node.create", &args)?;
+        self.font_size(id, item.font_size)?;
         self.colour(id, item)?;
         Ok(id)
     }
@@ -709,6 +742,9 @@ impl<'a> Maker<'a> {
         // SVG keeps the size it was drawn at; a picture takes the size it is given.
         if !name.to_ascii_lowercase().ends_with(".svg") {
             self.fit_picture(id, &placed, item)?;
+        } else if item.as_group {
+            self.session
+                .execute("object.convertToGroup", &json!({"ids": [id]}))?;
         }
         Ok(Some(id))
     }
@@ -1026,6 +1062,49 @@ mod tests {
     }
 
     // The tests the brief asks for.
+
+    /// Excalidraw's `fontSize` sets a text's size and a shape's label's; without one, each is the
+    /// engine's.
+    #[test]
+    fn a_font_size_sets_the_text_and_the_label() {
+        let mut b = board();
+        add(
+            &mut b,
+            json!([
+                {"type": "text", "x": 0, "y": 0, "text": "big", "fontSize": 28},
+                {"type": "rectangle", "x": 0, "y": 100, "width": 120, "height": 40,
+                 "label": {"text": "small", "fontSize": 10}},
+                {"type": "text", "x": 0, "y": 200, "text": "plain"},
+                {"type": "rectangle", "x": 0, "y": 300, "width": 120, "height": 40,
+                 "label": {"text": "plain"}},
+            ]),
+        );
+        let made = layers(&b);
+        let doc = b.doc().unwrap();
+        let size = |id: &NodeId| {
+            let shape = figcraft_engine::board::text_of(&doc, *id);
+            let text = doc.node(shape.unwrap_or(*id)).unwrap().kind.text().unwrap();
+            (
+                shape.is_some(),
+                text.characters.clone(),
+                text.style.font_size,
+            )
+        };
+        let mut sizes: Vec<(bool, String, f64)> = made.iter().map(size).collect();
+        sizes.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+        let fresh = figcraft_doc::TextData::default().style.font_size;
+        let expected = [
+            (false, "big", 28.0),
+            (false, "plain", fresh),
+            (true, "plain", 16.0),
+            (true, "small", 10.0),
+        ];
+        let expected: Vec<(bool, String, f64)> = expected
+            .iter()
+            .map(|(shape, text, size)| (*shape, text.to_string(), *size))
+            .collect();
+        assert_eq!(sizes, expected);
+    }
 
     #[test]
     fn rectangle_with_label_becomes_board_shape() {
@@ -2058,7 +2137,15 @@ mod tests {
         assert_eq!(s.background_color.as_deref(), Some("#ffc9c9"));
         assert_eq!(s.roundness, Some(json!({"type": 3})));
         assert_eq!(s.frame_id.as_deref(), Some("f"));
-        assert_eq!(s.label, Some(Label { text: "go".into() }));
+        assert_eq!(
+            s.label,
+            Some(Label {
+                text: "go".into(),
+                font_size: Some(16.0)
+            })
+        );
+        // Excalidraw's `fontSize`, of a text and of a label, is read too.
+        assert_eq!(s.font_size, Some(20.0));
         // Anything missing is its default, and `null` is missing.
         let bare: Skeleton =
             serde_json::from_value(json!({"roundness": null, "label": {}})).unwrap();

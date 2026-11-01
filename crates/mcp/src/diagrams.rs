@@ -1,5 +1,6 @@
-//! Diagrams with Pele (Sawit's built-in Mermaid renderer): Mermaid to SVG,
-//! and database schemas as Mermaid, DBML or SVG.
+//! Diagrams with Pele (Sawit's built-in renderer of Mermaid syntax): a diagram
+//! of any type Pele draws to SVG (`render_diagram`, and `render_mermaid`, its
+//! old name), and database schemas as Mermaid, DBML or SVG.
 
 use std::path::PathBuf;
 
@@ -33,7 +34,9 @@ pub enum SchemaFormat {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RenderArgs {
-    #[schemars(description = "Mermaid source (flowchart, sequenceDiagram, erDiagram, …)")]
+    #[schemars(
+        description = "The diagram in Mermaid syntax, starting with its type: flowchart, sequenceDiagram, architecture-beta, C4Context, venn-beta, … (any type Pele draws)"
+    )]
     pub source: String,
     #[schemars(
         description = "Where to write the .svg (absolute). Default: a new file in the project's .nyawit/diagrams folder (Sawit's cache folder outside a project)"
@@ -127,14 +130,13 @@ impl Sawit {
         blocking(move || mermaid::render(&source, &palette(theme))).await?
     }
 
-    pub async fn render_mermaid_tool(&self, a: RenderArgs) -> CallToolResult {
+    /// `render_diagram`, or `render_mermaid` (its old name), whichever `tool` is: what it refuses
+    /// says it in the name the agent called it by.
+    pub async fn render_diagram_tool(&self, a: RenderArgs, tool: &str) -> CallToolResult {
         if a.source.trim().is_empty() {
-            return fail("The Mermaid source is empty.");
+            return fail("The diagram's source is empty.");
         }
-        let named = tri!(crate::output_path(
-            "render_mermaid",
-            a.output_path.as_deref()
-        ));
+        let named = tri!(crate::output_path(tool, a.output_path.as_deref()));
         let path = self.output_file(named, "diagram", "svg");
         let diagram = tri!(Self::render(a.source, a.theme).await);
         tri!(Self::write_file(path.clone(), diagram.svg.clone()).await);
@@ -201,13 +203,35 @@ pub(crate) fn describe_svg(d: &Diagram, path: &std::path::Path, inline: bool) ->
     out
 }
 
+/// What `render_diagram` says it does, and `render_mermaid` after the word that it is the old name.
+macro_rules! render_diagram_says {
+    () => {
+        concat!(
+            "Render a diagram written in Mermaid syntax to a standalone SVG file, offline, with Pele \
+             (https://pele.run, Sawit's built-in renderer; mermaid.js isn't used). Every type Pele \
+             draws: ",
+            diagram_types!(),
+            " (ZenUML and other Mermaid plugins aren't). Returns the file path, diagram type and \
+             size; the SVG text too when small or inline=true. A source that can't be drawn says \
+             why, with the line"
+        )
+    };
+}
+
 #[tool_router(router = diagrams_router, vis = "pub(crate)")]
 impl Sawit {
-    #[tool(
-        description = "Render Mermaid source to a standalone SVG file with Sawit's offline renderer (Pele). Returns the file path, diagram kind and size; the SVG text too when small or inline=true"
-    )]
+    #[tool(description = render_diagram_says!())]
+    async fn render_diagram(&self, Parameters(a): Parameters<RenderArgs>) -> CallToolResult {
+        self.render_diagram_tool(a, "render_diagram").await
+    }
+
+    #[tool(description = concat!(
+        "Deprecated: the old name of render_diagram, which takes the same arguments; use \
+         render_diagram. ",
+        render_diagram_says!()
+    ))]
     async fn render_mermaid(&self, Parameters(a): Parameters<RenderArgs>) -> CallToolResult {
-        self.render_mermaid_tool(a).await
+        self.render_diagram_tool(a, "render_mermaid").await
     }
 
     #[tool(
@@ -274,7 +298,9 @@ mod tests {
             theme: Theme::Light,
             inline: false,
         };
-        let drawn = server.render_mermaid_tool(render(&board)).await;
+        let drawn = server
+            .render_diagram_tool(render(&board), "render_mermaid")
+            .await;
         assert_eq!(drawn.is_error, Some(true));
         assert_eq!(said(&drawn), format!("render_mermaid {refused}"));
         for format in [SchemaFormat::Svg, SchemaFormat::Mermaid, SchemaFormat::Dbml] {
@@ -293,7 +319,9 @@ mod tests {
         assert_eq!(std::fs::read(&board).unwrap(), b"the board");
 
         let svg = dir.path().join(".nyawit").join("flow.svg");
-        let drawn = server.render_mermaid_tool(render(&svg)).await;
+        let drawn = server
+            .render_diagram_tool(render(&svg), "render_diagram")
+            .await;
         assert_ne!(drawn.is_error, Some(true), "{}", said(&drawn));
         assert!(std::fs::read_to_string(&svg).unwrap().contains("<svg"));
     }

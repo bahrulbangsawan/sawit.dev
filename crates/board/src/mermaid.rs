@@ -1,9 +1,35 @@
-//! Mermaid diagrams as board shapes that can be edited. [`to_skeletons`] reads the SVG that
-//! `sawit_core::mermaid::render` draws with Pele and makes [`Skeleton`]s of it for
+//! Diagrams in Mermaid syntax as board shapes that can be edited. [`to_skeletons`] reads the SVG
+//! that `sawit_core::mermaid::render` draws with Pele and makes [`Skeleton`]s of it for
 //! [`crate::skeleton::apply`]: a node becomes a rectangle, an ellipse or a diamond with its label
 //! inside, an edge a connector joined to the nodes at its ends, with its label, and whatever else
-//! the diagram draws comes in as it is drawn. Charts (pie, gantt, ...) have no shapes worth
-//! editing and come in as one SVG picture.
+//! the diagram draws comes in as it is drawn. Charts, whose shapes carry data, come in as one SVG
+//! picture.
+//!
+//! Every type Pele draws (`sawit_core::mermaid::TYPES`) comes onto the board, in one of three
+//! ways ([`WAYS`]):
+//!
+//! | Type | Comes in as | Why |
+//! | --- | --- | --- |
+//! | flowchart, swimlane, sequence, class, state, er, mindmap, kanban, block, requirement, c4, gitGraph, timeline | shapes | Nodes, edges and boxes: what a board draws. |
+//! | architecture | shapes | Groups and services are boxes, links connectors; each icon is a small picture. |
+//! | agentflow | shapes | A flowchart of agents: steps, decisions and tools are shapes, flows are clusters. |
+//! | usecase | shapes | Actors, use cases (ellipses) and system boundaries, joined by connectors. |
+//! | eventmodeling | shapes | Commands, events and views are boxes in lanes, joined by connectors. |
+//! | ishikawa | shapes | The head, the categories and each cause are texts and lines the user rewrites. |
+//! | packet | shapes | Each field is a box holding its name, its bit numbers texts. |
+//! | quadrantChart | shapes | Quadrants are boxes, points are dots with their labels. |
+//! | treeView | shapes on a picture | File names are texts; the guides between them a picture under them. |
+//! | railroad | shapes on a picture | Terminals and rules are boxes and texts; the tracks, which branch and loop, a picture under them. |
+//! | wardley | shapes on a picture | Components, links and moves are shapes; the axes and stages a picture under them. |
+//! | cynefin | shapes on a picture | Each domain's names and items are shapes; the regions, curved and see-through, a picture under them. |
+//! | venn | shapes on a picture | The labels are texts; the sets, see-through so that their overlaps show, a picture under them. |
+//! | journey, pie, gantt, xychart, sankey, radar, treemap, info | one picture | Charts: where a shape sits and how big it is is the data, so moving one would only misstate it. |
+//!
+//! A picture is an SVG the board imports as its own layers (`file.import`), drawn as Pele drew it.
+//! Under "shapes on a picture", what a board shape can't draw (translucent fills, curved regions,
+//! branching tracks) is cut from the diagram into one picture, at the back, and the rest comes in
+//! as shapes over it ([`BACKDROPS`]). What no shape can hold comes in as a small picture of its own
+//! wherever it is: an icon (a nested `<svg>`) and a text Pele turned (a lane's title, an axis's).
 //!
 //! It is the converter of the web canvas that the native canvas replaced, which read the same SVG
 //! laid out in a browser, ported to the SVG's own markup with the same passes: clusters, then
@@ -13,7 +39,9 @@
 //! where a width is needed it is estimated, because the engine sets the text again in its own font.
 //!
 //! A board holds less than an Excalidraw scene, so some of what that converter kept is left out:
-//! line widths and dashes, opacity, the size and colour of the text inside a shape, and groups. A
+//! line widths and dashes, opacity (the pictures keep both), the colour of the text inside a
+//! shape, the weight of text, and groups. Text keeps the size Pele set it in, and a label's room
+//! is measured in the face the engine sets it in. A
 //! connector has one arrowhead, at its end, so the marks it has no cap for stay drawn where Pele
 //! drew them. An edge whose route bends and whose ends join nothing, or one node at both ends (a
 //! message to oneself, a loop back to a node), stays drawn along its route.
@@ -29,22 +57,86 @@ use serde_json::json;
 
 use crate::skeleton::{End, Label, Skeleton};
 
-/// The diagram types that come in as shapes that can be edited. Any other (pie, gantt, ...) comes
-/// in as one picture.
-pub const EDITABLE: &[&str] = &[
-    "flowchart",
-    "sequence",
-    "class",
-    "state",
-    "er",
-    "mindmap",
-    "requirement",
-    "block",
-    "kanban",
-    "c4",
-    "gitGraph",
-    "timeline",
+/// How a diagram type comes onto the board.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Way {
+    /// As shapes, connectors and texts that can be edited.
+    Shapes,
+    /// As shapes over one picture of what no shape draws ([`BACKDROPS`]).
+    ShapesOnPicture,
+    /// As one picture of the whole diagram.
+    Picture,
+}
+
+/// How each type Pele draws (its name for it, `Diagram::kind`) comes onto the board; the module's
+/// table says why. A type that isn't here comes in as one picture.
+pub const WAYS: &[(&str, Way)] = &[
+    ("flowchart", Way::Shapes),
+    ("swimlane", Way::Shapes),
+    ("sequence", Way::Shapes),
+    ("class", Way::Shapes),
+    ("state", Way::Shapes),
+    ("er", Way::Shapes),
+    ("mindmap", Way::Shapes),
+    ("kanban", Way::Shapes),
+    ("block", Way::Shapes),
+    ("requirement", Way::Shapes),
+    ("c4", Way::Shapes),
+    ("gitGraph", Way::Shapes),
+    ("timeline", Way::Shapes),
+    ("architecture", Way::Shapes),
+    ("agentflow", Way::Shapes),
+    ("usecase", Way::Shapes),
+    ("eventmodeling", Way::Shapes),
+    ("ishikawa", Way::Shapes),
+    ("packet", Way::Shapes),
+    ("quadrantChart", Way::Shapes),
+    ("treeView", Way::ShapesOnPicture),
+    ("railroad", Way::ShapesOnPicture),
+    ("wardley", Way::ShapesOnPicture),
+    ("cynefin", Way::ShapesOnPicture),
+    ("venn", Way::ShapesOnPicture),
+    ("journey", Way::Picture),
+    ("pie", Way::Picture),
+    ("gantt", Way::Picture),
+    ("xychart", Way::Picture),
+    ("sankey", Way::Picture),
+    ("radar", Way::Picture),
+    ("treemap", Way::Picture),
+    ("info", Way::Picture),
 ];
+
+/// For each type that comes in as shapes on a picture, the classes of what comes in as shapes:
+/// those elements and everything in them. Everything else the diagram draws, but the page behind
+/// it, is the picture.
+pub const BACKDROPS: &[(&str, &[&str])] = &[
+    ("treeView", &["pele-node"]),
+    ("railroad", &["pele-title", "pele-rule-name", "pele-node"]),
+    (
+        "wardley",
+        &[
+            "pele-title",
+            "pele-edges",
+            "pele-wardley-trends",
+            "pele-node",
+        ],
+    ),
+    ("cynefin", &["pele-title", "pele-cynefin-domain"]),
+    ("venn", &["pele-title", "pele-venn-labels"]),
+];
+
+/// How diagrams of type `kind` (Pele's name for it) come onto the board.
+pub fn way_of(kind: &str) -> Way {
+    WAYS.iter()
+        .find(|(name, _)| *name == kind)
+        .map_or(Way::Picture, |(_, way)| *way)
+}
+
+/// The diagram types that come in as shapes that can be edited, on a picture or not. Any other
+/// comes in as one picture.
+pub fn editable(kind: &str) -> bool {
+    way_of(kind) != Way::Picture
+}
 
 /// The elements Pele draws shapes with.
 const SHAPES: &[&str] = &[
@@ -84,10 +176,10 @@ const FONT_SIZE: f64 = 16.0;
 const BASELINE: f64 = 0.35;
 /// The height of a line of text, in ems.
 const LINE_HEIGHT: f64 = 1.2;
-/// The size the engine sets a board shape's label in.
-const LABEL_SIZE: f64 = 16.0;
 /// The height of a line of a label, in ems, with room to spare.
 const LABEL_LINE_HEIGHT: f64 = 1.25;
+/// How much wider than Pele drew it a box may grow to keep a label Pele set on one line on one.
+const ONE_LINE_GROWTH: f64 = 1.3;
 /// The room around the text of a node that is only text (the web canvas's converter's `pad`).
 const TEXT_PAD: f64 = 4.0;
 /// The smallest side the engine takes for a shape.
@@ -95,20 +187,25 @@ const MIN_SIDE: f64 = 1.0;
 
 /// The shapes that draw `diagram`, in the diagram's own coordinates (0, 0 is its top left).
 ///
-/// A diagram of a type in [`EDITABLE`] comes in as shapes. It is read as rendered with
-/// `Palette::default()`, whose neutral colours become the canvas's own: unfilled shapes, ink lines
-/// and ink text. The nodes that edges can join get the ids `mermaid-1`, `mermaid-2`..., for the
-/// edges to name. Any other type comes in as one `image` skeleton of its SVG, `diagram.svg`, as
-/// big as it is drawn.
+/// A diagram of a type that is [`editable`] comes in as shapes, over a picture of what no shape
+/// draws for a type in [`BACKDROPS`]. It is read as rendered with `Palette::default()`, whose
+/// neutral colours become the canvas's own: unfilled shapes, ink lines and ink text. The nodes
+/// that edges can join get the ids `mermaid-1`, `mermaid-2`..., for the edges to name. Any other
+/// type comes in as one `image` skeleton of its SVG, `diagram.svg`, as big as it is drawn.
 ///
 /// The error is for an SVG that can't be read.
 pub fn to_skeletons(diagram: &Diagram) -> Result<Vec<Skeleton>, String> {
-    if !EDITABLE.contains(&diagram.kind.as_str()) {
+    if !editable(&diagram.kind) {
         return Ok(vec![picture(diagram)]);
     }
     let svg = Document::parse(&diagram.svg)
         .map_err(|error| format!("the diagram's SVG can't be read ({error})"))?;
-    Ok(Converter::new(&svg).run())
+    let content = BACKDROPS
+        .iter()
+        .find(|(kind, _)| *kind == diagram.kind)
+        .map(|(_, content)| *content);
+    let size = (diagram.width, diagram.height);
+    Ok(Converter::new(&svg).run(content, size))
 }
 
 /// The whole diagram as one picture.
@@ -150,6 +247,8 @@ impl Neutrals {
 /// A conversion in progress.
 struct Converter<'a, 'input> {
     root: Node<'a, 'input>,
+    /// The SVG's markup, which the pictures cut from it are made of.
+    input: &'input str,
     neutrals: Neutrals,
     /// The groups of the edge labels, by the id of their edge.
     labels: HashMap<&'a str, Node<'a, 'input>>,
@@ -157,6 +256,8 @@ struct Converter<'a, 'input> {
     done: HashSet<XmlId>,
     /// What an edge can join: each node and cluster.
     targets: Vec<Target>,
+    /// Whether the diagram has edges, which a node that is only text needs a box for.
+    has_edges: bool,
     out: Vec<Skeleton>,
 }
 
@@ -184,19 +285,37 @@ impl<'a, 'input> Converter<'a, 'input> {
         }
         Self {
             root,
+            input: svg.input_text(),
             neutrals: Neutrals::of(&Palette::default()),
             labels,
             done: HashSet::new(),
             targets: Vec::new(),
+            has_edges: root.descendants().any(|n| has_class(n, &["pele-edge"])),
             out: Vec::new(),
         }
     }
 
-    fn run(mut self) -> Vec<Skeleton> {
+    /// The skeletons, back to front. With `content`, the classes of what comes in as shapes (a
+    /// type in [`BACKDROPS`]), the rest of the diagram comes first, as one picture as big as the
+    /// diagram (`size`).
+    fn run(mut self, content: Option<&[&str]>, size: (f64, f64)) -> Vec<Skeleton> {
         // The page that `flatten` paints behind the diagram is no shape of it.
         let first = self.root.children().find(Node::is_element);
         if let Some(background) = first.filter(|n| is_background(*n)) {
             self.done.insert(background.id());
+        }
+        if let Some(content) = content {
+            self.backdrop(content, size);
+        }
+        // What an icon draws is the icon's picture, which its `<svg>` makes.
+        let icons: Vec<Node> = self
+            .root
+            .descendants()
+            .skip(1)
+            .filter(|n| is_icon(*n))
+            .collect();
+        for icon in icons {
+            self.done.extend(icon.descendants().skip(1).map(|n| n.id()));
         }
         let elements: Vec<Node> = self
             .root
@@ -219,11 +338,121 @@ impl<'a, 'input> Converter<'a, 'input> {
         }
         for element in elements
             .iter()
-            .filter(|n| is_shape(**n) || n.has_tag_name("text"))
+            .filter(|n| is_shape(**n) || is_icon(**n) || n.has_tag_name("text"))
         {
             self.loose(*element);
         }
         self.out
+    }
+
+    // --- Pictures -------------------------------------------------------------------------------
+
+    /// The picture at the back of a type in [`BACKDROPS`]: everything the diagram draws outside the
+    /// elements of the `content` classes, which then come in as shapes over it, as big as the
+    /// diagram (`size`). Nothing when everything is content.
+    fn backdrop(&mut self, content: &[&str], size: (f64, f64)) {
+        let mut parts = Vec::new();
+        let mut stack: Vec<Node> = self.root.children().filter(Node::is_element).collect();
+        stack.reverse();
+        while let Some(node) = stack.pop() {
+            if self.is_done(node) || has_class(node, content) || NOT_DRAWN.contains(&tag(node)) {
+                continue;
+            }
+            let holds_content = node.descendants().skip(1).any(|n| has_class(n, content));
+            if !holds_content {
+                parts.push(node);
+                continue;
+            }
+            let mut children: Vec<Node> = node.children().filter(Node::is_element).collect();
+            children.reverse();
+            stack.extend(children);
+        }
+        let drawn = parts.iter().any(|part| {
+            part.descendants()
+                .any(|n| (is_shape(n) || n.has_tag_name("text")) && visible(n))
+        });
+        for part in &parts {
+            self.done.extend(part.descendants().map(|n| n.id()));
+        }
+        if drawn {
+            let frame = Rect::new(0.0, 0.0, size.0, size.1);
+            let picture = self.cut(&parts, frame, "backdrop.svg");
+            self.out.push(picture);
+        }
+    }
+
+    /// A picture of `parts` (elements of the diagram, each with everything in it) as Pele drew
+    /// them, of the diagram's area `frame` and placed there: each part inside the groups around
+    /// it, whose transforms and styles it takes, in an SVG with the root's styles and definitions.
+    fn cut(&self, parts: &[Node], frame: Rect, name: &str) -> Skeleton {
+        let (width, height) = (frame.width().max(MIN_SIDE), frame.height().max(MIN_SIDE));
+        let mut svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{} {} {width} {height}" width="{width}" height="{height}""#,
+            frame.x0, frame.y0
+        );
+        for attribute in self.root.attributes() {
+            let name = attribute.name();
+            let kept = attribute.namespace().is_none()
+                && !name.starts_with("aria-")
+                && !matches!(name, "width" | "height" | "viewBox" | "class" | "role");
+            if kept {
+                let value = escape_attribute(attribute.value());
+                svg.push_str(&format!(r#" {name}="{value}""#));
+            }
+        }
+        svg.push('>');
+        // What the parts may refer to: gradients, markers, patterns.
+        for defs in self
+            .root
+            .children()
+            .filter(|n| NOT_DRAWN.contains(&tag(*n)))
+        {
+            svg.push_str(&self.input[defs.range()]);
+        }
+        for part in parts {
+            let around: Vec<Node> = part
+                .ancestors()
+                .skip(1)
+                .filter(|n| n.is_element() && n.parent_element().is_some())
+                .collect();
+            for group in around.iter().rev() {
+                svg.push_str(open_tag(self.input, group.range().start));
+            }
+            svg.push_str(&self.input[part.range()]);
+            for group in &around {
+                svg.push_str(&format!("</{}>", tag(*group)));
+            }
+        }
+        svg.push_str("</svg>");
+        Skeleton {
+            kind: "image".into(),
+            x: frame.x0,
+            y: frame.y0,
+            width: Some(width),
+            height: Some(height),
+            svg: Some(svg),
+            name: Some(name.into()),
+            // A frame's title would label every icon and turned text.
+            as_group: true,
+            ..Skeleton::default()
+        }
+    }
+
+    /// An icon (a nested `<svg>`) as a picture of itself, where Pele drew it.
+    fn icon(&mut self, icon: Node<'a, 'input>) -> Option<Skeleton> {
+        self.done.insert(icon.id());
+        let frame = shape_box(icon).filter(|b| b.width() > 0.0 && b.height() > 0.0)?;
+        Some(self.cut(&[icon], frame, "icon.svg"))
+    }
+
+    /// A text Pele turned, as a picture of itself where Pele drew it: a board's text can't turn.
+    fn turned_text(&mut self, text: Node<'a, 'input>) -> Skeleton {
+        self.done.insert(text.id());
+        let place = text_place_in(text, Affine::IDENTITY);
+        // Room for the guess of its width to be short.
+        let local = place.bounds().inflate(place.size, place.size * 0.25);
+        let frame = transform_of(text).transform_rect_bbox(local);
+        self.cut(&[text], frame, "text.svg")
     }
 
     fn is_done(&self, node: Node) -> bool {
@@ -238,7 +467,12 @@ impl<'a, 'input> Converter<'a, 'input> {
     ///
     /// The outline is the largest shape. A rectangle, an ellipse or a diamond is a board shape of
     /// its own; any other outline (a cylinder, a hexagon) is drawn as lines under a box nobody
-    /// sees, which holds the label and is what edges join. So is a node that is only text.
+    /// sees, which holds the label and is what edges join. So is a node that is only text, in a
+    /// diagram with edges; in one without, nothing joins it and its text stays a text, set as the
+    /// diagram's other texts are. An icon in it is a picture over its outline.
+    ///
+    /// A cluster that Pele only filled, with one of its neutral surfaces (a lane of an event
+    /// model), comes in light grey: unfilled and unlined, it would be a box nobody sees.
     fn group(&mut self, group: Node<'a, 'input>, bind_label: bool) {
         if self.is_done(group) || !visible(group) {
             return;
@@ -252,6 +486,11 @@ impl<'a, 'input> Converter<'a, 'input> {
             .descendants()
             .skip(1)
             .filter(|n| n.has_tag_name("text") && !self.is_done(*n) && !text_of(*n).is_empty())
+            .collect();
+        let icons: Vec<Node> = group
+            .descendants()
+            .skip(1)
+            .filter(|n| is_icon(*n) && !self.is_done(*n))
             .collect();
         self.done.insert(group.id());
         let outline = shapes
@@ -270,12 +509,17 @@ impl<'a, 'input> Converter<'a, 'input> {
                 Some(kind) => {
                     self.done.insert(shape.id());
                     let rounded = is_rounded(shape, Some(group));
-                    let drawn = self.box_shape(shape, kind, frame, rounded);
+                    let mut drawn = self.box_shape(shape, kind, frame, rounded);
+                    let unseen = drawn.background_color.as_deref() == Some(TRANSPARENT)
+                        && drawn.stroke_color.as_deref() == Some(TRANSPARENT);
+                    if !bind_label && unseen && paint(shape, "fill").is_some() {
+                        drawn.background_color = Some(SURFACE_ALT_FILL.into());
+                    }
                     Some((drawn, frame, Room::Words))
                 }
                 None => Some((invisible(frame), frame, Room::Words)),
             },
-            None if bind_label && texts.len() == 1 => {
+            None if bind_label && self.has_edges && texts.len() == 1 && !is_turned(texts[0]) => {
                 let frame = text_place(texts[0]).bounds().inflate(TEXT_PAD, TEXT_PAD);
                 Some((invisible(frame), frame, Room::Lines))
             }
@@ -289,12 +533,20 @@ impl<'a, 'input> Converter<'a, 'input> {
         }
         if let Some((mut container, frame, room)) = container {
             let label = texts.first().copied().filter(|text| {
-                bind_label && texts.len() == 1 && holds_middle(frame, text_place(*text).bounds())
+                bind_label
+                    && texts.len() == 1
+                    && !is_turned(*text)
+                    && holds_middle(frame, text_place(*text).bounds())
             });
             if let Some(text) = label {
                 let said = text_of(text);
-                fit(&mut container, &said, room);
-                container.label = Some(Label { text: said });
+                // At the size Pele set it in, which it sized the node for.
+                let size = font_size(text);
+                fit(&mut container, &said, room, size);
+                container.label = Some(Label {
+                    text: said,
+                    font_size: Some(size),
+                });
                 self.done.insert(text.id());
             }
             if bind_label || has_class(group, &["pele-cluster"]) {
@@ -309,6 +561,9 @@ impl<'a, 'input> Converter<'a, 'input> {
                 });
             }
             members.push(container);
+        }
+        for icon in icons {
+            members.extend(self.icon(icon));
         }
         for text in &texts {
             if !self.is_done(*text) {
@@ -430,6 +685,7 @@ impl<'a, 'input> Converter<'a, 'input> {
         if distance_to_route(middle, &points) < ON_THE_ROUTE {
             connector.label = Some(Label {
                 text: text_of(text),
+                font_size: None,
             });
             self.out.push(connector);
         } else {
@@ -474,6 +730,11 @@ impl<'a, 'input> Converter<'a, 'input> {
     /// What no node or edge drew: a text, or a shape as it is drawn.
     fn loose(&mut self, element: Node<'a, 'input>) {
         if self.is_done(element) || !visible(element) {
+            return;
+        }
+        if is_icon(element) {
+            let icon = self.icon(element);
+            self.out.extend(icon);
             return;
         }
         self.done.insert(element.id());
@@ -529,19 +790,24 @@ impl<'a, 'input> Converter<'a, 'input> {
         }
     }
 
-    /// A text of the board's. Its anchor stays where Pele put it, at the size the engine gives
-    /// new text, and its colour (its fill) travels in `strokeColor`, as an Excalidraw text's does.
+    /// A text of the board's. Its anchor stays where Pele put it, at the size Pele set it in, and
+    /// its colour (its fill) travels in `strokeColor`, as an Excalidraw text's does. One Pele
+    /// turned is a picture of itself ([`Self::turned_text`]).
     fn text(&mut self, text: Node<'a, 'input>) -> Skeleton {
+        if is_turned(text) {
+            return self.turned_text(text);
+        }
         self.done.insert(text.id());
         let place = text_place(text);
-        let size = TextData::default().style.font_size;
-        let width = place.width(size);
+        let size = place.size;
+        let width = place.set_width(size);
         let height = place.lines as f64 * size * LINE_HEIGHT;
         Skeleton {
             kind: "text".into(),
             x: place.at.x - place.anchor.before(width),
             y: place.at.y - height / 2.0,
             text: Some(text_of(text)),
+            font_size: Some(size),
             stroke_color: Some(self.ink_or(paint(text, "fill"))),
             ..Skeleton::default()
         }
@@ -657,11 +923,11 @@ enum Room {
     Lines,
 }
 
-/// Grows `shape` around its middle until the engine can set `label` in it with the `room` asked
-/// for. A board shape keeps its label inside its insets, so an ellipse or a diamond holds less
-/// than the shape Pele drew around the same text (the web canvas's converter's `fit`, with
-/// FigCraft's insets for Excalidraw's).
-fn fit(shape: &mut Skeleton, label: &str, room: Room) {
+/// Grows `shape` around its middle until the engine can set `label` in it, at font `size`, with
+/// the `room` asked for. A board shape keeps its label inside its insets, so an ellipse or a
+/// diamond holds less than the shape Pele drew around the same text (the web canvas's converter's
+/// `fit`, with FigCraft's insets for Excalidraw's).
+fn fit(shape: &mut Skeleton, label: &str, room: Room, size: f64) {
     let insets = match shape.kind.as_str() {
         "ellipse" => BoardShape::Ellipse,
         "diamond" => BoardShape::Diamond,
@@ -669,16 +935,30 @@ fn fit(shape: &mut Skeleton, label: &str, room: Room) {
     }
     .text_insets();
     let [top, right, bottom, left] = insets;
+    let (width, height) = (shape.width.unwrap_or(0.0), shape.height.unwrap_or(0.0));
+    let across = 1.0 - left - right;
     let (widest, tall) = match room {
-        Room::Words => (widest_word(label), 0.0),
+        Room::Words => {
+            // A label Pele set on one line in a box made for it: the engine's face sets it a
+            // little wider, and a box grown that little keeps the line whole, where a broken one
+            // would spill out of the box's height.
+            let line = set_widest_line(label, size);
+            let one_line = !label.contains('\n') && line / across <= width * ONE_LINE_GROWTH;
+            let widest = if one_line {
+                line
+            } else {
+                set_widest_word(label, size)
+            };
+            (widest, 0.0)
+        }
         Room::Lines => {
             let lines = label.lines().count().max(1) as f64;
-            let tall = lines * LABEL_SIZE * LABEL_LINE_HEIGHT / (1.0 - top - bottom);
-            (widest_line(label), tall)
+            let tall = lines * size * LABEL_LINE_HEIGHT / (1.0 - top - bottom);
+            (set_widest_line(label, size), tall)
         }
     };
-    let wide = widest * LABEL_SIZE / (1.0 - left - right);
-    let (width, height) = (shape.width.unwrap_or(0.0), shape.height.unwrap_or(0.0));
+    // A pixel to spare, so that a word set exactly as wide as its room isn't broken.
+    let wide = (widest + 1.0) / across;
     let (grown_width, grown_height) = (width.max(wide), height.max(tall));
     shape.x -= (grown_width - width) / 2.0;
     shape.y -= (grown_height - height) / 2.0;
@@ -727,9 +1007,11 @@ fn is_rounded(shape: Node, group: Option<Node>) -> bool {
         .attribute("rx")
         .and_then(length)
         .is_some_and(|rx| rx > 0.0);
-    let styled = shape
-        .attribute("style")
-        .is_some_and(|style| declarations(style).any(|(property, _)| property == "rx"));
+    // A radius of nothing (a theme's `--pele-radius` the diagram doesn't declare) rounds nothing.
+    let styled = shape.attribute("style").is_some_and(|style| {
+        declarations(style)
+            .any(|(property, value)| property == "rx" && length(value).is_some_and(|rx| rx > 0.0))
+    });
     let shaped = group.is_some_and(|g| has_class(g, &["pele-shape-rounded", "pele-shape-stadium"]));
     shape.has_tag_name("rect") && (radius || styled || shaped)
 }
@@ -871,7 +1153,7 @@ fn visible(node: Node) -> bool {
     if declared(node, "opacity").and_then(length) == Some(0.0) {
         return false;
     }
-    matches!(tag(node), "g" | "text")
+    matches!(tag(node), "g" | "text" | "svg")
         || paint(node, "fill").is_some()
         || paint(node, "stroke").is_some()
 }
@@ -885,6 +1167,42 @@ fn is_background(node: Node) -> bool {
 
 fn tag<'a>(node: Node<'a, '_>) -> &'a str {
     node.tag_name().name()
+}
+
+/// Whether `node` is an icon: an `<svg>` inside the diagram's, which draws in its own coordinates
+/// (its `viewBox`) and comes in as a picture of itself.
+fn is_icon(node: Node) -> bool {
+    node.has_tag_name("svg") && node.parent_element().is_some()
+}
+
+/// Whether text `node` is turned (or slanted) on its way to the diagram's coordinates, as a lane's
+/// title or an axis's is, which a board's text can't be.
+fn is_turned(node: Node) -> bool {
+    let [_, b, c, _, _, _] = transform_of(node).as_coeffs();
+    node.has_tag_name("text") && (b.abs() > 1e-9 || c.abs() > 1e-9)
+}
+
+/// The start tag of the element whose markup starts at `start` in `input`: up to its first `>`
+/// outside a quoted attribute value.
+fn open_tag(input: &str, start: usize) -> &str {
+    let mut quote = None;
+    for (at, c) in input[start..].char_indices() {
+        match (c, quote) {
+            ('"' | '\'', None) => quote = Some(c),
+            (c, Some(q)) if c == q => quote = None,
+            ('>', None) => return &input[start..=start + at],
+            _ => {}
+        }
+    }
+    &input[start..]
+}
+
+/// `value` as an attribute's value in double quotes.
+fn escape_attribute(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
 }
 
 fn is_shape(node: Node) -> bool {
@@ -971,9 +1289,29 @@ fn widest_line(text: &str) -> f64 {
     text.lines().map(ems).fold(0.0, f64::max)
 }
 
-/// About how wide the widest word of `text` is, in ems.
-fn widest_word(text: &str) -> f64 {
-    text.split_whitespace().map(ems).fold(0.0, f64::max)
+/// How wide the engine sets `line` at font `size`, in px: as its text layout measures it in the
+/// face new text takes (Inter, [`crate::fonts`]), and never under the estimate ([`ems`]), so that
+/// a face that isn't there yet makes room too.
+fn set_width(line: &str, size: f64) -> f64 {
+    crate::fonts::register();
+    let mut text = TextData::new(line);
+    text.style.font_size = size;
+    let measured = figcraft_text::layout(&text, None, None).width;
+    (ems(line) * size).max(measured)
+}
+
+/// How wide the engine sets the widest line of `text` at font `size`, in px.
+fn set_widest_line(text: &str, size: f64) -> f64 {
+    text.lines()
+        .map(|line| set_width(line, size))
+        .fold(0.0, f64::max)
+}
+
+/// How wide the engine sets the widest word of `text` at font `size`, in px.
+fn set_widest_word(text: &str, size: f64) -> f64 {
+    text.split_whitespace()
+        .map(|word| set_width(word, size))
+        .fold(0.0, f64::max)
 }
 
 /// Which end of a line of text its anchor is.
@@ -1005,12 +1343,19 @@ struct TextPlace {
     lines: usize,
     /// About how wide its widest line is, in ems.
     ems: f64,
+    /// What it says.
+    said: String,
 }
 
 impl TextPlace {
     /// About how wide its widest line is at font `size`.
     fn width(&self, size: f64) -> f64 {
         self.ems * size
+    }
+
+    /// How wide the engine sets its widest line at font `size`.
+    fn set_width(&self, size: f64) -> f64 {
+        set_widest_line(&self.said, size)
     }
 
     /// About the box Pele drew it in.
@@ -1030,6 +1375,12 @@ impl TextPlace {
 /// Where `text` is drawn: its anchor is its `x` (or its first span's), and its lines run from its
 /// `y` (or its spans') down, each with its baseline [`BASELINE`] below its middle.
 fn text_place(text: Node) -> TextPlace {
+    text_place_in(text, transform_of(text))
+}
+
+/// Where `text` is drawn, in the coordinates that `to` takes its own to: the diagram's for
+/// [`transform_of`] it, its own for the identity.
+fn text_place_in(text: Node, to: Affine) -> TextPlace {
     let said = text_of(text);
     let size = font_size(text);
     let spans: Vec<Node> = text
@@ -1062,10 +1413,11 @@ fn text_place(text: Node) -> TextPlace {
     };
     TextPlace {
         anchor,
-        at: transform_of(text) * middle,
+        at: to * middle,
         size,
         lines,
         ems: widest_line(&said),
+        said,
     }
 }
 
@@ -1222,6 +1574,14 @@ fn local_box(shape: Node) -> Option<Rect> {
         "circle" => Rect::from_center_size((n("cx"), n("cy")), (2.0 * n("r"), 2.0 * n("r"))),
         "ellipse" => Rect::from_center_size((n("cx"), n("cy")), (2.0 * n("rx"), 2.0 * n("ry"))),
         "line" => Rect::from_points((n("x1"), n("y1")), (n("x2"), n("y2"))),
+        // An icon: its viewport.
+        "svg" => {
+            let (width, height) = (
+                shape.attribute("width").and_then(length)?,
+                shape.attribute("height").and_then(length)?,
+            );
+            Rect::new(n("x"), n("y"), n("x") + width, n("y") + height)
+        }
         "polygon" | "polyline" => {
             let points = point_list(shape.attribute("points")?);
             let first = *points.first()?;
@@ -1397,6 +1757,9 @@ mod tests {
 
     use super::*;
     use crate::{BoardDoc, ops};
+
+    /// The size Pele sets a flowchart's labels in, which they come onto the board in.
+    const PELE_SIZE: f64 = 16.0;
 
     const FLOW: &str = include_str!("../tests/fixtures/mermaid/flow.mmd");
     const SEQUENCE: &str = include_str!("../tests/fixtures/mermaid/sequence.mmd");
@@ -1734,21 +2097,199 @@ mod tests {
 
     #[test]
     fn every_editable_kind_comes_in_as_shapes() {
-        let mut kinds: Vec<&str> = EVERY_KIND.iter().map(|(kind, _)| *kind).collect();
-        let mut editable = EDITABLE.to_vec();
-        kinds.sort_unstable();
-        editable.sort_unstable();
-        assert_eq!(kinds, editable);
-
         for (kind, source) in EVERY_KIND {
+            assert_eq!(way_of(kind), Way::Shapes, "{kind}");
             let diagram = render(source, &Palette::default()).unwrap();
             assert_eq!(diagram.kind, *kind);
             let items = to_skeletons(&diagram).unwrap();
             assert!(!items.is_empty(), "{kind}");
-            assert!(of_kind(&items, "image").is_empty(), "{kind}: {items:#?}");
+            // No picture of the diagram: only of a text Pele turned (a git graph's commit ids).
+            let pictures = of_kind(&items, "image");
+            assert!(
+                pictures
+                    .iter()
+                    .all(|p| p.name.as_deref() == Some("text.svg")),
+                "{kind}: {items:#?}"
+            );
             // The engine takes every one of them: the op answers, and draws something.
             let mut board = board();
             draw(&mut board, json!({"op": "mermaid", "source": source}));
+        }
+    }
+
+    /// The fixture for `keyword`, one of `sawit_core::mermaid::TYPES`.
+    fn fixture(keyword: &str) -> String {
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/mermaid/types")
+            .join(format!("{keyword}.mmd"));
+        std::fs::read_to_string(&file)
+            .unwrap_or_else(|error| panic!("{} can't be read: {error}", file.display()))
+    }
+
+    /// The pictures cut from a diagram come in as groups of their layers, not frames: a frame's
+    /// title, its file's name, showed over every icon of an architecture and every turned title of
+    /// a swimlane. A chart, one picture of the whole diagram, stays a frame, as any SVG an agent
+    /// adds does. Each picture is where Pele drew it.
+    #[test]
+    fn the_pictures_cut_from_a_diagram_are_groups() {
+        use figcraft_doc::NodeKind;
+        for keyword in ["architecture-beta", "swimlane-beta", "venn-beta"] {
+            let mut board = board();
+            let ids = draw(
+                &mut board,
+                json!({"op": "mermaid", "source": fixture(keyword)}),
+            );
+            let doc = board.doc().unwrap();
+            // A board's shape is a frame too, but one with its board item; a picture's has none.
+            let picture_frame = |id: &NodeId| {
+                let node = doc.node(*id).unwrap();
+                matches!(node.kind, NodeKind::Frame) && node.board.is_none()
+            };
+            let group = |id: &NodeId| matches!(doc.node(*id).unwrap().kind, NodeKind::Group);
+            assert!(!ids.iter().any(picture_frame), "{keyword}");
+            assert!(ids.iter().any(group), "{keyword}");
+        }
+        let mut board = board();
+        let ids = draw(&mut board, json!({"op": "mermaid", "source": PIE}));
+        let doc = board.doc().unwrap();
+        let chart = doc.node(ids[0]).unwrap();
+        assert!(matches!(chart.kind, NodeKind::Frame) && chart.board.is_none());
+    }
+
+    /// How long a big flowchart takes to render, to become skeletons and to be drawn:
+    /// `cargo test -p sawit-board --release -- --ignored --nocapture a_big_diagram_takes`.
+    #[test]
+    #[ignore]
+    fn a_big_diagram_takes() {
+        for edges in [500u32, 1000, 2000] {
+            let nodes = edges.div_ceil(2);
+            let mut source = String::from("flowchart LR\n");
+            for i in 0..edges {
+                source.push_str(&format!("  n{} --> n{}\n", i % nodes, (i * 7 + 3) % nodes));
+            }
+            let started = std::time::Instant::now();
+            let diagram = render(&source, &Palette::default()).unwrap();
+            let rendered = started.elapsed();
+            let items = to_skeletons(&diagram).unwrap();
+            let converted = started.elapsed() - rendered;
+            let mut board = board();
+            let applied = crate::skeleton::apply(&mut board, &items, (0.0, 0.0)).unwrap();
+            let drawn = started.elapsed() - rendered - converted;
+            println!(
+                "{edges} edges, {} skeletons, {} layers: render {rendered:?}, convert \
+                 {converted:?}, draw {drawn:?}",
+                items.len(),
+                applied.ids.len()
+            );
+        }
+    }
+
+    /// Every type Pele draws has its way onto the board, and every type there is one Pele draws:
+    /// a type a newer Pele adds has to be placed, and the module's table with it.
+    #[test]
+    fn every_type_has_its_way_onto_the_board() {
+        let mut drawn: Vec<&str> = sawit_core::mermaid::TYPES.iter().map(|(_, k)| *k).collect();
+        drawn.sort_unstable();
+        drawn.dedup();
+        let mut placed: Vec<&str> = WAYS.iter().map(|(kind, _)| *kind).collect();
+        placed.sort_unstable();
+        assert_eq!(drawn, placed);
+        let doc = include_str!("mermaid.rs");
+        for (kind, way) in WAYS {
+            let row = doc.lines().find(|line| {
+                line.starts_with("//! | ")
+                    && line
+                        .split('|')
+                        .nth(1)
+                        .is_some_and(|types| types.split(',').any(|t| t.trim() == *kind))
+            });
+            let row = row.unwrap_or_else(|| panic!("the module's table has no row for {kind}"));
+            let said = match way {
+                Way::Shapes => "| shapes |",
+                Way::ShapesOnPicture => "| shapes on a picture |",
+                Way::Picture => "| one picture |",
+            };
+            assert!(row.contains(said), "{kind} is {way:?}: {row}");
+        }
+        for (kind, _) in BACKDROPS {
+            assert_eq!(way_of(kind), Way::ShapesOnPicture, "{kind}");
+        }
+    }
+
+    /// Every diagram type Pele draws, in each of its spellings (each C4 and railroad variant, each
+    /// `-beta`), renders, comes onto the board and is sane: shapes when its type is [`editable`]
+    /// (on one picture for a type in [`BACKDROPS`]), else one picture; something drawn, nothing far
+    /// outside the box Pele drew it in, and the op answers with what it added and nothing it
+    /// couldn't draw.
+    ///
+    /// `SAWIT_DIAGRAM_PNG=dir cargo test -p sawit-board every_type` also writes each board as PNG,
+    /// beside Pele's own drawing as SVG, for a look.
+    #[test]
+    fn every_type_comes_onto_the_board() {
+        let png_dir = std::env::var_os("SAWIT_DIAGRAM_PNG").map(std::path::PathBuf::from);
+        if let Some(dir) = &png_dir {
+            std::fs::create_dir_all(dir).unwrap();
+            // The PNG's text is set in Inter, as the app sets it.
+            crate::fonts::register();
+        }
+        for (keyword, kind) in sawit_core::mermaid::TYPES {
+            let source = fixture(keyword);
+            let diagram = render(&source, &Palette::default())
+                .unwrap_or_else(|error| panic!("{keyword}: {error}"));
+            assert_eq!(diagram.kind, *kind, "{keyword}");
+            let items = to_skeletons(&diagram).unwrap_or_else(|e| panic!("{keyword}: {e}"));
+            assert!(!items.is_empty(), "{keyword}");
+            let pictures: Vec<&Skeleton> = of_kind(&items, "image");
+            match way_of(kind) {
+                Way::Picture => {
+                    assert_eq!(items.len(), 1, "{keyword}");
+                    assert_eq!(items[0].kind, "image", "{keyword}");
+                }
+                way => {
+                    // Shapes, and pictures only for what no shape draws: the one at the back, the
+                    // icons, the turned texts.
+                    assert!(items.len() > 1, "{keyword}: {items:#?}");
+                    assert!(pictures.len() < items.len() / 2, "{keyword}: {items:#?}");
+                    let backdrop = pictures
+                        .iter()
+                        .filter(|p| p.name.as_deref() == Some("backdrop.svg"))
+                        .count();
+                    let expected = usize::from(way == Way::ShapesOnPicture);
+                    assert_eq!(backdrop, expected, "{keyword}");
+                    if way == Way::ShapesOnPicture {
+                        // At the back.
+                        assert_eq!(items[0].name.as_deref(), Some("backdrop.svg"), "{keyword}");
+                    }
+                }
+            }
+            // Each picture cut from the diagram is an SVG of its own that reads.
+            for picture in &pictures {
+                let svg = picture.svg.as_deref().expect("an SVG picture");
+                Document::parse(svg).unwrap_or_else(|e| panic!("{keyword}: {e}\n{svg}"));
+            }
+            // Within the box Pele drew, give or take what a text's width is guessed at.
+            let (x0, y0, x1, y1) = crate::skeleton::bounds(&items).expect("bounds");
+            let slack = 120.0;
+            assert!(
+                x0 >= -slack
+                    && y0 >= -slack
+                    && x1 <= diagram.width + slack
+                    && y1 <= diagram.height + slack,
+                "{keyword}: ({x0}, {y0}, {x1}, {y1}) is outside {}x{}",
+                diagram.width,
+                diagram.height
+            );
+            let mut board = board();
+            let reply = ops::run(&mut board, &json!({"op": "mermaid", "source": source}));
+            assert_eq!(reply["ok"], json!(true), "{keyword}: {reply}");
+            assert!(reply.get("notes").is_none(), "{keyword}: {reply}");
+            let added = reply["added"].as_u64().unwrap_or_default();
+            assert!(added > 0, "{keyword}: {reply}");
+            if let Some(dir) = &png_dir {
+                let png = ops::export_page(&mut board, "png", 1.0).unwrap();
+                std::fs::write(dir.join(format!("{keyword}.board.png")), png).unwrap();
+                std::fs::write(dir.join(format!("{keyword}.pele.svg")), &diagram.svg).unwrap();
+            }
         }
     }
 
@@ -1904,7 +2445,7 @@ mod tests {
         assert_eq!(leaf.background_color.as_deref(), Some("transparent"));
         assert_eq!(leaf.stroke_color.as_deref(), Some("transparent"));
         // Room for its text on the one line Pele drew it on.
-        assert!(room(leaf) >= widest_line("Leaf") * LABEL_SIZE - 1e-9);
+        assert!(room(leaf) >= set_widest_line("Leaf", PELE_SIZE));
         // The edge from the root joins it.
         let edges = of_kind(&items, "line");
         assert_eq!(edges.len(), 1, "{items:#?}");
@@ -2093,7 +2634,7 @@ mod tests {
         let source = "flowchart LR\n  A((Authentication)) --> B[Next]\n";
         let diagram = render(source, &Palette::default()).unwrap();
         let circle = drawn(&diagram, "circle");
-        let word = widest_word("Authentication") * LABEL_SIZE;
+        let word = set_widest_word("Authentication", PELE_SIZE);
         let [_, right, _, left] = BoardShape::Ellipse.text_insets();
         assert!(circle.width() * (1.0 - left - right) < word, "{circle:?}");
         let items = to_skeletons(&diagram).unwrap();
@@ -2136,7 +2677,7 @@ mod tests {
             ("diamond", Some(label_text))
         );
         assert!(
-            room(node) < widest_line(label_text) * LABEL_SIZE,
+            room(node) < set_widest_line(label_text, PELE_SIZE),
             "{node:?}"
         );
         let (x, width) = (node.x, node.width.unwrap());
@@ -2184,7 +2725,7 @@ mod tests {
     }
 
     #[test]
-    fn a_text_keeps_its_anchor_at_the_size_the_engine_gives_it() {
+    fn a_text_keeps_its_anchor_at_the_size_pele_set_it_in() {
         let items = converted(
             r#"<svg xmlns="http://www.w3.org/2000/svg" font-size="16">
                  <g transform="translate(100, 0)">
@@ -2195,9 +2736,12 @@ mod tests {
                </svg>"#,
         );
         assert_eq!(items.len(), 3, "{items:#?}");
-        // New text comes out at the engine's size, so that is the size its width is guessed at.
-        let size = TextData::default().style.font_size;
-        let width = ems("abcd") * size;
+        // It comes out at Pele's size, not the engine's for new text, so that is the size its
+        // width is guessed at.
+        let size = 16.0;
+        assert_ne!(TextData::default().style.font_size, size);
+        assert!(items.iter().all(|text| text.font_size == Some(size)));
+        let width = set_width("abcd", size);
         let lefts: Vec<f64> = items.iter().map(|text| text.x).collect();
         assert!(near(lefts[0], 100.0), "{lefts:?}");
         assert!(near(lefts[1], 100.0 - width / 2.0), "{lefts:?}");
@@ -2217,8 +2761,9 @@ mod tests {
         assert!(ems("AAAA") < ems("WWWW") && ems("WWWW") <= ems("漢字漢字"));
         assert!(near(ems("漢"), 1.0));
         assert!(near(widest_line("ab\nabcd\nabc"), ems("abcd")));
-        assert!(near(widest_word("a abcd abc"), ems("abcd")));
-        assert_eq!(widest_word(""), 0.0);
+        assert!(set_widest_word("a abcd abc", 16.0) >= ems("abcd") * 16.0);
+        assert!(set_widest_word("a abcd abc", 16.0) > set_widest_word("a abc", 16.0));
+        assert_eq!(set_widest_word("", 16.0), 0.0);
     }
 
     #[test]

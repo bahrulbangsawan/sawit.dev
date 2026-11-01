@@ -18,6 +18,21 @@ use sawit_core::app_control::{self, Store};
 use sawit_core::instances::{AppPaths, Instance};
 
 pub mod agent;
+/// Every diagram type the diagram tools draw, by the keyword a source starts with
+/// (`sawit_core::mermaid::TYPES`, which a test holds this to), for their descriptions.
+macro_rules! diagram_types {
+    () => {
+        "flowchart, graph, flowchart-elk, swimlane-beta, sequenceDiagram, classDiagram, \
+         stateDiagram, stateDiagram-v2, erDiagram, gantt, gitGraph, pie, mindmap, kanban, \
+         timeline, journey, quadrantChart, xychart, xychart-beta, requirementDiagram, sankey, \
+         sankey-beta, architecture-beta, C4Context, C4Container, C4Component, C4Dynamic, \
+         C4Deployment, block, block-beta, agentflow-beta, railroad-beta, railroad-ebnf-beta, \
+         railroad-abnf-beta, railroad-peg-beta, treeView-beta, cynefin-beta, wardley-beta, \
+         eventmodeling, usecase-beta, venn-beta, ishikawa, ishikawa-beta, packet, packet-beta, \
+         radar-beta, treemap, treemap-beta and info"
+    };
+}
+
 pub mod app;
 pub mod browser;
 pub mod browser_design;
@@ -79,7 +94,7 @@ pub const INSTRUCTIONS: &str = "\
 Sawit is a macOS developer workbench. These tools work without the Sawit app running:
 - Instances: local PostgreSQL servers managed by Sawit (list/create/start/stop/restart/remove, logs, port checks, installed binaries).
 - Databases: detect every reachable database, list/create/drop databases, describe schemas and tables, `query` (always read-only) and `execute_sql` (read-write: can modify data), saved connections, writing DATABASE_URL to a project's .env; export tables or queries to CSV/Excel, pg_dump backups, CSV imports, drop/truncate (with confirm) and refresh relations.
-- Diagrams: render Mermaid to SVG, and draw a database schema as Mermaid, DBML or SVG.
+- Diagrams: render_diagram draws a diagram written in Mermaid syntax to SVG with Pele (https://pele.run, built in and offline; mermaid.js isn't used), any type Pele draws: flowchart, swimlane, sequence, class, state, ER, gantt, git graph, pie, mindmap, kanban, timeline, journey, quadrant, XY, requirement, sankey, architecture, C4, block, agentflow, railroad, tree view, Cynefin, Wardley, event modeling, use case, Venn, Ishikawa, packet, radar, treemap, info (not ZenUML). schema_diagram draws a database schema as Mermaid, DBML or SVG. render_mermaid and canvas_add_mermaid are the old names of render_diagram and canvas_add_diagram.
 - Ports: list listening dev servers and stop them.
 - Cloudflare Local Explorer: local_explorer finds the explorers Workers dev servers (wrangler dev, vite with the Cloudflare plugin, cf dev) serve at http://localhost:<port>/cdn-cgi/local/explorer, the project's Workers, their bindings and whether the installed Wrangler or Vite plugin has it; local_explorer_request calls its API on loopback (GET reads; POST, PUT, PATCH and DELETE write local data and need confirm: true).
 - Network: diagnose the internet connection, ping a host.
@@ -96,7 +111,7 @@ These control the running Sawit app (start it with launch_app; app_state shows w
 - app_*: open files/folders, show panels, layout, tabs, pages (canvas, MCP, tools, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
 - GitHub: Sawit's GitHub features run on the user's one GitHub sign-in in the app, which no tool can do for them. app_state's `github` says whether they have signed in (signed_in, login); while they haven't, app_open_page github shows them the sign-in card and says to sign in to GitHub in Sawit first.
 - terminal_*: run commands in Sawit's terminal and read their output, split a pane to run something beside it (terminal_split), type keys (ctrl-c), close tabs or panes. terminal_run, terminal_split, app_run_script and app_ssh_connect return the terminal (tab) and `pane` they used: pass both to terminal_read, terminal_input and terminal_close, since the user may be typing in another terminal, which stays in front (app_state lists tabs and panes, and the coding agent, such as Claude Code, running in each). terminal_input and terminal_split need the tab, and a split tab needs its pane; terminal_read without a tab reads the pane the user has in front, and terminal_close without a pane closes the whole tab. terminal_close ends what runs there: while a program runs or the user types there it needs confirm: true.
-- canvas_*: the Sawit canvas: list, clear and export SVG/PNG the page on show; add shapes/stickies/arrows and Mermaid as editable shapes; update and delete layers by id, on any page; load another canvas in place of every page. They use your project's canvas (.nyawit/canvas.sawit), or the .sawit file named by `file` (a design file, say), in a canvas tab of its own. They also work on the saved file when the app is closed, and keep what they clear, load over or delete in backups beside it (.bak, .del.bak), which canvas_load reads back.
+- canvas_*: the Sawit canvas: list, clear and export SVG/PNG the page on show; add shapes/stickies/arrows, and diagrams in Mermaid syntax as editable shapes (canvas_add_diagram; charts as one picture); update and delete layers by id, on any page; load another canvas in place of every page. They use your project's canvas (.nyawit/canvas.sawit), or the .sawit file named by `file` (a design file, say), in a canvas tab of its own. They also work on the saved file when the app is closed, and keep what they clear, load over or delete in backups beside it (.bak, .del.bak), which canvas_load reads back.
 - canvas_command: run any command of the canvas engine by id with its parameters (board.sticky, node.set, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes. With the app closed each call starts from the saved file, so nothing carries over between calls (no undo, no selection, no view): pass ids, or run the steps in one command.batch.
 - browser_*: a browser tab (WebKit) to check the app being built: navigate (default the project's dev server), snapshot the page as an outline with element refs, click/hover/type/press keys/select/scroll by ref or CSS selector, wait for text, screenshot, read console errors and network requests, evaluate JS, resize to a device, read the user's annotations, inspect an element's design, read the page's design system, export it as DESIGN.md + tokens + assets. Take a new browser_snapshot after the page changes; refs reset.
 - keymap_*: the key bindings, as the Keymap Editor shows them: keymap_list says what a key does or which key runs an action, keymap_bind and keymap_unbind change the user's bindings (they write keymap.json again without its comments, so a file with comments needs confirm: true). They need the app: the default keys live in it.
@@ -396,6 +411,7 @@ const DESTRUCTIVE: &[&str] = &[
     "backup_database",
     "drop_relation",
     "truncate_table",
+    "render_diagram",
     "render_mermaid",
     "schema_diagram",
     "stop_processes",
@@ -464,6 +480,7 @@ const ADDS: &[&str] = &[
     "launch_app",
     "app_ssh_connect",
     "canvas_add_elements",
+    "canvas_add_diagram",
     "canvas_add_mermaid",
 ];
 
@@ -657,6 +674,7 @@ mod tests {
             "truncate_table",
             "refresh_materialized_view",
             // diagrams
+            "render_diagram",
             "render_mermaid",
             "schema_diagram",
             // ports
@@ -741,6 +759,7 @@ mod tests {
             "terminal_close",
             "canvas_get",
             "canvas_add_elements",
+            "canvas_add_diagram",
             "canvas_add_mermaid",
             "canvas_update",
             "canvas_delete",
@@ -782,6 +801,39 @@ mod tests {
                 tool.name
             );
         }
+    }
+
+    /// The diagram tools are named for diagrams, and list every type Pele draws, each keyword a
+    /// source can start with; the old Mermaid names still work, say they are deprecated and name
+    /// the tool to call instead, with the same arguments and hints.
+    #[test]
+    fn the_diagram_tools_list_every_type_and_the_old_names_are_deprecated() {
+        let tools = Sawit::router().list_all();
+        let tool = |name: &str| {
+            let tool = tools.iter().find(|tool| tool.name == name);
+            tool.unwrap_or_else(|| panic!("no tool {name}")).clone()
+        };
+        for (new, old) in [
+            ("render_diagram", "render_mermaid"),
+            ("canvas_add_diagram", "canvas_add_mermaid"),
+        ] {
+            let (new, old) = (tool(new), tool(old));
+            let said = new.description.as_deref().unwrap_or_default();
+            assert!(!said.contains("Deprecated"), "{said}");
+            assert!(said.contains("Pele"), "{said}");
+            for (keyword, _) in sawit_core::mermaid::TYPES {
+                let named = said
+                    .split([',', ' ', ':', '(', ')'])
+                    .any(|word| word == *keyword);
+                assert!(named, "{} doesn't name {keyword}: {said}", new.name);
+            }
+            let old_said = old.description.as_deref().unwrap_or_default();
+            assert!(old_said.starts_with("Deprecated"), "{old_said}");
+            assert!(old_said.contains(new.name.as_ref()), "{old_said}");
+            assert_eq!(old.input_schema, new.input_schema, "{}", old.name);
+            assert_eq!(old.annotations, new.annotations, "{}", old.name);
+        }
+        assert!(INSTRUCTIONS.contains("render_diagram") && INSTRUCTIONS.contains("Pele"));
     }
 
     /// README and the sawit.dev site say how many tools agents get: every count they give is the

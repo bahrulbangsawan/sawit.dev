@@ -563,6 +563,7 @@ impl<'a> Item<'a> {
         let text = labels.of.get(self.id?)?;
         Some(Label {
             text: (*text).to_string(),
+            font_size: None,
         })
     }
 }

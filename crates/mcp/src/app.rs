@@ -315,9 +315,33 @@ pub struct CanvasElementsArgs {
     pub project: Option<String>,
 }
 
+/// What `canvas_add_diagram` says it does, and `canvas_add_mermaid` after the word that it is the
+/// old name. How each type comes in is `sawit_board::mermaid::WAYS`.
+macro_rules! canvas_add_diagram_says {
+    () => {
+        concat!(
+            "Draw a diagram written in Mermaid syntax on Sawit's canvas as shapes you can edit: \
+             boxes, connectors bound to them, labels. Pele (https://pele.run) lays it out offline; \
+             mermaid.js isn't used. Every type Pele draws comes in: ",
+            diagram_types!(),
+            " (not ZenUML or other Mermaid plugins). Flowcharts, swimlanes, sequence, class, \
+             state, ER, mindmaps, kanban, block, requirement, C4, git graphs, timelines, \
+             architecture, agentflow, use case, event modeling, Ishikawa, packet and quadrant \
+             charts come in as shapes; tree views, railroads, Wardley maps, Cynefin and Venn \
+             diagrams as shapes over one picture of their frame (tracks, axes, regions, sets); \
+             charts whose shapes are their data (journey, pie, gantt, xychart, sankey, radar, \
+             treemap, info) as one picture. Icons and turned text come in as small pictures. \
+             Answers the ids of what it drew. For an SVG file of a diagram use render_diagram"
+        )
+    };
+}
+
+/// The arguments of `canvas_add_diagram`, and of `canvas_add_mermaid`, its old name.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasMermaidArgs {
-    #[schemars(description = "Mermaid source (flowchart, sequence, class, ...)")]
+    #[schemars(
+        description = "The diagram in Mermaid syntax, starting with its type: flowchart, sequenceDiagram, architecture-beta, C4Context, venn-beta, … (any type Pele draws)"
+    )]
     pub source: String,
     #[schemars(description = "Where to put it; default right of the existing content")]
     pub x: Option<f64>,
@@ -560,6 +584,16 @@ impl Sawit {
             ));
         }
         Ok(store::board_file(dir.as_deref(), &self.paths.root))
+    }
+
+    /// `canvas_add_diagram`, and `canvas_add_mermaid`, its old name: the canvas's `mermaid` op,
+    /// which every version of the app runs.
+    pub async fn canvas_add_diagram_tool(&self, a: CanvasMermaidArgs) -> CallToolResult {
+        let op = json!({ "op": "mermaid", "source": a.source, "x": a.x, "y": a.y });
+        match self.canvas(a.project, a.file, op).await {
+            Ok(v) => ok(pretty(&v)),
+            Err(e) => fail(e),
+        }
     }
 
     pub async fn canvas_get_tool(&self, a: CanvasTargetArgs) -> CallToolResult {
@@ -1367,18 +1401,24 @@ impl Sawit {
         }
     }
 
-    #[tool(
-        description = "Convert a Mermaid diagram into editable shapes on Sawit's canvas: boxes, arrows bound to them, labels. Charts (pie, gantt, xychart, quadrant, journey, sankey, architecture) are placed as one image. (For an SVG image of a Mermaid diagram use render_mermaid)"
-    )]
+    #[tool(description = canvas_add_diagram_says!())]
+    async fn canvas_add_diagram(
+        &self,
+        Parameters(a): Parameters<CanvasMermaidArgs>,
+    ) -> CallToolResult {
+        self.canvas_add_diagram_tool(a).await
+    }
+
+    #[tool(description = concat!(
+        "Deprecated: the old name of canvas_add_diagram, which takes the same arguments; use \
+         canvas_add_diagram. ",
+        canvas_add_diagram_says!()
+    ))]
     async fn canvas_add_mermaid(
         &self,
         Parameters(a): Parameters<CanvasMermaidArgs>,
     ) -> CallToolResult {
-        let op = json!({ "op": "mermaid", "source": a.source, "x": a.x, "y": a.y });
-        match self.canvas(a.project, a.file, op).await {
-            Ok(v) => ok(pretty(&v)),
-            Err(e) => fail(e),
-        }
+        self.canvas_add_diagram_tool(a).await
     }
 
     #[tool(description = "Change canvas elements by id: position, size, colors, text")]
@@ -2469,7 +2509,7 @@ mod tests {
 
         // A diagram from Mermaid is drawn as shapes the next call can edit.
         let drawn = server
-            .canvas_add_mermaid(Parameters(CanvasMermaidArgs {
+            .canvas_add_diagram(Parameters(CanvasMermaidArgs {
                 source: "graph TD; A-->B".into(),
                 x: Some(0.0),
                 y: Some(400.0),
@@ -3350,7 +3390,7 @@ mod tests {
                         theme: crate::diagrams::Theme::Light,
                         inline: false,
                     };
-                    server.render_mermaid_tool(args).await
+                    server.render_diagram_tool(args, "render_diagram").await
                 }
             };
             let rendered = within_seconds(render).expect("the render answered");

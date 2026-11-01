@@ -1,0 +1,8 @@
+classDiagram
+  Animal <|-- Turtle
+  Animal <|-- Shark
+  Animal <|-- Whale
+  Animal *-- Habitat
+  Habitat o-- Animal
+  Turtle --> Shark : fears
+  Shark --> Turtle : hunts
