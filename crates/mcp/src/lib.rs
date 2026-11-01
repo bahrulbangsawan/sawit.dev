@@ -933,18 +933,32 @@ mod tests {
         }
         // The canvas tab opens only in the app. With the app closed a clear is saved at once, so
         // nothing undoes it, and the save keeps the board it cleared beside the file (m1), and the
-        // ones before it (CANVAS-CORE-3).
+        // ones before it (CANVAS-CORE-3). So does every op that deletes layers, a deletion by id
+        // and an engine command that deletes included, whatever is left on the canvas.
         assert!(
             elements.contains("Opens the canvas tab when the app is running"),
             "{elements}"
         );
         let clear = tool("canvas_clear");
         assert!(
-            clear.contains(
-                "The board it held is kept beside the canvas file as canvas.figcraft.bak"
-            ) && clear.contains("the 4 kept before it moving to .bak.1 to .bak.4")
+            clear.contains("The board it held is kept beside the canvas file as <name>.bak (canvas.figcraft.bak for the project's canvas)")
+                && clear.contains("the 4 kept before it moving to .bak.1 to .bak.4")
+                && clear.contains("canvas_load brings it back")
                 && clear.contains("in the app the user can also undo it"),
             "{clear}"
+        );
+        let delete = tool("canvas_delete");
+        assert!(
+            delete.contains(
+                "The board they were on is kept beside the canvas file as <name>.bak first"
+            ) && delete.contains("canvas_load brings it back")
+                && delete.contains("in the app the user can also undo it"),
+            "{delete}"
+        );
+        let command = tool("canvas_command");
+        assert!(
+            command.contains("A command that deletes layers (edit.delete, edit.cut, page.delete, ...) keeps the board they were on beside the canvas file as <name>.bak first"),
+            "{command}"
         );
         let load = tool("canvas_load");
         assert!(

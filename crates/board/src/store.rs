@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::SystemTime;
 
-use figcraft_doc::Document;
+use figcraft_doc::{Document, NodeId};
 use sawit_core::{files, nyawit};
 
 use crate::doc::{BoardDoc, BoardError};
@@ -177,6 +177,25 @@ pub fn is_empty(doc: &Document) -> bool {
     doc.pages
         .iter()
         .all(|page| doc.node(*page).is_none_or(|p| p.children.is_empty()))
+}
+
+/// How many nodes an edit may touch for [`removes_layers`] to look at those alone; past that it
+/// looks at every node of the board as it was.
+const CHANGES_LOOKED_AT: usize = 4096;
+
+/// Whether `after` lacks a layer that `before` has, on any page, a nested one included: a save of
+/// `after` takes layers off the canvas that held `before` (a clear, a deletion, a page deleted with
+/// what is on it, another canvas loaded in its place), so the board the file holds is kept as a
+/// backup first ([`Writer::save`]). A page alone is no layer: one deleted with nothing on it takes
+/// nothing off. Nor does an edit that only adds or changes layers.
+pub fn removes_layers(before: &Document, after: &Document) -> bool {
+    let gone = |id: NodeId| !after.contains(id) && !before.pages.contains(&id);
+    // An edit shares the rest of the document with the version it came from, so the nodes it
+    // touched are found in about the time of the edit, not of the document.
+    match after.changed_ids(before, CHANGES_LOOKED_AT) {
+        Some(changed) => changed.into_iter().any(gone),
+        None => before.ids().any(gone),
+    }
 }
 
 /// A file's length and modification time, as the canvas read or wrote it: when the file there has
@@ -1194,6 +1213,47 @@ mod tests {
             .unwrap();
         assert!(!is_empty(&doc));
         assert!(is_empty(&Document::without_pages("None")));
+    }
+
+    /// A save takes layers off the canvas when a layer the board had, on any page and at any
+    /// depth, is gone from what it saves: then the file's board is kept as a backup first. An
+    /// edit that adds, moves or renames layers takes nothing off, nor does deleting an empty page.
+    #[test]
+    fn a_layer_gone_from_any_page_is_a_save_that_takes_layers_off() {
+        let mut board = board_with(&["one", "two"]);
+        let page = board.doc().unwrap().pages[0];
+        let first = board.doc().unwrap().node(page).unwrap().children[0];
+        for (command, params, takes_off) in [
+            ("board.sticky", json!({"x": 900, "y": 0}), false),
+            ("node.set", json!({"id": first, "x": 40, "y": 40}), false),
+            ("node.set", json!({"id": first, "name": "First"}), false),
+            ("edit.delete", json!({"ids": [first]}), true),
+        ] {
+            let before = board.doc().unwrap();
+            board.execute(command, &params).unwrap();
+            let after = board.doc().unwrap();
+            assert_eq!(
+                removes_layers(&before, &after),
+                takes_off,
+                "{command} {params}"
+            );
+        }
+
+        // On another page: a layer in a frame there, the page with it, or an empty page.
+        let mut doc = Document::new("Two pages");
+        let second = doc.add_page("Page 2");
+        let empty = doc.add_page("Page 3");
+        let frame = (doc.create(second, NodeKind::Frame, "F", 0.0, 0.0, 400.0, 400.0)).unwrap();
+        let nested = (doc.create(frame, NodeKind::Rectangle, "R", 10.0, 10.0, 50.0, 50.0)).unwrap();
+        let without = |id| {
+            let mut after = doc.clone();
+            after.remove(id).unwrap();
+            removes_layers(&doc, &after)
+        };
+        assert!(without(nested), "a nested layer");
+        assert!(without(second), "a page with layers on it");
+        assert!(!without(empty), "a page with nothing on it");
+        assert!(!removes_layers(&doc, &doc.clone()));
     }
 
     #[test]
