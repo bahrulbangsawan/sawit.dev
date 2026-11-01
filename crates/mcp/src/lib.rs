@@ -1001,6 +1001,40 @@ mod tests {
         }
     }
 
+    /// canvas_get, canvas_clear and canvas_export act on the page on show, and say so: they said
+    /// "the canvas", or "the whole canvas" for a clear that leaves the other pages as they are.
+    /// canvas_get says where the other pages and the nested layers are.
+    #[test]
+    fn canvas_tools_say_which_page_they_act_on() {
+        let tools = Sawit::router().list_all();
+        let said = |name: &str| {
+            let tool = tools.iter().find(|tool| tool.name == name).expect(name);
+            tool.description.as_deref().unwrap_or_default().to_string()
+        };
+        let get = said("canvas_get");
+        for part in [
+            "top-level layers of the canvas's page on show",
+            "page.list",
+            "node.get",
+            "page.select",
+        ] {
+            assert!(get.contains(part), "no {part:?} in {get}");
+        }
+        let clear = said("canvas_clear");
+        assert!(
+            clear.contains("page on show; other pages keep theirs"),
+            "{clear}"
+        );
+        let export = said("canvas_export");
+        assert!(
+            export.contains("page on show") && export.contains("file.export"),
+            "{export}"
+        );
+        for name in ["canvas_get", "canvas_clear", "canvas_export"] {
+            assert!(!said(name).contains("whole canvas"), "{name}");
+        }
+    }
+
     /// What an agent is told matches what the tools do:
     /// - MCP-12: with the app closed every canvas_command opens the saved file afresh, so nothing
     ///   carries over from one call to the next: edit.undo has nothing to undo, and a command that

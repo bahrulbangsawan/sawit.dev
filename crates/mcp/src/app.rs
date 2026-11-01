@@ -1108,7 +1108,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "List the elements on Sawit's canvas: id, type, position, size, text, color and what a connector joins. Works from the saved file when the app isn't running"
+        description = "List the top-level layers of the canvas's page on show: id, type, position, size, text, color and what a connector joins. For the other pages and nested layers use canvas_command: page.list lists the pages, node.get {id} reads a page's or a layer's own layers, and page.select shows another page (with the app closed, only for the rest of one command.batch). Works from the saved file when the app isn't running; the page on show is then the one last saved"
     )]
     async fn canvas_get(&self, Parameters(a): Parameters<WindowArgs>) -> CallToolResult {
         self.canvas_get_tool(a).await
@@ -1169,7 +1169,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Clear the whole canvas. The board it held is kept beside the canvas file as <name>.bak (canvas.figcraft.bak for the project's canvas), the 4 kept before it moving to .bak.1 to .bak.4 (the oldest goes), and canvas_load brings it back; in the app the user can also undo it"
+        description = "Delete every layer of the canvas's page on show; other pages keep theirs. The board it held is kept beside the canvas file as <name>.bak (canvas.figcraft.bak for the project's canvas), the 4 kept before it moving to .bak.1 to .bak.4 (the oldest goes), and canvas_load brings it back; in the app the user can also undo it"
     )]
     async fn canvas_clear(&self, Parameters(a): Parameters<WindowArgs>) -> CallToolResult {
         match self.canvas(a.project, json!({ "op": "clear" })).await {
@@ -1216,7 +1216,9 @@ impl Sawit {
         }
     }
 
-    #[tool(description = "Export the canvas as an SVG or PNG file")]
+    #[tool(
+        description = "Export the canvas's page on show as one SVG or PNG file, at 1×. For other pages, chosen layers, another format (pdf, jpg, webp) or scale, use canvas_command file.export {ids, format, scale, path}"
+    )]
     async fn canvas_export(&self, Parameters(a): Parameters<CanvasExportArgs>) -> CallToolResult {
         let format = a.format.as_deref().map(str::trim).unwrap_or_default();
         let png = match format.to_lowercase().as_str() {
@@ -2752,6 +2754,55 @@ mod tests {
         assert!(newest_holds(&["on two", "on three"]));
         assert_eq!(backups_of(&file).len(), 4);
         assert!(texts_of(&std::fs::read(&file).unwrap()).contains("on three"));
+    }
+
+    /// canvas_get and canvas_clear act on the page on show, the one last saved with the app
+    /// closed, as their descriptions say: they said "the canvas", and an agent took the layers of
+    /// one page for all of it. The other pages are where the descriptions point: page.list lists
+    /// them, and node.get reads a page's layers.
+    #[tokio::test]
+    async fn the_page_tools_act_on_the_page_on_show_and_reach_the_others_by_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        write_board(&board_file(&project), 2);
+        let command = |command: &str, params: Value| {
+            let run = server.canvas_command_tool(CanvasCommandArgs {
+                command: command.into(),
+                params: Some(params),
+                project: project_arg(&project),
+            });
+            async {
+                let ran = run.await;
+                answer(&ran)["result"].clone()
+            }
+        };
+        let steps = json!({"commands": [
+            {"command": "page.add", "params": {"name": "Two"}},
+            {"command": "board.sticky", "params": {"x": 0, "y": 0, "text": "on two"}},
+            {"command": "page.select", "params": {"index": 0}},
+        ]});
+        command("command.batch", steps).await;
+        let window = || WindowArgs {
+            project: project_arg(&project),
+        };
+
+        let got = answer(&server.canvas_get_tool(window()).await);
+        let texts: Vec<&str> = (got["elements"].as_array().unwrap().iter())
+            .filter_map(|layer| layer["text"].as_str())
+            .collect();
+        assert_eq!(texts, ["note 0", "note 1"]);
+        let pages = command("page.list", json!({})).await;
+        let pages = pages.as_array().unwrap();
+        assert_eq!(pages.len(), 2, "{pages:?}");
+        let two = pages.iter().find(|page| page["name"] == "Two").unwrap()["id"].clone();
+        let on_two = || async { command("node.get", json!({"id": two})).await["children"].clone() };
+        assert_eq!(on_two().await.as_array().map(Vec::len), Some(1));
+
+        let cleared = server.canvas_clear(Parameters(window())).await;
+        assert_ne!(cleared.is_error, Some(true), "{}", said(&cleared));
+        assert!(answer(&server.canvas_get_tool(window()).await)["elements"] == json!([]));
+        assert_eq!(on_two().await.as_array().map(Vec::len), Some(1));
     }
 
     /// CANVAS-CORE-3: a load the changed-on-disk guard refuses changes nothing, the backups
