@@ -395,7 +395,7 @@ mod tests {
     #[gpui_kit::test]
     fn the_typography_section_edits_the_texts(cx: &mut TestAppContext) {
         let tmp = Scratch::new("typography");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let [text, shape] = text_and_rectangle(&path);
         let (view, mut cx) = open_in_window(cx, &path, &[text, shape]);
         let value = |key: &str, cx: &VisualTestContext| prop(&view, text, key, cx);
@@ -439,7 +439,7 @@ mod tests {
             .find(|family| family.to_lowercase().contains("helvetica"))
             .expect("a Mac has Helvetica");
         let tmp = Scratch::new("typography-family");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let [text, _] = text_and_rectangle(&path);
         let (view, mut cx) = open_in_window(cx, &path, &[text]);
         focus_canvas(&view, &mut cx);

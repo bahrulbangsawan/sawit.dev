@@ -954,7 +954,7 @@ fn check_waiters(cx: &mut App) {
 }
 
 /// Whether a `--wait` on `files` waits on: one of them is in `open`, the files the windows' tabs
-/// show, itself or, for an `.excalidraw` file, as the `.figcraft` file beside it that its canvas
+/// show, itself or, for an `.excalidraw` file, as the `.sawit` file beside it that its canvas
 /// is bound to and its tab shows (CANVAS-UI-7).
 fn still_open(files: &[PathBuf], open: &HashSet<PathBuf>) -> bool {
     files
@@ -1022,21 +1022,21 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     /// CANVAS-UI-7: `sawit --wait` on a canvas file waits while its canvas is open: an
-    /// `.excalidraw` file's canvas is bound to the `.figcraft` file beside it, which its tab
+    /// `.excalidraw` file's canvas is bound to the `.sawit` file beside it, which its tab
     /// shows, and a project's canvas file is shown by the project's canvas tab. It answered "done"
     /// at the first change of the window.
     #[test]
     fn a_wait_on_a_canvas_file_lasts_while_its_canvas_is_open() {
         let open: HashSet<PathBuf> = [
-            PathBuf::from("/p/sketch.figcraft"),
-            PathBuf::from("/p/.nyawit/canvas.figcraft"),
+            PathBuf::from("/p/sketch.sawit"),
+            PathBuf::from("/p/.nyawit/canvas.sawit"),
             PathBuf::from("/p/notes.md"),
         ]
         .into();
         let waits = |file: &str| still_open(&[PathBuf::from(file)], &open);
         assert!(waits("/p/sketch.excalidraw"));
-        assert!(waits("/p/sketch.figcraft"));
-        assert!(waits("/p/.nyawit/canvas.figcraft"));
+        assert!(waits("/p/sketch.sawit"));
+        assert!(waits("/p/.nyawit/canvas.sawit"));
         assert!(waits("/p/notes.md"));
         assert!(!waits("/p/other.excalidraw"));
         assert!(!waits("/p/notes.txt"));
@@ -1077,14 +1077,14 @@ mod tests {
             ("front", vec![PathBuf::from("/code/shop")]),
             ("back", vec![PathBuf::from("/code/blog")]),
         ];
-        let file = Path::new("/code/blog/design/home.figcraft");
+        let file = Path::new("/code/blog/design/home.sawit");
         assert_eq!(canvas_file_window(None, &windows, file), Some("back"));
         assert_eq!(
             canvas_file_window(Some("front"), &windows, file),
             Some("front"),
             "the window that shows it"
         );
-        let elsewhere = Path::new("/elsewhere/home.figcraft");
+        let elsewhere = Path::new("/elsewhere/home.sawit");
         assert_eq!(canvas_file_window(None, &windows, elsewhere), None);
     }
 

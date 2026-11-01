@@ -47,7 +47,7 @@ fn browser_route(open: bool, shown: bool, shows_tab: bool) -> BrowserRoute {
 /// for no project), from the window's project folders, `roots`. With no project named, the one
 /// holding the folder the agent works in, `agent_folder`: its browser_navigate opens that
 /// project's dev server, the page's cookies, screenshots and exports are that project's
-/// (final-seams m1), and its canvas is that project's `.nyawit/canvas.figcraft`, the one
+/// (final-seams m1), and its canvas is that project's `.nyawit/canvas.sawit`, the one
 /// sawit-mcp edits while the app is closed (Q12). Else the active project's, which is the one it
 /// named, if it named one ([`crate::cli`] makes it active).
 fn agent_project(
@@ -61,7 +61,8 @@ fn agent_project(
 }
 
 /// The kind of canvas file `file` is, which an agent's canvas op names: an absolute path to a
-/// `.figcraft` or an `.excalidraw` file. Anything else is the op's error, and no tab opens for it.
+/// `.sawit` file (or a `.figcraft` one, as canvas files were named before) or an `.excalidraw`
+/// file. Anything else is the op's error, and no tab opens for it.
 fn canvas_file_kind(file: &Path) -> Result<FileKind, String> {
     if !file.is_absolute() {
         return Err(format!(
@@ -70,9 +71,9 @@ fn canvas_file_kind(file: &Path) -> Result<FileKind, String> {
         ));
     }
     match classify(file) {
-        kind @ (FileKind::Figcraft | FileKind::Excalidraw) => Ok(kind),
+        kind @ (FileKind::Canvas | FileKind::Excalidraw) => Ok(kind),
         _ => Err(format!(
-            "{} isn't a canvas file: name a .figcraft or .excalidraw file.",
+            "{} isn't a canvas file: name a .sawit or .excalidraw file.",
             file.display()
         )),
     }
@@ -622,7 +623,7 @@ impl Workspace {
 
     /// The canvas of the canvas file an agent's op names, `file`: its tab, opened as `sawit <file>`
     /// opens it ([`Self::open_board_file`]: a project's canvas file is that project's canvas tab,
-    /// and an `.excalidraw` file's canvas is bound to the `.figcraft` file beside it), shown with
+    /// and an `.excalidraw` file's canvas is bound to the `.sawit` file beside it), shown with
     /// the tab area and its project, but with the keyboard left where the user has it.
     fn agent_canvas_file(
         &mut self,
@@ -946,18 +947,19 @@ mod tests {
         );
     }
 
-    /// An agent's canvas op names a canvas file by its absolute path: a `.figcraft` file, or an
-    /// `.excalidraw` file, whose canvas is bound to the `.figcraft` file beside it. Anything else
-    /// is the op's error, and no tab opens for it.
+    /// An agent's canvas op names a canvas file by its absolute path: a `.sawit` file (or a
+    /// `.figcraft` one from before), or an `.excalidraw` file, whose canvas is bound to the
+    /// `.sawit` file beside it. Anything else is the op's error, and no tab opens for it.
     #[test]
-    fn an_agents_canvas_file_is_a_figcraft_or_excalidraw_file_by_its_absolute_path() {
+    fn an_agents_canvas_file_is_a_sawit_or_excalidraw_file_by_its_absolute_path() {
         let kind = |file: &str| canvas_file_kind(Path::new(file));
-        assert_eq!(kind("/p/design/home.figcraft"), Ok(FileKind::Figcraft));
+        assert_eq!(kind("/p/design/home.sawit"), Ok(FileKind::Canvas));
+        assert_eq!(kind("/p/design/home.figcraft"), Ok(FileKind::Canvas));
         assert_eq!(kind("/p/Old.EXCALIDRAW"), Ok(FileKind::Excalidraw));
         for (file, says) in [
-            ("design/home.figcraft", "isn't an absolute path"),
+            ("design/home.sawit", "isn't an absolute path"),
             ("/p/notes.md", "isn't a canvas file"),
-            ("/p/.nyawit/canvas.figcraft.bak", "isn't a canvas file"),
+            ("/p/.nyawit/canvas.sawit.bak", "isn't a canvas file"),
         ] {
             let refused = kind(file).unwrap_err();
             assert!(refused.contains(says), "{file}: {refused}");

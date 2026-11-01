@@ -125,7 +125,7 @@ pub(super) fn render_top_bar(
 }
 
 /// What the bar calls the document in `path`: "Canvas" for the canvas a project or the app has
-/// (`canvas.figcraft`, the file the store takes for it), else the file's name.
+/// (`canvas.sawit`, the file the store takes for it), else the file's name.
 pub(super) fn document_name(path: &Path) -> SharedString {
     match path.file_name() {
         Some(name) if name == nyawit::BOARD_FILE => TITLE.into(),

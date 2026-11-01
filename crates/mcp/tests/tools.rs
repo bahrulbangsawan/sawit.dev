@@ -247,9 +247,9 @@ fn project_arg(project: &Path) -> Option<String> {
     Some(project.display().to_string())
 }
 
-/// `<project>/.nyawit/canvas.figcraft`.
+/// `<project>/.nyawit/canvas.sawit`.
 fn board_file(project: &Path) -> PathBuf {
-    project.join(".nyawit").join("canvas.figcraft")
+    project.join(".nyawit").join("canvas.sawit")
 }
 
 /// `<project>/.nyawit/canvas.excalidraw`, the canvas as it was before the native one.
@@ -340,14 +340,14 @@ async fn command(server: &Sawit, project: &Path, id: &str, params: Value) -> Cal
 }
 
 #[tokio::test]
-async fn offline_get_reads_figcraft_then_excalidraw() {
+async fn offline_get_reads_the_sawit_file_then_excalidraw() {
     let dir = tempfile::tempdir().unwrap();
     let server = native(dir.path());
 
-    // A project whose canvas is a .figcraft file: its two stickies.
-    let figcraft = dir.path().join("figcraft-project");
-    write_board(&board_file(&figcraft), 2);
-    let listed = elements(&get(&server, &figcraft).await);
+    // A project whose canvas is a .sawit file: its two stickies.
+    let project = dir.path().join("sawit-project");
+    write_board(&board_file(&project), 2);
+    let listed = elements(&get(&server, &project).await);
     assert_eq!(listed.len(), 2, "{listed:?}");
     assert!(listed.iter().all(|e| e["type"] == json!("sticky")));
     assert!(listed.iter().any(|e| e["text"] == json!("note 1")));
@@ -366,7 +366,7 @@ async fn offline_get_reads_figcraft_then_excalidraw() {
         OLD_BOARD
     );
 
-    // With both files, the .figcraft is the canvas: the old one is imported once.
+    // With both files, the .sawit file is the canvas: the old one is imported once.
     write_board(&board_file(&old), 1);
     assert_eq!(elements(&get(&server, &old).await).len(), 1);
 
@@ -395,7 +395,7 @@ async fn offline_command_edits_the_file() {
     // The new .nyawit/ keeps its own files out of git, and nothing else is left in it.
     assert_eq!(
         names(&project.join(".nyawit")),
-        [".gitignore", "canvas.figcraft"]
+        [".gitignore", "canvas.sawit"]
     );
 
     // The next call opens the file as it is now, so the canvas grows.
@@ -425,7 +425,7 @@ async fn an_offline_edit_of_an_old_canvas_saves_the_import_and_keeps_the_origina
     assert_eq!(layers_in(&board_file(&project)).len(), 10);
     assert_eq!(
         names(&project.join(".nyawit")),
-        ["canvas.excalidraw", "canvas.figcraft"]
+        ["canvas.excalidraw", "canvas.sawit"]
     );
     assert_eq!(
         std::fs::read_to_string(old_canvas(&project)).unwrap(),
@@ -451,7 +451,7 @@ async fn offline_get_and_other_reads_write_nothing() {
     assert_ne!(zoom.is_error, Some(true), "{}", text(&zoom));
 
     assert_eq!(on_disk(&board_file(&project)), before);
-    assert_eq!(names(&project.join(".nyawit")), ["canvas.figcraft"]);
+    assert_eq!(names(&project.join(".nyawit")), ["canvas.sawit"]);
 }
 
 /// Plan 7 final review I-1 (ruling P7-C1, offline): a version of the canvas shown in place of the
@@ -477,7 +477,7 @@ async fn an_offline_version_preview_writes_nothing() {
     assert_ne!(preview.is_error, Some(true), "{}", text(&preview));
 
     assert_eq!(on_disk(&file), before);
-    assert_eq!(names(&project.join(".nyawit")), ["canvas.figcraft"]);
+    assert_eq!(names(&project.join(".nyawit")), ["canvas.sawit"]);
     assert_eq!(layers_in(&file).len(), 1);
 }
 
@@ -508,7 +508,7 @@ async fn an_offline_edit_never_saves_over_images_left_in_the_file() {
     // Beside it is only the copy the store keeps of a file it opens with notes.
     assert_eq!(
         names(&project.join(".nyawit")),
-        ["canvas.figcraft", "canvas.figcraft.lossy.bak"]
+        ["canvas.sawit", "canvas.sawit.lossy.bak"]
     );
 
     let listed = elements(&get(&server, &project).await);
@@ -612,15 +612,11 @@ async fn a_corrupt_canvas_is_an_error_and_never_the_old_canvas() {
     write_file(&old_canvas(&project), OLD_BOARD);
     write_file(&board_file(&project), "this is not a canvas");
 
-    // The canvas is the .figcraft: its error is the answer, not the elements of a board the
+    // The canvas is the .sawit file: its error is the answer, not the elements of a board the
     // canvas left months ago.
     let listed = get(&server, &project).await;
     assert_eq!(listed.is_error, Some(true), "{}", text(&listed));
-    assert!(
-        text(&listed).contains("canvas.figcraft"),
-        "{}",
-        text(&listed)
-    );
+    assert!(text(&listed).contains("canvas.sawit"), "{}", text(&listed));
     assert!(!text(&listed).contains("Service"), "{}", text(&listed));
 
     // And no edit goes over it.
@@ -632,6 +628,6 @@ async fn a_corrupt_canvas_is_an_error_and_never_the_old_canvas() {
     );
     assert_eq!(
         names(&project.join(".nyawit")),
-        ["canvas.excalidraw", "canvas.figcraft"]
+        ["canvas.excalidraw", "canvas.sawit"]
     );
 }

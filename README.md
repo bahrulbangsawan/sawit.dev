@@ -308,9 +308,9 @@ explained. A conflict on the same address can't be forced.
 <img src="docs/media/canvas.png" alt="Canvas: a Mermaid flowchart of the demo app turned into editable shapes, with boxes for the browser, acme-store, the checkout API, payments, acme-admin, an AI agent and the shop database" width="100%">
 
 - Click **Canvas** in the title bar, or press <kbd>⌃</kbd><kbd>⌘</kbd><kbd>C</kbd>, for a native whiteboard and
-  design canvas on the [FigCraft](https://github.com/storytold/figcraft) engine. It saves by itself.
+  design canvas (its engine is [FigCraft](https://github.com/storytold/figcraft)). It saves by itself.
 - **Boards and design files**: the project's canvas is a board, for sticky notes, shapes with text, connectors,
-  marker drawing, stamps and sections. A `.figcraft` file opened from the **Files** tab gets its own canvas tab,
+  marker drawing, stamps and sections. A `.sawit` file opened from the **Files** tab gets its own canvas tab,
   as a board or as a design file (frames, vectors, auto layout and components), and saves back to the same file.
 - **Tools and the toolbar**: the toolbar floats at the bottom of the canvas, and each tool's tooltip shows its key when it has one.
   - A board has Move and Hand, Marker, Highlighter and Eraser, Sticky notes in eight colours, Shapes, Connectors
@@ -329,12 +329,18 @@ explained. A conflict on the same address can't be forced.
   <kbd>⌘</kbd><kbd>K</kbd> belongs to the palette, so the chords that start with it (the tab chords,
   <kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd> for the Keymap Editor, and any you add) don't work there. The
   same goes for a chord you add that starts with another key the canvas uses alone.
-- **Where files live**: the project's canvas is `.nyawit/canvas.figcraft` in its folder. With no project it is
-  `canvas.figcraft` in Sawit's data folder. Exports go to `.nyawit/exports/`, or to `exports/` in the data folder
-  with no project or for a canvas file outside a project's `.nyawit/` (a `.figcraft` opened from the Files tab, say),
-  and Sawit shows them in Finder. **Save as…** (<kbd>⇧</kbd><kbd>⌘</kbd><kbd>S</kbd>) writes a `.figcraft` copy
+- **Where files live**: the project's canvas is `.nyawit/canvas.sawit` in its folder. With no project it is
+  `canvas.sawit` in Sawit's data folder. Exports go to `.nyawit/exports/`, or to `exports/` in the data folder
+  with no project or for a canvas file outside a project's `.nyawit/` (a `.sawit` opened from the Files tab, say),
+  and Sawit shows them in Finder. **Save as…** (<kbd>⇧</kbd><kbd>⌘</kbd><kbd>S</kbd>) writes a `.sawit` copy
   anywhere. `.nyawit/` has its own `.gitignore`, so nothing in it is committed until you delete that file.
-- **Copies it keeps beside the file** (`<file>` is the canvas file's whole name, such as `canvas.figcraft`):
+- **Files from before `.sawit`**: canvas files used to be `.figcraft` files, and still open, edit and save where they
+  are. The first time a project's canvas opens (in the app, or through an agent's `canvas_*` tool with Sawit
+  closed), its `.nyawit/canvas.figcraft` moves to `canvas.sawit`, with its backups (`canvas.figcraft.bak` becomes
+  `canvas.sawit.bak`, and so on). Nothing is copied or replaced: when a `canvas.sawit` is there already, it is the
+  canvas, and `canvas.figcraft` stays as it is for you to open or delete. The same goes for `canvas.figcraft` in
+  Sawit's data folder. Only the name changed: a `.sawit` file holds the canvas engine's own format, as before.
+- **Copies it keeps beside the file** (`<file>` is the canvas file's whole name, such as `canvas.sawit`):
   - A save that leaves the canvas empty, or follows an agent's `canvas_clear` or a `canvas_load` that put another
     canvas in its place, first keeps the board the file held as `<file>.bak`. The four before it move along to
     `<file>.bak.1` … `<file>.bak.4`, and the oldest goes.
@@ -346,17 +352,17 @@ explained. A conflict on the same address can't be forced.
     `<file>.lossy.bak`.
   - A save that would replace what another app or window wrote to the file since is refused, and the canvas says
     why. If the tab then closes, or Sawit quits, with edits it couldn't save, they're kept in
-    `<name> (unsaved <date>).figcraft` beside the file (`-2`, `-3`… when that name is taken), or in `unsaved/` in
+    `<name> (unsaved <date>).sawit` beside the file (`-2`, `-3`… when that name is taken), or in `unsaved/` in
     Sawit's data folder when nothing can be written there. The canvas doesn't announce these copies, so look for
     them there.
-  - Outside `.nyawit/` (a `.figcraft` opened from the Files tab in a repository, or one an agent names with
+  - Outside `.nyawit/` (a `.sawit` opened from the Files tab in a repository, or one an agent names with
     `file`), these files show in `git status`, and staging everything (`git add -A`) puts them in the next commit:
-    full copies of the file, images included. Add `*.figcraft.*bak*` to the repository's `.gitignore` to keep the
-    backups out.
+    full copies of the file, images included. Add `*.sawit.*bak*` to the repository's `.gitignore` to keep the
+    backups out, and keep `*.figcraft.*bak*` there too for the backups of files from before `.sawit`.
 - **From the old canvas**: a project that has only its old `.nyawit/canvas.excalidraw` opens it imported the first
   time. The `.excalidraw` file is never changed, and the canvas says what the import left out (the hand-drawn look
-  doesn't carry over). An `.excalidraw` file in the Files tab opens the same way and saves as `<name>.figcraft`
-  beside it.
+  doesn't carry over). An `.excalidraw` file in the Files tab opens the same way and saves as `<name>.sawit`
+  beside it (or goes on saving to the `<name>.figcraft` an older Sawit imported it into).
 - Agents draw on it through the `canvas_*` MCP tools. `canvas_add_mermaid` turns Mermaid into **editable shapes**:
   boxes, connectors joined to them, and labels. Charts (pie, Gantt, XY, quadrant, journey, Sankey, architecture) are
   placed as one picture. Pele, the renderer the rest of the app uses, lays the diagram out. `canvas_command` runs any
@@ -366,7 +372,7 @@ explained. A conflict on the same address can't be forced.
   folder); a diagram it renders with no path goes to that project's `.nyawit/diagrams/`. A `.nyawit/` with no canvas
   in it, or one above the repository, doesn't count. `file` names any other canvas file instead, such as a design
   file in the repository: the agent works on it in its own canvas tab, which opens without taking your keyboard,
-  or on the file while Sawit is closed. An `.excalidraw` file is imported once into the `.figcraft` file beside it,
+  or on the file while Sawit is closed. An `.excalidraw` file is imported once into the `.sawit` file beside it,
   as the Files tab opens it.
 
 ### Git
@@ -666,7 +672,7 @@ its own project's, even while you look at another project of that window.
 | Terminal (app running) | `terminal_run`, `terminal_split` (a pane split right or down, with a command in the new half), `terminal_read`, `terminal_input`, `terminal_close` (`terminal_run`, `terminal_split`, `app_run_script` and `app_ssh_connect` return the tab and `pane` they used; `terminal_input` needs the tab, and a split tab needs its pane) |
 | Keymap (app running) | `keymap_list` (every binding: what a key does, which key runs an action, what clashes), `keymap_bind`, `keymap_unbind` (with the Keymap Editor's checks; `restore` brings back a default) |
 | Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (what the user annotated), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`; replacing an earlier export needs `replace: true`) |
-| Canvas | `canvas_get` (the top-level layers of the page on show), `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear` (the page on show), `canvas_load`, `canvas_export` (the page on show, as SVG or PNG), `canvas_command` (any command of the canvas engine, by id: `page.list` and `node.get` reach the other pages), `canvas_commands` (lists them; pass a `filter` to see what each takes). Each takes `file`, a `.figcraft` file (a design file, say) or an `.excalidraw` file to work on instead of the project's canvas, in a canvas tab of its own. All of them work on the saved canvas file when the app is closed; then each call starts from that file, so no undo or selection carries over to the next: pass `canvas_command` the ids, or its steps in one `command.batch` |
+| Canvas | `canvas_get` (the top-level layers of the page on show), `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear` (the page on show), `canvas_load`, `canvas_export` (the page on show, as SVG or PNG), `canvas_command` (any command of the canvas engine, by id: `page.list` and `node.get` reach the other pages), `canvas_commands` (lists them; pass a `filter` to see what each takes). Each takes `file`, a `.sawit` file (a design file, say; a `.figcraft` one from before works too) or an `.excalidraw` file to work on instead of the project's canvas, in a canvas tab of its own. All of them work on the saved canvas file when the app is closed; then each call starts from that file, so no undo or selection carries over to the next: pass `canvas_command` the ids, or its steps in one `command.batch` |
 
 Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`,
 `uninstall_mcp_server`, `remove_connection`, `remove_ssh_host`, `delete_prompt` and `remove_command` take the name

@@ -261,7 +261,7 @@ mod tests {
         let server = Sawit::new(sawit_core::instances::AppPaths {
             root: dir.path().join("home"),
         });
-        let board = dir.path().join(".nyawit").join("canvas.figcraft");
+        let board = dir.path().join(".nyawit").join("canvas.sawit");
         std::fs::create_dir_all(board.parent().unwrap()).unwrap();
         std::fs::write(&board, b"the board").unwrap();
         let said = |result: &CallToolResult| result.content[0].as_text().unwrap().text.clone();

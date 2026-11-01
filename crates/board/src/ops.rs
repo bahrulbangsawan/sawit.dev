@@ -37,17 +37,17 @@
 //!
 //! Nor may a `command` op write over a canvas file. An engine command that writes where its `path`
 //! says (`file.export`, `variable.export`...: [`WRITES_TO_PATH`]) is refused, as the steps of a
-//! `command.batch` too, when `path` names a `.figcraft` or `.excalidraw` file or a copy Sawit keeps
-//! of one ([`is_canvas_file`]): with the app closed nothing else holds the board. So is a batch
-//! step of one that takes its params from another step's result, which names a path only as the
-//! batch runs.
+//! `command.batch` too, when `path` names a canvas file (`.sawit`, `.figcraft` as it was before,
+//! or `.excalidraw`) or a copy Sawit keeps of one ([`is_canvas_file`]): with the app closed
+//! nothing else holds the board. So is a batch step of one that takes its params from another
+//! step's result, which names a path only as the batch runs.
 //!
 //! Nor may it have the engine read a file that never ends. An engine command that reads the file
 //! its params name (`file.import`, `image.place`...: [`READS_FROM_PATH`]) reads it whole, as it
 //! finds it, on the canvas's UI thread: it is refused when that is a named pipe, a device such as
 //! `/dev/zero` (a cloned repository can link a file to one), or a file past
 //! [`crate::store::MAX_FILE`], and as a batch step when the file's name is taken from another
-//! step's result. `replace` checks the `.figcraft` file it loads the same way.
+//! step's result. `replace` checks the canvas file it loads the same way.
 //!
 //! It also holds the document's side of the commands Sawit carries out itself instead of the
 //! engine, which the canvas's menus and keys run ([`export_page`], [`frames_pdf`], [`copy_as`],
@@ -141,9 +141,9 @@ const READS_FROM_PATH: &[(&str, &[&str])] = &[
     ("collab.recoverFile", &["path"]),
 ];
 
-/// The ends of the names of the files a canvas is kept in: the one it is saved to, and the old
-/// one that it was migrated from.
-const CANVAS_EXTENSIONS: [&str; 2] = [".figcraft", ".excalidraw"];
+/// The ends of the names of the files a canvas is kept in: the one it is saved to (`.sawit`, and
+/// `.figcraft`, its name before), and the old one that it was migrated from.
+const CANVAS_EXTENSIONS: [&str; 3] = [".sawit", ".figcraft", ".excalidraw"];
 
 /// What goes after that to name a copy Sawit keeps of a canvas file, or a file it writes one
 /// through: the backups of the store (`.bak` and `.del.bak`, the newest of each kind, and
@@ -160,11 +160,11 @@ const STAGED: &str = ".sawit-tmp-";
 /// ([`crate::store::deletion_backup_file`]).
 const OLDER_BACKUPS: [&str; 2] = [".bak.", ".del.bak."];
 
-/// Whether `path` names a canvas file: a `.figcraft` or an `.excalidraw` file, or one of the
-/// copies and staging files that Sawit keeps beside one.
+/// Whether `path` names a canvas file: a `.sawit`, `.figcraft` or `.excalidraw` file, or one of
+/// the copies and staging files that Sawit keeps beside one.
 ///
 /// Only the name at the end of `path` counts, in any case (the files of a Mac are not told apart
-/// by it), and the whole of its end: `canvas.figcraft.svg` is an SVG file, not a canvas. So an
+/// by it), and the whole of its end: `canvas.sawit.svg` is an SVG file, not a canvas. So an
 /// export to an image path is never refused. A staging file's name goes on after the canvas
 /// file's, with what makes it of one save alone.
 pub fn is_canvas_file(path: &Path) -> bool {
@@ -229,8 +229,8 @@ const MERMAID_GAP: f64 = 100.0;
 /// - `replace` (`{scene}` or `{path}`) loads a canvas in place of the canvas's pages and answers
 ///   `{ok, elements, notes?}`: `elements` as `get` gives them, and `notes` on what the importer
 ///   left out. The new canvas is an Excalidraw scene (`scene`, or an `.excalidraw` file at `path`,
-///   which [`excalidraw::import`] draws), or the `.figcraft` file at `path`, or a copy Sawit kept
-///   of one there (`canvas.figcraft.bak`..., [`is_figcraft_file`]). A `scene` wins over a
+///   which [`excalidraw::import`] draws), or the `.sawit` (or `.figcraft`) file at `path`, or a
+///   copy Sawit kept of one there (`canvas.sawit.bak`..., [`is_sawit_file`]). A `scene` wins over a
 ///   `path`. It runs in the canvas's own session, so the canvas stays what it is (a board, with
 ///   its file), and undo brings the old pages back. A scene that has no `elements`, and a file
 ///   that can't be read, are errors that change nothing; a file that is no regular file (a named
@@ -785,24 +785,25 @@ struct Incoming {
 /// (read here when it is an Excalidraw one). Anything that can't be taken is the reply's error,
 /// before the canvas is touched.
 ///
-/// A `.figcraft` file is read by the engine's `file.import`, whole and as it finds it, so it is
-/// checked first as the canvas checks its own file ([`sawit_core::files::check_regular`]): a named
-/// pipe blocked the read for ever, and a link to a device such as `/dev/zero` read until the Mac
-/// ran out of memory, on the UI thread (CANVAS-CORE-6). Only a regular file of at most
-/// [`crate::store::MAX_FILE`] bytes is taken.
+/// A canvas file is read whole and as it is found, so it is checked first as the canvas checks
+/// its own file ([`sawit_core::files::check_regular`]): a named pipe blocked the read for ever, and
+/// a link to a device such as `/dev/zero` read until the Mac ran out of memory, on the UI thread
+/// (CANVAS-CORE-6). Only a regular file of at most [`crate::store::MAX_FILE`] bytes is taken. A
+/// `.figcraft` file is read by the engine's `file.import` where it is; a `.sawit` file, or a copy
+/// Sawit keeps of a canvas file, is read here and handed to it by its bytes ([`kept_copy`]).
 fn incoming(op: &Value) -> Result<Incoming, String> {
     if let Some(scene) = op.get("scene").filter(|scene| !scene.is_null()) {
         return from_scene(scene).map_err(|error| format!("replace: {error}"));
     }
     let Some(path) = op.get("path").and_then(Value::as_str) else {
         return Err(
-            r#"replace needs the scene or the file to load, like {"op": "replace", "path": "/path/to/board.figcraft"}"#
+            r#"replace needs the scene or the file to load, like {"op": "replace", "path": "/path/to/board.sawit"}"#
                 .into(),
         );
     };
     let extension = Path::new(path).extension().and_then(OsStr::to_str);
     match extension.map(str::to_ascii_lowercase).as_deref() {
-        Some("figcraft") => {
+        Some(figcraft_format::EXTENSION) => {
             sawit_core::files::check_regular(Path::new(path), crate::store::MAX_FILE)
                 .map_err(|error| format!("replace: couldn't read {path}: {error}"))?;
             Ok(Incoming {
@@ -815,64 +816,86 @@ fn incoming(op: &Value) -> Result<Incoming, String> {
                 .map_err(|error| format!("replace: {error}"))?;
             from_scene(&scene).map_err(|error| format!("replace: {path}: {error}"))
         }
-        _ if is_figcraft_file(Path::new(path)) => kept_copy(path),
+        _ if is_sawit_file(Path::new(path)) => kept_copy(path),
         _ => Err(format!(
-            "replace: {path} is not a .figcraft or .excalidraw file"
+            "replace: {path} is not a .sawit or .excalidraw file"
         )),
     }
 }
 
-/// Whether `path` names a FigCraft file: a `.figcraft` file, or a copy Sawit keeps of one under
-/// another name, the backups of the store (`<name>.figcraft.bak` and `<name>.figcraft.del.bak`,
-/// the older `.bak.<n>` and `.del.bak.<n>`, and the `.lossy.bak` of a file opened with notes).
-/// Only the name counts, in any case.
-pub fn is_figcraft_file(path: &Path) -> bool {
+/// Whether `path` names a Sawit canvas file: a `.sawit` file (or a `.figcraft` one, the
+/// extension canvas files had before), or a copy Sawit keeps of one under another name, the
+/// backups of the store (`<name>.sawit.bak` and `<name>.sawit.del.bak`, the older `.bak.<n>` and
+/// `.del.bak.<n>`, and the `.lossy.bak` of a file opened with notes:
+/// [`sawit_core::nyawit::is_backup_suffix`]). Only the name counts, in any case.
+pub fn is_sawit_file(path: &Path) -> bool {
+    use sawit_core::files::{CANVAS_EXTENSION, LEGACY_CANVAS_EXTENSION};
     let Some(name) = path.file_name() else {
         return false;
     };
     let name = name.to_string_lossy().to_lowercase();
-    let Some(at) = name.rfind(".figcraft") else {
-        return false;
-    };
-    let kept = &name[at + ".figcraft".len()..];
-    let numbered = OLDER_BACKUPS.iter().any(|older| {
-        (kept.strip_prefix(older))
-            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-    });
-    matches!(kept, "" | ".bak" | ".del.bak" | ".lossy.bak") || numbered
+    [CANVAS_EXTENSION, LEGACY_CANVAS_EXTENSION]
+        .iter()
+        .any(|extension| {
+            let extension = format!(".{extension}");
+            name.rfind(&extension).is_some_and(|at| {
+                let kept = &name[at + extension.len()..];
+                kept.is_empty() || sawit_core::nyawit::is_backup_suffix(kept)
+            })
+        })
 }
 
-/// A copy Sawit keeps of a canvas file under another name ([`is_figcraft_file`]:
-/// `canvas.figcraft.bak`...) as what `file.import` loads: its bytes, named as the `.figcraft` file
-/// it was. The engine tells a file's kind by its name, and would place this one as an image
-/// (MCP-6). It is read as a `.figcraft` file is checked: only a regular file of at most
-/// [`crate::store::MAX_FILE`] (CANVAS-CORE-6). A copy that isn't there, or isn't one, is the error.
+/// The name the engine is given for the bytes of a file called `name` that it imports
+/// (`file.import` with `data`). It tells a file's kind by its extension, and knows a canvas file
+/// only by its format's own, `.figcraft` ([`figcraft_format::EXTENSION`]): a `.sawit` file is
+/// handed over as `<stem>.figcraft`, and a copy Sawit keeps of a canvas file ([`is_sawit_file`]:
+/// `canvas.sawit.bak`...) as `<name>.figcraft`, where the engine would place either as an image
+/// (MCP-6). Any other name is as it is.
+pub fn engine_name(name: &str) -> String {
+    let file = Path::new(name);
+    let extension = file.extension().and_then(OsStr::to_str);
+    let is = |wanted: &str| extension.is_some_and(|ext| ext.eq_ignore_ascii_case(wanted));
+    if is(sawit_core::files::CANVAS_EXTENSION) {
+        let engine = file.with_extension(figcraft_format::EXTENSION);
+        return engine.to_string_lossy().into_owned();
+    }
+    if is(figcraft_format::EXTENSION) || !is_sawit_file(file) {
+        return name.to_string();
+    }
+    format!("{name}.{}", figcraft_format::EXTENSION)
+}
+
+/// A `.sawit` file, or a copy Sawit keeps of a canvas file under another name ([`is_sawit_file`]:
+/// `canvas.sawit.bak`...), as what `file.import` loads: its bytes, named as the engine knows a
+/// canvas file ([`engine_name`]). It is read as a canvas file is checked: only a regular file of
+/// at most [`crate::store::MAX_FILE`] (CANVAS-CORE-6). A file that isn't there, or isn't one, is
+/// the error.
 fn kept_copy(path: &str) -> Result<Incoming, String> {
     let file = Path::new(path);
     let bytes = sawit_core::files::read_regular(file, crate::store::MAX_FILE)
         .map_err(|error| format!("replace: couldn't read {path}: {error}"))?;
     let name = file.file_name().unwrap_or_default().to_string_lossy();
     Ok(Incoming {
-        import: json!({"data": STANDARD.encode(bytes), "name": format!("{name}.figcraft")}),
+        import: json!({"data": STANDARD.encode(bytes), "name": engine_name(&name)}),
         notes: Vec::new(),
     })
 }
 
 /// An Excalidraw `scene` as something the engine imports: it is drawn on a board of its own, and
-/// that board is the `.figcraft` that comes in. So a scene replaces the canvas the way a file
-/// does, as pages, and what it is drawn on is as the importer makes it (a light page, which the
-/// scene's own colours are made for).
+/// that board is the canvas file that comes in, named as the engine knows one. So a scene replaces
+/// the canvas the way a file does, as pages, and what it is drawn on is as the importer makes it
+/// (a light page, which the scene's own colours are made for).
 fn from_scene(scene: &Value) -> Result<Incoming, BoardError> {
     let (drawn, notes) = excalidraw::to_board("Canvas", scene)?;
     let file = drawn.to_bytes()?;
     Ok(Incoming {
-        import: json!({"data": STANDARD.encode(file), "name": "scene.figcraft"}),
+        import: json!({"data": STANDARD.encode(file), "name": engine_name("scene.sawit")}),
         notes,
     })
 }
 
 /// Replaces the pages of the canvas with those that the `file.import` of `import` brings in (a
-/// `.figcraft` file or its bytes), in the canvas's own session as one undo step: they are added to
+/// canvas file or its bytes), in the canvas's own session as one undo step: they are added to
 /// the document, then the old ones are deleted. An import that fails, a file that can't be read
 /// say, fails the step, and the canvas is as it was.
 ///
@@ -928,6 +951,10 @@ fn command(board: &mut BoardDoc, op: &Value) -> Value {
     if let Some(refusal) = refused(id, &params) {
         return failure(refusal);
     }
+    let params = match canvas_files_by_bytes(id, params) {
+        Ok(params) => params,
+        Err(error) => return failure(error),
+    };
     let history = FileHistory::of(&board.session);
     let ran = if id == BATCH {
         batch(board, &params)
@@ -1144,6 +1171,45 @@ impl Documents {
             .and_then(|uid| session.docs.iter().position(|doc| doc.uid == uid))
             .unwrap_or(0);
     }
+}
+
+/// `params` of command `id`, with the Sawit canvas file that a `file.import` names by its `path`
+/// (a `.sawit` file, or a copy Sawit keeps of a canvas file: [`is_sawit_file`]) handed to the
+/// engine by its bytes instead, named as the engine knows a canvas file ([`engine_name`]): it
+/// tells a file's kind by its extension, and would place one as an image. The steps of a
+/// `command.batch` are read the same way, a nested one's too; a path that another step's result
+/// gives is the engine's. A file that can't be read is the error, and nothing runs.
+fn canvas_files_by_bytes(id: &str, mut params: Value) -> Result<Value, String> {
+    if id == BATCH {
+        let steps = params.get_mut("commands").and_then(Value::as_array_mut);
+        for step in steps.into_iter().flatten() {
+            let Some(id) = step
+                .get("command")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            if let Some(params) = step.get_mut("params") {
+                *params = canvas_files_by_bytes(&id, params.take())?;
+            }
+        }
+        return Ok(params);
+    }
+    let path = params.get("path").and_then(Value::as_str);
+    let Some(path) = path.filter(|path| id == "file.import" && engine_name(path) != *path) else {
+        return Ok(params);
+    };
+    let file = Path::new(path);
+    let bytes = sawit_core::files::read_regular(file, crate::store::MAX_FILE)
+        .map_err(|error| format!("file.import: couldn't read {path}: {error}"))?;
+    let name = engine_name(&file.file_name().unwrap_or_default().to_string_lossy());
+    if let Some(params) = params.as_object_mut() {
+        params.remove("path");
+        params.insert("data".into(), json!(STANDARD.encode(bytes)));
+        params.insert("name".into(), json!(name));
+    }
+    Ok(params)
 }
 
 /// Runs command `id`, other than a batch. If it left other documents open, or another on show,
@@ -1542,10 +1608,10 @@ fn png_of(board: &mut BoardDoc, ids: &[NodeId], what: &str) -> Result<Vec<u8>, B
 /// images. The layer it made, which is then selected.
 ///
 /// The import lands in the middle of the view, as a paste does ([`clipboard::paste`]): an image or
-/// an SVG file is centred there. A design file (`.figcraft`, `.fig`, `.sketch`, `.penpot`) adds its
-/// pages after the canvas's own instead, and makes no layer on the page on show. One undo step. A
-/// file that can't be read, or that the engine can't import, is the error, which doesn't name the
-/// file, and nothing changes.
+/// an SVG file is centred there. A design file (`.sawit`, `.figcraft`, `.fig`, `.sketch`,
+/// `.penpot`) adds its pages after the canvas's own instead, and makes no layer on the page on
+/// show. One undo step. A file that can't be read, or that the engine can't import, is the error,
+/// which doesn't name the file, and nothing changes.
 pub fn import_file(
     board: &mut BoardDoc,
     path: &Path,
@@ -1570,8 +1636,8 @@ pub fn import_file(
         params["name"] = json!(stem);
         "file.placeImage"
     } else {
-        // Its extension says what the file is.
-        params["name"] = json!(name);
+        // Its extension says what the file is, a canvas file's as the engine knows it.
+        params["name"] = json!(engine_name(&name));
         "file.import"
     };
     let made = board.execute(command, &params)?;
@@ -1619,8 +1685,9 @@ mod tests {
         )
     }
 
-    /// A second board in `dir`, the kind of file `file.recover` opens. It has two stickies, so
-    /// it can't be taken for a canvas that has one.
+    /// A second board in `dir`, the kind of file `file.recover` opens, named as the engine knows a
+    /// canvas file (`.figcraft`), for the engine's commands that read it where it is. It has two
+    /// stickies, so it can't be taken for a canvas that has one.
     fn other_board_file(dir: &std::path::Path) -> String {
         let mut other = BoardDoc::new_board("Other").unwrap();
         for x in [40, 400] {
@@ -1869,7 +1936,7 @@ mod tests {
     #[test]
     fn a_save_inside_nested_batches_is_refused_and_writes_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("copy.figcraft");
+        let target = dir.path().join("copy.sawit");
         let mut board = board();
         let before = board.doc().unwrap();
 
@@ -1912,18 +1979,21 @@ mod tests {
     fn canvas_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         let folder = dir.join(".nyawit");
         std::fs::create_dir_all(&folder).unwrap();
-        let staging = sawit_core::files::staging_file(&folder.join("canvas.figcraft"), 0);
+        let staging = sawit_core::files::staging_file(&folder.join("canvas.sawit"), 0);
         let mut files: Vec<_> = [
-            "canvas.figcraft",
+            "canvas.sawit",
             "canvas.excalidraw",
-            "canvas.figcraft.bak",
-            "canvas.figcraft.del.bak",
-            "canvas.figcraft.lossy.bak",
-            "canvas.figcraft.tmp",
+            "canvas.sawit.bak",
+            "canvas.sawit.del.bak",
+            "canvas.sawit.lossy.bak",
+            "canvas.sawit.tmp",
             "canvas.excalidraw.bak",
             "canvas.excalidraw.lossy.bak",
+            // The canvas file by the name it had before, and a backup of it.
+            "canvas.figcraft",
+            "canvas.figcraft.bak",
             // A file of the user's own, and in capitals, which is the same file on a Mac.
-            "Design.figcraft",
+            "Design.sawit",
             "OLD.EXCALIDRAW",
         ]
         .map(|name| folder.join(name))
@@ -1939,25 +2009,31 @@ mod tests {
     fn canvas_files_are_told_by_the_end_of_their_name() {
         use std::path::Path;
         for name in [
-            "canvas.figcraft",
-            "/project/.nyawit/canvas.figcraft",
-            "relative/Board.FigCraft",
+            "canvas.sawit",
+            "/project/.nyawit/canvas.sawit",
+            "relative/Board.Sawit",
             "OLD.EXCALIDRAW",
-            "canvas.figcraft.bak",
-            "canvas.figcraft.lossy.bak",
-            "canvas.figcraft.tmp",
-            ".canvas.figcraft.sawit-tmp",
-            ".canvas.figcraft.sawit-tmp-412-3",
-            ".Design.FigCraft.sawit-tmp-1-0",
-            "canvas.figcraft.bak.1",
-            "canvas.figcraft.bak.4",
-            "Design.FIGCRAFT.BAK.12",
-            "canvas.figcraft.del.bak",
-            "canvas.figcraft.del.bak.1",
-            "home.FigCraft.DEL.BAK.4",
+            "canvas.sawit.bak",
+            "canvas.sawit.lossy.bak",
+            "canvas.sawit.tmp",
+            ".canvas.sawit.sawit-tmp",
+            ".canvas.sawit.sawit-tmp-412-3",
+            ".Design.Sawit.sawit-tmp-1-0",
+            "canvas.sawit.bak.1",
+            "canvas.sawit.bak.4",
+            "Design.SAWIT.BAK.12",
+            "canvas.sawit.del.bak",
+            "canvas.sawit.del.bak.1",
+            "home.Sawit.DEL.BAK.4",
             "canvas.excalidraw.bak",
             "canvas.excalidraw.lossy.bak",
             "canvas.excalidraw.tmp",
+            // The extension canvas files had before, and the copies kept of one.
+            "/project/.nyawit/canvas.figcraft",
+            "relative/Board.FigCraft",
+            "canvas.figcraft.bak",
+            "canvas.figcraft.del.bak.1",
+            ".canvas.figcraft.sawit-tmp-412-3",
         ] {
             assert!(is_canvas_file(Path::new(name)), "{name}");
         }
@@ -1965,19 +2041,20 @@ mod tests {
         for name in [
             "page.png",
             "page.svg",
+            "canvas.sawit.svg",
             "canvas.figcraft.svg",
             "canvas.excalidraw.png",
-            "figcraft",
-            "notes.figcraftx",
+            "sawit",
+            "notes.sawitx",
             "canvas.bak",
             "canvas.tmp",
-            "canvas.figcraft.bak.",
-            "canvas.figcraft.bak.png",
-            "canvas.figcraft.bak.1.svg",
-            "canvas.figcraft.del.bak.",
-            "canvas.figcraft.del.bak.png",
+            "canvas.sawit.bak.",
+            "canvas.sawit.bak.png",
+            "canvas.sawit.bak.1.svg",
+            "canvas.sawit.del.bak.",
+            "canvas.sawit.del.bak.png",
             "canvas.del.bak",
-            "/project/.figcraft/page.png",
+            "/project/.sawit/page.png",
             "",
             "/",
             "..",
@@ -1986,8 +2063,7 @@ mod tests {
         }
         // The files a save of the canvas is staged in, wherever it is.
         for n in [0, 1, u64::MAX] {
-            let staging =
-                sawit_core::files::staging_file(Path::new("/p/.nyawit/canvas.figcraft"), n);
+            let staging = sawit_core::files::staging_file(Path::new("/p/.nyawit/canvas.sawit"), n);
             assert!(is_canvas_file(&staging), "{}", staging.display());
         }
     }
@@ -2043,12 +2119,12 @@ mod tests {
         let mut board = board();
         square_at(&mut board, 0.0);
 
-        // What the name ends in decides, not what it holds: `.figcraft.svg` is an SVG file.
+        // What the name ends in decides, not what it holds: `.sawit.svg` is an SVG file.
         let writes = [
             ("file.export", "page.png"),
             ("file.exportSvg", "page.svg"),
-            ("file.exportSvg", "canvas.figcraft.svg"),
-            ("file.export", "design.figcraft.png"),
+            ("file.exportSvg", "canvas.sawit.svg"),
+            ("file.export", "design.sawit.png"),
             ("variable.export", "variables.json"),
             ("codeConnect.export", "links.json"),
         ];
@@ -2060,7 +2136,7 @@ mod tests {
         }
         let page = std::fs::read(dir.path().join("page.png")).unwrap();
         assert!(page.starts_with(b"\x89PNG"), "{:02x?}", &page[..8]);
-        let svg = std::fs::read_to_string(dir.path().join("canvas.figcraft.svg")).unwrap();
+        let svg = std::fs::read_to_string(dir.path().join("canvas.sawit.svg")).unwrap();
         assert!(svg.starts_with("<svg"), "{svg}");
         // And the canvas files beside them are as they were.
         for file in &canvas {
@@ -2380,24 +2456,21 @@ mod tests {
             "node.create",
             json!({"type": "frame", "x": 0, "y": 0, "width": 100, "height": 100}),
         );
-        let name = json!({"ids": [frame], "props": {"name": "canvas.figcraft"}});
+        let name = json!({"ids": [frame], "props": {"name": "canvas.sawit"}});
         board.execute("node.set", &name).unwrap();
         let png = json!({"ids": [frame], "setting": {"format": "png"}});
         board.execute("export.add", &png).unwrap();
 
         let reply = send(&mut board, "file.exportLayers", json!({"dir": folder}));
         assert_eq!(reply["ok"], json!(true), "{reply}");
-        let rows = json!([{"name": "canvas.figcraft"}]);
+        let rows = json!([{"name": "canvas.sawit"}]);
         let fill = json!({"id": frame, "rows": rows, "dir": folder, "format": "svg"});
         let reply = send(&mut board, "data.fill", fill);
         assert_eq!(reply["ok"], json!(true), "{reply}");
 
         // What they made ends in an image extension, and the canvas files are as they were.
         let names = names_in(&folder);
-        assert!(
-            names.iter().any(|n| n == "canvas.figcraft.png"),
-            "{names:?}"
-        );
+        assert!(names.iter().any(|n| n == "canvas.sawit.png"), "{names:?}");
         assert!(names.iter().any(|n| n.ends_with(".svg")), "{names:?}");
         for file in &canvas {
             let path = file.to_string_lossy();
@@ -3535,15 +3608,75 @@ mod tests {
         other
             .execute("board.sticky", &json!({"x": 0, "y": 0, "text": "second"}))
             .unwrap();
-        let path = dir.join("two.figcraft");
+        let path = dir.join("two.sawit");
         std::fs::write(&path, other.to_bytes().unwrap()).unwrap();
         path.to_string_lossy().into_owned()
     }
 
+    /// The board of [`other_board_file`] as a `.sawit` file in `dir`: its path.
+    fn other_sawit_file(dir: &std::path::Path) -> String {
+        let path = dir.join("other.sawit");
+        std::fs::copy(other_board_file(dir), &path).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    /// A canvas file by the extension it had before loads as it always did, the engine reading it
+    /// where it is; a `.sawit` one is handed over by its bytes, named as the engine knows a canvas
+    /// file, which it would otherwise place as an image.
     #[test]
-    fn replace_loads_a_figcraft_file_as_one_undo_step() {
+    fn replace_loads_a_canvas_file_by_either_extension() {
         let dir = tempfile::tempdir().unwrap();
-        let other = other_board_file(dir.path());
+        for path in [other_board_file(dir.path()), other_sawit_file(dir.path())] {
+            let mut board = board();
+            let reply = ask(&mut board, json!({"op": "replace", "path": path}));
+            let now = elements(&mut board);
+            assert_eq!(now.len(), 2, "{path}: {now:?}");
+            assert!(now.iter().all(|e| e["text"] == json!("other")), "{now:?}");
+            assert_eq!(reply["elements"], json!(now));
+        }
+        assert_eq!(engine_name("other.sawit"), "other.figcraft");
+        assert_eq!(engine_name("Other.SAWIT"), "Other.figcraft");
+        assert_eq!(
+            engine_name("canvas.sawit.bak.2"),
+            "canvas.sawit.bak.2.figcraft"
+        );
+        assert_eq!(
+            engine_name("canvas.figcraft.bak"),
+            "canvas.figcraft.bak.figcraft"
+        );
+        for name in ["other.figcraft", "page.png", "logo.svg", "notes.sawitx"] {
+            assert_eq!(engine_name(name), name);
+        }
+    }
+
+    /// `file.import` run as a command reads a `.sawit` file it names as a canvas file, as the
+    /// steps of a batch do: its pages come in after the canvas's own, where the engine alone would
+    /// have placed the file as an image. A `.sawit` file that isn't there is the error.
+    #[test]
+    fn file_import_of_a_sawit_file_brings_its_pages_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = other_sawit_file(dir.path());
+        let mut board = board();
+        let reply = send(&mut board, "file.import", json!({"path": other}));
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        assert_eq!(board.doc().unwrap().pages.len(), 2, "{reply}");
+
+        let batch = json!({"commands": [{"command": "file.import", "params": {"path": other}}]});
+        let reply = send(&mut board, "command.batch", batch);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+        assert_eq!(board.doc().unwrap().pages.len(), 3, "{reply}");
+
+        let missing = dir.path().join("missing.sawit");
+        let reply = send(&mut board, "file.import", json!({"path": missing}));
+        let error = reply["error"].as_str().unwrap_or_default();
+        assert!(error.starts_with("file.import: couldn't read"), "{reply}");
+        assert_eq!(board.doc().unwrap().pages.len(), 3);
+    }
+
+    #[test]
+    fn replace_loads_a_sawit_file_as_one_undo_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = other_sawit_file(dir.path());
         let mut board = board();
         add(
             &mut board,
@@ -3612,7 +3745,7 @@ mod tests {
             &json!({"type": "frame", "x": 0, "y": 0, "name": "Screen"}),
         )
         .unwrap();
-        let path = dir.path().join("design.figcraft");
+        let path = dir.path().join("design.sawit");
         std::fs::write(&path, file.to_bytes().unwrap()).unwrap();
         let mut board = board();
 
@@ -3626,9 +3759,9 @@ mod tests {
     #[test]
     fn replace_of_a_missing_or_bad_file_is_an_error_and_changes_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        let bad = dir.path().join("bad.figcraft");
-        std::fs::write(&bad, b"not a figcraft file").unwrap();
-        let missing = dir.path().join("missing.figcraft");
+        let bad = dir.path().join("bad.sawit");
+        std::fs::write(&bad, b"not a canvas file").unwrap();
+        let missing = dir.path().join("missing.sawit");
         let mut board = board();
         add(
             &mut board,
@@ -3638,7 +3771,7 @@ mod tests {
 
         let error = refusal(&mut board, json!({"op": "replace", "path": missing}));
         assert!(
-            error.starts_with("replace:") && error.contains("missing.figcraft"),
+            error.starts_with("replace:") && error.contains("missing.sawit"),
             "{error}"
         );
         let error = refusal(&mut board, json!({"op": "replace", "path": bad}));
@@ -3663,7 +3796,7 @@ mod tests {
         })
     }
 
-    /// CANVAS-CORE-6, for an agent's load (`canvas_load`): a `replace` of a `.figcraft` file has
+    /// CANVAS-CORE-6, for an agent's load (`canvas_load`): a `replace` of a canvas file has
     /// the engine read the file `path` names, whole and as it finds it, on the canvas's UI thread
     /// (with the app closed, in sawit-mcp, holding every other canvas call back). A named pipe
     /// blocked it for ever, and a link a cloned repository holds to `/dev/zero` read until the Mac
@@ -3672,8 +3805,11 @@ mod tests {
     #[test]
     fn replace_of_a_pipe_or_a_device_is_refused_at_once() {
         let dir = tempfile::tempdir().unwrap();
-        let pipe = dir.path().join("board.figcraft");
+        let pipe = dir.path().join("board.sawit");
         crate::store::pipe_at(&pipe);
+        // A canvas file by the extension it had before, which the engine reads where it is.
+        let before = dir.path().join("board.figcraft");
+        crate::store::pipe_at(&before);
         let scene = dir.path().join("scene.excalidraw");
         crate::store::pipe_at(&scene);
         let refused_at_once = |paths: &[&std::path::Path]| {
@@ -3693,8 +3829,8 @@ mod tests {
             assert!(failed.is_empty(), "{}", failed.join("\n"));
         };
         // The pipes first: a device that never ends is read only once they are refused.
-        refused_at_once(&[&pipe, &scene]);
-        let zero = dir.path().join("zero.figcraft");
+        refused_at_once(&[&pipe, &before, &scene]);
+        let zero = dir.path().join("zero.sawit");
         std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
         refused_at_once(&[&zero]);
     }
@@ -3807,7 +3943,7 @@ mod tests {
         );
         let reply = ask(
             &mut board,
-            json!({"op": "replace", "scene": {"elements": []}, "path": "/nowhere/a.figcraft"}),
+            json!({"op": "replace", "scene": {"elements": []}, "path": "/nowhere/a.sawit"}),
         );
         assert_eq!(reply, json!({"ok": true, "elements": []}));
         assert!(elements(&mut board).is_empty());
@@ -3816,9 +3952,9 @@ mod tests {
         // `null` is no scene: the path is what counts.
         let error = refusal(
             &mut board,
-            json!({"op": "replace", "scene": null, "path": "/nowhere/a.figcraft"}),
+            json!({"op": "replace", "scene": null, "path": "/nowhere/a.sawit"}),
         );
-        assert!(error.contains("a.figcraft"), "{error}");
+        assert!(error.contains("a.sawit"), "{error}");
     }
 
     #[test]
@@ -3893,11 +4029,11 @@ mod tests {
         }
         for path in ["/tmp/board.png", "/tmp/board.bak", "/tmp/board"] {
             let error = refusal(&mut board, json!({"op": "replace", "path": path}));
-            let expected = format!("replace: {path} is not a .figcraft or .excalidraw file");
+            let expected = format!("replace: {path} is not a .sawit or .excalidraw file");
             assert_eq!(error, expected);
         }
         // A copy kept of a canvas file that isn't there says so.
-        let missing = "/nowhere/canvas.figcraft.bak";
+        let missing = "/nowhere/canvas.sawit.bak";
         let error = refusal(&mut board, json!({"op": "replace", "path": missing}));
         assert!(
             error.starts_with(&format!("replace: couldn't read {missing}: ")),
@@ -3907,24 +4043,27 @@ mod tests {
         assert_eq!(board.session.undo_depth(), (1, 0));
     }
 
-    /// MCP-6: the copies Sawit keeps of a canvas file (`canvas.figcraft.bak` and the older
+    /// MCP-6: the copies Sawit keeps of a canvas file (`canvas.sawit.bak` and the older
     /// `.bak.<n>`, which a clear or a load keeps of the board it takes off, `.del.bak` and the
     /// older `.del.bak.<n>`, which an agent's deletion keeps, and the `.lossy.bak` of a file
-    /// opened with notes) are FigCraft files under another name, and load as the file they were:
+    /// opened with notes) are canvas files under another name, and load as the file they were:
     /// that is how an agent brings back a board it cleared. Refused by its name, a backup could
-    /// only be loaded once someone copied it to a `.figcraft` name; and passed on by its path,
+    /// only be loaded once someone copied it to a `.sawit` name; and passed on by its path,
     /// the engine, which tells a file's kind by its name, would place it as an image.
     #[test]
     fn replace_loads_a_copy_kept_of_a_canvas_file() {
         let dir = tempfile::tempdir().unwrap();
         let other = other_board_file(dir.path());
         for name in [
+            "canvas.sawit.bak",
+            "canvas.sawit.bak.2",
+            "canvas.sawit.del.bak",
+            "canvas.sawit.del.bak.3",
+            "canvas.sawit.lossy.bak",
+            "Board.SAWIT.BAK",
+            // Those kept of a canvas file by the extension it had before.
             "canvas.figcraft.bak",
-            "canvas.figcraft.bak.2",
-            "canvas.figcraft.del.bak",
-            "canvas.figcraft.del.bak.3",
-            "canvas.figcraft.lossy.bak",
-            "Board.FIGCRAFT.BAK",
+            "canvas.figcraft.del.bak.1",
         ] {
             let kept = dir.path().join(name);
             std::fs::copy(&other, &kept).unwrap();
@@ -3943,8 +4082,8 @@ mod tests {
             assert_eq!(reply["elements"], json!(now), "{name}");
             assert_eq!(board.kind(), DocKind::Board);
         }
-        // Read as a .figcraft file is checked: a named pipe at such a name is refused, unread.
-        let pipe = dir.path().join("pipe.figcraft.bak");
+        // Read as a canvas file is checked: a named pipe at such a name is refused, unread.
+        let pipe = dir.path().join("pipe.sawit.bak");
         let made = std::process::Command::new("mkfifo").arg(&pipe).status();
         assert!(made.unwrap().success(), "mkfifo {}", pipe.display());
         let error = refusal(&mut board(), json!({"op": "replace", "path": pipe}));
@@ -4050,7 +4189,7 @@ mod tests {
             json!({"op": "update", "elements": []}),
             json!({"op": "delete", "ids": []}),
             json!({"op": "clear"}),
-            json!({"op": "replace", "path": "/tmp/canvas.figcraft"}),
+            json!({"op": "replace", "path": "/tmp/canvas.sawit"}),
             json!({"op": "replace", "scene": {"elements": []}}),
             json!({"op": "export_svg"}),
             json!({"op": "export_png"}),

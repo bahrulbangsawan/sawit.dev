@@ -289,10 +289,10 @@ pub struct OpenPromptArgs {
 
 /// What a canvas tool's `file` names: a canvas file to work on instead of the project's canvas
 /// ([`canvas_file`]).
-const CANVAS_FILE: &str = "A canvas file to work on instead of the project's canvas: an absolute path (or ~/…) to a .figcraft file (a design file or a board; one not there yet, in a folder that is, starts as a new board) or to an .excalidraw file, imported once into the .figcraft file of its name beside it (flow.figcraft for flow.excalidraw) and left as it is. With the app running the op runs on that file's canvas tab, opened if need be without taking the user's keyboard; with it closed, on the file itself. Its backups go beside it (home.figcraft.bak and home.figcraft.del.bak for home.figcraft): in a repository they show in git status, and staging everything would commit them";
+const CANVAS_FILE: &str = "A canvas file to work on instead of the project's canvas: an absolute path (or ~/…) to a .sawit file (a design file or a board; one not there yet, in a folder that is, starts as a new board; a .figcraft file from before works too) or to an .excalidraw file, imported once into the .sawit file of its name beside it (flow.sawit for flow.excalidraw) and left as it is. With the app running the op runs on that file's canvas tab, opened if need be without taking the user's keyboard; with it closed, on the file itself. Its backups go beside it (home.sawit.bak and home.sawit.del.bak for home.sawit): in a repository they show in git status, and staging everything would commit them";
 
 /// What a canvas tool's `project` names: the project whose canvas it uses ([`crate::agent_project`]).
-const CANVAS_PROJECT: &str = "Project folder whose canvas (.nyawit/canvas.figcraft) to use, in the window that has it open. Default: the project your working folder is in (with the app closed: within its git repository, the nearest folder up from it whose .nyawit/ holds a canvas, else the repository's root; outside a repository, the folder itself)";
+const CANVAS_PROJECT: &str = "Project folder whose canvas (.nyawit/canvas.sawit) to use, in the window that has it open. Default: the project your working folder is in (with the app closed: within its git repository, the nearest folder up from it whose .nyawit/ holds a canvas, else the repository's root; outside a repository, the folder itself)";
 
 /// canvas_get's and canvas_clear's arguments: which canvas.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -353,7 +353,7 @@ pub struct CanvasDeleteArgs {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasLoadArgs {
     #[schemars(
-        description = "A .figcraft file to load, or an .excalidraw file to import (replaces the board). A backup Sawit keeps loads too: beside the canvas file, <file>.bak holds the board the last clear or load took off, and <file>.del.bak the board the last deletion took layers off (canvas.figcraft.bak and canvas.figcraft.del.bak for the project's canvas), with the ones before them in .bak.1 to .bak.4 and .del.bak.1 to .del.bak.4"
+        description = "A .sawit file to load (or a .figcraft one from before), or an .excalidraw file to import (replaces the board). A backup Sawit keeps loads too: beside the canvas file, <file>.bak holds the board the last clear or load took off, and <file>.del.bak the board the last deletion took layers off (canvas.sawit.bak and canvas.sawit.del.bak for the project's canvas), with the ones before them in .bak.1 to .bak.4 and .del.bak.1 to .del.bak.4"
     )]
     pub path: Option<String>,
     #[schemars(description = "Or the .excalidraw scene JSON itself")]
@@ -537,9 +537,11 @@ impl Sawit {
     }
 
     /// The file `project`'s canvas is saved in while the app is closed: its
-    /// `.nyawit/canvas.figcraft` (the project is the one that holds the folder the agent runs in,
-    /// [`crate::agent_project`], unless it names one), else `canvas.figcraft` in Sawit's own
-    /// folder. This is the app's choice of file too.
+    /// `.nyawit/canvas.sawit` (the project is the one that holds the folder the agent runs in,
+    /// [`crate::agent_project`], unless it names one), else `canvas.sawit` in Sawit's own
+    /// folder. This is the app's choice of file too, and as the app does, a canvas kept there
+    /// under the name it had before (`canvas.figcraft`) is moved to it first, with its backups
+    /// ([`store::migrated_board_file`]).
     ///
     /// A project the agent names must be a folder that is there, as the app answers only for a
     /// project one of its windows has open. A name that is no folder (a project's name rather than
@@ -557,7 +559,7 @@ impl Sawit {
                 dir.display()
             ));
         }
-        Ok(store::board_file(dir.as_deref(), &self.paths.root))
+        Ok(store::migrated_board_file(dir.as_deref(), &self.paths.root))
     }
 
     pub async fn canvas_get_tool(&self, a: CanvasTargetArgs) -> CallToolResult {
@@ -786,13 +788,14 @@ fn lock_stored_canvas(lock: &Path) -> Result<std::fs::File, String> {
 
 /// Runs canvas op `op` on the canvas stored in `named` while no app is running, as the app would
 /// run it, and saves the canvas if the op changed it. `named` is the project's canvas file, or a
-/// canvas file the agent named: a `.figcraft` file, or an `.excalidraw` file, whose canvas is
-/// saved to the `.figcraft` file beside it ([`store::bound_file`]). The reply is the op's, and an
+/// canvas file the agent named: a `.sawit` file (or a `.figcraft` one from before), or an
+/// `.excalidraw` file, whose canvas is saved to the `.sawit` file beside it
+/// ([`store::bound_file`]). The reply is the op's, and an
 /// op that fails is an `Err` that has changed nothing in the file.
 ///
 /// - The canvas is opened as the app opens it ([`store::open_bound`]): a canvas file that isn't
 ///   there is a new, empty board, and one that is missing beside an old `canvas.excalidraw` is
-///   that board, imported; an `.excalidraw` file is its scene, imported, until the `.figcraft`
+///   that board, imported; an `.excalidraw` file is its scene, imported, until the `.sawit`
 ///   file beside it is there. Nothing is written until an op changes the canvas, so the scene is
 ///   imported once, and the `.excalidraw` file is never touched. A canvas that can't be opened is
 ///   an error, and then nothing is written, so a blank board never takes its place.
@@ -822,7 +825,7 @@ fn headless_turn(named: &Path, lock: &Path, op: &Value) -> Result<Value, String>
 }
 
 /// Reads the canvas stored in `named` ([`store::open_bound`]), runs `op` on it and saves it to its
-/// `.figcraft` file ([`run_and_save`]).
+/// canvas file ([`run_and_save`]).
 ///
 /// Every `sawit-mcp` takes turns ([`lock_stored_canvas`]), but Sawit as it starts, or another
 /// program, may still save the file while a call runs: then the call's save is refused (its edit
@@ -924,18 +927,20 @@ fn read_scene(path: &Path) -> std::io::Result<String> {
     })
 }
 
-/// Whether `path` names a FigCraft file: a `.figcraft` file, or a backup Sawit keeps of one, such as
-/// the `canvas.figcraft.bak` a clear keeps or the `canvas.figcraft.del.bak` a deletion keeps
-/// ([`ops::is_figcraft_file`]), which loads as the board it was (MCP-6).
-fn is_figcraft(path: &str) -> bool {
-    ops::is_figcraft_file(Path::new(path.trim()))
+/// Whether `path` names a Sawit canvas file: a `.sawit` file (or a `.figcraft` one from before),
+/// or a backup Sawit keeps of one, such as the `canvas.sawit.bak` a clear keeps or the
+/// `canvas.sawit.del.bak` a deletion keeps ([`ops::is_sawit_file`]), which loads as the board it
+/// was (MCP-6).
+fn is_sawit_file(path: &str) -> bool {
+    ops::is_sawit_file(Path::new(path.trim()))
 }
 
 /// The canvas file an agent names with `file`, if it names one: trimmed (a blank one names none),
 /// `~` for the home folder, absolute, and through the links on its way, as the app names the files
-/// it opens ([`sawit_core::files::resolve`]). It is a `.figcraft` file that is there, or one to be
+/// it opens ([`sawit_core::files::resolve`]). It is a `.sawit` file (or a `.figcraft` one from
+/// before) that is there, or one to be
 /// made in a folder that is there (a new board, written by the first edit), or an `.excalidraw`
-/// file that is there or was imported into the `.figcraft` file beside it ([`store::bound_file`]).
+/// file that is there or was imported into the `.sawit` file beside it ([`store::bound_file`]).
 /// It is checked before the app or a file is touched, so a mistaken name opens no tab and makes
 /// no file.
 fn canvas_file(file: Option<&str>) -> Result<Option<PathBuf>, String> {
@@ -953,9 +958,9 @@ fn canvas_file(file: Option<&str>) -> Result<Option<PathBuf>, String> {
     let there = std::fs::symlink_metadata(&path).is_ok();
     let in_a_folder = path.parent().is_some_and(Path::is_dir);
     match sawit_core::files::classify(&path) {
-        FileKind::Figcraft if path.is_file() || (!there && in_a_folder) => Ok(Some(path)),
-        FileKind::Figcraft if there => Err(format!("{} isn't a canvas file.", path.display())),
-        FileKind::Figcraft => Err(format!(
+        FileKind::Canvas if path.is_file() || (!there && in_a_folder) => Ok(Some(path)),
+        FileKind::Canvas if there => Err(format!("{} isn't a canvas file.", path.display())),
+        FileKind::Canvas => Err(format!(
             "{} isn't there, nor is the folder a new canvas file would go in.",
             path.display()
         )),
@@ -967,7 +972,7 @@ fn canvas_file(file: Option<&str>) -> Result<Option<PathBuf>, String> {
             path.display()
         )),
         _ => Err(format!(
-            "{} isn't a canvas file: name a .figcraft or .excalidraw file.",
+            "{} isn't a canvas file: name a .sawit or .excalidraw file.",
             path.display()
         )),
     }
@@ -1395,7 +1400,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Delete canvas elements by id, on any page (a connector's label goes with it). The board they were on is first kept beside the canvas file as <file>.del.bak (canvas.figcraft.del.bak for the project's canvas, home.figcraft.del.bak for home.figcraft), the 4 kept before it moving to .del.bak.1 to .del.bak.4 (the oldest goes). Deletions keep these apart from the .bak files canvas_clear and canvas_load keep, so they never push those out; a deletion that leaves the canvas empty keeps a .bak, as a clear does. canvas_load brings any of them back; in the app the user can also undo it"
+        description = "Delete canvas elements by id, on any page (a connector's label goes with it). The board they were on is first kept beside the canvas file as <file>.del.bak (canvas.sawit.del.bak for the project's canvas, home.sawit.del.bak for home.sawit), the 4 kept before it moving to .del.bak.1 to .del.bak.4 (the oldest goes). Deletions keep these apart from the .bak files canvas_clear and canvas_load keep, so they never push those out; a deletion that leaves the canvas empty keeps a .bak, as a clear does. canvas_load brings any of them back; in the app the user can also undo it"
     )]
     async fn canvas_delete(&self, Parameters(a): Parameters<CanvasDeleteArgs>) -> CallToolResult {
         match self
@@ -1408,7 +1413,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Delete every layer of the canvas's page on show; other pages keep theirs. The board it held is kept beside the canvas file as <file>.bak (canvas.figcraft.bak for the project's canvas, home.figcraft.bak for home.figcraft), the 4 kept before it moving to .bak.1 to .bak.4 (the oldest goes); only a clear, a load or a save that empties the canvas moves them along, never a deletion that leaves layers on the canvas. canvas_load brings it back; in the app the user can also undo it"
+        description = "Delete every layer of the canvas's page on show; other pages keep theirs. The board it held is kept beside the canvas file as <file>.bak (canvas.sawit.bak for the project's canvas, home.sawit.bak for home.sawit), the 4 kept before it moving to .bak.1 to .bak.4 (the oldest goes); only a clear, a load or a save that empties the canvas moves them along, never a deletion that leaves layers on the canvas. canvas_load brings it back; in the app the user can also undo it"
     )]
     async fn canvas_clear(&self, Parameters(a): Parameters<CanvasTargetArgs>) -> CallToolResult {
         match self
@@ -1421,14 +1426,14 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Replace the canvas with a .figcraft file, or import an .excalidraw file or scene JSON in its place. The board it replaces is kept beside the canvas file as <file>.bak (canvas.figcraft.bak for the project's canvas, home.figcraft.bak for home.figcraft), as canvas_clear keeps one"
+        description = "Replace the canvas with a .sawit file (or a .figcraft one from before), or import an .excalidraw file or scene JSON in its place. The board it replaces is kept beside the canvas file as <file>.bak (canvas.sawit.bak for the project's canvas, home.sawit.bak for home.sawit), as canvas_clear keeps one"
     )]
     async fn canvas_load(&self, Parameters(a): Parameters<CanvasLoadArgs>) -> CallToolResult {
         let op = match (a.scene, a.path) {
             (Some(scene), _) => json!({ "op": "replace", "scene": scene }),
-            // A .figcraft file is loaded by the canvas itself, from where it is, which refuses a
+            // A canvas file is loaded by the canvas itself, from where it is, which refuses a
             // file it can't read whole, a pipe or a device included.
-            (None, Some(path)) if is_figcraft(&path) => {
+            (None, Some(path)) if is_sawit_file(&path) => {
                 json!({ "op": "replace", "path": absolute_path(&path) })
             }
             // Read here, as an agent means the path (MCP-7): trimmed, `~` for the home folder,
@@ -1476,7 +1481,7 @@ impl Sawit {
         ));
         let op = json!({ "op": if png { "export_png" } else { "export_svg" } });
         let project = crate::agent_project(a.project.as_deref());
-        // Named after the canvas file: `canvas-…` for the project's, `home-…` for home.figcraft.
+        // Named after the canvas file: `canvas-…` for the project's, `home-…` for home.sawit.
         let canvas = tri!(canvas_file(a.file.as_deref()));
         let stem = canvas.as_deref().map(store::bound_file);
         let stem = stem.as_deref().and_then(Path::file_stem);
@@ -1863,9 +1868,9 @@ mod tests {
         project
     }
 
-    /// `<project>/.nyawit/canvas.figcraft`.
+    /// `<project>/.nyawit/canvas.sawit`.
     fn board_file(project: &Path) -> PathBuf {
-        project.join(".nyawit").join("canvas.figcraft")
+        project.join(".nyawit").join("canvas.sawit")
     }
 
     /// A canvas file at `path` with `stickies` stickies, written as the app writes one.
@@ -2355,6 +2360,43 @@ mod tests {
         }
     }
 
+    /// With the app closed, a project's canvas kept under the name it had before
+    /// (`.nyawit/canvas.figcraft`) moves to `canvas.sawit` with its backups the first time a
+    /// canvas tool reaches it, as the app moves it, and the tools work on it there: nothing is
+    /// lost, and nothing is left at the old name. A canvas file named by its old name is that
+    /// canvas too.
+    #[tokio::test]
+    async fn the_canvas_under_its_old_name_moves_before_a_tool_works_on_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let project = project_in(dir.path());
+        let nyawit = project.join(".nyawit");
+        write_board(&nyawit.join("canvas.figcraft"), 2);
+        write_board(&nyawit.join("canvas.figcraft.bak"), 5);
+
+        let got = server
+            .canvas_get_tool(CanvasTargetArgs {
+                file: None,
+                project: project_arg(&project),
+            })
+            .await;
+        assert_eq!(answer(&got)["elements"].as_array().unwrap().len(), 2);
+        assert_eq!(names(&nyawit), ["canvas.sawit", "canvas.sawit.bak"]);
+        assert_eq!(layers_in(&nyawit.join("canvas.sawit.bak")).len(), 5);
+
+        let old = nyawit.join("canvas.figcraft");
+        let added = server
+            .canvas_add_elements(Parameters(CanvasElementsArgs {
+                elements: vec![json!({"type": "sticky", "x": 0, "y": 300, "text": "new"})],
+                file: Some(old.display().to_string()),
+                project: None,
+            }))
+            .await;
+        assert_eq!(answer(&added)["added"], json!(1), "{}", said(&added));
+        assert_eq!(layers_in(&board_file(&project)).len(), 3);
+        assert_eq!(names(&nyawit), ["canvas.sawit", "canvas.sawit.bak"]);
+    }
+
     #[tokio::test]
     async fn the_other_canvas_tools_edit_the_stored_canvas_while_the_app_is_closed() {
         let dir = tempfile::tempdir().unwrap();
@@ -2451,7 +2493,7 @@ mod tests {
             .await;
         assert_ne!(cleared.is_error, Some(true), "{}", said(&cleared));
         assert!(layers_in(&file).is_empty());
-        let kept = std::fs::read(file.with_extension("figcraft.bak")).unwrap();
+        let kept = std::fs::read(file.with_extension("sawit.bak")).unwrap();
         let kept = BoardDoc::from_bytes(&kept).unwrap();
         let kept = ops::run(&mut { kept }, &json!({"op": "get"}));
         assert_eq!(
@@ -2482,13 +2524,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canvas_load_takes_a_figcraft_file_where_it_is() {
+    async fn canvas_load_takes_a_sawit_file_where_it_is() {
         let dir = tempfile::tempdir().unwrap();
         let server = native(dir.path());
         let project = dir.path().join("project");
         let file = board_file(&project);
         write_board(&file, 1);
-        let other = dir.path().join("elsewhere").join("board.FIGCRAFT");
+        let other = dir.path().join("elsewhere").join("board.SAWIT");
         write_board(&other, 3);
         let other_bytes = std::fs::read(&other).unwrap();
         let load = |path: &Path| CanvasLoadArgs {
@@ -2510,10 +2552,10 @@ mod tests {
         assert_eq!(answer(&loaded)["elements"].as_array().unwrap().len(), 9);
         assert_eq!(layers_in(&file).len(), 9);
 
-        // A .figcraft file that isn't there is an error that changes nothing.
+        // A .sawit file that isn't there is an error that changes nothing.
         let before = std::fs::read(&file).unwrap();
         let missing = server
-            .canvas_load(Parameters(load(&dir.path().join("nope.figcraft"))))
+            .canvas_load(Parameters(load(&dir.path().join("nope.sawit"))))
             .await;
         assert_eq!(missing.is_error, Some(true), "{}", said(&missing));
         assert_eq!(std::fs::read(&file).unwrap(), before);
@@ -2551,7 +2593,7 @@ mod tests {
 
     /// CANVAS-CORE-6, for an agent's load: `canvas_load` of a file that is a named pipe, or a link
     /// a cloned repository holds to `/dev/zero`, never answered. The canvas's engine read a
-    /// `.figcraft` file (with the app closed, in the blocking task that holds every other canvas
+    /// `.sawit` file (with the app closed, in the blocking task that holds every other canvas
     /// call back; with it open, on its UI thread), and the tool itself read any other, on the
     /// server's async thread. Each is refused at once now, and the canvas is as it was.
     #[test]
@@ -2586,15 +2628,14 @@ mod tests {
                 .collect();
             assert!(failed.is_empty(), "{}", failed.join("\n"));
         };
-        let pipes =
-            ["board.figcraft", "scene.excalidraw", "scene.json"].map(|n| dir.path().join(n));
+        let pipes = ["board.sawit", "scene.excalidraw", "scene.json"].map(|n| dir.path().join(n));
         for pipe in &pipes {
             let made = std::process::Command::new("mkfifo").arg(pipe).status();
             assert!(made.unwrap().success(), "mkfifo {}", pipe.display());
         }
         // The pipes first: a device that never ends is read only once they are refused.
         refused_at_once(&pipes);
-        let zeros = ["zero.figcraft", "zero.excalidraw"].map(|n| dir.path().join(n));
+        let zeros = ["zero.sawit", "zero.excalidraw"].map(|n| dir.path().join(n));
         for zero in &zeros {
             std::os::unix::fs::symlink("/dev/zero", zero).unwrap();
         }
@@ -2602,7 +2643,7 @@ mod tests {
         assert_eq!(std::fs::read(&file).unwrap(), before);
     }
 
-    /// MCP-6: canvas_clear keeps the board it cleared as `canvas.figcraft.bak`, and canvas_load
+    /// MCP-6: canvas_clear keeps the board it cleared as `canvas.sawit.bak`, and canvas_load
     /// brings it back from there. It read the backup as Excalidraw JSON ("stream did not contain
     /// valid UTF-8"), so no tool could restore a cleared board.
     #[tokio::test]
@@ -2622,7 +2663,7 @@ mod tests {
         assert_ne!(cleared.is_error, Some(true), "{}", said(&cleared));
         assert!(layers_in(&file).is_empty());
 
-        let backup = file.with_extension("figcraft.bak");
+        let backup = file.with_extension("sawit.bak");
         let loaded = server
             .canvas_load(Parameters(CanvasLoadArgs {
                 path: Some(backup.display().to_string()),
@@ -2639,11 +2680,11 @@ mod tests {
         );
     }
 
-    /// MCP-7: canvas_load reads an Excalidraw file's path as it reads a `.figcraft` file's:
+    /// MCP-7: canvas_load reads an Excalidraw file's path as it reads a `.sawit` file's:
     /// trimmed, `~` for the home folder, and relative to the agent's folder. It read the path as
     /// written: a space at its end, or `~/`, was "No such file or directory".
     #[tokio::test]
-    async fn canvas_load_reads_an_import_path_as_it_reads_a_figcraft_path() {
+    async fn canvas_load_reads_an_import_path_as_it_reads_a_sawit_path() {
         let dir = tempfile::tempdir().unwrap();
         let server = native(dir.path());
         let project = project_in(dir.path());
@@ -2951,10 +2992,10 @@ mod tests {
         let server = native(dir.path());
         let project = project_in(dir.path());
         let file = board_file(&project);
-        let bak = file.with_extension("figcraft.bak");
+        let bak = file.with_extension("sawit.bak");
         write_board(&file, 2);
         let replaced = std::fs::read(&file).unwrap();
-        let other = dir.path().join("other.figcraft");
+        let other = dir.path().join("other.sawit");
         write_board(&other, 1);
         let load = |path: &Path| CanvasLoadArgs {
             path: Some(path.display().to_string()),
@@ -3047,10 +3088,7 @@ mod tests {
         // A load, then another.
         write_board(&file, 3);
         let users = std::fs::read(&file).unwrap();
-        let (one, two) = (
-            dir.path().join("one.figcraft"),
-            dir.path().join("two.figcraft"),
-        );
+        let (one, two) = (dir.path().join("one.sawit"), dir.path().join("two.sawit"));
         write_board(&one, 1);
         write_board(&two, 2);
         for other in [&one, &two] {
@@ -3082,7 +3120,7 @@ mod tests {
     /// backup only when it left the canvas empty: canvas_delete, canvas_clear of a page while
     /// another page keeps its layers, and canvas_command's edit.delete or page.delete took them
     /// for good. Each keeps the board it took them off now, the one before moving along: a
-    /// deletion as `canvas.figcraft.del.bak`, a clear as `canvas.figcraft.bak`. An op that only
+    /// deletion as `canvas.sawit.del.bak`, a clear as `canvas.sawit.bak`. An op that only
     /// adds or moves keeps none.
     #[tokio::test]
     async fn every_deletion_with_sawit_closed_keeps_the_board_it_took_layers_off() {
@@ -3178,7 +3216,7 @@ mod tests {
     /// so an agent that cleared the user's board, drew, then deleted five stickies one call at a
     /// time pushed the cleared board out of every backup, and with Sawit closed nothing undoes a
     /// call. Deletions keep their own five now (`.del.bak`): after a clear and six deletions,
-    /// canvas_load brings the cleared board back from the clear's `canvas.figcraft.bak`.
+    /// canvas_load brings the cleared board back from the clear's `canvas.sawit.bak`.
     #[tokio::test]
     async fn deletions_after_a_clear_never_push_out_the_board_it_cleared() {
         let dir = tempfile::tempdir().unwrap();
@@ -3234,7 +3272,7 @@ mod tests {
 
         let loaded = server
             .canvas_load(Parameters(CanvasLoadArgs {
-                path: Some(file.with_extension("figcraft.bak").display().to_string()),
+                path: Some(file.with_extension("sawit.bak").display().to_string()),
                 scene: None,
                 file: None,
                 project: project_arg(&project),
@@ -3251,11 +3289,7 @@ mod tests {
         // A deletion's backup loads too: the board before the last deletion.
         let loaded = server
             .canvas_load(Parameters(CanvasLoadArgs {
-                path: Some(
-                    file.with_extension("figcraft.del.bak")
-                        .display()
-                        .to_string(),
-                ),
+                path: Some(file.with_extension("sawit.del.bak").display().to_string()),
                 scene: None,
                 file: None,
                 project: project_arg(&project),
@@ -3408,7 +3442,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = board_file(&project_in(dir.path()));
         write_board(&file, 1);
-        let bak = file.with_extension("figcraft.bak");
+        let bak = file.with_extension("sawit.bak");
         write_board(&bak, 4);
         let before = backups_of(&file);
         let read = Stamp::of(&file);
@@ -3416,7 +3450,7 @@ mod tests {
         write_board(&file, 2);
         let theirs = std::fs::read(&file).unwrap();
 
-        let other = dir.path().join("other.figcraft");
+        let other = dir.path().join("other.sawit");
         write_board(&other, 3);
         let load = json!({"op": "replace", "path": other});
         let refused = run_and_save(&mut board, &file, read, &load).unwrap_err();
@@ -3425,7 +3459,7 @@ mod tests {
         assert!(backups_of(&file) == before, "the backup was replaced");
     }
 
-    /// CANVAS-CORE-1: a cloned project can hold a link at `canvas.figcraft.bak` to any file of
+    /// CANVAS-CORE-1: a cloned project can hold a link at `canvas.sawit.bak` to any file of
     /// the user's. A load with Sawit closed keeps the canvas it replaces in place of the link,
     /// never through it.
     #[tokio::test]
@@ -3434,13 +3468,13 @@ mod tests {
         let server = native(dir.path());
         let project = project_in(dir.path());
         let file = board_file(&project);
-        let bak = file.with_extension("figcraft.bak");
+        let bak = file.with_extension("sawit.bak");
         write_board(&file, 2);
         let replaced = std::fs::read(&file).unwrap();
         let victim = dir.path().join("victim");
         std::fs::write(&victim, "the user's").unwrap();
         std::os::unix::fs::symlink(&victim, &bak).unwrap();
-        let other = dir.path().join("other.figcraft");
+        let other = dir.path().join("other.sawit");
         write_board(&other, 1);
 
         let loaded = server
@@ -3482,34 +3516,38 @@ mod tests {
     }
 
     #[test]
-    fn figcraft_files_are_told_by_their_extension() {
-        assert!(is_figcraft("/a/b/board.figcraft"));
-        assert!(is_figcraft("board.FigCraft"));
-        assert!(is_figcraft("  ~/board.figcraft "));
-        assert!(!is_figcraft("/a/b/board.excalidraw"));
-        assert!(!is_figcraft("figcraft"));
-        assert!(!is_figcraft("/a/figcraft/board"));
-        // The backups Sawit keeps of a canvas file are FigCraft files too; an export of one isn't.
-        assert!(is_figcraft("/p/.nyawit/canvas.figcraft.bak"));
-        assert!(is_figcraft("/p/.nyawit/canvas.figcraft.bak.3"));
-        assert!(is_figcraft("/p/.nyawit/canvas.figcraft.del.bak"));
-        assert!(is_figcraft("/p/design/home.figcraft.del.bak.4"));
-        assert!(is_figcraft("/p/.nyawit/canvas.figcraft.lossy.bak"));
-        assert!(!is_figcraft("/p/canvas.figcraft.svg"));
-        assert!(!is_figcraft("/p/canvas.figcraft.bak.x"));
-        assert!(!is_figcraft("/p/canvas.figcraft.del.bak.x"));
-        assert!(!is_figcraft("/p/canvas.figcraft.del"));
+    fn sawit_files_are_told_by_their_extension() {
+        assert!(is_sawit_file("/a/b/board.sawit"));
+        assert!(is_sawit_file("board.Sawit"));
+        assert!(is_sawit_file("  ~/board.sawit "));
+        assert!(!is_sawit_file("/a/b/board.excalidraw"));
+        assert!(!is_sawit_file("sawit"));
+        assert!(!is_sawit_file("/a/sawit/board"));
+        // The extension canvas files had before names one too.
+        assert!(is_sawit_file("/a/b/board.figcraft"));
+        assert!(is_sawit_file("board.FigCraft"));
+        assert!(is_sawit_file("/p/.nyawit/canvas.figcraft.del.bak.2"));
+        // The backups Sawit keeps of a canvas file are canvas files too; an export of one isn't.
+        assert!(is_sawit_file("/p/.nyawit/canvas.sawit.bak"));
+        assert!(is_sawit_file("/p/.nyawit/canvas.sawit.bak.3"));
+        assert!(is_sawit_file("/p/.nyawit/canvas.sawit.del.bak"));
+        assert!(is_sawit_file("/p/design/home.sawit.del.bak.4"));
+        assert!(is_sawit_file("/p/.nyawit/canvas.sawit.lossy.bak"));
+        assert!(!is_sawit_file("/p/canvas.sawit.svg"));
+        assert!(!is_sawit_file("/p/canvas.sawit.bak.x"));
+        assert!(!is_sawit_file("/p/canvas.sawit.del.bak.x"));
+        assert!(!is_sawit_file("/p/canvas.sawit.del"));
     }
 
     #[test]
     fn a_path_for_the_app_is_absolute() {
-        assert_eq!(absolute_path("/a/b.figcraft"), "/a/b.figcraft");
-        let relative = absolute_path("b.figcraft");
+        assert_eq!(absolute_path("/a/b.sawit"), "/a/b.sawit");
+        let relative = absolute_path("b.sawit");
         assert!(Path::new(&relative).is_absolute(), "{relative}");
-        assert!(relative.ends_with("/b.figcraft"), "{relative}");
+        assert!(relative.ends_with("/b.sawit"), "{relative}");
         if let Some(home) = std::env::var_os("HOME") {
-            let home = Path::new(&home).join("b.figcraft");
-            assert_eq!(absolute_path("~/b.figcraft"), home.to_string_lossy());
+            let home = Path::new(&home).join("b.sawit");
+            assert_eq!(absolute_path("~/b.sawit"), home.to_string_lossy());
         }
     }
 
@@ -3540,10 +3578,10 @@ mod tests {
 
         // The canvas_export path, for every canvas name and both formats.
         for name in [
-            "canvas.figcraft",
+            "canvas.sawit",
             "canvas.excalidraw",
-            "canvas.figcraft.bak",
-            "canvas.figcraft.del.bak",
+            "canvas.sawit.bak",
+            "canvas.sawit.del.bak",
         ] {
             for format in ["svg", "png"] {
                 let target = file.with_file_name(name);
@@ -3743,7 +3781,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let server = native(dir.path());
         let project = project_in(dir.path());
-        let design = project.join("design").join("home.figcraft");
+        let design = project.join("design").join("home.sawit");
         write_design(&design);
         let file = || Some(format!(" {} ", design.display()));
 
@@ -3805,16 +3843,16 @@ mod tests {
         assert!(texts_of(&deletion_backups_of(&design)[0]).contains("Hero"));
         assert_eq!(
             names(&design.with_file_name("")),
-            ["home.figcraft", "home.figcraft.del.bak"]
+            ["home.sawit", "home.sawit.del.bak"]
         );
     }
 
-    /// An `.excalidraw` file an agent names is imported once, into the `.figcraft` file beside
+    /// An `.excalidraw` file an agent names is imported once, into the `.sawit` file beside
     /// it, as the app opens one (spec D14): reads import it and write nothing, the first edit
-    /// writes the `.figcraft` file, and from then on that file is the canvas. The `.excalidraw`
+    /// writes the `.sawit` file, and from then on that file is the canvas. The `.excalidraw`
     /// file is never touched.
     #[tokio::test]
-    async fn an_excalidraw_file_named_by_file_is_imported_once_into_the_figcraft_beside_it() {
+    async fn an_excalidraw_file_named_by_file_is_imported_once_into_the_sawit_file_beside_it() {
         let dir = tempfile::tempdir().unwrap();
         let server = native(dir.path());
         let project = project_in(dir.path());
@@ -3841,8 +3879,8 @@ mod tests {
             }))
             .await;
         assert_ne!(added.is_error, Some(true), "{}", said(&added));
-        assert_eq!(names(&sketches), ["flow.excalidraw", "flow.figcraft"]);
-        assert_eq!(layers_in(&sketches.join("flow.figcraft")).len(), 10);
+        assert_eq!(names(&sketches), ["flow.excalidraw", "flow.sawit"]);
+        assert_eq!(layers_in(&sketches.join("flow.sawit")).len(), 10);
         assert_eq!(std::fs::read_to_string(&scene).unwrap(), OLD_BOARD);
 
         // Imported once: the scene changing on disk changes the canvas no more.
@@ -3866,7 +3904,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let server = native(dir.path());
         let project = project_in(dir.path());
-        let design = project.join("home.figcraft");
+        let design = project.join("home.sawit");
         write_design(&design);
         let link = dir.path().join("link");
         std::os::unix::fs::symlink(&project, &link).unwrap();
@@ -3889,7 +3927,7 @@ mod tests {
 
         let got = server
             .canvas_get_tool(CanvasTargetArgs {
-                file: Some(link.join("home.figcraft").display().to_string()),
+                file: Some(link.join("home.sawit").display().to_string()),
                 project: None,
             })
             .await;
@@ -3931,7 +3969,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let server = native(dir.path());
         let project = project_in(dir.path());
-        let design = project.join("home.figcraft");
+        let design = project.join("home.sawit");
         write_design(&design);
         let state = json!({"version": "0.0.6", "windows": []});
         let asked = fake_app_answering(&server.paths, vec![state, json!({"ok": true})]);
@@ -3945,12 +3983,7 @@ mod tests {
             .await;
         assert_eq!(refused.is_error, Some(true), "{}", said(&refused));
         let says = said(&refused);
-        for said in [
-            "Nothing was changed",
-            "(0.0.6)",
-            "home.figcraft",
-            "Quit Sawit",
-        ] {
+        for said in ["Nothing was changed", "(0.0.6)", "home.sawit", "Quit Sawit"] {
             assert!(says.contains(said), "no {said:?} in {says}");
         }
         let request = asked.recv_timeout(Duration::from_secs(5)).expect("asked");
@@ -3990,46 +4023,46 @@ mod tests {
         }
     }
 
-    /// `file` names a canvas file by its absolute path (or `~/…`): a `.figcraft` file that is
+    /// `file` names a canvas file by its absolute path (or `~/…`): a `.sawit` file that is
     /// there, or a new one in a folder that is (a new board, made by the first edit), or an
     /// `.excalidraw` file that is there or was imported. Anything else is refused before a tab
     /// opens or a file is made, and says why.
     #[test]
-    fn a_canvas_file_is_an_absolute_figcraft_or_excalidraw_file() {
+    fn a_canvas_file_is_an_absolute_sawit_or_excalidraw_file() {
         let dir = tempfile::tempdir().unwrap();
         let real = dir.path().canonicalize().unwrap();
-        let design = real.join("home.figcraft");
+        let design = real.join("home.sawit");
         write_design(&design);
         let file = |path: &Path| canvas_file(Some(&path.display().to_string()));
         assert_eq!(canvas_file(None), Ok(None));
         assert_eq!(canvas_file(Some("  ")), Ok(None));
         assert_eq!(file(&design), Ok(Some(design.clone())));
-        let new = real.join("new.figcraft");
+        let new = real.join("new.sawit");
         assert_eq!(file(&new), Ok(Some(new.clone())));
         assert!(!new.exists());
         // An `.excalidraw` file whose scene went, once imported, is the file it was imported into.
-        write_board(&real.join("gone.figcraft"), 1);
+        write_board(&real.join("gone.sawit"), 1);
         let gone = real.join("gone.excalidraw");
         assert_eq!(file(&gone), Ok(Some(gone.clone())));
         if let Some(home) = std::env::var_os("HOME") {
             let home = Path::new(&home).canonicalize().unwrap();
-            let named = canvas_file(Some("~/sawit-test-no-such-folder/x.figcraft"));
+            let named = canvas_file(Some("~/sawit-test-no-such-folder/x.sawit"));
             let error = named.unwrap_err();
             assert!(error.contains(&home.display().to_string()), "{error}");
         }
 
         for (named, says) in [
-            ("home.figcraft".to_string(), "must be an absolute path"),
+            ("home.sawit".to_string(), "must be an absolute path"),
             (
                 real.join("notes.md").display().to_string(),
                 "isn't a canvas file",
             ),
             (
-                real.join("canvas.figcraft.bak").display().to_string(),
+                real.join("canvas.sawit.bak").display().to_string(),
                 "isn't a canvas file",
             ),
             (
-                real.join("no/such/folder/x.figcraft").display().to_string(),
+                real.join("no/such/folder/x.sawit").display().to_string(),
                 "nor is the folder a new canvas file would go in",
             ),
             (
@@ -4041,9 +4074,9 @@ mod tests {
             assert!(refused.contains(says), "{named}: {refused}");
         }
         // A folder by that name is no canvas file, and neither is a link left at the name.
-        std::fs::create_dir(real.join("folder.figcraft")).unwrap();
-        std::os::unix::fs::symlink(real.join("nowhere"), real.join("dangling.figcraft")).unwrap();
-        for name in ["folder.figcraft", "dangling.figcraft"] {
+        std::fs::create_dir(real.join("folder.sawit")).unwrap();
+        std::os::unix::fs::symlink(real.join("nowhere"), real.join("dangling.sawit")).unwrap();
+        for name in ["folder.sawit", "dangling.sawit"] {
             let refused = file(&real.join(name)).unwrap_err();
             assert!(refused.contains("isn't a canvas file"), "{name}: {refused}");
         }

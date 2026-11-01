@@ -1050,7 +1050,7 @@ mod tests {
         // P6-C1): Save writes the canvas's file now, and says so.
         run_menu(&view, "file.save", &mut cx);
         assert_eq!(toast(&view, &cx).as_deref(), Some("Saved"));
-        assert_eq!(saved_layers(&tmp.0.join("canvas.figcraft")), 2);
+        assert_eq!(saved_layers(&tmp.0.join("canvas.sawit")), 2);
     }
 
     #[gpui_kit::test]

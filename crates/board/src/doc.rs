@@ -17,7 +17,7 @@ pub enum BoardError {
     /// The engine refused a command, or the session holds no document.
     #[error("{0}")]
     Engine(String),
-    /// `.figcraft` bytes could not be read or written: corrupt, truncated or from a newer FigCraft.
+    /// Canvas file bytes could not be read or written: corrupt, truncated or from a newer Sawit.
     #[error("{0}")]
     Format(String),
     /// A file could not be read or written.
@@ -30,16 +30,35 @@ pub enum BoardError {
 /// keeps the file it opened, and nothing in Sawit makes a design file a board (SMOKE-3).
 pub const BOARDS_ONLY: &str = "this is for boards, and this canvas is a design file";
 
+/// What the engine's file format says of a file it can't read, in its own name, and the same in
+/// Sawit's: to the user and to an agent the canvas file is Sawit's, whatever engine reads it.
+const FILE_WORDS: [(&str, &str); 2] = [
+    ("not a valid FigCraft file", "not a valid canvas file"),
+    (
+        "saved by a newer FigCraft",
+        "saved by a newer version of Sawit",
+    ),
+];
+
+/// `message`, from the engine or its file format, with Sawit's words for what it says in
+/// FigCraft's ([`BOARDS_ONLY`], [`FILE_WORDS`]), wherever in it they are.
+fn in_sawits_words(message: &str) -> String {
+    let message = message.replace(board::NEEDS_BOARD, BOARDS_ONLY);
+    (FILE_WORDS.iter()).fold(message, |message, (engine, sawit)| {
+        message.replace(engine, sawit)
+    })
+}
+
 impl From<EngineError> for BoardError {
-    /// The engine's message, with Sawit's words for what it says in FigCraft's ([`BOARDS_ONLY`]):
-    /// the same for a toast and for an agent's reply, wherever in it the engine's words are.
+    /// The engine's message, with Sawit's words for what it says in FigCraft's
+    /// ([`in_sawits_words`]): the same for a toast and for an agent's reply.
     fn from(e: EngineError) -> Self {
-        BoardError::Engine(e.to_string().replace(board::NEEDS_BOARD, BOARDS_ONLY))
+        BoardError::Engine(in_sawits_words(&e.to_string()))
     }
 }
 
 fn format_error(e: FormatError) -> BoardError {
-    BoardError::Format(e.to_string())
+    BoardError::Format(in_sawits_words(&e.to_string()))
 }
 
 /// The kind of file a canvas holds.
@@ -64,8 +83,8 @@ impl BoardDoc {
         Ok(Self { session })
     }
 
-    /// The file in `bytes` (a `.figcraft` archive), with its version history and branches. The
-    /// notes on what the loader repaired or left out are only logged, so a caller that may save
+    /// The canvas file in `bytes` (the engine's archive), with its version history and branches.
+    /// The notes on what the loader repaired or left out are only logged, so a caller that may save
     /// back to a file should use [`BoardDoc::from_file_bytes`].
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, BoardError> {
         let (board, issues) = Self::from_bytes_with_issues(bytes)?;
@@ -87,7 +106,7 @@ impl BoardDoc {
         Self::load(bytes, None)
     }
 
-    /// The `.figcraft` file at `path`, whose bytes are `bytes`, read as
+    /// The canvas file at `path`, whose bytes are `bytes`, read as
     /// [`BoardDoc::from_bytes_with_issues`] reads it, and with what FigCraft's own `file.open` notes
     /// of the file: the images it holds past the loader's limits, which a save over it would delete
     /// ([`BoardDoc::refuse_dropping_images`]). The session keeps no path, so nothing in it can
@@ -129,7 +148,7 @@ impl BoardDoc {
         Ok((Self { session }, issues))
     }
 
-    /// The document as a `.figcraft` archive, with its version history and branches, and without a
+    /// The document as a canvas file's archive, with its version history and branches, and without a
     /// thumbnail (a preview, not content). It is the document itself
     /// ([`BoardDoc::document_itself`]), never a version shown in its place. It records the page on
     /// show, as FigCraft's own save does (`FileSnapshot::encode`), so the file opens on that page
@@ -164,7 +183,7 @@ impl BoardDoc {
         {
             Some(count) => Err(BoardError::Engine(format!(
                 "{} wasn't saved: {count} of its images weren't loaded (together they pass what \
-                 FigCraft reads from one file), and saving over it would delete them. Save it \
+                 the canvas reads from one file), and saving over it would delete them. Save it \
                  under another name; this file keeps them.",
                 path.file_stem()
                     .and_then(|stem| stem.to_str())
@@ -220,7 +239,7 @@ pub(crate) fn grouped<T>(
     session.grouped(label, |session| guard::run(label, || f(session)))
 }
 
-/// A `.figcraft` file of a board with a sticky "kept", and an image whose bytes are damaged: the
+/// A canvas file of a board with a sticky "kept", and an image whose bytes are damaged: the
 /// loader leaves the image out, and says that a save drops it.
 #[cfg(test)]
 pub(crate) fn file_with_a_damaged_image() -> Vec<u8> {
@@ -244,7 +263,7 @@ pub(crate) fn file_with_a_damaged_image() -> Vec<u8> {
     bytes
 }
 
-/// A `.figcraft` file of a blank design with one image more than FigCraft reads from a file (its
+/// A canvas file of a blank design with one image more than FigCraft reads from a file (its
 /// `IMAGE_BUDGET` is 20 000): that image stays in the file, unread. Building its 20 001 archive
 /// members takes most of a second.
 #[cfg(test)]
@@ -306,13 +325,28 @@ mod tests {
     fn corrupt_or_truncated_bytes_are_a_format_error() {
         let is_format_error =
             |bytes: &[u8]| matches!(BoardDoc::from_bytes(bytes), Err(BoardError::Format(_)));
-        assert!(is_format_error(b"not a figcraft file"));
+        assert!(is_format_error(b"not a canvas file"));
         assert!(is_format_error(&[]));
         let mut b = BoardDoc::new_board("Canvas").unwrap();
         b.execute("board.sticky", &json!({"x": 0, "y": 0, "text": "hi"}))
             .unwrap();
         let bytes = b.to_bytes().unwrap();
         assert!(is_format_error(&bytes[..bytes.len() / 2]));
+    }
+
+    /// A file the canvas can't read is said to be no canvas file, or one from a newer Sawit: the
+    /// user and the agent read Sawit's name, not the engine's.
+    #[test]
+    fn a_file_that_cant_be_read_is_told_in_sawits_words() {
+        let error = BoardDoc::from_bytes(b"{").err().unwrap().to_string();
+        assert!(error.starts_with("not a valid canvas file: "), "{error}");
+        let newer = br#"{"version":99,"pages":[]}"#;
+        let error = BoardDoc::from_bytes(newer).err().unwrap().to_string();
+        assert_eq!(
+            error,
+            "this file was saved by a newer version of Sawit (format version 99)"
+        );
+        assert!(!error.contains("FigCraft"));
     }
 
     #[test]
@@ -437,7 +471,7 @@ mod tests {
     #[test]
     fn images_past_the_loaders_limit_make_saving_over_their_file_refused() {
         let bytes = file_with_an_image_past_the_limit();
-        let path = Path::new("/work/design.figcraft");
+        let path = Path::new("/work/design.sawit");
         let (board, issues) = BoardDoc::from_file_bytes(&bytes, path).unwrap();
         let note = |i: &&String| i.contains("past the limit");
         assert_eq!(issues.iter().filter(note).count(), 1, "{issues:?}");
@@ -446,17 +480,17 @@ mod tests {
             "{issues:?}"
         );
         // Saved over, the file would lose the image it holds unread. That is refused, in
-        // FigCraft's own words; saved anywhere else, nothing is lost.
+        // FigCraft's own words, the canvas in its place; saved anywhere else, nothing is lost.
         let refused = board.refuse_dropping_images(path).unwrap_err();
         assert_eq!(
             refused.to_string(),
             "design wasn't saved: 1 of its images weren't loaded (together they pass what \
-             FigCraft reads from one file), and saving over it would delete them. Save it under \
+             the canvas reads from one file), and saving over it would delete them. Save it under \
              another name; this file keeps them."
         );
         assert!(
             board
-                .refuse_dropping_images(Path::new("/work/copy.figcraft"))
+                .refuse_dropping_images(Path::new("/work/copy.sawit"))
                 .is_ok()
         );
         // Read with no file, it has no file to save over.

@@ -24,13 +24,73 @@ const NAME: &str = "Canvas";
 /// the path of the canvas file is all the store is given.
 const OLD_CANVAS: &str = "canvas.excalidraw";
 
-/// The canvas file: `<project>/.nyawit/canvas.figcraft`, else `canvas.figcraft` in `app_root`
+/// The canvas file: `<project>/.nyawit/canvas.sawit`, else `canvas.sawit` in `app_root`
 /// (Sawit's own folder).
 pub fn board_file(project: Option<&Path>, app_root: &Path) -> PathBuf {
     match project {
         Some(project) => nyawit::board_file(project),
         None => app_root.join(nyawit::BOARD_FILE),
     }
+}
+
+/// The canvas file of `project` (or of Sawit's own folder), as [`board_file`] names it, once a
+/// canvas kept there under the name it had before (`canvas.figcraft`) has moved to it
+/// ([`nyawit::migrate_canvas`], which says what happens when both are there). The app's canvas
+/// tab and `sawit-mcp` with the app closed take the file of the canvas they open from here, so
+/// whichever comes first moves it, once, and the other finds it moved.
+///
+/// A move that fails is logged, and the file under the old name stays the canvas while there is
+/// nothing at the new one: it holds the canvas, which a new, empty file at the new name would
+/// hide.
+pub fn migrated_board_file(project: Option<&Path>, app_root: &Path) -> PathBuf {
+    migrated(board_file(project, app_root))
+}
+
+/// The canvas file `file` ([`nyawit::BOARD_FILE`] in its folder) once the canvas beside it under
+/// the old name has moved to it, as [`migrated_board_file`] gives it.
+fn migrated(file: PathBuf) -> PathBuf {
+    let Some(folder) = file.parent() else {
+        return file;
+    };
+    match nyawit::migrate_canvas(folder) {
+        Ok(_) => file,
+        Err(e) => {
+            let old = folder.join(nyawit::LEGACY_BOARD_FILE);
+            log::warn!(
+                "couldn't move the canvas {} to {}: {e}",
+                old.display(),
+                file.display()
+            );
+            if taken(&old) && !taken(&file) {
+                old
+            } else {
+                file
+            }
+        }
+    }
+}
+
+/// The canvas file `path` names now. A project's canvas named by the name it had before
+/// (`.nyawit/canvas.figcraft`) is moved to its name now ([`migrated_board_file`]), whose file is
+/// given, unless a file is still at the old name (one was at both, or the move failed): that file
+/// is then the one named. Any other path, a `.figcraft` file of the user's included, is given as
+/// it is: only the canvas Sawit keeps in `.nyawit/` moves.
+pub fn current_canvas_file(path: &Path) -> PathBuf {
+    let in_nyawit = path.parent().and_then(Path::file_name) == Some(OsStr::new(nyawit::DIR));
+    if !in_nyawit || path.file_name() != Some(OsStr::new(nyawit::LEGACY_BOARD_FILE)) {
+        return path.to_path_buf();
+    }
+    let file = migrated(path.with_file_name(nyawit::BOARD_FILE));
+    if taken(path) {
+        path.to_path_buf()
+    } else {
+        file
+    }
+}
+
+/// Whether something is at `path`: a file, a folder, or a link, wherever it points.
+fn taken(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok()
 }
 
 /// Opens the canvas at `path`, as [`open_with_issues`] does (so it imports the old canvas too), and
@@ -51,7 +111,7 @@ pub fn open(path: &Path) -> Result<BoardDoc, BoardError> {
 ///
 /// - A missing file is a new, empty board. Nothing is written, not even the folder: the first
 ///   save does that.
-/// - A missing canvas file (`canvas.figcraft`, [`nyawit::BOARD_FILE`]) with a `canvas.excalidraw`
+/// - A missing canvas file (`canvas.sawit`, [`nyawit::BOARD_FILE`]) with a `canvas.excalidraw`
 ///   beside it is that old canvas, imported ([`excalidraw::import`]). It is the first open only:
 ///   once the canvas has been saved the file is there, and is what opens. Neither file is
 ///   written, and no `.bak` is made: the old canvas stays as it is, and the notes are what the
@@ -121,7 +181,7 @@ fn open_missing(path: &Path) -> Result<(BoardDoc, Vec<String>), BoardError> {
 }
 
 /// The old canvas that the canvas file `path` replaces: `canvas.excalidraw` in the same folder.
-/// Only the canvas file takes over from it, not any other `.figcraft` file that is missing.
+/// Only the canvas file takes over from it, not any other `.sawit` file that is missing.
 fn old_canvas(path: &Path) -> Option<PathBuf> {
     if path.file_name() != Some(OsStr::new(nyawit::BOARD_FILE)) {
         return None;
@@ -136,18 +196,30 @@ fn import_old_canvas(old: &Path) -> Result<(BoardDoc, Vec<String>), BoardError> 
     import_as(old, NAME)
 }
 
-/// The `.figcraft` file that a canvas opened on the file at `path` is bound to, and saves to (spec
-/// D14): for an `.excalidraw` file the `<stem>.figcraft` beside it (so the old project canvas is
+/// The canvas file that a canvas opened on the file at `path` is bound to, and saves to (spec
+/// D14): for an `.excalidraw` file the `<stem>.sawit` beside it (so the old project canvas is
 /// bound to the canvas file), for any other file the file itself.
+///
+/// What came before the `.sawit` extension stays where it is: an `.excalidraw` file imported into
+/// a `<stem>.figcraft` beside it, with no `<stem>.sawit` there, is bound to that file still, so
+/// its edits aren't lost to a new import. Only a project's canvas by its old name moves
+/// ([`current_canvas_file`]), wherever it is named from.
 pub fn bound_file(path: &Path) -> PathBuf {
-    let excalidraw = path
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("excalidraw"));
-    if excalidraw {
-        path.with_extension("figcraft")
-    } else {
-        path.to_path_buf()
+    if !is_excalidraw(path) {
+        return current_canvas_file(path);
     }
+    let file = path.with_extension(files::CANVAS_EXTENSION);
+    let before = path.with_extension(files::LEGACY_CANVAS_EXTENSION);
+    if !taken(&file) && taken(&before) {
+        current_canvas_file(&before)
+    } else {
+        file
+    }
+}
+
+/// Whether `path` names an `.excalidraw` file, in any case.
+fn is_excalidraw(path: &Path) -> bool {
+    (path.extension()).is_some_and(|ext| ext.eq_ignore_ascii_case("excalidraw"))
 }
 
 /// The `.excalidraw` file at `path` as a new board named after it, and the notes on what the
@@ -249,13 +321,14 @@ pub fn backup_after(op: &str, before: &Document, after: &Document) -> Backup {
 }
 
 /// Opens the canvas a canvas tab shows for the file at `path` (spec D14), as [`open`] opens one:
-/// an `.excalidraw` file's scene, imported ([`import_file`]), while the `.figcraft` file it is
-/// bound to ([`bound_file`]) isn't there, and that file once it is; any other file itself. What
-/// the import left out is only logged. Nothing is written, the `.excalidraw` file least of all:
-/// the first save of the canvas makes the `.figcraft` file, so the scene is imported once.
+/// an `.excalidraw` file's scene, imported ([`import_file`]), while the `.sawit` file it is
+/// bound to ([`bound_file`]) isn't there, and that file once it is; any other file itself (a
+/// project's canvas by its old name as moved to its new one). What the import left out is only
+/// logged. Nothing is written, the `.excalidraw` file least of all: the first save of the canvas
+/// makes the `.sawit` file, so the scene is imported once.
 pub fn open_bound(path: &Path) -> Result<BoardDoc, BoardError> {
     let file = bound_file(path);
-    if file == path || file.exists() {
+    if !is_excalidraw(path) || file.exists() {
         return open(&file);
     }
     let (board, issues) = import_file(path)?;
@@ -656,7 +729,7 @@ fn ring_file(path: &Path, suffix: &str, n: usize) -> PathBuf {
 /// loads as a canvas with layers, keeps it as the newest backup of its kind, `<path><suffix>`
 /// (`.bak`, or `.del.bak` for a deletion: [`Backup`]), so "clear canvas" (or an agent's clear,
 /// load or deletion) can be undone even after the app restarts. So is a file that doesn't load
-/// at all (cut short, or written by a newer FigCraft), which may hold layers too, as the old
+/// at all (cut short, or written by a newer Sawit), which may hold layers too, as the old
 /// canvas kept a scene it couldn't read; an empty file has nothing to keep. On failure the error
 /// says why, and the save must not go on.
 ///
@@ -723,7 +796,7 @@ fn lossy_backup(path: &Path) -> PathBuf {
     sibling(path, ".lossy.bak")
 }
 
-/// `path` with `suffix` added to its name: `canvas.figcraft` becomes `canvas.figcraft.bak`.
+/// `path` with `suffix` added to its name: `canvas.sawit` becomes `canvas.sawit.bak`.
 fn sibling(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(suffix);
@@ -801,7 +874,7 @@ mod tests {
         names
     }
 
-    /// A `.figcraft` file of a board with a sticky "kept", and a version history.
+    /// A `.sawit` file of a board with a sticky "kept", and a version history.
     fn file_with_a_history() -> Vec<u8> {
         let doc = board_with(&["kept"]).doc().unwrap();
         let history = [figcraft_format::Version::new(
@@ -820,15 +893,82 @@ mod tests {
         let root = Path::new("/support/sawit");
         assert_eq!(
             board_file(Some(project), root),
-            project.join(".nyawit/canvas.figcraft")
+            project.join(".nyawit/canvas.sawit")
         );
-        assert_eq!(board_file(None, root), root.join("canvas.figcraft"));
+        assert_eq!(board_file(None, root), root.join("canvas.sawit"));
+    }
+
+    /// A project's canvas, and the canvas in Sawit's own folder, kept under the old name moves to
+    /// the new one with its backups the first time it is asked for, and opens there with what it
+    /// held. A move that fails leaves the old file the canvas.
+    #[test]
+    fn the_canvas_under_its_old_name_moves_before_it_opens() {
+        let dir = tempdir().unwrap();
+        let project = dir.path().join("shop");
+        let nyawit = project.join(".nyawit");
+        std::fs::create_dir_all(&nyawit).unwrap();
+        std::fs::write(nyawit.join("canvas.figcraft"), bytes_with(&["kept"])).unwrap();
+        std::fs::write(nyawit.join("canvas.figcraft.bak"), bytes_with(&["cleared"])).unwrap();
+        let root = dir.path().join("support");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("canvas.figcraft"), bytes_with(&["mine"])).unwrap();
+
+        let file = migrated_board_file(Some(&project), &root);
+        assert_eq!(file, nyawit.join("canvas.sawit"));
+        assert_eq!(names(&nyawit), ["canvas.sawit", "canvas.sawit.bak"]);
+        assert!(has_text(&open(&file).unwrap(), "kept"));
+        assert!(has_text(&open(&backup_file(&file, 0)).unwrap(), "cleared"));
+
+        let own = migrated_board_file(None, &root);
+        assert_eq!(own, root.join("canvas.sawit"));
+        assert!(has_text(&open(&own).unwrap(), "mine"));
+
+        // A folder the canvas can't be moved in: the old file is the canvas still.
+        use std::os::unix::fs::PermissionsExt as _;
+        let locked = dir.path().join("locked");
+        let locked_nyawit = locked.join(".nyawit");
+        std::fs::create_dir_all(&locked_nyawit).unwrap();
+        std::fs::write(locked_nyawit.join("canvas.figcraft"), bytes_with(&["old"])).unwrap();
+        let permissions = |mode| std::fs::Permissions::from_mode(mode);
+        std::fs::set_permissions(&locked_nyawit, permissions(0o555)).unwrap();
+        let file = migrated_board_file(Some(&locked), &root);
+        std::fs::set_permissions(&locked_nyawit, permissions(0o755)).unwrap();
+        assert_eq!(file, locked_nyawit.join("canvas.figcraft"));
+        assert_eq!(names(&locked_nyawit), ["canvas.figcraft"]);
+    }
+
+    /// A project's canvas named by its old name (an agent's `file`, the Files tab, `sawit <file>`)
+    /// is the project's canvas, moved: it opens under its new name. Once both names are there,
+    /// the old one names the file left there; any other `.figcraft` file is itself.
+    #[test]
+    fn a_projects_canvas_named_by_its_old_name_is_the_canvas_now() {
+        let dir = tempdir().unwrap();
+        let nyawit = dir.path().join(".nyawit");
+        std::fs::create_dir(&nyawit).unwrap();
+        let old = nyawit.join("canvas.figcraft");
+        std::fs::write(&old, bytes_with(&["kept"])).unwrap();
+        let new = nyawit.join("canvas.sawit");
+
+        assert_eq!(current_canvas_file(&old), new);
+        assert_eq!(bound_file(&old), new);
+        assert!(has_text(&open_bound(&old).unwrap(), "kept"));
+        assert_eq!(names(&nyawit), ["canvas.sawit"]);
+
+        std::fs::write(&old, bytes_with(&["left"])).unwrap();
+        assert_eq!(current_canvas_file(&old), old);
+        assert!(has_text(&open_bound(&old).unwrap(), "left"));
+        assert!(has_text(&open_bound(&new).unwrap(), "kept"));
+
+        let design = dir.path().join("canvas.figcraft");
+        std::fs::write(&design, bytes_with(&["design"])).unwrap();
+        assert_eq!(current_canvas_file(&design), design);
+        assert_eq!(names(dir.path()), [".nyawit", "canvas.figcraft"]);
     }
 
     #[test]
     fn open_missing_file_is_a_new_board_and_writes_nothing() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join(".nyawit/canvas.figcraft");
+        let path = dir.path().join(".nyawit/canvas.sawit");
         let board = open(&path).unwrap();
         assert_eq!(board.kind(), DocKind::Board);
         assert!(!path.exists());
@@ -841,27 +981,27 @@ mod tests {
     #[test]
     fn open_corrupt_file_errors_and_never_saves() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
-        std::fs::write(&path, b"not a figcraft file").unwrap();
+        let path = dir.path().join("canvas.sawit");
+        std::fs::write(&path, b"not a canvas file").unwrap();
         assert!(matches!(open(&path), Err(BoardError::Format(_))));
         assert!(matches!(
             open_with_issues(&path),
             Err(BoardError::Format(_))
         ));
-        assert_eq!(std::fs::read(&path).unwrap(), b"not a figcraft file");
+        assert_eq!(std::fs::read(&path).unwrap(), b"not a canvas file");
         // No `.bak` or temporary file beside it either.
-        assert_eq!(names(dir.path()), ["canvas.figcraft"]);
+        assert_eq!(names(dir.path()), ["canvas.sawit"]);
     }
 
     #[test]
     fn a_file_that_cannot_be_read_is_an_io_error() {
         let dir = tempdir().unwrap();
         // A folder where the file should be.
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         std::fs::create_dir(&path).unwrap();
         let err = open(&path).err().unwrap();
         assert!(matches!(err, BoardError::Io(_)), "{err:?}");
-        assert!(err.to_string().contains("canvas.figcraft"), "{err}");
+        assert!(err.to_string().contains("canvas.sawit"), "{err}");
     }
 
     /// CANVAS-CORE-6: opening a canvas reads its file on the UI thread (and in sawit-mcp, holding
@@ -871,14 +1011,14 @@ mod tests {
     #[test]
     fn a_canvas_file_that_is_a_pipe_is_refused_at_once() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         pipe_at(&path);
         let opened = within_seconds(move || open_with_issues(&path).map(|_| ()));
         let error = opened.expect("opening a pipe never returned").unwrap_err();
         assert!(matches!(error, BoardError::Io(_)), "{error:?}");
         let error = error.to_string();
         assert!(
-            error.contains("canvas.figcraft") && error.contains("not a regular file"),
+            error.contains("canvas.sawit") && error.contains("not a regular file"),
             "{error}"
         );
         let scene = dir.path().join("sketch.excalidraw");
@@ -900,7 +1040,7 @@ mod tests {
     #[test]
     fn a_canvas_file_linked_to_a_device_is_refused_at_once() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         std::os::unix::fs::symlink("/dev/zero", &path).unwrap();
         let opened = within_seconds(move || open_with_issues(&path).map(|_| ()));
         let error = opened
@@ -914,7 +1054,7 @@ mod tests {
     #[test]
     fn a_canvas_file_past_the_limit_is_refused_unread() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         let file = std::fs::File::create(&path).unwrap();
         file.set_len(MAX_FILE + 1).unwrap();
         let opened = within_seconds(move || open_with_issues(&path).map(|_| ()));
@@ -926,9 +1066,9 @@ mod tests {
     #[test]
     fn open_with_issues_backs_up_the_original() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         let bak = lossy_backup(&path);
-        assert_eq!(bak, dir.path().join("canvas.figcraft.lossy.bak"));
+        assert_eq!(bak, dir.path().join("canvas.sawit.lossy.bak"));
         let original = file_with_a_damaged_image();
         std::fs::write(&path, &original).unwrap();
 
@@ -951,21 +1091,21 @@ mod tests {
     #[test]
     fn open_with_issues_leaves_a_healthy_file_alone() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         let original = bytes_with(&["hi"]);
         std::fs::write(&path, &original).unwrap();
 
         let (board, issues) = open_with_issues(&path).unwrap();
         assert!(has_text(&board, "hi"));
         assert!(issues.is_empty(), "{issues:?}");
-        assert_eq!(names(dir.path()), ["canvas.figcraft"], "no backup");
+        assert_eq!(names(dir.path()), ["canvas.sawit"], "no backup");
         assert_eq!(std::fs::read(&path).unwrap(), original);
     }
 
     #[test]
     fn open_with_issues_refuses_a_file_it_cannot_back_up() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         let original = file_with_a_damaged_image();
         std::fs::write(&path, &original).unwrap();
         // A folder where the backup should go.
@@ -973,10 +1113,7 @@ mod tests {
 
         let err = open_with_issues(&path).err().unwrap();
         assert!(matches!(err, BoardError::Io(_)), "{err:?}");
-        assert!(
-            err.to_string().contains("canvas.figcraft.lossy.bak"),
-            "{err}"
-        );
+        assert!(err.to_string().contains("canvas.sawit.lossy.bak"), "{err}");
         assert_eq!(std::fs::read(&path).unwrap(), original);
     }
 
@@ -984,20 +1121,20 @@ mod tests {
     fn a_file_with_a_history_opens_without_notes_or_a_backup() {
         // A save writes the history back, so there is nothing to warn about or to keep a copy of.
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         std::fs::write(&path, file_with_a_history()).unwrap();
 
         let (board, issues) = open_with_issues(&path).unwrap();
         assert!(issues.is_empty(), "{issues:?}");
         assert!(has_text(&board, "kept"));
         assert_eq!(board.session.ds().unwrap().versions.len(), 1);
-        assert_eq!(names(dir.path()), ["canvas.figcraft"], "no backup");
+        assert_eq!(names(dir.path()), ["canvas.sawit"], "no backup");
     }
 
     #[test]
     fn images_left_in_a_file_make_saving_over_it_refused() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("design.figcraft");
+        let path = dir.path().join("design.sawit");
         let original = file_with_an_image_past_the_limit();
         std::fs::write(&path, &original).unwrap();
 
@@ -1009,7 +1146,7 @@ mod tests {
             "{refused}"
         );
         // A copy anywhere else loses nothing of this file.
-        let copy = dir.path().join("copy.figcraft");
+        let copy = dir.path().join("copy.sawit");
         assert!(board.refuse_dropping_images(&copy).is_ok());
         // `open` records them too, and the original is kept beside the file, as for any open
         // with notes.
@@ -1019,20 +1156,46 @@ mod tests {
     }
 
     #[test]
-    fn an_excalidraw_file_is_bound_to_the_figcraft_beside_it() {
+    fn an_excalidraw_file_is_bound_to_the_sawit_file_beside_it() {
         let bound = |path: &str| bound_file(Path::new(path));
-        assert_eq!(
-            bound("/p/sketch.excalidraw"),
-            Path::new("/p/sketch.figcraft")
-        );
-        assert_eq!(bound("/p/v1.2.Excalidraw"), Path::new("/p/v1.2.figcraft"));
+        assert_eq!(bound("/p/sketch.excalidraw"), Path::new("/p/sketch.sawit"));
+        assert_eq!(bound("/p/v1.2.Excalidraw"), Path::new("/p/v1.2.sawit"));
         // The old project canvas is bound to the project canvas.
         assert_eq!(
             bound("/p/.nyawit/canvas.excalidraw"),
             nyawit::board_file(Path::new("/p"))
         );
-        // A `.figcraft` file is bound to itself.
+        // A canvas file is bound to itself, by either extension.
+        assert_eq!(bound("/p/board.sawit"), Path::new("/p/board.sawit"));
         assert_eq!(bound("/p/board.figcraft"), Path::new("/p/board.figcraft"));
+    }
+
+    /// An `.excalidraw` file imported before canvas files took the `.sawit` extension saved into
+    /// the `.figcraft` file beside it: that file is the one it stays bound to, where its edits are,
+    /// until a `.sawit` one is there. The project's old canvas goes to the project's canvas, moved.
+    #[test]
+    fn an_excalidraw_file_imported_before_stays_bound_to_its_figcraft_file() {
+        let dir = tempdir().unwrap();
+        let scene = dir.path().join("flow.excalidraw");
+        std::fs::write(&scene, FIXTURE).unwrap();
+        let before = dir.path().join("flow.figcraft");
+        std::fs::write(&before, bytes_with(&["edited"])).unwrap();
+        assert_eq!(bound_file(&scene), before);
+        assert!(has_text(&open_bound(&scene).unwrap(), "edited"));
+        std::fs::write(dir.path().join("flow.sawit"), bytes_with(&["newer"])).unwrap();
+        assert_eq!(bound_file(&scene), dir.path().join("flow.sawit"));
+
+        let nyawit = dir.path().join(".nyawit");
+        std::fs::create_dir(&nyawit).unwrap();
+        std::fs::write(nyawit.join("canvas.excalidraw"), FIXTURE).unwrap();
+        std::fs::write(nyawit.join("canvas.figcraft"), bytes_with(&["kept"])).unwrap();
+        let canvas = bound_file(&nyawit.join("canvas.excalidraw"));
+        assert_eq!(canvas, nyawit.join("canvas.sawit"));
+        assert_eq!(names(&nyawit), ["canvas.excalidraw", "canvas.sawit"]);
+        assert!(has_text(
+            &open_bound(&nyawit.join("canvas.excalidraw")).unwrap(),
+            "kept"
+        ));
     }
 
     #[test]
@@ -1100,7 +1263,7 @@ mod tests {
         let nyawit = dir.path().join(".nyawit");
         std::fs::create_dir(&nyawit).unwrap();
         let old = nyawit.join("canvas.excalidraw");
-        let path = nyawit.join("canvas.figcraft");
+        let path = nyawit.join("canvas.sawit");
         std::fs::write(&old, FIXTURE).unwrap();
 
         // The first open imports the old canvas. Nothing is written: not the new file, and the
@@ -1126,7 +1289,7 @@ mod tests {
         let again = open(&path).unwrap();
         assert!(has_text(&again, "after"));
         assert_eq!(top_level(&again), 10);
-        assert_eq!(names(&nyawit), ["canvas.excalidraw", "canvas.figcraft"]);
+        assert_eq!(names(&nyawit), ["canvas.excalidraw", "canvas.sawit"]);
     }
 
     /// A project folder whose `.nyawit/` holds the old canvas `scene`: the folder, the old canvas
@@ -1137,7 +1300,7 @@ mod tests {
         std::fs::create_dir(&nyawit).unwrap();
         let old = nyawit.join("canvas.excalidraw");
         std::fs::write(&old, scene).unwrap();
-        (dir, old, nyawit.join("canvas.figcraft"))
+        (dir, old, nyawit.join("canvas.sawit"))
     }
 
     #[test]
@@ -1187,11 +1350,11 @@ mod tests {
         std::fs::write(dir.path().join("canvas.excalidraw"), FIXTURE).unwrap();
 
         // Any other file that is missing is a new board, even beside a `canvas.excalidraw`.
-        let other = open(&dir.path().join("other.figcraft")).unwrap();
+        let other = open(&dir.path().join("other.sawit")).unwrap();
         assert_eq!(top_level(&other), 0);
-        let named_alike = open(&dir.path().join("my-canvas.figcraft")).unwrap();
+        let named_alike = open(&dir.path().join("my-canvas.sawit")).unwrap();
         assert_eq!(top_level(&named_alike), 0);
-        // The canvas of a window with no project is `canvas.figcraft` in Sawit's own folder, with
+        // The canvas of a window with no project is `canvas.sawit` in Sawit's own folder, with
         // the old one beside it.
         let app = open(&board_file(None, dir.path())).unwrap();
         assert_eq!(top_level(&app), 9);
@@ -1200,11 +1363,11 @@ mod tests {
         // No old canvas, or one that is a folder, is nothing to import.
         let empty = tempdir().unwrap();
         assert_eq!(
-            top_level(&open(&empty.path().join("canvas.figcraft")).unwrap()),
+            top_level(&open(&empty.path().join("canvas.sawit")).unwrap()),
             0
         );
         std::fs::create_dir(empty.path().join("canvas.excalidraw")).unwrap();
-        let (board, issues) = open_with_issues(&empty.path().join("canvas.figcraft")).unwrap();
+        let (board, issues) = open_with_issues(&empty.path().join("canvas.sawit")).unwrap();
         assert_eq!(top_level(&board), 0);
         assert!(issues.is_empty());
     }
@@ -1218,9 +1381,9 @@ mod tests {
         assert_eq!(top_level(&board), 1);
 
         // Not when the canvas file is corrupt either: it stays as it is, and so does the old one.
-        std::fs::write(&path, b"not a figcraft file").unwrap();
+        std::fs::write(&path, b"not a canvas file").unwrap();
         assert!(matches!(open(&path), Err(BoardError::Format(_))));
-        assert_eq!(std::fs::read(&path).unwrap(), b"not a figcraft file");
+        assert_eq!(std::fs::read(&path).unwrap(), b"not a canvas file");
         assert_eq!(std::fs::read(&old).unwrap(), FIXTURE.as_bytes());
     }
 
@@ -1356,12 +1519,12 @@ mod tests {
         assert!(!removes_layers(&doc, &doc.clone()));
     }
 
-    /// A canvas tab opens an `.excalidraw` file imported, bound to the `.figcraft` file beside it
+    /// A canvas tab opens an `.excalidraw` file imported, bound to the `.sawit` file beside it
     /// (spec D14), and so does sawit-mcp with the app closed: the scene while that file isn't
     /// there, and that file once a save has made it, so the scene is imported once. Neither file
     /// is written by opening.
     #[test]
-    fn an_excalidraw_file_opens_imported_until_its_figcraft_is_there() {
+    fn an_excalidraw_file_opens_imported_until_its_sawit_file_is_there() {
         let dir = tempdir().unwrap();
         let scene = dir.path().join("sketch.excalidraw");
         std::fs::write(&scene, FIXTURE).unwrap();
@@ -1370,15 +1533,15 @@ mod tests {
         assert_eq!(board.doc().unwrap().name, "sketch");
         assert_eq!(names(dir.path()), ["sketch.excalidraw"]);
 
-        // Saved once, edited since: the `.figcraft` file is what opens, not the scene again.
-        std::fs::write(dir.path().join("sketch.figcraft"), bytes_with(&["edited"])).unwrap();
+        // Saved once, edited since: the `.sawit` file is what opens, not the scene again.
+        std::fs::write(dir.path().join("sketch.sawit"), bytes_with(&["edited"])).unwrap();
         let board = open_bound(&scene).unwrap();
         assert_eq!(top_level(&board), 1);
         assert!(has_text(&board, "edited"));
         assert_eq!(std::fs::read(&scene).unwrap(), FIXTURE.as_bytes());
 
-        // A `.figcraft` file opens itself, as `open` opens it: one that isn't there is a new board.
-        let file = dir.path().join("board.figcraft");
+        // A `.sawit` file opens itself, as `open` opens it: one that isn't there is a new board.
+        let file = dir.path().join("board.sawit");
         assert_eq!(top_level(&open_bound(&file).unwrap()), 0);
         assert!(!file.exists());
         // A scene that can't be imported is the import's error, and nothing is made.
@@ -1386,13 +1549,13 @@ mod tests {
         std::fs::write(&broken, b"{ not json").unwrap();
         let error = open_bound(&broken).err().unwrap().to_string();
         assert!(error.contains("broken.excalidraw"), "{error}");
-        assert!(!dir.path().join("broken.figcraft").exists());
+        assert!(!dir.path().join("broken.sawit").exists());
     }
 
     #[test]
     fn writer_creates_nyawit_with_gitignore() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join(".nyawit/canvas.figcraft");
+        let path = dir.path().join(".nyawit/canvas.sawit");
         let writer = Writer::spawn();
         writer.save(path.clone(), bytes_with(&["hi"]), false);
         writer.flush();
@@ -1406,7 +1569,7 @@ mod tests {
     fn a_gitignore_the_user_deleted_stays_deleted() {
         // "Delete this file to commit them": the next autosave must not put it back.
         let dir = tempdir().unwrap();
-        let path = dir.path().join(".nyawit/canvas.figcraft");
+        let path = dir.path().join(".nyawit/canvas.sawit");
         let ignore = dir.path().join(".nyawit/.gitignore");
         let writer = Writer::spawn();
         writer.save(path.clone(), bytes_with(&["one"]), false);
@@ -1422,20 +1585,20 @@ mod tests {
     #[test]
     fn other_folders_are_made_without_a_gitignore() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("a/b/canvas.figcraft");
+        let path = dir.path().join("a/b/canvas.sawit");
         let writer = Writer::spawn();
         writer.save(path.clone(), bytes_with(&["hi"]), false);
         writer.flush();
         assert_eq!(writer.last_error(), None);
         assert!(has_text(&open(&path).unwrap(), "hi"));
-        assert_eq!(names(&dir.path().join("a/b")), ["canvas.figcraft"]);
+        assert_eq!(names(&dir.path().join("a/b")), ["canvas.sawit"]);
         assert_eq!(names(&dir.path().join("a")), ["b"]);
     }
 
     #[test]
     fn newest_save_wins() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         let writer = Writer::spawn();
         writer.save(path.clone(), bytes_with(&["first"]), false);
         writer.save(path.clone(), bytes_with(&["second"]), false);
@@ -1448,10 +1611,7 @@ mod tests {
     #[test]
     fn a_burst_of_saves_leaves_the_newest_of_each_path() {
         let dir = tempdir().unwrap();
-        let (one, two) = (
-            dir.path().join("one.figcraft"),
-            dir.path().join("two.figcraft"),
-        );
+        let (one, two) = (dir.path().join("one.sawit"), dir.path().join("two.sawit"));
         let saves: Vec<(Vec<u8>, Vec<u8>)> = (0..40)
             .map(|n| {
                 (
@@ -1501,7 +1661,7 @@ mod tests {
     #[test]
     fn emptying_keeps_backup() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         let writer = Writer::spawn();
         writer.save(path.clone(), bytes_with(&["keep me"]), false);
         writer.flush();
@@ -1517,7 +1677,7 @@ mod tests {
     #[test]
     fn backups_are_made_only_when_layers_are_emptied() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         let bak = sibling(&path, ".bak");
         let writer = Writer::spawn();
         let save = |bytes: Vec<u8>, empty: bool| {
@@ -1547,7 +1707,7 @@ mod tests {
         // as an agent's add then clear does: the emptying save keeps the edited canvas, and the
         // original stays where the open put it.
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         let original = file_with_a_damaged_image();
         std::fs::write(&path, &original).unwrap();
         let (_, issues) = open_with_issues(&path).unwrap();
@@ -1583,7 +1743,7 @@ mod tests {
     #[test]
     fn clearing_twice_keeps_the_board_cleared_first() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         let first = bytes_with(&["the user's board"]);
         std::fs::write(&path, &first).unwrap();
         let writer = Writer::spawn();
@@ -1637,7 +1797,7 @@ mod tests {
     #[test]
     fn backups_move_along_and_the_oldest_goes() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         let writer = Writer::spawn();
         let boards: Vec<Vec<u8>> = (0..7)
             .map(|n| bytes_with(&[&format!("board {n}")]))
@@ -1659,11 +1819,11 @@ mod tests {
         assert!(!backup_file(&path, BACKUPS).exists());
         assert_eq!(
             backup_file(&path, 0).file_name().unwrap(),
-            "canvas.figcraft.bak"
+            "canvas.sawit.bak"
         );
         assert_eq!(
             backup_file(&path, 4).file_name().unwrap(),
-            "canvas.figcraft.bak.4"
+            "canvas.sawit.bak.4"
         );
 
         // The same board cleared again, saved by another app's undo, say.
@@ -1686,7 +1846,7 @@ mod tests {
     #[test]
     fn deletions_keep_backups_of_their_own_apart_from_a_clears() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         let users = bytes_with(&["the user's board"]);
         std::fs::write(&path, &users).unwrap();
         let writer = Writer::spawn();
@@ -1720,11 +1880,11 @@ mod tests {
         assert!(!deletion_backup_file(&path, BACKUPS).exists());
         assert_eq!(
             deletion_backup_file(&path, 0).file_name().unwrap(),
-            "canvas.figcraft.del.bak"
+            "canvas.sawit.del.bak"
         );
         assert_eq!(
             deletion_backup_file(&path, 4).file_name().unwrap(),
-            "canvas.figcraft.del.bak.4"
+            "canvas.sawit.del.bak.4"
         );
     }
 
@@ -1768,7 +1928,7 @@ mod tests {
     #[test]
     fn a_refused_save_leaves_the_backups_as_they_were() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("design.figcraft");
+        let path = dir.path().join("design.sawit");
         let writer = Writer::spawn();
         writer.save(path.clone(), bytes_with(&["kept"]), false);
         writer.flush();
@@ -1791,11 +1951,11 @@ mod tests {
 
     #[test]
     fn emptying_keeps_a_file_that_does_not_load() {
-        // A canvas file another app left unreadable (cut short, or from a newer FigCraft): an
+        // A canvas file another app left unreadable (cut short, or from a newer Sawit): an
         // emptying save can't tell that it had no layers, so it keeps it, as the old canvas
         // kept a scene it couldn't parse. An empty file has nothing to keep.
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         let bak = sibling(&path, ".bak");
         let writer = Writer::spawn();
         let save_blank = || {
@@ -1818,7 +1978,7 @@ mod tests {
     #[test]
     fn a_failed_backup_stops_the_emptying_save() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         let full = bytes_with(&["keep me"]);
         let writer = Writer::spawn();
         writer.save(path.clone(), full.clone(), false);
@@ -1828,7 +1988,7 @@ mod tests {
         writer.save(path.clone(), blank(), true);
         writer.flush();
         let error = writer.last_error().unwrap();
-        assert!(error.contains("canvas.figcraft.bak"), "{error}");
+        assert!(error.contains("canvas.sawit.bak"), "{error}");
         assert_eq!(
             std::fs::read(&path).unwrap(),
             full,
@@ -1842,13 +2002,13 @@ mod tests {
         // A regular file where the folder should be.
         let blocker = dir.path().join("not-a-folder");
         std::fs::write(&blocker, b"x").unwrap();
-        let path = blocker.join("canvas.figcraft");
+        let path = blocker.join("canvas.sawit");
         let writer = Writer::spawn();
         assert_eq!(writer.last_error(), None);
         writer.save(path, bytes_with(&["hi"]), false);
         writer.flush();
         let error = writer.last_error().unwrap();
-        assert!(error.contains("canvas.figcraft"), "{error}");
+        assert!(error.contains("canvas.sawit"), "{error}");
         assert_eq!(std::fs::read(&blocker).unwrap(), b"x");
     }
 
@@ -1857,9 +2017,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let blocker = dir.path().join("not-a-folder");
         std::fs::write(&blocker, b"x").unwrap();
-        let good = dir.path().join("canvas.figcraft");
+        let good = dir.path().join("canvas.sawit");
         let writer = Writer::spawn();
-        writer.save(blocker.join("canvas.figcraft"), bytes_with(&["a"]), false);
+        writer.save(blocker.join("canvas.sawit"), bytes_with(&["a"]), false);
         writer.flush();
         assert!(writer.last_error().is_some());
         // A flush with nothing queued doesn't count as a save that went through.
@@ -1874,9 +2034,9 @@ mod tests {
     #[test]
     fn saves_leave_no_temporary_file() {
         let dir = tempdir().unwrap();
-        let good = dir.path().join("good.figcraft");
+        let good = dir.path().join("good.sawit");
         // A folder where the file should be: the rename fails, after the temporary file is made.
-        let bad = dir.path().join("bad.figcraft");
+        let bad = dir.path().join("bad.sawit");
         std::fs::create_dir(&bad).unwrap();
         let writer = Writer::spawn();
         writer.save(good, bytes_with(&["a"]), false);
@@ -1884,7 +2044,7 @@ mod tests {
         writer.flush();
         assert!(writer.last_error().is_some());
         assert!(bad.is_dir());
-        assert_eq!(names(dir.path()), ["bad.figcraft", "good.figcraft"]);
+        assert_eq!(names(dir.path()), ["bad.sawit", "good.sawit"]);
     }
 
     #[test]
@@ -1893,7 +2053,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let folder = dir.path().join("boards");
         std::fs::create_dir(&folder).unwrap();
-        let path = folder.join("canvas.figcraft");
+        let path = folder.join("canvas.sawit");
         let writer = Writer::spawn();
         writer.save(path.clone(), bytes_with(&["old"]), false);
         writer.flush();
@@ -1909,7 +2069,7 @@ mod tests {
         let board = open(&path).unwrap();
         assert!(has_text(&board, "old"));
         assert!(!has_text(&board, "new"));
-        assert_eq!(names(&folder), ["canvas.figcraft"]);
+        assert_eq!(names(&folder), ["canvas.sawit"]);
     }
 
     #[test]
@@ -1919,9 +2079,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let elsewhere = dir.path().join("boards");
         std::fs::create_dir(&elsewhere).unwrap();
-        let target = elsewhere.join("plan.figcraft");
+        let target = elsewhere.join("plan.sawit");
         std::fs::write(&target, bytes_with(&["old"])).unwrap();
-        let link = dir.path().join("plan.figcraft");
+        let link = dir.path().join("plan.sawit");
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
         let writer = Writer::spawn();
@@ -1935,13 +2095,13 @@ mod tests {
         assert!(has_text(&saved, "new"));
         assert!(!has_text(&saved, "old"));
         // Nothing is left beside either of them.
-        assert_eq!(names(dir.path()), ["boards", "plan.figcraft"]);
-        assert_eq!(names(&elsewhere), ["plan.figcraft"]);
+        assert_eq!(names(dir.path()), ["boards", "plan.sawit"]);
+        assert_eq!(names(&elsewhere), ["plan.sawit"]);
     }
 
     /// CANVAS-CORE-1: a cloned repository can hold links at the names the canvas writes beside its
     /// file: its backups (`.lossy.bak`, `.bak`) and where a save was staged
-    /// (`.canvas.figcraft.sawit-tmp`), to any file of the user's (`~/.zshrc`). Opening the file
+    /// (`.canvas.sawit.sawit-tmp`), to any file of the user's (`~/.zshrc`). Opening the file
     /// with notes, emptying it and saving it never write through them: each link is replaced by
     /// the file, or left alone, and what it names stays as it was.
     #[test]
@@ -1950,7 +2110,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let folder = dir.path().join(".nyawit");
         std::fs::create_dir(&folder).unwrap();
-        let path = folder.join("canvas.figcraft");
+        let path = folder.join("canvas.sawit");
         let original = file_with_a_damaged_image();
         std::fs::write(&path, &original).unwrap();
         let victim = |name: &str| {
@@ -1962,7 +2122,7 @@ mod tests {
         symlink(&lossy, lossy_backup(&path)).unwrap();
         symlink(&bak, sibling(&path, ".bak")).unwrap();
         // A link to a file that isn't there yet, by a relative path, as git checks one out.
-        symlink("../hook", folder.join(".canvas.figcraft.sawit-tmp")).unwrap();
+        symlink("../hook", folder.join(".canvas.sawit.sawit-tmp")).unwrap();
 
         // Opened with notes, the original is kept in place of the link.
         let (_, issues) = open_with_issues(&path).unwrap();
@@ -2003,7 +2163,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
         // A file only its owner may read stays so: a save doesn't make it readable by everyone.
         let dir = tempdir().unwrap();
-        let path = dir.path().join("private.figcraft");
+        let path = dir.path().join("private.sawit");
         std::fs::write(&path, bytes_with(&["old"])).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
@@ -2019,9 +2179,9 @@ mod tests {
     #[test]
     fn a_stamp_tells_a_file_written_since() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         assert_eq!(Stamp::of(&path), None, "no file");
-        let folder = dir.path().join("folder.figcraft");
+        let folder = dir.path().join("folder.sawit");
         std::fs::create_dir(&folder).unwrap();
         assert_eq!(Stamp::of(&folder), None, "a folder");
         std::fs::write(&path, b"one").unwrap();
@@ -2030,7 +2190,7 @@ mod tests {
         std::fs::write(&path, b"three").unwrap();
         assert_ne!(Stamp::of(&path), Some(first), "written since");
         // Through a symlink, it is its target's.
-        let link = dir.path().join("link.figcraft");
+        let link = dir.path().join("link.sawit");
         std::os::unix::fs::symlink(&path, &link).unwrap();
         assert_eq!(Stamp::of(&link), Stamp::of(&path));
     }
@@ -2038,7 +2198,7 @@ mod tests {
     #[test]
     fn a_guarded_file_changed_on_disk_is_not_saved_over() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("design.figcraft");
+        let path = dir.path().join("design.sawit");
         std::fs::write(&path, bytes_with(&["read"])).unwrap();
         let writer = Writer::spawn();
         // Stamped before the canvas reads it, as a canvas tab opens its file.
@@ -2064,7 +2224,7 @@ mod tests {
         writer.flush();
         assert!(writer.last_error().is_some());
         assert_eq!(std::fs::read(&path).unwrap(), theirs);
-        assert_eq!(names(dir.path()), ["design.figcraft"]);
+        assert_eq!(names(dir.path()), ["design.sawit"]);
     }
 
     #[test]
@@ -2072,9 +2232,9 @@ mod tests {
         let dir = tempdir().unwrap();
         // A file that was there when the canvas read it, and one that wasn't, which its first
         // save makes.
-        let read = dir.path().join("read.figcraft");
+        let read = dir.path().join("read.sawit");
         std::fs::write(&read, bytes_with(&["read"])).unwrap();
-        let new = dir.path().join("new.figcraft");
+        let new = dir.path().join("new.sawit");
         let writer = Writer::spawn();
         for path in [&read, &new] {
             writer.guard(path.clone(), Stamp::of(path));
@@ -2103,14 +2263,14 @@ mod tests {
     }
 
     /// CANVAS-CORE-5: a canvas that found no file at its path (a project's canvas not saved yet,
-    /// an imported `.excalidraw` file's `.figcraft`) refuses to save over a file made there since:
+    /// an imported `.excalidraw` file's `.sawit`) refuses to save over a file made there since:
     /// another window's canvas of the same file, `sawit -n`, a `git pull` of a committed
     /// `.nyawit/`, a headless sawit-mcp. Its first save used to replace that file without a word.
     /// The writer's own first save is still written, and guards the file from then on.
     #[test]
     fn a_file_made_since_the_canvas_found_none_is_not_saved_over() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         let writer = Writer::spawn();
         writer.guard(path.clone(), Stamp::of(&path));
         let theirs = bytes_with(&["theirs"]);
@@ -2126,14 +2286,14 @@ mod tests {
         writer.flush();
         assert!(writer.last_error().is_some());
         assert_eq!(std::fs::read(&path).unwrap(), theirs);
-        assert_eq!(names(dir.path()), ["canvas.figcraft"]);
+        assert_eq!(names(dir.path()), ["canvas.sawit"]);
     }
 
     #[test]
     fn an_unguarded_file_is_saved_whatever_wrote_to_it_since() {
         // As sawit-mcp saves a canvas file that no canvas tab has open: every save writes.
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         std::fs::write(&path, bytes_with(&["theirs"])).unwrap();
         let writer = Writer::spawn();
         writer.save(path.clone(), bytes_with(&["one"]), false);
@@ -2145,7 +2305,7 @@ mod tests {
         assert!(has_text(&open(&path).unwrap(), "two"));
 
         // A guarded file that is gone has nothing to replace: the save makes it again.
-        let gone = dir.path().join("gone.figcraft");
+        let gone = dir.path().join("gone.sawit");
         std::fs::write(&gone, bytes_with(&["read"])).unwrap();
         writer.guard(gone.clone(), Stamp::of(&gone));
         std::fs::remove_file(&gone).unwrap();
@@ -2161,7 +2321,7 @@ mod tests {
     #[test]
     fn a_guarded_file_written_again_where_it_had_gone_leaves_a_note() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         std::fs::write(&path, bytes_with(&["read"])).unwrap();
         let writer = Writer::spawn();
         writer.guard(path.clone(), Stamp::of(&path));
@@ -2176,7 +2336,7 @@ mod tests {
         assert!(has_text(&open(&path).unwrap(), "two"));
         let note = writer.take_notice().expect("no note");
         assert!(
-            note.starts_with("canvas.figcraft was no longer in ")
+            note.starts_with("canvas.sawit was no longer in ")
                 && note.contains("saved it there again"),
             "{note}"
         );
@@ -2193,7 +2353,7 @@ mod tests {
 
         // A file that wasn't there when the canvas opened, which its first save makes, is no
         // file that went: no note.
-        let new = dir.path().join("new.figcraft");
+        let new = dir.path().join("new.sawit");
         writer.guard(new.clone(), Stamp::of(&new));
         writer.save(new.clone(), bytes_with(&["new"]), false);
         writer.flush();
@@ -2205,7 +2365,7 @@ mod tests {
     #[test]
     fn a_guard_follows_its_file_to_its_new_place() {
         let dir = tempdir().unwrap();
-        let (from, to) = (dir.path().join("a.figcraft"), dir.path().join("b.figcraft"));
+        let (from, to) = (dir.path().join("a.sawit"), dir.path().join("b.sawit"));
         std::fs::write(&from, bytes_with(&["read"])).unwrap();
         let writer = Writer::spawn();
         writer.guard(from.clone(), Stamp::of(&from));
@@ -2234,16 +2394,16 @@ mod tests {
             stamps: Arc::default(),
             thread: None,
         };
-        writer.save("/nowhere/canvas.figcraft".into(), blank(), false);
+        writer.save("/nowhere/canvas.sawit".into(), blank(), false);
         let error = writer.last_error().unwrap();
-        assert!(error.contains("/nowhere/canvas.figcraft"), "{error}");
+        assert!(error.contains("/nowhere/canvas.sawit"), "{error}");
         writer.flush();
     }
 
     #[test]
     fn dropping_the_writer_finishes_what_is_queued() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("canvas.figcraft");
+        let path = dir.path().join("canvas.sawit");
         {
             let writer = Writer::spawn();
             writer.save(path.clone(), bytes_with(&["hi"]), false);

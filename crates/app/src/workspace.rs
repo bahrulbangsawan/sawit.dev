@@ -625,7 +625,7 @@ impl Workspace {
         let kind = classify(&path);
         // Canvas files open on a canvas (spec D14), which takes the keyboard, as a file editor
         // does once its file has loaded (CANVAS-UI-2).
-        if matches!(kind, FileKind::Figcraft | FileKind::Excalidraw) {
+        if matches!(kind, FileKind::Canvas | FileKind::Excalidraw) {
             if let Some(board) = self.open_board_file(path, kind, cx) {
                 board.update(cx, |board, cx| board.take_keyboard(cx));
             }
@@ -690,15 +690,16 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Opens a canvas file in a canvas tab (spec D14): a `.figcraft` file bound to itself, or an
-    /// `.excalidraw` file imported and bound to the `<stem>.figcraft` beside it
-    /// ([`BoardView::import`]).
+    /// Opens a canvas file in a canvas tab (spec D14): a `.sawit` file (or a `.figcraft` one, as
+    /// canvas files were named before) bound to itself, or an `.excalidraw` file imported and
+    /// bound to the `<stem>.sawit` beside it ([`BoardView::import`]).
     ///
     /// A file has one canvas in the window, whichever of its two names opens it, because two
     /// canvases of one file would each save over the other's edits. A project's canvas file is
-    /// that project's canvas tab ([`Self::open_canvas_of`]); any other file's tab is keyed by the
-    /// `.figcraft` file it is bound to, and shown again when the file is opened again. The canvas
-    /// shown.
+    /// that project's canvas tab ([`Self::open_canvas_of`]), its old name
+    /// (`.nyawit/canvas.figcraft`) too, which moves it to its new one ([`store::bound_file`]); any
+    /// other file's tab is keyed by the canvas file it is bound to, and shown again when the file
+    /// is opened again. The canvas shown.
     fn open_board_file(
         &mut self,
         path: PathBuf,
@@ -716,7 +717,7 @@ impl Workspace {
         }
         let view = cx.new(|cx| match kind {
             FileKind::Excalidraw => BoardView::import(path, cx),
-            _ => BoardView::open(path, cx),
+            _ => BoardView::open(file.clone(), cx),
         });
         cx.subscribe(&view, |this, _, _: &ToggleCanvasMaximize, cx| {
             this.toggle_canvas_maximized(cx)
@@ -744,13 +745,13 @@ impl Workspace {
     }
 
     /// Whether a canvas tab of this window shows the canvas of the canvas file at `path`
-    /// ([`Self::board_tab`]): an `.excalidraw` file's is the one bound to the `.figcraft` file
+    /// ([`Self::board_tab`]): an `.excalidraw` file's is the one bound to the `.sawit` file
     /// beside it. An agent's op on that file goes to this window ([`crate::cli`]).
     pub(crate) fn shows_canvas_file(&self, path: &Path, cx: &App) -> bool {
         self.board_tab(&store::bound_file(path), cx).is_some()
     }
 
-    /// The tab of the canvas bound to the `.figcraft` file `file` ([`BoardView::path`]), and the
+    /// The tab of the canvas bound to the canvas file `file` ([`BoardView::path`]), and the
     /// canvas, whatever opened it: a project's canvas tab, or a canvas file's. Named through a
     /// link or as written, it is one file ([`same_canvas_file`]).
     fn board_tab(&self, file: &Path, cx: &App) -> Option<(usize, Entity<BoardView>)> {
@@ -2206,7 +2207,7 @@ impl Workspace {
     /// follow it: a file editor's, a canvas file's, whose canvas saves
     /// there from now on ([`BoardView::rebind`], CANVAS-UI-3), an image's, a
     /// PDF's and a video's, and a Find in Folder tab its folder and the files it
-    /// found. A project's canvas stays the project's, `.nyawit/canvas.figcraft`
+    /// found. A project's canvas stays the project's, `.nyawit/canvas.sawit`
     /// by definition. A History tab keeps the path it lists the commits of: git
     /// knows them by that path until the move is committed.
     fn follow_move(&mut self, from: &Path, to: &Path, cx: &mut Context<Self>) {
@@ -2410,7 +2411,7 @@ impl Workspace {
 
     /// Opens the active project's brainstorming canvas (one tab per
     /// project, saved in its `.nyawit/`), or the app-wide one without a
-    /// project. Its file is `.nyawit/canvas.figcraft` (else `canvas.figcraft`
+    /// project. Its file is `.nyawit/canvas.sawit` (else `canvas.sawit`
     /// in Sawit's own folder).
     fn open_canvas(&mut self, cx: &mut Context<Self>) -> Option<Entity<BoardView>> {
         let root = self.root(cx);
@@ -2457,7 +2458,8 @@ impl Workspace {
             };
             return view.clone().downcast::<BoardView>().ok();
         }
-        let file = board_file(root.as_deref(), &AppPaths::default_macos().root);
+        // A canvas kept under the name it had before moves to its name now first, with its backups.
+        let file = store::migrated_board_file(root.as_deref(), &AppPaths::default_macos().root);
         if let Some((ix, board)) = self.board_tab(&file, cx) {
             self.activate_tab(ix, cx);
             return Some(board);
@@ -3392,8 +3394,8 @@ fn canvas_project(
 
 /// Whether `a` and `b` name one canvas file: as written, or through the links on their way, the
 /// file there yet or not (CANVAS-UI-4). An agent's `app_open` passes its path as given, where the
-/// CLI's paths and the projects' folders are resolved: `/tmp/p/x.figcraft` is
-/// `/private/tmp/p/x.figcraft` on macOS. Two canvases of one file would each save over the
+/// CLI's paths and the projects' folders are resolved: `/tmp/p/x.sawit` is
+/// `/private/tmp/p/x.sawit` on macOS. Two canvases of one file would each save over the
 /// other's edits.
 fn same_canvas_file(a: &Path, b: &Path) -> bool {
     use sawit_core::files::resolve;
@@ -3496,16 +3498,16 @@ mod tests {
         let roots = vec![Some(a.clone()), Some(b.clone()), None];
         let project = |file: &str| canvas_project(Path::new(file), roots.clone(), app);
         // Each project's canvas file, and for the project with no folder the app's own.
-        assert_eq!(project("/work/b/.nyawit/canvas.figcraft"), Some(Some(b)));
-        assert_eq!(project("/work/a/.nyawit/canvas.figcraft"), Some(Some(a)));
-        assert_eq!(project("/support/sawit/canvas.figcraft"), Some(None));
+        assert_eq!(project("/work/b/.nyawit/canvas.sawit"), Some(Some(b)));
+        assert_eq!(project("/work/a/.nyawit/canvas.sawit"), Some(Some(a)));
+        assert_eq!(project("/support/sawit/canvas.sawit"), Some(None));
         // Any other file is one of its own: another file in `.nyawit`, a canvas file elsewhere,
         // the canvas file of a project the window doesn't have.
-        assert_eq!(project("/work/a/.nyawit/sketch.figcraft"), None);
-        assert_eq!(project("/work/a/canvas.figcraft"), None);
-        assert_eq!(project("/work/c/.nyawit/canvas.figcraft"), None);
+        assert_eq!(project("/work/a/.nyawit/sketch.sawit"), None);
+        assert_eq!(project("/work/a/canvas.sawit"), None);
+        assert_eq!(project("/work/c/.nyawit/canvas.sawit"), None);
         // With every project in a folder, the app's canvas file is one of its own too.
-        let app_canvas = Path::new("/support/sawit/canvas.figcraft");
+        let app_canvas = Path::new("/support/sawit/canvas.sawit");
         let folders = [Some(PathBuf::from("/work/a"))];
         assert_eq!(canvas_project(app_canvas, folders, app), None);
     }
@@ -3518,21 +3520,21 @@ mod tests {
         let moved = |path: &str| moved_to(Path::new(path), from, to);
         assert_eq!(moved("/p/sub"), Some(PathBuf::from("/p/moved")));
         assert_eq!(
-            moved("/p/sub/a.figcraft"),
-            Some(PathBuf::from("/p/moved/a.figcraft"))
+            moved("/p/sub/a.sawit"),
+            Some(PathBuf::from("/p/moved/a.sawit"))
         );
         assert_eq!(
-            moved("/p/sub/deeper/b.figcraft"),
-            Some(PathBuf::from("/p/moved/deeper/b.figcraft"))
+            moved("/p/sub/deeper/b.sawit"),
+            Some(PathBuf::from("/p/moved/deeper/b.sawit"))
         );
         // Beside it, or with a name that only starts the same: where it was.
-        assert_eq!(moved("/p/other.figcraft"), None);
-        assert_eq!(moved("/p/sub2/a.figcraft"), None);
+        assert_eq!(moved("/p/other.sawit"), None);
+        assert_eq!(moved("/p/sub2/a.sawit"), None);
         assert_eq!(moved("/p"), None);
     }
 
     /// CANVAS-UI-4: a project's canvas file named through a link (an agent's `app_open` of
-    /// `/tmp/p/.nyawit/canvas.figcraft` for the project at `/private/tmp/p`, `/tmp` being a link
+    /// `/tmp/p/.nyawit/canvas.sawit` for the project at `/private/tmp/p`, `/tmp` being a link
     /// on macOS) is that project's canvas still, whether `.nyawit/` is there yet or not: one
     /// canvas per file. Compared as written, it was a file of its own, and a second canvas of it
     /// opened in a tab, whose saves the first one's refused.
@@ -3549,19 +3551,19 @@ mod tests {
         std::os::unix::fs::symlink(&project, &link).unwrap();
         let app = Path::new("/support/sawit");
         let roots = || vec![Some(project.clone()), None];
-        let aliased = link.join(".nyawit").join("canvas.figcraft");
+        let aliased = link.join(".nyawit").join("canvas.sawit");
         assert_eq!(
             canvas_project(&aliased, roots(), app),
             Some(Some(project.clone()))
         );
         std::fs::create_dir_all(project.join(".nyawit")).unwrap();
-        std::fs::write(project.join(".nyawit/canvas.figcraft"), b"").unwrap();
+        std::fs::write(project.join(".nyawit/canvas.sawit"), b"").unwrap();
         assert_eq!(
             canvas_project(&aliased, roots(), app),
             Some(Some(project.clone()))
         );
         // Another file through the link is still one of its own.
-        let other = link.join(".nyawit").join("sketch.figcraft");
+        let other = link.join(".nyawit").join("sketch.sawit");
         assert_eq!(canvas_project(&other, roots(), app), None);
         let _ = std::fs::remove_dir_all(&scratch);
     }

@@ -5,7 +5,7 @@
 //! - **Import from file…** and **Place image…** ask for files, and bring each one into the middle
 //!   of the view (`sawit_board::ops::import_file`).
 //! - **Save** writes the canvas's file now, rather than once the canvas has been still for a
-//!   moment. **Save as…** asks where, and writes a copy of the canvas there as a `.figcraft` file;
+//!   moment. **Save as…** asks where, and writes a copy of the canvas there as a `.sawit` file;
 //!   the canvas stays bound to its own file.
 //! - **Export**, **Export as SVG** and **Export frames to PDF** write the selection, or the page,
 //!   into the canvas's exports folder, and show the first file in the Finder
@@ -24,13 +24,11 @@ use gpui_kit::*;
 use sawit_board::ops::{self, Copied};
 use sawit_board::store::{self, Writer};
 use sawit_board::{BoardDoc, BoardError};
+use sawit_core::files::{CANVAS_EXTENSION, LEGACY_CANVAS_EXTENSION};
 use sawit_core::instances::AppPaths;
 use sawit_core::nyawit;
 
 use super::BoardView;
-
-/// The extension of the files Save as… writes.
-const FIGCRAFT: &str = "figcraft";
 
 /// Carries out command `id`, one of `sawit_board::policy::UI_COMMANDS`, as a click on its menu
 /// item or its shortcut does ([`BoardView::run_menu`], [`BoardView::on_key`]). A canvas whose file
@@ -131,7 +129,9 @@ fn import_files(view: &mut BoardView, paths: &[PathBuf], place: bool, cx: &mut C
 fn save_as(view: &BoardView, window: &mut Window, cx: &mut Context<BoardView>) {
     let canvas = view.path();
     let folder = save_as_folder(canvas, || AppPaths::default_macos().root, home);
-    let name = canvas.file_name().unwrap_or_default().to_string_lossy();
+    // A copy is a `.sawit` file, a canvas opened from a `.figcraft` file's too.
+    let name = Path::new(canvas.file_name().unwrap_or_default()).with_extension(CANVAS_EXTENSION);
+    let name = name.to_string_lossy();
     let picked = cx.prompt_for_new_path(&folder, Some(name.as_ref()));
     cx.spawn_in(window, async move |this, cx| {
         let Ok(Ok(Some(path))) = picked.await else {
@@ -170,12 +170,12 @@ fn home() -> PathBuf {
     std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
 }
 
-/// Writes the canvas as a `.figcraft` file at `path`, chosen in Save as…'s dialog
-/// ([`figcraft_path`]), and says so in a toast, or why it couldn't. The canvas's own file is saved
+/// Writes the canvas as a `.sawit` file at `path`, chosen in Save as…'s dialog
+/// ([`canvas_path`]), and says so in a toast, or why it couldn't. The canvas's own file is saved
 /// as Save saves it; any other gets a copy, which the canvas doesn't follow: it goes on saving to
 /// its own file.
 fn save_copy(view: &mut BoardView, path: PathBuf, cx: &mut Context<BoardView>) {
-    let saved = figcraft_path(path).and_then(|path| {
+    let saved = canvas_path(path).and_then(|path| {
         if same_file(&path, view.path()) {
             return save(view);
         }
@@ -188,18 +188,21 @@ fn save_copy(view: &mut BoardView, path: PathBuf, cx: &mut Context<BoardView>) {
 }
 
 /// `path` as the file Save as… writes, as FigCraft's own Save as takes it: one without an
-/// extension gets `.figcraft`, unless a file of that name is there already, which only its full
-/// name replaces (the dialog asked about the name without it). Any other extension is refused.
-fn figcraft_path(mut path: PathBuf) -> Result<PathBuf, String> {
+/// extension gets `.sawit`, unless a file of that name is there already, which only its full name
+/// replaces (the dialog asked about the name without it). A `.figcraft` name, the extension canvas
+/// files had before (the name of a file opened from before, say), is written as it is named. Any
+/// other extension is refused.
+fn canvas_path(mut path: PathBuf) -> Result<PathBuf, String> {
+    let is = |ext: &OsStr, wanted: &str| ext.eq_ignore_ascii_case(wanted);
     match path.extension() {
-        Some(ext) if ext.eq_ignore_ascii_case(FIGCRAFT) => Ok(path),
-        Some(ext) if !ext.is_empty() => Err(format!("Use the .{FIGCRAFT} extension.")),
+        Some(ext) if is(ext, CANVAS_EXTENSION) || is(ext, LEGACY_CANVAS_EXTENSION) => Ok(path),
+        Some(ext) if !ext.is_empty() => Err(format!("Use the .{CANVAS_EXTENSION} extension.")),
         _ => {
-            path.set_extension(FIGCRAFT);
+            path.set_extension(CANVAS_EXTENSION);
             if path.exists() {
                 return Err(format!(
-                    "A .{FIGCRAFT} file with this name already exists. Choose its full name to \
-                     confirm replacement."
+                    "A .{CANVAS_EXTENSION} file with this name already exists. Choose its full \
+                     name to confirm replacement."
                 ));
             }
             Ok(path)
@@ -359,7 +362,7 @@ mod tests {
         let (view, mut cx) = chrome_canvas(cx, &tmp);
         run_op(&view, sticky_op(), &mut cx);
         view.update(&mut cx, |view, _| view.flush());
-        let canvas = tmp.0.join("canvas.figcraft");
+        let canvas = tmp.0.join("canvas.sawit");
         let (files, saved) = (names(&tmp.0), std::fs::read(&canvas).unwrap());
         run_ui(&view, "file.saveAs", &mut cx);
         cx.simulate_new_path_selection(|_| None);
@@ -429,7 +432,7 @@ mod tests {
         let tmp = Scratch::new("save-as");
         let (view, mut cx) = chrome_canvas(cx, &tmp);
         run_op(&view, sticky_op(), &mut cx);
-        let copy = tmp.0.join("copy.figcraft");
+        let copy = tmp.0.join("copy.sawit");
         run_ui(&view, "file.saveAs", &mut cx);
         let folder = tmp.0.clone();
         let answer = copy.clone();
@@ -441,9 +444,9 @@ mod tests {
         assert_eq!(saved_layers(&copy), 1);
         assert_eq!(
             toast(&view, &cx).as_deref(),
-            Some("Saved a copy as copy.figcraft")
+            Some("Saved a copy as copy.sawit")
         );
-        let canvas = tmp.0.join("canvas.figcraft");
+        let canvas = tmp.0.join("canvas.sawit");
         assert_eq!(
             view.read_with(&cx, |view, _| view.path().to_path_buf()),
             canvas
@@ -455,13 +458,14 @@ mod tests {
     }
 
     /// Save as… onto the canvas's own file saves it, as Save does. A name without an extension
-    /// is given `.figcraft`, and another extension is refused.
+    /// is given `.sawit`, one with `.figcraft` (canvas files' extension before) is written as it
+    /// is named, and another extension is refused.
     #[gpui_kit::test]
-    fn save_as_writes_only_figcraft_files(cx: &mut TestAppContext) {
+    fn save_as_writes_only_canvas_files(cx: &mut TestAppContext) {
         let tmp = Scratch::new("save-as-names");
         let (view, mut cx) = chrome_canvas(cx, &tmp);
         run_op(&view, sticky_op(), &mut cx);
-        let canvas = tmp.0.join("canvas.figcraft");
+        let canvas = tmp.0.join("canvas.sawit");
         assert_eq!(
             save_as(&view, canvas.clone(), &mut cx).as_deref(),
             Some("Saved")
@@ -470,16 +474,22 @@ mod tests {
         let bare = tmp.0.join("copy");
         assert_eq!(
             save_as(&view, bare.clone(), &mut cx).as_deref(),
-            Some("Saved a copy as copy.figcraft")
+            Some("Saved a copy as copy.sawit")
         );
-        assert_eq!(saved_layers(&tmp.0.join("copy.figcraft")), 1);
+        assert_eq!(saved_layers(&tmp.0.join("copy.sawit")), 1);
         assert!(!bare.exists());
         // That name again: the file is there now, and only its full name replaces it.
         let refused = save_as(&view, bare, &mut cx).unwrap_or_default();
         assert!(refused.contains("already"), "{refused}");
+        let before = tmp.0.join("copy.figcraft");
+        assert_eq!(
+            save_as(&view, before.clone(), &mut cx).as_deref(),
+            Some("Saved a copy as copy.figcraft")
+        );
+        assert_eq!(saved_layers(&before), 1);
         let png = tmp.0.join("copy.png");
         let refused = save_as(&view, png.clone(), &mut cx).unwrap_or_default();
-        assert!(refused.contains(".figcraft"), "{refused}");
+        assert!(refused.contains(".sawit"), "{refused}");
         assert!(!png.exists());
     }
 
@@ -510,9 +520,9 @@ mod tests {
     fn one_file_under_two_names_is_the_same_file() {
         let tmp = Scratch::new("same-file");
         let (file, link, other) = (
-            tmp.0.join("canvas.figcraft"),
-            tmp.0.join("link.figcraft"),
-            tmp.0.join("other.figcraft"),
+            tmp.0.join("canvas.sawit"),
+            tmp.0.join("link.sawit"),
+            tmp.0.join("other.sawit"),
         );
         std::fs::write(&file, "a").unwrap();
         std::fs::write(&other, "a").unwrap();
@@ -521,7 +531,7 @@ mod tests {
         assert!(super::same_file(&link, &file));
         assert!(!super::same_file(&other, &file));
         // A file that isn't there yet is only itself.
-        let new = tmp.0.join("new.figcraft");
+        let new = tmp.0.join("new.sawit");
         assert!(super::same_file(&new, &new));
         assert!(!super::same_file(&new, &file));
     }
@@ -530,10 +540,10 @@ mod tests {
     fn save_as_begins_in_the_project_or_the_canvas_files_folder() {
         let (app, home) = (|| PathBuf::from("/app"), || PathBuf::from("/home/me"));
         for (canvas, folder) in [
-            ("/proj/.nyawit/canvas.figcraft", "/proj"),
+            ("/proj/.nyawit/canvas.sawit", "/proj"),
             // The canvas without a project is in Sawit's own folder, which is no place for a copy.
-            ("/app/canvas.figcraft", "/home/me"),
-            ("/proj/designs/card.figcraft", "/proj/designs"),
+            ("/app/canvas.sawit", "/home/me"),
+            ("/proj/designs/card.sawit", "/proj/designs"),
         ] {
             let begins = super::save_as_folder(Path::new(canvas), app, home);
             assert_eq!(begins, Path::new(folder), "{canvas}");

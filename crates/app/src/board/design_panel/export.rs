@@ -455,7 +455,7 @@ mod tests {
     };
     use super::{exports_folder, file_name, file_stem, scale_name, with_another};
 
-    /// The canvas file of a project at `project`, `.nyawit/canvas.figcraft`, written with the
+    /// The canvas file of a project at `project`, `.nyawit/canvas.sawit`, written with the
     /// layers `design` makes; their ids.
     fn project_canvas(
         project: &Path,
@@ -615,7 +615,7 @@ mod tests {
     #[gpui_kit::test]
     fn the_export_section_edits_the_settings(cx: &mut TestAppContext) {
         let tmp = Scratch::new("export-rows");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let mut design = Design::new();
         let id = card(&mut design, "Card", 0.0);
         design.save(&path);
@@ -654,14 +654,14 @@ mod tests {
     fn exports_go_to_the_project_or_to_sawits_own_folder() {
         let app = || PathBuf::from("/app");
         assert_eq!(
-            exports_folder(Path::new("/proj/.nyawit/canvas.figcraft"), app),
+            exports_folder(Path::new("/proj/.nyawit/canvas.sawit"), app),
             (
                 PathBuf::from("/proj/.nyawit/exports"),
                 Some(PathBuf::from("/proj"))
             )
         );
         // The canvas without a project, and a file opened from a project's tree.
-        for board in ["/app/canvas.figcraft", "/proj/designs/card.figcraft"] {
+        for board in ["/app/canvas.sawit", "/proj/designs/card.sawit"] {
             assert_eq!(
                 exports_folder(Path::new(board), app),
                 (PathBuf::from("/app/exports"), None),

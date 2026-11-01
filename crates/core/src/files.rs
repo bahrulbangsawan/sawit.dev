@@ -113,7 +113,7 @@ pub fn read_regular(path: &Path, max: u64) -> std::io::Result<Vec<u8>> {
 /// Checks the file at `path` as [`read_regular`] does before it reads, and
 /// reads nothing: `Ok` for a regular file (a link is followed) of at most
 /// `max` bytes, else the error `read_regular` gives. It is for a file that
-/// something else reads next, by its path, as FigCraft's engine reads the
+/// something else reads next, by its path, as the canvas engine reads the
 /// file its `file.import` names: a pipe or a device is told at once, as the
 /// open doesn't block. Something that replaces the file in between isn't
 /// caught, which only a process of the user's own could do.
@@ -370,7 +370,7 @@ pub fn remove(path: &Path) -> Result<()> {
 /// `path` with the links on its way resolved, as far as it exists: the longest part of it that
 /// is there, as [`std::fs::canonicalize`] gives it, then the rest as written. Two names of one
 /// place give one path this way, whether the file is there yet or not: on macOS
-/// `/tmp/p/.nyawit/canvas.figcraft` and `/private/tmp/p/.nyawit/canvas.figcraft`, `/tmp` being a
+/// `/tmp/p/.nyawit/canvas.sawit` and `/private/tmp/p/.nyawit/canvas.sawit`, `/tmp` being a
 /// link, before `.nyawit/` is made. A path none of which can be looked up stays as it is.
 pub fn resolve(path: &Path) -> PathBuf {
     let mut rest = Vec::new();
@@ -530,12 +530,23 @@ pub enum FileKind {
     Image,
     Pdf,
     Video,
-    /// A FigCraft document (`.figcraft`), shown on a canvas bound to the file.
-    Figcraft,
+    /// A Sawit canvas file (`.sawit`, or `.figcraft`, the extension it had before), shown on a
+    /// canvas bound to the file.
+    Canvas,
     /// An Excalidraw scene (`.excalidraw`), imported onto a canvas that is saved as the
-    /// `.figcraft` file beside it.
+    /// `.sawit` file beside it.
     Excalidraw,
 }
+
+/// The extension of Sawit's canvas files: the project's `canvas.sawit`, and every file Save as…
+/// writes.
+pub const CANVAS_EXTENSION: &str = "sawit";
+
+/// The extension canvas files had before they took Sawit's own: `.figcraft`, the name the canvas
+/// engine (FigCraft) gives its format, which the files still are. Such a file opens on a canvas
+/// and saves where it is; only a project's canvas moves to the new name
+/// ([`crate::nyawit::migrate_canvas`]).
+pub const LEGACY_CANVAS_EXTENSION: &str = "figcraft";
 
 fn extension(path: &Path) -> String {
     path.extension()
@@ -554,7 +565,7 @@ pub fn classify(path: &Path) -> FileKind {
         | "heif" | "avif" => FileKind::Image,
         "pdf" => FileKind::Pdf,
         "mp4" | "m4v" | "mov" | "webm" | "mkv" | "avi" => FileKind::Video,
-        "figcraft" => FileKind::Figcraft,
+        CANVAS_EXTENSION | LEGACY_CANVAS_EXTENSION => FileKind::Canvas,
         "excalidraw" => FileKind::Excalidraw,
         _ => FileKind::Text,
     }
@@ -684,8 +695,8 @@ mod tests {
         std::os::unix::fs::symlink(&real, &link).unwrap();
         let canonical = real.canonicalize().unwrap();
         // A file that is there, one that isn't yet, and one in a folder that isn't yet.
-        fs::write(real.join("a.figcraft"), "").unwrap();
-        for name in ["a.figcraft", "new.figcraft", ".nyawit/canvas.figcraft"] {
+        fs::write(real.join("a.sawit"), "").unwrap();
+        for name in ["a.sawit", "new.sawit", ".nyawit/canvas.sawit"] {
             assert_eq!(resolve(&link.join(name)), canonical.join(name), "{name}");
             assert_eq!(resolve(&real.join(name)), canonical.join(name), "{name}");
         }
@@ -1065,11 +1076,11 @@ mod tests {
     fn write_atomic_writes_bytes_through_a_staging_file() {
         use std::os::unix::fs::PermissionsExt;
         let d = tempfile::tempdir().unwrap();
-        let f = d.path().join("board.figcraft");
+        let f = d.path().join("board.sawit");
         let pid = std::process::id();
         assert_eq!(
             staging_file(&f, 7),
-            d.path().join(format!(".board.figcraft.sawit-tmp-{pid}-7"))
+            d.path().join(format!(".board.sawit.sawit-tmp-{pid}-7"))
         );
         // Bytes that aren't text, to a new file, which gets the usual permissions.
         write_atomic(&f, &[0, 0xFF, 0xFE]).unwrap();
@@ -1078,7 +1089,7 @@ mod tests {
             fs::metadata(&f).unwrap().permissions().mode() & 0o777,
             0o644
         );
-        assert_eq!(names(d.path()), ["board.figcraft"], "a temp file was left");
+        assert_eq!(names(d.path()), ["board.sawit"], "a temp file was left");
     }
 
     /// CANVAS-CORE-1: the temp file is made new, at a name nothing is at. A file, a folder or a
@@ -1088,7 +1099,7 @@ mod tests {
     fn staging_passes_over_a_name_that_is_taken() {
         use std::os::unix::fs::{PermissionsExt, symlink};
         let d = tempfile::tempdir().unwrap();
-        let f = d.path().join("board.figcraft");
+        let f = d.path().join("board.sawit");
         fs::write(&f, "old").unwrap();
         let victim = d.path().join("victim");
         fs::write(&victim, "the user's").unwrap();
@@ -1155,7 +1166,7 @@ mod tests {
     #[test]
     fn two_writers_of_one_file_never_share_a_temp_file() {
         let d = tempfile::tempdir().unwrap();
-        let f = d.path().join("canvas.figcraft");
+        let f = d.path().join("canvas.sawit");
         let [a, b] = (*b"ab").map(|byte| vec![byte; 256 * 1024]);
         std::thread::scope(|scope| {
             for bytes in [&a, &b] {
@@ -1171,7 +1182,7 @@ mod tests {
                 assert!(now == a || now == b, "a mix of both saves");
             }
         });
-        assert_eq!(names(d.path()), ["canvas.figcraft"], "a temp file was left");
+        assert_eq!(names(d.path()), ["canvas.sawit"], "a temp file was left");
     }
 
     /// CANVAS-CORE-1: a cloned repository can hold a link where a save of one of its files was
@@ -1306,18 +1317,24 @@ mod tests {
     }
 
     #[test]
-    fn classify_figcraft_and_excalidraw() {
+    fn classify_canvas_files_by_either_extension_and_excalidraw() {
         use FileKind::*;
         for (file, kind) in [
-            ("board.figcraft", Figcraft),
-            ("/p/.nyawit/canvas.figcraft", Figcraft),
-            ("Board.FIGCRAFT", Figcraft),
+            ("board.sawit", Canvas),
+            ("/p/.nyawit/canvas.sawit", Canvas),
+            ("Board.SAWIT", Canvas),
+            // The extension canvas files had before names a canvas file still.
+            ("board.figcraft", Canvas),
+            ("/p/.nyawit/canvas.figcraft", Canvas),
+            ("Board.FIGCRAFT", Canvas),
             ("sketch.excalidraw", Excalidraw),
             ("/p/.nyawit/canvas.excalidraw", Excalidraw),
             ("Sketch.Excalidraw", Excalidraw),
             // An Excalidraw library, and names without the extension, are something else.
             ("shapes.excalidrawlib", Text),
+            ("sawit", Text),
             ("figcraft", Text),
+            ("canvas.sawit.bak", Text),
             (".excalidraw", Text),
         ] {
             assert_eq!(classify(Path::new(file)), kind, "{file}");

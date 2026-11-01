@@ -665,7 +665,7 @@ mod tests {
     #[gpui_kit::test]
     fn color_pick_is_one_undo_step(cx: &mut TestAppContext) {
         let tmp = Scratch::new("colour-pick");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = with_fills(&path, &[0.0], &[json!(["#D9D9D9"])]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let colour = |cx: &VisualTestContext| prop(&view, ids[0], "fills", cx)[0]["color"].clone();
@@ -697,7 +697,7 @@ mod tests {
     #[gpui_kit::test]
     fn escape_puts_a_colour_pick_back(cx: &mut TestAppContext) {
         let tmp = Scratch::new("colour-escape");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = with_fills(&path, &[0.0], &[json!(["#D9D9D9"])]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let colour = |cx: &VisualTestContext| prop(&view, ids[0], "fills", cx)[0]["color"].clone();
@@ -722,7 +722,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_drag_on_the_canvas_after_a_colour_pick_moves_the_layer(cx: &mut TestAppContext) {
         let tmp = Scratch::new("colour-then-drag");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = with_fills(&path, &[0.0], &[json!(["#D9D9D9"])]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let colour = |cx: &VisualTestContext| prop(&view, ids[0], "fills", cx)[0]["color"].clone();
@@ -761,7 +761,7 @@ mod tests {
     #[gpui_kit::test]
     fn an_op_while_a_colour_is_picked_is_a_step_of_its_own(cx: &mut TestAppContext) {
         let tmp = Scratch::new("colour-then-op");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = with_fills(&path, &[0.0], &[json!(["#D9D9D9"])]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let colour = |cx: &VisualTestContext| prop(&view, ids[0], "fills", cx)[0]["color"].clone();
@@ -800,7 +800,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_value_typed_before_a_colour_pick_stays(cx: &mut TestAppContext) {
         let tmp = Scratch::new("typed-then-colour");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = with_fills(&path, &[0.0], &[json!(["#D9D9D9"])]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let colour = |cx: &VisualTestContext| prop(&view, ids[0], "fills", cx)[0]["color"].clone();
@@ -828,7 +828,7 @@ mod tests {
     #[gpui_kit::test]
     fn escape_in_a_colour_pick_keeps_the_text_typed(cx: &mut TestAppContext) {
         let tmp = Scratch::new("colour-escape-text");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[text_layer("Hello")]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let characters = |cx: &VisualTestContext| prop(&view, ids[0], "characters", cx);
@@ -862,7 +862,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_colour_pick_while_text_is_edited_is_a_step_of_its_own(cx: &mut TestAppContext) {
         let tmp = Scratch::new("colour-commit-text");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[text_layer("Hello")]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let characters = |cx: &VisualTestContext| prop(&view, ids[0], "characters", cx);
@@ -902,7 +902,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_colour_pick_on_a_text_emptied_while_edited_closes(cx: &mut TestAppContext) {
         let tmp = Scratch::new("colour-emptied-text");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[text_layer("Hi")]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         edit_text(&view, ids[0], &mut cx);
@@ -923,7 +923,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_colour_pick_leaves_an_open_pen_path_alone(cx: &mut TestAppContext) {
         let tmp = Scratch::new("colour-pen");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = with_fills(&path, &[0.0], &[json!(["#D9D9D9"])]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let steps = undo_steps(&view, &cx);
@@ -952,7 +952,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_colour_pick_ends_once_its_swatch_is_gone(cx: &mut TestAppContext) {
         let tmp = Scratch::new("colour-out-of-sight");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let fills = json!(["#D9D9D9"]);
         let ids = with_fills(&path, &[0.0, 150.0], &[fills.clone(), fills]);
         let (view, mut cx) = open_in_window(cx, &path, &ids[..1]);
@@ -998,7 +998,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_paints_hex_and_opacity_are_typed(cx: &mut TestAppContext) {
         let tmp = Scratch::new("paint-fields");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let fills = json!(["#D9D9D9"]);
         let ids = with_fills(&path, &[0.0, 150.0], &[fills.clone(), fills]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
@@ -1033,7 +1033,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_gradient_becomes_a_solid_only_when_asked(cx: &mut TestAppContext) {
         let tmp = Scratch::new("paint-gradient");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let gradient = json!({"type": "linearGradient", "stops": ["#FF0000", "#0000FF"]});
         let ids = with_fills(&path, &[0.0], &[json!([gradient, "#112233"])]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
@@ -1055,7 +1055,7 @@ mod tests {
     #[gpui_kit::test]
     fn mixed_fills_are_replaced_all_at_once(cx: &mut TestAppContext) {
         let tmp = Scratch::new("paint-mixed");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = with_fills(
             &path,
             &[0.0, 150.0],
@@ -1089,7 +1089,7 @@ mod tests {
     #[gpui_kit::test]
     fn the_stroke_section_edits_the_strokes(cx: &mut TestAppContext) {
         let tmp = Scratch::new("strokes");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = with_fills(&path, &[0.0], &[json!(["#D9D9D9"])]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let value = |key: &str, cx: &VisualTestContext| prop(&view, ids[0], key, cx);

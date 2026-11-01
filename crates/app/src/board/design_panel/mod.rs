@@ -865,7 +865,7 @@ mod tests {
     #[gpui_kit::test]
     fn scrub_is_one_undo_step(cx: &mut TestAppContext) {
         let tmp = Scratch::new("scrub-one-step");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[rectangle(0.0)]);
         let view = open(cx, &path, &ids);
         let steps = undo_steps(&view, cx);
@@ -887,7 +887,7 @@ mod tests {
     #[gpui_kit::test]
     fn cancelled_scrub_restores(cx: &mut TestAppContext) {
         let tmp = Scratch::new("scrub-cancel");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[rectangle(0.0)]);
         let view = open(cx, &path, &ids);
         let steps = undo_steps(&view, cx);
@@ -906,7 +906,7 @@ mod tests {
     #[gpui_kit::test]
     fn apply_edit_error_sets_toast(cx: &mut TestAppContext) {
         let tmp = Scratch::new("apply-edit-error");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[rectangle(0.0)]);
         let view = open(cx, &path, &ids);
         let edit = Edit {
@@ -922,7 +922,7 @@ mod tests {
     #[gpui_kit::test]
     fn typing_in_a_field_leaves_the_canvas_keys_alone(cx: &mut TestAppContext) {
         let tmp = Scratch::new("type-in-field");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[rectangle(0.0)]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let tool = |cx: &VisualTestContext| {
@@ -958,7 +958,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_value_typed_over_mixed_goes_to_every_layer(cx: &mut TestAppContext) {
         let tmp = Scratch::new("type-mixed");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[rectangle(0.0), rectangle(150.0)]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         assert_eq!(field_text(&view, "x", &cx), "Mixed");
@@ -987,7 +987,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_field_applies_to_the_layers_it_showed(cx: &mut TestAppContext) {
         let tmp = Scratch::new("field-target");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[rectangle(0.0), rectangle(150.0)]);
         let (view, mut cx) = open_in_window(cx, &path, &ids[..1]);
         click(&mut cx, "design-field-width");
@@ -1008,7 +1008,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_value_typed_then_a_press_on_the_canvas_stays(cx: &mut TestAppContext) {
         let tmp = Scratch::new("typed-then-press");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[rectangle(0.0)]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let steps = undo_steps(&view, &cx);
@@ -1046,7 +1046,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_value_typed_then_a_drag_on_the_canvas_stays(cx: &mut TestAppContext) {
         let tmp = Scratch::new("typed-then-drag");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[rectangle(0.0)]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let steps = undo_steps(&view, &cx);
@@ -1071,7 +1071,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_label_drag_scrubs_as_one_undo_step(cx: &mut TestAppContext) {
         let tmp = Scratch::new("label-drag");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[rectangle(0.0)]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let steps = undo_steps(&view, &cx);
@@ -1116,7 +1116,7 @@ mod tests {
     #[gpui_kit::test]
     fn hiding_the_canvas_ends_a_label_scrub_kept(cx: &mut TestAppContext) {
         let tmp = Scratch::new("label-hidden");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[rectangle(0.0)]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let steps = undo_steps(&view, &cx);
@@ -1140,7 +1140,7 @@ mod tests {
     #[gpui_kit::test]
     fn escape_puts_a_label_scrub_back(cx: &mut TestAppContext) {
         let tmp = Scratch::new("label-escape");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[rectangle(0.0)]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let steps = undo_steps(&view, &cx);
@@ -1169,7 +1169,7 @@ mod tests {
     #[gpui_kit::test]
     fn escape_in_a_label_drag_keeps_the_text_typed(cx: &mut TestAppContext) {
         let tmp = Scratch::new("label-drag-text");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[text_layer("Hello")]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let characters = |cx: &VisualTestContext| prop(&view, ids[0], "characters", cx);
@@ -1205,7 +1205,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_label_drag_leaves_an_open_pen_path_alone(cx: &mut TestAppContext) {
         let tmp = Scratch::new("label-drag-pen");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[rectangle(0.0)]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let path_id = draw_pen_path(&view, &mut cx);
@@ -1249,7 +1249,7 @@ mod tests {
     #[gpui_kit::test]
     fn an_op_during_a_label_drag_is_a_step_of_its_own(cx: &mut TestAppContext) {
         let tmp = Scratch::new("label-drag-op");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[rectangle(0.0)]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let steps = undo_steps(&view, &cx);
@@ -1290,7 +1290,7 @@ mod tests {
     #[gpui_kit::test]
     fn the_design_panel_goes_with_the_ui_and_comes_back(cx: &mut TestAppContext) {
         let tmp = Scratch::new("panel-ui");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[rectangle(0.0)]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let shown = |cx: &VisualTestContext| view.read_with(cx, |view, _| view.show_design);
@@ -1320,7 +1320,7 @@ mod tests {
     #[gpui_kit::test]
     fn view_design_shows_and_hides_the_panel(cx: &mut TestAppContext) {
         let tmp = Scratch::new("panel-toggle");
-        let (view, mut cx) = open_in_window(cx, &tmp.0.join("canvas.figcraft"), &[]);
+        let (view, mut cx) = open_in_window(cx, &tmp.0.join("canvas.sawit"), &[]);
         assert!(!view.read_with(&cx, |view, _| view.show_design));
         assert!(!drawn(&mut cx, "board-design-panel"));
         let op = json!({"op": "command", "command": "view.design"});
@@ -1343,7 +1343,7 @@ mod tests {
     #[gpui_kit::test]
     fn aligning_frames_that_run_both_ways_is_one_undo_step(cx: &mut TestAppContext) {
         let tmp = Scratch::new("align-both-ways");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let mut design = Design::new();
         let (across, _) = frame_with_a_child(&mut design, 0.0);
         let (down, _) = frame_with_a_child(&mut design, 400.0);
@@ -1384,7 +1384,7 @@ mod tests {
     #[gpui_kit::test]
     fn the_auto_layout_section_edits_the_frames(cx: &mut TestAppContext) {
         let tmp = Scratch::new("auto-layout");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let mut design = Design::new();
         let (plain, _) = frame_with_a_child(&mut design, 0.0);
         let (laid_out, _) = frame_with_a_child(&mut design, 400.0);
@@ -1442,7 +1442,7 @@ mod tests {
     #[gpui_kit::test]
     fn add_auto_layout_ends_the_text_being_edited_first(cx: &mut TestAppContext) {
         let tmp = Scratch::new("auto-layout-typing");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let mut design = Design::new();
         let (frame, _) = frame_with_a_child(&mut design, 0.0);
         let text = design.make(json!({"type": "text", "text": "Hi", "x": 400, "y": 0}));
@@ -1469,7 +1469,7 @@ mod tests {
     #[gpui_kit::test]
     fn the_appearance_section_edits_the_layers(cx: &mut TestAppContext) {
         let tmp = Scratch::new("appearance");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let ids = design_file(&path, &[rectangle(0.0), rectangle(150.0)]);
         let (view, mut cx) = open_in_window(cx, &path, &ids);
         let value = |key: &str, cx: &VisualTestContext| panel_value(&view, &ids, key, cx);

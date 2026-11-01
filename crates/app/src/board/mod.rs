@@ -412,11 +412,11 @@ fn let_through() -> Vec<KeyBinding> {
     ]
 }
 
-/// A canvas tab: the board in one `.figcraft` file, drawn as its view and its document change,
-/// and saved as it is edited. An `.excalidraw` file opens imported, in the `.figcraft` file beside
-/// it ([`BoardView::import`]).
+/// A canvas tab: the board in one `.sawit` file (or a `.figcraft` one from before), drawn as its
+/// view and its document change, and saved as it is edited. An `.excalidraw` file opens
+/// imported, in the `.sawit` file beside it ([`BoardView::import`]).
 pub struct BoardView {
-    /// The `.figcraft` file the canvas is bound to: the one it opened, or the one an imported
+    /// The canvas file the canvas is bound to: the one it opened, or the one an imported
     /// `.excalidraw` file is saved to.
     path: PathBuf,
     /// The document, or why the file couldn't be opened: the tab then says so, and never saves.
@@ -569,14 +569,14 @@ impl BoardView {
     }
 
     /// Opens the Excalidraw file at `path` imported ([`store::import_file`]), as a canvas bound to
-    /// the `<stem>.figcraft` file beside it ([`store::bound_file`]), which it saves to (spec D14).
+    /// the `<stem>.sawit` file beside it ([`store::bound_file`]), which it saves to (spec D14).
     /// The `.excalidraw` file is never written.
     ///
-    /// - When that `.figcraft` file is there, the scene was imported before, and the file is what
+    /// - When that `.sawit` file is there, the scene was imported before, and the file is what
     ///   opens ([`BoardView::open`]).
     /// - Else the scene is drawn on a new board, and what the import left out shows as a toast
     ///   that names the `.excalidraw` file. The board isn't on disk yet, so its first autosave, or
-    ///   a flush, writes the `.figcraft` file, edited or not. A scene with nothing in it is a blank
+    ///   a flush, writes the `.sawit` file, edited or not. A scene with nothing in it is a blank
     ///   board, written once there is an edit, as a new canvas is.
     /// - A file that can't be imported is shown as an error that names it, as a canvas file that
     ///   can't be read is, and nothing is written.
@@ -694,7 +694,7 @@ impl BoardView {
         }
     }
 
-    /// The `.figcraft` file the canvas is bound to, and saves to.
+    /// The canvas file the canvas is bound to, and saves to.
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -1312,7 +1312,7 @@ impl BoardView {
     }
 
     /// Keeps the document, which the canvas couldn't save, in a file of its own, as a save would
-    /// write it: `<name> (unsaved <date>).figcraft` beside the canvas file, numbered when that is
+    /// write it: `<name> (unsaved <date>).sawit` beside the canvas file, numbered when that is
     /// taken, made new and never through a link ([`sawit_core::nyawit::write_unique`]); else, when
     /// nothing can be made there (the folder is read-only, or gone), in `unsaved/` in Sawit's own
     /// folder, `app_root`. The file that was there stays as it is. A document kept already isn't
@@ -1328,8 +1328,9 @@ impl BoardView {
         let bytes = board.to_bytes().map_err(|e| e.to_string())?;
         let stem = (self.path.file_stem()).map_or_else(|| TITLE.into(), |s| s.to_string_lossy());
         let name = format!(
-            "{stem} (unsaved {}).figcraft",
-            sawit_core::date::local_date()
+            "{stem} (unsaved {}).{}",
+            sawit_core::date::local_date(),
+            sawit_core::files::CANVAS_EXTENSION
         );
         let beside = (self.path.parent())
             .map(|folder| sawit_core::nyawit::write_unique(folder, &name, &bytes));
@@ -2058,7 +2059,7 @@ mod tests {
         let reading = |cx: &mut TestAppContext| cx.update(|cx| cx.has_global::<SystemFonts>());
         assert!(!reading(cx), "starting the app read the system's fonts");
         let tmp = Scratch::new("system-fonts");
-        let _view = cx.new(|cx| BoardView::open(tmp.0.join("canvas.figcraft"), cx));
+        let _view = cx.new(|cx| BoardView::open(tmp.0.join("canvas.sawit"), cx));
         assert!(reading(cx));
         cx.run_until_parked();
         assert!(figcraft_text::installed_fonts_known());
@@ -2173,7 +2174,7 @@ mod tests {
     #[gpui_kit::test]
     fn missing_canvas_opens_as_empty_board(cx: &mut TestAppContext) {
         let tmp = Scratch::new("missing");
-        let path = tmp.0.join(".nyawit/canvas.figcraft");
+        let path = tmp.0.join(".nyawit/canvas.sawit");
         let view = open(cx, &path);
         let kind = view.read_with(cx, |view, _| view.board().map(|board| board.kind()));
         assert_eq!(kind, Some(DocKind::Board));
@@ -2186,13 +2187,13 @@ mod tests {
     #[gpui_kit::test]
     fn corrupt_file_shows_error_and_leaves_file(cx: &mut TestAppContext) {
         let tmp = Scratch::new("corrupt");
-        let path = tmp.0.join("canvas.figcraft");
+        let path = tmp.0.join("canvas.sawit");
         std::fs::write(&path, b"not a canvas").unwrap();
         let view = open(cx, &path);
         assert!(view.read_with(cx, |view, _| view.board().is_none()));
         view.update(cx, |view, _| view.flush());
         assert_eq!(std::fs::read(&path).unwrap(), b"not a canvas");
-        assert_eq!(names(&tmp.0), ["canvas.figcraft"]);
+        assert_eq!(names(&tmp.0), ["canvas.sawit"]);
     }
 
     /// An old canvas as Excalidraw saved it (sawit-board's import fixture): nine layers on the
@@ -2218,7 +2219,7 @@ mod tests {
         let old = tmp.0.join("x.excalidraw");
         std::fs::write(&old, FIXTURE).unwrap();
         let view = import(cx, &old);
-        let file = tmp.0.join("x.figcraft");
+        let file = tmp.0.join("x.sawit");
         assert_eq!(path_of(&view, cx), file);
         // The scene is on the canvas. What the import left out is said of the file it is in.
         assert_eq!(layers(&view, cx).len(), 9);
@@ -2228,14 +2229,14 @@ mod tests {
         view.update(cx, |view, _| view.flush());
         assert_eq!(saved_layers(&file), 9);
         assert_eq!(std::fs::read(&old).unwrap(), FIXTURE.as_bytes());
-        assert_eq!(names(&tmp.0), ["x.excalidraw", "x.figcraft"]);
+        assert_eq!(names(&tmp.0), ["x.excalidraw", "x.sawit"]);
     }
 
     #[gpui_kit::test]
-    fn an_excalidraw_file_with_its_figcraft_beside_it_opens_that(cx: &mut TestAppContext) {
+    fn an_excalidraw_file_with_its_sawit_file_beside_it_opens_that(cx: &mut TestAppContext) {
         let tmp = Scratch::new("import-again");
         let old = tmp.0.join("x.excalidraw");
-        let file = tmp.0.join("x.figcraft");
+        let file = tmp.0.join("x.sawit");
         std::fs::write(&old, FIXTURE).unwrap();
         // Saved there before, and edited since: a sticky, not the scene's nine layers.
         let mut board = BoardDoc::new_board("x").unwrap();
@@ -2256,7 +2257,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn an_excalidraw_file_that_cannot_be_imported_shows_error_and_makes_no_figcraft(
+    fn an_excalidraw_file_that_cannot_be_imported_shows_error_and_makes_no_sawit_file(
         cx: &mut TestAppContext,
     ) {
         let tmp = Scratch::new("import-corrupt");
@@ -2264,7 +2265,7 @@ mod tests {
         std::fs::write(&old, b"{ not json").unwrap();
         let view = import(cx, &old);
         assert!(view.read_with(cx, |view, _| view.board().is_none()));
-        assert_eq!(path_of(&view, cx), tmp.0.join("x.figcraft"));
+        assert_eq!(path_of(&view, cx), tmp.0.join("x.sawit"));
         // Ops answer why, naming the file that couldn't be imported.
         let reply = run_op(&view, json!({"op": "get"}), cx);
         assert_eq!(reply["ok"], json!(false), "{reply}");
@@ -2296,7 +2297,7 @@ mod tests {
         assert_eq!(names(&tmp.0), ["x.excalidraw"]);
         add_sticky(&view, cx);
         view.update(cx, |view, _| view.flush());
-        assert_eq!(saved_layers(&tmp.0.join("x.figcraft")), 1);
+        assert_eq!(saved_layers(&tmp.0.join("x.sawit")), 1);
         assert_eq!(std::fs::read(&old).unwrap(), b" \n");
     }
 
@@ -2315,9 +2316,9 @@ mod tests {
         // The canvas's shortcuts are key bindings.
         cx.update(init_keys);
 
-        // Painted: its first autosave writes canvas.figcraft.
+        // Painted: its first autosave writes canvas.sawit.
         let (_painted, nyawit) = project("migrate-painted");
-        let path = nyawit.join("canvas.figcraft");
+        let path = nyawit.join("canvas.sawit");
         let (_, view) = open_in_window(cx, &path);
         next_frame(cx, &view, None);
         assert!(!path.exists(), "saved before the canvas was still");
@@ -2325,7 +2326,7 @@ mod tests {
         cx.run_until_parked();
         // (A canvas file that isn't there would open as the old canvas again: the folder says
         // whether it was written.)
-        assert_eq!(names(&nyawit), ["canvas.excalidraw", "canvas.figcraft"]);
+        assert_eq!(names(&nyawit), ["canvas.excalidraw", "canvas.sawit"]);
         assert_eq!(saved_layers(&path), 9);
         let old = std::fs::read(nyawit.join("canvas.excalidraw")).unwrap();
         assert_eq!(old, FIXTURE.as_bytes());
@@ -2337,10 +2338,10 @@ mod tests {
 
         // Never painted (its tab closed, or the app quit, before a frame): a flush writes it.
         let (_unpainted, nyawit) = project("migrate-flush");
-        let path = nyawit.join("canvas.figcraft");
+        let path = nyawit.join("canvas.sawit");
         let view = cx.new(|cx| BoardView::open(path.clone(), cx));
         view.update(cx, |view, _| view.flush());
-        assert_eq!(names(&nyawit), ["canvas.excalidraw", "canvas.figcraft"]);
+        assert_eq!(names(&nyawit), ["canvas.excalidraw", "canvas.sawit"]);
         assert_eq!(saved_layers(&path), 9);
         let old = std::fs::read(nyawit.join("canvas.excalidraw")).unwrap();
         assert_eq!(old, FIXTURE.as_bytes());
@@ -2349,7 +2350,7 @@ mod tests {
     #[gpui_kit::test]
     fn edits_are_saved_after_flush(cx: &mut TestAppContext) {
         let tmp = Scratch::new("flush");
-        let path = tmp.0.join(".nyawit/canvas.figcraft");
+        let path = tmp.0.join(".nyawit/canvas.sawit");
         let view = open(cx, &path);
         add_sticky(&view, cx);
         view.update(cx, |view, _| view.flush());
@@ -2359,7 +2360,7 @@ mod tests {
     #[gpui_kit::test]
     fn edits_are_saved_once_the_canvas_has_been_still_for_the_delay(cx: &mut TestAppContext) {
         let tmp = Scratch::new("autosave");
-        let path = tmp.0.join("canvas.figcraft");
+        let path = tmp.0.join("canvas.sawit");
         let view = open(cx, &path);
         let step = Duration::from_millis(200);
         assert!(SAVE_DELAY > step && SAVE_DELAY < 2 * step);
@@ -2382,7 +2383,7 @@ mod tests {
     fn a_failed_save_shows_its_error_for_a_while(cx: &mut TestAppContext) {
         let tmp = Scratch::new("save-error");
         let blocker = tmp.0.join("not-a-folder");
-        let path = blocker.join("canvas.figcraft");
+        let path = blocker.join("canvas.sawit");
         let view = open(cx, &path);
         // The folder can't be made any more: a file has its name.
         std::fs::write(&blocker, b"x").unwrap();
@@ -2392,9 +2393,7 @@ mod tests {
         cx.run_until_parked();
         let toast = view.read_with(cx, |view, _| view.toast.clone());
         assert!(
-            toast
-                .as_ref()
-                .is_some_and(|t| t.contains("canvas.figcraft")),
+            toast.as_ref().is_some_and(|t| t.contains("canvas.sawit")),
             "{toast:?}"
         );
         assert_eq!(std::fs::read(&blocker).unwrap(), b"x");
@@ -2441,11 +2440,11 @@ mod tests {
     #[gpui_kit::test]
     fn a_lossy_open_says_what_saving_drops(cx: &mut TestAppContext) {
         let tmp = Scratch::new("lossy");
-        let path = tmp.0.join("canvas.figcraft");
+        let path = tmp.0.join("canvas.sawit");
         std::fs::write(&path, file_with_a_damaged_image()).unwrap();
         let view = open(cx, &path);
         let toast = view.read_with(cx, |view, _| view.toast.clone()).unwrap();
-        assert!(toast.starts_with("canvas.figcraft: "), "{toast}");
+        assert!(toast.starts_with("canvas.sawit: "), "{toast}");
         assert!(toast.contains("saving this file again drops it"), "{toast}");
         cx.executor().advance_clock(TOAST_TIME);
         cx.run_until_parked();
@@ -2455,7 +2454,7 @@ mod tests {
     #[gpui_kit::test]
     fn an_in_place_save_keeps_the_files_version_history(cx: &mut TestAppContext) {
         let tmp = Scratch::new("history");
-        let path = tmp.0.join("canvas.figcraft");
+        let path = tmp.0.join("canvas.sawit");
         let mut board = BoardDoc::new_board("Canvas").unwrap();
         board
             .execute("board.sticky", &json!({"x": 0, "y": 0, "text": "then"}))
@@ -2478,13 +2477,13 @@ mod tests {
             .map(|version| version.name.clone())
             .collect();
         assert_eq!(versions, ["Then"]);
-        assert_eq!(names(&tmp.0), ["canvas.figcraft"]);
+        assert_eq!(names(&tmp.0), ["canvas.sawit"]);
     }
 
     #[gpui_kit::test]
     fn a_version_shown_in_place_of_the_document_is_not_saved(cx: &mut TestAppContext) {
         let tmp = Scratch::new("preview");
-        let path = tmp.0.join("canvas.figcraft");
+        let path = tmp.0.join("canvas.sawit");
         // A canvas with a sticky, and a version from when it was blank.
         let mut board = BoardDoc::new_board("Canvas").unwrap();
         board
@@ -2507,13 +2506,13 @@ mod tests {
         cx.run_until_parked();
         view.update(cx, |view, _| view.flush());
         assert!(std::fs::read(&path).unwrap() == bytes, "the file was saved");
-        assert_eq!(names(&tmp.0), ["canvas.figcraft"]);
+        assert_eq!(names(&tmp.0), ["canvas.sawit"]);
     }
 
     #[gpui_kit::test]
     fn a_file_with_images_left_in_it_is_not_saved_over(cx: &mut TestAppContext) {
         let tmp = Scratch::new("images-left");
-        let path = tmp.0.join("canvas.figcraft");
+        let path = tmp.0.join("canvas.sawit");
         let mut board = BoardDoc::new_board("Canvas").unwrap();
         board
             .execute("board.sticky", &json!({"x": 0, "y": 0, "text": "kept"}))
@@ -2541,7 +2540,7 @@ mod tests {
         );
         view.update(cx, |view, _| view.flush());
         assert!(std::fs::read(&path).unwrap() == bytes, "the file was saved");
-        assert_eq!(names(&tmp.0), ["canvas.figcraft"]);
+        assert_eq!(names(&tmp.0), ["canvas.sawit"]);
     }
 
     /// A board with a sticky for each of `texts`.
@@ -2564,7 +2563,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_file_changed_on_disk_since_it_opened_is_not_saved_over(cx: &mut TestAppContext) {
         let tmp = Scratch::new("changed-on-disk");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         write_board(&path, &board_with(&["mine"]));
         let view = open(cx, &path);
         // Another app (FigCraft, figcraft-cli, git) writes the file while its canvas is open.
@@ -2593,7 +2592,7 @@ mod tests {
     /// layers each holds.
     fn unsaved_copies(dir: &Path, stem: &str) -> Vec<usize> {
         let copies = names(dir).into_iter().filter(|name| {
-            name.starts_with(&format!("{stem} (unsaved ")) && name.ends_with(".figcraft")
+            name.starts_with(&format!("{stem} (unsaved ")) && name.ends_with(".sawit")
         });
         copies.map(|name| saved_layers(&dir.join(name))).collect()
     }
@@ -2608,7 +2607,7 @@ mod tests {
         let tmp = Scratch::new("read-only-unsaved");
         let folder = tmp.0.join("designs");
         std::fs::create_dir(&folder).unwrap();
-        let path = folder.join("locked.figcraft");
+        let path = folder.join("locked.sawit");
         write_board(&path, &board_with(&["mine"]));
         let view = open(cx, &path);
         let mode = |mode| std::fs::Permissions::from_mode(mode);
@@ -2622,7 +2621,7 @@ mod tests {
         let kept = kept.unwrap().expect("no copy");
         assert_eq!(kept.parent().unwrap(), tmp.0.join("app").join("unsaved"));
         assert_eq!(saved_layers(&kept), 2);
-        assert_eq!(names(&folder), ["locked.figcraft"]);
+        assert_eq!(names(&folder), ["locked.sawit"]);
         assert_eq!(saved_layers(&path), 1);
         // Kept once: the same edits again make no second copy.
         let again = view.update(cx, |view, _| view.keep_unsaved(&tmp.0.join("app")));
@@ -2634,7 +2633,7 @@ mod tests {
     #[gpui_kit::test]
     fn quitting_keeps_edits_it_couldnt_save_in_a_copy(cx: &mut TestAppContext) {
         let tmp = Scratch::new("quit-unsaved");
-        let path = tmp.0.join("plan.figcraft");
+        let path = tmp.0.join("plan.sawit");
         write_board(&path, &board_with(&["mine"]));
         let view = open(cx, &path);
         let theirs = write_board(&path, &board_with(&["theirs"]));
@@ -2670,7 +2669,7 @@ mod tests {
                     {
                         // The test's body: it ends with an edit not saved yet.
                         let tmp = Scratch::new("leaves-nothing");
-                        let path = tmp.0.join("canvas.figcraft");
+                        let path = tmp.0.join("canvas.sawit");
                         write_board(&path, &board_with(&["mine"]));
                         let view = open(&mut cx, &path);
                         add_sticky(&view, &mut cx);
@@ -2699,7 +2698,7 @@ mod tests {
     fn of_two_canvases_of_one_file_the_second_to_save_is_refused(cx: &mut TestAppContext) {
         // Two windows have the file open, and each canvas would save over the other's edits.
         let tmp = Scratch::new("two-canvases");
-        let path = tmp.0.join("canvas.figcraft");
+        let path = tmp.0.join("canvas.sawit");
         write_board(&path, &board_with(&["shared"]));
         let first = open(cx, &path);
         let second = cx.new(|cx| BoardView::open(path.clone(), cx));
@@ -2726,7 +2725,7 @@ mod tests {
         assert!(first.read_with(cx, |view, _| view.toast.is_none()));
     }
 
-    /// CANVAS-CORE-5: two windows with no project share Sawit's own `canvas.figcraft`, and
+    /// CANVAS-CORE-5: two windows with no project share Sawit's own `canvas.sawit`, and
     /// `sawit -n` puts one project in two; each window has its own canvas of the file. With no
     /// file there when they opened, the second to save replaced the first's board without a word,
     /// and the first's next save was refused: its work was in no file. The second's save is
@@ -2736,7 +2735,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let tmp = Scratch::new("two-canvases-new");
-        let path = tmp.0.join("canvas.figcraft");
+        let path = tmp.0.join("canvas.sawit");
         let first = open(cx, &path);
         let second = cx.new(|cx| BoardView::open(path.clone(), cx));
         add_sticky(&first, cx);
@@ -2767,7 +2766,7 @@ mod tests {
     fn a_board_with_no_file_at_open_is_written_by_its_first_flush_and_guarded_after(
         cx: &mut TestAppContext,
     ) {
-        // An `.excalidraw` file imported, and a project's old canvas migrated: neither `.figcraft`
+        // An `.excalidraw` file imported, and a project's old canvas migrated: neither `.sawit`
         // file is there yet, and nothing else makes one meanwhile (when something does, the save
         // is refused: CANVAS-CORE-5).
         let imported = Scratch::new("guard-import");
@@ -2777,9 +2776,9 @@ mod tests {
         let nyawit = migrated.0.join(".nyawit");
         std::fs::create_dir(&nyawit).unwrap();
         std::fs::write(nyawit.join("canvas.excalidraw"), FIXTURE).unwrap();
-        let canvas = nyawit.join("canvas.figcraft");
+        let canvas = nyawit.join("canvas.sawit");
         let views = [
-            (import(cx, &old), imported.0.join("x.figcraft")),
+            (import(cx, &old), imported.0.join("x.sawit")),
             (cx.new(|cx| BoardView::open(canvas.clone(), cx)), canvas),
         ];
         for (view, file) in &views {
@@ -2845,7 +2844,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_clear_or_a_load_keeps_the_board_it_took_off(cx: &mut TestAppContext) {
         let tmp = Scratch::new("backups");
-        let path = tmp.0.join("canvas.figcraft");
+        let path = tmp.0.join("canvas.sawit");
         write_board(&path, &board_with(&["the user's"]));
         let view = open(cx, &path);
         let ask = |op: Value, cx: &mut TestAppContext| {
@@ -2893,7 +2892,7 @@ mod tests {
     #[gpui_kit::test]
     fn an_agents_deletion_keeps_the_board_it_took_layers_off(cx: &mut TestAppContext) {
         let tmp = Scratch::new("deletion-backups");
-        let path = tmp.0.join("canvas.figcraft");
+        let path = tmp.0.join("canvas.sawit");
         write_board(&path, &board_with(&["first", "second", "third", "fourth"]));
         let view = open(cx, &path);
         let ask = |op: Value, cx: &mut TestAppContext| {
@@ -2976,7 +2975,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_canvas_follows_its_file_when_it_is_renamed(cx: &mut TestAppContext) {
         let tmp = Scratch::new("renamed-under-canvas");
-        let (a, b) = (tmp.0.join("a.figcraft"), tmp.0.join("b.figcraft"));
+        let (a, b) = (tmp.0.join("a.sawit"), tmp.0.join("b.sawit"));
         write_board(&a, &board_with(&["mine"]));
         let view = open(cx, &a);
         std::fs::rename(&a, &b).unwrap();
@@ -2986,14 +2985,14 @@ mod tests {
         cx.executor().advance_clock(SAVE_DELAY * 2);
         cx.run_until_parked();
         view.update(cx, |view, _| view.flush());
-        assert_eq!(names(&tmp.0), ["b.figcraft"]);
+        assert_eq!(names(&tmp.0), ["b.sawit"]);
         assert_eq!(saved_layers(&b), 2);
         assert_eq!(view.read_with(cx, |view, _| view.toast.clone()), None);
         // Closing the tab writes nothing at the old name either.
         add_sticky(&view, cx);
         drop(view);
         cx.update(|_| {});
-        assert_eq!(names(&tmp.0), ["b.figcraft"]);
+        assert_eq!(names(&tmp.0), ["b.sawit"]);
         assert_eq!(saved_layers(&b), 3);
     }
 
@@ -3005,10 +3004,10 @@ mod tests {
         let tmp = Scratch::new("folder-moved-under-canvas");
         let (sub, moved) = (tmp.0.join("sub"), tmp.0.join("moved"));
         std::fs::create_dir_all(&sub).unwrap();
-        write_board(&sub.join("a.figcraft"), &board_with(&["mine"]));
-        let view = open(cx, &sub.join("a.figcraft"));
+        write_board(&sub.join("a.sawit"), &board_with(&["mine"]));
+        let view = open(cx, &sub.join("a.sawit"));
         std::fs::rename(&sub, &moved).unwrap();
-        let file = moved.join("a.figcraft");
+        let file = moved.join("a.sawit");
         view.update(cx, |view, cx| view.rebind(file.clone(), cx));
         add_sticky(&view, cx);
         view.update(cx, |view, _| view.flush());
@@ -3033,7 +3032,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_canvas_whose_file_went_saves_it_again_and_says_so(cx: &mut TestAppContext) {
         let tmp = Scratch::new("file-went");
-        let a = tmp.0.join("a.figcraft");
+        let a = tmp.0.join("a.sawit");
         write_board(&a, &board_with(&["mine"]));
         let view = open(cx, &a);
         std::fs::remove_file(&a).unwrap();
@@ -3048,14 +3047,14 @@ mod tests {
         assert_eq!(saved_layers(&a), 2);
         let toast = view.read_with(cx, |view, _| view.toast.clone()).unwrap();
         assert!(
-            toast.starts_with("a.figcraft was no longer in ")
+            toast.starts_with("a.sawit was no longer in ")
                 && toast.contains("saved it there again"),
             "{toast}"
         );
 
         // A project's canvas whose `.nyawit/` was deleted.
         let nyawit = tmp.0.join(".nyawit");
-        let canvas = nyawit.join("canvas.figcraft");
+        let canvas = nyawit.join("canvas.sawit");
         std::fs::create_dir_all(&nyawit).unwrap();
         write_board(&canvas, &board_with(&["mine"]));
         let view = open(cx, &canvas);
@@ -3066,7 +3065,7 @@ mod tests {
         assert_eq!(saved_layers(&canvas), 2);
         let toast = view.read_with(cx, |view, _| view.toast.clone()).unwrap();
         assert!(
-            toast.starts_with("canvas.figcraft was no longer in "),
+            toast.starts_with("canvas.sawit was no longer in "),
             "{toast}"
         );
     }
@@ -3077,7 +3076,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_save_that_lands_after_the_rename_reaches_the_new_name_too(cx: &mut TestAppContext) {
         let tmp = Scratch::new("rename-mid-save");
-        let (a, b) = (tmp.0.join("a.figcraft"), tmp.0.join("b.figcraft"));
+        let (a, b) = (tmp.0.join("a.sawit"), tmp.0.join("b.sawit"));
         let older = write_board(&a, &board_with(&["mine"]));
         let view = open(cx, &a);
         add_sticky(&view, cx);
@@ -3095,7 +3094,7 @@ mod tests {
         cx.update(gpui_kit::init);
         // The canvas's shortcuts are key bindings.
         cx.update(init_keys);
-        let (window, view) = open_in_window(cx, &tmp.0.join("canvas.figcraft"));
+        let (window, view) = open_in_window(cx, &tmp.0.join("canvas.sawit"));
         let first = next_frame(cx, &view, None);
         assert!(in_atlas(cx, window, &first));
         // The engine has the canvas's size, the window's less the top bar, which the first frame
@@ -3126,7 +3125,7 @@ mod tests {
         cx.update(gpui_kit::init);
         // The canvas's shortcuts are key bindings.
         cx.update(init_keys);
-        let (window, view) = open_in_window(cx, &tmp.0.join("canvas.figcraft"));
+        let (window, view) = open_in_window(cx, &tmp.0.join("canvas.sawit"));
         let first = next_frame(cx, &view, None);
         assert!(in_atlas(cx, window, &first));
         let show = |shown: bool, cx: &mut TestAppContext| {
@@ -3169,7 +3168,7 @@ mod tests {
     #[gpui_kit::test]
     fn only_a_frame_of_the_page_on_show_is_painted(cx: &mut TestAppContext) {
         let tmp = Scratch::new("pages");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         // A design file of two pages: a frame on the first, nothing on the second.
         let mut session = figcraft_engine::Session::new();
         let frame =
@@ -3250,7 +3249,7 @@ mod tests {
     #[gpui_kit::test]
     fn opening_in_a_dark_theme_is_no_edit(cx: &mut TestAppContext) {
         let tmp = Scratch::new("dark");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let mut session = figcraft_engine::Session::new();
         session
             .execute("file.saveAs", &json!({"path": path.to_str().unwrap()}))
@@ -3272,7 +3271,7 @@ mod tests {
         cx.run_until_parked();
         view.update(cx, |view, _| view.flush());
         assert!(std::fs::read(&path).unwrap() == bytes, "the file was saved");
-        assert_eq!(names(&tmp.0), ["design.figcraft"]);
+        assert_eq!(names(&tmp.0), ["design.sawit"]);
         // An edit saves the file with its own page colour.
         let rectangle = json!({"type": "rectangle"});
         let made = json!({"op": "command", "command": "node.create", "params": rectangle});
@@ -3286,7 +3285,7 @@ mod tests {
     #[gpui_kit::test]
     fn ops_run_on_the_canvas_document(cx: &mut TestAppContext) {
         let tmp = Scratch::new("ops");
-        let view = open(cx, &tmp.0.join("canvas.figcraft"));
+        let view = open(cx, &tmp.0.join("canvas.sawit"));
         let layers = |cx: &mut TestAppContext| {
             let reply = run_op(&view, json!({"op": "get"}), cx);
             assert_eq!(reply["ok"], json!(true), "{reply}");
@@ -3313,7 +3312,7 @@ mod tests {
         // No window: the canvas is never painted, as when an agent edits a covered window, whose
         // display link has stopped. The edit must reach the file all the same.
         let tmp = Scratch::new("op-saves");
-        let path = tmp.0.join("canvas.figcraft");
+        let path = tmp.0.join("canvas.sawit");
         let view = open(cx, &path);
         let step = SAVE_DELAY / 2;
 
@@ -3347,7 +3346,7 @@ mod tests {
         // An edit made in the window (a drag, a key, typing) arrives with no op: the canvas only
         // redraws, and its paint is what starts the save.
         let tmp = Scratch::new("painted-save");
-        let path = tmp.0.join("canvas.figcraft");
+        let path = tmp.0.join("canvas.sawit");
         cx.update(gpui_kit::init);
         // The canvas's shortcuts are key bindings.
         cx.update(init_keys);
@@ -3373,7 +3372,7 @@ mod tests {
     #[gpui_kit::test]
     fn closing_the_tab_saves_what_is_not_on_disk(cx: &mut TestAppContext) {
         let tmp = Scratch::new("drop-saves");
-        let path = tmp.0.join("canvas.figcraft");
+        let path = tmp.0.join("canvas.sawit");
         let view = open(cx, &path);
         // An edit that no paint, op or wait has saved.
         add_sticky(&view, cx);
@@ -3387,7 +3386,7 @@ mod tests {
     #[gpui_kit::test]
     fn quitting_saves_what_is_not_on_disk(cx: &mut TestAppContext) {
         let tmp = Scratch::new("quit-saves");
-        let path = tmp.0.join("canvas.figcraft");
+        let path = tmp.0.join("canvas.sawit");
         let view = open(cx, &path);
         add_sticky(&view, cx);
         assert!(!path.exists());
@@ -3400,7 +3399,7 @@ mod tests {
     #[gpui_kit::test]
     fn an_op_redraws_the_canvas(cx: &mut TestAppContext) {
         let tmp = Scratch::new("op-redraw");
-        let view = open(cx, &tmp.0.join("canvas.figcraft"));
+        let view = open(cx, &tmp.0.join("canvas.sawit"));
         let redraws = Rc::new(Cell::new(0));
         cx.update(|cx| {
             let redraws = redraws.clone();
@@ -3423,7 +3422,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_canvas_that_could_not_be_opened_answers_ops_with_the_reason(cx: &mut TestAppContext) {
         let tmp = Scratch::new("op-corrupt");
-        let path = tmp.0.join("canvas.figcraft");
+        let path = tmp.0.join("canvas.sawit");
         std::fs::write(&path, b"not a canvas").unwrap();
         let view = open(cx, &path);
         let reason = store::open(&path)
@@ -3444,13 +3443,13 @@ mod tests {
         cx.run_until_parked();
         view.update(cx, |view, _| view.flush());
         assert_eq!(std::fs::read(&path).unwrap(), b"not a canvas");
-        assert_eq!(names(&tmp.0), ["canvas.figcraft"]);
+        assert_eq!(names(&tmp.0), ["canvas.sawit"]);
     }
 
     #[gpui_kit::test]
     fn painted_frame_names_go_back_to_the_engine(cx: &mut TestAppContext) {
         let tmp = Scratch::new("names");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let mut session = figcraft_engine::Session::new();
         let frame =
             json!({"type": "frame", "name": "Frame", "x": 0, "y": 0, "width": 200, "height": 100});
@@ -3492,7 +3491,7 @@ mod tests {
     #[gpui_kit::test]
     fn long_names_are_cut_to_their_frames(cx: &mut TestAppContext) {
         let tmp = Scratch::new("long-names");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         // A frame and a section, each named far wider than it is on screen.
         let long = "Checkout – payment method – error state, ".repeat(8);
         let mut session = figcraft_engine::Session::new();
@@ -3544,17 +3543,17 @@ mod tests {
 
     #[test]
     fn open_issues_read_as_one_line() {
-        let path = Path::new("/p/.nyawit/canvas.figcraft");
+        let path = Path::new("/p/.nyawit/canvas.sawit");
         assert_eq!(issues_line(path, &[]), None);
         assert_eq!(
             issues_line(path, &["an image was left out".into()]).as_deref(),
-            Some("canvas.figcraft: an image was left out")
+            Some("canvas.sawit: an image was left out")
         );
         let two = ["a layer was repaired".into(), "a font is missing".into()];
         assert_eq!(
             issues_line(path, &two).as_deref(),
             Some(
-                "canvas.figcraft: 2 problems were repaired or left out while opening it, \
+                "canvas.sawit: 2 problems were repaired or left out while opening it, \
                  e.g. a layer was repaired"
             )
         );
@@ -3688,7 +3687,7 @@ mod tests {
     #[gpui_kit::test]
     fn show_outlines_redraws_the_page_as_outlines(cx: &mut TestAppContext) {
         let tmp = Scratch::new("outlines");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let (mut session, _) = design_with_a_rectangle();
         session
             .execute("file.saveAs", &json!({"path": path.to_str().unwrap()}))
@@ -3718,7 +3717,7 @@ mod tests {
     #[gpui_kit::test]
     fn scrolling_pans_and_zooms_about_the_pointer(cx: &mut TestAppContext) {
         let tmp = Scratch::new("scroll");
-        let view = open(cx, &tmp.0.join("canvas.figcraft"));
+        let view = open(cx, &tmp.0.join("canvas.sawit"));
         let pointer = point(px(100.), px(50.));
         let scroll = |dx: f32, dy: f32, cmd: bool| ScrollEvent {
             position: pointer,
@@ -3781,7 +3780,7 @@ mod tests {
         cx.update(gpui_kit::init);
         // The canvas's shortcuts are key bindings.
         cx.update(init_keys);
-        let (window, view) = open_in_window(cx, &tmp.0.join("canvas.figcraft"));
+        let (window, view) = open_in_window(cx, &tmp.0.join("canvas.sawit"));
         next_frame(cx, &view, None);
         (view, VisualTestContext::from_window(window.into(), cx))
     }
@@ -4062,7 +4061,7 @@ mod tests {
     #[gpui_kit::test]
     fn an_ops_requests_reach_the_view(cx: &mut TestAppContext) {
         let tmp = Scratch::new("op-requests");
-        let view = open(cx, &tmp.0.join("canvas.figcraft"));
+        let view = open(cx, &tmp.0.join("canvas.sawit"));
         run_op(&view, sticky_op(), cx);
         // ⇧⌘↩'s command, with typing going on in the new sticky: the engine asks the view to
         // start it, and an op's requests reach the view as an input's do.
@@ -4510,7 +4509,7 @@ mod tests {
         cx.simulate_keystrokes("cmd-s");
         let toast = view.read_with(&cx, |view, _| view.toast.clone());
         assert_eq!(toast.as_deref(), Some("Saved"));
-        assert_eq!(saved_layers(&tmp.0.join("canvas.figcraft")), 1);
+        assert_eq!(saved_layers(&tmp.0.join("canvas.sawit")), 1);
     }
 
     /// Releases the keys of `keystrokes`, last first, as `simulate_keystrokes` presses them.
@@ -4733,8 +4732,8 @@ mod tests {
             next_frame(cx, &view, None);
             (view, VisualTestContext::from_window(window.into(), cx))
         };
-        let (one, mut one_cx) = canvas("one.figcraft");
-        let (other, mut other_cx) = canvas("other.figcraft");
+        let (one, mut one_cx) = canvas("one.sawit");
+        let (other, mut other_cx) = canvas("other.sawit");
         let sticky = |text: &str| {
             json!({
                 "op": "command", "command": "board.sticky",
@@ -5054,7 +5053,7 @@ mod tests {
         cx: &mut TestAppContext,
         tmp: &Scratch,
     ) -> (Entity<BoardView>, VisualTestContext) {
-        chrome_canvas_at(cx, &tmp.0.join("canvas.figcraft"))
+        chrome_canvas_at(cx, &tmp.0.join("canvas.sawit"))
     }
 
     /// [`chrome_canvas`], of the canvas file at `path`.
@@ -5341,7 +5340,7 @@ mod tests {
     #[gpui_kit::test]
     fn choose_carries_out_what_its_command_asks(cx: &mut TestAppContext) {
         let tmp = Scratch::new("choose");
-        let view = open(cx, &tmp.0.join("canvas.figcraft"));
+        let view = open(cx, &tmp.0.join("canvas.sawit"));
         // A sticky, selected, then ⇧⌘↩'s command with typing to go on in the next one: the
         // engine asks the view to start it, which `choose` carries out at once.
         run_op(&view, sticky_op(), cx);
@@ -5836,11 +5835,11 @@ mod tests {
     fn the_top_bar_names_the_canvas_and_shows_its_zoom() {
         let name = |path: &str| top_bar::document_name(Path::new(path));
         // The canvas of a project, and the one of a window without a project.
-        assert_eq!(name("/p/.nyawit/canvas.figcraft").as_ref(), "Canvas");
-        assert_eq!(name("/sawit/canvas.figcraft").as_ref(), "Canvas");
+        assert_eq!(name("/p/.nyawit/canvas.sawit").as_ref(), "Canvas");
+        assert_eq!(name("/sawit/canvas.sawit").as_ref(), "Canvas");
         assert_eq!(
-            name("/p/design/ridgeline-app.figcraft").as_ref(),
-            "ridgeline-app.figcraft"
+            name("/p/design/ridgeline-app.sawit").as_ref(),
+            "ridgeline-app.sawit"
         );
         assert_eq!(top_bar::zoom_label(1.0), "100%");
         assert_eq!(top_bar::zoom_label(0.5), "50%");

@@ -404,7 +404,7 @@ mod tests {
     #[gpui_kit::test]
     fn the_effects_section_edits_the_effects(cx: &mut TestAppContext) {
         let tmp = Scratch::new("effects");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let id = with_effects(&path, json!([]));
         let (view, mut cx) = open_in_window(cx, &path, &[id]);
         click(&mut cx, "design-effects-add");
@@ -453,7 +453,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_glass_effect_shows_but_is_not_edited(cx: &mut TestAppContext) {
         let tmp = Scratch::new("effects-glass");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let id = with_effects(&path, json!([{"type": "glass"}, {"type": "dropShadow"}]));
         let (view, mut cx) = open_in_window(cx, &path, &[id]);
         let effects = |cx: &VisualTestContext| prop(&view, id, "effects", cx);
@@ -481,7 +481,7 @@ mod tests {
     #[gpui_kit::test]
     fn mixed_effects_are_replaced_all_at_once(cx: &mut TestAppContext) {
         let tmp = Scratch::new("effects-mixed");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let mut design = Design::new();
         let ids = [design.make(rectangle(0.0)), design.make(rectangle(150.0))];
         design.set(&ids[..1], json!({"effects": [{"type": "layerBlur"}]}));

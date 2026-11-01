@@ -960,7 +960,7 @@ mod tests {
             root: dir.path().join("home"),
         };
         let server = Sawit::new(paths.clone());
-        let board = dir.path().join(".nyawit").join("canvas.figcraft");
+        let board = dir.path().join(".nyawit").join("canvas.sawit");
         std::fs::create_dir_all(board.parent().unwrap()).unwrap();
         std::fs::write(&board, b"the board").unwrap();
         let shot = |output: &std::path::Path| {

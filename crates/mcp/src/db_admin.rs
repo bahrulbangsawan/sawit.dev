@@ -410,7 +410,7 @@ mod tests {
     #[tokio::test]
     async fn no_export_or_backup_writes_over_a_canvas_file() {
         let dir = tempfile::tempdir().unwrap();
-        let board = dir.path().join(".nyawit").join("canvas.figcraft");
+        let board = dir.path().join(".nyawit").join("canvas.sawit");
         std::fs::create_dir_all(board.parent().unwrap()).unwrap();
         std::fs::write(&board, b"the board").unwrap();
         let target = board.display().to_string();

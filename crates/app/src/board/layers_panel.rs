@@ -1474,7 +1474,7 @@ mod tests {
     #[gpui_kit::test]
     fn click_selects_and_shift_selects_range(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-range");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let t = design_file(&path);
         let view = open(cx, &path);
         // F open: the rows are F, B, A and G.
@@ -1499,7 +1499,7 @@ mod tests {
     #[gpui_kit::test]
     fn cmd_click_toggles(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-toggle");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let t = design_file(&path);
         let view = open(cx, &path);
         view.update(cx, |view, cx| {
@@ -1523,7 +1523,7 @@ mod tests {
     #[gpui_kit::test]
     fn blank_rename_keeps_name(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-blank-rename");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let t = design_file(&path);
         let view = open(cx, &path);
         let steps = undo_steps(&view, cx);
@@ -1543,7 +1543,7 @@ mod tests {
     #[gpui_kit::test]
     fn eye_and_lock_toggle(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-eye-lock");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let t = design_file(&path);
         let view = open(cx, &path);
         let steps = undo_steps(&view, cx);
@@ -1565,7 +1565,7 @@ mod tests {
     #[gpui_kit::test]
     fn deleting_current_page_selects_another(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-delete-page");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         design_file(&path);
         let view = open(cx, &path);
         let (_, first) = pages(&view, cx);
@@ -1593,7 +1593,7 @@ mod tests {
     #[gpui_kit::test]
     fn pages_are_renamed_and_duplicated(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-pages");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         design_file(&path);
         let view = open(cx, &path);
         let (_, first) = pages(&view, cx);
@@ -1621,7 +1621,7 @@ mod tests {
     #[gpui_kit::test]
     fn drop_reorders(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-drop");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let t = design_file(&path);
         let view = open(cx, &path);
         assert_eq!(children(&view, t.f, cx), [t.g, t.a, t.b]);
@@ -1657,7 +1657,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_layer_dragged_out_of_an_instance_stays_and_the_toast_says_why(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-instance");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let mut session = figcraft_engine::Session::new();
         let mut make = |command: &str, params: Value| {
             let made = session.execute(command, &params).unwrap();
@@ -1711,11 +1711,11 @@ mod tests {
     #[gpui_kit::test]
     fn the_panel_shows_beside_a_design_file_and_not_a_board(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-defaults");
-        let design = tmp.0.join("design.figcraft");
+        let design = tmp.0.join("design.sawit");
         design_file(&design);
         let view = open(cx, &design);
         assert!(view.read_with(cx, |view, _| view.show_layers));
-        let board = open(cx, &tmp.0.join("canvas.figcraft"));
+        let board = open(cx, &tmp.0.join("canvas.sawit"));
         assert!(!board.read_with(cx, |view, _| view.show_layers));
     }
 
@@ -1724,7 +1724,7 @@ mod tests {
     #[gpui_kit::test]
     fn view_layers_and_the_left_sidebar_show_and_hide_the_panel(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-op");
-        let view = open(cx, &tmp.0.join("canvas.figcraft"));
+        let view = open(cx, &tmp.0.join("canvas.sawit"));
         let shown = |cx: &TestAppContext| view.read_with(cx, |view, _| view.show_layers);
         let reply = run_op(&view, command("view.layers"), cx);
         assert_eq!(reply["ok"], json!(true), "{reply}");
@@ -1744,7 +1744,7 @@ mod tests {
     #[gpui_kit::test]
     fn collapse_layers_keeps_the_way_to_the_selection(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-collapse");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let t = design_file(&path);
         let view = open(cx, &path);
         let expanded = |cx: &TestAppContext| view.read_with(cx, |view, _| view.expanded.clone());
@@ -1764,7 +1764,7 @@ mod tests {
     #[gpui_kit::test]
     fn rename_from_the_keys_starts_in_the_row_of_the_top_layer(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-rename-request");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let t = design_file(&path);
         let view = open(cx, &path);
         view.update(cx, |view, _| {
@@ -1798,7 +1798,7 @@ mod tests {
     #[gpui_kit::test]
     fn the_layers_panel_goes_with_the_ui_and_comes_back(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-ui");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         design_file(&path);
         let (view, mut cx) = open_in_window(cx, &path);
         let canvas = |cx: &VisualTestContext| {
@@ -1829,7 +1829,7 @@ mod tests {
     #[gpui_kit::test]
     fn the_top_bar_toggle_shows_and_hides_the_panel(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-top-bar");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         design_file(&path);
         let (view, mut cx) = open_in_window(cx, &path);
         let left = |cx: &mut VisualTestContext, selector| {
@@ -1856,7 +1856,7 @@ mod tests {
     #[gpui_kit::test]
     fn the_filter_leaves_the_open_layers_alone(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-filter");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let t = design_file(&path);
         let (view, mut cx) = open_in_window(cx, &path);
         change(&view, &mut cx, |view, _| {
@@ -1893,7 +1893,7 @@ mod tests {
     #[gpui_kit::test]
     fn typing_in_the_filter_leaves_the_canvas_keys_alone(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-filter-keys");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let t = design_file(&path);
         let (view, mut cx) = open_in_window(cx, &path);
         // With the rectangle tool, "v" on the canvas would choose Move.
@@ -1920,7 +1920,7 @@ mod tests {
     #[gpui_kit::test]
     fn hovering_a_row_outlines_its_layer(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-hover");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let t = design_file(&path);
         let (view, mut cx) = open_in_window(cx, &path);
         change(&view, &mut cx, |view, _| {
@@ -1962,7 +1962,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_selection_made_on_the_canvas_opens_its_way_in_the_tree(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-reveal");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let t = design_file(&path);
         let (view, mut cx) = open_in_window(cx, &path);
         assert!(!drawn(&mut cx, row(t.c)));
@@ -1987,7 +1987,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_double_click_renames_in_the_row(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-rename-row");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let mut doc = Document::new("Design");
         let page = doc.first_page().unwrap();
         let nameless = add(&mut doc, page, NodeKind::Rectangle, "");
@@ -2047,7 +2047,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_double_click_on_a_frames_name_renames_it(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-rename-label");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let mut session = figcraft_engine::Session::new();
         let frame = json!({
             "type": "frame", "name": "Frame", "x": 0, "y": 0, "width": 200, "height": 100,
@@ -2086,7 +2086,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_row_dragged_onto_the_top_of_another_goes_above_it(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-drag");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let t = design_file(&path);
         let (view, mut cx) = open_in_window(cx, &path);
         change(&view, &mut cx, |view, _| {
@@ -2183,7 +2183,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_page_picked_in_the_panel_while_typing_keeps_what_was_typed(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-page-typing");
-        let path = tmp.0.join("canvas.figcraft");
+        let path = tmp.0.join("canvas.sawit");
         // A board of two pages, with a sticky on each: the first one reads "old".
         let mut board = BoardDoc::new_board("Canvas").unwrap();
         let note = sticky(&mut board, "old");
@@ -2221,7 +2221,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_row_clicked_while_typing_keeps_what_was_typed(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-row-typing");
-        let path = tmp.0.join("canvas.figcraft");
+        let path = tmp.0.join("canvas.sawit");
         let mut board = BoardDoc::new_board("Canvas").unwrap();
         let note = sticky(&mut board, "old");
         let params = json!({"x": 300, "y": -100, "text": "other"});
@@ -2284,7 +2284,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_name_typed_then_a_click_on_a_layer_stays(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-typed-then-click");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let (card, other) = card_and_other(&path);
         let (view, mut cx) = open_in_window(cx, &path);
         let steps = undo_steps(&view, &cx);
@@ -2323,7 +2323,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_name_typed_then_a_drag_on_a_layer_stays(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-typed-then-drag");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let (card, _) = card_and_other(&path);
         let (view, mut cx) = open_in_window(cx, &path);
         let steps = undo_steps(&view, &cx);
@@ -2354,7 +2354,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_page_name_typed_then_a_click_on_a_layer_stays(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-page-typed-then-click");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let (card, _) = card_and_other(&path);
         let (view, mut cx) = open_in_window(cx, &path);
         let (_, page) = pages(&view, &cx);
@@ -2380,7 +2380,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_name_typed_then_a_scrub_put_back_stays(cx: &mut TestAppContext) {
         let tmp = Scratch::new("layers-typed-then-scrub");
-        let path = tmp.0.join("design.figcraft");
+        let path = tmp.0.join("design.sawit");
         let (card, _) = card_and_other(&path);
         let (view, mut cx) = open_in_window(cx, &path);
         change(&view, &mut cx, |view, _| {
