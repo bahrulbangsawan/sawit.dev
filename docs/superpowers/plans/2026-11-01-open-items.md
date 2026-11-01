@@ -17,8 +17,9 @@ and minor items nobody has fixed yet. The hand checks to run before a release ar
   `CLOUDFLARE_API_TOKEN` secret. Its job still runs the site's package scripts before the deploy step.
 - **The app-wide browser** can't be reached, by agents or the user, once a folder is open (each project has its own).
 - **Config Files' ⌘⌫** moves a file such as `~/.zshrc` to the Trash without asking, and the panel can't undo it.
-- **Canvas ops without a `project`** go to the project in front, unlike terminal and browser ops, which go to the
-  agent's own project (Q12), and `app_open` of a canvas file takes the keyboard when its tab only shows again (Q13).
+- **`app_open` of a canvas file** takes the keyboard when its tab only shows again (Q13). Canvas ops without a
+  `project` now go to the agent's own project, as terminal and browser ops do, with Sawit open or closed: Q12 is
+  settled.
 - **Media.** README and the site still show the Excalidraw canvas until they are re-recorded. Seven unused site images
   (`site/public/media/{canvas,instances,mcp,network,port-conflict,prompts,tools}.jpg`) were left out of the repository.
 

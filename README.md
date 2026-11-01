@@ -336,7 +336,9 @@ explained. A conflict on the same address can't be forced.
 - Agents draw on it through the `canvas_*` MCP tools. `canvas_add_mermaid` turns Mermaid into **editable shapes**:
   boxes, connectors joined to them, and labels. Charts (pie, Gantt, XY, quadrant, journey, Sankey, architecture) are
   placed as one picture. Pele, the renderer the rest of the app uses, lays the diagram out. `canvas_command` runs any
-  other canvas command by its id.
+  other canvas command by its id. With no `project`, an agent draws on the canvas of the project it works in, with
+  Sawit open or closed: with Sawit closed, that is the nearest folder up from the agent's with `.nyawit/` (else
+  with `.git`).
 
 ### Git
 
@@ -564,7 +566,8 @@ sawit pupuk bun -y                           # upgrade one tool without asking
 
 The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 117 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
-the agent's project open (or the one `project` names), else the frontmost window.
+the agent's project open (or the one `project` names), else the frontmost window. An agent's browser and canvas are
+its own project's, even while you look at another project of that window.
 
 | Area | Tools |
 |---|---|

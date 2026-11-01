@@ -1088,6 +1088,10 @@ There are 26 questions. They come from the ledger lines that leave a decision or
   B's browser, with B's cookies, and its screenshots and exports went into B's `.nyawit`. Ops in the background
   change nothing on screen; one that shows a page brings that browser forward with its project. The canvas
   could take the same rule.
+- Settled for the second inconsistency (v0.0.8 parity): with no project named, an agent's canvas ops and
+  `app_open_page canvas` use the canvas of the project its working folder is in, as its browser does, and with the
+  app closed sawit-mcp edits that project's canvas: the nearest folder up from the agent's with `.nyawit/`, else
+  with `.git`, else the folder itself. Every canvas op still brings the canvas tab forward.
 - Source: P1:186, P7:212.
 
 **Q13. May an agent's op open UI that takes the keyboard?**

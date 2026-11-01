@@ -660,7 +660,7 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
         }
         // No project named: the window the agent's own folder is open in,
         // else the frontmost one. The folder goes along, as that window
-        // names it: the agent's browser is its project's.
+        // names it: the agent's browser and canvas are its project's.
         (None, folder) => {
             let found = folder.as_deref().and_then(holding);
             let own = found.as_ref().map(|(_, named)| named.clone());

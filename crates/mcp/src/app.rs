@@ -245,12 +245,23 @@ pub struct OpenPromptArgs {
     pub project: Option<String>,
 }
 
+/// What a canvas tool's `project` names: the project whose canvas it uses ([`crate::agent_project`]).
+const CANVAS_PROJECT: &str = "Project folder whose canvas (.nyawit/canvas.figcraft) to use, in the window that has it open. Default: the project your working folder is in (with the app closed, the nearest folder up from it with .nyawit/, else with .git, else the folder itself)";
+
+/// canvas_get's and canvas_clear's arguments: which canvas.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasTargetArgs {
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasElementsArgs {
     #[schemars(
         description = "Element skeletons, e.g. {\"type\":\"rectangle\",\"id\":\"a\",\"x\":0,\"y\":0,\"width\":160,\"height\":60,\"label\":{\"text\":\"API\"}}, {\"type\":\"arrow\",\"x\":160,\"y\":30,\"start\":{\"id\":\"a\"},\"end\":{\"id\":\"b\"}}, {\"type\":\"text\",\"x\":0,\"y\":-40,\"text\":\"Title\"}. Types: rectangle, ellipse, diamond, sticky, text, arrow, line, frame. With no colour given, shapes and stickies are sticky yellow (#FFE78A): pass backgroundColor for another, \"transparent\" for no fill. A line through more than two points is drawn as ink, #1E1E1E unless strokeColor names another. Arrows and lines run straight"
     )]
     pub elements: Vec<Value>,
+    #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
 
@@ -261,6 +272,7 @@ pub struct CanvasMermaidArgs {
     #[schemars(description = "Where to put it; default right of the existing content")]
     pub x: Option<f64>,
     pub y: Option<f64>,
+    #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
 
@@ -270,6 +282,7 @@ pub struct CanvasUpdateArgs {
         description = "Changes per element: {\"id\":\"a\", \"x\":10, \"text\":\"New label\", \"strokeColor\":\"#e03131\", \"backgroundColor\":\"#ffc9c9\", ...}"
     )]
     pub elements: Vec<Value>,
+    #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
 
@@ -277,6 +290,7 @@ pub struct CanvasUpdateArgs {
 pub struct CanvasDeleteArgs {
     #[schemars(description = "Element ids (from canvas_get)")]
     pub ids: Vec<String>,
+    #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
 
@@ -288,6 +302,7 @@ pub struct CanvasLoadArgs {
     pub path: Option<String>,
     #[schemars(description = "Or the .excalidraw scene JSON itself")]
     pub scene: Option<Value>,
+    #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
 
@@ -301,6 +316,7 @@ pub struct CanvasCommandArgs {
         description = "The command's parameters as an object, e.g. {\"x\": 0, \"y\": 0, \"text\": \"Idea\"} for board.sticky"
     )]
     pub params: Option<Value>,
+    #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
 
@@ -310,6 +326,7 @@ pub struct CanvasCommandsArgs {
         description = "Only the commands whose id or label contains this text (any case), such as board. or align, each with the parameters it takes. Without it: every command's id and label"
     )]
     pub filter: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
 
@@ -321,6 +338,7 @@ pub struct CanvasExportArgs {
         description = "Absolute path (or ~/…) to write the file to; default the project's .nyawit/exports folder (Sawit's cache folder outside a project)"
     )]
     pub output_path: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
 
@@ -393,8 +411,9 @@ impl Sawit {
     }
 
     /// The file `project`'s canvas is saved in while the app is closed: its
-    /// `.nyawit/canvas.figcraft` (the project is the folder the agent runs in, unless it names
-    /// one), else `canvas.figcraft` in Sawit's own folder. This is the app's choice of file too.
+    /// `.nyawit/canvas.figcraft` (the project is the one that holds the folder the agent runs in,
+    /// [`crate::agent_project`], unless it names one), else `canvas.figcraft` in Sawit's own
+    /// folder. This is the app's choice of file too.
     ///
     /// A project the agent names must be a folder that is there, as the app answers only for a
     /// project one of its windows has open. A name that is no folder (a project's name rather than
@@ -402,7 +421,7 @@ impl Sawit {
     /// neither the agent nor the user would look.
     fn canvas_board_file(&self, project: Option<&str>) -> Result<PathBuf, String> {
         let named = project.is_some_and(|project| !project.trim().is_empty());
-        let dir = crate::project_dir(project);
+        let dir = crate::agent_project(project);
         if named
             && let Some(dir) = &dir
             && !dir.is_dir()
@@ -415,7 +434,7 @@ impl Sawit {
         Ok(store::board_file(dir.as_deref(), &self.paths.root))
     }
 
-    pub async fn canvas_get_tool(&self, a: WindowArgs) -> CallToolResult {
+    pub async fn canvas_get_tool(&self, a: CanvasTargetArgs) -> CallToolResult {
         let reply = if app_control::is_running(&self.paths) {
             self.canvas(a.project, json!({ "op": "get" })).await
         } else {
@@ -458,7 +477,7 @@ impl Sawit {
     /// the project's `.nyawit/canvas.excalidraw` ([`sawit_core::nyawit::legacy_canvas_file`]),
     /// else the app-wide one.
     fn canvas_file_summary(&self, project: Option<&str>) -> Result<Value, String> {
-        let file = match crate::project_dir(project) {
+        let file = match crate::agent_project(project) {
             Some(project) => sawit_core::nyawit::legacy_canvas_file(&project),
             None => self.paths.root.join("canvas.excalidraw"),
         };
@@ -1110,7 +1129,7 @@ impl Sawit {
     #[tool(
         description = "List the top-level layers of the canvas's page on show: id, type, position, size, text, color and what a connector joins. For the other pages and nested layers use canvas_command: page.list lists the pages, node.get {id} reads a page's or a layer's own layers, and page.select shows another page (with the app closed, only for the rest of one command.batch). Works from the saved file when the app isn't running; the page on show is then the one last saved"
     )]
-    async fn canvas_get(&self, Parameters(a): Parameters<WindowArgs>) -> CallToolResult {
+    async fn canvas_get(&self, Parameters(a): Parameters<CanvasTargetArgs>) -> CallToolResult {
         self.canvas_get_tool(a).await
     }
 
@@ -1171,7 +1190,7 @@ impl Sawit {
     #[tool(
         description = "Delete every layer of the canvas's page on show; other pages keep theirs. The board it held is kept beside the canvas file as <name>.bak (canvas.figcraft.bak for the project's canvas), the 4 kept before it moving to .bak.1 to .bak.4 (the oldest goes), and canvas_load brings it back; in the app the user can also undo it"
     )]
-    async fn canvas_clear(&self, Parameters(a): Parameters<WindowArgs>) -> CallToolResult {
+    async fn canvas_clear(&self, Parameters(a): Parameters<CanvasTargetArgs>) -> CallToolResult {
         match self.canvas(a.project, json!({ "op": "clear" })).await {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
@@ -1233,7 +1252,7 @@ impl Sawit {
             a.output_path.as_deref()
         ));
         let op = json!({ "op": if png { "export_png" } else { "export_svg" } });
-        let project = crate::project_dir(a.project.as_deref());
+        let project = crate::agent_project(a.project.as_deref());
         let value = match self.canvas(a.project, op).await {
             Ok(v) => v,
             Err(e) => return fail(e),
@@ -1871,7 +1890,7 @@ mod tests {
         // The app's answer to `get`, though the native canvas is on and the file could be read:
         // the app is the one that has the canvas.
         let got = server
-            .canvas_get_tool(WindowArgs {
+            .canvas_get_tool(CanvasTargetArgs {
                 project: project_arg(&project),
             })
             .await;
@@ -2067,7 +2086,7 @@ mod tests {
 
         // Clearing the canvas keeps what it held, in the `.bak` beside it.
         let cleared = server
-            .canvas_clear(Parameters(WindowArgs {
+            .canvas_clear(Parameters(CanvasTargetArgs {
                 project: project_arg(&project),
             }))
             .await;
@@ -2232,7 +2251,7 @@ mod tests {
         write_board(&file, 3);
 
         let cleared = server
-            .canvas_clear(Parameters(WindowArgs {
+            .canvas_clear(Parameters(CanvasTargetArgs {
                 project: project_arg(&project),
             }))
             .await;
@@ -2618,7 +2637,7 @@ mod tests {
         let server = native(dir.path());
         let project = project_in(dir.path());
         let file = board_file(&project);
-        let window = || WindowArgs {
+        let window = || CanvasTargetArgs {
             project: project_arg(&project),
         };
         write_board(&file, 3);
@@ -2734,7 +2753,7 @@ mod tests {
 
         // A clear of the first page, while the others keep their stickies.
         let cleared = server
-            .canvas_clear(Parameters(WindowArgs {
+            .canvas_clear(Parameters(CanvasTargetArgs {
                 project: project_arg(&project),
             }))
             .await;
@@ -2754,6 +2773,59 @@ mod tests {
         assert!(newest_holds(&["on two", "on three"]));
         assert_eq!(backups_of(&file).len(), 4);
         assert!(texts_of(&std::fs::read(&file).unwrap()).contains("on three"));
+    }
+
+    /// Q12: an agent started in a subfolder of a project (`web/` of a repository) names no
+    /// project, and with the app closed its canvas tools draw on that project's canvas, the one
+    /// the app shows, as the app's own path does: they made a canvas of the subfolder's own,
+    /// which the app never shows. The folder an agent runs in is its process's, so the call runs
+    /// in a process of its own: this test binary, run again in the subfolder for this test alone.
+    #[test]
+    fn an_agent_in_a_subfolder_draws_on_its_projects_canvas() {
+        const AGENT_HOME: &str = "SAWIT_TEST_AGENT_IN_A_SUBFOLDER";
+        if let Some(home) = std::env::var_os(AGENT_HOME) {
+            // The agent's side, run in the subfolder.
+            let server = Sawit::new(AppPaths { root: home.into() });
+            let sticky = json!({"type": "sticky", "x": 0, "y": 0, "text": "from web"});
+            let add = async move {
+                let elements = vec![sticky];
+                let args = CanvasElementsArgs {
+                    elements,
+                    project: None,
+                };
+                server.canvas_add_elements(Parameters(args)).await
+            };
+            let added = within_seconds(add).expect("the call answered");
+            assert_ne!(added.is_error, Some(true), "{}", said(&added));
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("shop");
+        let web = project.join("web");
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        std::fs::create_dir_all(&web).unwrap();
+        let this_test = "app::tests::an_agent_in_a_subfolder_draws_on_its_projects_canvas";
+        let ran = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", this_test, "--nocapture"])
+            .current_dir(&web)
+            .env(AGENT_HOME, dir.path().join("home"))
+            .output()
+            .unwrap();
+        let out = String::from_utf8_lossy(&ran.stdout);
+        assert!(
+            ran.status.success(),
+            "{out}{}",
+            String::from_utf8_lossy(&ran.stderr)
+        );
+        assert!(
+            out.contains("1 passed"),
+            "the agent's side didn't run: {out}"
+        );
+        assert!(texts_in(&board_file(&project)).contains("from web"));
+        assert!(
+            !web.join(".nyawit").exists(),
+            "a canvas of the subfolder's own"
+        );
     }
 
     /// canvas_get and canvas_clear act on the page on show, the one last saved with the app
@@ -2783,7 +2855,7 @@ mod tests {
             {"command": "page.select", "params": {"index": 0}},
         ]});
         command("command.batch", steps).await;
-        let window = || WindowArgs {
+        let window = || CanvasTargetArgs {
             project: project_arg(&project),
         };
 
@@ -2960,7 +3032,7 @@ mod tests {
 
         // The canvas is still there, with its sticky.
         let got = server
-            .canvas_get_tool(WindowArgs {
+            .canvas_get_tool(CanvasTargetArgs {
                 project: project_arg(&project),
             })
             .await;

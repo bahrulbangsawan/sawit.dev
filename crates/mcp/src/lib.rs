@@ -88,7 +88,7 @@ These control the running Sawit app (start it with launch_app; app_state shows w
 - canvas_*: the canvas (FigCraft engine): list, add shapes/stickies/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG. They also work on the saved file when the app is closed.
 - canvas_command: run any command of the canvas engine by id with its parameters (board.sticky, node.set, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes. With the app closed each call starts from the saved file, so nothing carries over between calls (no undo, no selection, no view): pass ids, or run the steps in one command.batch.
 - browser_*: a browser tab (WebKit) to check the app being built: navigate (default the project's dev server), snapshot the page as an outline with element refs, click/hover/type/press keys/select/scroll by ref or CSS selector, wait for text, screenshot, read console errors and network requests, evaluate JS, resize to a device, read the user's annotations, inspect an element's design, read the page's design system, export it as DESIGN.md + tokens + assets. Take a new browser_snapshot after the page changes; refs reset.
-Most app tools take `project` to pick the window that has that folder open; without it, the window that has the folder sawit-mcp runs in open is used, else the frontmost window. The browser_* tools use that project's own browser tab, even while the user looks at another project of the window.
+Most app tools take `project` to pick the window that has that folder open; without it, the window that has the folder sawit-mcp runs in open is used, else the frontmost window. The browser_* and canvas_* tools (and app_open_page browser or canvas) use that project's own browser tab and canvas, even while the user looks at another project of the window.
 Targets: database tools take a Sawit instance name or a saved connection name (see list_connections).";
 
 #[derive(Debug, Clone)]
@@ -226,8 +226,8 @@ pub(crate) fn expand_home(path: &str) -> PathBuf {
 
 /// The project a tool's files belong to: the `project` argument, else the
 /// folder the agent started `sawit-mcp` in (its project), unless that is
-/// `/` or the home folder. Canvas and diagram files default to its
-/// `.nyawit/`.
+/// `/` or the home folder. Diagram files default to its `.nyawit/`; the
+/// canvas goes by [`agent_project`].
 pub(crate) fn project_dir(project: Option<&str>) -> Option<PathBuf> {
     if let Some(p) = project.map(str::trim).filter(|p| !p.is_empty()) {
         return Some(expand_home(p));
@@ -235,6 +235,37 @@ pub(crate) fn project_dir(project: Option<&str>) -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
     let home = std::env::var_os("HOME").map(PathBuf::from);
     (cwd.parent().is_some() && Some(&cwd) != home.as_ref()).then_some(cwd)
+}
+
+/// The project whose canvas the canvas tools use: the `project` argument, else the project that
+/// holds the folder the agent started `sawit-mcp` in ([`project_dir`], [`project_holding`]). The
+/// app takes an agent's folder to mean the project of its window that holds it, so an agent
+/// started in a subfolder (`web/` of a repository) reaches the canvas the app shows for that
+/// project with the app closed too, rather than a canvas of the subfolder's own that the app never
+/// shows (Q12).
+pub(crate) fn agent_project(project: Option<&str>) -> Option<PathBuf> {
+    let named = project.is_some_and(|p| !p.trim().is_empty());
+    let folder = project_dir(project)?;
+    if named {
+        return Some(folder);
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    Some(project_holding(&folder, home.as_deref()))
+}
+
+/// The project that holds `folder`, from what is on disk: the nearest folder from `folder` up
+/// with Sawit's `.nyawit/` folder in it, where the app keeps a project's canvas; else the nearest
+/// with `.git`; else `folder` itself. The home folder and `/` are never one, nor is a folder above
+/// them, as [`project_dir`] has it.
+fn project_holding(folder: &Path, home: Option<&Path>) -> PathBuf {
+    let nearest = |marker: &str, is_it: fn(&Path) -> bool| {
+        let mut up =
+            (folder.ancestors()).take_while(|dir| dir.parent().is_some() && Some(*dir) != home);
+        up.find(|dir| is_it(&dir.join(marker)))
+    };
+    let found = nearest(sawit_core::nyawit::DIR, Path::is_dir);
+    let found = found.or_else(|| nearest(".git", Path::exists));
+    found.unwrap_or(folder).to_path_buf()
 }
 
 /// Unix seconds as `YYYY-MM-DD HH:MM` (UTC).
@@ -1081,6 +1112,34 @@ mod tests {
         );
     }
 
+    /// Q12: an agent that names no project gets its own project's canvas, as it gets its own
+    /// project's browser, and the instructions say so: they said it of the browser alone, while
+    /// the canvas tools used the project in front.
+    #[test]
+    fn agents_are_told_the_canvas_is_their_own_projects() {
+        let line = INSTRUCTIONS
+            .lines()
+            .find(|line| line.starts_with("Most app tools take `project`"))
+            .expect("the line on `project`");
+        for said in [
+            "the window that has the folder sawit-mcp runs in open",
+            "The browser_* and canvas_* tools (and app_open_page browser or canvas) use that project's own browser tab and canvas",
+        ] {
+            assert!(line.contains(said), "no {said:?} in {line}");
+        }
+        let tools = Sawit::router().list_all();
+        for tool in tools.iter().filter(|tool| tool.name.starts_with("canvas_")) {
+            let properties = tool.input_schema.get("properties").cloned();
+            let project = properties.unwrap_or_default()["project"]["description"].clone();
+            let project = project.as_str().unwrap_or_default();
+            assert!(
+                project.contains("Default: the project your working folder is in"),
+                "{}: {project}",
+                tool.name
+            );
+        }
+    }
+
     /// The terminal_* line says what the tools do now that a terminal tab can hold split panes
     /// (terminal-panes review m2): it names each terminal tool that takes `pane`, and where the
     /// pane's number comes from, instead of saying the tools close tabs.
@@ -1156,6 +1215,44 @@ mod tests {
         ] {
             assert_eq!(refuse_canvas_file("export_query", Path::new(name)), Ok(()));
         }
+    }
+
+    /// Q12: with the app closed, a canvas tool that names no project draws on the canvas of the
+    /// project that holds the agent's folder, as the app does: the nearest folder up with Sawit's
+    /// `.nyawit/`, else with `.git`, else the folder itself. An agent started in `shop/web` edited
+    /// `shop/web/.nyawit/canvas.figcraft`, which the app never shows. The home folder is never the
+    /// project, whatever it holds.
+    #[test]
+    fn the_agents_project_is_the_nearest_folder_up_that_is_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let shop = home.join("code").join("shop");
+        let web = shop.join("web").join("src");
+        std::fs::create_dir_all(&web).unwrap();
+        let project = |folder: &Path| project_holding(folder, Some(&home));
+        assert_eq!(project(&web), web, "nothing marks a project");
+
+        std::fs::create_dir(shop.join(".git")).unwrap();
+        assert_eq!(project(&web), shop, "the repository");
+        // A package with a repository of its own (a submodule's `.git` is a file).
+        std::fs::write(shop.join("web").join(".git"), "gitdir: ../.git/modules/web").unwrap();
+        assert_eq!(project(&web), shop.join("web"));
+        // The project Sawit has made a canvas or an export for wins over a nearer repository.
+        std::fs::create_dir(shop.join(".nyawit")).unwrap();
+        assert_eq!(project(&web), shop);
+        assert_eq!(project(&shop), shop);
+        // A file at that name is no such folder.
+        std::fs::write(shop.join("web").join(".nyawit"), "").unwrap();
+        assert_eq!(project(&web), shop);
+
+        // The home folder isn't one, nor is anything above it.
+        std::fs::create_dir(home.join(".nyawit")).unwrap();
+        std::fs::create_dir(home.join(".git")).unwrap();
+        let notes = home.join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        assert_eq!(project(&notes), notes);
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        assert_eq!(project(&notes), notes);
     }
 
     #[test]
