@@ -280,7 +280,11 @@ async fn sql_is_tried_read_only_first() {
     };
     let admin = db::connect(&profile, None).await.unwrap();
     admin
-        .batch_execute("CREATE TABLE t (x int); INSERT INTO t VALUES (1); CREATE SEQUENCE s;")
+        .batch_execute(
+            "CREATE TABLE t (x int); INSERT INTO t VALUES (1); CREATE SEQUENCE s;
+             CREATE PROCEDURE add_one() LANGUAGE plpgsql AS $$
+               BEGIN INSERT INTO t VALUES (2); COMMIT; END $$;",
+        )
         .await
         .unwrap();
     let ro = db::connect_read_only(&profile, None).await.unwrap();
@@ -301,6 +305,9 @@ async fn sql_is_tried_read_only_first() {
         "VACUUM t",
         "CREATE DATABASE other",
         "COPY t TO STDOUT",
+        "CALL add_one()",
+        // Ends the transaction it runs in before it writes anything.
+        "DO $$ BEGIN COMMIT; INSERT INTO t VALUES (3); END $$",
     ] {
         let tried = db::run_if_read_only(&ro, sql, 10).await;
         assert!(

@@ -973,8 +973,9 @@ pub enum ReadOnlyTry {
     /// It only reads: what it returned.
     Read(QueryOutcome),
     /// It writes (the server refused it in a read-only transaction), must run outside any
-    /// transaction (`DROP DATABASE`, `VACUUM`), or is what read-only mode never runs (`COPY`, a
-    /// switch of the mode): the refusal, in the server's or Sawit's words. Nothing of it ran.
+    /// transaction (`DROP DATABASE`, `VACUUM`, a procedure that commits), or is what read-only
+    /// mode never runs (`COPY`, a switch of the mode): the refusal, in the server's or Sawit's
+    /// words. Nothing of it ran.
     Writes(String),
     /// Several statements, which a read-only run can't take (a `COMMIT` among them would end its
     /// transaction): the server's refusal. None of them ran.
@@ -1006,10 +1007,12 @@ pub async fn run_if_read_only(client: &Client, sql: &str, max_rows: usize) -> Re
     let _ = client.batch_execute("ROLLBACK").await;
     match result {
         Ok(outcome) => Ok(ReadOnlyTry::Read(outcome)),
-        // It writes (25006), or must run outside a transaction (25001).
+        // It writes (25006), must run outside a transaction (25001), or ends the transaction
+        // it runs in, as a procedure that commits does (2D000).
         Err(e)
             if e.code() == Some(&SqlState::READ_ONLY_SQL_TRANSACTION)
-                || e.code() == Some(&SqlState::ACTIVE_SQL_TRANSACTION) =>
+                || e.code() == Some(&SqlState::ACTIVE_SQL_TRANSACTION)
+                || e.code() == Some(&SqlState::INVALID_TRANSACTION_TERMINATION) =>
         {
             Ok(ReadOnlyTry::Writes(sql_error(e).to_string()))
         }
