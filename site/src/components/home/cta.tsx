@@ -7,7 +7,7 @@ export function Cta() {
     <section className="sec cta" aria-labelledby="cta-title">
       <div className="w">
         <span className="icon">
-          <img src="/media/sawit-icon.png" width={1024} height={1024} alt="The Sawit app icon: a palm tree whose trunk is three database discs" />
+          <img src="/media/sawit-icon.png" width={512} height={512} alt="The Sawit app icon: a palm tree whose trunk is three database discs" />
         </span>
         <h2 id="cta-title" className="blue" lang="id">
           Pasang Sawit
