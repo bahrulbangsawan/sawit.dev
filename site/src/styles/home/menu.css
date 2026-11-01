@@ -1,0 +1,89 @@
+/* the CLI as a letter: an envelope holding a ringed sheet with the icon as a seal */
+.letter {
+  position: relative;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--pane-2) 50%, var(--bg));
+  box-shadow: 6px 6px 0 color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.sheet {
+  position: relative;
+  overflow: hidden;
+  padding: var(--space-6);
+  border: 1px solid var(--border);
+  background: radial-gradient(
+        circle at 12px 12px,
+        transparent 5px,
+        color-mix(in srgb, var(--accent) 8%, transparent) 5px 6px,
+        transparent 6px
+      )
+      0 0 / 24px 24px,
+    var(--bg-2);
+}
+.sheet h2 {
+  margin: 10px 0 var(--space-3);
+  font-size: 28px;
+}
+.sheet .eyebrow {
+  display: block;
+}
+.sheet-lead {
+  max-width: 34em;
+}
+.seal {
+  position: absolute;
+  top: var(--space-5);
+  right: var(--space-5);
+  width: 96px;
+  height: 96px;
+  padding: 14px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 6px var(--bg-2), 0 0 0 7px color-mix(in srgb, var(--accent) 30%, transparent);
+  opacity: 0.85;
+}
+.groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-6) var(--space-7);
+  margin-top: var(--space-6);
+}
+.groups h3 {
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--line);
+  font-size: 17px;
+}
+.groups ul {
+  display: grid;
+  gap: var(--space-3);
+}
+.groups li {
+  display: grid;
+  gap: 2px;
+}
+.groups code {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  color: var(--fg);
+}
+.groups li span {
+  font-size: 12.5px;
+  color: var(--fg-muted);
+}
+.sheet hr {
+  width: 150px;
+  margin: var(--space-6) 0 var(--space-5);
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+.sign {
+  font: italic 400 16px/1.4 var(--font-display);
+  color: var(--fg);
+}
+.sign small {
+  display: block;
+  margin-top: 4px;
+  font: 400 11px/1.6 var(--font-mono);
+  color: var(--ink);
+}

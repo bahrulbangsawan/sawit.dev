@@ -1,0 +1,258 @@
+/* the app window, drawn in HTML, hanging from a "watch the demo" tab */
+.stage .w {
+  padding: var(--space-7) var(--space-4) 0;
+  background: linear-gradient(180deg, var(--wash), transparent 60%), var(--bg);
+}
+.demo {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 6px;
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: var(--bg-2);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  color: var(--fg);
+  white-space: nowrap;
+  transform: translateX(-50%);
+  transition: background-color var(--dur) var(--ease);
+}
+.demo:hover {
+  background: var(--pane-2);
+}
+.demo svg {
+  width: 10px;
+  height: 10px;
+  fill: currentColor;
+  stroke: none;
+}
+.ide {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) minmax(0, 1.35fr);
+  overflow: hidden;
+  height: 440px;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--pane);
+  box-shadow: var(--shadow);
+  font: 400 11px/1.5 var(--font-mono);
+  color: var(--ink);
+}
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--pane-2);
+  white-space: nowrap;
+  color: var(--fg-muted);
+}
+.bar .fg {
+  color: var(--fg);
+}
+.dots {
+  display: flex;
+  gap: 6px;
+  margin-right: 4px;
+}
+.dots i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--syn-3);
+}
+.dots i:nth-child(2) {
+  background: color-mix(in srgb, var(--syn-3) 45%, var(--syn-2));
+}
+.dots i:nth-child(3) {
+  background: var(--syn-2);
+}
+.side {
+  position: relative;
+  border-right: 1px solid var(--line);
+}
+.grp {
+  padding: 10px 10px 4px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.it {
+  display: grid;
+  grid-template-columns: 12px 1fr;
+  gap: 0 6px;
+  padding: 5px 10px;
+}
+.it b {
+  overflow: hidden;
+  font-weight: 400;
+  color: var(--fg);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.it i {
+  width: 6px;
+  height: 6px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--fg-muted) 40%, transparent);
+}
+.it span {
+  grid-column: 2;
+  color: var(--fg-muted);
+}
+.it.on {
+  background: var(--pane-2);
+}
+.it.on i {
+  background: var(--syn-2);
+}
+.it.tb i {
+  border-radius: 1px;
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--fg-muted);
+}
+.it.sel {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.foot {
+  position: absolute;
+  inset: auto 0 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--line);
+  color: var(--fg-muted);
+}
+.foot i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--syn-2);
+}
+.term {
+  border-right: 1px solid var(--line);
+  background: var(--bg);
+}
+.term pre {
+  padding: 10px 12px;
+  font: 400 11.5px/1.65 var(--font-mono);
+  color: var(--ink);
+  white-space: pre;
+}
+.pr {
+  color: var(--syn-1);
+}
+.caret {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  vertical-align: -3px;
+  background: var(--ink);
+}
+.code {
+  background: var(--bg-2);
+  counter-reset: ln;
+}
+.tabs {
+  display: flex;
+  height: 30px;
+  border-bottom: 1px solid var(--line);
+  background: var(--pane);
+  white-space: nowrap;
+}
+.tabs span {
+  padding: 7px 16px;
+  border-right: 1px solid var(--line);
+  color: var(--fg-muted);
+}
+.tabs span:first-child {
+  background: var(--bg-2);
+  color: var(--fg);
+}
+.crumb {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg-muted);
+}
+.run {
+  padding: 0 6px;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+.lines {
+  padding: 6px 0;
+}
+.lines p {
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--fg);
+  white-space: pre;
+}
+.lines p::before {
+  counter-increment: ln;
+  content: counter(ln);
+  display: inline-block;
+  width: 3ch;
+  margin-right: 14px;
+  text-align: right;
+  color: var(--fg-muted);
+}
+.lines p.cur {
+  background: var(--pane);
+}
+.kw {
+  color: var(--syn-4);
+}
+.fn {
+  color: var(--syn-1);
+}
+.st {
+  color: var(--syn-2);
+}
+.nu {
+  color: var(--syn-3);
+}
+.cm {
+  color: var(--fg-muted);
+  font-style: italic;
+}
+.rmeta {
+  padding: 5px 10px;
+  border-block: 1px solid var(--line);
+  background: var(--pane);
+  color: var(--fg-muted);
+}
+.code table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+.code th,
+.code td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  font-weight: 400;
+}
+.code th {
+  color: var(--fg-muted);
+}
+.code td {
+  color: var(--fg);
+}

@@ -1,0 +1,18 @@
+/* trio: three butted cells under the hero */
+.trio {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.trio > div {
+  padding: var(--space-5);
+}
+.trio > div + div {
+  border-left: 1px solid var(--line);
+}
+.trio h2 {
+  font-size: 16.8px;
+}
+.trio p {
+  margin-top: var(--space-2);
+  font-size: 13px;
+}

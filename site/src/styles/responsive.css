@@ -1,0 +1,132 @@
+/* narrow screens: the 1000px and 760px breakpoints */
+@media (max-width: 1000px) {
+  .links {
+    display: none;
+  }
+  .ide {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+  .term {
+    display: none;
+  }
+  .steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .steps > li:nth-child(3) {
+    border-left: 0;
+  }
+  .steps > li:nth-child(n + 3) {
+    border-top: 1px solid var(--line);
+  }
+  .cells {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .cells > div:nth-child(n) {
+    border-left: 0;
+    border-top: 0;
+  }
+  .cells > div:nth-child(2n) {
+    border-left: 1px solid var(--line);
+  }
+  .cells > div:nth-child(n + 3) {
+    border-top: 1px solid var(--line);
+  }
+  .fc {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .fc > *:first-child {
+    grid-column: 1 / -1;
+  }
+  .fc > *:nth-child(2) {
+    border-left: 0;
+  }
+  .fc > * + * {
+    border-top: 1px solid color-mix(in srgb, var(--accent-fg) 18%, transparent);
+  }
+}
+@media (max-width: 760px) {
+  :root {
+    --space-7: 32px;
+    --space-8: 64px;
+  }
+  .hide-sm {
+    display: none;
+  }
+  .w {
+    margin-inline: 12px;
+  }
+  .nav .w {
+    padding: 0 12px;
+  }
+  .pad {
+    padding: var(--space-7) var(--space-4);
+  }
+  .hero .w {
+    padding: 80px var(--space-4) 64px;
+  }
+  .acts {
+    flex-direction: column;
+    align-self: stretch;
+    justify-self: stretch;
+  }
+  .acts .btn {
+    height: 44px;
+    font-size: 16px;
+  }
+  .cmd {
+    justify-self: stretch;
+  }
+  .trio,
+  .steps,
+  .cells,
+  .plans,
+  .stats,
+  .groups,
+  .acc-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .trio > div + div,
+  .steps > li + li,
+  .cells > div + div,
+  .stats div + div {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .cells > div {
+    padding: var(--space-5) var(--space-4);
+  }
+  .acc summary {
+    padding-inline: var(--space-4);
+  }
+  .acc-body {
+    padding: 0 var(--space-4) var(--space-5);
+  }
+  .stage .w {
+    padding: var(--space-7) var(--space-2) 0;
+  }
+  .ide {
+    grid-template-columns: minmax(0, 1fr);
+    height: 380px;
+  }
+  .side {
+    display: none;
+  }
+  .seal {
+    display: none;
+  }
+  .sheet {
+    padding: var(--space-5);
+  }
+  .letter {
+    padding: var(--space-2);
+  }
+  .fc {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .fc > * + * {
+    border-left: 0;
+  }
+  .big {
+    height: 100px;
+  }
+}

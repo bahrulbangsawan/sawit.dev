@@ -1,0 +1,65 @@
+/* install: two hairline cards, the script one on graph paper */
+.plans {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-6);
+  max-width: 800px;
+  margin: var(--space-7) auto 0;
+}
+.plan {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-2) 70%, var(--bg));
+}
+.plan.hl {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+  background: linear-gradient(var(--gridline) 1px, transparent 0) 0 0 / 8px 8px,
+    linear-gradient(90deg, var(--gridline) 1px, transparent 0) 0 0 / 8px 8px,
+    color-mix(in srgb, var(--accent) 4%, var(--bg-2));
+  box-shadow: 6px 6px 0 color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.plan.hl .eyebrow span:first-child {
+  color: var(--accent);
+}
+.plan.hl .eyebrow span:last-child {
+  color: var(--fg-muted);
+}
+.price {
+  margin-top: var(--space-4);
+  font: 400 32px/1 var(--font-display);
+  color: var(--accent);
+}
+.price span {
+  white-space: nowrap;
+  font: 400 14px/1 var(--font-body);
+  color: var(--fg-muted);
+}
+.plan > p:not(.price) {
+  font-size: 14px;
+}
+.plan ul {
+  display: grid;
+  gap: 10px;
+  margin: var(--space-3) 0 var(--space-6);
+  font-size: 14px;
+}
+.plan li {
+  display: flex;
+  gap: 10px;
+}
+.plan li svg {
+  margin-top: 4px;
+  color: var(--accent);
+}
+.plan .btn {
+  width: 100%;
+  margin-top: auto;
+}
+.btn.tint {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-2));
+  color: var(--accent);
+}

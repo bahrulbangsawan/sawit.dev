@@ -1,0 +1,16 @@
+/* faq: serif questions, generous mono answers, one centred column */
+.faq {
+  display: grid;
+  gap: var(--space-7);
+  max-width: 672px;
+  margin: var(--space-7) auto 0;
+}
+.faq h3 {
+  font-size: 22px;
+  line-height: 1.3;
+}
+.faq p {
+  margin-top: var(--space-3);
+  font-size: 15px;
+  line-height: 26px;
+}

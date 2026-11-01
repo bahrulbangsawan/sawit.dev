@@ -1,0 +1,12 @@
+/* the running instance's pulse, unless the reader asks for reduced motion */
+@media (prefers-reduced-motion: no-preference) {
+  .it.on i,
+  .foot i {
+    animation: pulse 1.6s var(--ease) infinite;
+  }
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}

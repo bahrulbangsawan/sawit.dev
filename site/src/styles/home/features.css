@@ -1,0 +1,69 @@
+/* feature cells: dashed frames around real screenshots, hairline grid, + expanders */
+.cells {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+}
+.cells > div {
+  padding: var(--space-6);
+}
+.cells > div:not(:nth-child(3n + 1)) {
+  border-left: 1px solid var(--line);
+}
+.cells > div:nth-child(n + 4) {
+  border-top: 1px solid var(--line);
+}
+.cells h3 {
+  font-size: 16.8px;
+}
+.cells p {
+  margin-top: var(--space-3);
+  font-size: 13px;
+}
+.frame {
+  margin-bottom: var(--space-4);
+  padding: 6px;
+  border: 1px dashed var(--border);
+}
+.frame img,
+.frame video {
+  width: 100%;
+  background: var(--shot);
+}
+.acc {
+  border-top: 1px solid var(--line);
+}
+.acc details + details {
+  border-top: 1px solid var(--line);
+}
+.acc summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px var(--space-6);
+  font-size: 15px;
+  color: var(--fg);
+  cursor: pointer;
+  list-style: none;
+  transition: background-color var(--dur) var(--ease);
+}
+.acc summary::-webkit-details-marker {
+  display: none;
+}
+.acc summary::after {
+  content: '+';
+  color: var(--fg-muted);
+}
+.acc details[open] summary::after {
+  content: '−';
+}
+.acc summary:hover {
+  background: color-mix(in srgb, var(--pane) 60%, transparent);
+}
+.acc-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: var(--space-6);
+  padding: 0 var(--space-6) var(--space-6);
+  font-size: 13px;
+}

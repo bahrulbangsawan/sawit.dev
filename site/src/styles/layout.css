@@ -1,0 +1,98 @@
+/* the page: outer faint rails and a fixed paper grain */
+.flavor {
+  position: relative;
+  overflow-x: clip;
+}
+.flavor::before {
+  content: '';
+  position: absolute;
+  inset: 0 max(0px, calc(50% - var(--max) / 2 - var(--rail)));
+  border-inline: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  pointer-events: none;
+}
+.flavor::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  opacity: var(--grain);
+  mix-blend-mode: multiply;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* rails: every section is a full-bleed hairline band; the column has its own side rules and diamond nodes */
+.sec {
+  position: relative;
+  border-bottom: 1px solid var(--line);
+}
+.w {
+  position: relative;
+  max-width: var(--max);
+  margin-inline: auto;
+  border-inline: 1px solid var(--line);
+  background: var(--bg);
+}
+.sec > .w::before,
+.sec > .w::after {
+  content: '';
+  position: absolute;
+  z-index: 3;
+  top: calc(var(--node) / -2 - 0.5px);
+  width: var(--node);
+  height: var(--node);
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  transform: rotate(45deg);
+}
+.sec > .w::before {
+  left: calc(var(--node) / -2 - 0.5px);
+}
+.sec > .w::after {
+  right: calc(var(--node) / -2 - 0.5px);
+}
+.gr > .w {
+  background: linear-gradient(var(--gridline) 1px, transparent 0) 0 0 / var(--grid) var(--grid),
+    linear-gradient(90deg, var(--gridline) 1px, transparent 0) 0 0 / var(--grid) var(--grid), var(--bg);
+}
+.pad {
+  padding: var(--space-7);
+}
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+.h2 {
+  font-size: 25.6px;
+  line-height: 1.25;
+}
+.lead {
+  max-width: 36em;
+  margin-top: var(--space-3);
+  font-size: 16px;
+  line-height: 1.5;
+}
+.blue {
+  color: var(--accent);
+}
+.c {
+  text-align: center;
+}
+.c .lead {
+  margin-inline: auto;
+}
+.muted {
+  color: var(--fg-muted);
+}
+.eyebrow {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font: 400 11px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+}

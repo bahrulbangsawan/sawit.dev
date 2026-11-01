@@ -1,0 +1,31 @@
+/* final CTA: the app icon, blue serif line, the hero buttons again */
+.cta .w {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-4);
+  padding: var(--space-8) var(--space-5);
+  background: radial-gradient(60% 80% at 50% 40%, var(--wash), transparent), var(--bg);
+  text-align: center;
+}
+.icon {
+  display: grid;
+  place-items: center;
+  width: 152px;
+  height: 152px;
+  margin-bottom: var(--space-4);
+  padding: 8px;
+  border-radius: 40px;
+  background: var(--bg-2);
+  box-shadow: var(--shadow);
+}
+.icon img {
+  width: 100%;
+  height: 100%;
+  border-radius: 32px;
+}
+.cta h2 {
+  font-size: 28px;
+}
+.cta .lead {
+  margin: 0;
+}

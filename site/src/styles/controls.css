@@ -1,0 +1,68 @@
+/* buttons: 36px, 4px radius, a 2px inset lip that disappears on hover */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 12px 0 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg-2) 60%, transparent);
+  box-shadow: var(--lip);
+  color: var(--fg);
+  font: 400 14px/1 var(--font-body);
+  letter-spacing: -0.025em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+.btn:hover {
+  background: color-mix(in srgb, var(--pane-2) 80%, transparent);
+  box-shadow: none;
+}
+.btn:active {
+  transform: translateY(1px) scale(0.99);
+}
+.btn.ghost {
+  border-color: transparent;
+  background: none;
+  box-shadow: none;
+}
+.btn.ghost:hover {
+  background: color-mix(in srgb, var(--pane-2) 80%, transparent);
+}
+.pri {
+  border-color: transparent;
+  background: var(--accent);
+  box-shadow:
+    inset 0 -2px 0 0 var(--accent-deep),
+    0 1px 3px 0 color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent-fg);
+}
+.pri:hover {
+  background: color-mix(in srgb, var(--accent) 82%, var(--accent-deep));
+}
+.sm {
+  height: 32px;
+}
+kbd {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--fg-muted) 22%, transparent);
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--bg-2) 50%, transparent);
+  font: 400 11px/1 var(--font-mono);
+  color: var(--fg-muted);
+}
+.keys {
+  display: inline-flex;
+  gap: 3px;
+  margin-left: var(--space-2);
+  vertical-align: 2px;
+}

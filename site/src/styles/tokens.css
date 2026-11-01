@@ -1,0 +1,53 @@
+/* tokens: colours, fonts, radii, spacing, shadows and the page grid */
+:root {
+  --bg: #1b1d22;
+  --bg-2: #23262d;
+  --fg: #f0f1f4;
+  --ink: #c8ccd4;
+  --fg-muted: #8b93a3;
+  --accent: #74ade8;
+  --accent-fg: #0d1422;
+  --accent-deep: #3e6fae;
+  --border: #353a44;
+  --line: #2d3139;
+  --pane: #262a31;
+  --pane-2: #2f343e;
+  --shot: #0f1115;
+  --syn-1: #74ade8;
+  --syn-2: #a1c181;
+  --syn-3: #d07277;
+  --syn-4: #b477cf;
+
+  --font-display: 'IBM Plex Serif', Georgia, serif;
+  --font-body: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  --radius: 4px;
+  --radius-xs: 2px;
+  --radius-lg: 6px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 96px;
+
+  --shadow: 0 20px 25px -5px color-mix(in srgb, var(--shot) 60%, transparent),
+    0 8px 10px -6px color-mix(in srgb, var(--shot) 60%, transparent);
+  --lip: inset 0 -2px 0 0 color-mix(in srgb, var(--fg-muted) 12%, transparent);
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur: 150ms;
+
+  --max: 1120px;
+  --rail: 112px;
+  --node: 7px;
+  --grid: 16px;
+  --grid-ink: 6;
+  --grain: 0.06;
+  --wash: color-mix(in srgb, var(--accent) 7%, transparent);
+  --gridline: color-mix(in srgb, var(--fg-muted) calc(var(--grid-ink) * 1%), transparent);
+
+  color-scheme: dark;
+}

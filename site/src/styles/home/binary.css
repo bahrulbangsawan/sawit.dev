@@ -1,0 +1,69 @@
+/* one binary: the demo video and four numbers */
+.os .w {
+  padding-top: var(--space-8);
+  background: radial-gradient(70% 90% at 50% 20%, var(--wash), transparent),
+    linear-gradient(var(--gridline) 1px, transparent 0) 0 0 / var(--grid) var(--grid),
+    linear-gradient(90deg, var(--gridline) 1px, transparent 0) 0 0 / var(--grid) var(--grid), var(--bg);
+}
+.video {
+  position: relative;
+  max-width: 880px;
+  margin: var(--space-7) auto 0;
+  background: var(--bg);
+}
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: var(--space-7);
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+.stats div {
+  display: flex;
+  flex-direction: column-reverse;
+  padding: var(--space-5);
+}
+.stats div + div {
+  border-left: 1px solid var(--line);
+}
+.stats dd {
+  font: 400 26px/1.2 var(--font-mono);
+  letter-spacing: -0.02em;
+  color: var(--fg);
+}
+.stats dt {
+  font-size: 13px;
+}
+
+/* the only control on the demo: a small pause/play chip in the corner */
+.vid-toggle {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg) 75%, transparent);
+  color: var(--fg);
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity var(--dur) var(--ease);
+}
+.video:hover .vid-toggle,
+.vid-toggle:focus-visible {
+  opacity: 1;
+}
+.vid-toggle svg {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+  stroke: none;
+}
+.video video {
+  -webkit-touch-callout: none;
+  user-select: none;
+}
