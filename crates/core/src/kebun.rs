@@ -76,27 +76,33 @@ ORDER BY 1, 2";
 // Arguments
 // ---------------------------------------------------------------------------
 
-/// `sawit <db> [table] ["sql"]`.
+/// `sawit <db> [table] ["sql"] [-y]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryArgs {
     pub db: String,
     pub table: Option<String>,
     pub sql: Option<String>,
+    /// Run a statement that writes without asking first (`-y`).
+    pub yes: bool,
 }
 
 impl QueryArgs {
     /// More than a bare name: the user surely meant a database.
     fn explicit(&self) -> bool {
-        self.table.is_some() || self.sql.is_some()
+        self.table.is_some() || self.sql.is_some() || self.yes
     }
 }
 
-/// The arguments as `sawit <db> [table] ["sql"]` when they have that shape:
-/// a bare name that isn't a path in `cwd`, then a table and/or SQL (SQL has
-/// a space in it). Whether `db` really is a database is decided later.
-/// Subcommand names (`list`, `bakar`) are never databases.
+/// The arguments as `sawit <db> [table] ["sql"] [-y]` when they have that
+/// shape: a bare name that isn't a path in `cwd`, then a table and/or SQL
+/// (SQL has a space in it), and `-y` (`--yes`, `--ya`) anywhere. Whether
+/// `db` really is a database is decided later. Subcommand names (`list`,
+/// `bakar`) are never databases.
 pub fn query_args(args: &[OsString], cwd: &Path) -> Option<QueryArgs> {
     let args: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
+    let is_yes = |a: &&str| matches!(*a, "-y" | "--yes" | "--ya");
+    let yes = args.iter().any(is_yes);
+    let args: Vec<&str> = args.into_iter().filter(|a| !is_yes(a)).collect();
     if !(1..=3).contains(&args.len()) || args.iter().any(|a| a.starts_with('-') || a.is_empty()) {
         return None;
     }
@@ -122,6 +128,7 @@ pub fn query_args(args: &[OsString], cwd: &Path) -> Option<QueryArgs> {
         db: db.into(),
         table: table.map(Into::into),
         sql: sql.map(Into::into),
+        yes,
     })
 }
 
@@ -612,8 +619,10 @@ pub fn block_on<F: std::future::Future>(fut: F) -> F::Output {
         .block_on(fut)
 }
 
-/// `sawit <db> [table] ["sql"]`. `None` when `db` isn't a database and the
-/// arguments could just as well be files to open.
+/// `sawit <db> [table] ["sql"] [-y]`. `None` when `db` isn't a database and
+/// the arguments could just as well be files to open. The SQL is tried
+/// read-only first, as the `query` MCP tool runs it; SQL that writes is
+/// shown, and runs once the user says yes (or with `-y`).
 pub async fn query(args: QueryArgs, paths: &AppPaths, cwd: &Path) -> Option<i32> {
     let ink = Ink::stderr();
     let kebun = match find(&args.db, paths, cwd).await {
@@ -640,7 +649,8 @@ pub async fn query(args: QueryArgs, paths: &AppPaths, cwd: &Path) -> Option<i32>
             p.database, p.host, p.port, kebun.via
         ))
     );
-    let client = match db::connect(p, kebun.password.as_deref()).await {
+    // Read-only first: SQL that writes shows itself and asks before it runs.
+    let reader = match db::connect_read_only(p, kebun.password.as_deref()).await {
         Ok(client) => client,
         Err(e) => {
             eprintln!("{} Gagal masuk kebun {}: {e}", ink.red("🔥"), p.database);
@@ -648,13 +658,87 @@ pub async fn query(args: QueryArgs, paths: &AppPaths, cwd: &Path) -> Option<i32>
         }
     };
     let sql = plan_sql(args.table.as_deref(), args.sql.as_deref());
-    let outcome = match db::run_sql(&client, &sql, MAX_ROWS).await {
-        Ok(outcome) => outcome,
+    let why = match db::run_if_read_only(&reader, &sql, MAX_ROWS).await {
+        Ok(db::ReadOnlyTry::Read(outcome)) => return Some(harvest(&outcome, &ink)),
+        Ok(db::ReadOnlyTry::Writes(refusal)) => format!(
+            "Pernyataan ini mengubah kebun; mode baca-saja menolaknya ({}).",
+            refusal.lines().next().unwrap_or_default()
+        ),
+        Ok(db::ReadOnlyTry::Several(_)) => {
+            "Ada beberapa pernyataan sekaligus, dan Sawit tidak bisa mencobanya baca-saja dulu."
+                .into()
+        }
         Err(e) => {
             eprintln!("{} Gagal panen: {e}", ink.red("🔥"));
             return Some(1);
         }
     };
+    if !may_run_writes(&sql, &why, &p.database, args.yes, &ink) {
+        return Some(1);
+    }
+    let writer = match db::connect(p, kebun.password.as_deref()).await {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("{} Gagal masuk kebun {}: {e}", ink.red("🔥"), p.database);
+            return Some(1);
+        }
+    };
+    match db::run_sql(&writer, &sql, MAX_ROWS).await {
+        Ok(outcome) => Some(harvest(&outcome, &ink)),
+        Err(e) => {
+            eprintln!("{} Gagal panen: {e}", ink.red("🔥"));
+            Some(1)
+        }
+    }
+}
+
+/// Whether `sql`, which the read-only try refused (`why`), may run in `database` as it is: with
+/// `-y`, or when the user says yes. The statement and why it asks come first, on stderr, where
+/// `sawit <db>` says all but its tables. Without a terminal to ask on, and without `-y`, it may not.
+fn may_run_writes(sql: &str, why: &str, database: &str, yes: bool, ink: &Ink) -> bool {
+    eprintln!("{} {why}", ink.yellow("!"));
+    for line in statement_preview(sql) {
+        eprintln!("     {}", ink.gray(&line));
+    }
+    if yes {
+        return true;
+    }
+    match confirm_on_stderr(&format!(
+        "Jalankan di {database}? Lahan yang terbakar tidak tumbuh lagi."
+    )) {
+        Some(true) => true,
+        Some(false) => {
+            eprintln!("{}", ink.gray("🌾 Batal. Kebun tidak disentuh."));
+            false
+        }
+        None => {
+            eprintln!(
+                "{} Tidak ada saksi (stdin bukan terminal). Tambahkan -y kalau memang mau menjalankannya.",
+                ink.red("🔥")
+            );
+            false
+        }
+    }
+}
+
+/// The lines of `sql` shown before `sawit <db>` asks to run it: the first 20 (each cut at 200
+/// characters), then how many more there are.
+fn statement_preview(sql: &str) -> Vec<String> {
+    const SHOWN: usize = 20;
+    let lines: Vec<&str> = sql.trim().lines().collect();
+    let mut shown: Vec<String> = lines
+        .iter()
+        .take(SHOWN)
+        .map(|line| clip(line, 200))
+        .collect();
+    if lines.len() > SHOWN {
+        shown.push(format!("… ({} baris lagi)", lines.len() - SHOWN));
+    }
+    shown
+}
+
+/// Prints the result sets of `outcome` on stdout, and its tally on stderr; the exit code.
+fn harvest(outcome: &db::QueryOutcome, ink: &Ink) -> i32 {
     let mut out = std::io::stdout().lock();
     for (ix, set) in outcome.results.iter().enumerate() {
         let gap = if ix > 0 { "\n" } else { "" };
@@ -673,7 +757,7 @@ pub async fn query(args: QueryArgs, paths: &AppPaths, cwd: &Path) -> Option<i32>
     }
     summary.push(format!("{} ms", outcome.duration.as_millis()));
     eprintln!("{}", ink.gray(&format!("🌾 {}", summary.join(" · "))));
-    Some(0)
+    0
 }
 
 /// `sawit list [what]`.
@@ -1419,6 +1503,22 @@ fn confirm(question: &str) -> Option<bool> {
     ))
 }
 
+/// [`confirm`], asked on stderr: `sawit <db>` keeps stdout for its tables.
+fn confirm_on_stderr(question: &str) -> Option<bool> {
+    if !std::io::stdin().is_terminal() {
+        return None;
+    }
+    let ink = Ink::stderr();
+    eprint!("  {} {question} [y/N] ", ink.yellow("?"));
+    let _ = std::io::stderr().flush();
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer).ok()?;
+    Some(matches!(
+        answer.trim().to_lowercase().as_str(),
+        "y" | "ya" | "yes"
+    ))
+}
+
 /// `text` cut to `max` characters, with `…` when shortened.
 fn clip(text: &str, max: usize) -> String {
     match text.char_indices().nth(max - 1) {
@@ -1529,6 +1629,7 @@ mod tests {
             db: db.into(),
             table: table.map(Into::into),
             sql: sql.map(Into::into),
+            yes: false,
         })
     }
 
@@ -1562,6 +1663,50 @@ mod tests {
         // An existing folder is opened, not queried.
         let args = [OsString::from("tmp")];
         assert_eq!(query_args(&args, Path::new("/")), None);
+    }
+
+    /// `-y` (`--yes`, `--ya`) anywhere runs SQL that writes without asking; it isn't a table,
+    /// and with it a name that is no database is said to be none, not opened as a file.
+    #[test]
+    fn a_query_takes_yes_anywhere() {
+        let yes = |db: &str, table: Option<&str>, sql: Option<&str>| {
+            qa(db, table, sql).map(|q| QueryArgs { yes: true, ..q })
+        };
+        assert_eq!(
+            q(&["kyzn", "delete from leads", "-y"]),
+            yes("kyzn", None, Some("delete from leads"))
+        );
+        assert_eq!(
+            q(&["--yes", "kyzn", "leads", "id = 3"]),
+            yes("kyzn", Some("leads"), Some("id = 3"))
+        );
+        assert_eq!(q(&["kyzn", "--ya"]), yes("kyzn", None, None));
+        assert!(q(&["kyzn", "-y"]).unwrap().explicit());
+        // Other options are still not a query's.
+        assert_eq!(q(&["-y"]), None);
+        assert_eq!(q(&["kyzn", "-n"]), None);
+        assert_eq!(q(&["kyzn", "-y", "-r"]), None);
+    }
+
+    /// Before it asks, `sawit <db>` shows the statement: up to 20 lines, each cut at 200
+    /// characters, then how many more lines there are.
+    #[test]
+    fn a_statement_is_shown_before_it_runs() {
+        assert_eq!(
+            statement_preview("  delete from leads\n where id = 3\n"),
+            ["delete from leads", " where id = 3"]
+        );
+        let long = (1..=25)
+            .map(|n| format!("insert into t values ({n});"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let shown = statement_preview(&long);
+        assert_eq!(shown.len(), 21);
+        assert_eq!(shown[19], "insert into t values (20);");
+        assert_eq!(shown[20], "… (5 baris lagi)");
+        let wide = statement_preview(&"x".repeat(300));
+        assert_eq!(wide[0].chars().count(), 200);
+        assert!(wide[0].ends_with('…'));
     }
 
     #[test]

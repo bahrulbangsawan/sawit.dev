@@ -521,7 +521,8 @@ plantations Sawit is named after):
 sawit kyzn                                   # list the tables
 sawit kyzn leads                             # first 100 rows
 sawit kyzn leads "phone is null"             # filter: SELECT * FROM leads WHERE phone is null
-sawit kyzn leads "select * from leads where phone is null"   # any SQL, like psql (writes too)
+sawit kyzn leads "select * from leads where phone is null"   # any SQL, like psql
+sawit kyzn "delete from leads where id = 3"   # SQL that writes is shown and asks first (-y: no question)
 sawit list                                   # instances, databases, ports and saved connections
 sawit list db                                # or: instances, ports, connections, tools
 sawit bakar ports                            # "burn" dev servers: confirm, SIGTERM, then SIGKILL
@@ -548,6 +549,9 @@ sawit pupuk bun -y                           # upgrade one tool without asking
   `ports`/`lahan`, `instances`/`kebun`, `connections`/`konsesi`, `tools`/`alat`/`perkakas`.
 - `panen` and `backup` ask before replacing an existing file; `-y` replaces it without asking. Without a terminal
   they refuse instead of prompting. `panen` with SQL runs it read-only.
+- SQL runs read-only first, as the `query` MCP tool runs it. SQL that writes (or several statements, which can't be
+  tried read-only) is shown and asks before it runs; `-y` runs it without asking, and without a terminal it refuses
+  unless given `-y`.
 - Table output goes to stdout, while the "connected to" line and timing go to stderr, so `sawit kyzn leads | less`
   stays clean. Up to 10,000 rows are printed per result.
 - `bakar ports` with no ports only takes dev servers (tools such as `npm run dev`, `vite` or `bun`). It skips databases,

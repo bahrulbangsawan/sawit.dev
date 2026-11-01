@@ -18,7 +18,7 @@ sawit — open folders and files in Sawit, query databases, clear ports
 
 Usage:
   sawit [options] [path[:line[:column]] ...]
-  sawit <db> [table] [\"sql\"]
+  sawit <db> [table] [\"sql\"] [-y]
   sawit list [instances|db|ports|connections|tools]
   sawit bakar ports [port ...] [-y]
   sawit bakar instances [name ...] [-y]
@@ -40,6 +40,10 @@ Kebun (databases), no app needed:
   sawit kyzn leads                         first 100 rows
   sawit kyzn leads \"phone is null\"         filter (becomes WHERE)
   sawit kyzn leads \"select * from leads where phone is null\"
+  sawit kyzn \"delete from leads where id = 3\"
+                                           SQL is tried read-only first; SQL
+                                           that writes is shown, then asks
+                                           (-y: run it without asking)
   <db> is a Sawit instance, a saved connection, a database named in
   ./.env DATABASE_URL (or a folder above), or a database on a running
   local Postgres. A unique prefix works: kyzn finds kyzn_crm.

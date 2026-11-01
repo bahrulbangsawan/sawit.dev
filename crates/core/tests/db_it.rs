@@ -268,6 +268,77 @@ async fn read_only_cannot_be_escaped() {
     assert_eq!(read.results[0].rows[0][0].as_deref(), Some("1"));
 }
 
+/// `sawit <db> "sql"` tries SQL read-only first (`run_if_read_only`): a read runs, and a write
+/// (a `SELECT` that does one too), what must run outside a transaction, `COPY` and several
+/// statements come back as what they are, with nothing of them run. A typo or a missing table is
+/// the statement's own error.
+#[tokio::test]
+async fn sql_is_tried_read_only_first() {
+    let Some((_cluster, profile)) = cluster().await else {
+        eprintln!("skip: no PostgreSQL binaries");
+        return;
+    };
+    let admin = db::connect(&profile, None).await.unwrap();
+    admin
+        .batch_execute("CREATE TABLE t (x int); INSERT INTO t VALUES (1); CREATE SEQUENCE s;")
+        .await
+        .unwrap();
+    let ro = db::connect_read_only(&profile, None).await.unwrap();
+    match db::run_if_read_only(&ro, "SELECT x FROM t", 10).await {
+        Ok(db::ReadOnlyTry::Read(read)) => {
+            assert_eq!(read.results[0].rows[0][0].as_deref(), Some("1"));
+        }
+        other => panic!("a read: {other:?}"),
+    }
+    for sql in [
+        "DELETE FROM t",
+        "INSERT INTO t VALUES (2)",
+        "UPDATE t SET x = 3",
+        "SELECT nextval('s')",
+        "TRUNCATE t",
+        "DROP TABLE t",
+        "CREATE TABLE u (y int)",
+        "VACUUM t",
+        "CREATE DATABASE other",
+        "COPY t TO STDOUT",
+    ] {
+        let tried = db::run_if_read_only(&ro, sql, 10).await;
+        assert!(
+            matches!(tried, Ok(db::ReadOnlyTry::Writes(_))),
+            "{sql}: {tried:?}"
+        );
+    }
+    for sql in ["SELECT 1; SELECT 2", "COMMIT; DELETE FROM t"] {
+        let tried = db::run_if_read_only(&ro, sql, 10).await;
+        assert!(
+            matches!(tried, Ok(db::ReadOnlyTry::Several(_))),
+            "{sql}: {tried:?}"
+        );
+    }
+    for sql in ["SELEC 1", "SELECT * FROM missing_table"] {
+        assert!(db::run_if_read_only(&ro, sql, 10).await.is_err(), "{sql}");
+    }
+    // None of them ran.
+    let left = db::run_sql(&admin, "SELECT count(*), max(x) FROM t", 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        left.results[0].rows[0],
+        [Some("1".to_string()), Some("1".to_string())]
+    );
+    let next = db::run_sql(&admin, "SELECT nextval('s')", 1).await.unwrap();
+    assert_eq!(next.results[0].rows[0][0].as_deref(), Some("1"));
+    let databases = db::list_databases(&admin).await.unwrap();
+    assert!(!databases.contains(&"other".to_string()));
+    // `run_read_only` refuses them all, as before.
+    assert!(db::run_read_only(&ro, "DELETE FROM t", 10).await.is_err());
+    assert!(
+        db::run_read_only(&ro, "SELECT 1; SELECT 2", 10)
+            .await
+            .is_err()
+    );
+}
+
 #[tokio::test]
 async fn table_pages_follow_the_primary_key() {
     let Some((_cluster, profile)) = cluster().await else {
