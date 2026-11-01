@@ -57,9 +57,13 @@ pub struct UpdateHostArgs {
     pub user: Option<String>,
     #[schemars(description = "Port (0 resets to 22)")]
     pub port: Option<u16>,
-    #[schemars(description = "Sign-in: default (agent and default keys), key or password")]
+    #[schemars(
+        description = "Sign-in: default (agent and default keys), key or password. Moving a host off password deletes its saved Keychain password: pass confirm"
+    )]
     pub auth: Option<String>,
-    #[schemars(description = "Private key file; setting it switches sign-in to key")]
+    #[schemars(
+        description = "Private key file; setting it switches sign-in to key, which deletes a password host's saved Keychain password: pass confirm"
+    )]
     pub identity_file: Option<String>,
     #[schemars(
         description = "New password for the Keychain; setting it switches sign-in to password"
@@ -71,12 +75,20 @@ pub struct UpdateHostArgs {
     pub group: Option<String>,
     pub remote_dir: Option<String>,
     pub startup: Option<String>,
+    #[schemars(
+        description = "The host's id or name again. Needed only when the update moves a password host to default or key sign-in (auth, or identity_file), which deletes its saved Keychain password for good"
+    )]
+    pub confirm: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct HostIdArgs {
+pub struct RemoveHostArgs {
     #[schemars(description = "Saved host id or exact name (see list_ssh_hosts)")]
     pub id: String,
+    #[schemars(
+        description = "The host's id or name again, to confirm: the host and its Keychain password are deleted for good"
+    )]
+    pub confirm: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -116,6 +128,11 @@ pub(crate) fn parse_auth(text: &str) -> Result<Auth, String> {
         "password" => Ok(Auth::Password),
         other => Err(format!("auth “{other}” must be default, key or password.")),
     }
+}
+
+/// Whether `confirm` names `host` again: its id or its name, exactly.
+pub(crate) fn names(host: &SshHost, confirm: &str) -> bool {
+    !confirm.is_empty() && (confirm == host.id || confirm == host.name)
 }
 
 /// Saved host by id, else by exact name (unique).
@@ -374,6 +391,16 @@ impl Sawit {
         if let Some(problem) = host.problem() {
             return fail(problem);
         }
+        // Off password sign-in, the saved password goes: that needs a yes.
+        let forgets = current.auth == Auth::Password && host.auth != Auth::Password;
+        if forgets && !a.confirm.as_deref().is_some_and(|c| names(&current, c)) {
+            return fail(format!(
+                "Refused: this moves {} from password to {} sign-in, which deletes its saved Keychain password. Nothing was changed. To go ahead, pass confirm=\"{}\" (its id or name).",
+                current.label(),
+                auth_name(host.auth),
+                a.id
+            ));
+        }
         let edited = host.clone();
         list.update(&current.id, |h| *h = edited);
         if let Some(pw) = password {
@@ -383,7 +410,7 @@ impl Sawit {
                     .await
                     .and_then(|r| r.map_err(|e| format!("Unable to save the password. {e}")))
             );
-        } else if current.auth == Auth::Password && host.auth != Auth::Password {
+        } else if forgets {
             let h = host.clone();
             let _ = blocking(move || ssh::delete_password(&h)).await;
         }
@@ -396,11 +423,18 @@ impl Sawit {
         ))
     }
 
-    async fn remove_ssh_host_tool(&self, key: &str) -> CallToolResult {
+    async fn remove_ssh_host_tool(&self, key: &str, confirm: &str) -> CallToolResult {
         let mut list = tri!(self.ssh_hosts());
         let Some(host) = tri!(find_saved(&list, key)).cloned() else {
             return fail(format!("No saved host “{key}”. See list_ssh_hosts."));
         };
+        if !names(&host, confirm) {
+            return fail(format!(
+                "Refused: removing {} ({}) deletes it and its Keychain password for good. Pass confirm=\"{key}\" (its id or name).",
+                host.label(),
+                host.address()
+            ));
+        }
         list.remove(&host.id);
         tri!(list.save(&self.ssh_file()).map_err(|e| e.to_string()));
         let h = host.clone();
@@ -521,14 +555,18 @@ impl Sawit {
         self.add_ssh_host_tool(a).await
     }
 
-    #[tool(description = "Change a saved SSH server; only the given fields change")]
+    #[tool(
+        description = "Change a saved SSH server; only the given fields change. A new password replaces the one saved in the Keychain. Moving a password host to default or key sign-in (auth, or identity_file) deletes its saved Keychain password, which can't be undone: that needs confirm = the host's id or name"
+    )]
     async fn update_ssh_host(&self, Parameters(a): Parameters<UpdateHostArgs>) -> CallToolResult {
         self.update_ssh_host_tool(a).await
     }
 
-    #[tool(description = "Remove a saved SSH server (and its Keychain password)")]
-    async fn remove_ssh_host(&self, Parameters(a): Parameters<HostIdArgs>) -> CallToolResult {
-        self.remove_ssh_host_tool(&a.id).await
+    #[tool(
+        description = "Remove a saved SSH server and its Keychain password. DESTRUCTIVE, can't be undone: `confirm` must repeat the host's id or name, otherwise nothing happens. ~/.ssh/config is never changed"
+    )]
+    async fn remove_ssh_host(&self, Parameters(a): Parameters<RemoveHostArgs>) -> CallToolResult {
+        self.remove_ssh_host_tool(&a.id, &a.confirm).await
     }
 
     #[tool(
@@ -577,6 +615,65 @@ mod tests {
         assert_eq!(parse_auth("Password").unwrap(), Auth::Password);
         assert_eq!(parse_auth("key").unwrap(), Auth::Key);
         assert!(parse_auth("otp").is_err());
+    }
+
+    #[test]
+    fn a_host_is_named_again_by_its_id_or_its_name() {
+        let mut host = SshHost::new("web", "1.2.3.4");
+        host.id = "h1".into();
+        assert!(names(&host, "h1"));
+        assert!(names(&host, "web"));
+        assert!(!names(&host, "Web"));
+        assert!(!names(&host, "1.2.3.4"));
+        assert!(!names(&host, ""));
+    }
+
+    /// The saved host and its password stay unless the agent names the host
+    /// again: removing it, or moving it off password sign-in, which deletes
+    /// the password. A refusal returns before the Keychain is touched.
+    #[tokio::test]
+    async fn the_keychain_password_is_kept_until_confirmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let sawit = Sawit::new(sawit_core::instances::AppPaths {
+            root: dir.path().to_path_buf(),
+        });
+        let mut host = SshHost::new("web", "1.2.3.4");
+        host.auth = Auth::Password;
+        let mut list = HostList::default();
+        let id = list.add(host, 1);
+        list.save(&sawit.ssh_file()).unwrap();
+        let said = |r: &CallToolResult| {
+            let texts = r.content.iter().filter_map(|c| c.as_text());
+            texts.map(|t| t.text.clone()).collect::<String>()
+        };
+        let update = |confirm: Option<&str>| UpdateHostArgs {
+            id: "web".into(),
+            name: None,
+            host: None,
+            user: None,
+            port: None,
+            auth: None,
+            identity_file: Some("~/.ssh/id_ed25519".into()),
+            password: None,
+            forwards: None,
+            jump: None,
+            group: None,
+            remote_dir: None,
+            startup: None,
+            confirm: confirm.map(String::from),
+        };
+        for confirm in [None, Some("other")] {
+            let r = sawit.update_ssh_host_tool(update(confirm)).await;
+            assert_eq!(r.is_error, Some(true));
+            assert!(said(&r).contains("Keychain password"), "{}", said(&r));
+        }
+        let r = sawit.remove_ssh_host_tool("web", "").await;
+        assert_eq!(r.is_error, Some(true));
+        assert!(said(&r).contains("confirm=\"web\""), "{}", said(&r));
+        let kept = sawit.ssh_hosts().unwrap();
+        let kept = kept.get(&id).unwrap();
+        assert_eq!(kept.auth, Auth::Password);
+        assert!(kept.identity_file.is_empty());
     }
 
     #[test]

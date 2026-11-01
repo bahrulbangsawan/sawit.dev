@@ -55,8 +55,17 @@ async fn list_instances_and_write_env() {
         "VITE_X=1\nDATABASE_URL=postgres://old\n",
     )
     .unwrap();
+    // Another database's URL is replaced only when the agent says so.
+    let refused = server
+        .write_env_tool("shop", project.to_str().unwrap(), false)
+        .await;
+    assert_eq!(refused.is_error, Some(true), "{}", text(&refused));
+    assert_eq!(
+        std::fs::read_to_string(project.join(".env")).unwrap(),
+        "VITE_X=1\nDATABASE_URL=postgres://old\n"
+    );
     let res = server
-        .write_env_tool("shop", project.to_str().unwrap())
+        .write_env_tool("shop", project.to_str().unwrap(), true)
         .await;
     assert_ne!(res.is_error, Some(true), "{}", text(&res));
     assert_eq!(
@@ -65,7 +74,7 @@ async fn list_instances_and_write_env() {
     );
 
     let missing = server
-        .write_env_tool("nope", project.to_str().unwrap())
+        .write_env_tool("nope", project.to_str().unwrap(), true)
         .await;
     assert_eq!(missing.is_error, Some(true));
 }

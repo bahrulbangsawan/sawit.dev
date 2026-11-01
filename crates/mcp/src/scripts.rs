@@ -50,6 +50,10 @@ pub struct RemoveCommandArgs {
     pub project_dir: String,
     #[schemars(description = "Saved command id or exact name")]
     pub id: String,
+    #[schemars(
+        description = "Must equal `id` exactly, to confirm: the saved command is deleted for good"
+    )]
+    pub confirm: String,
 }
 
 /// The project key `run-commands.json` uses: the folder as it is on disk (through the links on its
@@ -166,6 +170,11 @@ impl Sawit {
             Ok(id) => id,
             Err(e) => return fail(e),
         };
+        tri!(crate::db::check_confirm(
+            &a.id,
+            &a.confirm,
+            "remove the saved command"
+        ));
         saved.remove(&root, &id);
         tri!(saved.save(&self.run_file()).map_err(|e| e.to_string()));
         self.notify(Store::RunCommands).await;
@@ -206,7 +215,9 @@ impl Sawit {
         self.save_command_tool(a).await
     }
 
-    #[tool(description = "Remove a saved command from a project's Run panel")]
+    #[tool(
+        description = "Remove a saved command from a project's Run panel. DESTRUCTIVE, can't be undone: `confirm` must equal `id`, otherwise nothing happens"
+    )]
     async fn remove_command(&self, Parameters(a): Parameters<RemoveCommandArgs>) -> CallToolResult {
         self.remove_command_tool(a).await
     }
@@ -224,6 +235,48 @@ mod tests {
         assert_eq!(find_command(&list, &a.id).unwrap(), a.id);
         assert_eq!(find_command(&list, "dev").unwrap(), a.id);
         assert!(find_command(&list, "nope").is_err());
+    }
+
+    /// A saved command is removed only once the agent names it again.
+    #[tokio::test]
+    async fn removing_a_saved_command_needs_it_named_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("shop");
+        std::fs::create_dir_all(&project).unwrap();
+        let sawit = Sawit::new(sawit_core::instances::AppPaths {
+            root: dir.path().join("home"),
+        });
+        let project_dir = project.display().to_string();
+        let saved = sawit
+            .save_command_tool(SaveCommandArgs {
+                project_dir: project_dir.clone(),
+                name: "dev".into(),
+                commands: vec!["bun dev".into()],
+                mode: Mode::Sequence,
+                id: None,
+            })
+            .await;
+        assert_ne!(saved.is_error, Some(true));
+        let remove = |confirm: &str| RemoveCommandArgs {
+            project_dir: project_dir.clone(),
+            id: "dev".into(),
+            confirm: confirm.into(),
+        };
+        let root = project_root(&project_dir).unwrap();
+        for confirm in ["", "Dev"] {
+            let refused = sawit.remove_command_tool(remove(confirm)).await;
+            assert_eq!(refused.is_error, Some(true));
+            assert_eq!(sawit.saved_commands().unwrap().for_project(&root).len(), 1);
+        }
+        let removed = sawit.remove_command_tool(remove("dev")).await;
+        assert_ne!(removed.is_error, Some(true));
+        assert!(
+            sawit
+                .saved_commands()
+                .unwrap()
+                .for_project(&root)
+                .is_empty()
+        );
     }
 
     #[test]

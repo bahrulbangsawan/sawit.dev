@@ -36,6 +36,11 @@ pub struct StopArgs {
     )]
     #[serde(default)]
     pub force: bool,
+    #[schemars(
+        description = "Must be true: stopping ends the processes and whatever they were doing (unsaved state, open connections), which can't be undone. See them first with list_ports"
+    )]
+    #[serde(default)]
+    pub confirm: bool,
 }
 
 /// What stopping would do: the jobs to stop and the reasons others were left.
@@ -165,6 +170,12 @@ impl Sawit {
     }
 
     async fn stop_processes_tool(&self, a: StopArgs) -> CallToolResult {
+        if !a.confirm {
+            // As `sawit bakar ports` asks before it burns anything.
+            return fail(
+                "Refused: stopping ends these processes and what they were doing. See them with list_ports, then pass confirm=true.",
+            );
+        }
         let jobs = tri!(probe::listening_jobs().await.map_err(|e| e.to_string()));
         let instance_ports = self.instance_ports();
         let only_pids = a.ports.is_empty() && !a.pids.is_empty();
@@ -260,7 +271,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Stop processes: by port, by PID, or (with neither) every dev server. Sends SIGTERM, then SIGKILL to survivors when force=true. Ports held by Docker, protected tools (editors, agents, language servers) or Sawit instances are skipped; PIDs are stopped as given"
+        description = "Stop processes: by port, by PID, or (with neither) every dev server. DESTRUCTIVE: ends them and whatever they were doing, so it needs confirm=true (list_ports shows what would stop). Sends SIGTERM, then SIGKILL to survivors when force=true. Ports held by Docker, protected tools (editors, agents, language servers) or Sawit instances are skipped; PIDs are stopped as given"
     )]
     async fn stop_processes(&self, Parameters(a): Parameters<StopArgs>) -> CallToolResult {
         self.stop_processes_tool(a).await
@@ -284,6 +295,21 @@ mod tests {
             cwd: None,
             dev,
         }
+    }
+
+    /// Nothing is looked up, let alone stopped, until the agent confirms.
+    #[tokio::test]
+    async fn stopping_needs_confirm() {
+        let sawit = Sawit::new(sawit_core::instances::AppPaths {
+            root: std::env::temp_dir(),
+        });
+        let a: StopArgs = serde_json::from_str(r#"{"pids": [999999]}"#).unwrap();
+        assert!(!a.confirm);
+        let r = sawit.stop_processes_tool(a).await;
+        assert_eq!(r.is_error, Some(true));
+        let texts = r.content.iter().filter_map(|c| c.as_text());
+        let said = texts.map(|t| t.text.clone()).collect::<String>();
+        assert!(said.contains("confirm=true"), "{said}");
     }
 
     #[test]
