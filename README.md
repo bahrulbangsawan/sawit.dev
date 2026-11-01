@@ -261,8 +261,13 @@ explained. A conflict on the same address can't be forced.
 
 - Click **Tools** in the title bar for package managers (Homebrew, nvm, pnpm, npm, uv), languages and runtimes
   (Node.js, Bun, Deno, Python, Rust), AI agents (Claude Code, Codex, OpenCode, Amp, …) and terminal apps (Zed,
-  Starship, the Fly.io CLI, Cloudflare's `cf`, …).
+  Starship, the Fly.io CLI, Cloudflare's `cf`, PureMac, …).
 - Each tool shows whether it's installed, its version and where it lives, and the exact command that installs it.
+  An app's version comes from its `Info.plist`.
+- **PureMac** ([momenbasel/PureMac](https://github.com/momenbasel/PureMac)), the open source Mac cleaner, installs
+  from its Homebrew cask as its README says (`brew install --cask puremac`, Homebrew first), upgrades with
+  `brew upgrade --cask puremac` when Homebrew has a newer version, and uninstalls with `brew uninstall --cask
+  puremac`. A copy dragged into Applications from its disk image shows as installed, and is left alone.
 - The tools npm installs for every project (Gemini CLI, Cloudflare's `cf`) have a package manager menu beside their
   command: **npm** (`npm install -g cf`), **pnpm** (`pnpm add -g cf`), **bun** (`bun add -g cf`) or **yarn**
   (`yarn global add cf`, Yarn 1). It lists only the ones installed, and the command shown changes with it before

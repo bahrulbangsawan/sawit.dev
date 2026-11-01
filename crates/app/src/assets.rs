@@ -234,8 +234,19 @@ tool_logos!(
     "uv-color",
 );
 
+/// Tool logos that are an app's own icon, where it publishes no vector logo
+/// (see assets/tool_logos/SOURCES.md).
+const TOOL_ICONS: &[(&str, &[u8])] = &[(
+    "puremac",
+    include_bytes!("../../../assets/tool_logos/puremac.png"),
+)];
+
 fn tool_logo(path: &str) -> Option<&'static [u8]> {
-    let name = path.strip_prefix("tool_logos/")?.strip_suffix(".svg")?;
+    let name = path.strip_prefix("tool_logos/")?;
+    if let Some(name) = name.strip_suffix(".png") {
+        return TOOL_ICONS.iter().find(|(n, _)| *n == name).map(|(_, b)| *b);
+    }
+    let name = name.strip_suffix(".svg")?;
     TOOL_LOGOS.iter().find(|(n, _)| *n == name).map(|(_, b)| *b)
 }
 

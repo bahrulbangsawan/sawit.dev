@@ -47,7 +47,8 @@ pub struct Tool {
     pub name: &'static str,
     pub description: &'static str,
     pub category: Category,
-    /// The command that shows it is installed.
+    /// The command that shows it is installed; empty for an app that has
+    /// none, found at its `also` paths only.
     pub bin: &'static str,
     /// Where it lands when the installer doesn't put it on `PATH` (`~` is
     /// `$HOME`).
@@ -67,8 +68,13 @@ pub struct Tool {
     pub needs: &'static [&'static str],
     /// Asks for the user's password, so it runs in the terminal instead.
     pub interactive: bool,
-    /// `bin --version` prints something useful (and returns quickly).
+    /// `bin --version` prints something useful (and returns quickly); for an
+    /// app bundle found, its `Info.plist` gives the version instead.
     pub version: bool,
+    /// The Homebrew cask that installs it, an app: the copy found is
+    /// Homebrew's, and `uninstall` runs on it, only while Homebrew's Caskroom
+    /// has the cask. A copy dragged in from a disk image is left alone.
+    pub cask: Option<&'static str>,
     /// Where its latest release is published.
     pub latest: Latest,
     /// Updates an installed copy; `install` when `None`.
@@ -83,6 +89,9 @@ pub enum Latest {
     Npm(&'static str),
     /// A GitHub `owner/repo`; its latest release's tag.
     GitHub(&'static str),
+    /// A Homebrew cask's token: the version Homebrew's API has for it, which
+    /// is what `brew upgrade --cask` installs.
+    Cask(&'static str),
 }
 
 impl Tool {
@@ -113,6 +122,7 @@ const fn tool(
         needs: &[],
         interactive: false,
         version: true,
+        cask: None,
         latest: Latest::None,
         upgrade: None,
     }
@@ -438,6 +448,25 @@ rm -rf "/Applications/Zed.app" "$HOME/Applications/Zed.app""#,
         )
     },
     Tool {
+        // The app only: its README installs it with Homebrew's cask (or a signed, notarized disk
+        // image from GitHub Releases, dragged into /Applications). Its `puremac` command is
+        // another program, the PureMac CLI from momenbasel/tap/puremac-cli.
+        cask: Some("puremac"),
+        latest: Latest::Cask("puremac"),
+        upgrade: Some("brew upgrade --cask puremac"),
+        uninstall: Some("brew uninstall --cask puremac"),
+        needs: &["homebrew"],
+        also: &["/Applications/PureMac.app", "~/Applications/PureMac.app"],
+        ..tool(
+            "puremac",
+            "PureMac",
+            "Free, open source Mac cleaner and app uninstaller with no telemetry, from its Homebrew cask.",
+            Category::Other,
+            "",
+            "brew install --cask puremac",
+        )
+    },
+    Tool {
         latest: Latest::GitHub("starship/starship"),
         uninstall: Some(r#"rm -f "$HOME/.local/bin/starship""#),
         also: &["~/.local/bin/starship"],
@@ -676,10 +705,6 @@ fn shell(login: Option<&str>) -> tokio::process::Command {
     cmd
 }
 
-fn expand(path: &str) -> PathBuf {
-    expand_in(path, Path::new(&std::env::var("HOME").unwrap_or_default()))
-}
-
 fn expand_in(path: &str, home: &Path) -> PathBuf {
     match path.strip_prefix("~/") {
         Some(rest) => home.join(rest),
@@ -719,15 +744,18 @@ pub struct Detection {
 }
 
 /// Which tools are installed: `command -v` in one login shell, then the
-/// known install locations, then each one's `--version`.
+/// known install locations, then each one's `--version` (an app's
+/// `Info.plist`).
 pub async fn detect() -> Detection {
     detect_as(crate::probe::login_shell().as_deref()).await
 }
 
-/// [`detect`] with `login` as `$SHELL`.
-async fn detect_as(login: Option<&str>) -> Detection {
+/// The script detection runs in the login shell: a line with the path of
+/// each tool's command, or an empty one. An app without a command (PureMac)
+/// has no line: it's found at its `also` paths only.
+fn detect_script() -> String {
     let mut script = String::from(PRELUDE);
-    for t in TOOLS {
+    for t in TOOLS.iter().filter(|t| !t.bin.is_empty()) {
         // nvm is a shell function; its path is the script that defines it.
         let probe = if t.id == "nvm" {
             r#"[ -s "$NVM_DIR/nvm.sh" ] && printf '%s' "$NVM_DIR/nvm.sh""#.to_string()
@@ -740,9 +768,42 @@ async fn detect_as(login: Option<&str>) -> Detection {
         };
         script.push_str(&format!("printf '{MARK}{}\\t%s\\n' \"$({probe})\"\n", t.id));
     }
+    script
+}
+
+/// The first of `tool`'s `also` paths that is there, under `home`.
+fn at_known_place(tool: &Tool, home: &Path) -> Option<PathBuf> {
+    tool.also
+        .iter()
+        .map(|p| expand_in(p, home))
+        .find(|p| p.exists())
+}
+
+/// The version of `tool`'s copy at `path`: an app bundle's from its
+/// `Info.plist`, else the number its `--version` prints.
+async fn version_of(tool: &Tool, path: &Path) -> Option<String> {
+    if !tool.version {
+        return None;
+    }
+    if is_app(path) {
+        return app_version(path).await;
+    }
+    let out = crate::cmd::run(path, ["--version"], Duration::from_secs(3))
+        .await
+        .ok()?;
+    let text = if out.stdout.trim().is_empty() {
+        out.stderr
+    } else {
+        out.stdout
+    };
+    short_version(&text)
+}
+
+/// [`detect`] with `login` as `$SHELL`.
+async fn detect_as(login: Option<&str>) -> Detection {
     let mut cmd = shell(login);
     cmd.arg("-c")
-        .arg(script)
+        .arg(detect_script())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let shell_name = crate::probe::script_shell(login).display().to_string();
@@ -795,29 +856,20 @@ async fn detect_as(login: Option<&str>) -> Detection {
             paths.insert(t.id, PathBuf::from(path));
         }
     }
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
     for t in TOOLS {
         if paths.contains_key(t.id) {
             continue;
         }
-        if let Some(p) = t.also.iter().map(|p| expand(p)).find(|p| p.exists()) {
+        if let Some(p) = at_known_place(t, &home) {
             paths.insert(t.id, p);
         }
     }
-    let versions = futures::future::join_all(paths.iter().map(|(id, path)| async move {
-        let tool = find(id)?;
-        if !tool.version || path.extension().is_some_and(|e| e == "app") {
-            return None;
-        }
-        let out = crate::cmd::run(path, ["--version"], Duration::from_secs(3))
-            .await
-            .ok()?;
-        let text = if out.stdout.trim().is_empty() {
-            out.stderr
-        } else {
-            out.stdout
-        };
-        Some((*id, short_version(&text)?))
-    }))
+    let versions = futures::future::join_all(
+        paths
+            .iter()
+            .map(|(id, path)| async move { Some((*id, version_of(find(id)?, path).await?)) }),
+    )
     .await;
     let mut versions: HashMap<&str, String> = versions.into_iter().flatten().collect();
     let found = paths
@@ -840,6 +892,49 @@ fn short_version(text: &str) -> Option<String> {
     Some(word.to_string())
 }
 
+fn is_app(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "app")
+}
+
+/// The version an app bundle gives in its `Info.plist`
+/// (`CFBundleShortVersionString`, "3.2.0"), read with `plutil`, which reads
+/// the XML and binary forms alike; `None` without one.
+async fn app_version(app: &Path) -> Option<String> {
+    let plist = app.join("Contents/Info.plist");
+    let out = crate::cmd::run(
+        "/usr/bin/plutil",
+        [
+            std::ffi::OsStr::new("-extract"),
+            "CFBundleShortVersionString".as_ref(),
+            "raw".as_ref(),
+            "-o".as_ref(),
+            "-".as_ref(),
+            plist.as_os_str(),
+        ],
+        Duration::from_secs(3),
+    )
+    .await
+    .ok()?;
+    if out.code != Some(0) {
+        return None;
+    }
+    let version = out.stdout.trim();
+    version
+        .starts_with(|c: char| c.is_ascii_digit())
+        .then(|| version.to_string())
+}
+
+/// The version Homebrew's API gives a cask
+/// (`formulae.brew.sh/api/cask/<token>.json`): "3.2.0", the part before a
+/// build number ("1.2.3,456" → "1.2.3"); `None` for `latest`, which has none.
+fn cask_version(json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let version = v["version"].as_str()?.split(',').next()?.trim();
+    version
+        .starts_with(|c: char| c.is_ascii_digit())
+        .then(|| version.to_string())
+}
+
 /// The version in a release tag ("v1.2.3", "bun-v1.2.3" → "1.2.3").
 fn tag_version(tag: &str) -> Option<String> {
     let start = tag.find(|c: char| c.is_ascii_digit())?;
@@ -859,6 +954,10 @@ async fn latest_version(tool: &Tool) -> Option<String> {
             &["-fsSLI", "-o", "/dev/null", "-w", "%{url_effective}"],
             format!("https://github.com/{repo}/releases/latest"),
         ),
+        Latest::Cask(token) => (
+            &["-fsSL"],
+            format!("https://formulae.brew.sh/api/cask/{token}.json"),
+        ),
     };
     let out = crate::cmd::run(
         "/usr/bin/curl",
@@ -877,6 +976,7 @@ async fn latest_version(tool: &Tool) -> Option<String> {
             let v: serde_json::Value = serde_json::from_str(&out.stdout).ok()?;
             Some(v["version"].as_str()?.to_string())
         }
+        Latest::Cask(_) => cask_version(&out.stdout),
         _ => tag_version(out.stdout.trim().rsplit_once("/tag/")?.1),
     }
 }
@@ -979,8 +1079,31 @@ pub fn uninstall_command(tool: &Tool, found: &Path) -> Option<String> {
     uninstall_command_in(tool, found, &real, &home)
 }
 
+/// Homebrew's Caskroom, which has a folder for each cask installed: on Apple
+/// silicon, and on Intel.
+const CASKROOMS: [&str; 2] = ["/opt/homebrew/Caskroom", "/usr/local/Caskroom"];
+
 fn uninstall_command_in(tool: &Tool, found: &Path, real: &Path, home: &Path) -> Option<String> {
+    uninstall_command_at(tool, found, real, home, &CASKROOMS.map(PathBuf::from))
+}
+
+/// [`uninstall_command_in`] with `caskrooms` for Homebrew's Caskroom.
+fn uninstall_command_at(
+    tool: &Tool,
+    found: &Path,
+    real: &Path,
+    home: &Path,
+    caskrooms: &[PathBuf],
+) -> Option<String> {
     let own = tool.uninstall?;
+    // An app from a Homebrew cask, where the cask puts it: Homebrew's copy while its Caskroom
+    // has the cask. Otherwise it was dragged in from a disk image, and `brew uninstall` would
+    // fail on it.
+    if let Some(token) = tool.cask {
+        let at_its_place = tool.also.iter().any(|p| expand_in(p, home) == found);
+        let homebrews = caskrooms.iter().any(|room| room.join(token).is_dir());
+        return (at_its_place && homebrews).then(|| own.to_string());
+    }
     let parts: Vec<_> = real
         .components()
         .map(|c| c.as_os_str().to_string_lossy())
@@ -1353,6 +1476,190 @@ mod tests {
         }
         let ids: Vec<_> = dependents("node").iter().map(|t| t.id).collect();
         assert_eq!(ids, ["npm", "gemini", "cf"]);
+    }
+
+    /// PureMac is the app from its Homebrew cask, as its README installs it: Homebrew first,
+    /// then `brew install --cask`, upgraded and removed with brew, whatever package manager is
+    /// picked. It has no command of its own (`puremac` is the separate PureMac CLI), so
+    /// detection looks for the app only.
+    #[test]
+    fn puremac_is_the_app_from_its_homebrew_cask() {
+        let puremac = find("puremac").unwrap();
+        assert_eq!(puremac.category, Category::Other);
+        assert_eq!(puremac.cask, Some("puremac"));
+        assert_eq!(puremac.latest, Latest::Cask("puremac"));
+        assert_eq!(puremac.needs, ["homebrew"]);
+        assert!(!puremac.interactive);
+        for pm in [None, Some(PackageManager::Bun), Some(PackageManager::Pnpm)] {
+            assert_eq!(install_command(puremac, pm), "brew install --cask puremac");
+            assert_eq!(upgrade_command(puremac, pm), "brew upgrade --cask puremac");
+        }
+        assert_eq!(npm_package(puremac), None);
+        assert_eq!(puremac.uninstall, Some("brew uninstall --cask puremac"));
+        assert_eq!(
+            puremac.also,
+            ["/Applications/PureMac.app", "~/Applications/PureMac.app"]
+        );
+        let ids = |tools: Vec<&Tool>| tools.iter().map(|t| t.id).collect::<Vec<_>>();
+        assert_eq!(ids(plan(&["puremac"], &|_| false)), ["homebrew", "puremac"]);
+        assert_eq!(ids(plan(&["puremac"], &|id| id == "homebrew")), ["puremac"]);
+        assert_eq!(ids(dependents("homebrew")), ["puremac"]);
+        // No `command -v` for it: that would find the PureMac CLI.
+        let script = detect_script();
+        assert!(!script.contains(&format!("{MARK}puremac")), "{script}");
+        assert!(!script.contains("command -v  "), "{script}");
+        assert!(script.contains(&format!("{MARK}zed")), "{script}");
+    }
+
+    /// An app without a command is found where its cask (or a drag from the disk image) puts it:
+    /// /Applications first, else ~/Applications.
+    #[test]
+    fn an_app_is_found_at_its_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let puremac = find("puremac").unwrap();
+        let user_app = home.join("Applications/PureMac.app");
+        std::fs::create_dir_all(user_app.join("Contents")).unwrap();
+        // /Applications/PureMac.app isn't on this Mac when the test runs, unless it is.
+        let expected = if Path::new("/Applications/PureMac.app").exists() {
+            PathBuf::from("/Applications/PureMac.app")
+        } else {
+            user_app.clone()
+        };
+        assert_eq!(at_known_place(puremac, home), Some(expected));
+        let other = tempfile::tempdir().unwrap();
+        if !Path::new("/Applications/PureMac.app").exists() {
+            assert_eq!(at_known_place(puremac, other.path()), None);
+        }
+    }
+
+    /// An app's version is its Info.plist's CFBundleShortVersionString, in an XML or a binary
+    /// plist; an app without one has none, and a tool that says its version is no use has none.
+    #[tokio::test]
+    async fn an_apps_version_comes_from_its_info_plist() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("PureMac.app");
+        let contents = app.join("Contents");
+        std::fs::create_dir_all(&contents).unwrap();
+        let plist = contents.join("Info.plist");
+        // As PureMac 3.2.0's Info.plist has them.
+        std::fs::write(
+            &plist,
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.puremac.app</string>
+	<key>CFBundleShortVersionString</key>
+	<string>3.2.0</string>
+	<key>CFBundleVersion</key>
+	<string>31</string>
+</dict>
+</plist>
+"#,
+        )
+        .unwrap();
+        let puremac = find("puremac").unwrap();
+        assert_eq!(app_version(&app).await.as_deref(), Some("3.2.0"));
+        assert_eq!(version_of(puremac, &app).await.as_deref(), Some("3.2.0"));
+        // Cap says nothing useful about its version.
+        assert_eq!(version_of(find("cap").unwrap(), &app).await, None);
+        let binary = std::process::Command::new("/usr/bin/plutil")
+            .args(["-convert", "binary1"])
+            .arg(&plist)
+            .status()
+            .unwrap();
+        assert!(binary.success());
+        assert!(!std::fs::read(&plist).unwrap().starts_with(b"<?xml"));
+        assert_eq!(app_version(&app).await.as_deref(), Some("3.2.0"));
+        // No version in it, and no Info.plist at all.
+        std::fs::write(
+            &plist,
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>CFBundleVersion</key><string>31</string></dict></plist>
+"#,
+        )
+        .unwrap();
+        assert_eq!(app_version(&app).await, None);
+        std::fs::remove_file(&plist).unwrap();
+        assert_eq!(app_version(&app).await, None);
+    }
+
+    /// Homebrew's API names the version `brew upgrade --cask` installs.
+    #[test]
+    fn cask_versions() {
+        assert_eq!(
+            cask_version(r#"{"token":"puremac","version":"3.2.0","auto_updates":null}"#).as_deref(),
+            Some("3.2.0")
+        );
+        assert_eq!(
+            cask_version(r#"{"version":"1.2.3,456"}"#).as_deref(),
+            Some("1.2.3")
+        );
+        assert_eq!(cask_version(r#"{"version":"latest"}"#), None);
+        assert_eq!(cask_version(r#"{"token":"x"}"#), None);
+        assert_eq!(cask_version("not json"), None);
+        assert!(is_newer("3.3.0", "3.2.0"));
+    }
+
+    /// PureMac's copy is Homebrew's, and `brew uninstall --cask` runs on it, only where the cask
+    /// puts the app and while Homebrew's Caskroom has the cask; one dragged in from the disk image
+    /// is left alone, as is a copy anywhere else.
+    #[test]
+    fn a_cask_app_is_removed_only_when_homebrew_installed_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("me");
+        let rooms = [dir.path().join("Caskroom")];
+        let caskroom = &rooms[0];
+        std::fs::create_dir_all(caskroom).unwrap();
+        let puremac = find("puremac").unwrap();
+        let script = |found: &Path| uninstall_command_at(puremac, found, found, &home, &rooms);
+        let system = Path::new("/Applications/PureMac.app");
+        let user = home.join("Applications/PureMac.app");
+        let elsewhere = home.join("Downloads/PureMac.app");
+        // Dragged in from the disk image: no Caskroom entry.
+        assert_eq!(script(system), None);
+        assert_eq!(script(&user), None);
+        std::fs::create_dir_all(caskroom.join("puremac/3.2.0")).unwrap();
+        let brew = Some("brew uninstall --cask puremac".to_string());
+        assert_eq!(script(system), brew);
+        assert_eq!(script(&user), brew);
+        assert_eq!(script(&elsewhere), None);
+        // Another cask's Caskroom folder isn't PureMac's.
+        std::fs::remove_dir_all(caskroom.join("puremac")).unwrap();
+        std::fs::create_dir_all(caskroom.join("pesty")).unwrap();
+        assert_eq!(script(system), None);
+        // As the page and `sawit cabut` work it out: left alone, or run.
+        let found = HashMap::from([(
+            "puremac",
+            Found {
+                path: system.to_path_buf(),
+                version: Some("3.2.0".into()),
+            },
+        )]);
+        let plan = || {
+            uninstall_plan_with(&["puremac"], &found, &|tool, path| {
+                uninstall_command_at(tool, path, path, &home, &rooms)
+            })
+        };
+        assert_eq!(plan()[0].removal, Removal::LeftAlone);
+        std::fs::create_dir_all(caskroom.join("puremac")).unwrap();
+        assert_eq!(
+            plan()[0].removal,
+            Removal::Run("brew uninstall --cask puremac".into())
+        );
+        // Other tools are as they were: a cask's Caskroom doesn't make Zed's app Homebrew's.
+        assert_eq!(
+            uninstall_command_at(
+                find("zed").unwrap(),
+                Path::new("/Applications/Zed.app"),
+                Path::new("/Applications/Zed.app"),
+                &home,
+                &rooms
+            ),
+            find("zed").unwrap().uninstall.map(String::from)
+        );
     }
 
     /// The tools npm installs globally install with the package manager picked, the way the cf
@@ -1921,7 +2228,7 @@ mod tests {
     #[ignore]
     async fn latest_lookups() {
         let latest = latest_versions().await;
-        for id in ["bun", "deno", "pnpm", "claude-code"] {
+        for id in ["bun", "deno", "pnpm", "claude-code", "puremac"] {
             let v = latest
                 .get(id)
                 .unwrap_or_else(|| panic!("no latest for {id}"));

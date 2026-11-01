@@ -205,6 +205,8 @@ fn logo(id: &str, size: f32, cx: &App) -> AnyElement {
         "cursor" => ("agent_logos/cursor.svg", false),
         "zed" => ("agent_logos/zed.svg", false),
         "cf" => ("agent_logos/cloudflare-color.svg", true),
+        // The app's own icon.
+        "puremac" => ("tool_logos/puremac.png", true),
         "bun" | "deno" | "rust" | "flyio" => {
             return svg()
                 .path(SharedString::from(format!("tool_logos/{id}.svg")))
@@ -1925,6 +1927,71 @@ mod tests {
             page.upgrades.insert("cf");
             assert_eq!(page.command(cf), "bun add -g cf");
         });
+    }
+
+    /// PureMac installs from its Homebrew cask: picked while Homebrew is missing, Homebrew's
+    /// installer goes to the terminal (it asks for a password) and PureMac waits behind it. Its
+    /// install and upgrade are brew's whatever package manager is picked.
+    #[gpui_kit::test]
+    fn puremac_waits_for_homebrew_and_installs_with_brew(cx: &mut TestAppContext) {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use sawit_core::package_manager::PackageManager;
+
+        use super::ToolsEvent;
+        let page = cx.new(|cx| {
+            let mut page = ToolsPage::blank(cx);
+            page.loading = false;
+            page.pm = Some(PackageManager::Bun);
+            // Another installer "runs", so nothing queued starts here.
+            page.running = Some(("deno", Job::Install));
+            page
+        });
+        let terminal = Rc::new(RefCell::new(Vec::new()));
+        let seen = terminal.clone();
+        cx.update(|cx| {
+            cx.subscribe(&page, move |_, event: &ToolsEvent, _| {
+                let ToolsEvent::RunInTerminal(command) = event;
+                seen.borrow_mut().push(command.clone());
+            })
+            .detach()
+        });
+        page.update(cx, |page, cx| page.enqueue(&["puremac"], cx));
+        cx.run_until_parked();
+        assert_eq!(
+            *terminal.borrow(),
+            [find("homebrew").unwrap().install.to_string()]
+        );
+        assert_eq!(
+            page.read_with(cx, |page, _| page.states.get("homebrew").cloned()),
+            Some(State::InTerminal)
+        );
+        assert_eq!(queued(cx, &page), [("puremac", Job::Install)]);
+        let puremac = find("puremac").unwrap();
+        page.update(cx, |page, _| {
+            assert_eq!(page.command(puremac), "brew install --cask puremac");
+            page.upgrades.insert("puremac");
+            assert_eq!(page.command(puremac), "brew upgrade --cask puremac");
+        });
+    }
+
+    /// PureMac's logo is its app icon, a PNG in the app's assets; the SVG logos load as before.
+    #[test]
+    fn puremacs_logo_is_its_app_icon() {
+        use gpui_kit::AssetSource as _;
+        let load = |path: &str| {
+            crate::assets::AppAssets
+                .load(path)
+                .ok()
+                .flatten()
+                .map(|bytes| bytes.to_vec())
+        };
+        let png = load("tool_logos/puremac.png").expect("PureMac's icon");
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert!(load("tool_logos/bun.svg").is_some());
+        assert!(load("tool_logos/bun.png").is_none());
+        assert!(load("tool_logos/puremac.svg").is_none());
     }
 
     /// Closing the Dev Tools tab drops the page: the installer it runs stops with it, instead
