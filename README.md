@@ -611,7 +611,8 @@ sawit list keys                              # every shortcut and what it runs (
   stays clean. Up to 10,000 rows are printed per result.
 - `nyalakan` starts instances as their **Start** button does: when another process holds the port, it explains who
   and leaves the instance stopped (exit 1); it never forces a start. One already running is just noted. `--ulang`
-  (`--restart`) restarts the running ones too, after asking (`-y` skips; without a terminal it needs `-y`).
+  (`--restart`) restarts the running ones too, after asking (`-y` skips; without a terminal it needs `-y`); a no
+  leaves them running and still starts the stopped ones.
 - `bakar ports` with no ports only takes dev servers (tools such as `npm run dev`, `vite` or `bun`). It skips databases,
   Docker, Sawit's instances and protected tools (Claude, MCP servers, language servers, Electron), the same rules as
   the `kill-dev` script. Without a terminal it asks for `-y` instead of prompting.

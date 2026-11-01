@@ -1610,6 +1610,9 @@ pub async fn nyalakan(args: NyalakanArgs, paths: &AppPaths) -> i32 {
         ink.footer("Tidak ada yang dinyalakan.");
         return 0;
     }
+    // The question is only about the running ones: a no leaves them be, and the stopped ones
+    // still start, as without `--ulang`.
+    let mut again = args.again;
     if !args.again {
         for (inst, pid) in &running {
             ink.empty(&format!("{} sudah menyala, PID {pid}", inst.name));
@@ -1639,9 +1642,13 @@ pub async fn nyalakan(args: NyalakanArgs, paths: &AppPaths) -> i32 {
                 running.len()
             )) {
                 Some(true) => {}
-                Some(false) => {
+                Some(false) if stopped.is_empty() => {
                     ink.footer("Batal. Kebun tetap menyala seperti tadi.");
                     return 0;
+                }
+                Some(false) => {
+                    ink.empty("yang menyala dibiarkan menyala; yang padam tetap dinyalakan.");
+                    again = false;
                 }
                 None => {
                     println!(
@@ -1655,7 +1662,7 @@ pub async fn nyalakan(args: NyalakanArgs, paths: &AppPaths) -> i32 {
     }
     let restarts = running
         .iter()
-        .filter(|_| args.again)
+        .filter(|_| again)
         .map(|(inst, _)| (*inst, true));
     let plan: Vec<(&Instance, bool)> = restarts
         .chain(stopped.iter().map(|inst| (*inst, false)))
