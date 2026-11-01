@@ -1,8 +1,9 @@
 //! Git: status, history, diffs, branches, staging and commits (no network:
 //! fetch, pull and push stay with the user).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use futures::StreamExt as _;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
@@ -12,6 +13,8 @@ use crate::{Sawit, existing_dir, fail, ok, tri, utc_time};
 
 const LOG_LIMIT: usize = 30;
 const MAX_LOG: usize = 500;
+/// The diffs `git_diff` reads at once, each a `git diff` of its own.
+const DIFF_JOBS: usize = 8;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RepoArgs {
@@ -149,6 +152,15 @@ pub(crate) fn status_text(s: &Status) -> String {
     out.join("\n")
 }
 
+/// One changed file's patch, as `git_diff` shows it, or why there is none.
+async fn diff_text(repo: &Path, f: &FileChange, staged: bool) -> String {
+    match git::diff(repo, f, staged).await {
+        Ok(patch) if !patch.trim().is_empty() => patch,
+        Ok(_) => format!("(no textual diff for {})", f.path),
+        Err(e) => format!("{}: {e}", f.path),
+    }
+}
+
 fn safe_rev(rev: &str) -> Result<&str, String> {
     let rev = rev.trim();
     if rev.is_empty() || rev.starts_with('-') || rev.contains(char::is_whitespace) {
@@ -230,14 +242,16 @@ impl Sawit {
                 ),
             });
         }
-        let mut out = Vec::new();
-        for f in files {
-            match git::diff(&repo, f, a.staged).await {
-                Ok(patch) if !patch.trim().is_empty() => out.push(patch),
-                Ok(_) => out.push(format!("(no textual diff for {})", f.path)),
-                Err(e) => out.push(format!("{}: {e}", f.path)),
-            }
-        }
+        // Several files' `git diff` run at once (each is a process that mostly starts up), and
+        // their patches come back in the files' order.
+        let diffs: Vec<_> = files
+            .iter()
+            .map(|f| diff_text(&repo, f, a.staged))
+            .collect();
+        let out: Vec<String> = futures::stream::iter(diffs)
+            .buffered(DIFF_JOBS)
+            .collect()
+            .await;
         ok(out.join("\n"))
     }
 
@@ -427,5 +441,54 @@ mod tests {
         assert!(safe_rev("--output=/tmp/x").is_err());
         assert!(safe_rev("a b").is_err());
         assert_eq!(safe_rev(" HEAD~1 ").unwrap(), "HEAD~1");
+    }
+
+    /// git_diff reads several files' diffs at once, and still answers them in the order git status
+    /// lists the files, an untracked one as new.
+    #[tokio::test]
+    async fn diffs_come_back_in_the_files_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(repo)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+        };
+        git(&["init", "-q"]);
+        let names = ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"];
+        for name in names {
+            std::fs::write(repo.join(name), "one\n").unwrap();
+        }
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "files"]);
+        for name in names {
+            std::fs::write(repo.join(name), format!("one\n{name}\n")).unwrap();
+        }
+        std::fs::write(repo.join("new.txt"), "new\n").unwrap();
+        let server = Sawit::new(sawit_core::instances::AppPaths {
+            root: repo.join("home"),
+        });
+        let diff = server
+            .git_diff_tool(DiffArgs {
+                repo: repo.display().to_string(),
+                path: None,
+                staged: false,
+            })
+            .await;
+        assert_ne!(diff.is_error, Some(true));
+        let said = &diff.content[0].as_text().unwrap().text;
+        let headers: Vec<&str> = said
+            .lines()
+            .filter(|line| line.starts_with("diff --git"))
+            .collect();
+        assert_eq!(headers.len(), 6, "{said}");
+        for (header, name) in headers.iter().zip(names.iter().chain(&["new.txt"])) {
+            assert!(header.contains(name), "{header} isn't {name}'s: {said}");
+        }
     }
 }
