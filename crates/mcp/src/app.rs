@@ -858,7 +858,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "What the Sawit app shows: each window's project, sidebar panel, layout, open tabs (index, title, kind, path, unsaved) and terminal tabs (index, title, running job, script, ssh) and each tab's split panes"
+        description = "What the Sawit app shows: each window's project, sidebar panel, layout, open tabs (index, title, kind, path, unsaved) and terminal tabs (index, title, running job, script, ssh) and each tab's split panes, and `browser`: the browser tab of the window's active project (url, title, loading, viewport, panel, pick_mode), which may not be the browser your browser_* tools use (theirs is your project's; browser_snapshot shows its page)"
     )]
     async fn app_state(&self) -> CallToolResult {
         self.app_tool(None, Command::State).await

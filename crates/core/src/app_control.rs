@@ -219,7 +219,9 @@ pub enum Command {
     Canvas {
         op: Value,
     },
-    /// Drives the browser tab (opening it if needed); see `crate::browser`.
+    /// Drives the project's browser tab; see `crate::browser`. Only the ops that show a page
+    /// ([`BrowserOp::shows_tab`](crate::browser::BrowserOp::shows_tab): navigate, screenshot,
+    /// resize) open it; the others answer that it isn't open ([`crate::browser::NOT_OPEN`]).
     Browser {
         op: crate::browser::BrowserOp,
     },
