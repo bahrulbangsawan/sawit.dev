@@ -58,6 +58,19 @@ fn browser_project(
         .or(active)
 }
 
+/// Where a new shell an agent starts goes: `cwd` when it names a folder, else the agent's own
+/// project, as for its browser ([`browser_project`]): the project of the window's `roots` that
+/// holds the folder the agent works in, else the active one. It started in the active project,
+/// so an agent in project A whose window showed B ran its command in B's folder.
+fn agent_shell_folder(
+    cwd: Option<PathBuf>,
+    roots: &[PathBuf],
+    agent_folder: Option<&Path>,
+    active: Option<PathBuf>,
+) -> Option<PathBuf> {
+    cwd.or_else(|| browser_project(roots, agent_folder, active))
+}
+
 fn panel_name(tab: SidebarTab) -> &'static str {
     match tab {
         SidebarTab::Servers => "instances",
@@ -232,7 +245,7 @@ impl Workspace {
     /// Runs a window command. `State`, `Focus`, `Open` and `Reload` are
     /// handled for the whole app by the caller. `agent_folder` is the folder the agent works in,
     /// when it named no project and a project of this window holds it: its browser is that
-    /// project's ([`browser_project`]).
+    /// project's ([`browser_project`]), and so is a new terminal it starts without a folder.
     pub fn control(
         &mut self,
         command: Command,
@@ -307,7 +320,7 @@ impl Workspace {
                 let (tab, pane) = if cwd.is_some() || new_tab {
                     self.leave_welcome(TERMINAL_ONLY, cx);
                     self.layout.terminal = true;
-                    let dir = cwd.or_else(|| self.root(cx));
+                    let dir = agent_shell_folder(cwd, &self.roots(cx), agent_folder, self.root(cx));
                     self.terminal.update(cx, |t, cx| {
                         t.run_in_new(dir, &command, Origin::Agent, window, cx)
                     })?
@@ -331,7 +344,10 @@ impl Workspace {
                 let mut bytes = text.map(String::into_bytes).unwrap_or_default();
                 if let Some(key) = key {
                     bytes.extend(key_bytes(&key).ok_or_else(|| {
-                        format!("Unknown key “{key}”. Use enter, tab, escape, backspace, up, down, left, right or ctrl-<letter>.")
+                        format!(
+                            "Unknown key “{key}”. Use {}.",
+                            sawit_core::app_control::KEY_NAMES
+                        )
                     })?);
                 }
                 if bytes.is_empty() {
@@ -698,10 +714,38 @@ mod tests {
 
     use serde_json::json;
 
-    use super::split_dir;
     use super::{
         BrowserRoute, browser_project, browser_route, close_answer, script_answer, shell_folder,
     };
+    use super::{agent_shell_folder, split_dir};
+
+    /// An agent's new terminal (terminal_run with new_tab and no cwd) starts in the agent's own
+    /// project, as its browser opens on that project's dev server: with projects A and B in one
+    /// window and B shown, an agent in A ran its command in B's folder. A folder it names wins,
+    /// and an agent that works in no project of the window gets the active one.
+    #[test]
+    fn an_agents_new_terminal_starts_in_its_own_project() {
+        let roots = [PathBuf::from("/code/shop"), PathBuf::from("/code/blog")];
+        let shown = Some(PathBuf::from("/code/blog"));
+        let folder = |cwd: Option<&str>, agent: Option<&str>| {
+            agent_shell_folder(
+                cwd.map(PathBuf::from),
+                &roots,
+                agent.map(Path::new),
+                shown.clone(),
+            )
+        };
+        assert_eq!(
+            folder(None, Some("/code/shop/web")),
+            Some(PathBuf::from("/code/shop"))
+        );
+        assert_eq!(
+            folder(Some("/code/blog/api"), Some("/code/shop")),
+            Some(PathBuf::from("/code/blog/api"))
+        );
+        assert_eq!(folder(None, Some("/elsewhere")), shown);
+        assert_eq!(folder(None, None), shown);
+    }
 
     /// terminal_split's right and down are the pane menu's Split right (⌘D) and Split down (⇧⌘D).
     #[test]

@@ -136,7 +136,8 @@ pub enum Command {
         tab: String,
     },
     /// Types `command` and Enter into a shell: a new one in `cwd` when given
-    /// or `new_tab`, else the active or newest idle shell, never the one the
+    /// or `new_tab` (without `cwd`, in the agent's own project, as for its
+    /// browser), else the active or newest idle shell, never the one the
     /// user is typing in.
     TerminalRun {
         command: String,
@@ -145,8 +146,9 @@ pub enum Command {
         #[serde(default)]
         new_tab: bool,
     },
-    /// The text of a terminal tab (index from `state`, default the active
-    /// one): its scrollback tail and screen, up to `lines` lines.
+    /// The text of a terminal pane, in the tab with this index (from
+    /// `state`, default the active one): its scrollback tail and screen, up
+    /// to `lines` lines.
     TerminalRead {
         #[serde(default)]
         tab: Option<usize>,
@@ -157,8 +159,9 @@ pub enum Command {
         #[serde(default)]
         lines: Option<usize>,
     },
-    /// Sends raw input to a terminal: text as typed, or a key such as
-    /// `ctrl-c`, `enter`, `up`. `sawit-mcp` always names the tab.
+    /// Sends raw input to a terminal: text as typed, or a key named in
+    /// [`KEY_NAMES`] (`ctrl-c`, `enter`, `up`). `sawit-mcp` always names the
+    /// tab.
     TerminalInput {
         #[serde(default)]
         tab: Option<usize>,
@@ -258,8 +261,12 @@ pub enum Command {
     },
 }
 
-/// What a terminal receives for a named key: `enter`, `tab`, `escape`,
-/// `backspace`, `up`/`down`/`left`/`right`, or `ctrl-<letter>`.
+/// The keys [`key_bytes`] knows, as `terminal_input` and its errors list them.
+pub const KEY_NAMES: &str = "enter, tab, escape, backspace, space, up, down, left, right, home, \
+end, pageup, pagedown, delete or ctrl-<letter> (return, esc and ctrl+<letter> work too)";
+
+/// What a terminal receives for a named key, one of [`KEY_NAMES`] (in any
+/// case), or `ctrl-[` and `ctrl-\`.
 pub fn key_bytes(name: &str) -> Option<Vec<u8>> {
     let name = name.trim().to_ascii_lowercase();
     let fixed: &[u8] = match name.as_str() {
@@ -548,6 +555,44 @@ mod tests {
         assert_eq!(key_bytes("up"), Some(b"\x1b[A".to_vec()));
         assert_eq!(key_bytes("ctrl-1"), None);
         assert_eq!(key_bytes("hyper"), None);
+    }
+
+    /// The one list of key names that terminal_input's description and its error give is true:
+    /// every name in it is a key `key_bytes` sends, and every key it sends by a name is in it.
+    #[test]
+    fn the_key_names_given_are_the_keys_there_are() {
+        let named: Vec<&str> = KEY_NAMES
+            .split(|c: char| c == ',' || c == '(' || c == ')' || c.is_whitespace())
+            .filter(|word| !word.is_empty() && !matches!(*word, "or" | "and" | "work" | "too"))
+            .collect();
+        for name in &named {
+            let key = name.replace("<letter>", "x");
+            assert!(
+                key_bytes(&key).is_some(),
+                "{name} is listed, but isn't a key"
+            );
+        }
+        for key in [
+            "enter",
+            "return",
+            "tab",
+            "escape",
+            "esc",
+            "backspace",
+            "space",
+            "up",
+            "down",
+            "left",
+            "right",
+            "home",
+            "end",
+            "pageup",
+            "pagedown",
+            "delete",
+        ] {
+            assert!(named.contains(&key), "{key} isn't in {KEY_NAMES}");
+        }
+        assert!(named.contains(&"ctrl-<letter>") && named.contains(&"ctrl+<letter>"));
     }
 
     /// An agent's split names its tab and the way to split, and leaves the rest out when it has

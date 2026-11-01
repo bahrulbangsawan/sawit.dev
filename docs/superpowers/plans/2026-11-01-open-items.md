@@ -45,10 +45,9 @@ Small, rare or untested-wiring items. Most of the untested wiring has one root c
   bracketed paste on (nvim, tmux, a REPL) as an agent. `ssh host` typed in a shell tab isn't treated as an SSH session.
   A link followed to another page doesn't reset the "links to other apps" question; only a reload or a typed address
   does. `app_state.browser` describes the front project's browser.
-- **Terminal.** A restart left waiting a long time takes the keyboard when it finally starts. `terminal_run` with
-  `new_tab` from an agent in another project starts in the front project's folder. Stable tab and pane ids in the
-  control protocol are a follow-up (pane ids are u64s that JSON doubles round). The Dock's Quit, logout and shutdown
-  end terminals without asking (gpui doesn't implement `applicationShouldTerminate:`).
+- **Terminal.** A restart left waiting a long time takes the keyboard when it finally starts. Stable tab and pane ids
+  in the control protocol are a follow-up (pane ids are u64s that JSON doubles round). The Dock's Quit, logout and
+  shutdown end terminals without asking (gpui doesn't implement `applicationShouldTerminate:`).
 - **Canvas.** The refusal toast doesn't mention the unsaved copy; Save As then close makes a second copy; backup
   rotation isn't all-or-nothing; a Mermaid diagram of thousands of edges stalls the worker for seconds.
 - **Release and install.** The installer's "run it from another terminal" guard relies on Sawit's PTY setting

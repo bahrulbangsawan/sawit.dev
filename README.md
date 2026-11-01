@@ -219,7 +219,8 @@ explained. A conflict on the same address can't be forced.
 - What an agent runs in the terminal (`terminal_run`, `app_run_script`, `app_ssh_connect`) never takes the keyboard,
   and never goes into the shell you're typing in, even at its prompt: `terminal_run` then uses another idle shell or a
   new tab. Its terminal comes forward unless you're typing in a terminal, and then it runs in the background. The agent
-  is told which terminal and pane it got, and its keys (`terminal_input`) go only to a terminal it names.
+  is told which terminal and pane it got, and its keys (`terminal_input`) go only to a terminal it names. A new tab
+  it opens without a folder starts in the agent's own project, even while the window shows another.
 - An agent can split a pane too (`terminal_split`, right or down), to run a dev server or a test watcher beside your
   shell. The new half never takes the keyboard, and the split stops at 20 columns by 4 rows, as <kbd>⌘D</kbd>'s does.
   Its `terminal_close` ends what runs there, so it needs `confirm: true` while a program runs in that terminal or

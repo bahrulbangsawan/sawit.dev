@@ -112,7 +112,7 @@ pub struct TerminalRunArgs {
     #[schemars(description = "Command line(s) to type, followed by Enter")]
     pub command: String,
     #[schemars(
-        description = "Start a new shell in this folder: an absolute path, or ~/… (default: the project)"
+        description = "Start a new shell in this folder: an absolute path, or ~/…. A new_tab without cwd starts in the project `project` names, else in your own: the window's project that holds the folder sawit-mcp runs in, else the project in front"
     )]
     pub cwd: Option<String>,
     #[schemars(
@@ -156,9 +156,10 @@ pub struct TerminalInputArgs {
     pub pane: Option<usize>,
     #[schemars(description = "Text to type as is (no Enter added)")]
     pub text: Option<String>,
-    #[schemars(
-        description = "Key to press after the text: enter, tab, escape, backspace, up, down, left, right, home, end, pageup, pagedown, delete or ctrl-<letter> (ctrl-c interrupts)"
-    )]
+    #[schemars(description = format!(
+        "Key to press after the text: {} (ctrl-c interrupts)",
+        app_control::KEY_NAMES
+    ))]
     pub key: Option<String>,
     pub project: Option<String>,
 }
@@ -1048,7 +1049,9 @@ impl Sawit {
             .await
     }
 
-    #[tool(description = "Read a terminal tab's latest output (scrollback and screen) as text")]
+    #[tool(
+        description = "Read a terminal pane's latest output (scrollback and screen) as text: name the tab, and the pane in a split tab, as terminal_run returned them; without a tab, the pane the user has in front"
+    )]
     async fn terminal_read(&self, Parameters(a): Parameters<TerminalReadArgs>) -> CallToolResult {
         let command = Command::TerminalRead {
             tab: a.tab,
