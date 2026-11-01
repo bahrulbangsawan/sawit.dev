@@ -386,10 +386,19 @@ explained. A conflict on the same address can't be forced.
     text, its box in the viewport and on the page, its main computed styles, the elements around it, the page's
     route, and a screenshot. In a dev build it also names the component and its source file (React, Vue, Svelte,
     Astro, and the `data-source` attributes of inspector plugins).
-  - **Copy** the notes as Markdown, or **Send to terminal** to paste them into Claude Code (or a shell) without
-    pressing Enter: the project's own terminals first, never an SSH session. Both can add the page's console errors.
-    Screenshots go to `.nyawit/annotations/`. **Clear** asks first when it would take several notes or one not yet
-    sent, and a cleared or removed note can be brought back with **Undo** for a few seconds.
+  - A note's card folds to one line (its number, kind, element and the first line of the note, all of it on hover)
+    and opens again with a click, <kbd>↩</kbd> or <kbd>Space</kbd>; **Collapse all** and **Expand all** fold a page's
+    notes. A new note opens, and from the fourth on it folds the ones before it.
+  - **Send to Claude Code** (or Codex, Gemini CLI, whichever agent runs) sends the notes to the agent running in a
+    Sawit terminal as one message in its chat: a single paste, then Return. With several agents running, the button's
+    menu lists each by its logo and terminal, the one you last typed to ticked as the default. An agent that has
+    exited gets nothing, and a plain shell or an SSH session never does. With no agent running, **Open Claude Code**
+    starts one in a new terminal in the project with the notes as its first message, in an interactive session that
+    can ask before it edits; its menu lists the agent CLIs installed (Claude Code, Codex, Gemini CLI, OpenCode).
+    **Copy** copies the notes as Markdown. Both can add the page's console errors.
+    Screenshots, and the notes an opened agent starts with, go to `.nyawit/annotations/`. **Clear** asks first when
+    it would take several notes or one not yet sent, and a cleared or removed note can be brought back with **Undo**
+    for a few seconds.
 - **Design**: five tabs, each with its own empty and loading state; the refresh button beside them reads the page
   again after it changed.
   - **Inspect**: hover an element to read its box model, typography (in its own face when this Mac has it), colors

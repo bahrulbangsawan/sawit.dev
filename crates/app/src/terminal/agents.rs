@@ -52,10 +52,28 @@ fn raster(name: &'static str, device: u32, cx: &App) -> Option<Arc<RenderImage>>
 /// the light themes alike; a one-colour logo takes the text's colour. An agent with no logo
 /// gets the generic agent glyph.
 pub fn logo(kind: AgentKind, side: Pixels, window: &Window, cx: &App) -> AnyElement {
+    draw(kind, side, None, window, cx)
+}
+
+/// [`logo`] on a surface of its own, a primary button's say: a one-colour logo, and the glyph
+/// of an agent with none, take `tint`, the surface's text colour.
+pub fn logo_in(kind: AgentKind, side: Pixels, tint: Hsla, window: &Window, cx: &App) -> AnyElement {
+    draw(kind, side, Some(tint), window, cx)
+}
+
+/// [`logo`], its one colour `tint` when given, else the text's.
+fn draw(
+    kind: AgentKind,
+    side: Pixels,
+    tint: Option<Hsla>,
+    window: &Window,
+    cx: &App,
+) -> AnyElement {
     let Some(name) = kind.logo() else {
         return Icon::new(Lucide::Bot)
             .size(side)
             .flex_none()
+            .when_some(tint, |icon, tint| icon.text_color(tint))
             .into_any_element();
     };
     if name.ends_with("-color") {
@@ -71,7 +89,7 @@ pub fn logo(kind: AgentKind, side: Pixels, window: &Window, cx: &App) -> AnyElem
         .path(SharedString::from(format!("agent_logos/{name}.svg")))
         .size(side)
         .flex_none()
-        .text_color(cx.theme().foreground)
+        .text_color(tint.unwrap_or(cx.theme().foreground))
         .into_any_element()
 }
 

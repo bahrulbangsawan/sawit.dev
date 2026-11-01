@@ -1,25 +1,38 @@
 //! The Annotate panel: one card per element the user picked, with a comment, an intent and a
 //! screenshot, grouped by page. Notes are written in a popover on the page itself
 //! (`browser_overlay.js`); the panel is their list, kept in step both ways. `BrowserView` owns
-//! the flow around it (pick, capture, markers, copy); the panel owns the rows.
+//! the flow around it (pick, capture, markers, copy); the panel owns the rows, and where the
+//! notes go: an agent running in a terminal, or a new one ([`super::agents`]).
 
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
+use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::annotations::{Annotation, Intent, Rect, page_key};
+use sawit_core::terminal::{AgentKind, PaneId};
 
+use super::agents::{self, AgentSource};
 use super::panel::{self, note_timer, note_timer_for};
+use crate::terminal::RunningAgent;
 
 /// How long Undo stays after a delete or a clear.
 const UNDO_FOR: Duration = Duration::from_secs(8);
+/// How often the open panel looks again for the agents running in the terminals.
+const AGENT_POLL: Duration = Duration::from_secs(1);
+/// From how many notes on, picking another collapses the ones before it.
+const KEEP_OPEN: usize = 3;
+/// How wide an agent menu may be: it opens over the panel, never over the page, whose webview
+/// draws above it.
+const MENU_WIDTH: f32 = 236.;
 
 /// What the panel asks of the browser.
 pub enum AnnotateEvent {
@@ -28,9 +41,23 @@ pub enum AnnotateEvent {
     /// Rows were added, removed or edited: the page's markers need redrawing.
     Changed,
     Copy,
-    Send,
+    /// Send the notes to this agent's chat.
+    SendTo(RunningAgent),
+    /// Start this agent in a new terminal with the notes as its first message.
+    Open(AgentKind),
     /// Pick again (after Esc stopped it).
     Pick,
+}
+
+/// What the send button does, from the agents running and those installed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SendAction {
+    /// Sends to the agent at this index; with more than one running, a menu lists them all.
+    Send { default: usize },
+    /// Starts this agent CLI in a new terminal; with more than one installed, a menu lists them.
+    Open { kind: AgentKind },
+    /// No agent runs and none was found to start, or the panel is still looking.
+    NoAgent { looking: bool },
 }
 
 /// A marker on the page, with what its popover shows.
@@ -44,8 +71,15 @@ pub struct Marker {
 }
 
 struct Row {
+    /// Names the row's elements for as long as the panel lives: a row's index changes as
+    /// others are removed, and its toggle keeps its focus by this.
+    key: u64,
     annotation: Annotation,
     comment: Entity<TextareaState>,
+    /// Shown as one line, until the user opens it again.
+    collapsed: bool,
+    /// The card's head, which folds and opens it, keeps the keyboard through both.
+    head: FocusHandle,
     _changed: Subscription,
 }
 
@@ -73,6 +107,21 @@ pub struct AnnotatePanel {
     /// Rows a delete or a clear took, with their places, while Undo can bring them back.
     removed: Vec<(usize, Row)>,
     _note_timer: Option<Task<()>>,
+    /// The next row's key.
+    next_key: u64,
+    /// The agents running in the terminals, as last looked at.
+    agents: Vec<RunningAgent>,
+    /// The agent pane last sent to, remembered while its agent runs.
+    last_target: Option<PaneId>,
+    /// The agent CLIs on this Mac that Open agent can start; `None` until looked for.
+    installed: Option<Vec<AgentKind>>,
+    /// The agent last sent to or opened, which Open agent starts again.
+    last_kind: Option<AgentKind>,
+    /// Where the running agents are found; none in tests, which set them.
+    source: Option<AgentSource>,
+    /// The panel is open, so it keeps the agents up to date.
+    shown: bool,
+    _poll: Option<Task<()>>,
 }
 
 impl EventEmitter<AnnotateEvent> for AnnotatePanel {}
@@ -90,11 +139,127 @@ impl AnnotatePanel {
             note: None,
             removed: Vec::new(),
             _note_timer: None,
+            next_key: 0,
+            agents: Vec::new(),
+            last_target: None,
+            installed: None,
+            last_kind: None,
+            source: None,
+            shown: false,
+            _poll: None,
         }
     }
 
+    /// Where the agents running in the terminals are found. While the panel is open it looks
+    /// again every [`AGENT_POLL`], as an agent can start or end in a terminal at any time.
+    pub fn set_agent_source(&mut self, source: AgentSource, cx: &mut Context<Self>) {
+        self.source = Some(source);
+        self._poll = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(AGENT_POLL).await;
+                let alive = this.update(cx, |this, cx| {
+                    if this.shown {
+                        this.refresh_agents(cx);
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        }));
+        self.refresh_agents(cx);
+        self.find_installed(cx);
+    }
+
+    /// The panel opened or closed. Opened, it looks at once for the agents running, and for the
+    /// agent CLIs installed since it last looked.
+    pub fn set_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
+        self.shown = shown;
+        if shown && self.source.is_some() {
+            self.refresh_agents(cx);
+            self.find_installed(cx);
+        }
+    }
+
+    /// Looks again for the agents running in the terminals. A remembered target whose agent has
+    /// ended is forgotten.
+    pub fn refresh_agents(&mut self, cx: &mut Context<Self>) {
+        if let Some(source) = self.source.clone() {
+            let agents = source(cx);
+            self.set_agents(agents, cx);
+        }
+    }
+
+    /// The agents running in the terminals.
+    pub(super) fn set_agents(&mut self, agents: Vec<RunningAgent>, cx: &mut Context<Self>) {
+        if let Some(pane) = self.last_target
+            && !agents.iter().any(|a| a.pane == pane)
+        {
+            self.last_target = None;
+        }
+        if !agents::same_agents(&agents, &self.agents) {
+            self.agents = agents;
+            cx.notify();
+        }
+    }
+
+    /// The agent CLIs Open agent can start (for tests; the panel looks for them itself).
+    #[cfg(test)]
+    pub(super) fn set_installed(&mut self, installed: Vec<AgentKind>, cx: &mut Context<Self>) {
+        self.installed = Some(installed);
+        cx.notify();
+    }
+
+    /// Looks for the agent CLIs on this Mac, off the UI thread.
+    fn find_installed(&mut self, cx: &mut Context<Self>) {
+        let found = crate::rt::spawn_blocking(cx, agents::installed_agents);
+        cx.spawn(async move |this, cx| {
+            if let Ok(found) = found.await {
+                let _ = this.update(cx, |this, cx| {
+                    if this.installed.as_ref() != Some(&found) {
+                        this.installed = Some(found);
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// What the send button does now.
+    pub(super) fn send_action(&self) -> SendAction {
+        if let Some(default) = agents::default_target(&self.agents, self.last_target) {
+            return SendAction::Send { default };
+        }
+        match &self.installed {
+            None => SendAction::NoAgent { looking: true },
+            Some(found) => match agents::default_open(found, self.last_kind) {
+                Some(kind) => SendAction::Open { kind },
+                None => SendAction::NoAgent { looking: false },
+            },
+        }
+    }
+
+    /// Sends the notes to the agent in `pane`, which is remembered as the target while it runs.
+    fn send_to(&mut self, pane: PaneId, cx: &mut Context<Self>) {
+        let Some(agent) = self.agents.iter().find(|a| a.pane == pane).cloned() else {
+            return;
+        };
+        self.last_target = Some(pane);
+        self.last_kind = Some(agent.kind);
+        cx.emit(AnnotateEvent::SendTo(agent));
+    }
+
+    /// Starts `kind` in a new terminal with the notes, and starts it again next time.
+    fn open_agent(&mut self, kind: AgentKind, cx: &mut Context<Self>) {
+        self.last_kind = Some(kind);
+        cx.emit(AnnotateEvent::Open(kind));
+    }
+
     /// Appends `a`. Its comment, written in the page's popover, is the row's; without one the
-    /// row's comment field takes the keyboard (`focus`), as when the page couldn't ask.
+    /// row's comment field takes the keyboard (`focus`), as when the page couldn't ask. The new
+    /// row opens; past [`KEEP_OPEN`] notes the others fold to a line each, so the list stays
+    /// short enough to scan.
     pub fn add(&mut self, a: Annotation, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
         let comment =
             cx.new(|cx| TextareaState::new(window, cx).placeholder("What should change?"));
@@ -111,13 +276,46 @@ impl AnnotatePanel {
                 cx.emit(AnnotateEvent::Changed);
             }
         });
+        if self.rows.len() >= KEEP_OPEN {
+            for row in &mut self.rows {
+                row.collapsed = true;
+            }
+        }
         self.rows.push(Row {
+            key: self.next_key,
             annotation: a,
             comment,
+            collapsed: false,
+            head: cx.focus_handle(),
             _changed: changed,
         });
+        self.next_key += 1;
         cx.emit(AnnotateEvent::Changed);
         cx.notify();
+    }
+
+    /// Folds row `ix` to one line, or opens it.
+    fn toggle(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if let Some(row) = self.rows.get_mut(ix) {
+            row.collapsed = !row.collapsed;
+            cx.notify();
+        }
+    }
+
+    /// Folds every row on the page `key`, or opens them all.
+    fn collapse_page(&mut self, key: &str, collapsed: bool, cx: &mut Context<Self>) {
+        for row in &mut self.rows {
+            if page_key(&row.annotation.url) == key {
+                row.collapsed = collapsed;
+            }
+        }
+        cx.notify();
+    }
+
+    /// Whether each row is folded, in order (for tests).
+    #[cfg(test)]
+    fn collapsed(&self) -> Vec<bool> {
+        self.rows.iter().map(|r| r.collapsed).collect()
     }
 
     /// The rows, with the comments as typed so far.
@@ -364,50 +562,136 @@ impl AnnotatePanel {
         }
     }
 
+    /// A note's card: one line while folded (its number, kind, element and the first line of the
+    /// comment), else the whole card. Its head folds and opens it, by click, ↩ or Space.
     fn row(&self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let row = &self.rows[ix];
+        let theme = cx.theme();
+        let collapsed = row.collapsed;
+        v_flex()
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(theme.border)
+            .child(self.card_head(ix, cx))
+            .when(!collapsed, |el| el.child(self.card_body(ix, cx)))
+    }
+
+    /// The part of a card that folds it: a button that says whether the card is open.
+    fn card_head(&self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let row = &self.rows[ix];
         let a = &row.annotation;
         let theme = cx.theme();
         let muted = theme.muted_foreground;
+        let mono = theme.mono_font_family.clone();
+        let collapsed = row.collapsed;
+        let comment = row.comment.read(cx).value().to_string();
+        let first = first_line(&comment);
+        let kind = intent_name(a.intent);
+        let inner = theme.radius - px(1.);
+        let label = if first.is_empty() {
+            format!("Annotation {}, {kind}, no note yet", a.n)
+        } else {
+            format!("Annotation {}, {kind}: {first}", a.n)
+        };
+        let head = gpui_kit::base::Button::new(("annotate-card", row.key))
+            .track_focus(&row.head)
+            .debug_selector(move || format!("annotate-card-{ix}"))
+            .accessibility_label(label)
+            .aria_expanded(!collapsed)
+            .w_full()
+            .flex()
+            .gap_2()
+            .px_3()
+            .border_1()
+            .border_color(transparent_black())
+            .map(|el| {
+                if collapsed {
+                    el.py_1p5().items_center().rounded(inner)
+                } else {
+                    el.pt_3().pb_2().items_start().rounded_t(inner)
+                }
+            })
+            .line_height(relative(1.4))
+            .cursor_pointer()
+            .hover(|s| s.bg(theme.list_hover))
+            .focus_visible(|s| s.border_color(theme.ring))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle(ix, cx)))
+            .child(number_badge(a.n, cx));
+        let chevron = Icon::new(if collapsed {
+            Lucide::ChevronRight
+        } else {
+            Lucide::ChevronDown
+        })
+        .xsmall()
+        .flex_none()
+        .text_color(muted);
+        if collapsed {
+            let full = comment.trim().to_string();
+            head.when(!full.is_empty(), |el| {
+                el.tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
+            })
+            .child(panel::tag(kind, cx))
+            .child(
+                div()
+                    .flex_shrink(1.)
+                    .min_w(px(24.))
+                    .max_w(px(112.))
+                    .truncate()
+                    .text_xs()
+                    .text_color(muted)
+                    .font_family(mono)
+                    .child(a.element.label.clone()),
+            )
+            .child(div().flex_1().min_w_0().truncate().text_xs().map(|el| {
+                if first.is_empty() {
+                    el.text_color(muted).child("No note yet")
+                } else {
+                    el.child(first)
+                }
+            }))
+            .child(chevron)
+            .into_any_element()
+        } else {
+            let summary = element_summary(a);
+            let source = source_line(a);
+            head.child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .truncate()
+                            .text_xs()
+                            .font_family(mono.clone())
+                            .child(a.element.label.clone()),
+                    )
+                    .child(div().truncate().text_xs().text_color(muted).child(summary))
+                    .children(source.map(|s| {
+                        div()
+                            .truncate()
+                            .text_xs()
+                            .text_color(muted)
+                            .font_family(mono)
+                            .child(s)
+                    })),
+            )
+            .child(div().pt_0p5().child(chevron))
+            .into_any_element()
+        }
+    }
+
+    /// An open card under its head: the kind, the comment and the card's actions.
+    fn card_body(&self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let row = &self.rows[ix];
+        let a = &row.annotation;
         let selector = a.element.selector.clone();
         let shot = a.include_screenshot;
         let has_shot = a.screenshot.is_some();
-        let summary = element_summary(a);
-        let source = source_line(a);
         let intent_ix = Intent::ALL.iter().position(|i| *i == a.intent).unwrap_or(0);
         v_flex()
             .gap_2()
-            .p_3()
-            .rounded(theme.radius)
-            .border_1()
-            .border_color(theme.border)
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_start()
-                    .child(number_badge(a.n, cx))
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_xs()
-                                    .font_family(theme.mono_font_family.clone())
-                                    .child(a.element.label.clone()),
-                            )
-                            .child(div().truncate().text_xs().text_color(muted).child(summary))
-                            .children(source.map(|s| {
-                                div()
-                                    .truncate()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .font_family(theme.mono_font_family.clone())
-                                    .child(s)
-                            })),
-                    ),
-            )
+            .px_3()
+            .pb_3()
             .child(
                 TabBar::new(("annotate-intent", ix))
                     .segmented()
@@ -599,8 +883,10 @@ impl AnnotatePanel {
             ))
     }
 
-    /// The group header: the page's title, and its path with the host in a tooltip.
-    fn group_header(&self, key: &str, title: &str, cx: &App) -> impl IntoElement {
+    /// The group header: the page's title, its path under it when that says more than the
+    /// title does (the home page's `/` doesn't), with the host in a tooltip; and with two notes
+    /// or more, Collapse all, or Expand all when every one is folded.
+    fn group_header(&self, key: &str, title: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let (path, host) = split_url(key);
         let muted = cx.theme().muted_foreground;
         let title = if title.trim().is_empty() {
@@ -608,28 +894,64 @@ impl AnnotatePanel {
         } else {
             title.to_string()
         };
-        v_flex()
-            .id(SharedString::from(format!("annotate-page-{key}")))
-            .gap_0p5()
-            .tooltip(move |window, cx| Tooltip::new(key_tooltip(&host, &path)).build(window, cx))
+        let shown_path = route_line(&path);
+        let rows: Vec<&Row> = self
+            .rows
+            .iter()
+            .filter(|r| page_key(&r.annotation.url) == key)
+            .collect();
+        let fold = (rows.len() >= 2).then(|| rows.iter().all(|r| r.collapsed));
+        let page = key.to_string();
+        h_flex()
+            .gap_2()
+            .items_center()
             .child(
-                div()
-                    .truncate()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(title),
+                v_flex()
+                    .id(SharedString::from(format!("annotate-page-{key}")))
+                    .flex_1()
+                    .min_w_0()
+                    .gap_0p5()
+                    .tooltip(move |window, cx| {
+                        Tooltip::new(key_tooltip(&host, &path)).build(window, cx)
+                    })
+                    .child(
+                        div()
+                            .truncate()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(title),
+                    )
+                    .children(shown_path.map(|path| {
+                        div()
+                            .truncate()
+                            .text_xs()
+                            .text_color(muted)
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .child(path)
+                    })),
             )
-            .child(
-                div()
-                    .truncate()
-                    .text_xs()
-                    .text_color(muted)
-                    .font_family(cx.theme().mono_font_family.clone())
-                    .child(split_url(key).0),
-            )
+            .children(fold.map(|all_folded| {
+                Button::new(SharedString::from(format!("annotate-fold-{key}")))
+                    .debug_selector(|| "annotate-fold".into())
+                    .ghost()
+                    .xsmall()
+                    .icon(if all_folded {
+                        Lucide::UnfoldVertical
+                    } else {
+                        Lucide::FoldVertical
+                    })
+                    .label(if all_folded {
+                        "Expand all"
+                    } else {
+                        "Collapse all"
+                    })
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.collapse_page(&page, !all_folded, cx);
+                    }))
+            }))
     }
 
-    fn footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn footer(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let has_rows = !self.rows.is_empty();
         let theme = cx.theme();
         let muted = theme.muted_foreground;
@@ -638,6 +960,7 @@ impl AnnotatePanel {
             n => format!("Include console errors ({n})"),
         };
         let undo = !self.removed.is_empty();
+        let reason = self.send_blocked(has_rows);
         v_flex()
             .flex_none()
             .gap_2()
@@ -680,22 +1003,7 @@ impl AnnotatePanel {
                 h_flex()
                     .gap_2()
                     .items_center()
-                    .child(
-                        Button::new("annotate-send")
-                            .debug_selector(|| "annotate-send".into())
-                            .small()
-                            .primary()
-                            .flex_1()
-                            .icon(Lucide::SquareTerminal)
-                            .label("Send to terminal")
-                            .disabled(!has_rows)
-                            .tooltip(
-                                "Paste the notes into the agent's terminal, without pressing Return",
-                            )
-                            .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
-                                cx.emit(AnnotateEvent::Send);
-                            })),
-                    )
+                    .child(self.send_control(has_rows, window, cx))
                     .child(
                         Button::new("annotate-copy")
                             .debug_selector(|| "annotate-copy".into())
@@ -710,12 +1018,19 @@ impl AnnotatePanel {
                             })),
                     ),
             )
-            .children(self.note.clone().map(|note| {
+            .children(self.note.clone().or(reason).map(|note| {
                 h_flex()
                     .min_h(px(22.))
                     .gap_2()
                     .items_center()
-                    .child(div().flex_1().text_xs().text_color(muted).child(note))
+                    .child(
+                        div()
+                            .debug_selector(|| "annotate-note".into())
+                            .flex_1()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(note),
+                    )
                     .when(undo, |el| {
                         el.child(
                             Button::new("annotate-undo")
@@ -730,6 +1045,205 @@ impl AnnotatePanel {
                     })
             }))
     }
+
+    /// Why the send button can't be used now, said under it: there are no notes, or no agent
+    /// to send them to.
+    fn send_blocked(&self, has_rows: bool) -> Option<SharedString> {
+        if !has_rows {
+            return Some("Pick an element and write a note to send it to an agent.".into());
+        }
+        match self.send_action() {
+            SendAction::NoAgent { looking: true } => Some("Looking for agent CLIs…".into()),
+            SendAction::NoAgent { looking: false } => Some(
+                "No agent is running in a terminal, and no agent CLI was found. Install Claude \
+                 Code, Codex or Gemini CLI from Dev Tools."
+                    .into(),
+            ),
+            _ => None,
+        }
+    }
+
+    /// The send button: Send to the agent running in a terminal, with a menu of the others when
+    /// there are several; else Open, which starts one with the notes, with a menu of the agent
+    /// CLIs installed when there are several. Each shows the agent's logo.
+    fn send_control(
+        &self,
+        has_rows: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let tint = theme.primary_foreground;
+        let menu_tint = theme.popover_foreground;
+        let action = self.send_action();
+        let this = cx.entity().downgrade();
+        let (mode, control): (&'static str, AnyElement) = match action {
+            SendAction::Send { default } => {
+                let agent = self.agents[default].clone();
+                let name = agents::target_name(&self.agents, default);
+                let pane = agent.pane;
+                let primary = Button::new("annotate-send-primary")
+                    .small()
+                    .primary()
+                    .flex_1()
+                    .child(logo_slot(agent.kind, tint, !has_rows, window, cx))
+                    .child(button_text(format!("Send to {}", agent.kind.name())))
+                    .accessibility_label(format!("Send the notes to {name}"))
+                    .tooltip(format!(
+                        "Paste the notes into the chat of {name} and send them"
+                    ))
+                    .disabled(!has_rows)
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.send_to(pane, cx);
+                    }));
+                if self.agents.len() < 2 {
+                    ("annotate-send-one", primary.w_full().into_any_element())
+                } else {
+                    let entries: Rc<Vec<(RunningAgent, String, bool)>> = Rc::new(
+                        self.agents
+                            .iter()
+                            .enumerate()
+                            .map(|(ix, a)| {
+                                (
+                                    a.clone(),
+                                    agents::target_name(&self.agents, ix),
+                                    ix == default,
+                                )
+                            })
+                            .collect(),
+                    );
+                    let control = DropdownButton::new("annotate-send-split")
+                        .w_full()
+                        .small()
+                        .primary()
+                        .button(primary)
+                        .disabled(!has_rows)
+                        .menu_accessibility_label("Choose the agent to send the notes to")
+                        .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
+                            let mut menu = menu.max_w(px(MENU_WIDTH)).label("Send the notes to");
+                            for (agent, name, ticked) in entries.iter().cloned() {
+                                let this = this.clone();
+                                let pane = agent.pane;
+                                menu = menu.item(
+                                    PopupMenuItem::element(move |window, cx| {
+                                        menu_entry(agent.kind, name.clone(), menu_tint, window, cx)
+                                    })
+                                    .checked(ticked)
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            let _ = this.update(cx, |p, cx| p.send_to(pane, cx));
+                                        },
+                                    ),
+                                );
+                            }
+                            menu
+                        });
+                    ("annotate-send-split", control.into_any_element())
+                }
+            }
+            SendAction::Open { kind } => {
+                let name = kind.name();
+                let primary = Button::new("annotate-open-primary")
+                    .small()
+                    .primary()
+                    .flex_1()
+                    .child(logo_slot(kind, tint, !has_rows, window, cx))
+                    .child(button_text(format!("Open {name}")))
+                    .accessibility_label(format!("Open {name} in a new terminal with the notes"))
+                    .tooltip(format!(
+                        "No agent is running in a terminal: start {name} in a new one, with the \
+                         notes as its first message"
+                    ))
+                    .disabled(!has_rows)
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.open_agent(kind, cx);
+                    }));
+                let installed = self.installed.clone().unwrap_or_default();
+                if installed.len() < 2 {
+                    ("annotate-open-one", primary.w_full().into_any_element())
+                } else {
+                    let control = DropdownButton::new("annotate-open-split")
+                        .w_full()
+                        .small()
+                        .primary()
+                        .button(primary)
+                        .disabled(!has_rows)
+                        .menu_accessibility_label("Choose the agent to open")
+                        .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
+                            let mut menu = menu.max_w(px(MENU_WIDTH)).label("Open with the notes");
+                            for other in installed.iter().copied() {
+                                let this = this.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::element(move |window, cx| {
+                                        menu_entry(
+                                            other,
+                                            other.name().to_string(),
+                                            menu_tint,
+                                            window,
+                                            cx,
+                                        )
+                                    })
+                                    .checked(other == kind)
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            let _ =
+                                                this.update(cx, |p, cx| p.open_agent(other, cx));
+                                        },
+                                    ),
+                                );
+                            }
+                            menu
+                        });
+                    ("annotate-open-split", control.into_any_element())
+                }
+            }
+            SendAction::NoAgent { .. } => (
+                "annotate-send-none",
+                Button::new("annotate-open-none")
+                    .small()
+                    .primary()
+                    .w_full()
+                    .icon(Lucide::Bot)
+                    .label("Open agent")
+                    .disabled(true)
+                    .into_any_element(),
+            ),
+        };
+        div()
+            .debug_selector(|| "annotate-send".into())
+            .flex_1()
+            .min_w_0()
+            .child(
+                h_flex()
+                    .debug_selector(move || mode.into())
+                    .w_full()
+                    .child(control),
+            )
+    }
+}
+
+/// An agent's logo in a button, 14 px, as the terminal draws it, faded with the button when it
+/// is disabled; a one-colour logo in the button's `tint`.
+fn logo_slot(kind: AgentKind, tint: Hsla, disabled: bool, window: &Window, cx: &App) -> Div {
+    div()
+        .flex_none()
+        .when(disabled, |el| el.opacity(0.5))
+        .child(crate::terminal::agent_logo(kind, px(14.), tint, window, cx))
+}
+
+/// A button's label beside its logo, cut short when the panel is narrow.
+fn button_text(text: String) -> impl IntoElement {
+    div().min_w_0().truncate().child(text)
+}
+
+/// A menu line: the agent's logo and what tells it apart.
+fn menu_entry(kind: AgentKind, name: String, tint: Hsla, window: &Window, cx: &App) -> Div {
+    h_flex()
+        .gap_2()
+        .min_w_0()
+        .items_center()
+        .child(crate::terminal::agent_logo(kind, px(16.), tint, window, cx))
+        .child(div().min_w_0().truncate().child(name))
 }
 
 impl Render for AnnotatePanel {
@@ -770,7 +1284,7 @@ impl Render for AnnotatePanel {
             .size_full()
             .child(self.status(cx))
             .child(panel::scroll("annotate-list").child(list))
-            .child(self.footer(cx))
+            .child(self.footer(window, cx))
     }
 }
 
@@ -819,10 +1333,42 @@ pub(super) fn source_line(a: &Annotation) -> Option<String> {
             None => src.file.clone(),
         });
     }
-    if let Some(c) = src.component.as_deref().filter(|c| !c.is_empty()) {
+    if let Some(c) = src.component.as_deref().filter(|c| real_component(c)) {
         parts.push(format!("<{c}>"));
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+/// Whether a component's name, as the page's framework reports it, names something the user
+/// wrote: `HeroActions`, `nav-bar`, `Card.Header`. A production build minifies names (`$u`,
+/// `Xe`, `t`), and a placeholder like `Anonymous` names nothing; a card shows neither.
+pub(super) fn real_component(name: &str) -> bool {
+    let name = name.trim();
+    name.chars().count() >= 3
+        && name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':' | '(' | ')'))
+        && !matches!(
+            name.to_ascii_lowercase().as_str(),
+            "anonymous" | "unknown" | "component"
+        )
+}
+
+/// A note's first line that has words, for its folded card.
+fn first_line(comment: &str) -> String {
+    comment
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The path a group header shows under the page's title, when it says more than the title
+/// alone: not the home page's bare `/`.
+fn route_line(path: &str) -> Option<String> {
+    (path != "/").then(|| path.to_string())
 }
 
 fn cut(text: &str, max: usize) -> String {
@@ -905,10 +1451,12 @@ fn split_url(url: &str) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::{
-        AnnotatePanel, clear_label, element_summary, group_order, padded_rect, source_line,
-        split_url,
+        AnnotatePanel, SendAction, clear_label, element_summary, first_line, group_order,
+        padded_rect, real_component, route_line, source_line, split_url,
     };
+    use crate::terminal::RunningAgent;
     use sawit_core::annotations::{Annotation, ElementDetails, Intent, Rect, SourceHint};
+    use sawit_core::terminal::AgentKind;
 
     fn at(url: &str, n: u32) -> Annotation {
         Annotation {
@@ -1158,5 +1706,274 @@ mod tests {
         );
         assert_eq!(clear_label(1), "Clear annotation");
         assert_eq!(clear_label(3), "Clear 3 annotations");
+    }
+
+    /// A minified or placeholder component name (`<$u>` on a production page) says nothing, so a
+    /// card leaves it out and keeps the source file; a name someone wrote stays.
+    #[test]
+    fn junk_component_names_are_hidden() {
+        for junk in ["$u", "$", "Xe", "t", "_c", "$Foo", "Anonymous", "  ", "a b"] {
+            assert!(!real_component(junk), "{junk:?}");
+        }
+        for real in [
+            "HeroActions",
+            "nav-bar",
+            "Card.Header",
+            "ForwardRef(Button)",
+            "App",
+        ] {
+            assert!(real_component(real), "{real:?}");
+        }
+        let mut a = at("http://a/1", 1);
+        a.element.source = Some(SourceHint {
+            file: String::new(),
+            line: None,
+            framework: "React".into(),
+            component: Some("$u".into()),
+        });
+        assert_eq!(source_line(&a), None, "nothing worth a line");
+        a.element.source = Some(SourceHint {
+            file: "src/Hero.tsx".into(),
+            line: Some(3),
+            framework: "React".into(),
+            component: Some("$u".into()),
+        });
+        assert_eq!(source_line(&a).as_deref(), Some("src/Hero.tsx:3"));
+    }
+
+    /// A group header shows the page's path only when it says more than the title: not the home
+    /// page's `/`. A folded card shows the first line of its note that has words.
+    #[test]
+    fn headers_and_folded_cards_say_only_what_adds() {
+        assert_eq!(route_line("/"), None);
+        assert_eq!(
+            route_line("/pricing?plan=pro").as_deref(),
+            Some("/pricing?plan=pro")
+        );
+        assert_eq!(first_line("\n  fix this.\nand that"), "fix this.");
+        assert_eq!(first_line(" \n "), "");
+    }
+
+    fn agent(pane: u64, kind: AgentKind, focused: bool) -> RunningAgent {
+        RunningAgent {
+            tab: gpui_kit::WeakEntity::new_invalid(),
+            pane,
+            kind,
+            label: format!("project-{pane}").into(),
+            focused,
+        }
+    }
+
+    /// A card folds and opens from its head, by click or key; Collapse all folds the page's
+    /// cards and Expand all opens them. A new note opens; past three, the others fold. Each
+    /// card keeps its state through a delete and its undo.
+    #[gpui_kit::test]
+    fn cards_fold_and_open(cx: &mut gpui_kit::TestAppContext) {
+        use crate::browser::panel::PANEL_WIDTH;
+        use gpui_kit::{VisualTestContext, px, size};
+        cx.update(gpui_kit::init);
+        let window = cx.open_window(size(px(PANEL_WIDTH), px(900.)), |window, cx| {
+            let mut panel = AnnotatePanel::new(window, cx);
+            panel.add(at("http://a/1", 1), false, window, cx);
+            panel.add(at("http://a/1", 2), false, window, cx);
+            panel
+        });
+        let panel = window.root(cx).unwrap();
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        let folded = |cx: &mut VisualTestContext| panel.read_with(cx, |p, _| p.collapsed());
+        assert_eq!(folded(&mut cx), [false, false], "new notes open");
+        assert!(cx.debug_bounds("annotate-fold").is_some(), "two notes");
+
+        // A click on a card's head folds it, and opens it again.
+        let head = cx.debug_bounds("annotate-card-0").unwrap();
+        cx.simulate_click(head.center(), gpui_kit::Modifiers::none());
+        assert_eq!(folded(&mut cx), [true, false]);
+        let folded_head = cx.debug_bounds("annotate-card-0").unwrap();
+        assert!(
+            folded_head.size.height < px(40.),
+            "folded to a line: {folded_head:?}"
+        );
+        cx.simulate_click(folded_head.center(), gpui_kit::Modifiers::none());
+        assert_eq!(folded(&mut cx), [false, false]);
+
+        // With the keyboard on the head, Return and Space fold and open it.
+        cx.update(|window, cx| {
+            let head = panel.read(cx).rows[0].head.clone();
+            window.focus(&head, cx);
+        });
+        cx.run_until_parked();
+        let press = |key: &str, cx: &mut VisualTestContext| {
+            use gpui_kit::{KeyDownEvent, KeyUpEvent, Keystroke};
+            let keystroke =
+                cx.update(|_, cx| Keystroke::parse_with_os(key, cx.platform_info().os).unwrap());
+            cx.simulate_event(KeyDownEvent {
+                keystroke: keystroke.clone(),
+                is_held: false,
+                prefer_character_input: false,
+            });
+            cx.simulate_event(KeyUpEvent { keystroke });
+            cx.run_until_parked();
+        };
+        press("enter", &mut cx);
+        assert_eq!(folded(&mut cx), [true, false], "Return");
+        press("space", &mut cx);
+        assert_eq!(folded(&mut cx), [false, false], "Space");
+
+        // Collapse all, then Expand all.
+        let fold = cx.debug_bounds("annotate-fold").unwrap();
+        cx.simulate_click(fold.center(), gpui_kit::Modifiers::none());
+        assert_eq!(folded(&mut cx), [true, true]);
+        cx.simulate_click(fold.center(), gpui_kit::Modifiers::none());
+        assert_eq!(folded(&mut cx), [false, false]);
+
+        // A third note opens with the others; a fourth folds the three before it.
+        cx.update(|window, cx| {
+            panel.update(cx, |p, cx| {
+                p.toggle(1, cx);
+                p.add(at("http://a/1", 3), false, window, cx);
+            })
+        });
+        assert_eq!(
+            folded(&mut cx),
+            [false, true, false],
+            "kept as the user left them"
+        );
+        cx.update(|window, cx| {
+            panel.update(cx, |p, cx| p.add(at("http://a/1", 4), false, window, cx))
+        });
+        assert_eq!(folded(&mut cx), [true, true, true, false]);
+
+        // A deleted card comes back as it was.
+        cx.update(|_, cx| {
+            panel.update(cx, |p, cx| {
+                p.toggle(0, cx);
+                p.remove(0, cx);
+                p.undo(cx);
+            })
+        });
+        assert_eq!(folded(&mut cx), [false, true, true, false]);
+    }
+
+    /// The send button follows the agents running in the terminals: none, it opens one (with a
+    /// menu of the CLIs installed, when there are several); one, it sends to it; several, it sends
+    /// to the default and its menu lists them all. Without notes it is there, disabled, and says
+    /// why.
+    #[gpui_kit::test]
+    fn the_send_button_follows_the_agents(cx: &mut gpui_kit::TestAppContext) {
+        use crate::browser::panel::PANEL_WIDTH;
+        use AgentKind::{ClaudeCode, Codex, GeminiCli};
+        use gpui_kit::{VisualTestContext, px, size};
+        cx.update(gpui_kit::init);
+        let window = cx.open_window(size(px(PANEL_WIDTH), px(700.)), AnnotatePanel::new);
+        let panel = window.root(cx).unwrap();
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        let action = |cx: &mut VisualTestContext| panel.read_with(cx, |p, _| p.send_action());
+        let drawn = |cx: &mut VisualTestContext| {
+            [
+                "annotate-send-one",
+                "annotate-send-split",
+                "annotate-open-one",
+                "annotate-open-split",
+                "annotate-send-none",
+            ]
+            .into_iter()
+            .filter(|s| cx.debug_bounds(s).is_some())
+            .collect::<Vec<_>>()
+        };
+        // Still looking for the CLIs, and no notes: disabled, with why.
+        assert_eq!(action(&mut cx), SendAction::NoAgent { looking: true });
+        assert_eq!(drawn(&mut cx), ["annotate-send-none"]);
+        assert!(cx.debug_bounds("annotate-note").is_some(), "says why");
+
+        cx.update(|window, cx| {
+            panel.update(cx, |p, cx| {
+                p.add(at("http://a/1", 1), false, window, cx);
+                p.set_installed(vec![], cx);
+            })
+        });
+        cx.run_until_parked();
+        assert_eq!(action(&mut cx), SendAction::NoAgent { looking: false });
+        assert!(
+            cx.debug_bounds("annotate-note").is_some(),
+            "says what to install"
+        );
+
+        // None running: Open, Claude Code first; a menu with two CLIs or more.
+        cx.update(|_, cx| panel.update(cx, |p, cx| p.set_installed(vec![Codex], cx)));
+        cx.run_until_parked();
+        assert_eq!(action(&mut cx), SendAction::Open { kind: Codex });
+        assert_eq!(drawn(&mut cx), ["annotate-open-one"]);
+        cx.update(|_, cx| panel.update(cx, |p, cx| p.set_installed(vec![Codex, ClaudeCode], cx)));
+        cx.run_until_parked();
+        assert_eq!(action(&mut cx), SendAction::Open { kind: ClaudeCode });
+        assert_eq!(drawn(&mut cx), ["annotate-open-split"]);
+        assert!(
+            cx.debug_bounds("annotate-note").is_none(),
+            "nothing in the way"
+        );
+
+        // One running: Send to it, no menu.
+        cx.update(|_, cx| {
+            panel.update(cx, |p, cx| {
+                p.set_agents(vec![agent(1, GeminiCli, false)], cx)
+            })
+        });
+        cx.run_until_parked();
+        assert_eq!(action(&mut cx), SendAction::Send { default: 0 });
+        assert_eq!(drawn(&mut cx), ["annotate-send-one"]);
+
+        // Two: a split button, sending to the one in front.
+        cx.update(|_, cx| {
+            panel.update(cx, |p, cx| {
+                p.set_agents(vec![agent(1, ClaudeCode, false), agent(2, Codex, true)], cx)
+            })
+        });
+        cx.run_until_parked();
+        assert_eq!(action(&mut cx), SendAction::Send { default: 1 });
+        assert_eq!(drawn(&mut cx), ["annotate-send-split"]);
+
+        // Sending asks for that agent, which stays the default while it runs.
+        let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = asked.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(&panel, move |_, event: &super::AnnotateEvent, _| {
+                if let super::AnnotateEvent::SendTo(agent) = event {
+                    seen.borrow_mut().push(agent.pane);
+                }
+            })
+            .detach()
+        });
+        cx.update(|_, cx| panel.update(cx, |p, cx| p.send_to(1, cx)));
+        assert_eq!(*asked.borrow(), [1]);
+        cx.update(|_, cx| {
+            panel.update(cx, |p, cx| {
+                p.set_agents(
+                    vec![agent(1, ClaudeCode, false), agent(2, Codex, false)],
+                    cx,
+                )
+            })
+        });
+        assert_eq!(
+            action(&mut cx),
+            SendAction::Send { default: 0 },
+            "the last used"
+        );
+        // It ended: forgotten.
+        cx.update(|_, cx| panel.update(cx, |p, cx| p.set_agents(vec![agent(2, Codex, false)], cx)));
+        cx.update(|_, cx| {
+            panel.update(cx, |p, cx| {
+                p.set_agents(
+                    vec![agent(1, ClaudeCode, false), agent(2, Codex, false)],
+                    cx,
+                )
+            })
+        });
+        assert_eq!(
+            action(&mut cx),
+            SendAction::Send { default: 1 },
+            "the newest"
+        );
     }
 }

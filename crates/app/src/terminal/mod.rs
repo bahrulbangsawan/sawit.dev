@@ -13,9 +13,8 @@ use gpui_kit::actions;
 
 pub use guard::{Ending, ask_before_closing, end_all};
 pub use panel::{JobTag, Origin, Remote, TerminalPanel, ToggleMaximize};
-// The agents running in the terminals, for the browser's Send to agent.
-#[allow(unused_imports)]
-pub use {panel::RunningAgent, tab::TerminalTab};
+// The agents running in the terminals, and their logos, for the browser's Send to agent.
+pub use {agents::logo_in as agent_logo, panel::RunningAgent};
 
 actions!(
     terminal,

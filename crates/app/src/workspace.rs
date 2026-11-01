@@ -2625,11 +2625,27 @@ impl Workspace {
                 let view = cx.new(|cx| BrowserView::new(root.clone(), url, window, cx));
                 self.browsers.retain(|b| b.upgrade().is_some());
                 self.browsers.push(view.downgrade());
-                cx.subscribe_in(&view, window, |this, browser, event, window, cx| {
-                    let crate::browser::BrowserEvent::SendToTerminal(md) = event;
-                    this.send_to_terminal(browser, md, window, cx);
-                })
+                cx.subscribe_in(
+                    &view,
+                    window,
+                    |this, browser, event, window, cx| match event {
+                        crate::browser::BrowserEvent::SendToAgent { markdown, agent } => {
+                            this.send_to_agent(browser, markdown, agent, window, cx)
+                        }
+                        crate::browser::BrowserEvent::OpenAgent { markdown, kind } => {
+                            this.open_agent(browser, markdown, *kind, window, cx)
+                        }
+                    },
+                )
                 .detach();
+                let terminal = self.terminal.downgrade();
+                let source: crate::browser::AgentSource = Rc::new(move |cx: &App| {
+                    terminal
+                        .upgrade()
+                        .map(|t| t.read(cx).local_agents(cx))
+                        .unwrap_or_default()
+                });
+                view.update(cx, |b, cx| b.set_agent_source(source, cx));
                 self.push_tab(
                     PaneItem::Other {
                         view: view.clone().into(),
@@ -2670,41 +2686,75 @@ impl Workspace {
         }
     }
 
-    /// Pastes annotations into the terminal running an agent, the browser's project's first;
-    /// copies them when no tab has bracketed paste on.
-    fn send_to_terminal(
+    /// Sends the browser's annotation notes to `agent`'s chat in its terminal pane
+    /// ([`TerminalPanel::send_to_agent`]), showing the terminal if it was hidden. Only that agent
+    /// gets them: one that has ended since the panel offered it gets nothing, and the panel says
+    /// so. A plain shell never gets them, as its prompt would run them as commands.
+    fn send_to_agent(
         &mut self,
         browser: &Entity<BrowserView>,
         markdown: &str,
+        agent: &crate::terminal::RunningAgent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let sent = self.terminal.update(cx, |t, cx| {
+            t.send_to_agent(agent.pane, agent.kind, markdown, window, cx)
+        });
+        if sent.is_ok() && !self.layout.terminal {
+            self.layout.toggle(Area::Terminal);
+        }
+        let result = sent.map(|a| format!("Sent to {} ({})", a.kind.name(), a.label));
+        browser.update(cx, |b, cx| b.finish_send(result, cx));
+        cx.notify();
+    }
+
+    /// Starts `kind` in a new terminal tab in the browser's project, with the notes as its
+    /// first message: they are written to a file beside the day's screenshots, which the shell
+    /// reads into the command line ([`crate::browser::open_command`]). The new terminal takes
+    /// the keyboard, as the agent may ask something first (whether to trust the folder).
+    fn open_agent(
+        &mut self,
+        browser: &Entity<BrowserView>,
+        markdown: &str,
+        kind: sawit_core::terminal::AgentKind,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let project = browser.read(cx).project().map(Path::to_path_buf);
-        let target = self.terminal.read(cx).paste_target(project.as_deref(), cx);
-        let sent = target.and_then(|ix| {
-            if !self.layout.terminal {
-                self.layout.toggle(Area::Terminal);
-            }
-            match self
-                .terminal
-                .update(cx, |t, cx| t.paste(ix, markdown, window, cx))
-            {
-                Ok(()) => Some(ix),
-                Err(e) => {
-                    eprintln!("annotate: paste failed: {e}");
-                    None
-                }
-            }
+        let markdown = markdown.to_string();
+        let dir = project.clone();
+        let written = crate::rt::spawn_blocking(cx, move || {
+            crate::browser::write_prompt(dir.as_deref(), &markdown)
         });
-        let note = match sent {
-            Some(ix) => format!("Sent to Terminal {}", ix + 1),
-            None => {
-                cx.write_to_clipboard(ClipboardItem::new_string(markdown.to_string()));
-                "No terminal is ready for a paste, so it was copied.".to_string()
-            }
-        };
-        browser.update(cx, |b, cx| b.set_annotate_note(&note, cx));
-        cx.notify();
+        let browser = browser.downgrade();
+        cx.spawn_in(window, async move |this, cx| {
+            let file = written
+                .await
+                .unwrap_or_else(|_| Err("Couldn't write the notes for the agent.".to_string()));
+            let _ = this.update_in(cx, |this, window, cx| {
+                let result = file.and_then(|file| {
+                    let command = crate::browser::open_command(kind, &file).ok_or_else(|| {
+                        format!("Sawit can't start {} with a prompt.", kind.name())
+                    })?;
+                    if !this.layout.terminal {
+                        this.layout.toggle(Area::Terminal);
+                    }
+                    this.terminal.update(cx, |t, cx| {
+                        t.run_in_new(project, &command, Origin::User, window, cx)
+                    })?;
+                    Ok(format!(
+                        "Opened {} in a new terminal with the notes",
+                        kind.name()
+                    ))
+                });
+                if let Some(browser) = browser.upgrade() {
+                    browser.update(cx, |b, cx| b.finish_send(result, cx));
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Tells each canvas whether its tab is on screen ([`BoardView::set_shown`]), as

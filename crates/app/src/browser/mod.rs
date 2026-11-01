@@ -10,6 +10,7 @@
 //! rest by the page agent (`sawit_core::browser::page_script`), injected into
 //! every page, through `Engine::eval_with_callback`.
 
+mod agents;
 mod annotate;
 mod design;
 mod engine;
@@ -39,8 +40,10 @@ use sawit_core::browser::{
     normalize_address, page_script, parse_ipc, resize_mode, search_url,
 };
 use sawit_core::probe;
+use sawit_core::terminal::AgentKind;
 use serde_json::{Value, json};
 
+pub use agents::{AgentSource, open_command, write_prompt};
 pub use annotate::notes_lost;
 use annotate::{AnnotateEvent, AnnotatePanel, Marker, Picking, group_order, padded_rect};
 use design::{DesignEvent, DesignPanel, Segment};
@@ -48,6 +51,7 @@ use engine::{Engine, EngineEvent, EngineSpec, Frame};
 
 use crate::rt;
 use crate::states::Placeholder;
+use crate::terminal::RunningAgent;
 
 /// The tab's icon and title.
 pub const ICON: Lucide = Lucide::Globe;
@@ -201,10 +205,15 @@ enum FromPage {
     },
 }
 
-/// What the browser asks of the workspace.
+/// What the browser asks of the workspace, which answers with [`BrowserView::finish_send`].
 pub enum BrowserEvent {
-    /// Paste this markdown into the terminal running an agent.
-    SendToTerminal(String),
+    /// Send the notes, as Markdown, to this agent's chat.
+    SendToAgent {
+        markdown: String,
+        agent: RunningAgent,
+    },
+    /// Start this agent in a new terminal with the notes as its first message.
+    OpenAgent { markdown: String, kind: AgentKind },
 }
 
 impl EventEmitter<BrowserEvent> for BrowserView {}
@@ -409,7 +418,32 @@ impl BrowserView {
             self.set_pick(pick_mode(panel, segment), cx);
             self.scan_if_design_open(cx);
         }
+        let annotating = self.panel == Some(Panel::Annotate);
+        self.annotate
+            .update(cx, |a, cx| a.set_shown(annotating, cx));
         cx.notify();
+    }
+
+    /// Where Annotate finds the agents running in the terminals, to send its notes to.
+    pub fn set_agent_source(&mut self, source: AgentSource, cx: &mut Context<Self>) {
+        self.annotate
+            .update(cx, |a, cx| a.set_agent_source(source, cx));
+    }
+
+    /// The workspace's answer to [`BrowserEvent::SendToAgent`] or [`BrowserEvent::OpenAgent`]:
+    /// what to tell the user. Sent, the notes count as sent; not, the panel looks again for the
+    /// agents, as the one it offered may have ended.
+    pub fn finish_send(&mut self, result: Result<String, String>, cx: &mut Context<Self>) {
+        self.annotate.update(cx, |a, cx| match result {
+            Ok(note) => {
+                a.mark_sent(cx);
+                a.set_note(note, cx);
+            }
+            Err(why) => {
+                a.refresh_agents(cx);
+                a.set_note(why, cx);
+            }
+        });
     }
 
     /// `Panel`: opens `panel` (on Design's `tab`), or closes the panel open (`None`).
@@ -566,12 +600,6 @@ impl BrowserView {
         self.annotate.read(cx).unsent(cx)
     }
 
-    /// Shows `text` in the Annotate footer for a moment.
-    pub fn set_annotate_note(&mut self, text: &str, cx: &mut Context<Self>) {
-        let text = text.to_string();
-        self.annotate.update(cx, |a, cx| a.set_note(text, cx));
-    }
-
     fn on_design(&mut self, event: &DesignEvent, cx: &mut Context<Self>) {
         match event {
             // Choosing Inspect again after Esc picks again.
@@ -652,11 +680,21 @@ impl BrowserView {
                     });
                 }
             }
-            AnnotateEvent::Send => {
-                if let Some(md) = self.annotations_markdown(cx) {
-                    // Pasted, or copied when no terminal takes it: either way the user has them.
-                    self.annotate.update(cx, |a, cx| a.mark_sent(cx));
-                    cx.emit(BrowserEvent::SendToTerminal(md));
+            // The notes count as sent once the workspace says they went (`finish_send`).
+            AnnotateEvent::SendTo(agent) => {
+                if let Some(markdown) = self.annotations_markdown(cx) {
+                    cx.emit(BrowserEvent::SendToAgent {
+                        markdown,
+                        agent: agent.clone(),
+                    });
+                }
+            }
+            AnnotateEvent::Open(kind) => {
+                if let Some(markdown) = self.annotations_markdown(cx) {
+                    cx.emit(BrowserEvent::OpenAgent {
+                        markdown,
+                        kind: *kind,
+                    });
                 }
             }
             AnnotateEvent::Pick => {
@@ -2472,7 +2510,37 @@ mod tests {
         assert_eq!(unsent(cx), 0, "copied");
         note("Make it blue, and bigger", cx);
         assert_eq!(unsent(cx), 1, "changed since");
-        cx.update(|_, cx| view.update(cx, |b, cx| b.on_annotate(&AnnotateEvent::Send, cx)));
+
+        // Sending asks the workspace, with the notes; they count as sent once they went.
+        let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = asked.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(&view, move |_, event: &super::BrowserEvent, _| {
+                if let super::BrowserEvent::SendToAgent { markdown, agent } = event {
+                    seen.borrow_mut().push((markdown.clone(), agent.pane));
+                }
+            })
+            .detach()
+        });
+        let agent = crate::terminal::RunningAgent {
+            tab: gpui_kit::WeakEntity::new_invalid(),
+            pane: 7,
+            kind: sawit_core::terminal::AgentKind::ClaudeCode,
+            label: "shop".into(),
+            focused: true,
+        };
+        cx.update(|_, cx| {
+            view.update(cx, |b, cx| b.on_annotate(&AnnotateEvent::SendTo(agent), cx))
+        });
+        assert_eq!(asked.borrow().len(), 1);
+        assert_eq!(asked.borrow()[0].1, 7, "to the agent chosen");
+        assert!(asked.borrow()[0].0.contains("Make it blue, and bigger"));
+        assert_eq!(unsent(cx), 1, "asked for, not sent yet");
+        let gone = "Claude Code is no longer running there, so nothing was sent.";
+        cx.update(|_, cx| view.update(cx, |b, cx| b.finish_send(Err(gone.into()), cx)));
+        assert_eq!(unsent(cx), 1, "the agent had ended");
+        let sent = "Sent to Claude Code (shop)";
+        cx.update(|_, cx| view.update(cx, |b, cx| b.finish_send(Ok(sent.into()), cx)));
         assert_eq!(unsent(cx), 0, "sent");
     }
 

@@ -95,7 +95,6 @@ pub enum Origin {
 /// A coding agent running in a pane ([`TerminalPanel::running_agents`]). The tab strip reads
 /// which agents run where; the browser's Send to agent also reads what the user sees each one
 /// called and which one the user types to.
-#[allow(dead_code)]
 #[derive(Clone)]
 pub struct RunningAgent {
     pub tab: WeakEntity<TerminalTab>,
@@ -1200,55 +1199,91 @@ impl TerminalPanel {
         }
     }
 
-    /// The tab a paste from the browser of `project` (`None`: the browser of no project) may go
-    /// to, by the program in its focused pane, which must have enabled bracketed paste
-    /// ([`pick_paste_target`]).
-    pub fn paste_target(&self, project: Option<&Path>, cx: &App) -> Option<usize> {
-        let panes: Vec<FocusedPane> = self
-            .tabs
-            .iter()
-            .map(|t| {
-                let view = focused(t, cx);
-                FocusedPane {
-                    accepts: view.accepts_paste(),
-                    at_prompt: view.at_prompt(),
-                    remote: view.remote.is_some(),
-                    place: match (project, t.read(cx).group.as_deref()) {
-                        (None, _) => Place::Project,
-                        (Some(_), None) => Place::Loose,
-                        (Some(project), Some(group)) if group == project => Place::Project,
-                        (Some(_), Some(_)) => Place::Other,
-                    },
-                }
-            })
-            .collect();
-        pick_paste_target(self.active, &panes)
+    /// The agents running on this Mac that the browser's notes may be sent to: those of
+    /// [`Self::running_agents`] outside SSH sessions. A session's agent is known only by the
+    /// title it set, which can outlast it, and its notes' paths are this Mac's.
+    pub fn local_agents(&self, cx: &App) -> Vec<RunningAgent> {
+        self.running_agents(cx)
+            .into_iter()
+            .filter(|a| self.agent_view(a.pane, a.kind, cx).is_some())
+            .collect()
     }
 
-    /// Pastes `text` into the focused pane of tab `ix` (never pressing
-    /// Enter) and focuses it.
-    pub fn paste(
+    /// Sends `text` to the agent `kind` in `pane` as one message, as if the user pasted it into
+    /// the agent's chat and pressed Return: a bracketed paste, so its lines arrive as one message
+    /// rather than one per line, then Return a moment later ([`ENTER_AFTER`]), so the agent has
+    /// taken the whole paste before it submits it. Only while that agent is still the pane's
+    /// foreground program and has bracketed paste on: an agent that has exited left a shell
+    /// there, which would run the notes as commands. The pane then shows as an agent's command's
+    /// does ([`Origin::Agent`]): in front, without the keyboard, which stays with the user.
+    /// Returns the agent as it was sent to, or what to tell the user.
+    pub fn send_to_agent(
         &mut self,
-        ix: usize,
+        pane: PaneId,
+        kind: AgentKind,
         text: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Result<(), String> {
-        let view = self
+    ) -> Result<RunningAgent, String> {
+        let gone = || {
+            format!(
+                "{} is no longer running there, so nothing was sent.",
+                kind.name()
+            )
+        };
+        let view = self.agent_view(pane, kind, cx).ok_or_else(gone)?;
+        let agent = self
+            .running_agents(cx)
+            .into_iter()
+            .find(|a| a.pane == pane && a.kind == kind)
+            .ok_or_else(gone)?;
+        let ix = self
             .tabs
-            .get(ix)
-            .map(|t| t.read(cx).focused_view().clone())
-            .ok_or_else(|| format!("no terminal {}", ix + 1))?;
+            .iter()
+            .position(|t| t.downgrade() == agent.tab)
+            .ok_or_else(gone)?;
         if !view.read(cx).accepts_paste() {
-            return Err(format!("terminal {} is not ready for a paste", ix + 1));
+            return Err(format!(
+                "{} isn't ready for a paste yet, so nothing was sent.",
+                kind.name()
+            ));
         }
-        self.active = ix;
         view.update(cx, |v, _| v.paste(text));
-        self.focus_active(window, cx);
-        cx.notify();
-        Ok(())
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(ENTER_AFTER).await;
+            let _ = this.update(cx, |this, cx| {
+                // The agent may have ended meanwhile: Return would then reach its shell.
+                if let Some(view) = this.agent_view(pane, kind, cx) {
+                    view.read(cx).write(b"\r".to_vec());
+                }
+            });
+        })
+        .detach();
+        self.reveal(ix, pane, Origin::Agent, window, cx);
+        Ok(agent)
+    }
+
+    /// The terminal of `pane` while the agent `kind` runs there, on this Mac. The agent is as
+    /// the pane last looked ([`TerminalView::agent`]), and something must still run in front of
+    /// its shell, read now: an agent that has just exited, before the pane looks again, has left
+    /// only its shell.
+    fn agent_view(&self, pane: PaneId, kind: AgentKind, cx: &App) -> Option<Entity<TerminalView>> {
+        self.all_panes(cx)
+            .find(|(_, id, view)| {
+                let v = view.read(cx);
+                *id == pane
+                    && !v.exited
+                    && v.remote.is_none()
+                    && v.agent() == Some(kind)
+                    && v.foreground_job().is_some()
+            })
+            .map(|(_, _, view)| view.clone())
     }
 }
+
+/// How long after pasting a message into an agent Return follows. Agents read a paste in
+/// pieces; a Return in the same read as the paste's end could be taken as part of it.
+const ENTER_AFTER: std::time::Duration = std::time::Duration::from_millis(150);
 
 impl TerminalPanel {
     /// The header in front of the run of `root`'s tabs that starts at tab `first`, `count` long:
@@ -1754,91 +1789,9 @@ fn ssh_command(launch: &Launch) -> Command {
     }
 }
 
-/// A tab's focused pane, as a paste sees it.
-#[derive(Clone, Copy, Debug)]
-struct FocusedPane {
-    /// Its program turned bracketed paste on.
-    accepts: bool,
-    /// A shell waiting at its prompt, not running a program.
-    at_prompt: bool,
-    /// An SSH session: what runs there runs on the server.
-    remote: bool,
-    /// Where its tab works, from the browser's project.
-    place: Place,
-}
-
-/// Where a terminal tab works, seen from the project of the browser that pastes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Place {
-    /// In the browser's project; every tab is, for the browser of no project.
-    Project,
-    /// In no project: a terminal opened before any project was.
-    Loose,
-    /// In another project.
-    Other,
-}
-
-impl FocusedPane {
-    /// How well a paste of the browser's notes fits here, best first; `None` where it never
-    /// goes: a pane that takes no paste, or an SSH session (its prompt or program is the
-    /// server's, not an agent working on this Mac). The browser's project comes first, its agent
-    /// (a program that takes a paste) before its shell at its prompt; then a terminal in no
-    /// project the same way, as its agent may work on any project; then another project's.
-    fn rank(&self) -> Option<u8> {
-        if !self.accepts || self.remote {
-            return None;
-        }
-        let agent = !self.at_prompt;
-        Some(match (self.place, agent) {
-            (Place::Project, true) => 0,
-            (Place::Loose, true) => 1,
-            (Place::Project, false) => 2,
-            (Place::Loose, false) => 3,
-            (Place::Other, true) => 4,
-            (Place::Other, false) => 5,
-        })
-    }
-}
-
-/// The tab to paste into, by its focused pane's [`FocusedPane::rank`]: among the best, `active`
-/// first, else the last. A pane without the keyboard is never chosen.
-fn pick_paste_target(active: usize, panes: &[FocusedPane]) -> Option<usize> {
-    let best = panes.iter().filter_map(FocusedPane::rank).min()?;
-    if panes.get(active).and_then(FocusedPane::rank) == Some(best) {
-        return Some(active);
-    }
-    panes.iter().rposition(|p| p.rank() == Some(best))
-}
-
 #[cfg(test)]
 mod helper_tests {
-    use super::{FocusedPane, Place, command_in, pick_paste_target};
-
-    /// A shell at its prompt, a program that takes a paste (Claude Code), and one that doesn't,
-    /// in the browser's project.
-    const SHELL: FocusedPane = FocusedPane {
-        accepts: true,
-        at_prompt: true,
-        remote: false,
-        place: Place::Project,
-    };
-    const AGENT: FocusedPane = FocusedPane {
-        accepts: true,
-        at_prompt: false,
-        remote: false,
-        place: Place::Project,
-    };
-    const BUSY: FocusedPane = FocusedPane {
-        accepts: false,
-        at_prompt: false,
-        remote: false,
-        place: Place::Project,
-    };
-
-    /// `pane` in a tab that works at `place`.
-    const fn at(place: Place, pane: FocusedPane) -> FocusedPane {
-        FocusedPane { place, ..pane }
-    }
+    use super::command_in;
 
     #[test]
     fn a_script_goes_back_to_its_folder_unless_its_shell_is_there() {
@@ -1858,70 +1811,6 @@ mod helper_tests {
             command_in(spaced, "pnpm dev", None),
             "cd -- '/tmp/my project' && pnpm dev"
         );
-    }
-
-    #[test]
-    fn picks_active_else_highest_accepting() {
-        assert_eq!(pick_paste_target(1, &[SHELL, BUSY, SHELL]), Some(2));
-        assert_eq!(pick_paste_target(0, &[SHELL, BUSY]), Some(0));
-        assert_eq!(pick_paste_target(0, &[BUSY, BUSY]), None);
-        assert_eq!(pick_paste_target(0, &[]), None);
-    }
-
-    /// Annotations go to the terminal running an agent: a tab whose focused pane runs a
-    /// program that takes a paste comes before a shell at its prompt, even the active one.
-    #[test]
-    fn an_agent_comes_before_an_idle_shell() {
-        assert_eq!(pick_paste_target(0, &[SHELL, AGENT]), Some(1));
-        assert_eq!(pick_paste_target(1, &[AGENT, SHELL, BUSY]), Some(0));
-        assert_eq!(
-            pick_paste_target(2, &[AGENT, SHELL, AGENT]),
-            Some(2),
-            "the active one first"
-        );
-        assert_eq!(
-            pick_paste_target(1, &[AGENT, SHELL, AGENT]),
-            Some(2),
-            "else the last"
-        );
-    }
-
-    /// An SSH session is never pasted into: the remote shell turns bracketed paste on at its
-    /// prompt, and a session isn't a local shell, so it passed for the agent. The notes, local
-    /// paths and all, went to the server's prompt.
-    #[test]
-    fn a_paste_never_goes_to_an_ssh_session() {
-        const SSH: FocusedPane = FocusedPane {
-            remote: true,
-            ..AGENT
-        };
-        assert_eq!(pick_paste_target(0, &[SHELL, SSH]), Some(0));
-        assert_eq!(pick_paste_target(1, &[AGENT, SSH]), Some(0), "even active");
-        assert_eq!(pick_paste_target(0, &[SSH]), None);
-    }
-
-    /// The browser's notes are about its project, so they go to that project's terminals first:
-    /// its agent, else its shell. A terminal in no project comes next, the agent first, as one
-    /// may be working on any project; another project's terminal is the last choice. The
-    /// highest-numbered agent anywhere won, so one project's notes went to another's agent.
-    #[test]
-    fn a_paste_goes_to_the_pages_project_first() {
-        use Place::{Loose, Other};
-        let (theirs, loose) = (at(Other, AGENT), at(Loose, AGENT));
-        assert_eq!(pick_paste_target(0, &[SHELL, theirs]), Some(0));
-        assert_eq!(
-            pick_paste_target(1, &[AGENT, theirs]),
-            Some(0),
-            "the project's agent, though the other is active"
-        );
-        assert_eq!(pick_paste_target(1, &[SHELL, loose]), Some(1), "an agent");
-        assert_eq!(pick_paste_target(0, &[at(Loose, SHELL), theirs]), Some(0));
-        assert_eq!(
-            pick_paste_target(0, &[theirs, at(Other, SHELL)]),
-            Some(0),
-            "another project's terminal, when nothing else takes a paste"
-        );
-        assert_eq!(pick_paste_target(2, &[AGENT, theirs, AGENT]), Some(2));
     }
 }
 
@@ -2664,6 +2553,102 @@ mod tests {
         });
     }
 
+    /// Annotate's notes reach an agent as one message: one bracketed paste, its lines inside it,
+    /// then Return, in that agent's pane only, and the keyboard stays where it was. The agent here
+    /// is `head`, started under the name `claude` with bracketed paste on (as Claude Code turns
+    /// it on) and the terminal raw, so the bytes it writes to a file are those sent; it ends once
+    /// it has the message. Once it has exited, nothing is sent: its shell would run the notes.
+    #[gpui_kit::test]
+    fn notes_reach_an_agent_as_one_message(cx: &mut TestAppContext) {
+        use sawit_core::terminal::AgentKind;
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        open_tabs(cx, &panel, 1);
+        let (first, second) = cx.update(|cx| {
+            let p = panel.read(cx);
+            (
+                p.tab(0).read(cx).focused_view().clone(),
+                p.tab(1).read(cx).focused_view().clone(),
+            )
+        });
+        ready(cx, &first);
+        ready(cx, &second);
+        // The panes look for their agent a moment after output: on the test's clock, now.
+        let look = |cx: &mut TestAppContext| {
+            cx.run_until_parked();
+            cx.executor()
+                .advance_clock(super::super::view::AGENT_CHECK * 2);
+            cx.run_until_parked();
+        };
+        look(cx);
+        assert!(cx.update(|cx| panel.read(cx).local_agents(cx).is_empty()));
+
+        let notes = "## Page\n\n- **Fix:** it's `broken`";
+        let message = b"\x1b[200~## Page\r\r- **Fix:** it's `broken`\x1b[201~\r";
+        let got = scratch_dir("agent-message").join("got");
+        let agent = format!(
+            "stty raw -echo; printf '\\033[?2004h'; (exec -a claude head -c {} > {})",
+            message.len(),
+            shell_quote(&got)
+        );
+        cx.update(|cx| second.read(cx).write(run_bytes(&agent)));
+        wait_until(cx, "the agent runs, with bracketed paste on", |cx| {
+            let v = second.read(cx);
+            v.foreground_name().as_deref() == Some("head") && v.accepts_paste()
+        });
+        look(cx);
+        let agents = cx.update(|cx| panel.read(cx).local_agents(cx));
+        assert_eq!(agents.len(), 1, "the agent is known by the name it runs as");
+        let agent = agents[0].clone();
+        assert_eq!(agent.kind, AgentKind::ClaudeCode);
+        assert!(agent.tab == cx.update(|cx| panel.read(cx).tab(1).downgrade()));
+
+        // The user is in the browser, the first tab in front: the keyboard is in neither.
+        click_tab(cx, w, &panel, 0);
+        cx.update_window(w, |_, window, cx| {
+            let away = cx.focus_handle();
+            window.focus(&away, cx);
+        })
+        .expect("the test window is open");
+        let send = |cx: &mut TestAppContext| {
+            cx.update_window(w, |_, window, cx| {
+                panel.update(cx, |p, cx| {
+                    p.send_to_agent(agent.pane, agent.kind, notes, window, cx)
+                })
+            })
+            .expect("the test window is open")
+        };
+        assert_eq!(send(cx).map(|a| a.pane), Ok(agent.pane));
+        cx.executor().advance_clock(super::ENTER_AFTER * 2);
+        cx.run_until_parked();
+        wait_until(cx, "the agent took the message and ended", |cx| {
+            second.read(cx).foreground_job().is_none()
+                && std::fs::read(&got).is_ok_and(|b| b.len() == message.len())
+        });
+        assert_eq!(std::fs::read(&got).unwrap(), message);
+        assert!(
+            active(cx, &panel) == cx.update(|cx| panel.read(cx).tab(1).clone()),
+            "the agent's tab shows"
+        );
+        assert!(
+            !has_keyboard(cx, w, &cx.update(|cx| panel.read(cx).tab(1).clone())),
+            "the keyboard stays with the user"
+        );
+        cx.update(|cx| assert!(!first.read(cx).text_tail(50).contains("Fix")));
+
+        // Exited, before the pane looked again: its shell is back, and gets nothing.
+        let refused = send(cx);
+        assert_eq!(
+            refused.map(|a| a.pane),
+            Err("Claude Code is no longer running there, so nothing was sent.".into())
+        );
+        cx.executor().advance_clock(super::ENTER_AFTER * 2);
+        cx.run_until_parked();
+        cx.update(|cx| assert!(!second.read(cx).text_tail(50).contains("Fix")));
+        look(cx);
+        assert!(cx.update(|cx| panel.read(cx).local_agents(cx).is_empty()));
+    }
+
     /// While the user types in a terminal (here into `cat`, standing in for Claude Code), an
     /// agent's command runs in another shell without switching tabs or taking the keyboard:
     /// the rest of what the user types still goes where they were typing.
@@ -3112,103 +3097,6 @@ mod tests {
                 env: Vec::new(),
             },
         }
-    }
-
-    #[gpui_kit::test]
-    fn a_paste_goes_to_the_focused_pane(cx: &mut TestAppContext) {
-        const MARK: &str = "sawit-paste-marker";
-        cx.update(init);
-        let (w, panel) = open_panel(cx);
-        focus_terminal(cx, w, &panel);
-        cx.simulate_keystrokes(w, "cmd-d");
-        cx.run_until_parked();
-        let (other, focused) = cx.update(|cx| {
-            let tab = panel.read(cx).tab(0).read(cx);
-            let panes = tab.state.layout.panes();
-            assert_eq!(panes.len(), 2);
-            assert_eq!(tab.state.focused, panes[1]);
-            let other = tab.view(panes[0]).expect("the first pane").clone();
-            (other, tab.focused_view().clone())
-        });
-        // A program that turns bracketed paste on, then echoes what it gets.
-        cx.update(|cx| {
-            focused
-                .read(cx)
-                .write(run_bytes("printf '\\033[?2004h'; cat"))
-        });
-        wait_until(cx, "cat waits with bracketed paste on", |cx| {
-            let v = focused.read(cx);
-            v.foreground_job().is_some() && v.accepts_paste()
-        });
-        assert_eq!(
-            cx.update(|cx| panel.read(cx).paste_target(None, cx)),
-            Some(0)
-        );
-        cx.update_window(w, |_, window, cx| {
-            panel.update(cx, |p, cx| p.paste(0, MARK, window, cx))
-        })
-        .expect("the test window is open")
-        .expect("the focused pane takes the paste");
-        wait_until(cx, "the paste shows in the focused pane", |cx| {
-            focused.read(cx).text_tail(100).contains(MARK)
-        });
-        cx.update(|cx| assert!(!other.read(cx).text_tail(100).contains(MARK)));
-    }
-
-    /// Send to terminal goes to the agent in the browser's project, and never into an SSH
-    /// session, whose remote shell or program turns bracketed paste on as an agent does: the
-    /// session in front, an agent of another project, won before.
-    #[gpui_kit::test]
-    fn a_paste_goes_to_the_projects_agent_and_never_over_ssh(cx: &mut TestAppContext) {
-        /// Turns bracketed paste on, then waits: a stand-in for Claude Code, or for the remote
-        /// shell at its prompt.
-        const AGENT: &str = "printf '\\033[?2004h'; cat";
-        cx.update(init);
-        let (w, panel) = open_panel(cx);
-        open_tabs(cx, &panel, 1);
-        let (a, b) = (
-            std::path::PathBuf::from("/work/a"),
-            std::path::PathBuf::from("/work/b"),
-        );
-        let [tab_a, tab_b] = cx.update(|cx| [0, 1].map(|ix| panel.read(cx).tab(ix).clone()));
-        for (tab, project) in [(&tab_a, &a), (&tab_b, &b)] {
-            cx.update(|cx| {
-                tab.update(cx, |t, _| t.group = Some(project.clone()));
-                tab.read(cx).focused_view().read(cx).write(run_bytes(AGENT));
-            });
-        }
-        let ssh = super::Remote {
-            launch: sawit_core::ssh::Launch {
-                program: "/bin/sh".into(),
-                args: vec!["-c".into(), AGENT.into()],
-                env: Vec::new(),
-            },
-            ..test_remote()
-        };
-        let (session, _) = cx
-            .update_window(w, |_, window, cx| {
-                panel.update(cx, |p, cx| p.open_ssh(ssh, Origin::User, window, cx))
-            })
-            .expect("the test window is open")
-            .expect("the session starts");
-        wait_until(cx, "every tab takes a paste", |cx| {
-            let p = panel.read(cx);
-            (0..p.tab_count()).all(|ix| p.tab(ix).read(cx).focused_view().read(cx).accepts_paste())
-        });
-        cx.update(|cx| {
-            let p = panel.read(cx);
-            let ix = |tab: &Entity<TerminalTab>| (0..p.tab_count()).find(|&ix| p.tab(ix) == tab);
-            let (in_a, in_b) = (ix(&tab_a), ix(&tab_b));
-            assert_eq!(p.tab_count(), 3);
-            assert_eq!(p.active_index(), session, "the session is in front");
-            assert_eq!(p.paste_target(Some(&a), cx), in_a, "a's agent");
-            assert_eq!(p.paste_target(Some(&b), cx), in_b, "b's agent");
-            assert_eq!(
-                p.paste_target(None, cx),
-                in_a.max(in_b),
-                "the browser of no project: the last agent, not the session"
-            );
-        });
     }
 
     #[gpui_kit::test]
