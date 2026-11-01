@@ -100,12 +100,10 @@ pub(super) fn open_panel_sized(
 }
 
 /// A fresh, empty folder under the temp dir, by its real path (what a
-/// process's cwd reports).
+/// process's cwd reports), removed once the test has ended, failed too
+/// ([`crate::testing::scratch_dir`]).
 pub(super) fn scratch_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("sawit-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir.canonicalize().unwrap()
+    crate::testing::scratch_dir(name).canonicalize().unwrap()
 }
 
 /// Gives the keyboard to the active tab's focused pane, so simulated keys

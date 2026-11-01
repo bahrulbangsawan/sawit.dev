@@ -23,11 +23,10 @@ pub(crate) fn init(cx: &mut App) {
     cx.set_global(crate::rt::Rt(sawit_core::rt::Runtime::start()));
 }
 
-/// A fresh, empty folder under the temp dir, by its real path.
+/// A fresh, empty folder under the temp dir, by its real path, removed once the test has ended
+/// ([`crate::testing::scratch_dir`]).
 pub(crate) fn scratch_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("sawit-editor-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::testing::scratch_dir(&format!("editor-{name}"));
     dir.canonicalize().unwrap()
 }
 

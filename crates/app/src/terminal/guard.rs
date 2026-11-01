@@ -632,8 +632,8 @@ mod tests {
     }
 
     /// With several unsaved files the question counts and names them and offers Save All, which
-    /// goes on only once every one is saved: a file that can't be saved (here its tab was made
-    /// read-only) keeps the app, its notice saying why. Don't Save restarts and writes nothing.
+    /// goes on only once every one is saved: a file that can't be saved (here its folder was
+    /// deleted) keeps the app, its notice saying why. Don't Save restarts and writes nothing.
     #[gpui_kit::test]
     fn ending_with_several_unsaved_files_saves_them_all_or_stays(cx: &mut TestAppContext) {
         cx.update(crate::editor::testing::init);
@@ -649,9 +649,12 @@ mod tests {
                 "notes.txt, todo.md. Your changes will be lost if you don't save them.".to_string()
             ))
         );
-        cx.update(|cx| todo.update(cx, |e, cx| e.set_read_only(true, cx)));
+        std::fs::remove_dir_all(todo_path.parent().unwrap()).unwrap();
         cx.simulate_prompt_answer("Save All");
         wait_until(cx, "notes.txt is saved", |cx| !notes.read(cx).dirty);
+        wait_until(cx, "todo.md's save failed", |cx| {
+            todo.read(cx).note().is_some()
+        });
         cx.run_until_parked();
         assert_eq!(
             restarts.get(),
@@ -659,7 +662,13 @@ mod tests {
             "restarted with a file that couldn't be saved"
         );
         assert_eq!(on_disk(&notes_path), "typed on disk\n");
-        assert_eq!(on_disk(&todo_path), "on disk\n");
+        let note = cx.update(|cx| {
+            todo.read(cx)
+                .note()
+                .map(|(text, error)| (text.to_owned(), error))
+        });
+        let (text, error) = note.expect("no notice says why");
+        assert!(error && text.starts_with("Unable to save."), "{text:?}");
 
         try_ending(cx, Ending::Restart, &restarts);
         let (question, _) = cx.pending_prompt().expect("a question");
@@ -667,7 +676,40 @@ mod tests {
         cx.simulate_prompt_answer("Don't Save");
         cx.run_until_parked();
         assert_eq!(restarts.get(), 1, "Don't Save didn't restart");
-        assert_eq!(on_disk(&todo_path), "on disk\n");
+        assert!(!todo_path.exists(), "Don't Save wrote the file");
+    }
+
+    /// Site M1: a tab made read-only after it was typed into still has unsaved changes, and the
+    /// question names it. ⌘S keeps to the tab's mark and writes nothing, but Save in the question
+    /// is the user answering for that file: it writes it, then quits. It used to save nothing and
+    /// say nothing, and the app stayed, so quitting looked stuck.
+    #[gpui_kit::test]
+    fn save_in_the_question_saves_a_read_only_tab_then_quits(cx: &mut TestAppContext) {
+        cx.update(crate::editor::testing::init);
+        let (w, editor, path) = unsaved_file(cx, "quit-read-only", "notes.txt");
+        cx.update(|cx| editor.update(cx, |e, cx| e.set_read_only(true, cx)));
+        cx.simulate_keystrokes(w, "cmd-s");
+        // A save lands from the runtime's threads: long enough for one to land, nothing does.
+        let until = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        while std::time::Instant::now() < until {
+            cx.run_until_parked();
+            assert_eq!(on_disk(&path), "on disk\n", "⌘S wrote a read-only tab");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(cx.update(|cx| editor.read(cx).dirty));
+
+        let quits = Rc::new(Cell::new(0));
+        try_ending(cx, Ending::Quit, &quits);
+        let (question, _) = cx.pending_prompt().expect("a question");
+        assert_eq!(question, "Save changes to notes.txt before quitting?");
+        cx.simulate_prompt_answer("Save");
+        wait_until(cx, "it saves, then quits", |_| quits.get() == 1);
+        assert_eq!(on_disk(&path), "typed on disk\n");
+        assert!(cx.update(|cx| !editor.read(cx).dirty));
+        assert!(
+            cx.update(|cx| editor.read(cx).read_only),
+            "the tab is no longer read-only"
+        );
     }
 
     /// One question covers both: a terminal that runs something and a file with unsaved changes.

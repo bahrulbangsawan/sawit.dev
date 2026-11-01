@@ -314,6 +314,19 @@ explained. A conflict on the same address can't be forced.
   with no project or for a canvas file outside a project's `.nyawit/` (a `.figcraft` opened from the Files tab, say),
   and Sawit shows them in Finder. **Save as…** (<kbd>⇧</kbd><kbd>⌘</kbd><kbd>S</kbd>) writes a `.figcraft` copy
   anywhere. `.nyawit/` has its own `.gitignore`, so nothing in it is committed until you delete that file.
+- **Copies it keeps beside the file**:
+  - A save that leaves the canvas empty, or puts another canvas in its place (an agent's `canvas_clear` or
+    `canvas_load`), first keeps the board the file held as `<name>.bak`. The four before it move along to
+    `<name>.bak.1` … `<name>.bak.4`, and the oldest goes. `canvas_load` reads any of them back.
+  - A file that opens with something the canvas can't save back (it says what) is first copied to
+    `<name>.lossy.bak`.
+  - A save that would replace what another app or window wrote to the file since is refused, and the canvas says
+    why. If the tab then closes, or Sawit quits, with edits it couldn't save, they're kept in
+    `<name> (unsaved <date>).figcraft` beside the file (`-2`, `-3`… when that name is taken), or in `unsaved/` in
+    Sawit's data folder when nothing can be written there. The canvas doesn't announce these copies, so look for
+    them there.
+  - Outside `.nyawit/` (a `.figcraft` opened from the Files tab in a repository, say), these files show in
+    `git status`.
 - **From the old canvas**: a project that has only its old `.nyawit/canvas.excalidraw` opens it imported the first
   time. The `.excalidraw` file is never changed, and the canvas says what the import left out (the hand-drawn look
   doesn't carry over). An `.excalidraw` file in the Files tab opens the same way and saves as `<name>.figcraft`
@@ -387,13 +400,15 @@ explained. A conflict on the same address can't be forced.
 ### Tabs & layout
 
 - Right-click a tab for Close, Close Others, Close Left/Right, Close Clean, Close All, Make Tab
-  Read-Only, and Pin Tab.
+  Read-Only, and Pin Tab. A read-only tab takes no typing and <kbd>⌘</kbd><kbd>S</kbd> doesn't save it, but
+  **Save** in the question on closing it or quitting does.
 - Bulk close leaves pinned and unsaved tabs alone. Closing an unsaved file
   asks for confirmation.
 - Quitting, closing a window and **Restart to Update** ask too, and offer to save every unsaved file first
   (**Save All**, **Don't Save**, **Cancel**). A quit that can't ask (the Dock's Quit, logging out, the install script)
   keeps the unsaved changes instead, and the next launch reopens those files with the changes back in, unsaved. If a
-  file changed on disk in the meantime, Sawit warns you that saving would overwrite it.
+  file changed on disk in the meantime, Sawit warns you that saving would overwrite it. If it can't be edited any more
+  (it became binary or unreadable, say), its tab says where the changes are kept.
 - The instance tab can be closed, and it reappears when an instance is selected.
 - The sidebar, terminal, and tab area can be hidden or shown from the title bar buttons or
   with shortcuts (see below).

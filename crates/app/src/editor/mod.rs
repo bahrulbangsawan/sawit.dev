@@ -95,7 +95,8 @@ pub struct FileEditor {
     state: Option<Entity<EditorState>>,
     saved_text: String,
     pub dirty: bool,
-    /// Set from the tab menu ("Make Tab Read-Only"): no edits, no saves.
+    /// Set from the tab menu ("Make Tab Read-Only"): no edits, and ⌘S doesn't save. Save in a
+    /// question that names the file still does ([`Self::save_task`]).
     pub read_only: bool,
     /// The user chose Don't Save for these changes as the app quit or restarted, so quitting
     /// doesn't keep them. The next edit clears it.
@@ -109,6 +110,9 @@ pub struct FileEditor {
     /// nor reloaded since, a quit keeps the changes as made to the latter, so the next launch
     /// warns again.
     restored_over: Option<(String, Option<String>)>,
+    /// Why the file can't be edited here, as its load found (binary, too large, unreadable): its
+    /// note, before [`Self::cannot_edit`] adds to it.
+    unreadable: Option<Notice>,
     notice: Option<Notice>,
     loading: bool,
     formatting: bool,
@@ -165,9 +169,7 @@ impl FileEditor {
                         this.disk_mtime = modified;
                         this.loaded(file, window, cx)
                     }
-                    Ok(Err(e)) => {
-                        this.notice = Some(error(format!("Unable to open this file. {e}")))
-                    }
+                    Ok(Err(e)) => this.cannot_edit(error(format!("Unable to open this file. {e}"))),
                     Err(_) => {}
                 }
                 this.loading = false;
@@ -198,6 +200,7 @@ impl FileEditor {
             discarded: false,
             restoring: None,
             restored_over: None,
+            unreadable: None,
             notice: None,
             loading: true,
             formatting: false,
@@ -353,7 +356,7 @@ impl FileEditor {
 
     fn loaded(&mut self, file: TextFile, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(reason) = file.read_only_reason {
-            self.notice = Some(Notice {
+            self.cannot_edit(Notice {
                 text: reason,
                 error: false,
             });
@@ -440,6 +443,12 @@ impl FileEditor {
         self.state.as_ref().map(|s| s.focus_handle(cx))
     }
 
+    /// The note under the toolbar, and whether it is a warning.
+    #[cfg(test)]
+    pub(crate) fn note(&self) -> Option<(&str, bool)> {
+        self.notice.as_ref().map(|n| (n.text.as_str(), n.error))
+    }
+
     /// Puts the cursor on a 1-based line and column (clamped), now or once
     /// the file has loaded.
     pub fn go_to(&mut self, line: u32, column: u32, window: &mut Window, cx: &mut Context<Self>) {
@@ -484,7 +493,8 @@ impl FileEditor {
     /// buffer holds them, unsaved, now or once the file has loaded, and `from`, the file that kept
     /// them, goes once they're in. When the file on disk is no longer the text they were made to,
     /// the note warns that saving writes over it. A file that can't be edited (binary, too large,
-    /// unreadable) leaves `from` for the next launch to try again.
+    /// unreadable) leaves `from` for the next launch to try again, and its note says where the
+    /// changes are ([`Self::cannot_edit`]).
     pub fn restore(
         &mut self,
         kept: kept::Kept,
@@ -494,9 +504,33 @@ impl FileEditor {
     ) {
         if self.state.is_some() {
             self.put_back(kept, &from, window, cx);
-        } else {
-            self.restoring = Some((kept, from));
+            return;
         }
+        self.restoring = Some((kept, from));
+        // The file had already failed to load.
+        if let Some(why) = self.unreadable.clone() {
+            self.cannot_edit(why);
+            cx.notify();
+        }
+    }
+
+    /// Notes why the file can't be edited here (`why`, as its load found). Changes kept for it
+    /// when Sawit last quit can't be put back then, and stay where they were kept for the next
+    /// launch to try again ([`Self::restore`]): the note says where they are, as a warning. They
+    /// used to stay there unseen, the tab opening again at every launch (site M3).
+    fn cannot_edit(&mut self, why: Notice) {
+        self.notice = Some(match &self.restoring {
+            Some((_, from)) => {
+                let end = if why.text.ends_with('.') { " " } else { ". " };
+                error(format!(
+                    "{}{end}Sawit kept unsaved changes to this file when it last quit, and can't put them back here. They're in {}.",
+                    why.text,
+                    from.display()
+                ))
+            }
+            None => why.clone(),
+        });
+        self.unreadable = Some(why);
     }
 
     fn put_back(
@@ -587,18 +621,23 @@ impl FileEditor {
         cx.notify();
     }
 
+    /// ⌘S: writes the buffer, unless the tab is read-only.
     fn save(&mut self, _: &Save, _: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         self.save_task(cx).detach();
     }
 
-    /// Writes the buffer; resolves to whether the file is now saved.
+    /// Writes the buffer; resolves to whether the file is now saved. A read-only tab is written
+    /// too: but for ⌘S, which keeps to the mark ([`Self::save`]), the callers are the user's
+    /// Save in a question that names this file (closing its tab, quitting, Restart to Update,
+    /// closing its window). That answer is the user's own: refused, it did nothing and said
+    /// nothing, and quitting looked stuck (site M1).
     pub fn save_task(&mut self, cx: &mut Context<Self>) -> Task<bool> {
         let Some(state) = &self.state else {
             return Task::ready(false);
         };
-        if self.read_only {
-            return Task::ready(!self.dirty);
-        }
         let text = state.read(cx).value().to_string();
         let path = self.path.clone();
         let to_write = text.clone();

@@ -1621,10 +1621,19 @@ fn app_root() -> PathBuf {
     sawit_core::instances::AppPaths::default_macos().root
 }
 
-/// A folder of the tests' own in place of Sawit's.
+/// A folder of the test's own in place of Sawit's, one for each test (each runs on a thread of
+/// its own), removed with its others once it has ended ([`crate::testing::scratch_dir`]).
 #[cfg(test)]
 fn app_root() -> PathBuf {
-    std::env::temp_dir().join(format!("sawit-board-view-{}-app-root", std::process::id()))
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static TESTS: AtomicUsize = AtomicUsize::new(0);
+    thread_local! {
+        static ROOT: PathBuf = crate::testing::scratch_dir(&format!(
+            "board-view-app-root-{}",
+            TESTS.fetch_add(1, Ordering::Relaxed)
+        ));
+    }
+    ROOT.with(PathBuf::clone)
 }
 
 impl Focusable for BoardView {
@@ -1983,23 +1992,14 @@ mod tests {
         issues_line, layers_panel, menus, toolbar, top_bar,
     };
 
-    /// A folder of the test's own, removed when the test ends. The view's other test modules
-    /// (`menus`) share this one and the helpers below.
+    /// A folder of the test's own, removed once the test has ended, after its views have closed
+    /// ([`crate::testing::scratch_dir`]): a closing canvas saves into it. The view's other test
+    /// modules (`menus`) share this one and the helpers below.
     pub(super) struct Scratch(pub(super) PathBuf);
 
     impl Scratch {
         pub(super) fn new(test: &str) -> Self {
-            let dir = std::env::temp_dir()
-                .join(format!("sawit-board-view-{}-{test}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            Self(dir)
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
+            Self(crate::testing::scratch_dir(&format!("board-view-{test}")))
         }
     }
 
@@ -2617,6 +2617,50 @@ mod tests {
         drop(view);
         cx.update(|_| {});
         assert_eq!(unsaved_copies(&tmp.0, "plan"), [2]);
+    }
+
+    /// Seams m7: a canvas test leaves no folder behind. Its view outlives the test's last line:
+    /// `#[gpui_kit::test]` drops it after, and the closing canvas saves what it hadn't saved yet.
+    /// That save made the folder again once the test's scratch had removed it, and nothing removed
+    /// it then: a run of the app's tests left 97 canvas folders in the temp dir. Here a test runs
+    /// as `#[gpui_kit::test]` runs one (its body, then the harness's ending, as the macro writes
+    /// them), on a thread of its own, as libtest runs each test.
+    #[test]
+    fn a_canvas_test_leaves_no_folder_behind() {
+        let dir = std::thread::spawn(|| {
+            let made = std::sync::Mutex::new(None);
+            gpui_kit::run_test(
+                1,
+                &[],
+                0,
+                &mut |dispatcher, _| {
+                    let mut cx = TestAppContext::build(dispatcher.clone(), None);
+                    {
+                        // The test's body: it ends with an edit not saved yet.
+                        let tmp = Scratch::new("leaves-nothing");
+                        let path = tmp.0.join("canvas.figcraft");
+                        write_board(&path, &board_with(&["mine"]));
+                        let view = open(&mut cx, &path);
+                        add_sticky(&view, &mut cx);
+                        *made.lock().unwrap() = Some(tmp.0.clone());
+                    }
+                    // The harness's ending: the view goes, and saves the sticky as it closes.
+                    cx.run_until_parked();
+                    cx.update(|cx| {
+                        cx.background_executor().forbid_parking();
+                        cx.quit();
+                    });
+                    cx.run_until_parked();
+                    drop(cx);
+                    dispatcher.drain_tasks();
+                },
+                None,
+            );
+            made.into_inner().unwrap().expect("the test ran")
+        })
+        .join()
+        .expect("the test's thread panicked");
+        assert!(!dir.exists(), "{} was left behind", dir.display());
     }
 
     #[gpui_kit::test]

@@ -1184,7 +1184,6 @@ mod tests {
             cx.executor().advance_clock(FOLDER_TTL);
             cx.run_until_parked();
         }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[gpui_kit::test]
@@ -1363,7 +1362,6 @@ mod tests {
             .unwrap();
         assert!(typed, "the drop didn't give the pane the keyboard");
         assert_eq!(focused, panes[1], "the tab still focuses the first pane");
-        let _ = std::fs::remove_dir_all(file.parent().unwrap());
     }
 
     #[gpui_kit::test]
@@ -1395,7 +1393,6 @@ mod tests {
         wait_until(cx, "the new pane runs in the folder", |cx| {
             new.read(cx).cwd().as_ref() == Some(&dir)
         });
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[gpui_kit::test]
@@ -1436,7 +1433,6 @@ mod tests {
         wait_until(cx, "the new pane runs in the project", |cx| {
             new.read(cx).cwd().as_ref() == Some(&project)
         });
-        let _ = std::fs::remove_dir_all(&project);
     }
 
     #[test]

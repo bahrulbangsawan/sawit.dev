@@ -460,13 +460,16 @@ fn write(save: &Save, stamps: &Stamps) -> Result<Option<String>, String> {
     Ok(gone.then(|| written_again(path)))
 }
 
-/// The note of a save that wrote the guarded file at `path` again where it had gone.
+/// The note of a save that wrote the guarded file at `path` again where it had gone. Closing the
+/// tab leaves that file there, so it says to delete it again too; and a save in flight during a
+/// rename lands after the tab follows the new name, when closing the tab isn't the whole answer.
 fn written_again(path: &Path) -> String {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let folder = path.parent().unwrap_or(path);
     format!(
         "{name} was no longer in {} (moved, renamed or deleted since it was opened or saved \
-         here), so the canvas saved it there again. Close its tab if the file was meant to go.",
+         here), so the canvas saved it there again. If it was meant to go, close its tab, then \
+         delete the file again.",
         folder.display()
     )
 }
@@ -1896,6 +1899,11 @@ mod tests {
         assert!(
             note.starts_with("canvas.figcraft was no longer in ")
                 && note.contains("saved it there again"),
+            "{note}"
+        );
+        // Closing the tab alone leaves the file it wrote again: the note says to delete it too.
+        assert!(
+            note.ends_with("If it was meant to go, close its tab, then delete the file again."),
             "{note}"
         );
         assert_eq!(writer.take_notice(), None);

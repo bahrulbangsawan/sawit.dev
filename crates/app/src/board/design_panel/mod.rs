@@ -642,22 +642,13 @@ mod tests {
     use super::super::{BoardView, layers_panel, top_bar};
     use super::{ICONS, NOTHING_SELECTED, WIDTH, appearance, header_text, position, typography};
 
-    /// A folder of the test's own, removed when the test ends.
+    /// A folder of the test's own, removed once the test has ended, after its views have closed
+    /// ([`crate::testing::scratch_dir`]): a closing canvas saves into it.
     pub(super) struct Scratch(pub(super) PathBuf);
 
     impl Scratch {
         pub(super) fn new(test: &str) -> Self {
-            let dir = std::env::temp_dir()
-                .join(format!("sawit-design-panel-{}-{test}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            Self(dir)
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
+            Self(crate::testing::scratch_dir(&format!("design-panel-{test}")))
         }
     }
 
