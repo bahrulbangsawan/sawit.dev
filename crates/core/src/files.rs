@@ -571,8 +571,9 @@ pub fn classify(path: &Path) -> FileKind {
     }
 }
 
-/// Highlighter language token for a file: a syntax name the editor's
-/// syntect backend knows, or the bare extension for it to try.
+/// Highlighter language token for a file: the name of a tree-sitter grammar
+/// the editor ships ("rust", "tsx", "sql"), a syntax name its syntect backend
+/// knows, or the bare extension for syntect to try.
 pub fn language_for(path: &Path) -> String {
     let name = path
         .file_name()

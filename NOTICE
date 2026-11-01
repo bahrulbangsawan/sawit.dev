@@ -186,3 +186,69 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+================================================================================
+
+tree-sitter and its grammars
+----------------------------
+
+Sawit's code editors parse with tree-sitter and compile in these grammars, each with the
+highlight and injection queries it ships. All are licensed under the MIT License. The copyright
+lines below are those of each crate's LICENSE file, or, for a crate published without one, its
+authors as the crate lists them.
+
+- tree-sitter 0.26.13 and tree-sitter-language 0.1.9
+  (https://github.com/tree-sitter/tree-sitter): Copyright (c) 2018 Max Brunsfeld
+- tree-sitter-rust 0.24.2 (https://github.com/tree-sitter/tree-sitter-rust):
+  Copyright (c) 2017 Maxim Sokolov
+- tree-sitter-typescript 0.23.2 (https://github.com/tree-sitter/tree-sitter-typescript):
+  Max Brunsfeld, Amaan Qureshi
+- tree-sitter-javascript 0.25.0 (https://github.com/tree-sitter/tree-sitter-javascript):
+  Copyright (c) 2014 Max Brunsfeld
+- tree-sitter-json 0.24.8 (https://github.com/tree-sitter/tree-sitter-json):
+  Max Brunsfeld, Amaan Qureshi
+- tree-sitter-python 0.25.0 (https://github.com/tree-sitter/tree-sitter-python):
+  Copyright (c) 2016 Max Brunsfeld
+- tree-sitter-go 0.25.0 (https://github.com/tree-sitter/tree-sitter-go):
+  Copyright (c) 2014 Max Brunsfeld
+- tree-sitter-bash 0.25.1 (https://github.com/tree-sitter/tree-sitter-bash):
+  Copyright (c) 2017 Max Brunsfeld
+- tree-sitter-toml-ng 0.7.0 (https://github.com/tree-sitter-grammars/tree-sitter-toml):
+  Ika, Amaan Qureshi
+- tree-sitter-yaml 0.7.2 (https://github.com/tree-sitter-grammars/tree-sitter-yaml):
+  Copyright (c) 2024 tree-sitter-grammars contributors, Copyright (c) 2019-2021 Ika
+- tree-sitter-md 0.5.4 (https://github.com/tree-sitter-grammars/tree-sitter-markdown): MDeiml
+- tree-sitter-html 0.23.2 (https://github.com/tree-sitter/tree-sitter-html):
+  Max Brunsfeld, Amaan Qureshi
+- tree-sitter-css 0.25.0 (https://github.com/tree-sitter/tree-sitter-css):
+  Copyright (c) 2018 Max Brunsfeld
+- tree-sitter-sequel 0.3.11 (https://github.com/derekstride/tree-sitter-sql): derek stride
+- tree-sitter-c 0.24.2 (https://github.com/tree-sitter/tree-sitter-c):
+  Copyright (c) 2014 Max Brunsfeld
+- tree-sitter-java 0.23.5 (https://github.com/tree-sitter/tree-sitter-java):
+  Ayman Nadeem, Max Brunsfeld, Amaan Qureshi
+
+The MIT License, under which each of them is licensed, follows; for each, the copyright line
+above takes the place of the one in the text.
+
+MIT License
+
+Copyright (c) <year> <copyright holders>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

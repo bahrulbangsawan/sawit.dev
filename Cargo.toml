@@ -46,6 +46,40 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.markdown]
 opt-level = 3
+# The same for tree-sitter's parser and the grammars' lexers, C built by their build scripts at
+# the package's opt-level.
+[profile.dev.package.tree-sitter]
+opt-level = 3
+[profile.dev.package.tree-sitter-bash]
+opt-level = 3
+[profile.dev.package.tree-sitter-c]
+opt-level = 3
+[profile.dev.package.tree-sitter-css]
+opt-level = 3
+[profile.dev.package.tree-sitter-go]
+opt-level = 3
+[profile.dev.package.tree-sitter-html]
+opt-level = 3
+[profile.dev.package.tree-sitter-java]
+opt-level = 3
+[profile.dev.package.tree-sitter-javascript]
+opt-level = 3
+[profile.dev.package.tree-sitter-json]
+opt-level = 3
+[profile.dev.package.tree-sitter-md]
+opt-level = 3
+[profile.dev.package.tree-sitter-python]
+opt-level = 3
+[profile.dev.package.tree-sitter-rust]
+opt-level = 3
+[profile.dev.package.tree-sitter-sequel]
+opt-level = 3
+[profile.dev.package.tree-sitter-toml-ng]
+opt-level = 3
+[profile.dev.package.tree-sitter-typescript]
+opt-level = 3
+[profile.dev.package.tree-sitter-yaml]
+opt-level = 3
 
 # Hot CPU path: debug renders of the native canvas (FigCraft's renderer and
 # text layout, the raster and font crates under them, and the engine that

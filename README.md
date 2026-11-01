@@ -57,7 +57,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🔍 **Safe data browsing** | The table grid uses a separate read-only connection. Passwords are stored in the macOS Keychain. |
 | 📦 **Export, back up, import** | Tables and queries to CSV or Excel, `pg_dump` backups, CSV imports, and bulk delete or set on the rows you select. |
 | 🗺️ **Schema diagrams** | Tables and foreign keys drawn as a diagram, and exported as DBML or SVG. |
-| ✍️ **Full editor** | Highlighting for about 200 languages, formatters, Markdown/HTML/SVG/Mermaid preview, and image, PDF, and video viewers. |
+| ✍️ **Full editor** | Tree-sitter parsing for the languages you open most and highlighting for about 200 more, formatters, Markdown/HTML/SVG/Mermaid preview, and image, PDF, and video viewers. |
 | 🖥️ **A real terminal** | Full `alacritty_terminal` emulation, fullscreen with one click, and built-in split panes with a right-click pane menu. |
 | 📡 **Ports & network** | See and stop every dev server you started, and diagnose your internet connection step by step. |
 | 💬 **Prompt library** | Save the prompts you reuse, with tags and `{{variables}}` to fill in before copying. |
@@ -179,7 +179,12 @@ explained. A conflict on the same address can't be forced.
   so it is one project however it is named.
 - **Virtual file tree** with a logo per file type. The tree updates when files are created or deleted
   from the terminal.
-- **Highlighting for about 200 languages** (syntect), including Dockerfile, Makefile, Vue, Svelte, Kotlin, and more.
+- **Tree-sitter parsing** for Rust, TypeScript, TSX, JavaScript/JSX, JSON, Python, Go, Bash/zsh, TOML, YAML,
+  Markdown, HTML, CSS, SQL, C and Java, colored by each grammar's own highlight queries. Code inside a Markdown
+  fence, an HTML `<script>` or `<style>`, or a Rust macro is parsed as the language it is in.
+- **Highlighting for about 200 more languages** (syntect), including Dockerfile, Makefile, C++, Swift, Ruby, PHP,
+  Kotlin, Vue and Svelte. Both parse off the UI thread; while you type, the edited lines are recolored at once and
+  the rest of the file after a pause.
 - Soft wrap without horizontal scrolling, Zed-style toolbar (breadcrumb, `Ln, Col`, language).
 - <kbd>⌘</kbd><kbd>S</kbd> saves atomically (symlinks stay symlinks). Files changed on disk are
   reloaded; if there are unsaved changes, Sawit warns you instead.
@@ -953,7 +958,7 @@ crates/mcp    sawit-mcp — stdio MCP server on top of core and board
 | `lsof -F` + `ps` + `docker ps` | No root needed; an IPv6 wildcard is treated as dual-stack (when in doubt, warn). |
 | PATH from the login shell at startup | Apps opened from Finder get a minimal PATH; without this, `docker` and `brew` are not found. |
 | Terminal: `alacritty_terminal` + canvas | Like Zed's terminal; core produces snapshots, the app only draws. `HERDR_*`/`TMUX`/`ZELLIJ*` variables from the parent process are dropped so programs don't refuse to run as "nested". |
-| Highlighting: syntect | About 200 languages at a small size, without a tree-sitter grammar per language. |
+| Highlighting: tree-sitter, then syntect | Tree-sitter for the 16 languages developers open most: it reparses only what an edit changed, parses embedded languages (Markdown fences, `<script>`, macros) on their own, and folds along the syntax tree. Each grammar is compiled into the binary, so C++, Swift, Ruby and PHP (1–4 MiB each) stay on syntect, which covers about 200 languages at a small size. Sawit runs both off the UI thread; gpui-component's own tree-sitter highlighter parses on it. |
 | Diagrams: Pele in QuickJS | Mermaid and schema diagrams render offline, without a browser engine. |
 | Network checks: system `ping` and `route` | No raw sockets, so no admin rights; a plain HTTP check detects Wi-Fi sign-in pages. |
 | Keychain via `/usr/bin/security` | Sawit is ad-hoc signed, so each build is a new app to macOS and asked for the login password again; items the `security` tool saves, it reads back without asking. |
@@ -1002,6 +1007,10 @@ Figures for other apps are not listed because they have not been measured on the
   SIL Open Font License 1.1. See [`NOTICE`](NOTICE).
 - The browser tab's page picker adapts [Visual Annotator](https://github.com/wernerstrauch/visual-annotator),
   Copyright (c) 2026 wernerstrauch, licensed under MIT. See [`NOTICE`](NOTICE).
+- The code editors parse with [tree-sitter](https://github.com/tree-sitter/tree-sitter), Copyright (c) 2018 Max
+  Brunsfeld, and its grammars for Rust, TypeScript/TSX, JavaScript, JSON, Python, Go, Bash, TOML, YAML, Markdown,
+  HTML, CSS, SQL ([tree-sitter-sql](https://github.com/derekstride/tree-sitter-sql)), C and Java, each licensed under
+  MIT. See [`NOTICE`](NOTICE) for each grammar's authors.
 
 <sub>Screenshots and video in `docs/media/` were recorded from a release build with demo data (separate `SAWIT_HOME`,
 Homebrew PostgreSQL 16).</sub>
