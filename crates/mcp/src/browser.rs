@@ -13,7 +13,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock as Content};
 use rmcp::{schemars, tool, tool_router};
 use sawit_core::app_control::Command;
-use sawit_core::browser::{BrowserOp, Target, pick_dev_server, resize_mode};
+use sawit_core::browser::{BrowserOp, Target, front_project, pick_dev_server, resize_mode};
 use serde_json::{Value, json};
 
 use crate::app::{base64_decode, pretty};
@@ -97,7 +97,7 @@ pub struct TypeArgs {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct KeyArgs {
     #[schemars(
-        description = "Enter, Tab, Shift+Tab, Escape, Backspace, Delete, Space, ArrowDown, PageDown, Home, End, Meta+a, or one character"
+        description = "Enter, Tab, Shift+Tab, Escape, Backspace, Delete, Space, ArrowDown, PageDown, Home, End, Meta+a, or one character. Meta+Shift+. is Sawit's: it opens or closes the Annotate panel"
     )]
     pub key: String,
     pub project: Option<String>,
@@ -173,7 +173,9 @@ pub struct ConsoleArgs {
     pub pattern: Option<String>,
     #[schemars(description = "Newest messages to return (default 100)")]
     pub limit: Option<usize>,
-    #[schemars(description = "Empty the log after reading")]
+    #[schemars(
+        description = "Empty the tab's console log after reading: every message kept so far, not only those returned, and with them the page's console errors that the user's Annotate notes add when copied or sent to a terminal"
+    )]
     #[serde(default)]
     pub clear: bool,
     pub project: Option<String>,
@@ -188,7 +190,9 @@ pub struct NetworkArgs {
     pub failed_only: bool,
     #[schemars(description = "Newest requests to return (default 100)")]
     pub limit: Option<usize>,
-    #[schemars(description = "Empty the log after reading")]
+    #[schemars(
+        description = "Empty the tab's network log after reading: every request kept so far, not only those returned, so the failed-request count browser_navigate answers starts again from zero"
+    )]
     #[serde(default)]
     pub clear: bool,
     pub project: Option<String>,
@@ -350,16 +354,11 @@ impl Sawit {
             return Ok(folder);
         }
         let state = self.app_call(None, Command::State).await?;
-        let windows = state["windows"].as_array().map_or(&[][..], Vec::as_slice);
-        let front = windows.iter().find(|window| window["frontmost"] == true);
-        front
-            .and_then(|window| window["project"].as_str())
-            .map(PathBuf::from)
-            .ok_or_else(|| {
-                "Give a url, or the project whose dev server to open: the front Sawit window has \
-                 no project."
-                    .into()
-            })
+        front_project(&state).ok_or_else(|| {
+            "Give a url, or the project whose dev server to open: the front Sawit window has no \
+             project."
+                .into()
+        })
     }
 }
 
@@ -452,7 +451,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Press a key in the browser tab's focused element: Enter, Tab, Escape, Backspace, arrows, PageDown, Meta+a, one character"
+        description = "Press a key in the browser tab's focused element: Enter, Tab, Escape, Backspace, arrows, PageDown, Meta+a, one character. Two keys go to Sawit instead, as the user's do: Meta+Shift+. opens or closes the Annotate panel (the answer has the panel and what the picker picks), and Escape while Sawit's picker is on (Annotate, or Design's inspect) turns it off"
     )]
     async fn browser_press_key(&self, Parameters(a): Parameters<KeyArgs>) -> CallToolResult {
         let v = tri!(
@@ -590,7 +589,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Read the browser tab's console messages and page errors (uncaught exceptions, promise rejections), newest last; filter by level and text"
+        description = "Read the browser tab's console messages and page errors (uncaught exceptions, promise rejections), newest last; filter by level and text. With clear: true it then empties the tab's console log, all of it, which also drops the console errors the user's Annotate notes would carry"
     )]
     async fn browser_console(&self, Parameters(a): Parameters<ConsoleArgs>) -> CallToolResult {
         let op = BrowserOp::Console {
@@ -604,7 +603,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Read the browser tab's requests: fetch/XHR with method, status, duration and (cut) request and response bodies, plus scripts, styles and images; filter by URL text or failures"
+        description = "Read the browser tab's requests: fetch/XHR with method, status, duration and (cut) request and response bodies, plus scripts, styles and images; filter by URL text or failures. Secrets read [redacted]: what is typed into the page's password fields, and the values of fields named like secrets (password, token, api_key, authorization, cookie, session, …) in URLs and bodies. With clear: true it then empties the tab's network log, all of it"
     )]
     async fn browser_network(&self, Parameters(a): Parameters<NetworkArgs>) -> CallToolResult {
         let op = BrowserOp::Network {
@@ -997,5 +996,50 @@ mod tests {
         let taken = server.browser_screenshot(shot(&png)).await;
         assert_ne!(taken.is_error, Some(true), "{}", said(&taken));
         assert_eq!(std::fs::read(&png).unwrap(), b"\x89PNG\r\n\x1a\n");
+    }
+
+    /// What an agent is told of the browser is what it does. browser_press_key's ⇧⌘. and Esc go
+    /// to Sawit, not the page, and ⇧⌘. is the only way an agent opens Annotate; browser_console
+    /// and browser_network empty their whole log when asked to, so they say what that drops and
+    /// aren't announced read-only; and app_state's `browser` is the active project's, which may
+    /// not be the agent's own.
+    #[test]
+    fn the_browser_tools_say_what_they_change() {
+        let tools = Sawit::router().list_all();
+        let sent = |name: &str| {
+            let tool = tools.iter().find(|tool| tool.name == name);
+            let tool = tool.unwrap_or_else(|| panic!("no tool {name}"));
+            serde_json::to_value(tool).unwrap()
+        };
+        let press = sent("browser_press_key").to_string();
+        for said in [
+            "Meta+Shift+. opens or closes the Annotate panel",
+            "Escape while Sawit's picker is on",
+            "Meta+Shift+. is Sawit's",
+        ] {
+            assert!(press.contains(said), "no {said:?} in {press}");
+        }
+        for (name, drops) in [
+            (
+                "browser_console",
+                "the console errors the user's Annotate notes would carry",
+            ),
+            (
+                "browser_network",
+                "the failed-request count browser_navigate answers",
+            ),
+        ] {
+            let tool = sent(name);
+            let text = tool.to_string();
+            assert!(text.contains("all of it") && text.contains(drops), "{text}");
+            assert_eq!(tool["annotations"]["readOnlyHint"], false, "{name}");
+            assert_eq!(tool["annotations"]["destructiveHint"], true, "{name}");
+        }
+        let state = sent("app_state").to_string();
+        assert!(
+            state.contains("`browser`: the browser tab of the window's active project")
+                && state.contains("may not be the browser your browser_* tools use"),
+            "{state}"
+        );
     }
 }

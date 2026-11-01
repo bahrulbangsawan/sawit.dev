@@ -7,7 +7,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
-use crate::kebun::{BakarArgs, CabutArgs, DbJob, ListWhat, PasangArgs, PupukArgs};
+use crate::kebun::{BakarArgs, CabutArgs, DbJob, ListWhat, NyalakanArgs, PasangArgs, PupukArgs};
 use crate::{CoreError, Result, cmd};
 
 /// Where "Install CLI" puts the command.
@@ -18,10 +18,12 @@ sawit — open folders and files in Sawit, query databases, clear ports
 
 Usage:
   sawit [options] [path[:line[:column]] ...]
-  sawit <db> [table] [\"sql\"]
+  sawit <db> [table] [\"sql\"] [-y]
   sawit list [instances|db|ports|connections|tools|mcp|config|keys]
   sawit bakar ports [port ...] [-y]
   sawit bakar instances [name ...] [-y]
+  sawit nyalakan [name ...] [--ulang] [-y]
+  sawit browse [url|port]
   sawit panen <db> <table|\"sql\"> <file.csv|file.xlsx> [-y]
   sawit backup <db> [schema|schema.table] <file.sql|file.dump> [-y]
   sawit tanam <db> <table> <file.csv>
@@ -32,24 +34,43 @@ Usage:
 Examples:
   sawit .                  open this folder as a project (joins the open
                            window next to its other projects)
+  sawit -n ~/code/shop     open a folder in a new window of its own
+  sawit -r ~/code/blog     open it in place of the front window's project
   sawit src/main.rs:42     open a file at line 42
   sawit -w COMMIT_EDITMSG  wait until the file's tab is closed (git core.editor)
   ls | sawit -             open stdin as a new file
+  sawit -- -notes.md       a name that starts with - (after --, all are paths)
+
+Browser (the project's tab in Sawit, which starts if it isn't running):
+  sawit browse             this project's running dev server
+  sawit browse 5173        http://localhost:5173
+  sawit browse example.com any address, as the address field takes it
+  sawit https://example.com
+                           a URL on its own opens there too
 
 Kebun (databases), no app needed:
   sawit kyzn                               list tables
   sawit kyzn leads                         first 100 rows
   sawit kyzn leads \"phone is null\"         filter (becomes WHERE)
   sawit kyzn leads \"select * from leads where phone is null\"
+  sawit kyzn \"delete from leads where id = 3\"
+                                           SQL is tried read-only first; SQL
+                                           that writes is shown, then asks
+                                           (-y: run it without asking)
   <db> is a Sawit instance, a saved connection, a database named in
   ./.env DATABASE_URL (or a folder above), or a database on a running
   local Postgres. A unique prefix works: kyzn finds kyzn_crm.
 
   sawit list               instances, databases, ports and connections
+  sawit list db            just one: instances, db, ports or connections
   sawit bakar ports        stop dev servers on ports (asks first;
                            SIGTERM, then SIGKILL for the stubborn)
   sawit bakar ports 3000   stop whatever listens on :3000
   sawit bakar instances    stop running Sawit instances (data is kept)
+  sawit nyalakan           start every stopped Sawit instance; a port
+                           another process holds is explained, not taken
+  sawit nyalakan kyzn --ulang
+                           restart kyzn (asks first while it runs; -y)
 
   sawit panen kyzn leads leads.xlsx        export a table (CSV or Excel)
   sawit panen kyzn \"select * from leads where phone is null\" x.csv
@@ -59,11 +80,6 @@ Kebun (databases), no app needed:
   sawit backup kyzn crm.leads leads.sql    one schema or table
   sawit tanam kyzn leads leads.csv         load a CSV file into a table
   An existing file is replaced only after asking (or with -y).
-  Aliases: panen = export, ekspor · backup = dump, cadangkan ·
-  tanam = import, impor · pasang = install · pupuk = upgrade ·
-  cabut = uninstall.
-  `sawit ./panen` opens a
-  folder named panen.
 
 Tools (the app's Tools page):
   sawit list tools         package managers, runtimes, AI agents (alat)
@@ -87,11 +103,24 @@ Keys (the app's Keymap Editor; Sawit must be running):
   sawit list keys | grep -i split
                            find one (aliases: pintasan, keymap, shortcuts)
 
+Aliases (every word has an English and an Indonesian name):
+  list = ls, daftar · bakar = stop · nyalakan = start · browse = intip
+  panen = export, ekspor · backup = dump, cadangkan · tanam = import, impor
+  pasang = install · pupuk = upgrade · cabut = uninstall
+  list: all = semua · instances = instance, kebun · db = dbs, database,
+    databases, blok · ports = port, lahan · connections = connection,
+    conn, koneksi, konsesi · tools = tool, alat, perkakas · mcp = colokan ·
+    config = configs, konfig · keys = key, keymap, shortcuts, pintasan
+  bakar: ports = port, lahan · instances = instance, kebun
+  -y = --yes, --ya (don't ask first) · --ulang = --restart
+  `sawit ./panen` opens a folder named panen; so for every word here.
+
 Options:
   -n, --new         always open in a new window
   -r, --reuse       use the frontmost window, replacing its active project
   -w, --wait        wait until every opened file is closed
   -                 read stdin into a temporary file and open it
+  --                the rest are paths, even when they start with -
       --foreground  run the app in this terminal (debugging)
   -v, --version     print the version
   -h, --help        print this help
@@ -137,6 +166,51 @@ pub enum Invocation {
         /// Run the app in this process instead of handing off to it.
         foreground: bool,
     },
+    /// `sawit nyalakan …` (`start`).
+    Nyalakan(NyalakanArgs),
+    /// `sawit browse [url|port]` (`intip`), and `sawit <url>`.
+    Browse(BrowseTarget),
+}
+
+/// What `sawit browse` opens in Sawit's browser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrowseTarget {
+    /// The dev server running in this folder, or in the open project that holds it.
+    DevServer,
+    /// An address as the browser's address field takes it: a URL, `localhost:5173`, a host; a
+    /// port on its own is already `http://localhost:<port>`.
+    Address(String),
+}
+
+impl BrowseTarget {
+    /// `sawit browse`'s arguments: nothing, a port, or one address.
+    pub fn parse(args: &[&str]) -> std::result::Result<BrowseTarget, String> {
+        match args {
+            [] => Ok(BrowseTarget::DevServer),
+            [arg] if arg.starts_with('-') => Err(format!(
+                "opsi tak dikenal: {arg} (`sawit browse` cuma butuh alamat atau port)"
+            )),
+            [port] if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+                match port.parse::<u16>() {
+                    Ok(port) if port > 0 => {
+                        Ok(BrowseTarget::Address(format!("http://localhost:{port}")))
+                    }
+                    _ => Err(format!("“{port}” bukan nomor port.")),
+                }
+            }
+            [address] if !address.trim().is_empty() => {
+                Ok(BrowseTarget::Address(address.trim().to_string()))
+            }
+            _ => Err("intip satu alamat saja: `sawit browse [url|port]`.".into()),
+        }
+    }
+}
+
+/// Whether `arg` is a web page's address (`http://…`, `https://…`), which `sawit` opens in its
+/// browser rather than as a file.
+fn web_address(arg: &str) -> bool {
+    let lower = arg.trim_start().to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
 }
 
 /// Parses `args` (without the program name); relative paths resolve
@@ -148,10 +222,10 @@ pub fn parse_args(
     let args: Vec<OsString> = args.into_iter().collect();
     let words: Vec<&str> = args.iter().filter_map(|a| a.to_str()).collect();
     match words.first().copied() {
-        Some("list" | "ls") if words.len() == args.len() && words.len() <= 2 => {
+        Some("list" | "ls" | "daftar") if words.len() == args.len() && words.len() <= 2 => {
             return ListWhat::parse(words.get(1).copied()).map(Invocation::List);
         }
-        Some("bakar") if words.len() == args.len() => {
+        Some("bakar" | "stop") if words.len() == args.len() => {
             return BakarArgs::parse(&words[1..]).map(Invocation::Bakar);
         }
         Some("install" | "pasang") if words.len() == args.len() => {
@@ -162,6 +236,15 @@ pub fn parse_args(
         }
         Some("uninstall" | "cabut") if words.len() == args.len() => {
             return CabutArgs::parse(&words[1..]).map(Invocation::Cabut);
+        }
+        Some("start" | "nyalakan") if words.len() == args.len() => {
+            return NyalakanArgs::parse(&words[1..]).map(Invocation::Nyalakan);
+        }
+        Some("browse" | "intip") if words.len() == args.len() => {
+            return BrowseTarget::parse(&words[1..]).map(Invocation::Browse);
+        }
+        Some(url) if args.len() == 1 && web_address(url) => {
+            return Ok(Invocation::Browse(BrowseTarget::Address(url.trim().into())));
         }
         Some(word) if words.len() == args.len() && DbJob::kind(word).is_some() => {
             let kind = DbJob::kind(word).expect("checked");
@@ -174,6 +257,12 @@ pub fn parse_args(
     for arg in args {
         let bytes = arg.as_bytes();
         if options_done || !bytes.starts_with(b"-") {
+            // A URL opens in the browser, alone; past `--` it is a path.
+            if let Some(url) = arg.to_str().filter(|a| !options_done && web_address(a)) {
+                return Err(format!(
+                    "{url} is a web address: open it on its own, `sawit {url}` or `sawit browse {url}`"
+                ));
+            }
             request
                 .targets
                 .push(parse_target(&arg, cwd, |p| p.exists()));
@@ -646,6 +735,164 @@ mod tests {
             "(configs, konfig)",
         ] {
             assert!(USAGE.contains(said), "no {said:?} in the help");
+        }
+    }
+
+    /// `sawit nyalakan` (`start`) starts instances; `./start` is still a folder.
+    #[test]
+    fn nyalakan_starts_instances() {
+        assert_eq!(
+            parse(&["start"]),
+            Ok(Invocation::Nyalakan(NyalakanArgs::default()))
+        );
+        let Ok(Invocation::Nyalakan(args)) = parse(&["nyalakan", "kyzn", "--ulang", "-y"]) else {
+            panic!()
+        };
+        assert_eq!(args.names, ["kyzn"]);
+        assert!(args.again && args.yes);
+        assert!(parse(&["start", "--nope"]).is_err());
+        assert!(matches!(parse(&["./start"]), Ok(Invocation::Open { .. })));
+        assert!(matches!(
+            parse(&["./nyalakan"]),
+            Ok(Invocation::Open { .. })
+        ));
+    }
+
+    /// `sawit browse` (`intip`) opens this project's dev server, a port or an address in Sawit's
+    /// browser, and so does a URL on its own. With anything else a URL is refused, where it was
+    /// opened as an empty file `http:/…` at the port's line.
+    #[test]
+    fn browse_opens_pages() {
+        let address = |a: &str| Ok(Invocation::Browse(BrowseTarget::Address(a.into())));
+        assert_eq!(
+            parse(&["browse"]),
+            Ok(Invocation::Browse(BrowseTarget::DevServer))
+        );
+        assert_eq!(parse(&["intip", "5173"]), address("http://localhost:5173"));
+        assert_eq!(
+            parse(&["browse", "example.com/a"]),
+            address("example.com/a")
+        );
+        assert_eq!(
+            parse(&["http://localhost:5173/x"]),
+            address("http://localhost:5173/x")
+        );
+        assert_eq!(parse(&["HTTPS://x.dev"]), address("HTTPS://x.dev"));
+        for bad in [
+            &["browse", "0"][..],
+            &["browse", "70000"],
+            &["browse", ""],
+            &["browse", "a.dev", "b.dev"],
+            &["intip", "-y"],
+            &["-n", "http://x.dev"],
+            &["a.rs", "https://x.dev"],
+        ] {
+            assert!(parse(bad).is_err(), "{bad:?}");
+        }
+        // Past `--` it is a path, and `./browse` is a folder.
+        assert!(matches!(
+            parse(&["--", "http://x.dev"]),
+            Ok(Invocation::Open { .. })
+        ));
+        assert!(matches!(parse(&["./browse"]), Ok(Invocation::Open { .. })));
+        assert!(matches!(parse(&["./intip"]), Ok(Invocation::Open { .. })));
+    }
+
+    /// `list` and `bakar` have their names in both languages: `daftar` and `stop`. Neither is a
+    /// database, and `./stop` is still a folder.
+    #[test]
+    fn list_and_bakar_in_both_languages() {
+        assert_eq!(
+            parse(&["daftar", "ports"]),
+            Ok(Invocation::List(ListWhat::Ports))
+        );
+        let Ok(Invocation::Bakar(bakar)) = parse(&["stop", "lahan", "3000", "-y"]) else {
+            panic!()
+        };
+        assert_eq!(bakar.targets, ["3000"]);
+        assert!(bakar.yes);
+        assert!(parse(&["stop"]).is_err());
+        assert!(matches!(parse(&["./daftar"]), Ok(Invocation::Open { .. })));
+        assert!(matches!(parse(&["./stop"]), Ok(Invocation::Open { .. })));
+    }
+
+    /// `sawit --help` names every word `sawit` takes as a command, every target of `list` and
+    /// `bakar` and every flag, each alias among them: it left out `ls`, most targets, `--yes`
+    /// and `--`.
+    #[test]
+    fn the_help_names_every_word_and_alias() {
+        let named: std::collections::HashSet<&str> = USAGE
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .collect();
+        for word in crate::kebun::SUBCOMMANDS {
+            assert!(named.contains(word), "--help doesn't name {word}");
+        }
+        for target in [
+            "all",
+            "semua",
+            "instances",
+            "instance",
+            "kebun",
+            "db",
+            "dbs",
+            "database",
+            "databases",
+            "blok",
+            "ports",
+            "port",
+            "lahan",
+            "connections",
+            "connection",
+            "conn",
+            "koneksi",
+            "konsesi",
+            "tools",
+            "tool",
+            "alat",
+            "perkakas",
+            "mcp",
+            "colokan",
+            "config",
+            "configs",
+            "konfig",
+            "keys",
+            "key",
+            "keymap",
+            "shortcuts",
+            "pintasan",
+        ] {
+            assert!(ListWhat::parse(Some(target)).is_ok(), "{target}");
+            assert!(named.contains(target), "--help doesn't name list {target}");
+        }
+        for target in ["ports", "port", "lahan", "instances", "instance", "kebun"] {
+            assert!(BakarArgs::parse(&[target]).is_ok(), "{target}");
+            assert!(named.contains(target), "--help doesn't name bakar {target}");
+        }
+        for flag in [
+            "-y",
+            "--yes",
+            "--ya",
+            "--ulang",
+            "--restart",
+            "--",
+            "-",
+            "-n",
+            "--new",
+            "-r",
+            "--reuse",
+            "-w",
+            "--wait",
+            "--foreground",
+            "-v",
+            "--version",
+            "-h",
+            "--help",
+        ] {
+            assert!(named.contains(flag), "--help doesn't name {flag}");
+        }
+        // The lines a terminal shows whole.
+        for line in USAGE.lines() {
+            assert!(line.chars().count() <= 81, "too wide: {line}");
         }
     }
 

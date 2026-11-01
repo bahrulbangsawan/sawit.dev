@@ -484,13 +484,23 @@ impl BrowserView {
         export_folder_for(self.project.as_deref(), host)
     }
 
-    /// `ExportDesign`: `{"export": "started"|"running", "folder"}`.
+    /// `ExportDesign`: `{"export": "started"|"running", "folder"}`. An agent's export replaces
+    /// what an earlier one left in the folder only when it says so, with `replace`
+    /// ([`earlier_export`]); joining the export that runs replaces nothing more.
     pub(in crate::browser) fn export_op(
         &mut self,
         include_videos: bool,
+        replace: bool,
         cx: &mut Context<Self>,
     ) -> OpResult {
         let running = self.design.export_running();
+        let url = self.current_url();
+        if !running && !replace && extractable(&url) {
+            let folder = folder_for(self.project.as_deref(), &export_host(&url));
+            if let Some(held) = earlier_export(&folder) {
+                return Err(held);
+            }
+        }
         let folder = self.start_export(include_videos, cx)?;
         Ok(json!({
             "export": if running { "running" } else { "started" },
@@ -1046,6 +1056,32 @@ fn export_folder_for(project: Option<&Path>, host: &str) -> Result<PathBuf, Stri
     Ok(folder)
 }
 
+/// Why an agent's export into `folder` must say `replace`: the folder holds something, what an
+/// earlier export left or not, and a new export replaces all of it, a `DESIGN.md` edited by hand
+/// included ([`write_folder`] and `run_export`'s clearing of `assets/`). `None` for a folder that
+/// is empty or not there yet.
+fn earlier_export(folder: &Path) -> Option<String> {
+    let mut names: Vec<String> = std::fs::read_dir(folder)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    names.sort();
+    let mut held = names.iter().take(6).cloned().collect::<Vec<_>>().join(", ");
+    if names.len() > 6 {
+        held.push_str(&format!(" and {} more", names.len() - 6));
+    }
+    Some(format!(
+        "{} already holds an export ({held}). A new export replaces everything in it, a DESIGN.md \
+         edited by hand included. Nothing was written: export again with replace: true to \
+         replace it.",
+        folder.display()
+    ))
+}
+
 /// Where an export of `host` goes (see [`export_folder_for`]).
 fn folder_for(project: Option<&Path>, host: &str) -> PathBuf {
     match project {
@@ -1398,6 +1434,42 @@ mod tests {
             project.0.join(".nyawit/design/x.dev")
         );
         assert!(project.0.join(".nyawit/.gitignore").exists());
+    }
+
+    /// An agent's export replaces the folder of an earlier one, a `DESIGN.md` edited by hand
+    /// included, only when it says `replace`: a folder that holds anything is refused, and the
+    /// answer says what is there and how to replace it.
+    #[test]
+    fn an_earlier_export_is_replaced_only_when_asked() {
+        let dir = std::env::temp_dir().join(format!("sawit-earlier-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(earlier_export(&dir), None, "no folder yet");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(earlier_export(&dir), None, "an empty folder");
+        std::fs::write(dir.join("DESIGN.md"), "edited by hand").unwrap();
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        let held = earlier_export(&dir).unwrap();
+        assert!(
+            held.starts_with(&format!(
+                "{} already holds an export (DESIGN.md, assets).",
+                dir.display()
+            )),
+            "{held}"
+        );
+        assert!(
+            held.contains("a DESIGN.md edited by hand included")
+                && held.ends_with("export again with replace: true to replace it."),
+            "{held}"
+        );
+        for n in 0..8 {
+            std::fs::write(dir.join(format!("x{n}.css")), "").unwrap();
+        }
+        assert!(
+            earlier_export(&dir)
+                .unwrap()
+                .contains(", x3.css and 4 more)")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Two dev servers on one host are two apps: an export of one used to replace the

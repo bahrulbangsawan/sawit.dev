@@ -256,6 +256,18 @@ fn read_only_sql_screening() {
     assert!(screen_read_only_sql("set default_transaction_read_only = off").is_err());
 }
 
+/// A statement the server couldn't parse may be several, only with a `;` before the end of its
+/// text: `sawit <db>` then asks before running them, as it can't try them read-only first.
+#[test]
+fn several_statements_have_a_semicolon_before_the_end() {
+    use super::query::several_statements;
+    assert!(several_statements("select 1; select 2"));
+    assert!(several_statements("commit; delete from t;"));
+    assert!(!several_statements("select 1"));
+    assert!(!several_statements("select 1;"));
+    assert!(!several_statements("delete from t ;  \n"));
+}
+
 #[test]
 fn recognises_poolers_rejecting_startup_options() {
     use super::query::rejects_startup_options;

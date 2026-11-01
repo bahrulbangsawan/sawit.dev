@@ -1,9 +1,11 @@
 //! The `sawit` command's terminal tools, which work without the app:
 //! `sawit <db> [table] ["sql"]` like psql, `sawit list`, `sawit bakar`
 //! ("burn": stop dev servers or instances, like the `kill-dev` script),
-//! `sawit panen|backup|tanam` (export, `pg_dump`, CSV import) and
+//! `sawit panen|backup|tanam` (export, `pg_dump`, CSV import),
 //! `sawit pasang|pupuk|cabut` (install, upgrade or uninstall developer
-//! tools).
+//! tools) and `sawit nyalakan` (start instances). Two need the app:
+//! `sawit browse` (a page in the app's browser), which starts it first, and
+//! `sawit list keys`, which asks the running app and never starts it.
 //! The wording riffs on Indonesia's forest fires (karhutla) and the palm-oil
 //! plantations (kebun sawit) behind them.
 
@@ -12,18 +14,21 @@ use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::control;
+use crate::app_control::{self, Command, Request};
+use crate::browser::{self, BrowserOp};
+use crate::cli::BrowseTarget;
+use crate::control::{self, Preflight, StartOutcome};
 use crate::db::{
     self, ConnProfile, Profiles, format_table, parse_database_url, read_dotenv_database_url,
     resolve_password,
 };
-use crate::instances::{AppPaths, Registry};
+use crate::instances::{AppPaths, Instance, Registry};
 use crate::pgctl::PgCtlStatus;
 use crate::ports::PortJob;
 use crate::probe;
 
 /// Words `sawit` takes as commands rather than database names.
-const SUBCOMMANDS: &[&str] = &[
+pub(crate) const SUBCOMMANDS: &[&str] = &[
     "list",
     "ls",
     "bakar",
@@ -42,6 +47,12 @@ const SUBCOMMANDS: &[&str] = &[
     "pupuk",
     "uninstall",
     "cabut",
+    "start",
+    "nyalakan",
+    "browse",
+    "intip",
+    "daftar",
+    "stop",
 ];
 
 /// Rows printed per result set at most.
@@ -79,27 +90,33 @@ ORDER BY 1, 2";
 // Arguments
 // ---------------------------------------------------------------------------
 
-/// `sawit <db> [table] ["sql"]`.
+/// `sawit <db> [table] ["sql"] [-y]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryArgs {
     pub db: String,
     pub table: Option<String>,
     pub sql: Option<String>,
+    /// Run a statement that writes without asking first (`-y`).
+    pub yes: bool,
 }
 
 impl QueryArgs {
     /// More than a bare name: the user surely meant a database.
     fn explicit(&self) -> bool {
-        self.table.is_some() || self.sql.is_some()
+        self.table.is_some() || self.sql.is_some() || self.yes
     }
 }
 
-/// The arguments as `sawit <db> [table] ["sql"]` when they have that shape:
-/// a bare name that isn't a path in `cwd`, then a table and/or SQL (SQL has
-/// a space in it). Whether `db` really is a database is decided later.
-/// Subcommand names (`list`, `bakar`) are never databases.
+/// The arguments as `sawit <db> [table] ["sql"] [-y]` when they have that
+/// shape: a bare name that isn't a path in `cwd`, then a table and/or SQL
+/// (SQL has a space in it), and `-y` (`--yes`, `--ya`) anywhere. Whether
+/// `db` really is a database is decided later. Subcommand names (`list`,
+/// `bakar`) are never databases.
 pub fn query_args(args: &[OsString], cwd: &Path) -> Option<QueryArgs> {
     let args: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
+    let is_yes = |a: &&str| matches!(*a, "-y" | "--yes" | "--ya");
+    let yes = args.iter().any(is_yes);
+    let args: Vec<&str> = args.into_iter().filter(|a| !is_yes(a)).collect();
     if !(1..=3).contains(&args.len()) || args.iter().any(|a| a.starts_with('-') || a.is_empty()) {
         return None;
     }
@@ -125,6 +142,7 @@ pub fn query_args(args: &[OsString], cwd: &Path) -> Option<QueryArgs> {
         db: db.into(),
         table: table.map(Into::into),
         sql: sql.map(Into::into),
+        yes,
     })
 }
 
@@ -228,6 +246,37 @@ impl BakarArgs {
             return Err(format!("“{bad}” bukan nomor port."));
         }
         Ok(BakarArgs { what, targets, yes })
+    }
+}
+
+/// `sawit nyalakan [name…] [--ulang] [-y]` (`start`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NyalakanArgs {
+    /// Instance names; empty means every stopped one (with `again`, every one).
+    pub names: Vec<String>,
+    /// `--ulang` (`--restart`): restart the running ones too.
+    pub again: bool,
+    /// Restart running ones without asking.
+    pub yes: bool,
+}
+
+impl NyalakanArgs {
+    pub fn parse(args: &[&str]) -> Result<NyalakanArgs, String> {
+        let mut out = NyalakanArgs::default();
+        for &arg in args {
+            match arg {
+                "--ulang" | "--restart" => out.again = true,
+                "-y" | "--yes" | "--ya" => out.yes = true,
+                _ if arg.starts_with('-') => {
+                    return Err(format!(
+                        "opsi tak dikenal: {arg} (yang ada cuma --ulang dan -y)"
+                    ));
+                }
+                _ if !out.names.iter().any(|n| n == arg) => out.names.push(arg.to_string()),
+                _ => {}
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -663,8 +712,10 @@ pub fn block_on<F: std::future::Future>(fut: F) -> F::Output {
         .block_on(fut)
 }
 
-/// `sawit <db> [table] ["sql"]`. `None` when `db` isn't a database and the
-/// arguments could just as well be files to open.
+/// `sawit <db> [table] ["sql"] [-y]`. `None` when `db` isn't a database and
+/// the arguments could just as well be files to open. The SQL is tried
+/// read-only first, as the `query` MCP tool runs it; SQL that writes is
+/// shown, and runs once the user says yes (or with `-y`).
 pub async fn query(args: QueryArgs, paths: &AppPaths, cwd: &Path) -> Option<i32> {
     let ink = Ink::stderr();
     let kebun = match find(&args.db, paths, cwd).await {
@@ -691,21 +742,114 @@ pub async fn query(args: QueryArgs, paths: &AppPaths, cwd: &Path) -> Option<i32>
             p.database, p.host, p.port, kebun.via
         ))
     );
-    let client = match db::connect(p, kebun.password.as_deref()).await {
+    // Read-only first: SQL that writes shows itself and asks before it runs.
+    let reader = match db::connect_read_only(p, kebun.password.as_deref()).await {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("{} Gagal masuk kebun {}: {e}", ink.red("🔥"), p.database);
+            if let Some(name) = stopped_instance(p, paths).await {
+                eprintln!("   Kebun {name} padam. Nyalakan dulu: `sawit nyalakan {name}`");
+            }
+            return Some(1);
+        }
+    };
+    let sql = plan_sql(args.table.as_deref(), args.sql.as_deref());
+    let why = match db::run_if_read_only(&reader, &sql, MAX_ROWS).await {
+        Ok(db::ReadOnlyTry::Read(outcome)) => return Some(harvest(&outcome, &ink)),
+        Ok(db::ReadOnlyTry::Writes(refusal)) => format!(
+            "Pernyataan ini mengubah kebun; mode baca-saja menolaknya ({}).",
+            refusal.lines().next().unwrap_or_default()
+        ),
+        Ok(db::ReadOnlyTry::Several(_)) => {
+            "Ada beberapa pernyataan sekaligus, dan Sawit tidak bisa mencobanya baca-saja dulu."
+                .into()
+        }
+        Err(e) => {
+            eprintln!("{} Gagal panen: {e}", ink.red("🔥"));
+            return Some(1);
+        }
+    };
+    if !may_run_writes(&sql, &why, &p.database, args.yes, &ink) {
+        return Some(1);
+    }
+    let writer = match db::connect(p, kebun.password.as_deref()).await {
         Ok(client) => client,
         Err(e) => {
             eprintln!("{} Gagal masuk kebun {}: {e}", ink.red("🔥"), p.database);
             return Some(1);
         }
     };
-    let sql = plan_sql(args.table.as_deref(), args.sql.as_deref());
-    let outcome = match db::run_sql(&client, &sql, MAX_ROWS).await {
-        Ok(outcome) => outcome,
+    match db::run_sql(&writer, &sql, MAX_ROWS).await {
+        Ok(outcome) => Some(harvest(&outcome, &ink)),
         Err(e) => {
             eprintln!("{} Gagal panen: {e}", ink.red("🔥"));
-            return Some(1);
+            Some(1)
         }
-    };
+    }
+}
+
+/// The name of the Sawit instance `profile` connects to, when it is one and it is stopped: a
+/// connection that failed then needs `sawit nyalakan <name>`.
+async fn stopped_instance(profile: &ConnProfile, paths: &AppPaths) -> Option<String> {
+    if !matches!(profile.host.as_str(), "localhost" | "127.0.0.1" | "::1") {
+        return None;
+    }
+    let registry = Registry::load(&paths.instances_file()).ok()?;
+    let inst = registry
+        .instances
+        .iter()
+        .find(|inst| inst.port == profile.port)?;
+    let stopped = matches!(control::status(inst).await, Ok(PgCtlStatus::Stopped));
+    stopped.then(|| inst.name.clone())
+}
+
+/// Whether `sql`, which the read-only try refused (`why`), may run in `database` as it is: with
+/// `-y`, or when the user says yes. The statement and why it asks come first, on stderr, where
+/// `sawit <db>` says all but its tables. Without a terminal to ask on, and without `-y`, it may not.
+fn may_run_writes(sql: &str, why: &str, database: &str, yes: bool, ink: &Ink) -> bool {
+    eprintln!("{} {why}", ink.yellow("!"));
+    for line in statement_preview(sql) {
+        eprintln!("     {}", ink.gray(&line));
+    }
+    if yes {
+        return true;
+    }
+    match confirm_on_stderr(&format!(
+        "Jalankan di {database}? Lahan yang terbakar tidak tumbuh lagi."
+    )) {
+        Some(true) => true,
+        Some(false) => {
+            eprintln!("{}", ink.gray("🌾 Batal. Kebun tidak disentuh."));
+            false
+        }
+        None => {
+            eprintln!(
+                "{} Tidak ada saksi (stdin bukan terminal). Tambahkan -y kalau memang mau menjalankannya.",
+                ink.red("🔥")
+            );
+            false
+        }
+    }
+}
+
+/// The lines of `sql` shown before `sawit <db>` asks to run it: the first 20 (each cut at 200
+/// characters), then how many more there are.
+fn statement_preview(sql: &str) -> Vec<String> {
+    const SHOWN: usize = 20;
+    let lines: Vec<&str> = sql.trim().lines().collect();
+    let mut shown: Vec<String> = lines
+        .iter()
+        .take(SHOWN)
+        .map(|line| clip(line, 200))
+        .collect();
+    if lines.len() > SHOWN {
+        shown.push(format!("… ({} baris lagi)", lines.len() - SHOWN));
+    }
+    shown
+}
+
+/// Prints the result sets of `outcome` on stdout, and its tally on stderr; the exit code.
+fn harvest(outcome: &db::QueryOutcome, ink: &Ink) -> i32 {
     let mut out = std::io::stdout().lock();
     for (ix, set) in outcome.results.iter().enumerate() {
         let gap = if ix > 0 { "\n" } else { "" };
@@ -724,7 +868,7 @@ pub async fn query(args: QueryArgs, paths: &AppPaths, cwd: &Path) -> Option<i32>
     }
     summary.push(format!("{} ms", outcome.duration.as_millis()));
     eprintln!("{}", ink.gray(&format!("🌾 {}", summary.join(" · "))));
-    Some(0)
+    0
 }
 
 /// `sawit list [what]`.
@@ -736,10 +880,14 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
         if registry.instances.is_empty() {
             ink.empty("belum ada kebun. Hutannya masih utuh, untuk sementara.");
         }
+        let mut padam = false;
         for inst in &registry.instances {
             let status = match control::status(inst).await {
                 Ok(PgCtlStatus::Running { pid }) => ink.green(&format!("menyala (PID {pid})")),
-                Ok(PgCtlStatus::Stopped) => ink.gray("padam"),
+                Ok(PgCtlStatus::Stopped) => {
+                    padam = true;
+                    ink.gray("padam")
+                }
                 Ok(other) => ink.yellow(&format!("{other:?}")),
                 Err(e) => ink.red(&format!("error: {e}")),
             };
@@ -751,6 +899,12 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
                     "postgres://postgres@localhost:{}/postgres",
                     inst.port
                 ))
+            );
+        }
+        if padam {
+            println!(
+                "  {}",
+                ink.gray("Yang padam dinyalakan lagi dengan `sawit nyalakan <nama>`.")
             );
         }
     }
@@ -1406,6 +1560,291 @@ async fn bakar_instances(args: BakarArgs, paths: &AppPaths) -> i32 {
     i32::from(out > 0)
 }
 
+/// `sawit nyalakan …`: starts Sawit instances as their Start button and the `start_instance` tool
+/// do, never over a port another process holds (`Preflight::Check`): that one's report says who
+/// holds it, and the exit code is 1. No names: every stopped instance. `--ulang` restarts the
+/// running ones too, as `restart_instance` does, which drops their connections, so it asks first
+/// as `bakar instances` does (`-y` doesn't; without a terminal it needs `-y`).
+pub async fn nyalakan(args: NyalakanArgs, paths: &AppPaths) -> i32 {
+    let ink = Ink::stdout();
+    ink.header(
+        if args.again {
+            "🔥 Nyalakan Ulang Kebun (instances)"
+        } else {
+            "🔥 Nyalakan Kebun (instances)"
+        },
+        if args.again {
+            "pg_ctl stop lalu start, port diperiksa dulu: lahan orang tidak diserobot (kali ini)"
+        } else {
+            "pg_ctl start, port diperiksa dulu: lahan orang tidak diserobot (kali ini)"
+        },
+    );
+    let registry = match Registry::load(&paths.instances_file()) {
+        Ok(registry) => registry,
+        Err(e) => {
+            println!("  {} {e}", ink.red("✗"));
+            return 1;
+        }
+    };
+    if let Some(unknown) = args.names.iter().find(|n| registry.get(n).is_none()) {
+        println!(
+            "  {} Kebun “{unknown}” tidak terdaftar. Ilegal, ya? Lihat `sawit list instances`.",
+            ink.red("✗")
+        );
+        return 1;
+    }
+    let mut running = Vec::new();
+    let mut stopped = Vec::new();
+    for inst in &registry.instances {
+        if !args.names.is_empty() && !args.names.contains(&inst.name) {
+            continue;
+        }
+        // One whose status can't be read is tried: starting it says why it can't.
+        match control::status(inst).await {
+            Ok(PgCtlStatus::Running { pid }) => running.push((inst, pid)),
+            _ => stopped.push(inst),
+        }
+    }
+    if running.is_empty() && stopped.is_empty() {
+        ink.empty("belum ada kebun. Hutannya masih utuh, untuk sementara.");
+        ink.footer("Tidak ada yang dinyalakan.");
+        return 0;
+    }
+    if !args.again {
+        for (inst, pid) in &running {
+            ink.empty(&format!("{} sudah menyala, PID {pid}", inst.name));
+        }
+        if stopped.is_empty() {
+            ink.footer("Semua sudah menyala. Asapnya sudah sampai negeri tetangga.");
+            return 0;
+        }
+    } else if !running.is_empty() {
+        ink.section(&format!(
+            "Kebun menyala, dinyalakan ulang ({})",
+            running.len()
+        ));
+        for (ix, (inst, pid)) in running.iter().enumerate() {
+            println!(
+                "  {} {:<16} :{:<6} {}",
+                ink.gray(&format!("{:>3}.", ix + 1)),
+                inst.name,
+                inst.port,
+                ink.gray(&format!("PID {pid}"))
+            );
+        }
+        println!();
+        if !args.yes {
+            match confirm(&format!(
+                "Nyalakan ulang {} kebun di atas? Koneksinya putus sebentar.",
+                running.len()
+            )) {
+                Some(true) => {}
+                Some(false) => {
+                    ink.footer("Batal. Kebun tetap menyala seperti tadi.");
+                    return 0;
+                }
+                None => {
+                    println!(
+                        "  {} Tidak ada saksi (stdin bukan terminal). Tambahkan -y untuk menyalakan ulang.",
+                        ink.red("✗")
+                    );
+                    return 1;
+                }
+            }
+        }
+    }
+    let restarts = running
+        .iter()
+        .filter(|_| args.again)
+        .map(|(inst, _)| (*inst, true));
+    let plan: Vec<(&Instance, bool)> = restarts
+        .chain(stopped.iter().map(|inst| (*inst, false)))
+        .collect();
+    let mut failed = 0;
+    for &(inst, restart) in &plan {
+        let managed = registry.data_dirs();
+        let outcome = match restart {
+            true => control::restart(inst, paths, managed, Preflight::Check).await,
+            false => control::start(inst, paths, managed, Preflight::Check).await,
+        };
+        match outcome {
+            Ok(StartOutcome::Started) => println!(
+                "  {} {} menyala  {}",
+                ink.green("✓"),
+                inst.name,
+                ink.gray(&format!(
+                    "postgres://postgres@localhost:{}/postgres",
+                    inst.port
+                ))
+            ),
+            Ok(StartOutcome::AlreadyRunning { pid }) => {
+                ink.empty(&format!("{} sudah menyala, PID {pid}", inst.name));
+            }
+            Ok(StartOutcome::Blocked(report)) => {
+                failed += 1;
+                println!(
+                    "  {} {} tidak dinyalakan: lahan :{} sudah ada yang menggarap.",
+                    ink.red("✗"),
+                    inst.name,
+                    inst.port
+                );
+                for line in report.explain().lines() {
+                    println!("      {line}");
+                }
+                println!(
+                    "      {}",
+                    ink.gray(
+                        "Lihat siapa di sana: `sawit list ports`. Padamkan dulu, atau pakai Start Anyway di Sawit."
+                    )
+                );
+            }
+            Err(e) => {
+                failed += 1;
+                println!("  {} {}: {e}", ink.red("✗"), inst.name);
+            }
+        }
+    }
+    println!();
+    ink.kv(
+        "Menyala",
+        &format!("{} / {} kebun", plan.len() - failed, plan.len()),
+    );
+    ink.footer(if failed == 0 {
+        "Selesai. Kebun menyala; asapnya urusan musim depan."
+    } else {
+        "Sebagian tidak menyala; lihat di atas."
+    });
+    i32::from(failed > 0)
+}
+
+/// How long `sawit browse` waits for each answer of the app, which gives a page op 30 s.
+const BROWSE_TIMEOUT: Duration = Duration::from_secs(35);
+
+/// `sawit browse [url|port]` (`intip`), and `sawit <url>`: opens the page in Sawit's browser and
+/// brings Sawit forward. It sends what `browser_navigate` sends for an agent working in `cwd`, so
+/// the browser is that of the open project that holds `cwd` (else the front window's). With no
+/// address, the dev server running in `cwd`, else in that project ([`dev_server_in`]).
+/// `start_app` starts Sawit when it isn't running, as `sawit <path>` does.
+pub fn browse(
+    target: BrowseTarget,
+    paths: &AppPaths,
+    cwd: &Path,
+    start_app: impl FnOnce() -> Result<(), String>,
+) -> i32 {
+    let ink = Ink::stderr();
+    if !app_control::is_running(paths)
+        && let Err(e) = start_app()
+    {
+        eprintln!("{} Sawit tidak mau menyala: {e}", ink.red("🔥"));
+        return 1;
+    }
+    let folder = own_folder(cwd);
+    let ask = |command| {
+        let request = Request {
+            project: None,
+            agent_folder: folder.clone(),
+            command,
+        };
+        app_control::send(paths, &request, BROWSE_TIMEOUT)
+    };
+    let url = match target {
+        BrowseTarget::Address(address) => browser::normalize_address(&address),
+        BrowseTarget::DevServer => {
+            let found = ask(Command::State).and_then(|state| {
+                let folders = dev_server_folders(&state, folder.as_deref())?;
+                let jobs =
+                    block_on(probe::listening_jobs()).map_err(|e| format!("lsof gagal: {e}"))?;
+                dev_server_in(&jobs, &folders)
+            });
+            match found {
+                Ok(url) => url,
+                Err(e) => {
+                    eprintln!("{} {e}", ink.red("🔥"));
+                    return 1;
+                }
+            }
+        }
+    };
+    let op = BrowserOp::Navigate { url: url.clone() };
+    if let Err(e) = ask(Command::Browser { op }) {
+        eprintln!("{} {url} tidak bisa diintip: {e}", ink.red("🔥"));
+        return 1;
+    }
+    let _ = ask(Command::Focus);
+    eprintln!(
+        "{}",
+        ink.gray(&format!("🌐 {url} · terbuka di browser Sawit"))
+    );
+    0
+}
+
+/// The folder `sawit browse` works in, as an agent's would be: its own, unless that is `/` or
+/// the home folder, which hold no one project.
+fn own_folder(cwd: &Path) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    (cwd.parent().is_some() && Some(cwd) != home.as_deref()).then(|| cwd.to_path_buf())
+}
+
+/// Where `sawit browse` looks for the dev server, nearest first, from the app's `state`: `folder`,
+/// then the open project that holds it; with no folder of its own, the front window's project,
+/// whose browser shows the page.
+fn dev_server_folders(
+    state: &serde_json::Value,
+    folder: Option<&Path>,
+) -> Result<Vec<PathBuf>, String> {
+    let Some(folder) = folder else {
+        return browser::front_project(state).map(|project| vec![project]).ok_or_else(|| {
+            "Jendela Sawit di depan tidak punya proyek, jadi tidak ada dev server-nya. Sebut alamatnya: `sawit browse 5173`."
+                .to_string()
+        });
+    };
+    let mut folders = vec![folder.to_path_buf()];
+    if let Some(project) = browser::project_holding(state, folder)
+        && !folders.contains(&project)
+    {
+        folders.push(project);
+    }
+    Ok(folders)
+}
+
+/// The address of the dev server running in the first of `folders` that runs any
+/// ([`browser::dev_servers`]); several there, or none in any, is an error that says what to type.
+fn dev_server_in(jobs: &[PortJob], folders: &[PathBuf]) -> Result<String, String> {
+    for folder in folders {
+        let found = browser::dev_servers(jobs, folder);
+        match found.as_slice() {
+            [] => continue,
+            [job] => {
+                if let Some(url) = browser::dev_server_url(job) {
+                    return Ok(url);
+                }
+            }
+            several => {
+                let named: Vec<String> = several
+                    .iter()
+                    .map(|job| format!("{} ({})", ports_of(job), clip(&job.label, 30)))
+                    .collect();
+                let port = several[0]
+                    .ports
+                    .iter()
+                    .map(|(p, _)| *p)
+                    .min()
+                    .unwrap_or_default();
+                return Err(format!(
+                    "Ada {} dev server di {}: {}. Sebut salah satu: `sawit browse {port}`.",
+                    several.len(),
+                    tilde(folder),
+                    named.join(", ")
+                ));
+            }
+        }
+    }
+    let place = folders.last().map(|f| tilde(f)).unwrap_or_default();
+    Err(format!(
+        "Tidak ada dev server yang menyala di {place}. Jalankan dulu (`npm run dev`, `bun dev`, …), atau sebut alamatnya: `sawit browse 5173`. Lihat `sawit list ports`."
+    ))
+}
+
 /// Whether `path` may be written: new, or replacing it was allowed.
 fn may_write(path: &Path, yes: bool, ink: &Ink) -> bool {
     if yes || !path.exists() {
@@ -1457,6 +1896,9 @@ pub async fn db_job(job: DbJob, paths: &AppPaths, cwd: &Path) -> i32 {
         Ok(client) => client,
         Err(e) => {
             eprintln!("{} Gagal masuk kebun {}: {e}", ink.red("🔥"), p.database);
+            if let Some(name) = stopped_instance(p, paths).await {
+                eprintln!("   Kebun {name} padam. Nyalakan dulu: `sawit nyalakan {name}`");
+            }
             return 1;
         }
     };
@@ -1887,6 +2329,22 @@ fn confirm(question: &str) -> Option<bool> {
     ))
 }
 
+/// [`confirm`], asked on stderr: `sawit <db>` keeps stdout for its tables.
+fn confirm_on_stderr(question: &str) -> Option<bool> {
+    if !std::io::stdin().is_terminal() {
+        return None;
+    }
+    let ink = Ink::stderr();
+    eprint!("  {} {question} [y/N] ", ink.yellow("?"));
+    let _ = std::io::stderr().flush();
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer).ok()?;
+    Some(matches!(
+        answer.trim().to_lowercase().as_str(),
+        "y" | "ya" | "yes"
+    ))
+}
+
 /// `text` cut to `max` characters, with `…` when shortened.
 fn clip(text: &str, max: usize) -> String {
     match text.char_indices().nth(max - 1) {
@@ -1997,6 +2455,7 @@ mod tests {
             db: db.into(),
             table: table.map(Into::into),
             sql: sql.map(Into::into),
+            yes: false,
         })
     }
 
@@ -2032,11 +2491,57 @@ mod tests {
         assert_eq!(query_args(&args, Path::new("/")), None);
     }
 
+    /// `-y` (`--yes`, `--ya`) anywhere runs SQL that writes without asking; it isn't a table,
+    /// and with it a name that is no database is said to be none, not opened as a file.
+    #[test]
+    fn a_query_takes_yes_anywhere() {
+        let yes = |db: &str, table: Option<&str>, sql: Option<&str>| {
+            qa(db, table, sql).map(|q| QueryArgs { yes: true, ..q })
+        };
+        assert_eq!(
+            q(&["kyzn", "delete from leads", "-y"]),
+            yes("kyzn", None, Some("delete from leads"))
+        );
+        assert_eq!(
+            q(&["--yes", "kyzn", "leads", "id = 3"]),
+            yes("kyzn", Some("leads"), Some("id = 3"))
+        );
+        assert_eq!(q(&["kyzn", "--ya"]), yes("kyzn", None, None));
+        assert!(q(&["kyzn", "-y"]).unwrap().explicit());
+        // Other options are still not a query's.
+        assert_eq!(q(&["-y"]), None);
+        assert_eq!(q(&["kyzn", "-n"]), None);
+        assert_eq!(q(&["kyzn", "-y", "-r"]), None);
+    }
+
+    /// Before it asks, `sawit <db>` shows the statement: up to 20 lines, each cut at 200
+    /// characters, then how many more lines there are.
+    #[test]
+    fn a_statement_is_shown_before_it_runs() {
+        assert_eq!(
+            statement_preview("  delete from leads\n where id = 3\n"),
+            ["delete from leads", " where id = 3"]
+        );
+        let long = (1..=25)
+            .map(|n| format!("insert into t values ({n});"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let shown = statement_preview(&long);
+        assert_eq!(shown.len(), 21);
+        assert_eq!(shown[19], "insert into t values (20);");
+        assert_eq!(shown[20], "… (5 baris lagi)");
+        let wide = statement_preview(&"x".repeat(300));
+        assert_eq!(wide[0].chars().count(), 200);
+        assert!(wide[0].ends_with('…'));
+    }
+
     #[test]
     fn subcommands_are_not_databases() {
         assert_eq!(q(&["list"]), None);
         assert_eq!(q(&["bakar", "ports"]), None);
         assert_eq!(q(&["ls", "db"]), None);
+        assert_eq!(q(&["daftar"]), None);
+        assert_eq!(q(&["stop", "ports"]), None);
     }
 
     #[test]
@@ -2364,6 +2869,185 @@ mod tests {
         assert!(CabutArgs::parse(&["-y"]).is_err());
         assert!(CabutArgs::parse(&["sawit-palsu"]).is_err());
         assert!(CabutArgs::parse(&[id, "--force"]).is_err());
+    }
+
+    #[test]
+    fn nyalakan_words() {
+        assert_eq!(NyalakanArgs::parse(&[]), Ok(NyalakanArgs::default()));
+        assert_eq!(
+            NyalakanArgs::parse(&["kyzn", "--ulang", "shop", "-y", "kyzn"]),
+            Ok(NyalakanArgs {
+                names: vec!["kyzn".into(), "shop".into()],
+                again: true,
+                yes: true,
+            })
+        );
+        assert_eq!(
+            NyalakanArgs::parse(&["--restart", "--ya"]),
+            Ok(NyalakanArgs {
+                names: vec![],
+                again: true,
+                yes: true,
+            })
+        );
+        assert!(NyalakanArgs::parse(&["kyzn", "--force"]).is_err());
+        assert!(NyalakanArgs::parse(&["-u"]).is_err());
+        // Its words are never databases.
+        assert_eq!(q(&["nyalakan", "kyzn"]), None);
+        assert_eq!(q(&["start", "kyzn"]), None);
+        assert_eq!(q(&["nyalakan"]), None);
+    }
+
+    /// A stand-in for the running app, listening where `paths` says the app does: it keeps each
+    /// request, and answers `state` for `state` and `{}` for the others.
+    fn fake_app(
+        paths: &AppPaths,
+        state: serde_json::Value,
+    ) -> std::sync::Arc<std::sync::Mutex<Vec<Request>>> {
+        use std::io::Read as _;
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        // In the test's own folder, never the shared one a long path falls back to.
+        assert!(paths.cli_socket().starts_with(&paths.root));
+        std::fs::create_dir_all(&paths.root).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(paths.cli_socket()).unwrap();
+        let kept = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut bytes = Vec::new();
+                // `is_running` only connects.
+                if stream.read_to_end(&mut bytes).is_err() || bytes.is_empty() {
+                    continue;
+                }
+                let Some(Ok(request)) = app_control::decode(&bytes) else {
+                    continue;
+                };
+                let answer = match request.command {
+                    Command::State => state.clone(),
+                    _ => serde_json::json!({}),
+                };
+                kept.lock().unwrap().push(request);
+                let _ = writeln!(stream, "{}", app_control::reply_ok(&answer));
+            }
+        });
+        seen
+    }
+
+    /// `sawit browse` sends what browser_navigate sends for an agent working in its folder, so
+    /// the page opens in the browser of the project that holds it, then brings Sawit forward. A
+    /// port is localhost's; an address is read as the address field reads it. Sawit is started
+    /// first when it isn't running, and when it won't start nothing is sent.
+    #[test]
+    fn browse_opens_the_page_in_the_folders_browser() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = AppPaths {
+            root: dir.path().join("home"),
+        };
+        let cwd = dir.path().join("shop");
+        let navigate = |url: &str| Command::Browser {
+            op: BrowserOp::Navigate { url: url.into() },
+        };
+        let sent = |seen: &std::sync::Mutex<Vec<Request>>| -> Vec<(Option<PathBuf>, Command)> {
+            let seen = seen.lock().unwrap();
+            seen.iter()
+                .map(|r| (r.agent_folder.clone(), r.command.clone()))
+                .collect()
+        };
+        let page = |a: &str| BrowseTarget::Address(a.into());
+
+        assert_eq!(
+            browse(
+                page("localhost:5173"),
+                &paths,
+                &cwd,
+                || Err("no app".into())
+            ),
+            1
+        );
+        let mut started = None;
+        let code = browse(page("localhost:5173"), &paths, &cwd, || {
+            started = Some(fake_app(&paths, serde_json::json!({})));
+            Ok(())
+        });
+        assert_eq!(code, 0);
+        let seen = started.expect("Sawit was started");
+        assert_eq!(
+            sent(&seen),
+            [
+                (Some(cwd.clone()), navigate("http://localhost:5173")),
+                (Some(cwd.clone()), Command::Focus),
+            ]
+        );
+        seen.lock().unwrap().clear();
+        let code = browse(page("https://example.com/a"), &paths, &cwd, || {
+            panic!("started while it runs")
+        });
+        assert_eq!(code, 0);
+        assert_eq!(sent(&seen)[0].1, navigate("https://example.com/a"));
+    }
+
+    /// With no address, `sawit browse` looks for the dev server in its folder, then in the open
+    /// project that holds it: the nearest one wins, two in one place are named for the user to
+    /// pick, and none says how to start one or give an address. In `/` or the home folder it
+    /// has no folder of its own, as an agent hasn't: the front window's project is used.
+    #[test]
+    fn browse_finds_the_nearest_dev_server() {
+        let job = |cwd: &str, port: u16| PortJob {
+            root: 1,
+            pids: vec![1],
+            label: "bun run dev".into(),
+            tool: "bun".into(),
+            cmdline: "bun run dev".into(),
+            listeners: vec![(2, "bun".into())],
+            ports: vec![(port, crate::ports::BindAddr::LoopbackV4)],
+            cwd: Some(cwd.into()),
+            dev: true,
+        };
+        let jobs = [job("/code/shop/web", 5173), job("/code/shop/api", 3000)];
+        let folders = |list: &[&str]| list.iter().map(PathBuf::from).collect::<Vec<_>>();
+        assert_eq!(
+            dev_server_in(&jobs, &folders(&["/code/shop/web", "/code/shop"])),
+            Ok("http://localhost:5173".into())
+        );
+        let two = dev_server_in(&jobs, &folders(&["/code/shop/docs", "/code/shop"])).unwrap_err();
+        assert!(
+            two.starts_with("Ada 2 dev server di /code/shop: :5173 (bun run dev), :3000")
+                && two.ends_with("`sawit browse 5173`."),
+            "{two}"
+        );
+        let none = dev_server_in(&jobs, &folders(&["/code/blog"])).unwrap_err();
+        assert!(
+            none.starts_with("Tidak ada dev server yang menyala di /code/blog."),
+            "{none}"
+        );
+
+        let state = serde_json::json!({"windows": [
+            {"project": "/code/shop", "projects": ["/code/shop"], "frontmost": true},
+        ]});
+        assert_eq!(
+            dev_server_folders(&state, Some(Path::new("/code/shop/docs"))),
+            Ok(folders(&["/code/shop/docs", "/code/shop"]))
+        );
+        assert_eq!(
+            dev_server_folders(&state, Some(Path::new("/code/shop"))),
+            Ok(folders(&["/code/shop"]))
+        );
+        assert_eq!(
+            dev_server_folders(&state, None),
+            Ok(folders(&["/code/shop"]))
+        );
+        assert!(dev_server_folders(&serde_json::json!({"windows": []}), None).is_err());
+        assert_eq!(own_folder(Path::new("/")), None);
+        if let Some(home) = std::env::var_os("HOME") {
+            assert_eq!(own_folder(Path::new(&home)), None);
+        }
+        assert_eq!(
+            own_folder(Path::new("/code/shop")),
+            Some(PathBuf::from("/code/shop"))
+        );
+        // Its words are never databases.
+        assert_eq!(q(&["browse"]), None);
+        assert_eq!(q(&["intip", "5173"]), None);
     }
 
     #[test]

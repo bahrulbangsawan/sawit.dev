@@ -742,13 +742,24 @@ pub struct QueryOutcome {
 /// Runs one or more statements (simple protocol, text values), keeping at
 /// most `max_rows` rows per result set without buffering the rest.
 pub async fn run_sql(client: &Client, sql: &str, max_rows: usize) -> Result<QueryOutcome> {
+    run_statements(client, sql, max_rows)
+        .await
+        .map_err(sql_error)
+}
+
+/// [`run_sql`], with the server's error as it came, its SQLSTATE included.
+async fn run_statements(
+    client: &Client,
+    sql: &str,
+    max_rows: usize,
+) -> std::result::Result<QueryOutcome, tokio_postgres::Error> {
     let started = Instant::now();
-    let stream = client.simple_query_raw(sql).await.map_err(sql_error)?;
+    let stream = client.simple_query_raw(sql).await?;
     pin_mut!(stream);
     let mut out = QueryOutcome::default();
     let mut current: Option<ResultSet> = None;
     while let Some(msg) = stream.next().await {
-        match msg.map_err(sql_error)? {
+        match msg? {
             SimpleQueryMessage::RowDescription(cols) => {
                 current = Some(ResultSet {
                     columns: cols.iter().map(|c| c.name().to_string()).collect(),
@@ -950,13 +961,68 @@ pub async fn ensure_read_only_role(admin: &Client) -> Result<()> {
 /// Parse step rejects them), as are COPY and read-only switches. Use a
 /// non-superuser role (see `ensure_read_only_role`) for full protection.
 pub async fn run_read_only(client: &Client, sql: &str, max_rows: usize) -> Result<QueryOutcome> {
-    screen_read_only_sql(sql)?;
-    client.prepare(sql).await.map_err(sql_error)?;
+    match run_if_read_only(client, sql, max_rows).await? {
+        ReadOnlyTry::Read(outcome) => Ok(outcome),
+        ReadOnlyTry::Writes(why) | ReadOnlyTry::Several(why) => Err(CoreError::Sql(why)),
+    }
+}
+
+/// What trying SQL read-only found ([`run_if_read_only`]).
+#[derive(Debug)]
+pub enum ReadOnlyTry {
+    /// It only reads: what it returned.
+    Read(QueryOutcome),
+    /// It writes (the server refused it in a read-only transaction), must run outside any
+    /// transaction (`DROP DATABASE`, `VACUUM`, a procedure that commits), or is what read-only
+    /// mode never runs (`COPY`, a switch of the mode): the refusal, in the server's or Sawit's
+    /// words. Nothing of it ran.
+    Writes(String),
+    /// Several statements, which a read-only run can't take (a `COMMIT` among them would end its
+    /// transaction): the server's refusal. None of them ran.
+    Several(String),
+}
+
+/// Runs `sql` as [`run_read_only`] does, and tells SQL that only reads (its results) from what
+/// the read-only run refuses for what it is: a write, or several statements. Any other error, a
+/// typo or a missing table, is the statement's own.
+pub async fn run_if_read_only(client: &Client, sql: &str, max_rows: usize) -> Result<ReadOnlyTry> {
+    use tokio_postgres::error::SqlState;
+
+    if let Err(e) = screen_read_only_sql(sql) {
+        return Ok(ReadOnlyTry::Writes(e.to_string()));
+    }
+    if let Err(e) = client.prepare(sql).await {
+        // The server answers several statements as it answers a typo: only text with a `;`
+        // before its end can be several.
+        if e.code() == Some(&SqlState::SYNTAX_ERROR) && several_statements(sql) {
+            return Ok(ReadOnlyTry::Several(sql_error(e).to_string()));
+        }
+        return Err(sql_error(e));
+    }
     client
         .batch_execute("BEGIN TRANSACTION READ ONLY")
         .await
         .map_err(sql_error)?;
-    let result = run_sql(client, sql, max_rows).await;
+    let result = run_statements(client, sql, max_rows).await;
     let _ = client.batch_execute("ROLLBACK").await;
-    result
+    match result {
+        Ok(outcome) => Ok(ReadOnlyTry::Read(outcome)),
+        // It writes (25006), must run outside a transaction (25001), or ends the transaction
+        // it runs in, as a procedure that commits does (2D000).
+        Err(e)
+            if e.code() == Some(&SqlState::READ_ONLY_SQL_TRANSACTION)
+                || e.code() == Some(&SqlState::ACTIVE_SQL_TRANSACTION)
+                || e.code() == Some(&SqlState::INVALID_TRANSACTION_TERMINATION) =>
+        {
+            Ok(ReadOnlyTry::Writes(sql_error(e).to_string()))
+        }
+        Err(e) => Err(sql_error(e)),
+    }
+}
+
+/// Whether `sql` may be several statements: a `;` before the end of its text (`;` at the end ends
+/// the one statement). One in a string or a comment counts too; it only says why the server
+/// couldn't parse it.
+pub(super) fn several_statements(sql: &str) -> bool {
+    sql.trim_end().trim_end_matches(';').contains(';')
 }

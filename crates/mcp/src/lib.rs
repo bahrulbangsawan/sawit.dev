@@ -358,8 +358,6 @@ const READ_ONLY: &[&str] = &[
     "browser_hover",
     "browser_scroll",
     "browser_wait_for",
-    "browser_console",
-    "browser_network",
     "browser_resize",
     "browser_inspect",
     "browser_design",
@@ -371,6 +369,8 @@ const READ_ONLY: &[&str] = &[
 /// was staged, the page the browser shows), or run what they can't bound: SQL, a shell command,
 /// a script, JavaScript, an install script. MCP's `destructiveHint`, which a client may act on by
 /// asking first. Every other tool that isn't [`READ_ONLY`] only adds.
+/// The browser's console and network logs are such a thing: browser_console and browser_network
+/// read them, and empty them when asked to.
 const DESTRUCTIVE: &[&str] = &[
     "stop_instance",
     "restart_instance",
@@ -429,6 +429,8 @@ const DESTRUCTIVE: &[&str] = &[
     "terminal_split",
     "keymap_bind",
     "keymap_unbind",
+    "browser_console",
+    "browser_network",
 ];
 
 /// The tools that change things but only add: a database, an instance, a prompt, rows, shapes on

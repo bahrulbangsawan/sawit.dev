@@ -270,6 +270,10 @@ pub enum BrowserOp {
     ExportDesign {
         #[serde(default)]
         include_videos: bool,
+        /// Replace what an earlier export left in the folder; without it, a
+        /// folder that holds anything is refused, and nothing starts.
+        #[serde(default)]
+        replace: bool,
     },
     /// How the last design export is doing.
     ExportStatus,
@@ -590,6 +594,277 @@ impl NetworkEntry {
     pub fn failed(&self) -> bool {
         self.error.is_some() || self.status.is_some_and(|s| s >= 400)
     }
+
+    /// The entry as the network log keeps it, so that no password or token reaches an agent
+    /// (`browser_network`), as `browser_snapshot` shows no password field's value: the values of
+    /// fields named like secrets ([`secret_name`]) are [`REDACTED`] in the URL (its query, its
+    /// fragment and a password before its host) and in the request and response bodies (JSON,
+    /// also cut short, and forms). The rest is kept as it was, so the shape still shows. The page
+    /// agent has already put [`REDACTED`] wherever a request carried what is typed in the page's
+    /// password fields, whatever their names.
+    pub fn redacted(mut self) -> NetworkEntry {
+        self.url = redact_url(&self.url);
+        self.request_body = self.request_body.as_deref().map(redact_body);
+        self.response_body = self.response_body.as_deref().map(redact_body);
+        self
+    }
+}
+
+/// What a secret's value is in the network log instead ([`NetworkEntry::redacted`]).
+pub const REDACTED: &str = "[redacted]";
+
+/// Whether a field named `name` holds a secret: a password, a token, a key, a cookie, a session
+/// or a card's number. Names are compared by their letters and digits in lower case, so
+/// `new_password`, `apiKey`, `X-Auth-Token`, `user[password]` and `client_secret` are secrets,
+/// and `max_tokens`, `token_type` and `author` aren't.
+fn secret_name(name: &str) -> bool {
+    /// Names of secrets on their own, which are other words inside longer names.
+    const WHOLE: &[&str] = &[
+        "pass", "pw", "pin", "mfa", "cvc", "cvv", "cvv2", "csc", "auth", "jwt", "bearer",
+    ];
+    /// How the names of secrets end.
+    const ENDS: &[&str] = &[
+        "token",
+        "session",
+        "sessionid",
+        "sessionkey",
+        "sessid",
+        "sid",
+        "pwd",
+        "otp",
+        "otpcode",
+        "mfacode",
+        "pincode",
+        "passcode",
+    ];
+    /// Words in the names of secrets.
+    const PARTS: &[&str] = &[
+        "password",
+        "passwd",
+        "passphrase",
+        "secret",
+        "apikey",
+        "privatekey",
+        "authorization",
+        "cookie",
+        "credential",
+        "signature",
+        "creditcard",
+        "cardnumber",
+    ];
+    let name: String = name
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    WHOLE.contains(&name.as_str())
+        || ENDS.iter().any(|end| name.ends_with(end))
+        || PARTS.iter().any(|part| name.contains(part))
+}
+
+/// `url` with its secrets [`REDACTED`]: the password of `user:password@`, and the values of the
+/// secret fields of its query and of its fragment (`#access_token=…`).
+fn redact_url(url: &str) -> String {
+    let (rest, fragment) = match url.split_once('#') {
+        Some((rest, fragment)) => (rest, Some(fragment)),
+        None => (url, None),
+    };
+    let (base, query) = match rest.split_once('?') {
+        Some((base, query)) => (base, Some(query)),
+        None => (rest, None),
+    };
+    let mut out = match base.split_once("://") {
+        Some((scheme, after)) => {
+            let host_end = after.find('/').unwrap_or(after.len());
+            match after[..host_end].rsplit_once('@') {
+                Some((userinfo, host)) if userinfo.contains(':') => {
+                    let user = userinfo.split_once(':').map_or(userinfo, |(user, _)| user);
+                    format!("{scheme}://{user}:{REDACTED}@{host}{}", &after[host_end..])
+                }
+                _ => base.to_string(),
+            }
+        }
+        None => base.to_string(),
+    };
+    if let Some(query) = query {
+        out.push('?');
+        out.push_str(&redact_form(query));
+    }
+    if let Some(fragment) = fragment {
+        out.push('#');
+        out.push_str(&redact_form(fragment));
+    }
+    out
+}
+
+/// A request's or a response's body with its secrets [`REDACTED`]: as JSON when it starts as JSON
+/// does, as a form when it looks like one ([`looks_like_form`]), else as it is. The note the page
+/// agent puts after a body it cut short (`… (5000 chars)`) stays.
+fn redact_body(body: &str) -> String {
+    let (head, note) = cut_note(body);
+    let redacted = if head.trim_start().starts_with(['{', '[']) {
+        redact_json(head)
+    } else if looks_like_form(head) {
+        redact_form(head)
+    } else {
+        head.to_string()
+    };
+    redacted + note
+}
+
+/// `body` split before the note the page agent's `clip` puts after a body it cut: `… (5000
+/// chars)`. Without one, all of it and no note.
+fn cut_note(body: &str) -> (&str, &str) {
+    const START: &str = "… (";
+    if let Some(head) = body.strip_suffix(" chars)")
+        && let Some(at) = head.rfind(START)
+        && head.len() > at + START.len()
+        && head[at + START.len()..].bytes().all(|b| b.is_ascii_digit())
+    {
+        return body.split_at(at);
+    }
+    (body, "")
+}
+
+/// Whether `text` reads as a form: `name=value` pairs joined by `&`, each name written as forms
+/// write them. Text, HTML and SQL have other characters before their first `=`.
+fn looks_like_form(text: &str) -> bool {
+    text.contains('=')
+        && text.split('&').all(|pair| {
+            let name = pair.split_once('=').map_or(pair, |(name, _)| name);
+            name.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_-.[]%+*~:".contains(&b))
+        })
+}
+
+/// `a=1&password=…`, a form or a URL's query, with the value of each secret field [`REDACTED`].
+fn redact_form(form: &str) -> String {
+    form.split('&')
+        .map(|pair| match pair.split_once('=') {
+            Some((name, _)) if secret_name(&percent_decode(name)) => format!("{name}={REDACTED}"),
+            _ => pair.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+/// A form's name as it was before it was written into the form: `%5F` is `_`, `+` a space.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let hex = bytes
+            .get(at + 1..at + 3)
+            .filter(|hex| bytes[at] == b'%' && hex.iter().all(u8::is_ascii_hexdigit));
+        match hex.and_then(|hex| u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()) {
+            Some(byte) => {
+                out.push(byte);
+                at += 3;
+            }
+            None => {
+                out.push(if bytes[at] == b'+' { b' ' } else { bytes[at] });
+                at += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `json`, also cut short, with every value under a secret field's name ([`secret_name`]) as
+/// `"[redacted]"`: a string or a number, and each one inside an object or an array there. The
+/// rest is copied as it is, spaces and all.
+fn redact_json(json: &str) -> String {
+    /// An object or an array the text is in, and whether everything in it is a secret's.
+    struct Open {
+        object: bool,
+        secret: bool,
+    }
+    let secret_value = format!("\"{REDACTED}\"");
+    let bytes = json.as_bytes();
+    let mut out = String::with_capacity(json.len());
+    let mut open: Vec<Open> = Vec::new();
+    // In an object: whether the next string is a name, and whether the value after the last
+    // name is a secret.
+    let (mut name_next, mut value_secret) = (false, false);
+    let mut at = 0;
+    while at < bytes.len() {
+        let secret = match open.last() {
+            Some(o) if o.object => value_secret,
+            Some(o) => o.secret,
+            None => false,
+        };
+        match bytes[at] {
+            c @ (b'{' | b'[') => {
+                open.push(Open {
+                    object: c == b'{',
+                    secret,
+                });
+                name_next = c == b'{';
+                out.push(c as char);
+                at += 1;
+            }
+            c @ (b'}' | b']') => {
+                open.pop();
+                name_next = false;
+                out.push(c as char);
+                at += 1;
+            }
+            b',' => {
+                name_next = open.last().is_some_and(|o| o.object);
+                out.push(',');
+                at += 1;
+            }
+            b'"' => {
+                let end = string_end(bytes, at);
+                let text = &json[at..end];
+                if name_next {
+                    let inherited = open.last().is_some_and(|o| o.secret);
+                    value_secret = inherited || secret_name(text);
+                    name_next = false;
+                    out.push_str(text);
+                } else if secret {
+                    out.push_str(&secret_value);
+                } else {
+                    out.push_str(text);
+                }
+                at = end;
+            }
+            b'-' | b'0'..=b'9' => {
+                let len = bytes[at..]
+                    .iter()
+                    .take_while(|b| b"+-.eE0123456789".contains(b))
+                    .count();
+                out.push_str(if secret {
+                    secret_value.as_str()
+                } else {
+                    &json[at..at + len]
+                });
+                at += len;
+            }
+            // Spaces, `:`, `true`, `false` and `null`, a whole character at a time.
+            _ => {
+                let len = json[at..].chars().next().map_or(1, char::len_utf8);
+                out.push_str(&json[at..at + len]);
+                at += len;
+            }
+        }
+    }
+    out
+}
+
+/// Where the JSON string whose `"` is at `start` ends: after its closing `"`, or at the end of a
+/// text cut short inside it.
+fn string_end(bytes: &[u8], start: usize) -> usize {
+    let mut at = start + 1;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'\\' => at += 2,
+            b'"' => return at + 1,
+            _ => at += 1,
+        }
+    }
+    bytes.len()
 }
 
 /// What a page sends over IPC.
@@ -665,11 +940,12 @@ impl Logs {
             .collect()
     }
 
+    /// Keeps `entry`, with its secrets hidden ([`NetworkEntry::redacted`]).
     pub fn push_network(&mut self, entry: NetworkEntry) {
         if self.network.len() == MAX_NETWORK {
             self.network.pop_front();
         }
-        self.network.push_back(entry);
+        self.network.push_back(entry.redacted());
     }
 
     /// The newest `limit` messages at `level` (`warn` means `warning`)
@@ -801,21 +1077,55 @@ pub fn data_store_id(project: &Path) -> [u8; 16] {
 
 /// The project's dev server when exactly one is running from inside it.
 pub fn pick_dev_server(jobs: &[PortJob], project: &Path) -> Option<String> {
-    let mut found = jobs.iter().filter(|j| {
-        j.dev
-            && !j.is_daemon()
-            && !j.is_docker()
-            && j.cwd
-                .as_deref()
-                .is_some_and(|c| Path::new(c).starts_with(project))
-            && !j.ports.is_empty()
-    });
-    let job = found.next()?;
-    if found.next().is_some() {
-        return None;
+    match dev_servers(jobs, project).as_slice() {
+        [job] => dev_server_url(job),
+        _ => None,
     }
+}
+
+/// The dev servers running from inside `folder` (what `npm run dev` and the like start, not a
+/// database, a daemon or Docker), with a port.
+pub fn dev_servers<'a>(jobs: &'a [PortJob], folder: &Path) -> Vec<&'a PortJob> {
+    jobs.iter()
+        .filter(|j| {
+            j.dev
+                && !j.is_daemon()
+                && !j.is_docker()
+                && j.cwd
+                    .as_deref()
+                    .is_some_and(|c| Path::new(c).starts_with(folder))
+                && !j.ports.is_empty()
+        })
+        .collect()
+}
+
+/// Where the browser opens `job`, a dev server: its lowest port on localhost.
+pub fn dev_server_url(job: &PortJob) -> Option<String> {
     let port = job.ports.iter().map(|(p, _)| *p).min()?;
     Some(format!("http://localhost:{port}"))
+}
+
+/// The front window's project, from the app's `state` (its answer to `Command::State`): its
+/// browser shows the page `browser_navigate` and `sawit browse` open for no project of their own.
+pub fn front_project(state: &Value) -> Option<std::path::PathBuf> {
+    let windows = state["windows"].as_array()?;
+    let front = windows.iter().find(|window| window["frontmost"] == true)?;
+    front["project"].as_str().map(std::path::PathBuf::from)
+}
+
+/// The open project that holds `folder`, from the app's `state`: the deepest of the windows'
+/// projects, as the app picks the window and the browser for a folder, and as it is on disk
+/// (through the links on its way, [`crate::files::resolve`]), as `lsof` lists a dev server's.
+pub fn project_holding(state: &Value, folder: &Path) -> Option<std::path::PathBuf> {
+    let folder = crate::files::resolve(folder);
+    state["windows"]
+        .as_array()?
+        .iter()
+        .flat_map(|window| window["projects"].as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .map(|root| crate::files::resolve(Path::new(root)))
+        .filter(|root| folder.starts_with(root))
+        .max_by_key(|root| root.components().count())
 }
 
 #[cfg(test)]
@@ -987,6 +1297,193 @@ mod tests {
     }
 
     #[test]
+    fn secrets_are_known_by_their_names() {
+        for name in [
+            "password",
+            "Password",
+            "new_password",
+            "password_confirmation",
+            "user[password]",
+            "passwd",
+            "pass",
+            "pw",
+            "userPwd",
+            "api_key",
+            "apiKey",
+            "X-API-Key",
+            "token",
+            "access_token",
+            "refreshToken",
+            "X-CSRF-Token",
+            "client_secret",
+            "secretAccessKey",
+            "Authorization",
+            "auth",
+            "cookie",
+            "Set-Cookie",
+            "session",
+            "sessionid",
+            "PHPSESSID",
+            "connect.sid",
+            "credentials",
+            "X-Amz-Signature",
+            "private_key",
+            "jwt",
+            "otp",
+            "pin",
+            "cvc",
+            "card_number",
+        ] {
+            assert!(secret_name(name), "{name} holds a secret");
+        }
+        for name in [
+            "email",
+            "user",
+            "username",
+            "name",
+            "id",
+            "author",
+            "authority",
+            "max_tokens",
+            "input_tokens",
+            "token_type",
+            "sessions",
+            "passport",
+            "compass",
+            "sidebar",
+            "pinned",
+            "keyboard",
+            "description",
+            "",
+        ] {
+            assert!(!secret_name(name), "{name} holds no secret");
+        }
+    }
+
+    /// The values of secret fields read [redacted] wherever they are in JSON, and nothing else
+    /// changes: not the names, the order, the spaces, nor values that aren't secrets (`true`,
+    /// `null` and counts stay).
+    #[test]
+    fn json_bodies_keep_their_shape_and_lose_their_secrets() {
+        let body = r#"{"email": "ana@x.dev", "password": "hunter2", "remember": true}"#;
+        assert_eq!(
+            redact_body(body),
+            r#"{"email": "ana@x.dev", "password": "[redacted]", "remember": true}"#
+        );
+        // Nested, in arrays, numbers, and a secret's whole object or array.
+        let body = r#"[{"user":{"id":7,"api_key":"sk-1","pin":1234,"tokens":3}},{"credentials":{"user":"a","pass":["x",9,null]}}]"#;
+        assert_eq!(
+            redact_body(body),
+            r#"[{"user":{"id":7,"api_key":"[redacted]","pin":"[redacted]","tokens":3}},{"credentials":{"user":"[redacted]","pass":["[redacted]","[redacted]",null]}}]"#
+        );
+        // A response with a token, pretty-printed: only the value changes.
+        let body = "{\n  \"access_token\": \"eyJhbGciOi.x.y\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 3600\n}";
+        assert_eq!(
+            redact_body(body),
+            "{\n  \"access_token\": \"[redacted]\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 3600\n}"
+        );
+        // Quotes, braces and names inside strings are text, not JSON.
+        let body = r#"{"note":"say \"password\": {x}","secret":"a\"b}c","n":"é"}"#;
+        assert_eq!(
+            redact_body(body),
+            r#"{"note":"say \"password\": {x}","secret":"[redacted]","n":"é"}"#
+        );
+    }
+
+    /// The page agent cuts long bodies (`… (5000 chars)`): a cut JSON body is redacted as far as
+    /// it goes, a secret cut in the middle too, and the note stays.
+    #[test]
+    fn bodies_cut_short_are_redacted_too() {
+        let body = r#"{"user":"ana","password":"hunter2-and-mo… (5000 chars)"#;
+        assert_eq!(
+            redact_body(body),
+            r#"{"user":"ana","password":"[redacted]"… (5000 chars)"#
+        );
+        let body = r#"{"items":[1,2],"session":{"id":"s… (9000 chars)"#;
+        assert_eq!(
+            redact_body(body),
+            r#"{"items":[1,2],"session":{"id":"[redacted]"… (9000 chars)"#
+        );
+        assert_eq!(
+            redact_body("a=1&token=abc… (3000 chars)"),
+            "a=1&token=[redacted]… (3000 chars)"
+        );
+        // A note that isn't one is part of the body.
+        assert_eq!(cut_note("x… (12 apples)"), ("x… (12 apples)", ""));
+    }
+
+    #[test]
+    fn forms_and_urls_lose_their_secrets() {
+        assert_eq!(
+            redact_body("user=ana&password=hunter2&remember=on"),
+            "user=ana&password=[redacted]&remember=on"
+        );
+        // Names as forms write them: `user[password]`, URL-encoded.
+        assert_eq!(
+            redact_body("user%5Bpassword%5D=x&api%5Fkey=y&q=a+b"),
+            "user%5Bpassword%5D=[redacted]&api%5Fkey=[redacted]&q=a+b"
+        );
+        // FormData as the page agent writes it: values as they are.
+        assert_eq!(
+            redact_body("name=Ana Lee&client_secret=s 3&file=[file a.png]"),
+            "name=Ana Lee&client_secret=[redacted]&file=[file a.png]"
+        );
+        // A form's value may hold spaces, as FormData's do.
+        assert_eq!(redact_body("token=abc is what we send"), "token=[redacted]");
+        // Text, HTML and SQL aren't forms.
+        for body in [
+            "<a href=\"/x?token=abc\">x</a>",
+            "select * from t where password = 'x'",
+            "plain text",
+        ] {
+            assert_eq!(redact_body(body), body);
+        }
+        assert_eq!(
+            redact_url("https://api.x.dev/v1/me?api_key=sk-1&page=2"),
+            "https://api.x.dev/v1/me?api_key=[redacted]&page=2"
+        );
+        assert_eq!(
+            redact_url("http://localhost:5173/callback#access_token=abc&token_type=bearer"),
+            "http://localhost:5173/callback#access_token=[redacted]&token_type=bearer"
+        );
+        assert_eq!(
+            redact_url("https://ana:hunter2@db.x.dev:8443/path?x=1"),
+            "https://ana:[redacted]@db.x.dev:8443/path?x=1"
+        );
+        for url in [
+            "http://localhost:5173/assets/app.js",
+            "https://x.dev/#/settings",
+            "https://ana@x.dev/a?b=c",
+            "https://x.dev/search?q=password",
+        ] {
+            assert_eq!(redact_url(url), url);
+        }
+    }
+
+    /// What the network log keeps, and so what browser_network answers, holds no secret.
+    #[test]
+    fn the_network_log_keeps_no_secret() {
+        let mut logs = Logs::default();
+        let mut login = request("http://localhost:5173/api/login?token=t0k", Some(200), None);
+        login.method = "POST".into();
+        login.request_body = Some(r#"{"email":"ana@x.dev","password":"hunter2"}"#.into());
+        login.response_body = Some(r#"{"ok":true,"session":"s3ss10n"}"#.into());
+        logs.push_network(login);
+        let answer = logs.network_json(None, false, None).to_string();
+        for secret in ["t0k", "hunter2", "s3ss10n"] {
+            assert!(!answer.contains(secret), "{secret} in {answer}");
+        }
+        let kept = &logs.network[0];
+        assert_eq!(kept.url, "http://localhost:5173/api/login?token=[redacted]");
+        assert_eq!(
+            kept.request_body.as_deref(),
+            Some(r#"{"email":"ana@x.dev","password":"[redacted]"}"#)
+        );
+        // Filtering by URL still finds it.
+        assert_eq!(logs.network_json(Some("login"), false, None)["matching"], 1);
+    }
+
+    #[test]
     fn base64_round_trips() {
         for bytes in [&b""[..], b"a", b"ab", b"abc", b"\x00\xff\xfe\x10"] {
             assert_eq!(base64_decode(&base64_encode(bytes)).unwrap(), bytes);
@@ -1047,6 +1544,53 @@ mod tests {
             None
         );
         assert_eq!(pick_dev_server(&[], project), None);
+    }
+
+    #[test]
+    fn dev_servers_in_a_folder() {
+        let mut api = job("/code/shop/api", 3000);
+        api.ports.push((3001, crate::ports::BindAddr::LoopbackV4));
+        let mut database = job("/code/shop", 5432);
+        database.dev = false;
+        let jobs = [job("/code/shop/web", 5173), api, database];
+        let found = |folder: &str| -> Vec<u16> {
+            dev_servers(&jobs, Path::new(folder))
+                .iter()
+                .map(|j| j.ports[0].0)
+                .collect()
+        };
+        assert_eq!(found("/code/shop"), [5173, 3000]);
+        assert_eq!(found("/code/shop/api"), [3000]);
+        assert_eq!(found("/code/blog"), Vec::<u16>::new());
+        // The lowest port of a server with several.
+        assert_eq!(
+            dev_server_url(dev_servers(&jobs, Path::new("/code/shop/api"))[0]),
+            Some("http://localhost:3000".into())
+        );
+    }
+
+    /// What `sawit browse` reads of the app's state: the front window's project, and the open
+    /// project that holds a folder, the deepest of any window's.
+    #[test]
+    fn projects_in_the_apps_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let (shop, api) = (root.join("shop"), root.join("shop").join("api"));
+        std::fs::create_dir_all(api.join("src")).unwrap();
+        let state = json!({"windows": [
+            {"project": shop, "projects": [shop], "frontmost": false},
+            {"project": api, "projects": [root.join("blog"), api], "frontmost": true},
+        ]});
+        assert_eq!(front_project(&state), Some(api.clone()));
+        assert_eq!(project_holding(&state, &api.join("src")), Some(api.clone()));
+        assert_eq!(project_holding(&state, &shop), Some(shop.clone()));
+        assert_eq!(project_holding(&state, &root), None);
+        // A folder named through a link is the project the link leads to.
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&shop, &link).unwrap();
+        assert_eq!(project_holding(&state, &link), Some(shop));
+        assert_eq!(front_project(&json!({"windows": []})), None);
+        assert_eq!(project_holding(&json!({}), &api), None);
     }
 
     #[test]
@@ -1231,8 +1775,9 @@ mod tests {
             (
                 BrowserOp::ExportDesign {
                     include_videos: true,
+                    replace: true,
                 },
-                json!({"op": "export_design", "include_videos": true}),
+                json!({"op": "export_design", "include_videos": true, "replace": true}),
             ),
             (BrowserOp::ExportStatus, json!({"op": "export_status"})),
         ] {
@@ -1241,11 +1786,13 @@ mod tests {
             assert!(op.is_native(), "{op:?}");
             assert!(!op.shows_tab(), "{op:?}");
         }
+        // An export replaces nothing unless asked to.
         let bare: BrowserOp = serde_json::from_str(r#"{"op":"export_design"}"#).unwrap();
         assert_eq!(
             bare,
             BrowserOp::ExportDesign {
-                include_videos: false
+                include_videos: false,
+                replace: false,
             }
         );
     }
@@ -1603,6 +2150,45 @@ mod tests {
         "#,
         );
         assert_eq!(got, json!({"synthetic": 0, "real": 0}));
+    }
+
+    /// What the user typed into the page's password fields never reaches the network log: a
+    /// request that carries it, under any name, as typed, URL-encoded or in a JSON string, is
+    /// logged with [redacted] there (Sawit then hides fields named like secrets). A value shorter
+    /// than 4 characters is left alone: it would hide the same letters everywhere.
+    #[test]
+    fn typed_passwords_never_reach_the_network_log() {
+        let got = on_stand_in_page(
+            r#"
+            var typed = [{ value: 'hunter2"!' }, { value: "abc" }];
+            document.querySelectorAll = function (selector) {
+                return selector.indexOf("password") >= 0 ? typed : [el];
+            };
+            var request = function (url, body) {
+                var xhr = new XMLHttpRequest();
+                var done = null;
+                xhr.addEventListener = function (type, fn) { if (type === "loadend") done = fn; };
+                xhr.status = 200;
+                xhr.responseType = "";
+                xhr.responseText = "{}";
+                xhr.open("POST", url);
+                xhr.send(body);
+                done();
+                return JSON.parse(posted[posted.length - 1].split("\n").slice(2).join("\n"));
+            };
+            var json = request("http://localhost:5173/login", '{"user":"ana","pw":"hunter2\\"!","code":"abc"}');
+            var form = request("http://localhost:5173/login?p=" + encodeURIComponent('hunter2"!'), "u=ana&p=hunter2%22!");
+            JSON.stringify({ json: json.request_body, url: form.url, form: form.request_body })
+        "#,
+        );
+        assert_eq!(
+            got,
+            json!({
+                "json": r#"{"user":"ana","pw":"[redacted]","code":"abc"}"#,
+                "url": "http://localhost:5173/login?p=[redacted]",
+                "form": "u=ana&p=[redacted]",
+            })
+        );
     }
 
     /// The agent, with the modules spliced into it, is strict-mode code. WebKit runs a user

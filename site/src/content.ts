@@ -78,6 +78,7 @@ export const menu = [
       { cmd: 'sawit kalimantan hutan', means: 'rows', note: 'The first 100 rows, like psql' },
       { cmd: 'sawit kalimantan hutan "izin is null"', means: 'where', note: 'The text becomes the WHERE clause' },
       { cmd: 'sawit list', means: 'everything', note: 'Instances, databases, ports and connections' },
+      { cmd: 'sawit browse', means: 'browser', note: 'The dev server of this project, a port or a URL, in the browser tab' },
     ],
   },
   {
@@ -96,6 +97,7 @@ export const menu = [
       { cmd: 'sawit bakar ports', means: 'stop', note: 'Dev servers only: asks, then SIGTERM, then SIGKILL' },
       { cmd: 'sawit bakar ports 3000 -y', means: 'stop :3000', note: 'Whatever listens there, without asking' },
       { cmd: 'sawit bakar instances', means: 'pg_ctl stop', note: 'Running instances; the data is kept' },
+      { cmd: 'sawit nyalakan', means: 'pg_ctl start', note: 'Stopped instances; a port already taken is explained, never forced' },
     ],
   },
   {

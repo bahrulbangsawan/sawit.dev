@@ -110,6 +110,8 @@ while the `sawit` command isn't installed, and the version.
   so TanStack Start, Next.js, Rails, and other apps connect right away.
 - New instances listen only on `localhost`, with the `postgres` superuser and `trust` authentication
   (local use only).
+- From the terminal: `sawit list instances`, `sawit nyalakan` (start, with the same port check) and
+  `sawit bakar instances` (stop).
 
 ### Port conflict detection before start
 
@@ -284,13 +286,19 @@ explained. A conflict on the same address can't be forced.
   as CSS, Tailwind or HTML. The panel also lists the page's colors, fonts and assets, and derives its design system:
   palette ramps, type scale, spacing, radius and shadows. **Export** writes `DESIGN.md`, DTCG tokens, a Tailwind v4
   theme, shadcn/ui variables, sample components and the assets to `.nyawit/design/<host>/` (with no project, to
-  `~/Downloads/sawit-design/<host>/`); a dev server's folder keeps its port, as `localhost-5173`.
+  `~/Downloads/sawit-design/<host>/`); a dev server's folder keeps its port, as `localhost-5173`. Exporting again
+  replaces that folder, a `DESIGN.md` you edited included; an agent's export does that only when it passes
+  `replace: true`.
 - AI agents drive it through the `browser_*` MCP tools: open pages, read the page as an accessibility outline,
   click, type, pick options, press keys, scroll, wait for text, run JavaScript, and read the console, failed
   requests and screenshots. They can also set a device size, read your annotations, and inspect, read or export
   the page's design. An agent uses its own project's browser (the project it names, else the one it runs in),
   even while you look at another project of the window, and in the background: only opening a page, a
   screenshot or a device size brings it forward.
+- From the terminal: `sawit browse` opens the project's dev server here, `sawit browse 5173` a port, and
+  `sawit https://example.com` any page.
+- The requests an agent reads keep no secrets: what you type into a password field, and the values of fields named
+  like secrets (password, token, API key, authorization, cookie, session, …) in URLs and bodies, read `[redacted]`.
 
 ### Canvas
 
@@ -517,7 +525,8 @@ Both create a symlink `/usr/local/bin/sawit` to the app and ask for an admin pas
 root.
 
 Besides opening files, the command can query databases like `psql`, export, back up and import tables, list
-instances, databases, ports, dev tools, MCP servers and config files, stop dev servers or instances, and install, upgrade or uninstall dev tools, all without the app (see
+instances, databases, ports, dev tools, MCP servers and config files, start or stop instances, stop dev servers, and
+install, upgrade or uninstall dev tools, all without the app (see
 [below](#databases-ports-and-instances-from-the-terminal)).
 
 ```bash
@@ -527,8 +536,12 @@ sawit src/main.rs:42:5   # open a file at line 42, column 5 (grep/rustc output f
 sawit new.sql            # a file that doesn't exist opens empty; ⌘S creates it
 sawit -n ~/code/other    # always in a new window
 sawit -r ~/code/other    # replace the project in the frontmost window
+sawit -- -notes.md       # after --, every argument is a path, even one that starts with -
 ls -la | sawit -         # open stdin as a file
 git config --global core.editor "sawit --wait"   # wait until the file tab is closed
+sawit browse             # this project's running dev server, in Sawit's browser tab (also: intip)
+sawit browse 5173        # a port on localhost, or any address: sawit browse example.com
+sawit https://example.com   # a URL on its own opens in the browser too
 ```
 
 - If Sawit is already running, paths are sent to it over a Unix socket and the command returns right away.
@@ -538,6 +551,9 @@ git config --global core.editor "sawit --wait"   # wait until the file tab is cl
 - `--wait` returns after all opened files are closed (or the app quits).
 - `--foreground` runs the app in that terminal itself (for debugging). `sawit --help` lists
   all options.
+- `sawit browse` opens the page in the browser of the open project that holds the current folder (else the front
+  window's), as an agent's `browser_navigate` does, and brings Sawit forward. With no address it opens the dev server
+  running in the current folder, else in that project; with several there it lists them for you to pick a port.
 
 ### Databases, ports and instances from the terminal
 
@@ -548,12 +564,15 @@ plantations Sawit is named after):
 sawit kyzn                                   # list the tables
 sawit kyzn leads                             # first 100 rows
 sawit kyzn leads "phone is null"             # filter: SELECT * FROM leads WHERE phone is null
-sawit kyzn leads "select * from leads where phone is null"   # any SQL, like psql (writes too)
+sawit kyzn leads "select * from leads where phone is null"   # any SQL, like psql
+sawit kyzn "delete from leads where id = 3"   # SQL that writes is shown and asks first (-y: no question)
 sawit list                                   # instances, databases, ports and saved connections
 sawit list db                                # or: instances, ports, connections, tools, mcp, config
 sawit bakar ports                            # "burn" dev servers: confirm, SIGTERM, then SIGKILL
 sawit bakar ports 3000 5173 -y               # whatever listens on these ports, without asking
 sawit bakar instances                        # stop running Sawit instances (data is kept)
+sawit nyalakan                               # "light up": start every stopped instance, port checked first
+sawit nyalakan kyzn --ulang                  # restart one (asks first while it runs; -y skips)
 sawit panen kyzn leads leads.xlsx            # "harvest": export a table to Excel (or .csv)
 sawit panen kyzn "select * from leads where phone is null" nophone.csv   # export a query (read-only)
 sawit backup kyzn kyzn.dump                  # pg_dump the database (.dump/.backup for pg_restore, else SQL)
@@ -573,16 +592,24 @@ sawit list config                            # shell startup files and coding ag
   Postgres running locally. A unique prefix also works (`kyzn` finds `kyzn_crm`). If a file or folder with that name
   exists, it's opened instead. To open a folder named after a subcommand (`list`, `bakar`, `panen`, `backup`,
   `tanam`, `pasang`, `pupuk`, `cabut`, …), use `sawit ./list`.
-- Every word has an English and an Indonesian name: `list`/`ls`, `panen`/`export`/`ekspor`,
-  `backup`/`dump`/`cadangkan`, `tanam`/`import`/`impor`, `pasang`/`install`, `pupuk`/`upgrade`, `cabut`/`uninstall`,
-  and for `list`: `db`/`blok`, `ports`/`lahan`, `instances`/`kebun`, `connections`/`konsesi`, `tools`/`alat`/`perkakas`,
-  `mcp`/`colokan`, `config`/`configs`/`konfig`, and `keys`/`pintasan`/`keymap`/`shortcuts`. `list keys` alone needs
-  the app: the default shortcuts live in it, so without Sawit running it says so (and where your keymap.json is)
-  instead of starting it.
+- Every word has an English and an Indonesian name: `list`/`ls`/`daftar`, `bakar`/`stop`, `nyalakan`/`start`,
+  `browse`/`intip`, `panen`/`export`/`ekspor`, `backup`/`dump`/`cadangkan`, `tanam`/`import`/`impor`,
+  `pasang`/`install`, `pupuk`/`upgrade` and `cabut`/`uninstall`. So do the targets, for `list`: `all`/`semua`,
+  `instances`/`instance`/`kebun`, `db`/`dbs`/`database`/`databases`/`blok`, `ports`/`port`/`lahan`,
+  `connections`/`connection`/`conn`/`koneksi`/`konsesi`, `tools`/`tool`/`alat`/`perkakas`, `mcp`/`colokan`,
+  `config`/`configs`/`konfig` and `keys`/`key`/`keymap`/`shortcuts`/`pintasan`; for `bakar`: `ports`/`port`/`lahan`
+  and `instances`/`instance`/`kebun`; and the flags: `-y`/`--yes`/`--ya` and `--ulang`/`--restart`. `sawit --help`
+  lists them all.
 - `panen` and `backup` ask before replacing an existing file; `-y` replaces it without asking. Without a terminal
   they refuse instead of prompting. `panen` with SQL runs it read-only.
+- SQL runs read-only first, as the `query` MCP tool runs it. SQL that writes (or several statements, which can't be
+  tried read-only) is shown and asks before it runs; `-y` runs it without asking, and without a terminal it refuses
+  unless given `-y`.
 - Table output goes to stdout, while the "connected to" line and timing go to stderr, so `sawit kyzn leads | less`
   stays clean. Up to 10,000 rows are printed per result.
+- `nyalakan` starts instances as their **Start** button does: when another process holds the port, it explains who
+  and leaves the instance stopped (exit 1); it never forces a start. One already running is just noted. `--ulang`
+  (`--restart`) restarts the running ones too, after asking (`-y` skips; without a terminal it needs `-y`).
 - `bakar ports` with no ports only takes dev servers (tools such as `npm run dev`, `vite` or `bun`). It skips databases,
   Docker, Sawit's instances and protected tools (Claude, MCP servers, language servers, Electron), the same rules as
   the `kill-dev` script. Without a terminal it asks for `-y` instead of prompting.
@@ -631,7 +658,7 @@ its own project's, even while you look at another project of that window.
 | App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, changelog, git_graph, github, instance, keymap), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
 | Terminal (app running) | `terminal_run`, `terminal_split` (a pane split right or down, with a command in the new half), `terminal_read`, `terminal_input`, `terminal_close` (`terminal_run`, `terminal_split`, `app_run_script` and `app_ssh_connect` return the tab and `pane` they used; `terminal_input` needs the tab, and a split tab needs its pane) |
 | Keymap (app running) | `keymap_list` (every binding: what a key does, which key runs an action, what clashes), `keymap_bind`, `keymap_unbind` (with the Keymap Editor's checks; `restore` brings back a default) |
-| Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (what the user annotated), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`) |
+| Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (what the user annotated), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`; replacing an earlier export needs `replace: true`) |
 | Canvas | `canvas_get` (the top-level layers of the page on show), `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear` (the page on show), `canvas_load`, `canvas_export` (the page on show, as SVG or PNG), `canvas_command` (any command of the canvas engine, by id: `page.list` and `node.get` reach the other pages), `canvas_commands` (lists them; pass a `filter` to see what each takes). Each takes `file`, a `.figcraft` file (a design file, say) or an `.excalidraw` file to work on instead of the project's canvas, in a canvas tab of its own. All of them work on the saved canvas file when the app is closed; then each call starts from that file, so no undo or selection carries over to the next: pass `canvas_command` the ids, or its steps in one `command.batch` |
 
 Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`,

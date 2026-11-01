@@ -36,6 +36,7 @@ pub use query::{
     list_databases, load_schema, primary_key, row_count, row_count_estimated, row_count_matching,
     row_count_within, run_bulk, run_read_only, run_sql, screen_read_only_sql, sql_error,
 };
+pub use query::{ReadOnlyTry, run_if_read_only};
 
 /// Quotes an SQL identifier.
 pub fn quote_ident(name: &str) -> String {
