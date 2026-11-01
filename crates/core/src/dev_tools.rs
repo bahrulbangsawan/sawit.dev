@@ -924,6 +924,9 @@ pub async fn run(tool: &Tool, command: &str, on_line: impl Fn(String) + Send + S
 /// own command when its installer did (at one of its known locations, or in
 /// the folders it installs to: [`Tool::owns`]), and `None` for anything
 /// else (pyenv's Python, Capistrano's `cap`, …), which Sawit leaves alone.
+/// A tool with no uninstaller of its own (npm, which comes with Node.js)
+/// gets none either: Homebrew's npm is its `node`, and removing it would
+/// remove Node.js.
 pub fn uninstall_command(tool: &Tool, found: &Path) -> Option<String> {
     let real = std::fs::canonicalize(found).unwrap_or_else(|_| found.to_path_buf());
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
@@ -931,6 +934,7 @@ pub fn uninstall_command(tool: &Tool, found: &Path) -> Option<String> {
 }
 
 fn uninstall_command_in(tool: &Tool, found: &Path, real: &Path, home: &Path) -> Option<String> {
+    let own = tool.uninstall?;
     let parts: Vec<_> = real
         .components()
         .map(|c| c.as_os_str().to_string_lossy())
@@ -963,7 +967,7 @@ fn uninstall_command_in(tool: &Tool, found: &Path, real: &Path, home: &Path) -> 
                 found.starts_with(&p) || real.starts_with(&p)
             }
         });
-    ours.then_some(tool.uninstall).flatten().map(String::from)
+    ours.then(|| own.to_string())
 }
 
 /// Runs an uninstall `command` for `tool`, like [`install`].
@@ -1314,6 +1318,27 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// npm comes with Node.js and has no uninstaller of its own. Homebrew's
+    /// npm is a file of its `node` formula, so `brew uninstall node` would
+    /// take Node.js with it: npm gets no command, wherever it was found.
+    #[test]
+    fn npm_is_never_uninstalled_on_its_own() {
+        let home = std::path::Path::new("/Users/me");
+        let p = std::path::Path::new;
+        let npm = find("npm").unwrap();
+        assert_eq!(
+            uninstall_command_in(
+                npm,
+                p("/opt/homebrew/bin/npm"),
+                p("/opt/homebrew/Cellar/node/24.1.0/lib/node_modules/npm/bin/npm-cli.js"),
+                home
+            ),
+            None
+        );
+        let nvm = "/Users/me/.nvm/versions/node/v22.11.0/bin/npm";
+        assert_eq!(uninstall_command_in(npm, p(nvm), p(nvm), home), None);
     }
 
     #[tokio::test]
