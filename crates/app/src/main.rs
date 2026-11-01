@@ -1,3 +1,4 @@
+mod agents;
 mod assets;
 mod board;
 mod browser;
@@ -147,6 +148,13 @@ fn main() -> std::process::ExitCode {
         db::init(cx);
         git::init(cx);
         workspace::init(cx);
+        agents::init(cx);
+        agents::keep_setting(
+            sawit_core::instances::AppPaths::default_macos()
+                .root
+                .join("agent-cursors.json"),
+            cx,
+        );
         terminal::init(cx);
         theme::apply_zed_one_dark(cx);
         cx.set_global(rt::Rt(runtime));

@@ -26,6 +26,11 @@
 //! the menus and the keys alike (import, save, export, copy as), is in [`commands`]. While the UI
 //! is hidden (`⌘\`, `view.toggleUi`) only the canvas shows, and the context menu, the palette and
 //! the sheet when they are open.
+//!
+//! Agents that drive the canvas through `sawit-mcp` show on it as other people do on a
+//! multiplayer canvas: a pointer in each one's colour with its name and what it does, the layers
+//! it touched outlined for a moment, and a placeholder where a slow op's result is about to land
+//! ([`presence`], [`BoardView::agent_op`]).
 
 mod commands;
 mod context_bar;
@@ -36,6 +41,7 @@ mod menus;
 pub(crate) mod option_icons;
 mod overlay_paint;
 mod paint;
+mod presence;
 mod text_input;
 mod toolbar;
 mod top_bar;
@@ -538,6 +544,9 @@ pub struct BoardView {
     /// shown again, it takes it back, unless something else took it meanwhile
     /// ([`Self::set_shown`]).
     gave_keyboard: bool,
+    /// The agents at work on the canvas, their placeholders and their ops waiting to run
+    /// ([`presence`]).
+    agents: presence::Presence,
     _frames: Task<()>,
     _quit: Subscription,
     _release: Subscription,
@@ -689,6 +698,7 @@ impl BoardView {
             shown: true,
             wants_keyboard: false,
             gave_keyboard: false,
+            agents: presence::Presence::default(),
             _frames: frames,
             // ⌘Q quits without dropping the views: what isn't on disk yet is written first.
             _quit: cx.on_app_quit(|this, _| {
@@ -1510,6 +1520,7 @@ impl BoardView {
         if !on_show.is_some_and(|ds| frame.shows(ds.uid, ds.page)) {
             return;
         }
+        self.agents_rendered(frame.key);
         if let Some(old) = self.frame.replace(frame) {
             self.stale.push(old.image);
         }
@@ -1616,14 +1627,18 @@ impl BoardView {
         })
         .unwrap_or_default();
         let ds = board.session.ds().ok()?;
+        let shown_view = ds.view.clone();
         let font = &cx.theme().font_family;
         let (overlay, names) = overlay_paint::layout(shapes, font, &ds.doc, &ds.view, window);
         board.session.tool.labels = names;
+        // Over it all, the agents at work on the page on show.
+        let agents = self.agents_paint(&shown_view, page, now, window, cx);
         let painting = Painting {
             page: screen_rgb,
             frame,
             stale: std::mem::take(&mut self.stale),
             overlay,
+            agents,
         };
         self.autosave(cx);
         Some(painting)
@@ -1792,6 +1807,7 @@ impl BoardView {
             .flatten();
         let tools = chrome.then(|| toolbar::render_toolbar(self, window, cx));
         let toast = self.render_toast(chrome, cx);
+        let agents = self.render_agents(cx);
         div()
             .id("board-canvas")
             .role(Role::Canvas)
@@ -1829,6 +1845,7 @@ impl BoardView {
                 )
                 .size_full(),
             )
+            .children(agents)
             .children(over_selection)
             .children(tools)
             .children(toast)
@@ -2157,7 +2174,7 @@ mod tests {
     }
 
     /// The canvas of `path` in a 400 × 300 window of its own, drawn as the app draws it.
-    fn open_in_window(
+    pub(super) fn open_in_window(
         cx: &mut TestAppContext,
         path: &Path,
     ) -> (WindowHandle<BoardView>, Entity<BoardView>) {
@@ -2185,7 +2202,7 @@ mod tests {
 
     /// Runs the app until the canvas has painted a frame whose image isn't `old`, and returns
     /// that image. Fails when the render thread sends none for a while.
-    fn next_frame(
+    pub(super) fn next_frame(
         cx: &mut TestAppContext,
         view: &Entity<BoardView>,
         old: Option<&Arc<RenderImage>>,

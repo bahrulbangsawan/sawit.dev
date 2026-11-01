@@ -511,6 +511,45 @@ explained. A conflict on the same address can't be forced.
   or on the file while Sawit is closed. An `.excalidraw` file is imported once into the `.sawit` file beside it,
   as the Files tab opens it.
 
+### Agent cursors
+
+When AI agents drive the canvas or the browser through `sawit-mcp`, you see each one at work, the way a multiplayer
+canvas shows other people. Every agent has its own pointer in its own colour, with a pill that carries its name and
+what it is doing: "Claude Code  adding 3 stickies", "Codex  typing in Email". Several agents at once each get their
+own cursor.
+
+- **Who is who.** Each `sawit-mcp` process is one agent session. Claude Code, Codex and Cursor each start their own
+  per session, and a session's subagents share it. The session's name comes from the client (`clientInfo` in MCP
+  `initialize`), and it keeps one colour and one label for as long as Sawit runs. A second session of the same
+  client is told apart by its project ("Codex · shop") or numbered ("Claude Code 2"). The pill always carries the
+  name, so colour is never the only way to tell agents apart. Ops from an older `sawit-mcp`, which doesn't say who
+  it is, show as "Agent".
+- **Canvas.** The pointer goes to where the op landed: the corner of what the agent added, or the middle of what it
+  changed (one layer, or several, as a selection's middle). It glides there, and the layers it touched are
+  outlined in its colour for a moment. An agent never takes your selection or your keyboard, and never moves your
+  view. When it works off screen, a chip in its colour sits at the canvas's edge pointing its way; click it to go
+  there. An op that takes a moment (a Mermaid diagram, an image or file brought in, a long `command.batch`) shows a
+  placeholder at once where its result will land, with a soft shimmer. The placeholder is replaced by the result,
+  or shows an error mark for a moment if the op failed.
+- **Browser.** For `browser_click`, `browser_hover`, `browser_type`, `browser_select_option`, `browser_scroll` and
+  `browser_press_key`, the pointer glides to the element's centre and rings it in the agent's colour. A click
+  ripples where it lands, and a field the agent types into shows its caret before the text arrives. The action
+  waits at most 120 ms for the glide (not at all under Reduce motion). On `browser_navigate`, the toolbar says
+  "Claude Code is opening /checkout…" until the page has loaded. The cursors live in the page overlay's closed
+  shadow root: they take no clicks, change no layout, and stay out of the agent's own `browser_screenshot` and
+  `browser_snapshot`.
+- **Fading.** An agent's cursor fades after 5 seconds without an op and goes after 30 seconds.
+- **On or off.** View ▸ Hide Agent Cursors, the pointer button in the canvas's top bar and the browser's toolbar,
+  or <kbd>⌃</kbd><kbd>⌘</kbd><kbd>A</kbd> turn them off or on for every window. Sawit remembers the choice in
+  `agent-cursors.json` in its folder. Setting `"agent_cursors_in_screenshots": true` there keeps them in agents'
+  screenshots.
+- **Motion and screen readers.** With Reduce motion on (System Settings ▸ Accessibility ▸ Display), pointers jump
+  instead of gliding, and nothing shimmers or ripples. The cursors are hidden from VoiceOver. Instead, the canvas
+  and the browser announce what agents did in a polite status line, such as "Claude Code added 3 stickies", at most
+  once every 2 seconds per agent.
+
+Agents that work on the canvas while Sawit is closed have no cursor: there is nothing on screen to show it on.
+
 ### Git
 
 <img src="docs/media/git.png" alt="Git tab with the branch, a commit message box, staged and changed files, next to the commit graph with branches, tags, authors and dates" width="100%">
@@ -706,6 +745,7 @@ French…), the defaults move where macOS menus put them.
 | Show/hide sidebar | <kbd>⌘</kbd><kbd>B</kbd> |
 | Show/hide terminal | <kbd>⌘</kbd><kbd>J</kbd> |
 | Show/hide tabs & tables | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>J</kbd> |
+| Show/hide agent cursors | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>A</kbd> |
 | Close active tab | <kbd>⌘</kbd><kbd>W</kbd> |
 | Close Others | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>T</kbd> |
 | Close Left / Close Right | <kbd>⌘</kbd><kbd>K</kbd> <kbd>E</kbd> / <kbd>⌘</kbd><kbd>K</kbd> <kbd>T</kbd> |
@@ -893,6 +933,13 @@ The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. 
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
 the agent's project open (or the one `project` names), else the frontmost window. An agent's browser and canvas are
 its own project's, even while you look at another project of that window.
+
+Every op `sawit-mcp` sends the app says which agent session sent it: the client's name and version from MCP
+`initialize`, an id made once per `sawit-mcp` process, and the project the session works in. The app shows each
+agent's cursor where it works ([Agent cursors](#agent-cursors)). `app_state` lists them in `agents`: each agent at
+work in the last 30 seconds, with its `id`, `name` (its label on screen), `color`, `surface` (`canvas` with its
+`file`, or `browser` with its `project`), `action` (what it did last, such as "adding 3 stickies") and
+`seconds_ago`. The field is optional: an older `sawit-mcp` sends none, and an older app ignores it.
 
 | Area | Tools |
 |---|---|

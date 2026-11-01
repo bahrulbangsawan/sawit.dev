@@ -1,7 +1,7 @@
 //! The canvas's top bar, a strip of [`HEIGHT`] over the canvas (spec D11, "Toolbar and context
 //! bar"): the main menu's ≡ button ([`super::menus`]), the document's name, the zoom menu, and
-//! the layers panel's and the Design panel's toggles on the left (rulings P3-C11, P4-C13), Hide
-//! UI and Maximize on the right.
+//! the layers panel's and the Design panel's toggles on the left (rulings P3-C11, P4-C13), the
+//! agent cursors' toggle, Hide UI and Maximize on the right.
 //!
 //! Like the rest of the chrome, the bar goes while the UI is hidden (`⌘\`, `view.toggleUi`), so
 //! its Hide UI button only ever hides: `⌘\` shows the UI again (ruling P3-C12).
@@ -94,6 +94,17 @@ pub(super) fn render_top_bar(
             h_flex()
                 .flex_shrink_0()
                 .gap_1()
+                .child(
+                    Button::new("board-agent-cursors")
+                        .ghost()
+                        .small()
+                        .icon(crate::agents::TOGGLE_ICON)
+                        .accessibility_label("Agent cursors")
+                        .selected(crate::agents::shown(cx))
+                        .tooltip(crate::agents::toggle_tooltip(window, cx))
+                        .debug_selector(|| "board-agent-cursors".into())
+                        .on_click(|_, _, cx| crate::agents::toggle(cx)),
+                )
                 .child(
                     Button::new("board-hide-ui")
                         .ghost()

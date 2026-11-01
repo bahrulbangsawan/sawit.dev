@@ -77,7 +77,14 @@ impl BrowserView {
                         }
                     })),
             )
-            .child(div().flex_1().child(Input::new(&self.address).small()))
+            .child(
+                div()
+                    .flex_1()
+                    .relative()
+                    .child(Input::new(&self.address).small())
+                    .children(self.render_agent_opening())
+                    .child(self.render_agent_status()),
+            )
             .when_some(explorer, |el, (port, on_explorer)| {
                 el.child(explorer_button(port, on_explorer, cx))
             })
@@ -109,6 +116,17 @@ impl BrowserView {
                         this.take_keyboard(window, cx);
                         this.toggle_panel(Panel::Design, cx);
                     })),
+            )
+            .child(
+                Button::new("browser-agent-cursors")
+                    .ghost()
+                    .xsmall()
+                    .icon(crate::agents::TOGGLE_ICON)
+                    .accessibility_label("Agent cursors")
+                    .toggled(crate::agents::shown(cx))
+                    .selected(crate::agents::shown(cx))
+                    .tooltip(crate::agents::toggle_tooltip(window, cx))
+                    .on_click(|_, _, cx| crate::agents::toggle(cx)),
             )
             .child(
                 Button::new("browser-external")

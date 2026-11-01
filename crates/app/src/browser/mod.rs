@@ -14,6 +14,7 @@ mod annotate;
 mod design;
 mod engine;
 mod panel;
+mod presence;
 mod toolbar;
 
 use std::path::{Path, PathBuf};
@@ -251,6 +252,8 @@ pub struct BrowserView {
     queued: Vec<(BrowserOp, oneshot::Sender<OpResult>)>,
     /// Links to other apps the page opened: asked about one at a time.
     external: ExternalGate,
+    /// The agents at work in the browser ([`presence`]).
+    agents: presence::Agents,
     _ipc: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
@@ -300,6 +303,8 @@ impl BrowserView {
                     _ => {}
                 },
             ),
+            // Agents' cursors turned off: the page's go.
+            cx.observe_global::<crate::agents::Agents>(|this, cx| this.agents_setting_changed(cx)),
         ];
         let (to_view, mut from_page) = unbounded();
         let ipc = cx.spawn_in(window, async move |this, cx| {
@@ -356,6 +361,7 @@ impl BrowserView {
             design: Default::default(),
             queued: Vec::new(),
             external: ExternalGate::default(),
+            agents: presence::Agents::new(crate::agents::shown(cx)),
             _ipc: ipc,
             _subscriptions: subscriptions,
         }
@@ -848,7 +854,8 @@ impl BrowserView {
             if let Some(turn) = turn {
                 let _ = turn.await;
             }
-            let [hide, show] = shoot_ops();
+            let keep = this.update(cx, |_, cx| crate::agents::in_screenshots(cx));
+            let [hide, show] = shoot_ops(keep.unwrap_or(false));
             let hidden = this.update(cx, |this, _| this.page_op(hide));
             // A page without an agent has no overlay to hide; one that doesn't answer
             // is shot as it is.
@@ -1080,6 +1087,9 @@ impl BrowserView {
             }
             FromPage::Engine(EngineEvent::Load { started, url }) => {
                 self.loading = started;
+                if !started {
+                    self.agent_page_loaded();
+                }
                 if started {
                     self.design_load_started();
                     self.sync_design(cx);
@@ -1871,9 +1881,14 @@ impl ShotGate {
     }
 }
 
-/// Around every screenshot: hide the overlay, then show it again.
-fn shoot_ops() -> [Value; 2] {
-    [overlay_op(true), overlay_op(false)]
+/// Around every screenshot: hide the overlay, then show it again. Agents' cursors hide with it,
+/// unless the user keeps them in agents' screenshots (`keep_agents`).
+fn shoot_ops(keep_agents: bool) -> [Value; 2] {
+    let mut hide = overlay_op(true);
+    if keep_agents {
+        hide["agents"] = json!(true);
+    }
+    [hide, overlay_op(false)]
 }
 
 /// The device `mode` imitates, and whether it is turned on its side (the size swapped):
@@ -2641,7 +2656,22 @@ mod tests {
     #[test]
     fn screenshot_wraps_overlay() {
         assert_eq!(overlay_op(true), json!({"op": "overlay", "hidden": true}));
-        assert_eq!(shoot_ops(), [overlay_op(true), overlay_op(false)]);
+        assert_eq!(shoot_ops(false), [overlay_op(true), overlay_op(false)]);
+    }
+
+    /// Agents' screenshots leave the agents' cursors out with the rest of the overlay, unless the
+    /// user keeps them in (`agent_cursors_in_screenshots`): then the page hides all but them.
+    #[test]
+    fn screenshots_leave_agents_cursors_out_unless_kept() {
+        assert_eq!(
+            shoot_ops(false)[0],
+            json!({"op": "overlay", "hidden": true})
+        );
+        assert_eq!(
+            shoot_ops(true)[0],
+            json!({"op": "overlay", "hidden": true, "agents": true})
+        );
+        assert_eq!(shoot_ops(true)[1], overlay_op(false));
     }
 
     #[test]

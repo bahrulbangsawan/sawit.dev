@@ -187,19 +187,49 @@ textarea:focus { border-color: var(--ring); box-shadow: 0 0 0 2px color-mix(in s
 kbd { font: 500 10px/1 var(--font); opacity: .7; }
 button:focus-visible, .kind:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 .flash { position: absolute; pointer-events: none; border-radius: 2px; outline: 3px solid var(--primary); outline-offset: 2px; }
+.root.shot > :not(.agents) { display: none; }
+.agents, .agents * { pointer-events: none; }
+.agent { position: absolute; left: 0; top: 0; z-index: 1; }
+.agent.faded { opacity: .4; }
+.agent.faded .doing, .agent.faded .typing { display: none; }
+.agent .tip { position: absolute; left: 0; top: 0; width: 13px; height: 19px;
+  filter: drop-shadow(1px 0 0 #fff) drop-shadow(-1px 0 0 #fff) drop-shadow(0 1px 0 #fff) drop-shadow(0 -1px 0 #fff) drop-shadow(0 1px 2px rgba(0,0,0,.35)); }
+.agent .arrow { width: 100%; height: 100%; background: var(--c);
+  clip-path: polygon(0 0, 0 16px, 4.4px 12.3px, 7.3px 18.6px, 9.9px 17.4px, 7.1px 11.2px, 12.6px 11.2px); }
+.agent .pill { position: absolute; left: 12px; top: 17px; display: flex; gap: 6px; align-items: baseline; max-width: 280px;
+  padding: 2px 8px; border-radius: 10px; background: var(--c); color: #fff; font: 600 11px/16px var(--font); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; box-shadow: 0 0 0 1.5px #fff, 0 2px 6px rgba(0,0,0,.25); }
+.agent .doing { font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
+.agent .typing { font-weight: 400; }
+.agent.west .pill { left: auto; right: 2px; }
+.agent.north .pill { top: auto; bottom: 4px; }
+.ring { position: absolute; border-radius: 4px; outline: 2px solid var(--c); outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(255,255,255,.55); }
+.ripple { position: absolute; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-radius: 50%;
+  border: 2px solid var(--c); box-shadow: 0 0 0 1px #fff; opacity: 0; }
+.caret { position: absolute; width: 2px; border-radius: 1px; background: var(--c); box-shadow: 0 0 0 1px #fff; }
+@media (prefers-reduced-motion: reduce) {
+  .ripple { opacity: 1; }
+}
 @media (prefers-reduced-motion: no-preference) {
   .pop.in { animation: pop-in 140ms cubic-bezier(0.2, 0, 0, 1); }
   .flash { animation: flash 600ms ease-out forwards; }
+  .agent { transition-property: transform, opacity; transition-duration: var(--glide, 120ms), 200ms;
+    transition-timing-function: cubic-bezier(0.2, 0, 0, 1), ease-out; }
+  .ripple { animation: ripple 420ms cubic-bezier(0.2, 0, 0, 1) var(--delay, 0ms) forwards; }
+  .caret, .agent .typing { animation: blink 1s steps(1) infinite; }
 }
 @keyframes pop-in { from { opacity: 0; transform: translateY(var(--rise, 4px)); } to { opacity: 1; transform: none; } }
 @keyframes flash { 0% { opacity: 1; } 30% { opacity: .2; } 60% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes ripple { from { opacity: 1; transform: scale(.4); } to { opacity: 0; transform: scale(1.6); } }
+@keyframes blink { 50% { opacity: 0; } }
 `;
   const UP = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M4 7l4-4 4 4"/></svg>';
   const DOWN = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v10M4 9l4 4 4-4"/></svg>';
   const TRASH = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4"/></svg>';
   // Static markup: what the page wrote is set as text later, never parsed.
   const MARKUP =
-    '<div class="root" part="root"><div class="layer"></div>' +
+    '<div class="root" part="root"><div class="layer"></div><div class="agents" aria-hidden="true"></div>' +
     '<div class="pop" role="dialog" aria-labelledby="pop-title" aria-describedby="pop-sub" hidden>' +
     '<div class="head"><span class="badge" id="pop-n"></span><div class="what"><div class="title" id="pop-title"></div>' +
     '<div class="sub" id="pop-sub"></div></div><div class="walk" id="pop-walk">' +
@@ -225,6 +255,8 @@ button:focus-visible, .kind:focus-visible { outline: 2px solid var(--ring); outl
   let shadow = null;
   let rootNode = null;
   let layer = null;
+  let agentsLayer = null;
+  let keepAgents = false;
   let ui = null;
   let ready = false;
   let hidden = false;
@@ -265,8 +297,10 @@ button:focus-visible, .kind:focus-visible { outline: 2px solid var(--ring); outl
     for (let i = 0; i < vars.length; i++) prop(rootNode, vars[i][0], vars[i][1]);
   };
 
-  const ensureHost = () => {
-    if (!ready || !document.documentElement || !N.createElement || !N.attachShadow || !N.inner) return null;
+  // The host waits for the page to settle (`ready`), unless an agent's cursor needs it now
+  // (`now`): an agent can act on a page the moment it has loaded.
+  const ensureHost = (now) => {
+    if ((!ready && !now) || !document.documentElement || !N.createElement || !N.attachShadow || !N.inner) return null;
     if (!host) {
       let made;
       try {
@@ -291,6 +325,7 @@ button:focus-visible, .kind:focus-visible { outline: 2px solid var(--ring); outl
       apply(N.inner, shadow, [(styled ? "" : "<style>" + STYLE + "</style>") + MARKUP]);
       rootNode = find(shadow, ".root");
       layer = find(shadow, ".layer");
+      agentsLayer = find(shadow, ".agents");
       const one = (id) => find(shadow, "#" + id);
       ui = {
         pop: one("pop-comment") && find(shadow, ".pop"),
@@ -316,9 +351,12 @@ button:focus-visible, .kind:focus-visible { outline: 2px solid var(--ring); outl
     if (!read(N.connected, host, "isConnected")) put(document.documentElement, host);
     return host;
   };
+  // Hidden for a screenshot, the overlay shows nothing, or (`keepAgents`, when the user wants
+  // agents' cursors in agents' screenshots) only the agents' cursors.
   const applyMode = () => {
     if (!host) return;
-    prop(host, "display", hidden ? "none" : "block");
+    prop(host, "display", hidden && !keepAgents ? "none" : "block");
+    if (rootNode) attr(rootNode, "class", hidden && keepAgents ? "root shot" : "root");
   };
   const box = (cssText, text) => {
     const div = make("div");
@@ -1262,10 +1300,214 @@ button:focus-visible, .kind:focus-visible { outline: 2px solid var(--ring); outl
   // the page dispatches mustn't open Annotate and arm the picker, and Sawit answers an
   // agent's browser_press_key "Meta+Shift+." itself.
 
+  // ---- Agents: the cursors of the agents that drive the page ----
+  //
+  // Each agent Sawit drives the page for has a pointer in its colour and a pill with its name and
+  // what it does, in the overlay's own layer. They take no event (`pointer-events: none`, so
+  // `elementFromPoint` passes them by and a click lands where it would), change no layout (the
+  // host is fixed over the viewport), are hidden from assistive technology (the app announces
+  // what agents do), and hide with the rest of the overlay for a screenshot. Sawit sends the
+  // cursor's op just before the action's, so the pointer glides to the target as the action
+  // happens; it adds no more than the glide to the action. Only Sawit's call, signed with the
+  // token, draws one: a page can't draw a cursor that claims to be an agent's.
+
+  const AGENT_FADE = 5000;
+  const AGENT_GONE = 30000;
+  // How long the target's ring and a click's ripple stay after the pointer arrives.
+  const AGENT_SETTLE = 900;
+  const AGENT_COLOR = /^#[0-9a-f]{6}$/i;
+  // `[{ id, node, name, doing, typing, x, y, fade, gone }]`, read by index.
+  let agentCursors = [];
+  // What an agent's op does, in words, by the action's name: `doing|done`.
+  const AGENT_VERBS = {
+    click: "clicking|clicked",
+    hover: "pointing at|pointed at",
+    type: "typing in|typed in",
+    select: "choosing|chose",
+    scroll: "scrolling|scrolled",
+    press: "pressing|pressed",
+  };
+  // The element as the agent's caption names it: its accessible name, else its role or tag.
+  const agentTargetName = (el) => {
+    if (!el) return "";
+    let name = "";
+    let r = null;
+    try {
+      r = role(el);
+      name = oneLine(nameOf(el, r) || "");
+    } catch (_) {}
+    return clip(name || r || el.localName || "", 40);
+  };
+  // What the agent does with `op` on `el`, in words: "clicking Sign up", "typing in Email",
+  // "choosing Large in Size", "pressing Enter", "scrolling".
+  const agentAction = (action, el, op) => {
+    const verb = (AGENT_VERBS[action] || "working on|worked on").split("|");
+    const name = agentTargetName(el);
+    let object = name;
+    if (action === "press") object = clip(String(op.key || "a key"), 24);
+    else if (action === "select") {
+      const values = clip((op.values || []).map(String).join(", "), 30);
+      object = values && name ? values + " in " + name : values || name;
+    } else if (action === "scroll") object = el ? name : "";
+    const words = (v) => (object ? v + " " + object : v.replace(/ (in|at|on)$/, ""));
+    return { doing: words(verb[0]), done: words(verb[1]) };
+  };
+  helpers.agentAction = agentAction;
+  // Where the pointer goes for `el`: its centre in the viewport, kept inside the viewport.
+  const agentAim = (el) => {
+    const r = el.getBoundingClientRect();
+    const x = Math.min(Math.max(r.left + r.width / 2, 0), innerWidth - 1);
+    const y = Math.min(Math.max(r.top + r.height / 2, 0), innerHeight - 1);
+    return { x: Math.round(x), y: Math.round(y), r };
+  };
+  // Where the agent's caret goes in a text field before its text lands: after the text the field
+  // holds, in its content box, as tall as a line.
+  const agentCaret = (el, r) => {
+    let left = r.left + 4;
+    let top = r.top + 4;
+    let height = Math.max(r.height - 8, 10);
+    try {
+      const s = getComputedStyle(el);
+      const n = (v) => parseFloat(v) || 0;
+      const size = n(s.fontSize) || 13;
+      const padL = n(s.paddingLeft) + n(s.borderLeftWidth);
+      const text = el.isContentEditable ? el.textContent || "" : String(el.value || "");
+      let width = text.length * size * 0.55;
+      try {
+        const ctx = make("canvas").getContext("2d");
+        ctx.font = s.font || size + "px sans-serif";
+        width = ctx.measureText(text).width;
+      } catch (_) {}
+      height = Math.min(Math.max(size * 1.3, 10), r.height - 4);
+      left = r.left + padL + Math.min(width, Math.max(r.width - padL * 2, 0));
+      top = r.top + (r.height - height) / 2;
+    } catch (_) {}
+    return { left, top, height };
+  };
+  // After `css`, which sets the whole inline style, the colour of what an agent draws.
+  const agentPaint = (node, color) => prop(node, "--c", AGENT_COLOR.test(color || "") ? color : "#2563eb");
+  // Drops a node of the agents' layer after `ms`.
+  const dropLater = (node, ms) => setTimeout(() => drop(node), ms);
+  const agentOf = (id) => {
+    for (let i = 0; i < agentCursors.length; i++) if (agentCursors[i].id === id) return agentCursors[i];
+    return null;
+  };
+  const forgetAgent = (a) => {
+    clearTimeout(a.fade);
+    clearTimeout(a.gone);
+    drop(a.node);
+    const kept = [];
+    for (let i = 0; i < agentCursors.length; i++) if (agentCursors[i] !== a) kept[kept.length] = agentCursors[i];
+    agentCursors = kept;
+  };
+  // The cursor of agent `who` (`{id, name, color}`), made the first time it acts.
+  const agentCursor = (who) => {
+    let a = agentOf(who.id);
+    if (a) return a;
+    const node = make("div");
+    attr(node, "class", "agent");
+    const tip = make("div");
+    attr(tip, "class", "tip");
+    const arrow = make("div");
+    attr(arrow, "class", "arrow");
+    put(tip, arrow);
+    const pill = make("div");
+    attr(pill, "class", "pill");
+    const name = make("span");
+    attr(name, "class", "name");
+    const typing = make("span");
+    attr(typing, "class", "typing");
+    const doing = make("span");
+    attr(doing, "class", "doing");
+    put(pill, name);
+    put(pill, typing);
+    put(pill, doing);
+    put(node, tip);
+    put(node, pill);
+    put(agentsLayer, node);
+    a = { id: who.id, node, name, doing, typing, x: null, y: null, fade: 0, gone: 0 };
+    agentCursors[agentCursors.length] = a;
+    return a;
+  };
+  // An agent acts: its pointer glides to the target (`lead` ms, Sawit's head start for the
+  // action; jumps under reduced motion or the first time), the target is ringed in its colour,
+  // a click ripples where the pointer lands, and a field it types into shows its caret first.
+  // The cursor fades after a few seconds idle and goes after 30 s.
+  const presence = (op) => {
+    if (op.token !== TOKEN) return { shown: false };
+    if (op.action === "clear") {
+      while (agentCursors.length) forgetAgent(agentCursors[0]);
+      return { shown: false };
+    }
+    const who = op.agent || {};
+    if (typeof who.id !== "string" || !who.id) throw new Error("An agent's cursor needs the agent's id.");
+    let el = null;
+    try {
+      el = op.action === "press" ? document.activeElement : resolve(op);
+    } catch (_) {}
+    if (el && (el === document.body || el === document.documentElement)) el = null;
+    // The action scrolls its element into view first; the cursor goes where it will be.
+    if (el && el.scrollIntoView && (op.action === "click" || op.action === "hover")) {
+      el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+    } else if (el && el.scrollIntoView && (op.action === "type" || (op.action === "scroll" && !op.dx && !op.dy))) {
+      el.scrollIntoView({ block: "center", behavior: "instant" });
+    }
+    const words = agentAction(op.action, el, op);
+    if (!ensureHost(true) || !agentsLayer) return { shown: false, doing: words.doing, done: words.done };
+    const a = agentCursor(who);
+    const lead = Math.max(0, Math.min(Number(op.lead) || 0, 150));
+    const aim = el ? agentAim(el) : { x: a.x === null ? Math.round(innerWidth / 2) : a.x, y: a.y === null ? Math.round(innerHeight / 2) : a.y, r: null };
+    const first = a.x === null;
+    agentPaint(a.node, who.color);
+    prop(a.node, "--glide", (first ? 0 : lead) + "ms");
+    prop(a.node, "transform", "translate(" + aim.x + "px," + aim.y + "px)");
+    const side = (aim.x > innerWidth - 220 ? " west" : "") + (aim.y > innerHeight - 48 ? " north" : "");
+    attr(a.node, "class", "agent" + side);
+    write(a.name, String(who.name || "Agent").slice(0, 40));
+    write(a.doing, words.doing);
+    write(a.typing, op.action === "type" ? "▍" : "");
+    a.x = aim.x;
+    a.y = aim.y;
+    const settle = (first ? 0 : lead) + AGENT_SETTLE;
+    if (aim.r) {
+      const ring = make("div");
+      attr(ring, "class", "ring");
+      css(ring, "left:" + px(aim.r.left) + ";top:" + px(aim.r.top) + ";width:" + px(aim.r.width) + ";height:" + px(aim.r.height));
+      agentPaint(ring, who.color);
+      put(agentsLayer, ring);
+      dropLater(ring, settle);
+    }
+    if (op.action === "click" && aim.r) {
+      const ripple = make("div");
+      attr(ripple, "class", "ripple");
+      css(ripple, "left:" + px(aim.x) + ";top:" + px(aim.y) + ";--delay:" + (first ? 0 : lead) + "ms");
+      agentPaint(ripple, who.color);
+      put(agentsLayer, ripple);
+      dropLater(ripple, settle);
+    }
+    if (op.action === "type" && aim.r) {
+      const at = agentCaret(el, aim.r);
+      const caret = make("div");
+      attr(caret, "class", "caret");
+      css(caret, "left:" + px(at.left) + ";top:" + px(at.top) + ";height:" + px(at.height));
+      agentPaint(caret, who.color);
+      put(agentsLayer, caret);
+      dropLater(caret, settle);
+    }
+    clearTimeout(a.fade);
+    clearTimeout(a.gone);
+    a.fade = setTimeout(() => attr(a.node, "class", "agent faded" + side), AGENT_FADE);
+    a.gone = setTimeout(() => forgetAgent(a), AGENT_GONE);
+    return { shown: true, doing: words.doing, done: words.done, x: aim.x, y: aim.y };
+  };
+
   // ---- Ops ----
 
+  // Hides the overlay for a screenshot (`hidden`), all of it, or (`agents`) all but the agents'
+  // cursors, which the user can have in agents' screenshots.
   const overlay = (op) => {
     hidden = !!op.hidden;
+    keepAgents = hidden && !!op.agents;
     applyMode();
     return { hidden };
   };
@@ -1351,5 +1593,5 @@ button:focus-visible, .kind:focus-visible { outline: 2px solid var(--ring); outl
     }
     return { found: true };
   };
-  Object.assign(modules, { overlay, pick, markers, flash, theme: themeOp });
+  Object.assign(modules, { overlay, pick, markers, flash, theme: themeOp, presence });
 }

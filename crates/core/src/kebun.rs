@@ -1173,6 +1173,7 @@ fn list_keys(ink: &Ink, paths: &AppPaths) -> i32 {
     let request = crate::app_control::Request {
         project: None,
         agent_folder: None,
+        agent: None,
         command: crate::app_control::Command::Keymap {
             op: crate::keymap::KeymapOp::List {
                 filter: None,
@@ -1920,6 +1921,7 @@ pub fn browse(
         let request = Request {
             project: None,
             agent_folder: folder.clone(),
+            agent: None,
             command,
         };
         app_control::send(paths, &request, BROWSE_TIMEOUT)

@@ -22,12 +22,18 @@ pub const REPLY_ERROR: &str = "error: ";
 /// A command for one window: the one whose project folder holds `project`
 /// (the deepest). Without `project`, the one whose project folder holds
 /// `agent_folder`, the folder the agent works in, else the frontmost.
+///
+/// `agent` says which agent session sent it ([`crate::agents`]), so that the app can show where
+/// each agent works and what it does. It is optional both ways: an older `sawit-mcp` sends none,
+/// and the app counts its ops as one anonymous agent's; an older app reads past the field.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_folder: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<crate::agents::AgentIdentity>,
     #[serde(flatten)]
     pub command: Command,
 }
@@ -403,6 +409,7 @@ pub fn notify_reload(paths: &AppPaths, store: Store) {
         let request = Request {
             project: None,
             agent_folder: None,
+            agent: None,
             command: Command::Reload { store },
         };
         let _ = send(paths, &request, Duration::from_secs(5));
@@ -418,6 +425,7 @@ mod tests {
         let request = Request {
             project: Some("/code/app".into()),
             agent_folder: None,
+            agent: None,
             command: Command::TerminalRun {
                 command: "npm test".into(),
                 cwd: None,
@@ -426,6 +434,71 @@ mod tests {
         };
         let bytes = encode(&request);
         assert_eq!(decode(&bytes), Some(Ok(request)));
+    }
+
+    /// The agent that sent an op goes with it as `{id, name, label}` and comes back as it went.
+    /// An op without one, as an older `sawit-mcp` sends it, still reads, and has none; and the
+    /// field is one an app that predates it reads past, as it reads past any field it doesn't
+    /// know.
+    #[test]
+    fn the_agent_round_trips_and_an_op_without_one_still_works() {
+        let request = Request {
+            project: None,
+            agent_folder: Some("/code/shop".into()),
+            agent: Some(crate::agents::AgentIdentity {
+                id: "mcp-4821-0badf00d".into(),
+                name: "Claude Code".into(),
+                label: Some("shop".into()),
+                version: None,
+            }),
+            command: Command::Canvas {
+                op: serde_json::json!({"op": "get"}),
+                file: None,
+            },
+        };
+        let bytes = encode(&request);
+        assert_eq!(
+            &bytes[MAGIC.len()..],
+            br#"{"agent_folder":"/code/shop","agent":{"id":"mcp-4821-0badf00d","name":"Claude Code","label":"shop"},"cmd":"canvas","op":{"op":"get"}}"#
+        );
+        assert_eq!(decode(&bytes), Some(Ok(request)));
+        let old = decode(
+            br#"sawit-control/1
+{"cmd":"browser","op":{"op":"click","selector":"button"}}"#,
+        );
+        assert!(matches!(
+            old,
+            Some(Ok(Request {
+                agent: None,
+                command: Command::Browser { .. },
+                ..
+            }))
+        ));
+        // Every kind of command reads with an agent beside it, the ones without fields too.
+        for wire in [
+            r#"{"cmd":"state","agent":{"id":"a","name":"Codex"}}"#,
+            r#"{"cmd":"focus","agent":{"id":"a","name":"Codex","version":"0.40"}}"#,
+            r#"{"cmd":"show_panel","panel":"git","agent":{"id":"a","name":"Codex"}}"#,
+        ] {
+            let mut bytes = MAGIC.to_vec();
+            bytes.extend_from_slice(wire.as_bytes());
+            let read = decode(&bytes)
+                .unwrap()
+                .unwrap_or_else(|e| panic!("{wire}: {e}"));
+            assert_eq!(read.agent.map(|a| a.name), Some("Codex".into()), "{wire}");
+        }
+        // What an app that predates the field does with it: a field it doesn't know is read past.
+        let unknown = decode(
+            br#"sawit-control/1
+{"cmd":"focus","from_the_future":{"id":"a"}}"#,
+        );
+        assert!(matches!(
+            unknown,
+            Some(Ok(Request {
+                command: Command::Focus,
+                ..
+            }))
+        ));
     }
 
     #[test]
@@ -439,6 +512,7 @@ mod tests {
         let request = Request {
             project: None,
             agent_folder: Some("/code/app".into()),
+            agent: None,
             command: Command::TerminalRead {
                 tab: None,
                 pane: None,
@@ -455,6 +529,7 @@ mod tests {
         let bytes = encode(&Request {
             project: None,
             agent_folder: None,
+            agent: None,
             command: Command::ShowPanel {
                 panel: Panel::Ports,
             },
@@ -475,6 +550,7 @@ mod tests {
         let request = Request {
             project: None,
             agent_folder: None,
+            agent: None,
             command: Command::OpenPage { page: Page::Tools },
         };
         let bytes = encode(&request);
@@ -486,6 +562,7 @@ mod tests {
         let skills = Request {
             project: None,
             agent_folder: None,
+            agent: None,
             command: Command::OpenPage { page: Page::Skills },
         };
         let bytes = encode(&skills);
@@ -524,6 +601,7 @@ mod tests {
             let request = Request {
                 project: None,
                 agent_folder: None,
+                agent: None,
                 command,
             };
             let bytes = encode(&request);
@@ -557,6 +635,7 @@ mod tests {
         let request = Request {
             project: None,
             agent_folder: None,
+            agent: None,
             command: Command::Browser {
                 op: crate::browser::BrowserOp::Navigate {
                     url: "http://localhost:5173".into(),
@@ -586,6 +665,7 @@ mod tests {
             let request = Request {
                 project: None,
                 agent_folder: None,
+                agent: None,
                 command: Command::Canvas {
                     op: op.clone(),
                     file,
@@ -661,6 +741,7 @@ mod tests {
         let request = Request {
             project: None,
             agent_folder: Some("/code/app".into()),
+            agent: None,
             command: Command::TerminalSplit {
                 tab: 2,
                 pane: Some(1),
@@ -680,6 +761,7 @@ mod tests {
             Some(Ok(Request {
                 project: None,
                 agent_folder: None,
+                agent: None,
                 command: Command::TerminalSplit {
                     tab: 0,
                     pane: None,
@@ -725,6 +807,7 @@ mod tests {
         let request = Request {
             project: None,
             agent_folder: None,
+            agent: None,
             command: Command::TerminalClose {
                 tab: 1,
                 pane: Some(0),
@@ -745,6 +828,7 @@ mod tests {
         let request = Request {
             project: None,
             agent_folder: None,
+            agent: None,
             command: Command::Keymap {
                 op: crate::keymap::KeymapOp::List {
                     filter: Some("close tab".into()),

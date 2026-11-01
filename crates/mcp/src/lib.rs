@@ -9,12 +9,15 @@ use std::path::{Path, PathBuf};
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::model::{
-    CallToolResult, ContentBlock as Content, Implementation, ServerCapabilities, ServerConfig,
+    CallToolResult, ContentBlock as Content, Implementation, InitializeRequestParams,
+    InitializeResult, ServerCapabilities, ServerConfig,
 };
-use rmcp::{ServerHandler, tool_handler};
+use rmcp::service::RequestContext;
+use rmcp::{ErrorData, RoleServer, ServerHandler, tool_handler};
 use sawit_core::app_control::{self, Store};
 use sawit_core::instances::{AppPaths, Instance};
 
+pub mod agent;
 pub mod app;
 pub mod browser;
 pub mod browser_design;
@@ -104,6 +107,8 @@ Targets: database tools take a Sawit instance name or a saved connection name (s
 pub struct Sawit {
     paths: AppPaths,
     tool_router: ToolRouter<Sawit>,
+    /// The agent session this process serves, whose identity goes with every op to the app.
+    agent: std::sync::Arc<agent::Session>,
 }
 
 pub(crate) fn ok(text: impl Into<String>) -> CallToolResult {
@@ -542,6 +547,7 @@ impl Sawit {
         Self {
             paths,
             tool_router: Self::router(),
+            agent: Default::default(),
         }
     }
 
@@ -592,6 +598,18 @@ impl ServerHandler for Sawit {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("sawit-mcp", env!("CARGO_PKG_VERSION")))
             .with_instructions(INSTRUCTIONS)
+    }
+
+    /// The client says who it is here, and the agent session takes its name
+    /// ([`agent::Session::met`]); the rest is rmcp's own handshake.
+    async fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, ErrorData> {
+        self.agent.met(&request.client_info);
+        context.peer.set_peer_info(request.clone());
+        self.negotiate_initialize(&request)
     }
 }
 

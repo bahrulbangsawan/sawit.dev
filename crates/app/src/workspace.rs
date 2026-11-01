@@ -148,6 +148,7 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-cmd-u", InstallUpdate, ctx),
         KeyBinding::new("ctrl-cmd-e", OpenLocalExplorer, ctx),
         KeyBinding::new("ctrl-cmd-i", crate::cli::InstallCli, ctx),
+        KeyBinding::new("ctrl-cmd-a", crate::agents::ToggleAgentCursors, ctx),
         // Zed's.
         KeyBinding::new("cmd-k cmd-s", OpenKeymapEditor, ctx),
     ]

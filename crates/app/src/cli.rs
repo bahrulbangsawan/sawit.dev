@@ -296,15 +296,16 @@ pub fn init(cx: &mut App) {
 /// Sets the app's menus. Their shortcuts are the keymap's as it is now, so the keymap sets them
 /// again whenever it changes.
 pub fn set_menus(cx: &mut App) {
-    cx.set_menus(menus());
+    cx.set_menus(menus(cx));
 }
 
 /// The app's menus. The Edit menu's items are the system's (`cut:`, `copy:`, `paste:`,
 /// `selectAll:`), sent to the view with AppKit's keyboard: a web page's clipboard keys reach it
 /// that way, which no binding of Sawit's takes there. Elsewhere Sawit's own bindings of the same
 /// keys run first, and a click on an item runs gpui-kit's text editing action in the field with
-/// the keyboard.
-fn menus() -> Vec<Menu> {
+/// the keyboard. The View menu's item says what it does now: hide the agents' cursors, or show
+/// them.
+fn menus(cx: &App) -> Vec<Menu> {
     use gpui_kit::component::input as text;
     vec![
         Menu::new("Sawit").items([
@@ -325,6 +326,10 @@ fn menus() -> Vec<Menu> {
             MenuItem::os_action("Paste", text::Paste, OsAction::Paste),
             MenuItem::os_action("Select All", text::SelectAll, OsAction::SelectAll),
         ]),
+        Menu::new("View").items([MenuItem::action(
+            crate::agents::menu_label(cx),
+            crate::agents::ToggleAgentCursors,
+        )]),
     ]
 }
 
@@ -439,7 +444,8 @@ fn frontmost(cx: &App) -> Option<(AnyWindowHandle, Entity<Workspace>)> {
 /// A request from the socket: the CLI's, or `sawit-mcp`'s.
 enum Incoming {
     Open(OpenRequest),
-    Control(app_control::Request),
+    /// Boxed: a request, with the agent that sent it, is much larger than an open request.
+    Control(Box<app_control::Request>),
 }
 
 /// How long a browser op may take before `sawit-mcp` hears it timed out.
@@ -478,7 +484,7 @@ pub fn serve(cx: &mut App) {
                 continue;
             }
             let incoming = match app_control::decode(&bytes) {
-                Some(Ok(request)) => Incoming::Control(request),
+                Some(Ok(request)) => Incoming::Control(Box::new(request)),
                 Some(Err(e)) => {
                     reply(&mut stream, &reply_error(&e));
                     continue;
@@ -507,7 +513,7 @@ pub fn serve(cx: &mut App) {
         while let Some((incoming, stream)) = rx.next().await {
             cx.update(|cx| match incoming {
                 Incoming::Open(request) => handle(request, Some(stream), cx),
-                Incoming::Control(request) => handle_control(request, stream, cx),
+                Incoming::Control(request) => handle_control(*request, stream, cx),
             });
         }
     })
@@ -590,7 +596,7 @@ fn handle_control(request: app_control::Request, mut stream: UnixStream, cx: &mu
                     futures::future::Either::Left((Ok(Ok(value)), _)) => reply_ok(&value),
                     futures::future::Either::Left((Ok(Err(e)), _)) => reply_error(&e),
                     futures::future::Either::Left((Err(_), _)) => {
-                        reply_error("The browser closed before answering.")
+                        reply_error("The browser or canvas closed before answering.")
                     }
                     futures::future::Either::Right(_) => reply_error(
                         "The browser page didn't answer in time. Is the Sawit window visible?",
@@ -620,10 +626,15 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
             // The GitHub sign-in is the app's, not a window's: whether there is one, and whose.
             // Never the token. Agents can't sign in: the user does, in the app.
             let github = crate::git::account::global(cx).read(cx).describe();
+            // The agents at work on any window's canvas or browser, each surface once.
+            let agents: Vec<serde_json::Value> = (windows.iter())
+                .flat_map(|w| w["agents"].as_array().cloned().unwrap_or_default())
+                .collect();
             return Ok(Answer::Now(serde_json::json!({
                 "version": env!("CARGO_PKG_VERSION"),
                 "github": github,
                 "windows": windows,
+                "agents": agents,
             })));
         }
         ControlCommand::Reload { store } => {
@@ -719,12 +730,15 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
     }
     let focus = request.command == ControlCommand::Focus;
     let command = request.command;
+    let agent = request.agent;
     let answer = handle
         .update(cx, |_, window, cx| {
             if focus {
                 window.activate_window();
             }
-            workspace.update(cx, |w, cx| w.control(command, own.as_deref(), window, cx))
+            workspace.update(cx, |w, cx| {
+                w.control(command, own.as_deref(), agent.as_ref(), window, cx)
+            })
         })
         .map_err(|_| "The Sawit window closed.".to_string())??;
     if focus {
@@ -1140,7 +1154,7 @@ mod tests {
         cx.update(|cx| {
             let keymap = cx.key_bindings();
             let keymap = keymap.borrow();
-            let menus = super::menus();
+            let menus = super::menus(cx);
             let edit = menus.iter().find(|m| m.name.as_ref() == "Edit");
             let found: Vec<(String, Option<String>, String)> = edit
                 .map(|edit| {
@@ -1237,7 +1251,7 @@ mod tests {
         cx.update(|cx| {
             let keymap = cx.key_bindings();
             let keymap = keymap.borrow();
-            for menu in super::menus() {
+            for menu in super::menus(cx) {
                 for item in &menu.items {
                     // A system item (the Edit menu's) goes to the view with AppKit's keyboard,
                     // not to a GPUI action, and only when no binding of Sawit's takes its key.

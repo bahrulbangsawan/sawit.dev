@@ -3,6 +3,7 @@
 //! database tabs and canvas an agent can drive.
 
 use futures::channel::oneshot;
+use sawit_core::agents::AgentIdentity;
 use sawit_core::app_control::{Command, InstanceAction, Page, Panel, Store, key_bytes};
 use sawit_core::control::Preflight;
 use sawit_core::db::ConnProfile;
@@ -248,7 +249,26 @@ impl Workspace {
             "browser": self
                 .browser_tab(self.root(cx).as_deref())
                 .map(|(_, b)| b.read(cx).describe()),
+            "agents": self.describe_agents(cx),
         })
+    }
+
+    /// The agents at work in this window, as `app_state.agents` lists them: on each canvas and
+    /// browser where one acted in the last 30 s, its id, label, colour, the surface (`canvas` with
+    /// its file, `browser` with its project), what it did last and how long ago.
+    fn describe_agents(&self, cx: &App) -> Vec<Value> {
+        let boards = self.boards.iter().filter_map(|b| b.upgrade());
+        let mut agents: Vec<Value> = boards
+            .flat_map(|b| b.read(cx).describe_agents(cx))
+            .collect();
+        for tab in &self.tabs {
+            if let PaneItem::Other { view, .. } = &tab.item
+                && let Ok(browser) = view.clone().downcast::<BrowserView>()
+            {
+                agents.extend(browser.read(cx).describe_agents(cx));
+            }
+        }
+        agents
     }
 
     /// Reads `store` again after `sawit-mcp` changed its file.
@@ -270,10 +290,13 @@ impl Workspace {
     /// handled for the whole app by the caller. `agent_folder` is the folder the agent works in,
     /// when it named no project and a project of this window holds it: its browser and its canvas
     /// are that project's ([`agent_project`]), and so is a new terminal it starts without a folder.
+    /// `agent` is the agent session that sent it, whose cursor the canvas and the browser show
+    /// where it works (`None` from a `sawit-mcp` that predates identities: an anonymous agent).
     pub fn control(
         &mut self,
         command: Command,
         agent_folder: Option<&Path>,
+        agent: Option<&AgentIdentity>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Answer, String> {
@@ -529,7 +552,7 @@ impl Workspace {
                         board.ok_or("The canvas didn't open.")?
                     }
                 };
-                Ok(Answer::Now(board.update(cx, |b, cx| b.run_op(&op, cx))))
+                Ok(board.update(cx, |b, cx| b.agent_op(op, agent, cx)))
             }
             // The browser of the agent's project ([`agent_project`]). One brought forward comes
             // with its project, as on a click on its tab; one used in the background changes
@@ -545,7 +568,9 @@ impl Workspace {
                     }
                     _ => self.open_browser_of(root, None, window, cx),
                 };
-                Ok(Answer::Later(browser.update(cx, |b, cx| b.apply(op, cx))))
+                Ok(Answer::Later(
+                    browser.update(cx, |b, cx| b.apply_as(op, agent, cx)),
+                ))
             }
             // ⌘D or ⇧⌘D for an agent: the new pane shows as terminal_run's terminal does, and the
             // keyboard stays where the user has it. The dock shows first, as for terminal_run: one

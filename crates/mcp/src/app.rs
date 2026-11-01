@@ -449,6 +449,7 @@ impl Sawit {
         let request = Request {
             project,
             agent_folder,
+            agent: Some(self.agent.identity()),
             command,
         };
         tokio::task::spawn_blocking(move || app_control::send(&paths, &request, REPLY_TIMEOUT))
@@ -1074,7 +1075,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "What the Sawit app shows: each window's project, sidebar panel, layout, open tabs (index, title, kind, path, unsaved) and terminal tabs (index, title, running job, script, ssh, and `agent`: the coding agent running there, such as claude-code or codex, with a tab's `agents` listing every one of its panes') and each tab's split panes (each with its `agent`), and `browser`: the browser tab of the window's active project (url, title, loading, viewport, panel, pick_mode), which may not be the browser your browser_* tools use (theirs is your project's; browser_snapshot shows its page). `github` is the app's one GitHub sign-in: signed_in, and login (never a token); only the user can sign in"
+        description = "What the Sawit app shows: each window's project, sidebar panel, layout, open tabs (index, title, kind, path, unsaved) and terminal tabs (index, title, running job, script, ssh, and `agent`: the coding agent running there, such as claude-code or codex, with a tab's `agents` listing every one of its panes') and each tab's split panes (each with its `agent`), and `browser`: the browser tab of the window's active project (url, title, loading, viewport, panel, pick_mode), which may not be the browser your browser_* tools use (theirs is your project's; browser_snapshot shows its page). `github` is the app's one GitHub sign-in: signed_in, and login (never a token); only the user can sign in. `agents` lists the AI agents at work on a canvas or browser now (id, name, color, surface, action, seconds_ago), you among them"
     )]
     async fn app_state(&self) -> CallToolResult {
         self.app_tool(None, Command::State).await
@@ -1558,6 +1559,7 @@ fn launch(paths: &sawit_core::instances::AppPaths, path: Option<&str>) -> Result
         let request = Request {
             project: None,
             agent_folder: None,
+            agent: None,
             command: Command::Focus,
         };
         app_control::send(paths, &request, REPLY_TIMEOUT)?;
@@ -2202,6 +2204,13 @@ mod tests {
         assert_eq!(request.project, None);
         assert_eq!(request.agent_folder, crate::project_dir(None));
         assert!(request.agent_folder.is_some(), "the tests run in a folder");
+        // Every op says which agent session sent it: this process's.
+        let agent = request.agent.expect("the agent goes with the op");
+        assert!(
+            agent
+                .id
+                .starts_with(&format!("mcp-{}-", std::process::id()))
+        );
 
         server
             .terminal_read(Parameters(read(Some("/code/shop".into()))))
