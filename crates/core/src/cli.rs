@@ -19,7 +19,7 @@ sawit — open folders and files in Sawit, query databases, clear ports
 Usage:
   sawit [options] [path[:line[:column]] ...]
   sawit <db> [table] [\"sql\"]
-  sawit list [instances|db|ports|connections|tools]
+  sawit list [instances|db|ports|connections|tools|keys]
   sawit bakar ports [port ...] [-y]
   sawit bakar instances [name ...] [-y]
   sawit panen <db> <table|\"sql\"> <file.csv|file.xlsx> [-y]
@@ -70,6 +70,12 @@ Tools (the app's Tools page):
   sawit pupuk              upgrade every installed tool with a newer
                            release (shown as → in `list tools`)
   sawit pupuk bun          upgrade just bun (asks first; -y to skip)
+
+Keys (the app's Keymap Editor; Sawit must be running):
+  sawit list keys          every shortcut: its keys, what it runs, where,
+                           and whether it's a default, yours or turned off
+  sawit list keys | grep -i split
+                           find one (aliases: pintasan, keymap, shortcuts)
 
 Options:
   -n, --new         always open in a new window
@@ -508,6 +514,33 @@ mod tests {
             parse(&["ls", "alat"]),
             Ok(Invocation::List(ListWhat::Tools))
         );
+    }
+
+    /// `sawit list keys` lists the key bindings under each of its names, `sawit --help` names
+    /// them all with an example, and `sawit ./keys` still opens a folder named keys.
+    #[test]
+    fn list_keys_has_its_names_and_its_help() {
+        for word in ["keys", "key", "keymap", "shortcuts", "pintasan"] {
+            assert_eq!(
+                parse(&["list", word]),
+                Ok(Invocation::List(ListWhat::Keys)),
+                "{word}"
+            );
+        }
+        assert_eq!(
+            parse(&["ls", "pintasan"]),
+            Ok(Invocation::List(ListWhat::Keys))
+        );
+        assert!(matches!(parse(&["./keys"]), Ok(Invocation::Open { .. })));
+        assert!(matches!(parse(&["keys"]), Ok(Invocation::Open { .. })));
+        for said in [
+            "sawit list [instances|db|ports|connections|tools|keys]",
+            "sawit list keys ",
+            "Sawit must be running",
+            "pintasan, keymap, shortcuts",
+        ] {
+            assert!(USAGE.contains(said), "the help doesn't say {said:?}");
+        }
     }
 
     #[test]

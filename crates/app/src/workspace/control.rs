@@ -78,6 +78,19 @@ fn canvas_file_kind(file: &Path) -> Result<FileKind, String> {
     }
 }
 
+/// Where a new shell an agent starts goes: `cwd` when it names a folder, else the agent's own
+/// project, as for its browser and canvas ([`agent_project`]): the project of the window's `roots`
+/// that holds the folder the agent works in, else the active one. It started in the active
+/// project, so an agent in project A whose window showed B ran its command in B's folder.
+fn agent_shell_folder(
+    cwd: Option<PathBuf>,
+    roots: &[PathBuf],
+    agent_folder: Option<&Path>,
+    active: Option<PathBuf>,
+) -> Option<PathBuf> {
+    cwd.or_else(|| agent_project(roots, agent_folder, active))
+}
+
 fn panel_name(tab: SidebarTab) -> &'static str {
     match tab {
         SidebarTab::Servers => "instances",
@@ -151,6 +164,16 @@ fn shell_folder(cwd: Option<PathBuf>) -> Result<Option<PathBuf>, String> {
             dir.display()
         )),
         cwd => Ok(cwd),
+    }
+}
+
+/// The terminal's way of splitting a pane, for the way `sawit-mcp` names.
+fn split_dir(direction: sawit_core::app_control::SplitDirection) -> sawit_core::terminal::SplitDir {
+    use sawit_core::app_control::SplitDirection;
+    use sawit_core::terminal::SplitDir;
+    match direction {
+        SplitDirection::Right => SplitDir::Right,
+        SplitDirection::Down => SplitDir::Down,
     }
 }
 
@@ -239,10 +262,10 @@ impl Workspace {
         }
     }
 
-    /// Runs a window command. `State`, `Focus`, `Open` and `Reload` are
+    /// Runs a window command. `State`, `Focus`, `Open`, `Reload` and `Keymap` are
     /// handled for the whole app by the caller. `agent_folder` is the folder the agent works in,
     /// when it named no project and a project of this window holds it: its browser and its canvas
-    /// are that project's ([`agent_project`]).
+    /// are that project's ([`agent_project`]), and so is a new terminal it starts without a folder.
     pub fn control(
         &mut self,
         command: Command,
@@ -317,7 +340,7 @@ impl Workspace {
                 let (tab, pane) = if cwd.is_some() || new_tab {
                     self.leave_welcome(TERMINAL_ONLY, cx);
                     self.layout.terminal = true;
-                    let dir = cwd.or_else(|| self.root(cx));
+                    let dir = agent_shell_folder(cwd, &self.roots(cx), agent_folder, self.root(cx));
                     self.terminal.update(cx, |t, cx| {
                         t.run_in_new(dir, &command, Origin::Agent, window, cx)
                     })?
@@ -341,7 +364,10 @@ impl Workspace {
                 let mut bytes = text.map(String::into_bytes).unwrap_or_default();
                 if let Some(key) = key {
                     bytes.extend(key_bytes(&key).ok_or_else(|| {
-                        format!("Unknown key “{key}”. Use enter, tab, escape, backspace, up, down, left, right or ctrl-<letter>.")
+                        format!(
+                            "Unknown key “{key}”. Use {}.",
+                            sawit_core::app_control::KEY_NAMES
+                        )
                     })?);
                 }
                 if bytes.is_empty() {
@@ -352,7 +378,17 @@ impl Workspace {
                     .update(cx, |t, cx| t.input(tab, pane, bytes, cx))?;
                 done(json!({ "terminal": ix }))
             }
-            Command::TerminalClose { tab, pane } => {
+            // Unconfirmed, a close that would end what runs there, or the terminal the user types
+            // in, is refused: terminal_run never touches the user's shell, and a close shouldn't
+            // either without the agent saying it is sure.
+            Command::TerminalClose { tab, pane, confirm } => {
+                let refusal = self
+                    .terminal
+                    .read(cx)
+                    .close_refusal(tab, pane, window, cx)?;
+                if let Some(refusal) = refusal.filter(|_| !confirm) {
+                    return Err(refusal);
+                }
                 self.terminal
                     .update(cx, |t, cx| t.close_tab(tab, pane, window, cx))?;
                 done(json!({ "closed": tab }))
@@ -501,6 +537,39 @@ impl Workspace {
                 };
                 Ok(Answer::Later(browser.update(cx, |b, cx| b.apply(op, cx))))
             }
+            // ⌘D or ⇧⌘D for an agent: the new pane shows as terminal_run's terminal does, and the
+            // keyboard stays where the user has it. The dock shows first, as for terminal_run: one
+            // never on screen can't tell how much room its panes have, and the split asked again
+            // once it shows can be measured.
+            Command::TerminalSplit {
+                tab,
+                pane,
+                direction,
+                command,
+                cwd,
+            } => {
+                let cwd = shell_folder(cwd)?;
+                let dir = split_dir(direction);
+                self.leave_welcome(TERMINAL_ONLY, cx);
+                self.layout.terminal = true;
+                cx.notify();
+                let (tab, pane) = self.terminal.update(cx, |t, cx| {
+                    t.split(
+                        tab,
+                        pane,
+                        dir,
+                        cwd,
+                        command.as_deref(),
+                        Origin::Agent,
+                        window,
+                        cx,
+                    )
+                })?;
+                let pane = self.terminal.read(cx).pane_index(tab, pane, cx);
+                done(json!({ "terminal": tab, "pane": pane }))
+            }
+            // The keymap is every window's: the caller answers it for the whole app.
+            Command::Keymap { .. } => done(json!({})),
         };
         cx.notify();
         result
@@ -701,6 +770,44 @@ mod tests {
         BrowserRoute, agent_project, browser_route, canvas_file_kind, close_answer, script_answer,
         shell_folder,
     };
+    use super::{agent_shell_folder, split_dir};
+
+    /// An agent's new terminal (terminal_run with new_tab and no cwd) starts in the agent's own
+    /// project, as its browser opens on that project's dev server: with projects A and B in one
+    /// window and B shown, an agent in A ran its command in B's folder. A folder it names wins,
+    /// and an agent that works in no project of the window gets the active one.
+    #[test]
+    fn an_agents_new_terminal_starts_in_its_own_project() {
+        let roots = [PathBuf::from("/code/shop"), PathBuf::from("/code/blog")];
+        let shown = Some(PathBuf::from("/code/blog"));
+        let folder = |cwd: Option<&str>, agent: Option<&str>| {
+            agent_shell_folder(
+                cwd.map(PathBuf::from),
+                &roots,
+                agent.map(Path::new),
+                shown.clone(),
+            )
+        };
+        assert_eq!(
+            folder(None, Some("/code/shop/web")),
+            Some(PathBuf::from("/code/shop"))
+        );
+        assert_eq!(
+            folder(Some("/code/blog/api"), Some("/code/shop")),
+            Some(PathBuf::from("/code/blog/api"))
+        );
+        assert_eq!(folder(None, Some("/elsewhere")), shown);
+        assert_eq!(folder(None, None), shown);
+    }
+
+    /// terminal_split's right and down are the pane menu's Split right (⌘D) and Split down (⇧⌘D).
+    #[test]
+    fn a_split_goes_the_way_the_agent_names() {
+        use sawit_core::app_control::SplitDirection;
+        use sawit_core::terminal::SplitDir;
+        assert_eq!(split_dir(SplitDirection::Right), SplitDir::Right);
+        assert_eq!(split_dir(SplitDirection::Down), SplitDir::Down);
+    }
 
     /// MCP-4: a shell an agent starts in a folder starts there or not at all. The PTY ignores a
     /// `chdir` that fails, so a relative folder or one that isn't there started the shell in the

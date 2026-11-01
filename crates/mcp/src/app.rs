@@ -119,7 +119,7 @@ pub struct TerminalRunArgs {
     #[schemars(description = "Command line(s) to type, followed by Enter")]
     pub command: String,
     #[schemars(
-        description = "Start a new shell in this folder: an absolute path, or ~/… (default: the project)"
+        description = "Start a new shell in this folder: an absolute path, or ~/…. A new_tab without cwd starts in the project `project` names, else in your own: the window's project that holds the folder sawit-mcp runs in, else the project in front"
     )]
     pub cwd: Option<String>,
     #[schemars(
@@ -163,9 +163,10 @@ pub struct TerminalInputArgs {
     pub pane: Option<usize>,
     #[schemars(description = "Text to type as is (no Enter added)")]
     pub text: Option<String>,
-    #[schemars(
-        description = "Key to press after the text: enter, tab, escape, backspace, up, down, left, right, home, end, pageup, pagedown, delete or ctrl-<letter> (ctrl-c interrupts)"
-    )]
+    #[schemars(description = format!(
+        "Key to press after the text: {} (ctrl-c interrupts)",
+        app_control::KEY_NAMES
+    ))]
     pub key: Option<String>,
     pub project: Option<String>,
 }
@@ -178,6 +179,40 @@ pub struct TerminalCloseArgs {
     pub tab: usize,
     #[schemars(description = "Pane within the tab (from app_state); default: the whole tab")]
     pub pane: Option<usize>,
+    #[schemars(
+        description = "Close it even though closing ends what runs there (a dev server, an SSH session, an agent) or the user is typing in it. Without it such a close is refused, naming what runs"
+    )]
+    #[serde(default)]
+    pub confirm: bool,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct TerminalSplitArgs {
+    #[schemars(
+        description = "Terminal tab index, as terminal_run, app_run_script and app_ssh_connect return it (or from app_state)"
+    )]
+    pub tab: usize,
+    #[schemars(
+        description = "Pane within the tab to split, as those tools return it (or from app_state); needed when the tab is split"
+    )]
+    pub pane: Option<usize>,
+    #[schemars(
+        description = "right (side by side, as ⌘D splits) or down (one above the other, as ⇧⌘D)"
+    )]
+    pub direction: String,
+    #[schemars(description = "Command line(s) to type into the new shell, followed by Enter")]
+    pub command: Option<String>,
+    #[schemars(
+        description = "Folder the new shell starts in: an absolute path, or ~/… (default: the split pane's folder, else its tab's project)"
+    )]
+    pub cwd: Option<String>,
+    #[schemars(
+        description = "Seconds to wait before returning the new pane's output (0-120, default 2)"
+    )]
+    pub wait_secs: Option<f64>,
+    #[schemars(description = "Output lines to return (default 100)")]
+    pub lines: Option<usize>,
     pub project: Option<String>,
 }
 
@@ -380,6 +415,7 @@ fn variant<T: serde::de::DeserializeOwned>(name: &str, choices: &str) -> Result<
 const PANELS: &str = "instances, files, git, database, run, ports, network, prompts, ssh, shell_config (Config Files)";
 const PAGES: &str = "canvas, browser, mcp, tools, changelog, git_graph, github, instance, keymap";
 const INSTANCE_ACTIONS: &str = "select, start, stop, restart";
+const SPLIT_DIRECTIONS: &str = "right, down";
 
 pub(crate) fn pretty(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
@@ -422,6 +458,34 @@ impl Sawit {
     async fn app_tool(&self, project: Option<String>, command: Command) -> CallToolResult {
         match self.app_call(project, command).await {
             Ok(value) => ok(pretty(&value)),
+            Err(e) => fail(e),
+        }
+    }
+
+    /// What `terminal_run` and `terminal_split` answer, once the app said where they started
+    /// (`started`: the terminal and the pane in it): that place, then, after waiting `wait_secs`
+    /// ([`run_wait`]), that pane's latest `lines` lines (default 100).
+    async fn started_output(
+        &self,
+        project: Option<String>,
+        started: &Value,
+        wait_secs: Option<f64>,
+        lines: Option<usize>,
+    ) -> CallToolResult {
+        let tab = started["terminal"].as_u64().map(|t| t as usize);
+        let pane = started["pane"].as_u64().map(|p| p as usize);
+        tokio::time::sleep(run_wait(wait_secs)).await;
+        let read = Command::TerminalRead {
+            tab,
+            pane,
+            lines: Some(lines.unwrap_or(100)),
+        };
+        match self.app_call(project, read).await {
+            Ok(v) => ok(format!(
+                "{}:\n{}",
+                terminal_name(tab, pane),
+                v["text"].as_str().unwrap_or_default()
+            )),
             Err(e) => fail(e),
         }
     }
@@ -994,7 +1058,7 @@ pub(crate) fn base64_decode(text: &str, from: &str) -> Result<Vec<u8>, String> {
 #[tool_router(router = app_router, vis = "pub(crate)")]
 impl Sawit {
     #[tool(
-        description = "Start the Sawit app if it isn't running (or bring it forward), optionally opening a folder or file. The app_*, terminal_* and browser_* tools need it running; the canvas_* tools also work on the saved canvas file without it"
+        description = "Start the Sawit app if it isn't running (or bring it forward), optionally opening a folder or file. The app_*, terminal_* and browser_* tools need it running; the canvas_* tools also work on the saved canvas file without it. The keymap_* tools and terminal_split need it running too"
     )]
     async fn launch_app(&self, Parameters(a): Parameters<LaunchArgs>) -> CallToolResult {
         let paths = self.paths.clone();
@@ -1103,25 +1167,42 @@ impl Sawit {
         };
         // Where the command went: the tab and the pane in it, which needn't be the tab's
         // focused pane (the app leaves the focus alone while the user types in a terminal).
-        let tab = started["terminal"].as_u64().map(|t| t as usize);
-        let pane = started["pane"].as_u64().map(|p| p as usize);
-        tokio::time::sleep(run_wait(a.wait_secs)).await;
-        let read = Command::TerminalRead {
-            tab,
-            pane,
-            lines: Some(a.lines.unwrap_or(100)),
-        };
-        match self.app_call(a.project, read).await {
-            Ok(v) => ok(format!(
-                "{}:\n{}",
-                terminal_name(tab, pane),
-                v["text"].as_str().unwrap_or_default()
-            )),
-            Err(e) => fail(e),
-        }
+        self.started_output(a.project, &started, a.wait_secs, a.lines)
+            .await
     }
 
-    #[tool(description = "Read a terminal tab's latest output (scrollback and screen) as text")]
+    #[tool(
+        description = "Split a terminal pane in two, as ⌘D (right) or ⇧⌘D (down) does, and start a shell in the new half, optionally running a command there: a dev server or a test watcher beside the user's shell. Name the tab, and the pane in a split tab, as terminal_run or app_state give them. The new pane never takes the keyboard. Each half must keep at least 20 columns by 4 rows: a split that would leave less is refused, saying so, and starts nothing. Waits, then returns where the new pane is (\"Terminal 2, pane 1:\") with its latest output: pass that tab and pane to terminal_read, terminal_input and terminal_close. Needs the app running"
+    )]
+    async fn terminal_split(&self, Parameters(a): Parameters<TerminalSplitArgs>) -> CallToolResult {
+        let direction = tri!(variant::<app_control::SplitDirection>(
+            &a.direction,
+            SPLIT_DIRECTIONS
+        ));
+        // A folder the shell can't go to would start it in the app's folder instead (MCP-4).
+        let cwd = a.cwd.filter(|cwd| !cwd.trim().is_empty());
+        let cwd = match cwd.as_deref().map(crate::existing_dir).transpose() {
+            Ok(cwd) => cwd,
+            Err(e) => return fail(format!("Nothing was split: {e}")),
+        };
+        let command = Command::TerminalSplit {
+            tab: a.tab,
+            pane: a.pane,
+            direction,
+            command: a.command,
+            cwd,
+        };
+        let started = match self.app_call(a.project.clone(), command).await {
+            Ok(v) => v,
+            Err(e) => return fail(e),
+        };
+        self.started_output(a.project, &started, a.wait_secs, a.lines)
+            .await
+    }
+
+    #[tool(
+        description = "Read a terminal pane's latest output (scrollback and screen) as text: name the tab, and the pane in a split tab, as terminal_run returned them; without a tab, the pane the user has in front"
+    )]
     async fn terminal_read(&self, Parameters(a): Parameters<TerminalReadArgs>) -> CallToolResult {
         let command = Command::TerminalRead {
             tab: a.tab,
@@ -1147,13 +1228,16 @@ impl Sawit {
         self.app_tool(a.project, command).await
     }
 
-    #[tool(description = "Close a terminal tab, or just one pane of it")]
+    #[tool(
+        description = "Close a terminal tab, or just one pane of it, ending whatever runs there: a dev server, an SSH session, the user's own agent. DESTRUCTIVE: while a program runs there or the user is typing in it, the close is refused unless confirm is true, and the refusal names what runs; shells waiting at their prompt close without it. Name the tab, and a pane to close only that one, as terminal_run or app_state give them"
+    )]
     async fn terminal_close(&self, Parameters(a): Parameters<TerminalCloseArgs>) -> CallToolResult {
         self.app_tool(
             a.project,
             Command::TerminalClose {
                 tab: a.tab,
                 pane: a.pane,
+                confirm: a.confirm,
             },
         )
         .await
@@ -1911,6 +1995,122 @@ mod tests {
                 lines: Some(100),
             }
         );
+    }
+
+    /// `terminal_split` asks the app to split the pane it names the way it names, then reads back
+    /// the new pane the app says it made, as `terminal_run` reads the pane its command went to.
+    /// A way that isn't right or down, or a folder that isn't one, is refused before the app is
+    /// asked.
+    #[tokio::test]
+    async fn terminal_split_reads_the_new_pane() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let asked = fake_app_answering(
+            &server.paths,
+            vec![
+                json!({"terminal": 2, "pane": 1}),
+                json!({"text": "$ npm test -- --watch\nwatching"}),
+            ],
+        );
+        let split = |direction: &str, cwd: Option<&str>| TerminalSplitArgs {
+            tab: 2,
+            pane: Some(0),
+            direction: direction.into(),
+            command: Some("npm test -- --watch".into()),
+            cwd: cwd.map(String::from),
+            wait_secs: Some(0.0),
+            lines: Some(20),
+            project: None,
+        };
+        let request = |asked: &Receiver<Request>| {
+            asked
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the app was asked")
+                .command
+        };
+        let folder = dir.path().join("web");
+        std::fs::create_dir_all(&folder).unwrap();
+        let ran = server
+            .terminal_split(Parameters(split(
+                " Down ",
+                Some(&folder.display().to_string()),
+            )))
+            .await;
+        assert_eq!(
+            said(&ran),
+            "Terminal 2, pane 1:\n$ npm test -- --watch\nwatching"
+        );
+        assert_eq!(
+            request(&asked),
+            Command::TerminalSplit {
+                tab: 2,
+                pane: Some(0),
+                direction: app_control::SplitDirection::Down,
+                command: Some("npm test -- --watch".into()),
+                cwd: Some(folder),
+            }
+        );
+        assert_eq!(
+            request(&asked),
+            Command::TerminalRead {
+                tab: Some(2),
+                pane: Some(1),
+                lines: Some(20),
+            }
+        );
+        for (direction, cwd, why) in [
+            ("left", None, "right, down"),
+            ("right", Some("web"), "Nothing was split"),
+            ("right", Some("/no/such/folder"), "Nothing was split"),
+        ] {
+            let refused = server
+                .terminal_split(Parameters(split(direction, cwd)))
+                .await;
+            assert_eq!(
+                refused.is_error,
+                Some(true),
+                "{direction}: {}",
+                said(&refused)
+            );
+            assert!(
+                said(&refused).contains(why),
+                "{direction}: {}",
+                said(&refused)
+            );
+        }
+        assert!(
+            asked.recv_timeout(Duration::from_millis(300)).is_err(),
+            "the app was asked to split with a way or a folder that isn't one"
+        );
+    }
+
+    /// `terminal_close` passes the agent's `confirm` on: the app refuses an unconfirmed close
+    /// that would end what runs there, and a `sawit-mcp` that dropped it could never close one.
+    #[tokio::test]
+    async fn terminal_close_passes_its_confirm_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = native(dir.path());
+        let asked = fake_app_answering(
+            &server.paths,
+            vec![json!({"closed": 1}), json!({"closed": 1})],
+        );
+        for confirm in [false, true] {
+            let args: TerminalCloseArgs = serde_json::from_value(match confirm {
+                true => json!({"tab": 1, "pane": 0, "confirm": true}),
+                false => json!({"tab": 1, "pane": 0}),
+            })
+            .unwrap();
+            server.terminal_close(Parameters(args)).await;
+            let request = asked.recv_timeout(Duration::from_secs(5)).expect("asked");
+            assert_eq!(
+                request.command,
+                Command::TerminalClose {
+                    tab: 1,
+                    pane: Some(0),
+                    confirm,
+                }
+            );
+        }
     }
 
     /// MCP-4: `terminal_run` starts its shell in the folder it names, or not at all. The PTY

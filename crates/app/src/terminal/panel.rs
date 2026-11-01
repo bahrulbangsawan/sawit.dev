@@ -14,10 +14,11 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::ssh::Launch;
 use sawit_core::terminal::{
-    Command, GridSize, PaneId, Session, SplitDir, default_shell, run_bytes, shell_quote,
+    Command, GridSize, MIN_COLS, MIN_ROWS, PaneId, Rect, Session, SplitDir, default_shell,
+    run_bytes, shell_quote,
 };
 
-use super::tab::{TabEvent, TerminalTab};
+use super::tab::{TabEvent, TerminalTab, Unsplit};
 use super::view::TerminalView;
 use super::{SplitDown, SplitRight};
 use crate::states::{Banner, Placeholder};
@@ -565,7 +566,7 @@ impl TerminalPanel {
         tab: Option<usize>,
         pane: Option<usize>,
         cx: &App,
-    ) -> Result<(usize, Entity<TerminalView>), String> {
+    ) -> Result<(usize, PaneId, Entity<TerminalView>), String> {
         let ix = self.tab_ix(tab)?;
         let panes = self.tabs[ix].read(cx).views().count();
         if tab.is_some() && pane.is_none() && panes > 1 {
@@ -575,8 +576,8 @@ impl TerminalPanel {
                 panes - 1
             ));
         }
-        let (_, view) = self.pane_of(ix, pane, cx)?;
-        Ok((ix, view))
+        let (id, view) = self.pane_of(ix, pane, cx)?;
+        Ok((ix, id, view))
     }
 
     /// The pane's last `lines` lines of output (see [`Self::target`]).
@@ -587,7 +588,7 @@ impl TerminalPanel {
         lines: usize,
         cx: &App,
     ) -> Result<String, String> {
-        let (_, view) = self.target(tab, pane, cx)?;
+        let (_, _, view) = self.target(tab, pane, cx)?;
         Ok(view.read(cx).text_tail(lines))
     }
 
@@ -600,7 +601,7 @@ impl TerminalPanel {
         bytes: Vec<u8>,
         cx: &mut Context<Self>,
     ) -> Result<usize, String> {
-        let (ix, view) = self.target(tab, pane, cx)?;
+        let (ix, _, view) = self.target(tab, pane, cx)?;
         if view.read(cx).exited {
             return Err(format!("Terminal {ix} has exited."));
         }
@@ -610,6 +611,47 @@ impl TerminalPanel {
         });
         cx.notify();
         Ok(ix)
+    }
+
+    /// Why an agent may not close the tab at `ix`, or only its pane at position `pane`, without
+    /// saying it is sure (`terminal_close`'s `confirm`): closing would end what runs there (a
+    /// command in the foreground or a live SSH session, as [`Self::running`] names them), or the
+    /// user is typing in it. `None` when it would end only shells at their prompt, nobody types
+    /// in, as quitting ends them without asking.
+    pub fn close_refusal(
+        &self,
+        ix: usize,
+        pane: Option<usize>,
+        window: &Window,
+        cx: &App,
+    ) -> Result<Option<String>, String> {
+        let ix = self.tab_ix(Some(ix))?;
+        let panes: Vec<PaneId> = match pane {
+            None => self.tabs[ix].read(cx).views().map(|(id, _)| id).collect(),
+            Some(_) => vec![self.pane_of(ix, pane, cx)?.0],
+        };
+        let tab = self.tabs[ix].read(cx);
+        let ends: Vec<String> = panes
+            .iter()
+            .filter_map(|&id| running_in(tab, id, tab.view(id)?.read(cx)))
+            .collect();
+        let typing = self
+            .typing_pane(window, cx)
+            .is_some_and(|(at, id)| at == ix && panes.contains(&id));
+        let what = match pane {
+            Some(n) => format!("Terminal {ix}, pane {n}"),
+            None => format!("Terminal {ix}"),
+        };
+        let ending = format!("closing it ends what runs there ({})", ends.join(", "));
+        let why = match (ends.is_empty(), typing) {
+            (true, false) => return Ok(None),
+            (false, false) => ending,
+            (true, true) => "the user is typing in it".to_string(),
+            (false, true) => format!("{ending}, and the user is typing in it"),
+        };
+        Ok(Some(format!(
+            "{what} wasn't closed: {why}. Pass confirm: true to close it anyway."
+        )))
     }
 
     /// Closes the tab at `ix`, or only its pane at position `pane`. Closing
@@ -871,25 +913,102 @@ impl TerminalPanel {
         }
     }
 
-    /// Splits the active tab's focused pane with a new shell. The shell
-    /// starts in the focused pane's folder if it still exists, else in the
-    /// tab's project, else in `$HOME`.
+    /// Splits the active tab's focused pane with a new shell, which takes
+    /// the keyboard. The shell starts where [`split_folder`] says.
     pub fn split_active(&mut self, dir: SplitDir, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.get(self.active).cloned() else {
             return;
         };
-        let (folder, group) = {
-            let t = tab.read(cx);
-            (t.focused_view().read(cx).cwd(), t.group.clone())
-        };
+        let t = tab.read(cx);
         let cmd = Command {
-            cwd: folder.filter(|d| d.is_dir()).or(group).or_else(home),
+            cwd: split_folder(t, t.state.focused, cx),
             ..Command::default()
         };
         if let Some(view) = self.spawn_view(cmd, &shell_name(), None, cx) {
             tab.update(cx, |t, cx| t.add_pane(dir, view, window, cx));
         }
         cx.notify();
+    }
+
+    /// The area the dock gives its tabs, as last drawn: every tab fills the same area, so a tab
+    /// that hasn't been drawn (one opened behind the tab in front) is as big as the one that was.
+    /// The tab in front was drawn last. `None` before the dock was ever on screen.
+    fn drawn_area(&self, cx: &App) -> Option<Rect> {
+        let front = self.tabs.get(self.active).and_then(|t| t.read(cx).area());
+        front.or_else(|| self.tabs.iter().find_map(|t| t.read(cx).area()))
+    }
+
+    /// Splits pane `pane` of the tab at `ix` (see [`Self::target`]: a split tab needs it named)
+    /// with a new shell in `cwd`, else where [`split_folder`] says, and types `commands` and Enter
+    /// into it when given: an agent's dev server or test watcher next to the user's shell. The
+    /// new pane shows as `origin` allows ([`Self::reveal`]), and an agent's never takes the
+    /// keyboard or the tab's focus while the user types. A tab not drawn yet is as big as the
+    /// dock's tabs ([`Self::drawn_area`]). Refused, with nothing started, when a half would be
+    /// under 20 columns by 4 rows, or when the dock was never on screen. Returns the tab and the
+    /// new pane.
+    #[allow(clippy::too_many_arguments)]
+    pub fn split(
+        &mut self,
+        ix: usize,
+        pane: Option<usize>,
+        dir: SplitDir,
+        cwd: Option<PathBuf>,
+        commands: Option<&str>,
+        origin: Origin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(usize, PaneId), String> {
+        let (ix, target, _) = self.target(Some(ix), pane, cx)?;
+        let tab = self.tabs[ix].clone();
+        let area = self.drawn_area(cx);
+        let which = match pane {
+            Some(n) => format!("Terminal {ix}'s pane {n}"),
+            None => format!("Terminal {ix}"),
+        };
+        let way = match dir {
+            SplitDir::Right => "in two side by side",
+            SplitDir::Down => "in two, one above the other",
+        };
+        match tab.read(cx).can_split(target, dir, area, window, cx) {
+            Ok(()) => {}
+            Err(Unsplit::Unmeasured) => {
+                return Err(format!(
+                    "{which} hasn't been on screen yet, so how much room its panes have isn't \
+                     known, and nothing was started. The terminal shows now: split it again."
+                ));
+            }
+            Err(Unsplit::TooSmall) => {
+                return Err(format!(
+                    "{which} is too small to split {way}: each half needs at least {MIN_COLS} \
+                     columns by {MIN_ROWS} rows, and nothing was started. Split another pane, \
+                     the other way, or close a pane first."
+                ));
+            }
+        }
+        let cmd = Command {
+            cwd: cwd.or_else(|| split_folder(tab.read(cx), target, cx)),
+            ..Command::default()
+        };
+        let view = self
+            .spawn_view(cmd, &shell_name(), None, cx)
+            .ok_or_else(|| {
+                self.error
+                    .clone()
+                    .unwrap_or_else(|| "Unable to open a terminal.".into())
+            })?;
+        let new = tab
+            .update(cx, |t, cx| {
+                t.split_pane(target, dir, view.clone(), area, window, cx)
+            })
+            .map_err(|_| format!("{which} couldn't be split {way}: nothing was started."))?;
+        if let Some(commands) = commands.filter(|c| !c.trim().is_empty()) {
+            view.update(cx, |view, _| {
+                view.touched = true;
+                view.write(run_bytes(commands));
+            });
+        }
+        self.reveal(ix, new, origin, window, cx);
+        Ok((ix, new))
     }
 
     /// Closes the tab at `ix`. The active tab stays the active one; when it is the one that
@@ -991,20 +1110,7 @@ impl TerminalPanel {
         for tab in &self.tabs {
             let t = tab.read(cx);
             for (pane, view) in t.views() {
-                let v = view.read(cx);
-                if v.exited {
-                    continue;
-                }
-                let named = t.state.panes.get(&pane).and_then(|m| m.name.clone());
-                if v.remote.is_some() {
-                    running.push(format!("{} (SSH)", t.pane_label(pane, v)));
-                } else if v.foreground_job().is_some() {
-                    let name = named
-                        .or_else(|| v.job.as_ref().map(|j| j.name.clone()))
-                        .or_else(|| v.foreground_name())
-                        .unwrap_or_else(|| v.title.to_string());
-                    running.push(name);
-                }
+                running.extend(running_in(t, pane, view.read(cx)));
             }
         }
         running
@@ -1399,6 +1505,36 @@ fn focused<'a>(tab: &Entity<TerminalTab>, cx: &'a App) -> &'a TerminalView {
     tab.read(cx).focused_view().read(cx)
 }
 
+/// What runs in `pane` of `tab`, whose terminal is `view`, that closing it would end, by name: a
+/// command in the foreground (by the pane's name, its script's, else the program's) or a live SSH
+/// session. `None` for a shell at its prompt, a script's terminal between runs or an ended session.
+fn running_in(tab: &TerminalTab, pane: PaneId, view: &TerminalView) -> Option<String> {
+    if view.exited {
+        return None;
+    }
+    if view.remote.is_some() {
+        return Some(format!("{} (SSH)", tab.pane_label(pane, view)));
+    }
+    view.foreground_job()?;
+    let named = tab.state.panes.get(&pane).and_then(|m| m.name.clone());
+    Some(
+        named
+            .or_else(|| view.job.as_ref().map(|j| j.name.clone()))
+            .or_else(|| view.foreground_name())
+            .unwrap_or_else(|| view.title.to_string()),
+    )
+}
+
+/// The folder a shell split off `pane` of `tab` starts in, as ⌘D starts it: the pane's folder if
+/// it is still there, else the tab's project, else `$HOME`.
+fn split_folder(tab: &TerminalTab, pane: PaneId, cx: &App) -> Option<PathBuf> {
+    let folder = tab.view(pane).and_then(|v| v.read(cx).cwd());
+    folder
+        .filter(|d| d.is_dir())
+        .or_else(|| tab.group.clone())
+        .or_else(home)
+}
+
 /// Tabs in `groups` as grouping sees them: terminal tabs are never pinned.
 fn slots(groups: &[Option<PathBuf>]) -> Vec<Slot<'_>> {
     groups
@@ -1630,6 +1766,205 @@ mod tests {
         wait_until,
     };
     use super::{JobTag, Origin, TerminalPanel};
+    use gpui_kit::Focusable as _;
+    use sawit_core::terminal::SplitDir;
+
+    /// An agent splits the tab the user types in, `pane` of tab `ix` (from the test window `w`),
+    /// with `command` in the new half.
+    fn agent_split(
+        cx: &mut TestAppContext,
+        w: AnyWindowHandle,
+        panel: &Entity<TerminalPanel>,
+        (ix, pane): (usize, Option<usize>),
+        dir: SplitDir,
+        command: Option<&str>,
+    ) -> Result<(usize, sawit_core::terminal::PaneId), String> {
+        let split = cx
+            .update_window(w, |_, window, cx| {
+                panel.update(cx, |p, cx| {
+                    p.split(ix, pane, dir, None, command, Origin::Agent, window, cx)
+                })
+            })
+            .expect("the test window is open");
+        cx.run_until_parked();
+        split
+    }
+
+    /// An agent's split (terminal_split) runs its command in the new half, beside the shell the
+    /// user types in: the keyboard and the tab's focus stay with the user's pane, so their next
+    /// keys still go there, and the answer names the new pane by its place in the tab, as
+    /// app_state lists panes. Without a folder, the new shell starts in the split pane's, as ⌘D's
+    /// does.
+    #[gpui_kit::test]
+    fn an_agents_split_runs_beside_the_user_and_leaves_the_keyboard(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        let dir = scratch_dir("agent-split");
+        cx.update_window(w, |_, window, cx| {
+            panel.update(cx, |p, cx| p.open_shell_in(dir.clone(), window, cx))
+        })
+        .expect("the test window is open");
+        cx.run_until_parked();
+        let user = active(cx, &panel);
+        let (ix, users_pane, typing) = cx.update(|cx| {
+            let p = panel.read(cx);
+            let t = user.read(cx);
+            (p.active_index(), t.state.focused, t.focused_view().clone())
+        });
+        ready(cx, &typing);
+        wait_until(cx, "the user's shell runs in the folder", |cx| {
+            typing.read(cx).cwd().as_ref() == Some(&dir)
+        });
+        assert!(has_keyboard(cx, w, &user), "the user isn't typing there");
+
+        let (at, new) = agent_split(
+            cx,
+            w,
+            &panel,
+            (ix, None),
+            SplitDir::Right,
+            Some("printf 'sawit-%s\\n' split"),
+        )
+        .expect("the pane splits");
+        let fresh = cx.update(|cx| {
+            let p = panel.read(cx);
+            assert_eq!((at, p.pane_index(at, new, cx)), (ix, Some(1)));
+            assert!(p.tab(ix) == &user, "the split went to another tab");
+            let t = user.read(cx);
+            assert_eq!(t.views().count(), 2);
+            assert_eq!(
+                t.state.focused, users_pane,
+                "the split took the tab's focus"
+            );
+            t.view(new).expect("the new pane").clone()
+        });
+        let typed = cx
+            .update_window(w, |_, window, cx| {
+                typing.focus_handle(cx).is_focused(window)
+            })
+            .expect("the test window is open");
+        assert!(typed, "the agent's split took the keyboard");
+        wait_until(cx, "the command ran in the new pane", |cx| {
+            panel
+                .read(cx)
+                .text(Some(ix), Some(1), 50, cx)
+                .is_ok_and(|text| text.contains("sawit-split"))
+        });
+        wait_until(cx, "the new shell runs in the split pane's folder", |cx| {
+            fresh.read(cx).cwd().as_ref() == Some(&dir)
+        });
+        cx.simulate_keystrokes(w, "x y x y");
+        wait_until(cx, "the user's keys reach their shell", |cx| {
+            typing.read(cx).text_tail(5).contains("xyxy")
+        });
+        cx.update(|cx| assert!(!fresh.read(cx).text_tail(50).contains("xyxy")));
+    }
+
+    /// A tab an agent opened behind the one the user types in has never been drawn, so it has no
+    /// size of its own: it is as big as the dock's other tabs, and splits. With the dock never on
+    /// screen at all there is no size to go by, and the split says so instead of starting a
+    /// shell.
+    #[gpui_kit::test]
+    fn an_agents_split_of_a_tab_never_drawn_takes_the_docks_size(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        let user = active(cx, &panel);
+        let (behind, _) = cx
+            .update_window(w, |_, window, cx| {
+                panel.update(cx, |p, cx| {
+                    p.run_in_new(None, "true", Origin::Agent, window, cx)
+                })
+            })
+            .expect("the test window is open")
+            .expect("a new shell opens");
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let p = panel.read(cx);
+            assert!(p.tab(behind) != &user, "the agent's tab came in front");
+            assert_eq!(p.tab(behind).read(cx).area(), None, "the tab was drawn");
+        });
+        let (at, new) = agent_split(cx, w, &panel, (behind, None), SplitDir::Down, None)
+            .expect("the tab behind splits");
+        cx.update(|cx| {
+            let p = panel.read(cx);
+            assert_eq!((at, p.pane_index(at, new, cx)), (behind, Some(1)));
+            assert_eq!(p.tab(behind).read(cx).views().count(), 2);
+        });
+        assert!(active(cx, &panel) == user, "the split switched tabs");
+        assert!(has_keyboard(cx, w, &user), "the split took the keyboard");
+
+        // A panel whose dock was never drawn: the window shows another one.
+        let hidden = cx.update(|cx| cx.new(TerminalPanel::new));
+        let refused = agent_split(cx, w, &hidden, (0, None), SplitDir::Right, Some("true"))
+            .expect_err("a split of a dock never drawn");
+        assert!(refused.contains("hasn't been on screen"), "{refused}");
+        cx.update(|cx| assert_eq!(hidden.read(cx).tab(0).read(cx).views().count(), 1));
+    }
+
+    /// A split that would leave a half under 20 columns by 4 rows is refused, as ⌘D's is, and
+    /// says why; nothing is started. A split tab needs the pane to split named, and a pane it
+    /// doesn't have is an error.
+    #[gpui_kit::test]
+    fn a_split_with_no_room_says_why_and_starts_nothing(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel_sized(cx, 280., 600.);
+        let refused = agent_split(cx, w, &panel, (0, None), SplitDir::Right, Some("true"))
+            .expect_err("a split with no room");
+        assert!(refused.contains("20 columns by 4 rows"), "{refused}");
+        assert!(refused.contains("nothing was started"), "{refused}");
+        cx.update(|cx| assert_eq!(panel.read(cx).tab(0).read(cx).views().count(), 1));
+
+        agent_split(cx, w, &panel, (0, None), SplitDir::Down, None).expect("room to stack");
+        let unnamed = agent_split(cx, w, &panel, (0, None), SplitDir::Down, None)
+            .expect_err("a split tab with no pane named");
+        assert!(unnamed.contains("name the pane"), "{unnamed}");
+        let missing = agent_split(cx, w, &panel, (0, Some(5)), SplitDir::Down, None)
+            .expect_err("a pane the tab doesn't have");
+        assert!(missing.contains("no pane 5"), "{missing}");
+        let tab = agent_split(cx, w, &panel, (3, None), SplitDir::Down, None)
+            .expect_err("a tab there isn't");
+        assert!(tab.contains("no terminal 3"), "{tab}");
+        cx.update(|cx| assert_eq!(panel.read(cx).tab(0).read(cx).views().count(), 2));
+    }
+
+    /// An agent's terminal_close ends what runs there, so without its confirm it is refused
+    /// while a program runs in the tab or pane, or the user is typing in it, naming why; shells
+    /// waiting at their prompt that nobody types in close as before.
+    #[gpui_kit::test]
+    fn closing_asks_while_a_program_runs_or_the_user_types(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        open_tabs(cx, &panel, 1);
+        click_tab(cx, w, &panel, 0);
+        let other = cx.update(|cx| panel.read(cx).tab(1).read(cx).focused_view().clone());
+        ready(cx, &other);
+        let refusal = |cx: &mut TestAppContext, ix: usize, pane: Option<usize>| {
+            cx.update_window(w, |_, window, cx| {
+                panel.read(cx).close_refusal(ix, pane, window, cx)
+            })
+            .expect("the test window is open")
+        };
+
+        assert_eq!(
+            refusal(cx, 1, None),
+            Ok(None),
+            "an idle shell nobody types in"
+        );
+        let typing = refusal(cx, 0, None).unwrap().expect("the user types there");
+        assert!(typing.contains("the user is typing in it"), "{typing}");
+        assert!(typing.contains("confirm: true"), "{typing}");
+
+        start(cx, &other, "sleep 30", "sleep");
+        let busy = refusal(cx, 1, Some(0)).unwrap().expect("sleep runs there");
+        assert!(
+            busy.starts_with("Terminal 1, pane 0 wasn't closed"),
+            "{busy}"
+        );
+        assert!(busy.contains("(sleep)"), "{busy}");
+        assert!(!busy.contains("typing"), "{busy}");
+        assert!(refusal(cx, 4, None).is_err());
+    }
 
     /// The active tab.
     fn active(cx: &mut TestAppContext, panel: &Entity<TerminalPanel>) -> Entity<TerminalTab> {

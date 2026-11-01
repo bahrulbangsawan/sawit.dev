@@ -83,6 +83,16 @@ pub enum InstanceAction {
     Restart,
 }
 
+/// Where a terminal split puts the new pane, as the pane menu's Split right and Split down do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SplitDirection {
+    /// Side by side, the new pane on the right (⌘D).
+    Right,
+    /// Stacked, the new pane below (⇧⌘D).
+    Down,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Command {
@@ -126,7 +136,8 @@ pub enum Command {
         tab: String,
     },
     /// Types `command` and Enter into a shell: a new one in `cwd` when given
-    /// or `new_tab`, else the active or newest idle shell, never the one the
+    /// or `new_tab` (without `cwd`, in the agent's own project, as for its
+    /// browser), else the active or newest idle shell, never the one the
     /// user is typing in.
     TerminalRun {
         command: String,
@@ -135,8 +146,9 @@ pub enum Command {
         #[serde(default)]
         new_tab: bool,
     },
-    /// The text of a terminal tab (index from `state`, default the active
-    /// one): its scrollback tail and screen, up to `lines` lines.
+    /// The text of a terminal pane, in the tab with this index (from
+    /// `state`, default the active one): its scrollback tail and screen, up
+    /// to `lines` lines.
     TerminalRead {
         #[serde(default)]
         tab: Option<usize>,
@@ -147,8 +159,9 @@ pub enum Command {
         #[serde(default)]
         lines: Option<usize>,
     },
-    /// Sends raw input to a terminal: text as typed, or a key such as
-    /// `ctrl-c`, `enter`, `up`. `sawit-mcp` always names the tab.
+    /// Sends raw input to a terminal: text as typed, or a key named in
+    /// [`KEY_NAMES`] (`ctrl-c`, `enter`, `up`). `sawit-mcp` always names the
+    /// tab.
     TerminalInput {
         #[serde(default)]
         tab: Option<usize>,
@@ -160,11 +173,15 @@ pub enum Command {
         #[serde(default)]
         key: Option<String>,
     },
-    /// Closes a terminal tab, or only one of its panes.
+    /// Closes a terminal tab, or only one of its panes, ending what runs
+    /// there. Without `confirm` it is refused while a program runs there (a
+    /// dev server, an SSH session, an agent) or the user is typing in it.
     TerminalClose {
         tab: usize,
         #[serde(default)]
         pane: Option<usize>,
+        #[serde(default)]
+        confirm: bool,
     },
     /// The Run panel's scripts and saved commands, with running state.
     RunList,
@@ -231,10 +248,35 @@ pub enum Command {
     Reload {
         store: Store,
     },
+    /// Splits pane `pane` of terminal tab `tab` (a split tab needs it
+    /// named), as the pane menu's Split right and Split down do, and starts
+    /// a shell in the new half: in `cwd`, else the split pane's folder. It
+    /// types `command` and Enter there when given. The new pane never takes
+    /// the keyboard, and a split that would leave a half under 20 columns by
+    /// 4 rows is refused.
+    TerminalSplit {
+        tab: usize,
+        #[serde(default)]
+        pane: Option<usize>,
+        direction: SplitDirection,
+        #[serde(default)]
+        command: Option<String>,
+        #[serde(default)]
+        cwd: Option<PathBuf>,
+    },
+    /// Reads or changes the key bindings, which every window shares; see
+    /// [`crate::keymap`].
+    Keymap {
+        op: crate::keymap::KeymapOp,
+    },
 }
 
-/// What a terminal receives for a named key: `enter`, `tab`, `escape`,
-/// `backspace`, `up`/`down`/`left`/`right`, or `ctrl-<letter>`.
+/// The keys [`key_bytes`] knows, as `terminal_input` and its errors list them.
+pub const KEY_NAMES: &str = "enter, tab, escape, backspace, space, up, down, left, right, home, \
+end, pageup, pagedown, delete or ctrl-<letter> (return, esc and ctrl+<letter> work too)";
+
+/// What a terminal receives for a named key, one of [`KEY_NAMES`] (in any
+/// case), or `ctrl-[` and `ctrl-\`.
 pub fn key_bytes(name: &str) -> Option<Vec<u8>> {
     let name = name.trim().to_ascii_lowercase();
     let fixed: &[u8] = match name.as_str() {
@@ -557,6 +599,152 @@ mod tests {
         assert_eq!(key_bytes("up"), Some(b"\x1b[A".to_vec()));
         assert_eq!(key_bytes("ctrl-1"), None);
         assert_eq!(key_bytes("hyper"), None);
+    }
+
+    /// The one list of key names that terminal_input's description and its error give is true:
+    /// every name in it is a key `key_bytes` sends, and every key it sends by a name is in it.
+    #[test]
+    fn the_key_names_given_are_the_keys_there_are() {
+        let named: Vec<&str> = KEY_NAMES
+            .split(|c: char| c == ',' || c == '(' || c == ')' || c.is_whitespace())
+            .filter(|word| !word.is_empty() && !matches!(*word, "or" | "and" | "work" | "too"))
+            .collect();
+        for name in &named {
+            let key = name.replace("<letter>", "x");
+            assert!(
+                key_bytes(&key).is_some(),
+                "{name} is listed, but isn't a key"
+            );
+        }
+        for key in [
+            "enter",
+            "return",
+            "tab",
+            "escape",
+            "esc",
+            "backspace",
+            "space",
+            "up",
+            "down",
+            "left",
+            "right",
+            "home",
+            "end",
+            "pageup",
+            "pagedown",
+            "delete",
+        ] {
+            assert!(named.contains(&key), "{key} isn't in {KEY_NAMES}");
+        }
+        assert!(named.contains(&"ctrl-<letter>") && named.contains(&"ctrl+<letter>"));
+    }
+
+    /// An agent's split names its tab and the way to split, and leaves the rest out when it has
+    /// nothing to say: the app splits the tab's only pane, starts the shell in its folder and runs
+    /// nothing.
+    #[test]
+    fn a_terminal_split_round_trips() {
+        let request = Request {
+            project: None,
+            agent_folder: Some("/code/app".into()),
+            command: Command::TerminalSplit {
+                tab: 2,
+                pane: Some(1),
+                direction: SplitDirection::Down,
+                command: Some("npm test -- --watch".into()),
+                cwd: Some("/code/app/web".into()),
+            },
+        };
+        let bytes = encode(&request);
+        assert_eq!(decode(&bytes), Some(Ok(request)));
+        let bare = decode(
+            br#"sawit-control/1
+{"cmd":"terminal_split","tab":0,"direction":"right"}"#,
+        );
+        assert_eq!(
+            bare,
+            Some(Ok(Request {
+                project: None,
+                agent_folder: None,
+                command: Command::TerminalSplit {
+                    tab: 0,
+                    pane: None,
+                    direction: SplitDirection::Right,
+                    command: None,
+                    cwd: None,
+                },
+            }))
+        );
+        for wrong in [
+            br#"{"cmd":"terminal_split","tab":0,"direction":"left"}"#.as_slice(),
+            br#"{"cmd":"terminal_split","direction":"down"}"#.as_slice(),
+        ] {
+            let mut bytes = MAGIC.to_vec();
+            bytes.extend_from_slice(wrong);
+            assert!(
+                decode(&bytes).unwrap().is_err(),
+                "{}",
+                String::from_utf8_lossy(wrong)
+            );
+        }
+    }
+
+    /// A close from a `sawit-mcp` that predates `confirm` reads as unconfirmed, so the app still
+    /// asks before ending what runs there.
+    #[test]
+    fn a_terminal_close_is_unconfirmed_unless_it_says_so() {
+        let old = decode(
+            br#"sawit-control/1
+{"cmd":"terminal_close","tab":1}"#,
+        );
+        assert!(matches!(
+            old,
+            Some(Ok(Request {
+                command: Command::TerminalClose {
+                    tab: 1,
+                    pane: None,
+                    confirm: false
+                },
+                ..
+            }))
+        ));
+        let request = Request {
+            project: None,
+            agent_folder: None,
+            command: Command::TerminalClose {
+                tab: 1,
+                pane: Some(0),
+                confirm: true,
+            },
+        };
+        let bytes = encode(&request);
+        assert_eq!(
+            &bytes[MAGIC.len()..],
+            br#"{"cmd":"terminal_close","tab":1,"pane":0,"confirm":true}"#
+        );
+        assert_eq!(decode(&bytes), Some(Ok(request)));
+    }
+
+    /// The keymap's ops go to the app inside one `keymap` command.
+    #[test]
+    fn keymap_ops_round_trip() {
+        let request = Request {
+            project: None,
+            agent_folder: None,
+            command: Command::Keymap {
+                op: crate::keymap::KeymapOp::List {
+                    filter: Some("close tab".into()),
+                    keys: None,
+                    unbound: true,
+                },
+            },
+        };
+        let bytes = encode(&request);
+        assert_eq!(
+            &bytes[MAGIC.len()..],
+            br#"{"cmd":"keymap","op":{"op":"list","filter":"close tab","unbound":true}}"#
+        );
+        assert_eq!(decode(&bytes), Some(Ok(request)));
     }
 
     #[test]

@@ -55,6 +55,15 @@ pub fn pane_menu_items(zoomed: bool, send_right_clicks: bool) -> Vec<(&'static s
     ]
 }
 
+/// Why a pane wasn't split.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unsplit {
+    /// The tab hasn't been drawn, and no area was given for it: how big its panes are isn't known.
+    Unmeasured,
+    /// A half would be under 20 columns or 4 rows.
+    TooSmall,
+}
+
 /// What a tab tells the panel.
 pub enum TabEvent {
     /// A pane's title or state changed, so the tab strip needs a redraw.
@@ -307,7 +316,7 @@ impl TerminalTab {
     }
 
     /// The tab's area from the last paint, in its own coordinates.
-    fn area(&self) -> Option<Rect> {
+    pub(super) fn area(&self) -> Option<Rect> {
         self.bounds.get().map(|b| Rect {
             x: 0.,
             y: 0.,
@@ -326,22 +335,64 @@ impl TerminalTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(area) = self.area() else {
+        let focused = self.state.focused;
+        let Ok(pane) = self.split_pane(focused, dir, view, None, window, cx) else {
             return false;
         };
-        let pane = new_pane_id();
-        if !self
-            .state
-            .split(dir, pane, area, min_size(cell_size(window, cx)))
-        {
-            return false;
-        }
-        Self::watch(pane, &view, cx);
-        self.views.insert(pane, view);
+        self.state.focus(pane);
         self.focus(window, cx);
+        true
+    }
+
+    /// Whether `pane` could be split `dir`: [`Self::split_pane`] without the split, so that a
+    /// shell is started only for a split that will happen.
+    pub fn can_split(
+        &self,
+        pane: PaneId,
+        dir: SplitDir,
+        area: Option<Rect>,
+        window: &Window,
+        cx: &App,
+    ) -> Result<(), Unsplit> {
+        let area = self.area().or(area).ok_or(Unsplit::Unmeasured)?;
+        let mut state = self.state.clone();
+        match state.split_pane(
+            pane,
+            dir,
+            new_pane_id(),
+            area,
+            min_size(cell_size(window, cx)),
+        ) {
+            true => Ok(()),
+            false => Err(Unsplit::TooSmall),
+        }
+    }
+
+    /// Splits `pane` and puts `view` in the new half, leaving the tab's focus and the keyboard
+    /// where they are: an agent's split, made while the user may type in another pane
+    /// ([`TabState::split_pane`]). A tab not drawn yet is measured as `area`, the area the dock
+    /// gives every tab. Returns the new pane, or why there is none; `view` is then dropped,
+    /// ending its process.
+    pub fn split_pane(
+        &mut self,
+        pane: PaneId,
+        dir: SplitDir,
+        view: Entity<TerminalView>,
+        area: Option<Rect>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<PaneId, Unsplit> {
+        let area = self.area().or(area).ok_or(Unsplit::Unmeasured)?;
+        let new = new_pane_id();
+        let min = min_size(cell_size(window, cx));
+        if !self.state.split_pane(pane, dir, new, area, min) {
+            return Err(Unsplit::TooSmall);
+        }
+        Self::watch(new, &view, cx);
+        self.views.insert(new, view);
         cx.emit(TabEvent::Changed);
         cx.notify();
-        true
+        Ok(new)
     }
 
     /// Focuses `pane` and gives it the keyboard.

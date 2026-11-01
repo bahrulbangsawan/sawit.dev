@@ -135,6 +135,8 @@ pub enum ListWhat {
     Connections,
     /// Developer tools (only when asked: detecting them takes a moment).
     Tools,
+    /// Key bindings (only when asked: they need the running app).
+    Keys,
 }
 
 impl ListWhat {
@@ -148,16 +150,17 @@ impl ListWhat {
                 ListWhat::Connections
             }
             Some("tools" | "tool" | "alat" | "perkakas") => ListWhat::Tools,
+            Some("keys" | "key" | "keymap" | "shortcuts" | "pintasan") => ListWhat::Keys,
             Some(other) => {
                 return Err(format!(
-                    "`sawit list {other}`? Tidak ada di peta. Pilih: instances, db, ports, connections, tools."
+                    "`sawit list {other}`? Tidak ada di peta. Pilih: instances, db, ports, connections, tools, keys."
                 ));
             }
         })
     }
 
     fn shows(self, part: ListWhat) -> bool {
-        self == part || (self == ListWhat::All && part != ListWhat::Tools)
+        self == part || (self == ListWhat::All && !matches!(part, ListWhat::Tools | ListWhat::Keys))
     }
 }
 
@@ -821,8 +824,104 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
             ink.gray("Yang bertanda → ada versi baru: `sawit pupuk` memupuk semuanya.")
         );
     }
+    if what.shows(ListWhat::Keys) {
+        let code = list_keys(&ink, paths);
+        if code != 0 {
+            return code;
+        }
+    }
     println!();
     0
+}
+
+/// `sawit list keys`: every key binding, as the Keymap Editor lists it, from the running app
+/// (`sawit-mcp`'s `keymap_list` asks the same). The defaults are bound in the app's code, so only
+/// the running app knows them: when it isn't running, this says so rather than start it.
+fn list_keys(ink: &Ink, paths: &AppPaths) -> i32 {
+    let problem = Ink::stderr();
+    let keymap = tilde(&paths.keymap_file());
+    if !crate::app_control::is_running(paths) {
+        eprintln!(
+            "{} Sawit sedang padam, jadi peta pintasannya ikut gelap: pintasan bawaan hanya hidup di dalam aplikasi.\n   Nyalakan dulu dengan `sawit`, lalu ulangi `sawit list keys`. Pintasanmu sendiri ada di {keymap}.",
+            problem.red("🔥")
+        );
+        return 1;
+    }
+    let request = crate::app_control::Request {
+        project: None,
+        agent_folder: None,
+        command: crate::app_control::Command::Keymap {
+            op: crate::keymap::KeymapOp::List {
+                filter: None,
+                keys: None,
+                unbound: false,
+            },
+        },
+    };
+    let list = crate::app_control::send(paths, &request, Duration::from_secs(10)).and_then(|v| {
+        serde_json::from_value::<crate::keymap::KeymapList>(v)
+            .map_err(|e| format!("Sawit menjawab dengan peta yang tidak terbaca: {e}"))
+    });
+    let list = match list {
+        Ok(list) => list,
+        Err(e) => {
+            eprintln!("{} Gagal membaca peta pintasan: {e}", problem.red("🔥"));
+            return 1;
+        }
+    };
+    ink.section("⌨️  Pintasan (keys)");
+    if list.rows.is_empty() {
+        ink.empty("tidak ada satu pun pintasan. Lahannya kosong melompong.");
+    }
+    for row in &list.rows {
+        println!("{}", key_line(ink, row));
+    }
+    for error in &list.errors {
+        ink.warn(&format!("keymap.json: {error}"));
+    }
+    let count = |source: crate::keymap::KeySource| {
+        list.rows.iter().filter(|row| row.source == source).count()
+    };
+    let clashing = list.rows.iter().filter(|row| row.conflict).count();
+    println!(
+        "  {}",
+        ink.gray(&format!(
+            "{} pintasan · {} milikmu · {} dicabut · {clashing} bentrok",
+            list.rows.len(),
+            count(crate::keymap::KeySource::User),
+            count(crate::keymap::KeySource::Removed),
+        ))
+    );
+    println!(
+        "  {}",
+        ink.gray(&format!(
+            "“dicabut” = bawaan yang kamu matikan; “bentrok” = tombol yang sama di konteks yang sama, cuma satu yang jalan. Ubah di Keymap Editor (⌘K ⌘S) atau di {keymap}."
+        ))
+    );
+    0
+}
+
+/// One binding as `sawit list keys` prints it: the keys as a Mac menu writes them and as
+/// keymap.json does, what they run, where, and whose binding it is.
+fn key_line(ink: &Ink, row: &crate::keymap::KeymapRow) -> String {
+    use crate::keymap::KeySource;
+    let source = match row.source {
+        KeySource::Default => ink.gray("bawaan"),
+        KeySource::User => ink.green("milikmu"),
+        KeySource::Removed => ink.yellow("dicabut"),
+        KeySource::Unbound => ink.gray("tanpa pintasan"),
+    };
+    let clash = match row.conflict {
+        true => format!(" {}", ink.red("bentrok")),
+        false => String::new(),
+    };
+    let context = row.context.as_deref().unwrap_or("di mana saja");
+    format!(
+        "  {:<12} {:<44} {}  {source}{clash}",
+        row.display,
+        clip(&row.label, 44),
+        ink.gray(&format!("{} · {}", row.keys, clip(context, 40))),
+    )
 }
 
 /// What `bakar ports` takes when no port is named: dev servers, never
@@ -1655,6 +1754,133 @@ mod tests {
         assert!(ListWhat::Tools.shows(ListWhat::Tools));
         assert!(!ListWhat::All.shows(ListWhat::Tools));
         assert!(ListWhat::All.shows(ListWhat::Ports));
+    }
+
+    /// `sawit list keys` and its aliases list the key bindings, and a bare `sawit list` leaves
+    /// them out: they need the running app.
+    #[test]
+    fn list_keys_only_when_asked() {
+        for word in ["keys", "key", "keymap", "shortcuts", "pintasan"] {
+            assert_eq!(ListWhat::parse(Some(word)), Ok(ListWhat::Keys), "{word}");
+        }
+        assert!(ListWhat::Keys.shows(ListWhat::Keys));
+        assert!(!ListWhat::Keys.shows(ListWhat::Ports));
+        assert!(!ListWhat::All.shows(ListWhat::Keys));
+        let unknown = ListWhat::parse(Some("tombol")).unwrap_err();
+        assert!(unknown.contains("keys"), "{unknown}");
+    }
+
+    /// A Sawit home of the test's own, whose socket is in the test's folder: no app listens
+    /// there but the one a test stands in.
+    fn scratch_home(dir: &Path) -> AppPaths {
+        let paths = AppPaths {
+            root: dir.join("home"),
+        };
+        assert!(
+            paths.cli_socket().starts_with(dir),
+            "the socket left the test's folder"
+        );
+        paths
+    }
+
+    /// The defaults are bound in the app's code, so without the app `sawit list keys` fails and
+    /// says so, rather than start it.
+    #[test]
+    fn list_keys_without_the_app_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_home(dir.path());
+        assert_eq!(list_keys(&Ink::new(false), &paths), 1);
+    }
+
+    /// With the app running, `sawit list keys` asks it for the keymap editor's rows, as
+    /// `keymap_list` does.
+    #[test]
+    fn list_keys_asks_the_running_app() {
+        use std::io::Read as _;
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_home(dir.path());
+        std::fs::create_dir_all(&paths.root).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(paths.cli_socket()).unwrap();
+        let list = crate::keymap::KeymapList {
+            path: paths.keymap_file(),
+            writable: true,
+            errors: vec!["\"cmd-e\": no such action".into()],
+            rows: vec![crate::keymap::KeymapRow {
+                action: "workspace::CloseAllTabs".into(),
+                label: "workspace: close all tabs".into(),
+                args: None,
+                keys: "cmd-k w".into(),
+                display: "⌘K W".into(),
+                context: Some("Workspace".into()),
+                source: crate::keymap::KeySource::Default,
+                conflict: false,
+            }],
+        };
+        let answer = crate::app_control::reply_ok(&serde_json::to_value(&list).unwrap());
+        let (asked, requests) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut bytes = Vec::new();
+                // `is_running` only connects, and sends nothing.
+                if stream.read_to_end(&mut bytes).is_err() || bytes.is_empty() {
+                    continue;
+                }
+                let Some(Ok(request)) = crate::app_control::decode(&bytes) else {
+                    break;
+                };
+                let _ = asked.send(request.command);
+                let _ = writeln!(stream, "{answer}");
+                break;
+            }
+        });
+        assert_eq!(list_keys(&Ink::new(false), &paths), 0);
+        let asked = requests
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the app was asked");
+        assert_eq!(
+            asked,
+            crate::app_control::Command::Keymap {
+                op: crate::keymap::KeymapOp::List {
+                    filter: None,
+                    keys: None,
+                    unbound: false,
+                },
+            }
+        );
+    }
+
+    /// A binding's line: the keys as a Mac menu writes them, in a column, then what they run,
+    /// then the keys as keymap.json writes them, where they work and whose binding it is.
+    #[test]
+    fn a_key_line_says_what_runs_where_and_whose_it_is() {
+        let ink = Ink::new(false);
+        let row = crate::keymap::KeymapRow {
+            action: "workspace::CloseAllTabs".into(),
+            label: "workspace: close all tabs".into(),
+            args: None,
+            keys: "cmd-k w".into(),
+            display: "⌘K W".into(),
+            context: Some("Workspace".into()),
+            source: crate::keymap::KeySource::User,
+            conflict: true,
+        };
+        let line = key_line(&ink, &row);
+        assert!(line.starts_with("  ⌘K W "), "{line}");
+        let label: String = line.chars().skip(15).collect();
+        assert!(label.starts_with("workspace: close all tabs "), "{line}");
+        assert!(
+            line.ends_with("cmd-k w · Workspace  milikmu bentrok"),
+            "{line}"
+        );
+        let anywhere = crate::keymap::KeymapRow {
+            context: None,
+            source: crate::keymap::KeySource::Removed,
+            conflict: false,
+            ..row
+        };
+        let line = key_line(&ink, &anywhere);
+        assert!(line.ends_with("cmd-k w · di mana saja  dicabut"), "{line}");
     }
 
     #[test]

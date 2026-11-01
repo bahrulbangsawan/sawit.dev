@@ -286,9 +286,20 @@ fn same_keys(a: &str, b: &str) -> bool {
             .is_some_and(|a| super::names::normalize_keystrokes(b) == Some(a))
 }
 
+/// Whether `text` has a `//` or `/* */` comment (outside its strings), which writing the keymap
+/// again would drop.
+pub fn has_comments(text: &str) -> bool {
+    without_comments(text) != text
+}
+
 /// `text` without its `//` and `/* */` comments, strings left as they are. A comment becomes
 /// spaces (a line comment's newline stays), so serde's errors keep their line and column.
 fn strip_comments(text: &str) -> String {
+    strip_trailing_commas(&without_comments(text))
+}
+
+/// [`strip_comments`] with the commas left.
+fn without_comments(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     let mut in_string = false;
@@ -331,7 +342,7 @@ fn strip_comments(text: &str) -> String {
             _ => out.push(c),
         }
     }
-    strip_trailing_commas(&out)
+    out
 }
 
 /// `text` without the commas just before a `]` or `}`, which Zed's files often have. A comma
@@ -420,6 +431,30 @@ mod tests {
             UserKeymap::parse(r#"[{"context": "a // b", "bindings": {"/": "x::Y"}}]"#).unwrap();
         assert_eq!(keymap.sections[0].context.as_deref(), Some("a // b"));
         assert_eq!(keymap.sections[0].bindings[0].keystrokes, "/");
+    }
+
+    /// A file with a comment anywhere outside its strings loses it when the keymap is written
+    /// again, so an agent's change asks first; one whose `//` is only inside a string, or that
+    /// has trailing commas alone, loses nothing of the user's.
+    #[test]
+    fn a_comment_is_found_outside_the_strings() {
+        for commented in [
+            "// Mine.\n[]",
+            "[{\"bindings\": {\"cmd-q\": null}}] // the end",
+            "[/* none yet */]",
+            "[{\"bindings\": {/**/}}]",
+        ] {
+            assert!(has_comments(commented), "{commented}");
+        }
+        for plain in [
+            "",
+            "[]",
+            r#"[{"context": "a // b", "bindings": {"/": "x::Y", "cmd-/": "x::Z"}}]"#,
+            "[{\"bindings\": {\"cmd-q\": null,},},]",
+            r#"[{"bindings": {"cmd-k": ["x::Y", {"text": "/* not one */"}]}}]"#,
+        ] {
+            assert!(!has_comments(plain), "{plain}");
+        }
     }
 
     #[test]

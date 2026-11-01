@@ -612,6 +612,10 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
             }
             return Ok(Answer::Now(serde_json::json!({ "reloaded": store })));
         }
+        // The keymap is the app's, not a window's: no window needs to be open or found.
+        ControlCommand::Keymap { op } => {
+            return crate::keymap::control::run(op, cx).map(Answer::Now);
+        }
         ControlCommand::Open {
             path,
             line,
