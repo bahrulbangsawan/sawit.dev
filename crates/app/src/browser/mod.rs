@@ -41,7 +41,7 @@ use sawit_core::probe;
 use serde_json::{Value, json};
 
 pub use annotate::notes_lost;
-use annotate::{AnnotateEvent, AnnotatePanel, group_order, padded_rect};
+use annotate::{AnnotateEvent, AnnotatePanel, Marker, Picking, group_order, padded_rect};
 use design::{DesignEvent, DesignPanel, Segment};
 use engine::{Engine, EngineEvent, EngineSpec, Frame};
 
@@ -403,6 +403,53 @@ impl BrowserView {
         cx.notify();
     }
 
+    /// `Panel`: opens `panel` (on Design's `tab`), or closes the panel open (`None`).
+    fn panel_op(
+        &mut self,
+        panel: Option<&str>,
+        tab: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> OpResult {
+        let want = match panel.map(str::to_ascii_lowercase).as_deref() {
+            None | Some("none") => None,
+            Some("annotate") => Some(Panel::Annotate),
+            Some("design") => Some(Panel::Design),
+            Some(other) => {
+                return Err(format!(
+                    "Unknown panel “{other}”. Use annotate or design, or leave it out to close."
+                ));
+            }
+        };
+        let segment = match tab {
+            None => None,
+            Some(name) => Some(Segment::named(name).ok_or_else(|| {
+                format!("Unknown tab “{name}”. Use inspect, colors, fonts, assets or system.")
+            })?),
+        };
+        if let Some(segment) = segment {
+            self.design_panel
+                .update(cx, |p, cx| p.set_segment(segment, cx));
+        }
+        match want {
+            Some(want) if self.panel != Some(want) => self.toggle_panel(want, cx),
+            Some(Panel::Design) => {
+                let segment = self.design_panel.read(cx).segment();
+                self.set_pick(pick_mode(Panel::Design, segment), cx);
+            }
+            Some(Panel::Annotate) => {}
+            None => {
+                if let Some(open) = self.panel {
+                    self.toggle_panel(open, cx);
+                }
+            }
+        }
+        Ok(json!({
+            "panel": self.panel.map(Panel::as_str),
+            "tab": (self.panel == Some(Panel::Design))
+                .then(|| self.design_panel.read(cx).segment().name()),
+        }))
+    }
+
     /// ⇧⌘.: like the Annotate button, except that with Annotate open after Esc
     /// it picks again instead of closing.
     fn annotate_key(&mut self, cx: &mut Context<Self>) {
@@ -433,9 +480,26 @@ impl BrowserView {
         self.pick = mode;
         if mode == PickMode::Off {
             self.pick_waiting = false;
+        } else {
+            // The overlay takes Sawit's colours before it draws.
+            drop(self.page_op(theme_op(cx)));
         }
         self.send_pick(pick_op(mode), cx);
+        self.sync_picking(cx);
         cx.notify();
+    }
+
+    /// Tells the panels whether the page picks for them.
+    fn sync_picking(&self, cx: &mut Context<Self>) {
+        let picking = match (self.pick, self.pick_waiting) {
+            (PickMode::Annotate, false) => Picking::On,
+            (PickMode::Annotate, true) => Picking::Waiting,
+            _ => Picking::Off,
+        };
+        self.annotate.update(cx, |a, cx| a.set_picking(picking, cx));
+        let inspecting = self.pick == PickMode::Inspect;
+        self.design_panel
+            .update(cx, |p, cx| p.set_inspecting(inspecting, cx));
     }
 
     /// Sends a pick op; when the page has no agent yet, remembers to try
@@ -448,6 +512,7 @@ impl BrowserView {
             let _ = this.update(cx, |this, cx| {
                 if this.pick == armed {
                     this.pick_waiting = failed && armed != PickMode::Off;
+                    this.sync_picking(cx);
                     cx.notify();
                 }
             });
@@ -455,21 +520,36 @@ impl BrowserView {
         .detach();
     }
 
-    /// Ops to run when a page has loaded: its agent starts fresh, so
-    /// picking has to be armed again.
+    /// Ops to run when a page has loaded: its agent starts fresh, so the overlay takes
+    /// Sawit's colours again, picking is armed again and the markers drawn again.
     fn ops_after_load(&self, cx: &App) -> Vec<Value> {
-        let mut ops = rearm_ops(self.pick);
-        let markers = self.annotate.read(cx).markers_for(&self.current_url());
+        let mut ops = vec![theme_op(cx)];
+        ops.extend(rearm_ops(self.pick));
+        let markers = self.annotate.read(cx).markers_for(&self.current_url(), cx);
         if !markers.is_empty() {
-            ops.push(markers_op(&markers));
+            ops.push(markers_op(&self.token, &markers));
         }
         ops
     }
 
+    /// Tells the Annotate panel which page is on show, and its title.
+    fn sync_page_info(&self, url: &str, cx: &mut Context<Self>) {
+        let title = self.title.clone();
+        self.annotate
+            .update(cx, |a, cx| a.set_current(url, &title, cx));
+        self.sync_error_count(cx);
+    }
+
+    /// Tells the Annotate panel how many console errors the page on show has logged.
+    fn sync_error_count(&self, cx: &mut Context<Self>) {
+        let errors = self.logs.page_errors(usize::MAX).len();
+        self.annotate.update(cx, |a, cx| a.set_errors(errors, cx));
+    }
+
     /// Draws the numbered markers of the page on show (none clears them).
     fn sync_markers(&self, cx: &App) {
-        let markers = self.annotate.read(cx).markers_for(&self.current_url());
-        drop(self.page_op(markers_op(&markers)));
+        let markers = self.annotate.read(cx).markers_for(&self.current_url(), cx);
+        drop(self.page_op(markers_op(&self.token, &markers)));
     }
 
     /// Annotation notes that would be lost with the tab: not copied, sent or read by an agent.
@@ -514,6 +594,12 @@ impl BrowserView {
                 })
                 .detach();
             }
+            DesignEvent::Rescan => {
+                self.design_load_started();
+                self.scan_design(cx).detach();
+            }
+            DesignEvent::Thumbnails(assets) => self.fetch_thumbnails(assets.clone(), cx),
+            DesignEvent::Pin(selector) => self.inspect_element(selector.clone(), true, cx),
             DesignEvent::SaveAssets(assets) => self.save_assets(assets.clone(), cx),
             DesignEvent::SaveAll { include_videos } => self.save_all_assets(*include_videos, cx),
             DesignEvent::Export { include_videos } => self.export_from_panel(*include_videos, cx),
@@ -564,6 +650,33 @@ impl BrowserView {
                     cx.emit(BrowserEvent::SendToTerminal(md));
                 }
             }
+            AnnotateEvent::Pick => {
+                if self.panel == Some(Panel::Annotate) {
+                    self.set_pick(PickMode::Annotate, cx);
+                }
+            }
+        }
+    }
+
+    /// The user saved or removed a note from its popover on the page: the panel follows.
+    fn on_page_annotation(&mut self, change: &Value, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(n) = change["n"].as_u64().and_then(|n| u32::try_from(n).ok()) else {
+            return;
+        };
+        let url = self.current_url();
+        match change["action"].as_str() {
+            Some("update") => {
+                let comment = change["comment"].as_str().unwrap_or_default().to_string();
+                let intent = intent_of(&change["intent"]);
+                self.annotate.update(cx, |a, cx| {
+                    a.update_from_page(&url, n, &comment, intent, window, cx)
+                });
+            }
+            Some("remove") => {
+                self.annotate
+                    .update(cx, |a, cx| a.remove_from_page(&url, n, cx));
+            }
+            _ => {}
         }
     }
 
@@ -587,10 +700,14 @@ impl BrowserView {
         let groups: Vec<PageGroup> = group_order(&url, &items)
             .into_iter()
             .map(|key| {
+                // Another page's title as it was when its first note was made.
                 let title = if key == page_key(&url) && !self.title.is_empty() {
                     self.title.clone()
                 } else {
-                    key.clone()
+                    items
+                        .iter()
+                        .find(|a| page_key(&a.url) == key && !a.title.is_empty())
+                        .map_or_else(|| key.clone(), |a| a.title.clone())
                 };
                 PageGroup {
                     page: PageInfo {
@@ -618,11 +735,14 @@ impl BrowserView {
         ))
     }
 
-    /// An element was clicked in annotate mode: capture it, then add a row
-    /// (whose comment gets the keyboard) and redraw the markers.
+    /// An element was annotated: capture it, then add a row and redraw the markers. A note
+    /// written in the page's popover (`note`: its comment and kind) is added as it is, and the
+    /// keyboard stays in the page; without one (the page couldn't show the popover yet) the
+    /// row's comment field takes the keyboard.
     fn on_picked(
         &mut self,
         mut element: ElementDetails,
+        note: Option<(String, Intent)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -643,6 +763,7 @@ impl BrowserView {
             let _ = tx.send(Err("The element isn't on screen.".into()));
         }
         let project = self.project.clone();
+        let title = self.title.clone();
         cx.spawn_in(window, async move |this, cx| {
             // Shots wait their turn; a row without a screenshot beats no row.
             let timer = cx.background_executor().timer(PICK_SHOT_TIMEOUT);
@@ -661,21 +782,27 @@ impl BrowserView {
                             None
                         }
                     };
+                let from_page = note.is_some();
+                let (comment, intent) = note.unwrap_or_default();
                 let annotation = Annotation {
                     n,
                     url,
+                    title,
                     element,
-                    comment: String::new(),
-                    intent: Intent::Fix,
+                    comment,
+                    intent,
                     screenshot,
                     include_screenshot: true,
                 };
-                // The keyboard moves from the page to the panel.
-                if let Some(engine) = &this.engine {
-                    engine.focus_parent();
+                if !from_page {
+                    // The keyboard moves from the page to the panel.
+                    if let Some(engine) = &this.engine {
+                        engine.focus_parent();
+                    }
                 }
-                this.annotate
-                    .update(cx, |panel, cx| panel.add(annotation, window, cx));
+                this.annotate.update(cx, |panel, cx| {
+                    panel.add(annotation, !from_page, window, cx)
+                });
             });
         })
         .detach();
@@ -875,7 +1002,13 @@ impl BrowserView {
 
     fn receive(&mut self, message: FromPage, window: &mut Window, cx: &mut Context<Self>) {
         match message {
-            FromPage::Event(PageEvent::Console(entry)) => self.logs.push_console(entry),
+            FromPage::Event(PageEvent::Console(entry)) => {
+                let error = entry.level == "error";
+                self.logs.push_console(entry);
+                if error {
+                    self.sync_error_count(cx);
+                }
+            }
             FromPage::Event(PageEvent::Network(entry)) => self.logs.push_network(entry),
             FromPage::Event(PageEvent::Picked(pick)) => {
                 // A page can arm the picker itself: only picks Sawit asked for count.
@@ -884,8 +1017,12 @@ impl BrowserView {
                 }
                 self.last_pick = pick["element"]["selector"].as_str().map(str::to_string);
                 if pick["mode"] == "annotate" {
+                    // Written in the page's popover, or (`null`) to be written in the panel.
+                    let note = pick["comment"]
+                        .as_str()
+                        .map(|c| (c.to_string(), intent_of(&pick["intent"])));
                     match serde_json::from_value(pick["element"].clone()) {
-                        Ok(element) => self.on_picked(element, window, cx),
+                        Ok(element) => self.on_picked(element, note, window, cx),
                         Err(e) => eprintln!("sawit: a picked element couldn't be read: {e}"),
                     }
                 } else if let Some(selector) = &self.last_pick {
@@ -904,6 +1041,9 @@ impl BrowserView {
                 if key == "escape" {
                     self.set_pick(PickMode::Off, cx);
                 }
+            }
+            FromPage::Event(PageEvent::Annotation(change)) => {
+                self.on_page_annotation(&change, window, cx);
             }
             // The user's press in the page gave it AppKit's keyboard: GPUI's follows. Never
             // while the tab is hidden: nobody can press in a hidden page, and the keyboard
@@ -927,7 +1067,7 @@ impl BrowserView {
                 self.show_address(window, cx);
                 // Route changes without a load still move to another page.
                 let url = self.current_url();
-                self.annotate.update(cx, |a, cx| a.set_current(&url, cx));
+                self.sync_page_info(&url, cx);
                 self.sync_markers(cx);
             }
             FromPage::Engine(EngineEvent::Ipc(body)) => {
@@ -964,9 +1104,13 @@ impl BrowserView {
                 self.url = url;
                 self.show_address(window, cx);
                 let url = self.current_url();
-                self.annotate.update(cx, |a, cx| a.set_current(&url, cx));
+                self.sync_page_info(&url, cx);
             }
-            FromPage::Engine(EngineEvent::Title(title)) => self.title = title,
+            FromPage::Engine(EngineEvent::Title(title)) => {
+                self.title = title;
+                let url = self.current_url();
+                self.sync_page_info(&url, cx);
+            }
             FromPage::Engine(EngineEvent::NewWindow(url)) => {
                 match new_window_action(&url, &self.current_url()) {
                     NewWindow::Ignore => {}
@@ -1175,6 +1319,10 @@ impl BrowserView {
             }
             BrowserOp::ExportStatus => {
                 let _ = reply.send(self.export_status_op());
+                return;
+            }
+            BrowserOp::Panel { panel, tab } => {
+                let _ = reply.send(self.panel_op(panel.as_deref(), tab.as_deref(), cx));
                 return;
             }
             BrowserOp::Screenshot { target } if target.is_empty() => {
@@ -1514,13 +1662,73 @@ fn rearm_ops(pick: PickMode) -> Vec<Value> {
     }
 }
 
-/// Numbers drawn over the annotated elements of the page.
-fn markers_op(markers: &[(u32, String)]) -> Value {
+/// Numbers drawn over the annotated elements of the page, with what each one's popover shows.
+/// Signed with the page token: the overlay shows comments only from Sawit's own call.
+fn markers_op(token: &str, markers: &[Marker]) -> Value {
     let items: Vec<Value> = markers
         .iter()
-        .map(|(n, selector)| json!({ "n": n, "selector": selector }))
+        .map(|m| {
+            json!({
+                "n": m.n,
+                "selector": m.selector,
+                "comment": m.comment,
+                "intent": m.intent.label(),
+                "label": m.label,
+            })
+        })
         .collect();
-    json!({ "op": "markers", "items": items })
+    json!({ "op": "markers", "token": token, "items": items })
+}
+
+/// The intent a page message names (`"change"`), Fix for anything else.
+fn intent_of(v: &Value) -> Intent {
+    serde_json::from_value(v.clone()).unwrap_or_default()
+}
+
+/// Sawit's colours and faces for the page's overlay, so the popover, the markers and the
+/// hover label look like the app around them.
+fn theme_op(cx: &App) -> Value {
+    let t = cx.theme();
+    let hex = |c: Hsla| {
+        let c = c.to_rgb();
+        let byte = |v: f32| (v.clamp(0., 1.) * 255.).round() as u8;
+        if c.a >= 0.999 {
+            format!("#{:02x}{:02x}{:02x}", byte(c.r), byte(c.g), byte(c.b))
+        } else {
+            format!(
+                "#{:02x}{:02x}{:02x}{:02x}",
+                byte(c.r),
+                byte(c.g),
+                byte(c.b),
+                byte(c.a)
+            )
+        }
+    };
+    let face = |name: &str, fallback: &str| {
+        // GPUI's own name for the system face (`.SystemUIFont`) means nothing to CSS.
+        if name.is_empty() || name.starts_with('.') {
+            fallback.to_string()
+        } else {
+            format!("\"{}\", {fallback}", name.replace('"', ""))
+        }
+    };
+    json!({
+        "op": "theme",
+        "colors": {
+            "bg": hex(t.popover),
+            "fg": hex(t.popover_foreground),
+            "muted": hex(t.muted_foreground),
+            "border": hex(t.border),
+            "field": hex(t.background),
+            "accent": hex(t.secondary),
+            "primary": hex(t.primary),
+            "primaryFg": hex(t.primary_foreground),
+            "danger": hex(t.danger),
+            "ring": hex(t.ring),
+            "font": face(&t.font_family, "-apple-system, BlinkMacSystemFont, system-ui, sans-serif"),
+            "mono": face(&t.mono_font_family, "ui-monospace, Menlo, monospace"),
+        }
+    })
 }
 
 /// Writes a screenshot answer (`png_base64`) to the project's annotation
@@ -2034,6 +2242,103 @@ mod tests {
         assert_eq!(rows(cx), 1, "Design is open");
     }
 
+    /// A note written in the page's popover arrives with its comment and kind; the popover's
+    /// later saves and its Remove reach the same row, and only the page's own notes.
+    #[gpui_kit::test]
+    fn notes_from_the_popover_reach_the_panel(cx: &mut gpui_kit::TestAppContext) {
+        use sawit_core::annotations::Intent;
+        use sawit_core::browser::PageEvent;
+        let (view, cx) = test_browser(cx);
+        cx.update(|_, cx| view.update(cx, |b, cx| b.toggle_panel(super::Panel::Annotate, cx)));
+        let send = |event: PageEvent, cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|window, cx| {
+                view.update(cx, |b, cx| {
+                    b.receive(super::FromPage::Event(event), window, cx)
+                })
+            });
+            cx.run_until_parked();
+        };
+        send(
+            PageEvent::Picked(json!({"mode": "annotate", "comment": "Make it blue",
+                "intent": "change", "element": {
+                "selector": "#buy", "label": "button#buy", "tag": "button",
+                "rect": {"x": 1, "y": 1, "width": 40, "height": 20},
+                "role": "button", "name": "Buy"}})),
+            cx,
+        );
+        let notes = |cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|_, cx| {
+                view.read(cx)
+                    .annotate
+                    .read(cx)
+                    .annotations(cx)
+                    .into_iter()
+                    .map(|a| (a.n, a.comment, a.intent))
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert_eq!(notes(cx), [(1, "Make it blue".into(), Intent::Change)]);
+
+        send(
+            PageEvent::Annotation(
+                json!({"action": "update", "n": 1, "comment": "Make it red", "intent": "question"}),
+            ),
+            cx,
+        );
+        assert_eq!(notes(cx), [(1, "Make it red".into(), Intent::Question)]);
+        // No note 7: nothing changes.
+        send(
+            PageEvent::Annotation(json!({"action": "remove", "n": 7})),
+            cx,
+        );
+        assert_eq!(notes(cx).len(), 1);
+        send(
+            PageEvent::Annotation(json!({"action": "remove", "n": 1})),
+            cx,
+        );
+        assert!(notes(cx).is_empty());
+    }
+
+    /// The Panel op opens Annotate or Design on a tab, closes the panel, and names what it
+    /// doesn't know.
+    #[gpui_kit::test]
+    fn the_panel_op_opens_panels_and_tabs(cx: &mut gpui_kit::TestAppContext) {
+        let (view, cx) = test_browser(cx);
+        let op = |panel: Option<&str>, tab: Option<&str>, cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|_, cx| view.update(cx, |b, cx| b.panel_op(panel, tab, cx)))
+        };
+        assert_eq!(
+            op(Some("design"), Some("fonts"), cx).unwrap(),
+            json!({"panel": "design", "tab": "fonts"})
+        );
+        assert_eq!(
+            op(Some("design"), Some("inspect"), cx).unwrap(),
+            json!({"panel": "design", "tab": "inspect"})
+        );
+        assert_eq!(
+            cx.update(|_, cx| view.read(cx).pick),
+            super::PickMode::Inspect
+        );
+        assert_eq!(
+            op(Some("annotate"), None, cx).unwrap(),
+            json!({"panel": "annotate", "tab": null})
+        );
+        assert_eq!(
+            op(None, None, cx).unwrap(),
+            json!({"panel": null, "tab": null})
+        );
+        assert!(
+            op(Some("layers"), None, cx)
+                .unwrap_err()
+                .contains("Unknown panel")
+        );
+        assert!(
+            op(Some("design"), Some("x"), cx)
+                .unwrap_err()
+                .contains("Unknown tab")
+        );
+    }
+
     /// The page answers no one's ⇧⌘. (a page can dispatch one, and the user's is the keymap's),
     /// so an agent's `browser_press_key "Meta+Shift+."` is Sawit's to answer: it toggles
     /// Annotate as the user's key does, before the page has loaded too. Esc while picking stops picking as
@@ -2279,12 +2584,55 @@ mod tests {
 
     #[test]
     fn markers_are_numbered_selectors() {
+        use super::Marker;
+        use sawit_core::annotations::Intent;
+        let marker = |n, selector: &str, comment: &str| Marker {
+            n,
+            selector: selector.into(),
+            comment: comment.into(),
+            intent: Intent::Change,
+            label: "a".into(),
+        };
         assert_eq!(
-            markers_op(&[(1, "#a".into()), (3, "b > i".into())]),
-            json!({"op": "markers", "items": [
-                {"n": 1, "selector": "#a"}, {"n": 3, "selector": "b > i"}]})
+            markers_op("tok", &[marker(1, "#a", "Bigger"), marker(3, "b > i", "")]),
+            json!({"op": "markers", "token": "tok", "items": [
+                {"n": 1, "selector": "#a", "comment": "Bigger", "intent": "change", "label": "a"},
+                {"n": 3, "selector": "b > i", "comment": "", "intent": "change", "label": "a"}]})
         );
-        assert_eq!(markers_op(&[]), json!({"op": "markers", "items": []}));
+        assert_eq!(
+            markers_op("tok", &[]),
+            json!({"op": "markers", "token": "tok", "items": []})
+        );
+    }
+
+    /// The overlay is drawn in Sawit's colours: every one a CSS colour, the system face as CSS
+    /// names it.
+    #[gpui_kit::test]
+    fn the_overlay_takes_the_apps_colours(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::init);
+        let op = cx.update(|cx| super::theme_op(cx));
+        assert_eq!(op["op"], "theme");
+        for name in [
+            "bg",
+            "fg",
+            "muted",
+            "border",
+            "field",
+            "accent",
+            "primary",
+            "primaryFg",
+            "danger",
+            "ring",
+        ] {
+            let v = op["colors"][name].as_str().unwrap();
+            assert!(
+                v.starts_with('#') && (v.len() == 7 || v.len() == 9),
+                "{name}: {v}"
+            );
+        }
+        let font = op["colors"]["font"].as_str().unwrap();
+        assert!(!font.starts_with('.'), "{font}");
+        assert!(font.ends_with("sans-serif"), "{font}");
     }
 
     #[test]

@@ -1,6 +1,7 @@
-//! The Inspect segment: the hovered (or pinned) element's box model, styles, states and
-//! contrast, with copy buttons.
+//! The Inspect tab: the hovered (or pinned) element's box model, type, colours, layout,
+//! border and effects, states and contrast. Every value copies on click.
 
+use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -9,10 +10,8 @@ use sawit_core::site_design::color;
 use sawit_core::site_design::inspect::{StyleInfo, contrast, css_rule};
 use sawit_core::site_design::tailwind::classes;
 
-use super::colors::rgba_u32;
-use super::{DesignEvent, DesignPanel};
-
-const HINT: &str = "Hover an element on the page to read its styles. Click to pin it.";
+use super::{DesignEvent, DesignPanel, copy_row, hex_and_alpha, swatch};
+use crate::browser::panel;
 
 /// `12`, `12.5`: no trailing zeros.
 fn num(n: f64) -> String {
@@ -34,49 +33,71 @@ fn ratio_text(ratio: f64) -> String {
     format!("{:.2}:1", (ratio * 100.).floor() / 100.)
 }
 
-/// A nested box of the diagram: the four sides' numbers around `inner`.
-fn layer(
-    title: &'static str,
-    v: [f64; 4],
-    tint: Hsla,
-    muted: Hsla,
-    inner: impl IntoElement,
-) -> Div {
-    let n = move |x: f64| div().text_xs().text_color(muted).child(num(x));
+/// The box model's layers, tinted as browsers' inspectors tint them, so the diagram reads
+/// at a glance next to the page's own overlay.
+const MARGIN: u32 = 0xf6b26b40;
+const BORDER: u32 = 0xffe59950;
+const PADDING: u32 = 0x93c47d40;
+const CONTENT: u32 = 0x6fa8dc40;
+
+/// A nested box of the diagram: its name in the corner, its four sides' numbers around `inner`.
+fn layer(title: &'static str, v: [f64; 4], tint: u32, inner: impl IntoElement, cx: &App) -> Div {
+    let muted = cx.theme().muted_foreground;
+    let n = move |x: f64| {
+        div()
+            .text_size(px(11.))
+            .line_height(px(14.))
+            .text_color(if x == 0. {
+                muted
+            } else {
+                cx.theme().foreground
+            })
+            .child(if x == 0. { "–".to_string() } else { num(x) })
+    };
     v_flex()
-        .p_1()
+        .w_full()
+        .px_1p5()
+        .pb_1()
         .gap_0p5()
         .items_center()
         .rounded(px(4.))
-        .border_1()
-        .border_dashed()
-        .border_color(muted)
-        .bg(tint)
-        .child(div().w_full().text_xs().text_color(muted).child(title))
-        .child(n(v[0]))
+        .bg(gpui_kit::rgba(tint))
         .child(
             h_flex()
                 .w_full()
-                .gap_1()
+                .h(px(14.))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(11.))
+                        .line_height(px(14.))
+                        .text_color(muted)
+                        .child(title),
+                )
+                .child(n(v[0]))
+                .child(div().flex_1()),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .gap_1p5()
                 .items_center()
-                .justify_between()
-                .child(n(v[3]))
-                .child(inner)
-                .child(n(v[1])),
+                .child(div().w(px(22.)).flex().justify_center().child(n(v[3])))
+                .child(div().flex_1().min_w_0().child(inner))
+                .child(div().w(px(22.)).flex().justify_center().child(n(v[1]))),
         )
         .child(n(v[2]))
 }
 
 fn box_model(info: &StyleInfo, cx: &App) -> impl IntoElement {
-    let theme = cx.theme();
-    let muted = theme.muted_foreground;
     let content = div()
-        .px_2()
-        .py_0p5()
+        .w_full()
+        .h(px(26.))
+        .flex()
+        .items_center()
+        .justify_center()
         .rounded(px(3.))
-        .border_1()
-        .border_color(theme.border)
-        .bg(theme.background)
+        .bg(gpui_kit::rgba(CONTENT))
         .text_xs()
         .child(format!(
             "{} × {}",
@@ -84,258 +105,247 @@ fn box_model(info: &StyleInfo, cx: &App) -> impl IntoElement {
             num(info.rect.height)
         ));
     let b = &info.box_model;
-    let tint = |a: f32| theme.accent.opacity(a);
     layer(
         "margin",
         b.margin,
-        tint(0.3),
-        muted,
+        MARGIN,
         layer(
             "border",
             b.border,
-            tint(0.6),
-            muted,
-            layer("padding", b.padding, tint(0.9), muted, content),
+            BORDER,
+            layer("padding", b.padding, PADDING, content, cx),
+            cx,
         ),
+        cx,
     )
 }
 
-fn section(title: &'static str, muted: Hsla, rows: Vec<AnyElement>) -> Option<AnyElement> {
-    (!rows.is_empty()).then(|| {
-        v_flex()
-            .gap_0p5()
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(muted)
-                    .child(title),
-            )
-            .children(rows)
-            .into_any_element()
-    })
-}
-
-fn prop(name: &'static str, value: impl Into<SharedString>, cx: &App) -> AnyElement {
-    h_flex()
-        .gap_2()
-        .items_start()
-        .text_xs()
-        .child(
-            div()
-                .w(px(84.))
-                .flex_none()
-                .text_color(cx.theme().muted_foreground)
-                .child(name),
-        )
-        .child(div().flex_1().min_w_0().child(value.into()))
-        .into_any_element()
-}
-
-fn opt(name: &'static str, value: &Option<String>, cx: &App) -> Option<AnyElement> {
-    value.as_ref().map(|v| prop(name, v.clone(), cx))
-}
-
-/// A row whose value is a color: a swatch before its text.
-fn color_prop(name: &'static str, value: &str, cx: &App) -> AnyElement {
+/// A value with its colour's swatch: `■ #132643 60%`.
+fn color_value(value: &str, cx: &App) -> AnyElement {
     let theme = cx.theme();
-    let swatch = color::parse(value);
-    h_flex()
-        .gap_2()
-        .items_center()
-        .text_xs()
-        .child(
-            div()
-                .w(px(84.))
-                .flex_none()
-                .text_color(theme.muted_foreground)
-                .child(name),
-        )
-        .when_some(swatch, |el, c| {
-            el.child(
-                div()
-                    .size_3()
-                    .flex_none()
-                    .rounded(px(2.))
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(gpui_kit::rgba(rgba_u32(&c))),
-            )
-        })
-        .child(div().flex_1().min_w_0().child(value.to_string()))
-        .into_any_element()
+    match color::parse(value) {
+        Some(c) => {
+            let (hex, alpha) = hex_and_alpha(&c);
+            h_flex()
+                .gap_1p5()
+                .items_center()
+                .child(swatch(&c, px(14.), cx))
+                .child(div().font_family(theme.mono_font_family.clone()).child(hex))
+                .children(alpha.map(|a| {
+                    div()
+                        .text_color(theme.muted_foreground)
+                        .child(format!("· {a}"))
+                }))
+                .into_any_element()
+        }
+        None => div().truncate().child(value.to_string()).into_any_element(),
+    }
 }
 
-fn badge(label: &'static str, pass: bool, cx: &App) -> impl IntoElement {
+/// The copy text of a colour: its hex with alpha, as CSS reads it.
+fn color_copy(value: &str) -> String {
+    color::parse(value).map_or_else(|| value.to_string(), |c| c.to_hex())
+}
+
+/// A pale pass/fail tag for a contrast level.
+fn level(label: &'static str, pass: bool, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     let (bg, fg) = if pass {
-        (theme.success, theme.success_foreground)
+        (theme.success.opacity(0.16), theme.success)
     } else {
-        (theme.danger, theme.danger_foreground)
+        (theme.danger.opacity(0.16), theme.danger)
     };
-    div()
+    h_flex()
+        .flex_none()
         .px_1p5()
-        .rounded(px(3.))
+        .h(px(18.))
+        .gap_1()
+        .items_center()
+        .rounded(px(4.))
         .bg(bg)
-        .text_color(fg)
         .text_xs()
-        .child(format!("{label} {}", if pass { "pass" } else { "fail" }))
+        .text_color(fg)
+        .child(if pass { "✓" } else { "✕" })
+        .child(label)
+}
+
+/// The tab with nothing inspected: how to start, the keys, and the element pinned last.
+fn waiting(
+    last: Option<&StyleInfo>,
+    inspecting: bool,
+    cx: &mut Context<DesignPanel>,
+) -> AnyElement {
+    let muted = cx.theme().muted_foreground;
+    let line = |keys: Vec<Div>, what: &'static str| {
+        h_flex()
+            .gap_1()
+            .items_center()
+            .text_xs()
+            .children(keys)
+            .child(div().pl_1().text_color(muted).child(what))
+    };
+    let action = (!inspecting).then(|| {
+        Button::new("design-inspect-again")
+            .outline()
+            .xsmall()
+            .icon(Lucide::MousePointer2)
+            .label("Inspect the page")
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.set_segment(super::Segment::Inspect, cx);
+            }))
+            .into_any_element()
+    });
+    v_flex()
+        .gap_4()
+        .child(panel::empty(
+            if inspecting {
+                "Point at an element"
+            } else {
+                "Inspecting is off"
+            },
+            if inspecting {
+                "Hover the page to read an element's box, type, colors and layout here. \
+                 Click it to keep it while you look."
+            } else {
+                "Esc stopped it. Inspect again to read elements as you hover them."
+            },
+            action,
+            cx,
+        ))
+        .children(last.map(|info| {
+            let selector = info.selector.clone();
+            let again = info.selector.clone();
+            panel::section(
+                "Pinned last",
+                None,
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .child(info.label.clone()),
+                    )
+                    .child(
+                        Button::new("design-last-show")
+                            .ghost()
+                            .xsmall()
+                            .icon(Lucide::Eye)
+                            .label("Show")
+                            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                                cx.emit(DesignEvent::Flash(selector.clone()));
+                            })),
+                    )
+                    .child(
+                        Button::new("design-last-pin")
+                            .ghost()
+                            .xsmall()
+                            .icon(Lucide::Pin)
+                            .label("Pin")
+                            .disabled(!inspecting)
+                            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                                cx.emit(DesignEvent::Pin(again.clone()));
+                            })),
+                    ),
+                cx,
+            )
+        }))
+        .child(panel::section(
+            "Keys",
+            None,
+            v_flex()
+                .gap_1p5()
+                .child(line(vec![panel::key("Click", cx)], "Pin the element"))
+                .child(line(
+                    vec![panel::key("⌥", cx)],
+                    "Hold over another to measure the gap",
+                ))
+                .child(line(
+                    vec![panel::key("↑", cx), panel::key("↓", cx)],
+                    "Walk to the parent or back to the child",
+                ))
+                .child(line(vec![panel::key("Esc", cx)], "Stop inspecting")),
+            cx,
+        ))
+        .into_any_element()
 }
 
 pub(super) fn render(
     info: Option<&StyleInfo>,
     pinned: bool,
+    last: Option<&StyleInfo>,
+    inspecting: bool,
     cx: &mut Context<DesignPanel>,
 ) -> impl IntoElement {
+    let Some(info) = info else {
+        return waiting(last, inspecting, cx);
+    };
     let theme = cx.theme();
     let muted = theme.muted_foreground;
-    let Some(info) = info else {
-        return div()
-            .text_sm()
-            .text_color(muted)
-            .child(HINT)
-            .into_any_element();
-    };
+    let mono = theme.mono_font_family.clone();
     let t = &info.typography;
     let selector = info.selector.clone();
     let html_selector = info.selector.clone();
     let css = css_rule(info);
     let tailwind = classes(info).join(" ");
+    let installed = cx.text_system().all_font_names();
+    let family = t.used_family.clone().unwrap_or_else(|| t.family.clone());
+    let face = super::fonts::face_for(
+        &family,
+        &installed,
+        &cx.theme().font_family,
+        &cx.theme().mono_font_family,
+    );
+    let has_face = face.is_some();
+    let face = face.unwrap_or_default();
 
-    let mut typography = vec![
-        prop(
-            "Family",
-            t.used_family.clone().unwrap_or_else(|| t.family.clone()),
-            cx,
-        ),
-        prop("Size", format!("{}px", num(t.size)), cx),
-        prop("Weight", t.weight.to_string(), cx),
-    ];
-    if let Some(lh) = t.line_height {
-        typography.push(prop("Line height", format!("{}px", num(lh)), cx));
-    }
-    if let Some(ls) = t.letter_spacing {
-        typography.push(prop("Letter spacing", format!("{}px", num(ls)), cx));
-    }
-    typography.push(color_prop("Color", &t.color, cx));
-    typography.push(prop("Align", t.align.clone(), cx));
-    if t.transform != "none" {
-        typography.push(prop("Transform", t.transform.clone(), cx));
-    }
-
-    let mut background = vec![color_prop("Color", &info.background.color, cx)];
-    background.extend(opt("Image", &info.background.image, cx));
-
-    let b = &info.border;
-    let mut border = vec![
-        prop("Width", sides(&b.width), cx),
-        prop("Style", b.style.clone(), cx),
-        color_prop("Color", &b.color, cx),
-        prop("Radius", b.radius.clone(), cx),
-    ];
-    border.retain(|_| b.width.iter().any(|w| *w > 0.) || !b.radius.is_empty());
-
-    let e = &info.effects;
-    let mut effects: Vec<AnyElement> = Vec::new();
-    effects.extend(opt("Shadow", &e.shadow, cx));
-    if e.opacity < 1. {
-        effects.push(prop("Opacity", num(e.opacity), cx));
-    }
-    effects.extend(opt("Transition", &e.transition, cx));
-
-    let l = &info.layout;
-    let mut layout = vec![
-        prop("Display", l.display.clone(), cx),
-        prop("Position", l.position.clone(), cx),
-    ];
-    layout.extend(opt("Gap", &l.gap, cx));
-    layout.extend(opt("Direction", &l.flex_direction, cx));
-    layout.extend(opt("Justify", &l.justify, cx));
-    layout.extend(opt("Align items", &l.align, cx));
-    layout.extend(opt("Columns", &l.grid_template_columns, cx));
-
-    let states: Vec<AnyElement> = info
-        .states
-        .iter()
-        .map(|(pseudo, decls)| {
-            v_flex()
-                .gap_0p5()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_family(cx.theme().mono_font_family.clone())
-                        .child(pseudo.clone()),
-                )
-                .children(decls.iter().map(|(p, v)| {
-                    div()
-                        .pl_2()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(format!("{p}: {v}"))
-                }))
-                .into_any_element()
-        })
-        .collect();
-
-    let contrast_row = contrast(info).map(|c| {
-        h_flex()
-            .gap_2()
-            .items_center()
-            .flex_wrap()
-            .text_xs()
-            .child(
-                div()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(ratio_text(c.ratio)),
-            )
-            .child(badge("AA", c.aa, cx))
-            .child(badge("AAA", c.aaa, cx))
-            .child(div().text_color(muted).child(if c.large {
-                "large text"
-            } else {
-                "normal text"
-            }))
-            .into_any_element()
-    });
-
-    let theme = cx.theme();
-    let sections: Vec<AnyElement> = [
-        section("Typography", muted, typography),
-        section("Contrast", muted, contrast_row.into_iter().collect()),
-        section("Background", muted, background),
-        section("Border", muted, border),
-        section("Effects", muted, effects),
-        section("Layout", muted, layout),
-        section("States", muted, states),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-
-    v_flex()
-        .gap_3()
+    // Header: what it is, and what can be copied of it.
+    let header = v_flex()
+        .gap_2()
         .child(
             h_flex()
-                .gap_1()
+                .gap_2()
                 .items_center()
                 .child(
-                    div()
-                        .id("design-inspect-label")
+                    v_flex()
                         .flex_1()
                         .min_w_0()
-                        .truncate()
-                        .text_sm()
-                        .font_family(theme.mono_font_family.clone())
-                        .cursor_pointer()
-                        .child(info.label.clone())
-                        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
-                            cx.emit(DesignEvent::Flash(selector.clone()));
+                        .child(
+                            div()
+                                .id("design-inspect-label")
+                                .truncate()
+                                .text_sm()
+                                .font_family(mono.clone())
+                                .cursor_pointer()
+                                .child(info.label.clone())
+                                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                                    cx.emit(DesignEvent::Flash(selector.clone()));
+                                })),
+                        )
+                        .child(div().text_xs().text_color(muted).child(if pinned {
+                            format!(
+                                "Pinned · {} × {}",
+                                num(info.rect.width),
+                                num(info.rect.height)
+                            )
+                        } else {
+                            format!(
+                                "Hovered · {} × {} · click to pin",
+                                num(info.rect.width),
+                                num(info.rect.height)
+                            )
                         })),
                 )
                 .when(pinned, |el| {
                     el.child(
                         Button::new("design-unpin")
+                            .ghost()
                             .xsmall()
+                            .icon(Lucide::X)
                             .label("Unpin")
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                 this.unpin(cx);
@@ -346,42 +356,291 @@ pub(super) fn render(
         .child(
             h_flex()
                 .gap_1()
+                .flex_wrap()
                 .child(
                     Button::new("design-copy-css")
+                        .outline()
                         .xsmall()
+                        .icon(Lucide::Copy)
                         .label("CSS")
                         .tooltip("Copy as a CSS rule")
+                        .accessibility_label("Copy as a CSS rule")
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             this.copy(css.clone(), cx);
                         })),
                 )
                 .child(
                     Button::new("design-copy-tailwind")
+                        .outline()
                         .xsmall()
+                        .icon(Lucide::Copy)
                         .label("Tailwind")
                         .tooltip("Copy as Tailwind classes")
+                        .accessibility_label("Copy as Tailwind classes")
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             this.copy(tailwind.clone(), cx);
                         })),
                 )
                 .child(
                     Button::new("design-copy-html")
+                        .outline()
                         .xsmall()
+                        .icon(Lucide::Code)
                         .label("HTML")
                         .tooltip("Copy the markup with computed styles inlined")
+                        .accessibility_label("Copy the markup with computed styles inlined")
                         .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                             cx.emit(DesignEvent::CopyHtml(html_selector.clone()));
                         })),
                 ),
+        );
+
+    // Typography: a specimen in the face itself when this Mac has it.
+    let mut type_rows: Vec<AnyElement> = Vec::new();
+    type_rows.push(copy_row(
+        "i-family",
+        "Family",
+        div()
+            .truncate()
+            .when(has_face, |el| el.font_family(face.clone()))
+            .child(family.clone()),
+        family.clone(),
+        cx,
+    ));
+    let size = match t.line_height {
+        Some(lh) => format!("{}px / {}px", num(t.size), num(lh)),
+        None => format!("{}px / normal", num(t.size)),
+    };
+    type_rows.push(copy_row(
+        "i-size",
+        "Size / line",
+        div().child(size.clone()),
+        size,
+        cx,
+    ));
+    type_rows.push(copy_row(
+        "i-weight",
+        "Weight",
+        div().child(t.weight.to_string()),
+        t.weight.to_string(),
+        cx,
+    ));
+    if let Some(ls) = t.letter_spacing {
+        type_rows.push(copy_row(
+            "i-tracking",
+            "Letter spacing",
+            div().child(format!("{}px", num(ls))),
+            format!("{}px", num(ls)),
+            cx,
+        ));
+    }
+    type_rows.push(copy_row(
+        "i-align",
+        "Align",
+        div().child(t.align.clone()),
+        t.align.clone(),
+        cx,
+    ));
+    if t.transform != "none" {
+        type_rows.push(copy_row(
+            "i-transform",
+            "Transform",
+            div().child(t.transform.clone()),
+            t.transform.clone(),
+            cx,
+        ));
+    }
+
+    // Colours, with the contrast of the text on what is behind it.
+    let mut color_rows = vec![
+        copy_row(
+            "i-color",
+            "Text",
+            color_value(&t.color, cx),
+            color_copy(&t.color),
+            cx,
+        ),
+        copy_row(
+            "i-bg",
+            "Background",
+            color_value(&info.background.color, cx),
+            color_copy(&info.background.color),
+            cx,
+        ),
+    ];
+    if let Some(image) = &info.background.image {
+        color_rows.push(copy_row(
+            "i-bg-image",
+            "Image",
+            div().truncate().child(image.clone()),
+            image.clone(),
+            cx,
+        ));
+    }
+    if let Some(c) = contrast(info) {
+        let ratio = ratio_text(c.ratio);
+        color_rows.push(copy_row(
+            "i-contrast",
+            "Contrast",
+            h_flex()
+                .gap_1p5()
+                .items_center()
+                .flex_wrap()
+                .child(div().font_weight(FontWeight::MEDIUM).child(ratio.clone()))
+                .child(level("AA", c.aa, cx))
+                .child(level("AAA", c.aaa, cx))
+                .child(div().text_color(muted).child(if c.large {
+                    "large text"
+                } else {
+                    "body text"
+                })),
+            ratio,
+            cx,
+        ));
+    }
+
+    let l = &info.layout;
+    let mut layout = vec![
+        copy_row(
+            "i-display",
+            "Display",
+            div().child(l.display.clone()),
+            l.display.clone(),
+            cx,
+        ),
+        copy_row(
+            "i-position",
+            "Position",
+            div().child(l.position.clone()),
+            l.position.clone(),
+            cx,
+        ),
+    ];
+    let optional = [
+        ("i-gap", "Gap", &l.gap),
+        ("i-direction", "Direction", &l.flex_direction),
+        ("i-justify", "Justify", &l.justify),
+        ("i-align-items", "Align items", &l.align),
+        ("i-columns", "Columns", &l.grid_template_columns),
+    ];
+    for (id, name, value) in optional {
+        if let Some(v) = value {
+            layout.push(copy_row(
+                id,
+                name,
+                div().truncate().child(v.clone()),
+                v.clone(),
+                cx,
+            ));
+        }
+    }
+
+    let b = &info.border;
+    let mut border: Vec<AnyElement> = Vec::new();
+    if b.width.iter().any(|w| *w > 0.) {
+        let line = format!("{} {}", sides(&b.width), b.style);
+        border.push(copy_row(
+            "i-border",
+            "Border",
+            div().child(line.clone()),
+            line,
+            cx,
+        ));
+        border.push(copy_row(
+            "i-border-color",
+            "Border color",
+            color_value(&b.color, cx),
+            color_copy(&b.color),
+            cx,
+        ));
+    }
+    if !b.radius.is_empty() && b.radius != "0px" {
+        border.push(copy_row(
+            "i-radius",
+            "Radius",
+            div().child(b.radius.clone()),
+            b.radius.clone(),
+            cx,
+        ));
+    }
+    let e = &info.effects;
+    if let Some(shadow) = &e.shadow {
+        border.push(copy_row(
+            "i-shadow",
+            "Shadow",
+            div().truncate().child(shadow.clone()),
+            shadow.clone(),
+            cx,
+        ));
+    }
+    if e.opacity < 1. {
+        border.push(copy_row(
+            "i-opacity",
+            "Opacity",
+            div().child(num(e.opacity)),
+            num(e.opacity),
+            cx,
+        ));
+    }
+    if let Some(tr) = &e.transition {
+        border.push(copy_row(
+            "i-transition",
+            "Transition",
+            div().truncate().child(tr.clone()),
+            tr.clone(),
+            cx,
+        ));
+    }
+
+    let states: Vec<AnyElement> = info
+        .states
+        .iter()
+        .enumerate()
+        .map(|(ix, (pseudo, decls))| {
+            let text = decls
+                .iter()
+                .map(|(p, v)| format!("{p}: {v};"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let shown = text.clone();
+            copy_row(
+                ("i-state", ix),
+                pseudo.clone(),
+                div()
+                    .font_family(mono.clone())
+                    .text_color(cx.theme().foreground)
+                    .child(shown),
+                text,
+                cx,
+            )
+        })
+        .collect();
+
+    let section = |title: &'static str, rows: Vec<AnyElement>, cx: &App| {
+        (!rows.is_empty()).then(|| panel::section(title, None, v_flex().children(rows), cx))
+    };
+    let theme = cx.theme();
+    v_flex()
+        .gap_4()
+        .child(header)
+        .child(panel::section("Box", None, box_model(info, cx), cx))
+        .children(section("Typography", type_rows, cx))
+        .children(section("Colors", color_rows, cx))
+        .children(section("Layout", layout, cx))
+        .children(section("Border and effects", border, cx))
+        .children(section("States", states, cx))
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child("Click a value to copy it."),
         )
-        .child(box_model(info, cx))
-        .children(sections)
         .into_any_element()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{num, ratio_text, sides};
+    use super::{color_copy, num, ratio_text, sides};
 
     #[test]
     fn numbers_and_sides_read_short() {
@@ -391,5 +650,12 @@ mod tests {
         assert_eq!(sides(&[1., 2., 3., 4.]), "1 2 3 4 px");
         assert_eq!(ratio_text(4.5), "4.50:1");
         assert_eq!(ratio_text(4.499), "4.49:1");
+    }
+
+    #[test]
+    fn colours_copy_as_css_reads_them() {
+        assert_eq!(color_copy("rgb(0, 113, 227)"), "#0071e3");
+        assert_eq!(color_copy("rgba(19, 38, 67, 0.6)"), "#13264399");
+        assert_eq!(color_copy("currentcolor"), "currentcolor");
     }
 }

@@ -53,7 +53,31 @@ pub struct SourceHint {
     pub component: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// An element next to the annotated one, so an agent can find the spot in the markup:
+/// its `tag#id.class` label and the start of its text.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Neighbour {
+    pub label: String,
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+/// Where the element sits among its neighbours.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Context {
+    #[serde(default)]
+    pub parent: Option<Neighbour>,
+    /// The element sibling before it.
+    #[serde(default)]
+    pub before: Option<Neighbour>,
+    /// The element sibling after it.
+    #[serde(default)]
+    pub after: Option<Neighbour>,
+}
+
+/// What the page reports about a picked element. The fields after `off_screen` came later;
+/// all of them are optional, so an older page agent's pick still reads.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ElementDetails {
     pub selector: String,
     pub label: String,
@@ -64,6 +88,7 @@ pub struct ElementDetails {
     pub classes: Vec<String>,
     #[serde(default)]
     pub text: Option<String>,
+    /// The box in the viewport, CSS px.
     pub rect: Rect,
     #[serde(default)]
     pub styles: Vec<(String, String)>,
@@ -73,12 +98,35 @@ pub struct ElementDetails {
     pub html: Option<String>,
     #[serde(default)]
     pub off_screen: bool,
+    /// The DOM path from `body`, one `tag#id.class` per level.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// The attributes that name or wire the element (`data-testid`, `aria-*`, `href`, `src`,
+    /// `alt`, `role`, `name`, `type`…), in page order.
+    #[serde(default)]
+    pub attributes: Vec<(String, String)>,
+    /// The accessible role, as the agent's snapshot computes it.
+    #[serde(default)]
+    pub role: Option<String>,
+    /// The accessible name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The box in the page (the viewport box plus the scroll), CSS px.
+    #[serde(default)]
+    pub page_rect: Option<Rect>,
+    /// The viewport's size when it was picked, CSS px.
+    #[serde(default)]
+    pub viewport: Option<(u32, u32)>,
+    #[serde(default)]
+    pub context: Option<Context>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {
     pub n: u32,
     pub url: String,
+    /// The page's title when the element was picked.
+    pub title: String,
     pub element: ElementDetails,
     pub comment: String,
     pub intent: Intent,
@@ -109,17 +157,18 @@ pub fn markdown(groups: &[PageGroup], errors: Option<(&str, &[ConsoleEntry])>) -
     for g in groups {
         let mut out = format!("# Visual feedback — {}\n", one_line(&g.page.title));
         let (w, h) = g.page.viewport;
-        out.push_str(&format!(
-            "**URL:** {} · **Viewport:** {w}×{h}",
-            one_line(&g.page.url)
-        ));
+        out.push_str(&format!("**URL:** {}", one_line(&g.page.url)));
+        if let Some(route) = route(&g.page.url) {
+            out.push_str(&format!(" · **Route:** {}", code(&route)));
+        }
+        out.push_str(&format!(" · **Viewport:** {w}×{h}"));
         if let Some(device) = g.page.device.as_deref().filter(|d| !d.is_empty()) {
             out.push_str(&format!(" ({})", one_line(device)));
         }
         out.push('\n');
         for item in &g.items {
             out.push('\n');
-            out.push_str(&item_markdown(item));
+            out.push_str(&item_markdown(item, &g.page));
         }
         sections.push(out);
     }
@@ -195,7 +244,46 @@ fn error_origin(e: &ConsoleEntry) -> String {
     }
 }
 
-fn item_markdown(a: &Annotation) -> String {
+/// The path (with its query) of a URL, as a router names the page: `/cart?step=2`. `None`
+/// for a URL with no host part (`about:blank`, `data:`).
+fn route(url: &str) -> Option<String> {
+    let (_, rest) = url.split_once("://")?;
+    let rest = rest.split('#').next().unwrap_or(rest);
+    Some(match rest.find(['/', '?']) {
+        Some(i) if rest[i..].starts_with('/') => rest[i..].to_string(),
+        Some(i) => format!("/{}", &rest[i..]),
+        None => "/".to_string(),
+    })
+}
+
+/// `Rect` as `120×40 at (350, 680)`, rounded.
+fn box_at(r: &Rect) -> String {
+    format!(
+        "{}×{} at ({}, {})",
+        r.width.round(),
+        r.height.round(),
+        r.x.round(),
+        r.y.round()
+    )
+}
+
+/// A neighbour as the Context line names it: `` `div.actions` "Read the notes" ``.
+fn neighbour(n: &Neighbour) -> String {
+    let mut out = code(&n.label);
+    if let Some(text) = n.text.as_deref().map(one_line).filter(|t| !t.is_empty()) {
+        out.push_str(&format!(" \"{}\"", cut_at(&text, NEIGHBOUR_CUT)));
+    }
+    out
+}
+
+/// The attributes the Element line shows besides `id` and `class`, each cut short.
+const ATTRIBUTE_CUT: usize = 120;
+/// A neighbour's text, cut short: it only has to say which one it is.
+const NEIGHBOUR_CUT: usize = 40;
+/// Attributes whose value is a URL, whose secrets are hidden.
+const URL_ATTRIBUTES: [&str; 5] = ["href", "src", "action", "formaction", "poster"];
+
+fn item_markdown(a: &Annotation, page: &PageInfo) -> String {
     let el = &a.element;
     let mut out = format!("## {}. {} — {}\n", a.n, code(&el.label), a.intent.label());
     // The user's own words, as typed.
@@ -203,6 +291,9 @@ fn item_markdown(a: &Annotation) -> String {
         out.push_str(&format!("- **Comment:** {}\n", a.comment));
     }
     out.push_str(&format!("- **Selector:** {}\n", code(&el.selector)));
+    if let Some(path) = el.path.as_deref().filter(|p| !p.trim().is_empty()) {
+        out.push_str(&format!("- **Path:** {}\n", code(path)));
+    }
 
     let mut tag = format!("<{}", el.tag);
     if let Some(id) = el.id.as_deref().filter(|i| !i.is_empty()) {
@@ -211,12 +302,36 @@ fn item_markdown(a: &Annotation) -> String {
     if !el.classes.is_empty() {
         tag.push_str(&format!(" class=\"{}\"", el.classes.join(" ")));
     }
+    for (name, value) in el
+        .attributes
+        .iter()
+        .filter(|(name, _)| name != "id" && name != "class")
+    {
+        // A link's token or password stays out of the agent's prompt, as in the network log.
+        let value = if URL_ATTRIBUTES.contains(&name.as_str()) {
+            crate::browser::redact_url(value)
+        } else {
+            value.clone()
+        };
+        tag.push_str(&format!(
+            " {}=\"{}\"",
+            one_line(name),
+            cut_at(&one_line(&value), ATTRIBUTE_CUT)
+        ));
+    }
     tag.push('>');
     out.push_str(&format!("- **Element:** {}", code(&tag)));
     if let Some(text) = el.text.as_deref().filter(|t| !t.trim().is_empty()) {
         out.push_str(&format!(" \"{}\"", cut_text(&one_line(text))));
     }
     out.push('\n');
+    if let Some(role) = el.role.as_deref().map(one_line).filter(|r| !r.is_empty()) {
+        out.push_str(&format!("- **Role:** {role}"));
+        if let Some(name) = el.name.as_deref().map(one_line).filter(|n| !n.is_empty()) {
+            out.push_str(&format!(" \"{}\"", cut_text(&name)));
+        }
+        out.push('\n');
+    }
 
     if let Some(src) = &el.source {
         let component = src
@@ -241,13 +356,24 @@ fn item_markdown(a: &Annotation) -> String {
     }
 
     let r = &el.rect;
-    out.push_str(&format!(
-        "- **Box:** {}×{} at ({}, {})\n",
-        r.width.round(),
-        r.height.round(),
-        r.x.round(),
-        r.y.round()
-    ));
+    out.push_str(&format!("- **Box:** {}", box_at(r)));
+    // Where it is on the page too, once the page has scrolled.
+    if let Some(p) = el
+        .page_rect
+        .as_ref()
+        .filter(|p| p.x.round() != r.x.round() || p.y.round() != r.y.round())
+    {
+        out.push_str(&format!(
+            " in the viewport, ({}, {}) on the page",
+            p.x.round(),
+            p.y.round()
+        ));
+    }
+    // The viewport it was picked in, when the header's is another.
+    if let Some((w, h)) = el.viewport.filter(|v| *v != page.viewport && v.0 > 0) {
+        out.push_str(&format!(", picked in a {w}×{h} viewport"));
+    }
+    out.push('\n');
     if !el.styles.is_empty() {
         let styles: Vec<String> = el
             .styles
@@ -255,6 +381,26 @@ fn item_markdown(a: &Annotation) -> String {
             .map(|(k, v)| format!("{}: {}", one_line(k), one_line(v)))
             .collect();
         out.push_str(&format!("- **Styles:** {}\n", styles.join("; ")));
+    }
+    if let Some(cx) = &el.context {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(p) = cx.parent.as_ref().filter(|p| !p.label.is_empty()) {
+            parts.push(format!("in {}", code(&p.label)));
+        }
+        if let Some(b) = cx.before.as_ref().filter(|b| !b.label.is_empty()) {
+            parts.push(format!("after {}", neighbour(b)));
+        }
+        if let Some(n) = cx.after.as_ref().filter(|n| !n.label.is_empty()) {
+            parts.push(format!("before {}", neighbour(n)));
+        }
+        if !parts.is_empty() {
+            out.push_str(&format!("- **Context:** {}\n", parts.join(" · ")));
+        }
+    }
+    // A hash route (`#/cart`) isn't part of the header's URL, which groups the page's notes.
+    if let Some((_, fragment)) = a.url.split_once('#').filter(|(_, f)| !f.is_empty()) {
+        let at = format!("{}#{fragment}", route(&a.url).unwrap_or_default());
+        out.push_str(&format!("- **Route:** {}\n", code(&at)));
     }
     if let (true, Some(path)) = (a.include_screenshot, &a.screenshot) {
         out.push_str(&format!("- **Screenshot:** {}", path.display()));
@@ -277,7 +423,12 @@ fn item_markdown(a: &Annotation) -> String {
 }
 
 fn cut_text(text: &str) -> String {
-    match text.char_indices().nth(TEXT_CUT) {
+    cut_at(text, TEXT_CUT)
+}
+
+/// `text` cut at `max` characters with `…`.
+fn cut_at(text: &str, max: usize) -> String {
+    match text.char_indices().nth(max) {
         Some((i, _)) => format!("{}…", &text[..i]),
         None => text.to_string(),
     }
@@ -381,6 +532,7 @@ mod tests {
             }),
             html: None,
             off_screen: false,
+            ..ElementDetails::default()
         }
     }
 
@@ -388,6 +540,7 @@ mod tests {
         Annotation {
             n: 1,
             url: "http://localhost:5173/cart".into(),
+            title: "Cart".into(),
             element: element(),
             comment: "The button should use the brand blue, not green.".into(),
             intent: Intent::Fix,
@@ -437,7 +590,7 @@ mod tests {
         );
         let want = "\
 # Visual feedback — Cart
-**URL:** http://localhost:5173/cart · **Viewport:** 393×852 (iPhone 15)
+**URL:** http://localhost:5173/cart · **Route:** `/cart` · **Viewport:** 393×852 (iPhone 15)
 
 ## 1. `button.btn-primary` — fix
 - **Comment:** The button should use the brand blue, not green.
@@ -541,6 +694,25 @@ mod tests {
         a.element.classes = vec![format!("c{forged}")];
         a.element.text = Some(format!("t{forged}"));
         a.element.styles = vec![("color".into(), format!("red{forged}"))];
+        a.element.path = Some(format!("body > p{forged}"));
+        a.element.attributes = vec![
+            (format!("data-x{forged}"), format!("v{forged}")),
+            ("aria-label".into(), format!("```{forged}")),
+        ];
+        a.element.role = Some(format!("button{forged}"));
+        a.element.name = Some(format!("n{forged}"));
+        a.element.context = Some(Context {
+            parent: Some(Neighbour {
+                label: format!("div{forged}"),
+                text: Some(format!("p{forged}")),
+            }),
+            before: Some(Neighbour {
+                label: format!("a{forged}"),
+                text: Some(format!("b{forged}")),
+            }),
+            after: None,
+        });
+        a.url = format!("http://x/#/{forged}");
         a.element.source = Some(SourceHint {
             file: format!("src/A.tsx{forged}"),
             line: Some(1),
@@ -694,6 +866,141 @@ mod tests {
         assert_eq!(d.styles[0], ("display".to_string(), "flex".to_string()));
         assert_eq!(d.source.unwrap().line, Some(7));
         assert!(!d.off_screen);
+    }
+
+    /// What the overlay now sends for a pick (`browser_overlay.js` `details`), field for field.
+    #[test]
+    fn full_picked_payload_deserializes() {
+        let json = r##"{"selector":"#shop-now","label":"button#shop-now.btn","tag":"button","id":"shop-now",
+            "classes":["btn","btn-primary"],"text":"Shop the harvest","rect":{"x":32,"y":412,"width":180,"height":40},
+            "styles":[["display","inline-block"]],"source":null,"html":"<button>","off_screen":false,
+            "path":"body > main > button#shop-now","attributes":[["data-testid","hero-cta"],["type","submit"]],
+            "role":"button","name":"Shop the harvest","page_rect":{"x":32,"y":1212,"width":180,"height":40},
+            "viewport":[1180,760],"context":{"parent":{"label":"div.actions","text":null},
+            "before":null,"after":{"label":"button.btn.btn-ghost","text":"Read the farm notes"}}}"##;
+        let d: ElementDetails = serde_json::from_str(json).unwrap();
+        assert_eq!(d.attributes[0], ("data-testid".into(), "hero-cta".into()));
+        assert_eq!(d.role.as_deref(), Some("button"));
+        assert_eq!(d.page_rect.as_ref().map(|r| r.y), Some(1212.));
+        assert_eq!(d.viewport, Some((1180, 760)));
+        let cx = d.context.unwrap();
+        assert_eq!(cx.parent.unwrap().label, "div.actions");
+        assert!(cx.before.is_none());
+        assert_eq!(
+            cx.after.unwrap().text.as_deref(),
+            Some("Read the farm notes")
+        );
+    }
+
+    /// Everything an agent needs to find and change the element reaches the markdown, in a
+    /// line each: its path, attributes, role and name, where it is on the page and beside what.
+    #[test]
+    fn comprehensive_details_reach_the_markdown() {
+        let mut a = annotation();
+        a.url = "http://localhost:5173/cart#/two".into();
+        let el = &mut a.element;
+        el.path = Some("body > main > div > button.btn-primary".into());
+        el.attributes = vec![
+            ("data-testid".into(), "checkout-submit".into()),
+            ("aria-label".into(), "Place the order".into()),
+            ("class".into(), "ignored".into()),
+        ];
+        el.role = Some("button".into());
+        el.name = Some("Place the order".into());
+        el.page_rect = Some(Rect {
+            x: 350.,
+            y: 1480.,
+            width: 120.,
+            height: 40.,
+        });
+        el.viewport = Some((1280, 800));
+        el.context = Some(Context {
+            parent: Some(Neighbour {
+                label: "div.actions".into(),
+                text: None,
+            }),
+            before: Some(Neighbour {
+                label: "a.back".into(),
+                text: Some("Back to cart".into()),
+            }),
+            after: Some(Neighbour {
+                label: "p.terms".into(),
+                text: Some("x".repeat(60)),
+            }),
+        });
+        let md = markdown(&[group(vec![a])], None);
+        assert!(
+            md.contains("- **Path:** `body > main > div > button.btn-primary`\n"),
+            "{md}"
+        );
+        assert!(md.contains(
+            "- **Element:** `<button class=\"btn-primary\" data-testid=\"checkout-submit\" aria-label=\"Place the order\">` \"Submit order\"\n"
+        ), "{md}");
+        assert!(
+            md.contains("- **Role:** button \"Place the order\"\n"),
+            "{md}"
+        );
+        assert!(md.contains(
+            "- **Box:** 120×40 at (350, 680) in the viewport, (350, 1480) on the page, picked in a 1280×800 viewport\n"
+        ), "{md}");
+        assert!(md.contains(&format!(
+            "- **Context:** in `div.actions` · after `a.back` \"Back to cart\" · before `p.terms` \"{}…\"\n",
+            "x".repeat(40)
+        )), "{md}");
+        assert!(md.contains("- **Route:** `/cart#/two`\n"), "{md}");
+        // The lines keep their order: what to do, where it is, what it looks like, the picture.
+        let order = [
+            "- **Comment:**",
+            "- **Selector:**",
+            "- **Path:**",
+            "- **Element:**",
+            "- **Role:**",
+            "- **Source:**",
+            "- **Box:**",
+            "- **Styles:**",
+            "- **Context:**",
+            "- **Route:**",
+            "- **Screenshot:**",
+        ];
+        let at: Vec<usize> = order.iter().map(|l| md.find(l).unwrap()).collect();
+        assert!(at.windows(2).all(|w| w[0] < w[1]), "{md}");
+    }
+
+    /// A page that never scrolled, picked in the header's viewport, keeps the short Box line.
+    #[test]
+    fn the_box_line_stays_short_when_nothing_differs() {
+        let mut a = annotation();
+        a.element.page_rect = Some(a.element.rect.clone());
+        a.element.viewport = Some((393, 852));
+        let md = markdown(&[group(vec![a])], None);
+        assert!(md.contains("- **Box:** 120×40 at (350, 680)\n"), "{md}");
+    }
+
+    /// A link's secret stays out of the prompt, as it does out of the network log.
+    #[test]
+    fn link_secrets_are_hidden() {
+        let mut a = annotation();
+        a.element.attributes = vec![(
+            "href".into(),
+            "https://a.dev/reset?token=abc123&step=2".into(),
+        )];
+        let md = markdown(&[group(vec![a])], None);
+        assert!(
+            md.contains("href=\"https://a.dev/reset?token=[redacted]&step=2\""),
+            "{md}"
+        );
+        assert!(!md.contains("abc123"), "{md}");
+    }
+
+    #[test]
+    fn routes_are_the_path_and_query() {
+        assert_eq!(
+            route("http://localhost:5173/cart?x=1#top").as_deref(),
+            Some("/cart?x=1")
+        );
+        assert_eq!(route("https://a.dev").as_deref(), Some("/"));
+        assert_eq!(route("https://a.dev?q=1").as_deref(), Some("/?q=1"));
+        assert_eq!(route("about:blank"), None);
     }
 
     #[test]

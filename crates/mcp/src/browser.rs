@@ -638,7 +638,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Read the annotations the user made in the browser tab: what to change, on which element (selector, styles, source file), with screenshot paths. clear removes them after reading"
+        description = "Read the annotations the user made in the browser tab, as Markdown: what to change and its kind, and for each element its selector, DOM path, tag and key attributes (data-testid, aria-*, href…), accessible role and name, text, source file and component in a dev build, box in the viewport and on the page, main computed styles, neighbours, and a screenshot path; the page's console errors too. clear removes them after reading"
     )]
     async fn browser_annotations(
         &self,

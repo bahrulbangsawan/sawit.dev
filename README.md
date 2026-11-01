@@ -348,18 +348,46 @@ explained. A conflict on the same address can't be forced.
   Desktop, scaled to fit the tab. **Rotate** turns the device, and **Responsive** fills the tab again. The device
   button shows the device in use (its name, or the size an agent set), and the menu ticks it, and **Rotate** while
   it's turned. While the menu is open the page steps aside for it and comes back at the size you picked.
-- **Annotate** (<kbd>⇧</kbd><kbd>⌘</kbd><kbd>.</kbd>): click elements on the page and write what should change. Each
-  note carries the element's selector, styles, a screenshot and, in a dev build, its source file. **Copy** the notes
-  as Markdown, or **Send to terminal** to paste them into Claude Code (or a shell) without pressing Enter: the
-  project's own terminals first, never an SSH session. Both can add the page's console errors. Screenshots go to
-  `.nyawit/annotations/`.
-- **Design**: inspect any element (box model, typography, colors with contrast, hover and focus states) and copy it
-  as CSS, Tailwind or HTML. The panel also lists the page's colors, fonts and assets, and derives its design system:
-  palette ramps, type scale, spacing, radius and shadows. **Export** writes `DESIGN.md`, DTCG tokens, a Tailwind v4
-  theme, shadcn/ui variables, sample components and the assets to `.nyawit/design/<host>/` (with no project, to
-  `~/Downloads/sawit-design/<host>/`); a dev server's folder keeps its port, as `localhost-5173`. Exporting again
-  replaces that folder, a `DESIGN.md` you edited included; an agent's export does that only when it passes
-  `replace: true`.
+- **Annotate** (<kbd>⇧</kbd><kbd>⌘</kbd><kbd>.</kbd>): point at the page and write what should change.
+  - Hovering outlines the element under the pointer, with a label of its tag, classes and size. <kbd>↑</kbd> or
+    <kbd>[</kbd> walks to the parent, <kbd>↓</kbd> or <kbd>]</kbd> back to the child, and <kbd>⌥</kbd>-click picks
+    the parent of what is under the pointer.
+  - A click opens a note on the page, beside the element: what it is (its role, name and size), the kind (**Fix**,
+    **Change**, **Question** or **Copy**, which also hands the agent its HTML) and your comment. <kbd>↩</kbd> saves it
+    (<kbd>⇧</kbd><kbd>↩</kbd> for a new line), <kbd>Esc</kbd> or a click elsewhere cancels it, and <kbd>Esc</kbd>
+    again stops picking. Its arrows pick the parent or the child before you save.
+  - Each saved note leaves a numbered marker on its element. Click a marker to reopen its note, edit it or
+    **Remove** it; with a marker focused, <kbd>⌫</kbd> removes it. The panel lists every note by page, with the
+    page's title, and stays in step with the markers: edit a comment or the kind in either place.
+  - Each note carries what an agent needs to find and change the element: a selector meant to last, its DOM path,
+    tag and attributes (`data-testid`, `aria-*`, `href`, `src`, `alt`, `role`…), its accessible role and name, its
+    text, its box in the viewport and on the page, its main computed styles, the elements around it, the page's
+    route, and a screenshot. In a dev build it also names the component and its source file (React, Vue, Svelte,
+    Astro, and the `data-source` attributes of inspector plugins).
+  - **Copy** the notes as Markdown, or **Send to terminal** to paste them into Claude Code (or a shell) without
+    pressing Enter: the project's own terminals first, never an SSH session. Both can add the page's console errors.
+    Screenshots go to `.nyawit/annotations/`. **Clear** asks first when it would take several notes or one not yet
+    sent, and a cleared or removed note can be brought back with **Undo** for a few seconds.
+- **Design**: five tabs, each with its own empty and loading state; the refresh button beside them reads the page
+  again after it changed.
+  - **Inspect**: hover an element to read its box model, typography (in its own face when this Mac has it), colors
+    with their contrast, layout, border and effects, and hover and focus states; click to pin it, and hold
+    <kbd>⌥</kbd> over another element to measure the gap. Click any value to copy it, or copy the element as CSS,
+    Tailwind or HTML.
+  - **Colors**: every color by role, with its opacity apart (`#132643 60%`) and how often it is used, and the page's
+    main text colors checked on its background. Click a color to copy its hex; its menu copies `rgb()`, `oklch()`,
+    the page's own variable or the Tailwind class.
+  - **Fonts**: each family named once in its own face, its weights, its sizes and line heights rounded to a short
+    scale (the exact values a click away), and buttons that copy its `font-family`, copy its Tailwind theme line or
+    save its files.
+  - **Assets**: images, SVG, icons, video and Lottie, each with a preview, its size and where the page uses it.
+    Click one to flash it on the page; **Save** one, or **Save all** of them.
+  - **System**: the derived design system (palette ramps and semantic colors, font families, type scale, spacing,
+    radius, shadows, breakpoints and the page's own variables), every value copyable. **Export** writes
+    `DESIGN.md`, DTCG tokens, a Tailwind v4 theme, shadcn/ui variables, sample components and the assets to
+    `.nyawit/design/<host>/` (with no project, to `~/Downloads/sawit-design/<host>/`); a dev server's folder keeps its
+    port, as `localhost-5173`. Exporting again replaces that folder, a `DESIGN.md` you edited included; an agent's
+    export does that only when it passes `replace: true`.
 - AI agents drive it through the `browser_*` MCP tools: open pages, read the page as an accessibility outline,
   click, type, pick options, press keys, scroll, wait for text, run JavaScript, and read the console, failed
   requests and screenshots. They can also set a device size, read your annotations, and inspect, read or export
@@ -802,7 +830,7 @@ its own project's, even while you look at another project of that window.
 | App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, skills, changelog, git_graph, github, instance, keymap), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
 | Terminal (app running) | `terminal_run`, `terminal_split` (a pane split right or down, with a command in the new half), `terminal_read`, `terminal_input`, `terminal_close` (`terminal_run`, `terminal_split`, `app_run_script` and `app_ssh_connect` return the tab and `pane` they used; `terminal_input` needs the tab, and a split tab needs its pane) |
 | Keymap (app running) | `keymap_list` (every binding: what a key does, which key runs an action, what clashes), `keymap_bind`, `keymap_unbind` (with the Keymap Editor's checks; `restore` brings back a default) |
-| Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (what the user annotated), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`; replacing an earlier export needs `replace: true`) |
+| Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (the user's notes as Markdown: each element's selector, path, attributes, role, box, styles, neighbours, source file and screenshot), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`; replacing an earlier export needs `replace: true`) |
 | Canvas | `canvas_get` (the top-level layers of the page on show), `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear` (the page on show), `canvas_load`, `canvas_export` (the page on show, as SVG or PNG), `canvas_command` (any command of the canvas engine, by id: `page.list` and `node.get` reach the other pages), `canvas_commands` (lists them; pass a `filter` to see what each takes). Each takes `file`, a `.sawit` file (a design file, say; a `.figcraft` one from before works too) or an `.excalidraw` file to work on instead of the project's canvas, in a canvas tab of its own. All of them work on the saved canvas file when the app is closed; then each call starts from that file, so no undo or selection carries over to the next: pass `canvas_command` the ids, or its steps in one `command.batch` |
 
 Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`,

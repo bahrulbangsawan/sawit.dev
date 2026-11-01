@@ -1,13 +1,12 @@
-// Sawit's page overlay module: picking, highlights, markers and flash.
-// Spliced into the page agent (see browser_agent.js), so
-// `send`, `resolve`, `describe`, `clip`, `oneLine`, `modules` and `helpers`
-// are in scope.
+// Sawit's page overlay module: picking, highlights, markers, the annotation popover and flash.
+// Spliced into the page agent (see browser_agent.js), so `TOKEN`, `send`, `resolve`,
+// `describe`, `role`, `nameOf`, `clip`, `oneLine`, `apply`, `modules` and `helpers` are in
+// scope.
 //
 // Picker and selector logic adapted from Visual Annotator (MIT License, ©
 // 2026 wernerstrauch).
 {
   const HOST_TAG = "sawit-overlay";
-  const ACCENT = "#0a84ff";
 
   // The listener methods as they are before any page script runs (this module runs with the
   // agent, at document start), called through the agent's own `apply`, with options that
@@ -26,10 +25,207 @@
   const PASSIVE = { __proto__: null, passive: true };
   const ONCE = { __proto__: null, once: true };
 
+  // ---- Natives, taken at document start ----
+  //
+  // The popover holds what the user types for the agent, which reaches it as the user's own
+  // words. So no page script may get hold of a node of the overlay (it could read or rewrite
+  // the comment), nor read a key typed into it. Every DOM call on the overlay's nodes goes
+  // through these, never through a method or getter a page could have replaced by the time
+  // the overlay is drawn; arrays that hold its nodes are read and written by index. Where a
+  // native is missing (a test's stand-in page), the plain property is used.
+  const protoOf = (name) => {
+    const C = window[name];
+    return typeof C === "function" && C.prototype ? C.prototype : null;
+  };
+  const method = (p, name) => (p && typeof p[name] === "function" ? p[name] : null);
+  const getter = (p, name) => {
+    const d = p ? Object.getOwnPropertyDescriptor(p, name) : null;
+    return d && d.get ? d.get : null;
+  };
+  const setter = (p, name) => {
+    const d = p ? Object.getOwnPropertyDescriptor(p, name) : null;
+    return d && d.set ? d.set : null;
+  };
+  const EV = protoOf("Event");
+  const KEV = protoOf("KeyboardEvent");
+  const MEV = protoOf("MouseEvent");
+  const UIEV = protoOf("UIEvent");
+  const NODE = protoOf("Node");
+  const ELEM = protoOf("Element");
+  const HTML = protoOf("HTMLElement");
+  const DOC = protoOf("Document");
+  const FRAG = protoOf("DocumentFragment");
+  const SHADOW = protoOf("ShadowRoot");
+  const AREA = protoOf("HTMLTextAreaElement");
+  const CSSD = protoOf("CSSStyleDeclaration");
+  const SHEET = window.CSSStyleSheet;
+  const N = {
+    target: getter(EV, "target"),
+    type: getter(EV, "type"),
+    stop: method(EV, "stopImmediatePropagation"),
+    prevent: method(EV, "preventDefault"),
+    key: getter(KEV, "key"),
+    composing: getter(KEV, "isComposing"),
+    meta: getter(KEV, "metaKey"),
+    shift: getter(KEV, "shiftKey"),
+    ctrl: getter(KEV, "ctrlKey"),
+    keyAlt: getter(KEV, "altKey"),
+    mouseAlt: getter(MEV, "altKey"),
+    x: getter(MEV, "clientX"),
+    y: getter(MEV, "clientY"),
+    detail: getter(UIEV, "detail"),
+    createElement: method(DOC, "createElement"),
+    attachShadow: method(ELEM, "attachShadow"),
+    setAttribute: method(ELEM, "setAttribute"),
+    removeAttribute: method(ELEM, "removeAttribute"),
+    box: method(ELEM, "getBoundingClientRect"),
+    scrollHeight: getter(ELEM, "scrollHeight"),
+    remove: method(ELEM, "remove"),
+    appendChild: method(NODE, "appendChild"),
+    text: setter(NODE, "textContent"),
+    connected: getter(NODE, "isConnected"),
+    style: getter(HTML, "style"),
+    focus: method(HTML, "focus"),
+    blur: method(HTML, "blur"),
+    query: method(FRAG, "querySelector"),
+    inner: setter(SHADOW, "innerHTML"),
+    active: getter(SHADOW, "activeElement"),
+    sheets: setter(SHADOW, "adoptedStyleSheets"),
+    value: getter(AREA, "value"),
+    setValue: setter(AREA, "value"),
+    cssText: setter(CSSD, "cssText"),
+    setProperty: method(CSSD, "setProperty"),
+    replaceSync: SHEET && method(SHEET.prototype, "replaceSync"),
+  };
+  // An event's field, through its native getter.
+  const read = (get, e, name) => (get ? apply(get, e, []) : e[name]);
+  const stopNow = (e) => (N.stop ? apply(N.stop, e, []) : e.stopImmediatePropagation());
+  const preventNow = (e) => (N.prevent ? apply(N.prevent, e, []) : e.preventDefault());
+  // DOM calls on the overlay's own nodes.
+  const make = (tag) => apply(N.createElement, document, [tag]);
+  const put = (parent, child) => apply(N.appendChild, parent, [child]);
+  const drop = (node) => apply(N.remove, node, []);
+  const attr = (node, name, value) =>
+    value === null ? apply(N.removeAttribute, node, [name]) : apply(N.setAttribute, node, [name, value]);
+  const write = (node, text) => apply(N.text, node, [text]);
+  const css = (node, text) => apply(N.cssText, apply(N.style, node, []), [text]);
+  const prop = (node, name, value) => apply(N.setProperty, apply(N.style, node, []), [name, value]);
+  const boxOf = (node) => apply(N.box, node, []);
+  const find = (root, selector) => apply(N.query, root, [selector]);
+  const focusOn = (node) => apply(N.focus, node, [{ __proto__: null, preventScroll: true }]);
+
+  // ---- Theme: Sawit's colours, which the app sends (`theme`) ----
+
+  const theme = {
+    bg: "#282c33",
+    fg: "#dce0e5",
+    muted: "#a9afbc",
+    border: "#464b57",
+    field: "#1f2227",
+    accent: "#363c46",
+    primary: "#74ade8",
+    primaryFg: "#1b1d22",
+    danger: "#d07277",
+    ring: "#74ade8",
+    font: "-apple-system, BlinkMacSystemFont, system-ui, sans-serif",
+    mono: "ui-monospace, Menlo, monospace",
+  };
+  const MEASURE = "#ff375f";
+
+  const STYLE = `
+:host { all: initial; }
+.root { position: absolute; inset: 0; overflow: hidden; font: 12px/1.4 var(--font); color: var(--fg);
+  -webkit-font-smoothing: antialiased; letter-spacing: 0; text-transform: none; text-align: left; direction: ltr; }
+.root * { box-sizing: border-box; }
+.box { position: absolute; box-sizing: border-box; pointer-events: none; }
+.label { position: absolute; pointer-events: none; display: flex; gap: 6px; align-items: baseline; padding: 3px 7px;
+  border-radius: 6px; background: var(--bg); border: 1px solid var(--border); color: var(--fg); white-space: nowrap;
+  font: 500 11px/16px var(--mono); box-shadow: 0 2px 8px rgba(0,0,0,.24); max-width: calc(100vw - 16px); overflow: hidden; }
+.label .size { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+.mark { position: absolute; pointer-events: auto; min-width: 24px; height: 24px; padding: 0 6px; border-radius: 12px;
+  border: 2px solid var(--bg); background: var(--primary); color: var(--primary-fg); font: 600 11px/20px var(--font);
+  font-variant-numeric: tabular-nums; text-align: center; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.3); margin: 0; }
+.mark:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.mark.open { background: var(--fg); color: var(--bg); }
+.pop { position: absolute; pointer-events: auto; width: 320px; max-width: calc(100vw - 16px); display: flex;
+  flex-direction: column; gap: 12px; padding: 12px; border-radius: 10px; background: var(--bg); color: var(--fg);
+  border: 1px solid var(--border); box-shadow: 0 12px 32px rgba(0,0,0,.32), 0 2px 6px rgba(0,0,0,.2); }
+.pop[hidden] { display: none; }
+.head { display: flex; gap: 8px; align-items: flex-start; }
+.badge { flex: none; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px; background: var(--primary);
+  color: var(--primary-fg); font: 600 11px/22px var(--font); text-align: center; font-variant-numeric: tabular-nums; }
+.what { flex: 1; min-width: 0; }
+.title { font: 500 12px/18px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub { color: var(--muted); font-size: 11px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-variant-numeric: tabular-nums; }
+.walk { flex: none; display: flex; gap: 4px; }
+.walk[hidden] { display: none; }
+button { font: 500 12px/1 var(--font); color: var(--fg); cursor: pointer; }
+.icon { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; padding: 0;
+  border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--muted); }
+.icon:hover { color: var(--fg); background: var(--accent); }
+.icon:disabled { opacity: .45; cursor: default; background: transparent; }
+.kinds { display: flex; padding: 2px; gap: 2px; border-radius: 7px; background: var(--field); border: 1px solid var(--border); }
+.kind { flex: 1; height: 24px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); }
+.kind:hover { color: var(--fg); }
+.kind[aria-checked="true"] { background: var(--accent); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.25); }
+textarea { display: block; width: 100%; min-height: 64px; max-height: 160px; resize: none; margin: 0; padding: 8px 10px;
+  border-radius: 7px; border: 1px solid var(--border); background: var(--field); color: var(--fg);
+  font: 13px/1.45 var(--font); outline: none; }
+textarea::placeholder { color: var(--muted); opacity: 1; }
+textarea:focus { border-color: var(--ring); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 30%, transparent); }
+.foot { display: flex; gap: 8px; align-items: center; }
+.grow { flex: 1; }
+.btn { height: 28px; padding: 0 10px; display: inline-flex; gap: 6px; align-items: center; border-radius: 7px;
+  border: 1px solid var(--border); background: transparent; }
+.btn:hover { background: var(--accent); }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: var(--primary-fg); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.danger { color: var(--danger); border-color: transparent; padding: 0 6px; }
+.btn.danger:hover { background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.btn[hidden] { display: none; }
+kbd { font: 500 10px/1 var(--font); opacity: .7; }
+button:focus-visible, .kind:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.flash { position: absolute; pointer-events: none; border-radius: 2px; outline: 3px solid var(--primary); outline-offset: 2px; }
+@media (prefers-reduced-motion: no-preference) {
+  .pop.in { animation: pop-in 140ms cubic-bezier(0.2, 0, 0, 1); }
+  .flash { animation: flash 600ms ease-out forwards; }
+}
+@keyframes pop-in { from { opacity: 0; transform: translateY(var(--rise, 4px)); } to { opacity: 1; transform: none; } }
+@keyframes flash { 0% { opacity: 1; } 30% { opacity: .2; } 60% { opacity: 1; } 100% { opacity: 0; } }
+`;
+  const UP = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M4 7l4-4 4 4"/></svg>';
+  const DOWN = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v10M4 9l4 4 4-4"/></svg>';
+  const TRASH = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4"/></svg>';
+  // Static markup: what the page wrote is set as text later, never parsed.
+  const MARKUP =
+    '<div class="root" part="root"><div class="layer"></div>' +
+    '<div class="pop" role="dialog" aria-labelledby="pop-title" aria-describedby="pop-sub" hidden>' +
+    '<div class="head"><span class="badge" id="pop-n"></span><div class="what"><div class="title" id="pop-title"></div>' +
+    '<div class="sub" id="pop-sub"></div></div><div class="walk" id="pop-walk">' +
+    '<button class="icon" id="pop-up" type="button" aria-label="Select the parent element" title="Parent element (⌥↑)">' + UP + "</button>" +
+    '<button class="icon" id="pop-down" type="button" aria-label="Select the child element again" title="Child element (⌥↓)">' + DOWN + "</button>" +
+    "</div></div>" +
+    '<div class="kinds" role="radiogroup" aria-label="Kind">' +
+    '<button class="kind" id="kind-fix" type="button" role="radio">Fix</button>' +
+    '<button class="kind" id="kind-change" type="button" role="radio">Change</button>' +
+    '<button class="kind" id="kind-question" type="button" role="radio">Question</button>' +
+    '<button class="kind" id="kind-copy" type="button" role="radio" title="Ask the agent to reuse this element; adds its HTML">Copy</button>' +
+    "</div>" +
+    '<textarea id="pop-comment" rows="3" placeholder="What should change?" aria-label="Comment for the agent"></textarea>' +
+    '<div class="foot"><button class="btn danger" id="pop-remove" type="button" aria-label="Remove this annotation">' + TRASH + "Remove</button>" +
+    '<span class="grow"></span><button class="btn" id="pop-cancel" type="button">Cancel <kbd>Esc</kbd></button>' +
+    '<button class="btn primary" id="pop-save" type="button">Save <kbd>↩</kbd></button></div>' +
+    "</div></div>";
+  const KINDS = ["fix", "change", "question", "copy"];
+
   // ---- Host: one closed shadow root on <html>, made once the page has settled ----
 
   let host = null;
+  let shadow = null;
+  let rootNode = null;
   let layer = null;
+  let ui = null;
   let ready = false;
   let hidden = false;
   let mode = "off";
@@ -43,31 +239,94 @@
   // Inspect: the picked element, and whether Alt is held to measure from it.
   let pinned = null;
   let altHeld = false;
+  // What `render` drew last (cleared each time), and the markers by number (kept, so one
+  // keeps the keyboard).
+  let drawn = [];
+  let marks = [];
+  // `items` changed since the markers were made (before the overlay could be drawn, say).
+  let stale = false;
+  // The open popover: `{ n, el, intent, down }`, `n` null for a new annotation.
+  let pop = null;
+  // A press outside closed the popover: the click that follows picks nothing.
+  let dismissed = false;
+  // Where the keyboard goes back to when the popover closes (the marker that opened it).
+  let returnTo = null;
+  // The overlay's clickable nodes: `[node, action]`, read by index.
+  let actions = [];
+
+  const applyTheme = () => {
+    if (!rootNode) return;
+    const vars = [
+      ["--bg", theme.bg], ["--fg", theme.fg], ["--muted", theme.muted], ["--border", theme.border],
+      ["--field", theme.field], ["--accent", theme.accent], ["--primary", theme.primary],
+      ["--primary-fg", theme.primaryFg], ["--danger", theme.danger], ["--ring", theme.ring],
+      ["--font", theme.font], ["--mono", theme.mono],
+    ];
+    for (let i = 0; i < vars.length; i++) prop(rootNode, vars[i][0], vars[i][1]);
+  };
 
   const ensureHost = () => {
-    if (!ready || !document.documentElement) return null;
+    if (!ready || !document.documentElement || !N.createElement || !N.attachShadow || !N.inner) return null;
     if (!host) {
-      host = document.createElement(HOST_TAG);
-      host.setAttribute("data-sawit-overlay", "");
-      const shadow = host.attachShadow({ mode: "closed" });
-      layer = document.createElement("div");
-      layer.style.cssText = "position:absolute;inset:0;overflow:hidden";
-      shadow.appendChild(layer);
-      host.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:none;margin:0;padding:0;border:0";
+      let made;
+      try {
+        made = make(HOST_TAG);
+        shadow = apply(N.attachShadow, made, [{ __proto__: null, mode: "closed" }]);
+      } catch (_) {
+        // A page that took the name for an element of its own gets no overlay.
+        return null;
+      }
+      host = made;
+      attr(host, "data-sawit-overlay", "");
+      css(host, "position:fixed;inset:0;z-index:2147483647;pointer-events:none;margin:0;padding:0;border:0;display:block");
+      let styled = false;
+      if (SHEET && N.replaceSync && N.sheets) {
+        try {
+          const sheet = new SHEET();
+          apply(N.replaceSync, sheet, [STYLE]);
+          apply(N.sheets, shadow, [[sheet]]);
+          styled = true;
+        } catch (_) {}
+      }
+      apply(N.inner, shadow, [(styled ? "" : "<style>" + STYLE + "</style>") + MARKUP]);
+      rootNode = find(shadow, ".root");
+      layer = find(shadow, ".layer");
+      const one = (id) => find(shadow, "#" + id);
+      ui = {
+        pop: one("pop-comment") && find(shadow, ".pop"),
+        badge: one("pop-n"),
+        title: one("pop-title"),
+        sub: one("pop-sub"),
+        walk: one("pop-walk"),
+        up: one("pop-up"),
+        down: one("pop-down"),
+        kinds: [one("kind-fix"), one("kind-change"), one("kind-question"), one("kind-copy")],
+        text: one("pop-comment"),
+        remove: one("pop-remove"),
+        cancel: one("pop-cancel"),
+        save: one("pop-save"),
+      };
+      actions = [
+        [ui.up, "parent"], [ui.down, "child"], [ui.remove, "remove"], [ui.cancel, "cancel"], [ui.save, "save"],
+        [ui.kinds[0], "kind:fix"], [ui.kinds[1], "kind:change"], [ui.kinds[2], "kind:question"], [ui.kinds[3], "kind:copy"],
+      ];
+      applyTheme();
       applyMode();
     }
-    if (!host.isConnected) document.documentElement.appendChild(host);
+    if (!read(N.connected, host, "isConnected")) put(document.documentElement, host);
     return host;
   };
   const applyMode = () => {
     if (!host) return;
-    // Shown is no inline display at all (position:fixed already makes it a block).
-    host.style.display = hidden ? "none" : "";
+    prop(host, "display", hidden ? "none" : "block");
   };
-  const box = (css, text) => {
-    const div = document.createElement("div");
-    div.style.cssText = "position:absolute;box-sizing:border-box;" + css;
-    if (text !== undefined) div.textContent = text;
+  const box = (cssText, text) => {
+    const div = make("div");
+    attr(div, "class", "box");
+    css(div, cssText);
+    if (text !== undefined) write(div, text);
+    put(layer, div);
+    drawn[drawn.length] = div;
     return div;
   };
   const px = (n) => Math.round(n * 100) / 100 + "px";
@@ -82,18 +341,48 @@
       return false;
     }
   };
+  // A class or id a build tool made up (`css-1x2y3z`, `sc-bdVaJa`, `jsx-4012`, `radix-:r1:`):
+  // it changes with the next build, so a selector for the agent doesn't lean on it.
+  const madeUp = (name) =>
+    !name || name.length > 40 || /\d{3,}/.test(name) || /[:[\]/@]/.test(name) ||
+    /^(?:css|sc|jsx|svelte|emotion|styled|chakra|mui|tw|ng)-/i.test(name) ||
+    (/\d/.test(name) && /^[a-z]{1,3}[A-Z0-9]\w{3,}$/.test(name));
+  helpers.madeUp = madeUp;
+  const quoted = (value) => '"' + String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+  const TEST_ATTRS = ["data-testid", "data-test-id", "data-test", "data-cy", "data-qa"];
+  // A selector that names `el` alone, short and lasting: its id, a test id, its tag and
+  // classes, an accessible label or name, else a path from the nearest named ancestor.
   const selectorFor = (el) => {
-    if (el.id) {
+    const tag = el.localName;
+    if (el.id && !madeUp(el.id)) {
       const byId = "#" + CSS.escape(el.id);
       if (unique(el, byId)) return byId;
     }
-    const tag = el.localName;
-    const classes = [...el.classList].filter((c) => !/^\d/.test(c)).map((c) => "." + CSS.escape(c)).join("");
-    if (classes && unique(el, tag + classes)) return tag + classes;
+    for (let i = 0; i < TEST_ATTRS.length; i++) {
+      const v = el.getAttribute && el.getAttribute(TEST_ATTRS[i]);
+      if (v) {
+        const s = "[" + TEST_ATTRS[i] + "=" + quoted(v) + "]";
+        if (unique(el, s)) return s;
+        if (unique(el, tag + s)) return tag + s;
+      }
+    }
+    const classes = [...el.classList].filter((c) => !/^\d/.test(c) && !madeUp(c)).map((c) => "." + CSS.escape(c));
+    for (let n = 1; n <= Math.min(classes.length, 3); n++) {
+      const s = tag + classes.slice(0, n).join("");
+      if (unique(el, s)) return s;
+    }
+    const ATTRS = ["aria-label", "name", "title", "alt", "placeholder", "href"];
+    for (let i = 0; i < ATTRS.length; i++) {
+      const v = el.getAttribute && el.getAttribute(ATTRS[i]);
+      if (v && v.length <= 80) {
+        const s = tag + "[" + ATTRS[i] + "=" + quoted(v) + "]";
+        if (unique(el, s)) return s;
+      }
+    }
     const parts = [];
     let node = el;
     while (node && node.nodeType === Node.ELEMENT_NODE) {
-      if (node.id && node !== el) {
+      if (node !== el && node.id && !madeUp(node.id) && unique(node, "#" + CSS.escape(node.id))) {
         parts.unshift("#" + CSS.escape(node.id));
         break;
       }
@@ -118,9 +407,9 @@
     const cls = typeof el.className === "string" && el.className.trim() ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".") : "";
     return el.localName + (el.id ? "#" + el.id : "") + cls;
   };
-  const chip = (el) => {
+  const sizeOf = (el) => {
     const r = el.getBoundingClientRect();
-    return short(el) + " " + Math.round(r.width) + "×" + Math.round(r.height);
+    return Math.round(r.width) + "×" + Math.round(r.height);
   };
   const info = (el, max = 120) => ({
     selector: selectorFor(el),
@@ -134,32 +423,114 @@
 
   // ---- Pick details ----
 
+  // Computed values worth an agent's time, each left out at its default.
   const STYLE_PROPS = [
     ["position", "static"],
-    ["overflow", "visible"],
     ["z-index", "auto"],
+    ["overflow", "visible"],
     ["opacity", "1"],
-    ["background-color", "transparent", "rgba(0, 0, 0, 0)"],
-    ["color", "rgb(0, 0, 0)"],
-    ["font-size", "16px"],
-    ["font-weight", "400"],
-    ["border-radius", "0px"],
+    ["flex-direction", "row"],
+    ["justify-content", "normal"],
+    ["align-items", "normal"],
     ["gap", "normal"],
+    ["grid-template-columns", "none"],
     ["padding", "0px"],
     ["margin", "0px"],
+    ["border-radius", "0px"],
+    ["font-family"],
+    ["font-size", "16px"],
+    ["font-weight", "400"],
+    ["line-height", "normal"],
+    ["letter-spacing", "normal"],
+    ["text-align", "start"],
+    ["text-transform", "none"],
+    ["color", "rgb(0, 0, 0)"],
+    ["background-color", "transparent", "rgba(0, 0, 0, 0)"],
+    ["background-image", "none"],
+    ["box-shadow", "none"],
+    ["transform", "none"],
   ];
   const stylesOf = (el) => {
     const s = getComputedStyle(el);
     const out = [["display", s.getPropertyValue("display")]];
-    for (const [prop, ...defaults] of STYLE_PROPS) {
-      const v = s.getPropertyValue(prop);
-      if (v && !defaults.includes(v)) out.push([prop, v]);
+    for (const [name, ...defaults] of STYLE_PROPS) {
+      const v = s.getPropertyValue(name);
+      if (v && !defaults.includes(v)) out.push([name, clip(oneLine(v), 160)]);
+      // The border, after the radius, when there is one.
+      if (name === "border-radius" && s.getPropertyValue("border-top-style") !== "none") {
+        const w = s.getPropertyValue("border-width");
+        if (w && w !== "0px") out.push(["border", oneLine(w + " " + s.getPropertyValue("border-style") + " " + s.getPropertyValue("border-color"))]);
+      }
     }
     return out;
   };
-  const nameOf = (t) => (t && (typeof t === "function" || typeof t === "object") ? t.displayName || t.name || t.__name || "" : "");
+  // The attributes that name or wire an element; never `value`, which can hold what was typed.
+  const KEY_ATTR = /^(?:data-(?:testid|test-id|test|cy|qa|component|track)|aria-[a-z-]+|role|href|src|alt|name|type|title|placeholder|for|action|method|target|rel|disabled|required|readonly|checked)$/;
+  const attributesOf = (el) => {
+    const out = [];
+    const list = el.attributes || [];
+    for (let i = 0; i < list.length && out.length < 16; i++) {
+      const a = list[i];
+      if (a && KEY_ATTR.test(a.name)) out.push([a.name, clip(oneLine(a.value), 200)]);
+    }
+    return out;
+  };
+  const parentOf = (el) => {
+    if (el.parentElement) return el.parentElement;
+    const root = el.getRootNode && el.getRootNode();
+    return root && root instanceof ShadowRoot ? root.host : null;
+  };
+  // `body > main > div.actions > button#buy`: at most ten levels, the middle ones cut.
+  const pathOf = (el) => {
+    const parts = [];
+    for (let n = el; n && n.nodeType === Node.ELEMENT_NODE && parts.length < 60; n = parentOf(n)) {
+      parts.unshift(short(n));
+      if (n.localName === "body") break;
+    }
+    if (parts.length > 10) parts.splice(3, parts.length - 9, "…");
+    return parts.join(" > ");
+  };
+  const SKIP = new Set(["script", "style", "template", "link", "meta", "noscript", HOST_TAG]);
+  const sibling = (el, forward) => {
+    let n = forward ? el.nextElementSibling : el.previousElementSibling;
+    while (n && SKIP.has(n.localName)) n = forward ? n.nextElementSibling : n.previousElementSibling;
+    return n;
+  };
+  const neighbour = (n) => {
+    if (!n) return null;
+    const text = clip(oneLine(n.innerText !== undefined ? n.innerText : n.textContent), 80);
+    return { label: short(n), text: text || null };
+  };
+  const contextOf = (el) => {
+    const parent = parentOf(el);
+    return {
+      parent: parent ? { label: short(parent), text: null } : null,
+      before: neighbour(sibling(el, false)),
+      after: neighbour(sibling(el, true)),
+    };
+  };
+  const typeName = (t) => (t && (typeof t === "function" || typeof t === "object") ? t.displayName || t.name || t.__name || "" : "");
+  // A React component's name: its function or class, through `memo` and `forwardRef`.
+  const componentName = (t) => typeName(t) || (t && (typeName(t.type) || typeName(t.render))) || "";
+  // React 19 has no `_debugSource`: the JSX call's place is the first frame of `_debugStack`
+  // that isn't React's own.
+  const stackSource = (stack) => {
+    const text = stack && typeof stack.stack === "string" ? stack.stack : "";
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const m = /((?:https?|file|webpack|webpack-internal):\/\/[^\s)]+?):(\d+)(?::\d+)?\)?\s*$/.exec(lines[i]);
+      if (!m || /node_modules|react-dom|react\.|jsx-dev-runtime|chunk-|\.vite\/deps/.test(m[1])) continue;
+      let file = m[1];
+      try {
+        const u = new URL(file);
+        if (u.origin === location.origin) file = u.pathname.replace(/^\/(?!@fs\/)/, "");
+      } catch (_) {}
+      return { file, line: Number(m[2]) || null };
+    }
+    return null;
+  };
   const reactHint = (el) => {
-    const key = Object.keys(el).find((k) => k.startsWith("__reactFiber$"));
+    const key = Object.keys(el).find((k) => k.startsWith("__reactFiber$") || k.startsWith("__reactInternalInstance$"));
     if (!key) return null;
     let file = "";
     let line = null;
@@ -170,11 +541,23 @@
         file = f._debugSource.fileName;
         line = f._debugSource.lineNumber || null;
       }
-      if (!component && typeof f.type === "function") component = nameOf(f.type);
+      if (!file && f._debugStack) {
+        const at = stackSource(f._debugStack);
+        if (at) {
+          file = at.file;
+          line = at.line;
+        }
+      }
+      if (!component && f.type && typeof f.type !== "string") component = componentName(f.type);
       if (file && component) break;
     }
     if (!file && !component) return null;
     return { framework: "React", file, line, component: component || null };
+  };
+  // `file:line[:col]`, as dev plugins write it into an attribute.
+  const fileLine = (text, framework, component) => {
+    const m = /^(.*?)(?::(\d+))?(?::\d+)?$/.exec(text);
+    return { framework, file: m[1], line: m[2] ? Number(m[2]) : null, component: component || null };
   };
   const hintOf = (el) => {
     const react = reactHint(el);
@@ -185,16 +568,23 @@
     if (v2) return { framework: "Vue", file: v2.__file || "", line: null, component: v2.name || null };
     const loc = el.__svelte_meta && el.__svelte_meta.loc;
     if (loc && loc.file) return { framework: "Svelte", file: loc.file, line: (loc.line || 0) + 1, component: null };
-    const ds = el.getAttribute && el.getAttribute("data-source");
-    if (ds) {
-      const m = /^(.*?)(?::(\d+))?(?::\d+)?$/.exec(ds);
-      return { framework: "source", file: m[1], line: m[2] ? Number(m[2]) : null, component: null };
+    if (!el.getAttribute) return null;
+    const get = (name) => el.getAttribute(name);
+    if (get("data-astro-source-file")) {
+      const at = (get("data-astro-source-loc") || "").split(":")[0];
+      return { framework: "Astro", file: get("data-astro-source-file"), line: Number(at) || null, component: null };
     }
-    const ip = el.getAttribute && el.getAttribute("data-inspector-relative-path");
+    if (get("data-v-inspector")) return fileLine(get("data-v-inspector"), "Vue", null);
+    if (get("data-sentry-source-file")) {
+      return { framework: "source", file: get("data-sentry-source-file"), line: null, component: get("data-sentry-component") || null };
+    }
+    if (get("data-source")) return fileLine(get("data-source"), "source", null);
+    const ip = get("data-inspector-relative-path");
     if (ip) {
-      const ln = Number(el.getAttribute("data-inspector-line"));
+      const ln = Number(get("data-inspector-line"));
       return { framework: "source", file: ip, line: ln || null, component: null };
     }
+    if (get("data-component")) return { framework: "source", file: "", line: null, component: get("data-component") };
     return null;
   };
   const sourceOf = (el) => {
@@ -203,12 +593,24 @@
         const h = hintOf(n);
         if (h) return h;
       }
+      // Any build: the nearest custom element names the component.
+      for (let n = el; n && n.nodeType === Node.ELEMENT_NODE; n = parentOf(n)) {
+        if (n.localName.includes("-") && n.localName !== HOST_TAG) return { framework: "custom element", file: "", line: null, component: n.localName };
+      }
     } catch (_) {}
     return null;
   };
   const details = (el) => {
     const r = el.getBoundingClientRect();
     const rect = { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
+    const sx = window.scrollX || 0;
+    const sy = window.scrollY || 0;
+    let accessible = null;
+    let name = null;
+    try {
+      accessible = role(el);
+      name = accessible ? clip(nameOf(el, accessible), 200) || null : null;
+    } catch (_) {}
     return {
       ...info(el, 500),
       rect,
@@ -216,66 +618,135 @@
       source: sourceOf(el),
       html: (el.outerHTML || "").slice(0, 20000),
       off_screen: r.left < 0 || r.top < 0 || r.right > innerWidth || r.bottom > innerHeight,
+      path: pathOf(el),
+      attributes: attributesOf(el),
+      role: accessible,
+      name,
+      page_rect: { x: Math.round(r.x + sx), y: Math.round(r.y + sy), width: rect.width, height: rect.height },
+      viewport: [Math.round(innerWidth), Math.round(innerHeight)],
+      context: contextOf(el),
     };
   };
+  // What the popover's second line says: `button “Buy” · 120×40`.
+  const summary = (el) => {
+    let r = null;
+    let name = "";
+    try {
+      r = role(el);
+      name = r ? clip(nameOf(el, r), 40) : "";
+    } catch (_) {}
+    const who = r ? r + (name ? " “" + name + "”" : "") + " · " : "";
+    return who + sizeOf(el);
+  };
+
+  // ---- Placement ----
+
+  // Where a floating box of `size` goes beside `anchor` (both in viewport px) inside a
+  // viewport of `view`: below it, else above it when that fits and below doesn't (flip), at
+  // the anchor's left edge moved inside the viewport (shift). An anchor with room on neither
+  // side (one taller than the viewport) gets the box inside its visible part.
+  const place = (anchor, size, view, gap = 8, margin = 8) => {
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, Math.max(lo, hi)));
+    const below = view.height - anchor.bottom - gap - margin;
+    const above = anchor.top - gap - margin;
+    let side;
+    let top;
+    if (size.height <= below) {
+      side = "below";
+      top = anchor.bottom + gap;
+    } else if (size.height <= above) {
+      side = "above";
+      top = anchor.top - gap - size.height;
+    } else {
+      side = "inside";
+      top = Math.max(anchor.top, 0) + margin;
+    }
+    top = clamp(top, margin, view.height - size.height - margin);
+    const left = clamp(anchor.left, margin, view.width - size.width - margin);
+    return { left: Math.round(left), top: Math.round(top), side };
+  };
+  helpers.place = place;
 
   // ---- Drawing ----
 
-  const drawHighlight = () => {
-    if (!current || !current.isConnected) return;
-    const r = current.getBoundingClientRect();
-    const s = getComputedStyle(current);
+  const drawHighlight = (el, label) => {
+    if (!el || !el.isConnected) return;
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
     const n = (name) => parseFloat(s[name]) || 0;
     const m = { t: n("marginTop"), r: n("marginRight"), b: n("marginBottom"), l: n("marginLeft") };
     const bw = { t: n("borderTopWidth"), r: n("borderRightWidth"), b: n("borderBottomWidth"), l: n("borderLeftWidth") };
     const p = { t: n("paddingTop"), r: n("paddingRight"), b: n("paddingBottom"), l: n("paddingLeft") };
     const at = (x, y, w, h) => "left:" + px(x) + ";top:" + px(y) + ";width:" + px(Math.max(w, 0)) + ";height:" + px(Math.max(h, 0)) + ";";
-    layer.appendChild(box(at(r.left - m.l, r.top - m.t, r.width + m.l + m.r, r.height + m.t + m.b) + "background:rgba(246,178,107,.35)"));
+    box(at(r.left - m.l, r.top - m.t, r.width + m.l + m.r, r.height + m.t + m.b) + "background:rgba(246,178,107,.3)");
     const px0 = r.left + bw.l;
     const py0 = r.top + bw.t;
     const pw = r.width - bw.l - bw.r;
     const ph = r.height - bw.t - bw.b;
-    layer.appendChild(box(at(px0, py0, pw, ph) + "background:rgba(147,196,125,.35)"));
-    layer.appendChild(box(at(px0 + p.l, py0 + p.t, pw - p.l - p.r, ph - p.t - p.b) + "outline:2px solid " + ACCENT + ";outline-offset:-2px"));
-    const label = box("left:" + px(Math.max(r.left, 0)) + ";top:" + px(r.top < 24 ? r.bottom + 4 : r.top - 22) +
-      ";padding:3px 6px;border-radius:4px;background:#1d1d1f;color:#fff;font:11px/14px system-ui,sans-serif;white-space:nowrap", chip(current));
-    layer.appendChild(label);
+    box(at(px0, py0, pw, ph) + "background:rgba(147,196,125,.3)");
+    box(at(r.left, r.top, r.width, r.height) + "outline:2px solid var(--primary);outline-offset:-1px");
+    if (!label) return;
+    const chip = make("div");
+    attr(chip, "class", "label");
+    const name = make("span");
+    write(name, short(el));
+    const size = make("span");
+    attr(size, "class", "size");
+    write(size, sizeOf(el));
+    put(chip, name);
+    put(chip, size);
+    css(chip, "left:" + px(Math.max(Math.min(r.left, innerWidth - 120), 4)) + ";top:" + px(r.top < 28 ? Math.min(r.bottom + 6, innerHeight - 26) : r.top - 26));
+    put(layer, chip);
+    drawn[drawn.length] = chip;
   };
-  const drawMarkers = () => {
-    for (const item of items) {
-      let el;
+  // Each marker sits on its element's top-left corner, kept inside the viewport.
+  const placeMarkers = () => {
+    for (let i = 0; i < marks.length; i++) {
+      const m = marks[i];
+      let el = null;
       try {
-        el = resolve({ selector: item.selector });
-      } catch (_) {
+        el = resolve({ selector: m.item.selector });
+      } catch (_) {}
+      if (!el) {
+        prop(m.node, "display", "none");
         continue;
       }
       const r = el.getBoundingClientRect();
-      layer.appendChild(box("left:" + px(r.left - 10) + ";top:" + px(r.top - 10) +
-        ";width:20px;height:20px;border-radius:50%;background:" + ACCENT +
-        ";color:#fff;font:bold 11px/20px system-ui,sans-serif;text-align:center", String(item.n)));
+      const out = r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth;
+      prop(m.node, "display", out ? "none" : "block");
+      prop(m.node, "left", px(Math.max(2, Math.min(r.left - 12, innerWidth - 28))));
+      prop(m.node, "top", px(Math.max(2, Math.min(r.top - 12, innerHeight - 28))));
+      attr(m.node, "class", pop && pop.n === m.item.n ? "mark open" : "mark");
     }
   };
-  // Alt-measure: distance lines with px labels between the picked box `a` and
-  // the hovered box `b`.
-  const MEASURE = "#ff375f";
+  const placePopover = () => {
+    if (!pop || !ui) return;
+    if (!pop.el.isConnected) return close();
+    const r = pop.el.getBoundingClientRect();
+    const b = boxOf(ui.pop);
+    const at = place(r, { width: b.width || 320, height: b.height || 200 }, { width: innerWidth, height: innerHeight });
+    prop(ui.pop, "left", at.left + "px");
+    prop(ui.pop, "top", at.top + "px");
+    prop(ui.pop, "--rise", at.side === "above" ? "-4px" : "4px");
+  };
   const drawMeasure = () => {
     if (mode !== "inspect" || !altHeld || !pinned || !pinned.isConnected || !current || current === pinned) return;
     const a = pinned.getBoundingClientRect();
     const b = current.getBoundingClientRect();
-    layer.appendChild(box("left:" + px(a.left) + ";top:" + px(a.top) + ";width:" + px(a.width) + ";height:" + px(a.height) +
-      ";outline:1px dashed " + MEASURE + ";outline-offset:-1px"));
+    box("left:" + px(a.left) + ";top:" + px(a.top) + ";width:" + px(a.width) + ";height:" + px(a.height) +
+      ";outline:1px dashed " + MEASURE + ";outline-offset:-1px");
     const tag = (x, y, d) => {
-      layer.appendChild(box("left:" + px(x) + ";top:" + px(y) + ";transform:translate(-50%,-50%);padding:1px 4px;border-radius:3px;background:" +
-        MEASURE + ";color:#fff;font:10px/13px system-ui,sans-serif;white-space:nowrap", Math.round(d * 10) / 10 + "px"));
+      box("left:" + px(x) + ";top:" + px(y) + ";transform:translate(-50%,-50%);padding:1px 4px;border-radius:3px;background:" +
+        MEASURE + ";color:#fff;font:10px/13px system-ui,sans-serif;white-space:nowrap", Math.round(d * 10) / 10 + "px");
     };
     const hLine = (x1, x2, y) => {
       if (x2 - x1 < 0.5) return;
-      layer.appendChild(box("left:" + px(x1) + ";top:" + px(y) + ";width:" + px(x2 - x1) + ";height:1px;background:" + MEASURE));
+      box("left:" + px(x1) + ";top:" + px(y) + ";width:" + px(x2 - x1) + ";height:1px;background:" + MEASURE);
       tag((x1 + x2) / 2, y, x2 - x1);
     };
     const vLine = (y1, y2, x) => {
       if (y2 - y1 < 0.5) return;
-      layer.appendChild(box("left:" + px(x) + ";top:" + px(y1) + ";width:1px;height:" + px(y2 - y1) + ";background:" + MEASURE));
+      box("left:" + px(x) + ";top:" + px(y1) + ";width:1px;height:" + px(y2 - y1) + ";background:" + MEASURE);
       tag(x, (y1 + y2) / 2, y2 - y1);
     };
     // Where a line between the boxes runs: the middle of their overlap, else the picked box's middle.
@@ -296,14 +767,16 @@
     }
   };
   const render = () => {
-    if (!host && items.length === 0 && mode === "off") return;
+    if (!host && items.length === 0 && mode === "off" && !pop) return;
     if (!ensureHost()) return;
-    for (const child of [...layer.children]) {
-      if (!child.hasAttribute("data-flash")) child.remove();
-    }
-    drawMarkers();
-    if (mode !== "off") drawHighlight();
+    for (let i = 0; i < drawn.length; i++) drop(drawn[i]);
+    drawn = [];
+    if (stale) syncMarkers();
+    placeMarkers();
+    if (pop) drawHighlight(pop.el, false);
+    else if (mode !== "off") drawHighlight(current, true);
     drawMeasure();
+    placePopover();
   };
   const schedule = () => {
     if (frame) return;
@@ -314,7 +787,7 @@
   };
   let timer = 0;
   const watch = () => {
-    const want = items.length > 0 || mode !== "off";
+    const want = items.length > 0 || mode !== "off" || !!pop;
     if (want === watching) return;
     watching = want;
     const act = want ? listen : unlisten;
@@ -337,6 +810,307 @@
       }, 1000);
     }, ONCE);
   }
+
+  // ---- Markers ----
+
+  const markerAction = (node) => {
+    for (let i = 0; i < marks.length; i++) if (marks[i].node === node) return marks[i];
+    return null;
+  };
+  // The markers for `items`: kept where the number stays, so a focused one keeps the keyboard.
+  const syncMarkers = () => {
+    if (!ensureHost()) return;
+    stale = false;
+    const kept = [];
+    for (let i = 0; i < marks.length; i++) {
+      let still = null;
+      for (let j = 0; j < items.length; j++) if (items[j].n === marks[i].item.n) still = items[j];
+      if (still) {
+        marks[i].item = still;
+        kept[kept.length] = marks[i];
+      } else drop(marks[i].node);
+    }
+    for (let j = 0; j < items.length; j++) {
+      let has = false;
+      for (let i = 0; i < kept.length; i++) if (kept[i].item.n === items[j].n) has = true;
+      if (has) continue;
+      const node = make("button");
+      attr(node, "type", "button");
+      attr(node, "class", "mark");
+      write(node, String(items[j].n));
+      put(rootNode, node);
+      kept[kept.length] = { node, item: items[j] };
+    }
+    for (let i = 0; i < kept.length; i++) {
+      const it = kept[i].item;
+      const what = it.comment ? clip(oneLine(it.comment), 80) : it.label || "";
+      attr(kept[i].node, "aria-label", "Annotation " + it.n + (what ? ": " + what : "") + ". Enter opens it, Delete removes it.");
+      attr(kept[i].node, "title", "Annotation " + it.n + (what ? ": " + what : ""));
+    }
+    marks = kept;
+  };
+
+  // ---- The popover ----
+
+  const showKind = () => {
+    for (let i = 0; i < KINDS.length; i++) {
+      attr(ui.kinds[i], "aria-checked", pop.intent === KINDS[i] ? "true" : "false");
+      attr(ui.kinds[i], "tabindex", pop.intent === KINDS[i] ? "0" : "-1");
+    }
+  };
+  const fill = () => {
+    write(ui.badge, pop.n === null ? "New" : String(pop.n));
+    write(ui.title, short(pop.el));
+    // The whole label, where the line cuts it.
+    attr(ui.title, "title", short(pop.el));
+    write(ui.sub, summary(pop.el));
+    attr(ui.walk, "hidden", pop.n === null ? null : "");
+    attr(ui.remove, "hidden", pop.n === null ? "" : null);
+    attr(ui.save, "aria-label", pop.n === null ? "Save the annotation" : "Save the changes");
+    if (ui.up) {
+      const parent = parentOf(pop.el);
+      if (parent && parent !== document.documentElement) attr(ui.up, "disabled", null);
+      else attr(ui.up, "disabled", "");
+      if (pop.down.length) attr(ui.down, "disabled", null);
+      else attr(ui.down, "disabled", "");
+    }
+    showKind();
+  };
+  const open = (el, n, intent, comment) => {
+    if (!ensureHost() || !ui || !ui.pop) return false;
+    pop = { n, el, intent: KINDS.includes(intent) ? intent : "fix", down: [] };
+    if (n === null) current = el;
+    fill();
+    apply(N.setValue, ui.text, [comment || ""]);
+    attr(ui.pop, "hidden", null);
+    attr(ui.pop, "class", "pop in");
+    syncMarkers();
+    watch();
+    render();
+    focusOn(ui.text);
+    return true;
+  };
+  const close = () => {
+    if (!pop) return;
+    pop = null;
+    if (ui) {
+      attr(ui.pop, "hidden", "");
+      attr(ui.pop, "class", "pop");
+      if (N.blur && ui.text) apply(N.blur, ui.text, []);
+    }
+    const back = returnTo;
+    returnTo = null;
+    if (back && read(N.connected, back, "isConnected")) focusOn(back);
+    watch();
+    schedule();
+  };
+  const commentOf = () => (ui && ui.text ? apply(N.value, ui.text, []) : "");
+  const save = () => {
+    if (!pop) return;
+    const comment = commentOf();
+    if (pop.n === null) {
+      // A new note goes to Sawit only while it is picking for Annotate.
+      if (mode === "annotate" && pop.el.isConnected) send("picked", { mode, element: details(pop.el), comment, intent: pop.intent });
+    } else {
+      send("annotation", { action: "update", n: pop.n, comment, intent: pop.intent });
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].n === pop.n) {
+          items[i].comment = comment;
+          items[i].intent = pop.intent;
+        }
+      }
+      syncMarkers();
+    }
+    close();
+  };
+  const removeItem = (n) => {
+    send("annotation", { action: "remove", n });
+    const left = [];
+    for (let i = 0; i < items.length; i++) if (items[i].n !== n) left[left.length] = items[i];
+    items = left;
+    if (pop && pop.n === n) {
+      returnTo = null;
+      close();
+    }
+    stale = true;
+    syncMarkers();
+    watch();
+    schedule();
+  };
+  const retarget = (toParent) => {
+    if (!pop || pop.n !== null) return;
+    if (toParent) {
+      const parent = parentOf(pop.el);
+      if (!parent || parent === document.documentElement) return;
+      pop.down.push(pop.el);
+      pop.el = parent;
+    } else if (pop.down.length) {
+      pop.el = pop.down.pop();
+    } else return;
+    current = pop.el;
+    fill();
+    render();
+  };
+  const openMarker = (m) => {
+    let el = null;
+    try {
+      el = resolve({ selector: m.item.selector });
+    } catch (_) {}
+    if (!el) return;
+    returnTo = m.node;
+    open(el, m.item.n, m.item.intent, m.item.comment);
+  };
+  const act = (what) => {
+    if (what === "save") save();
+    else if (what === "cancel") close();
+    else if (what === "remove" && pop && pop.n !== null) removeItem(pop.n);
+    else if (what === "parent") retarget(true);
+    else if (what === "child") retarget(false);
+    else if (what.startsWith("kind:") && pop) {
+      pop.intent = what.slice(5);
+      showKind();
+    }
+  };
+
+  // ---- The overlay's own events, kept from the page ----
+  //
+  // Events on the overlay reach the page with the host as their target. Each is stopped at
+  // the window, before any page listener (this one was added first), and handled here: the
+  // page never sees a key typed into the comment, nor a press on a marker. Stopping it there
+  // leaves its default alone (the field still types, takes the caret and focus). Events a
+  // page dispatches at the host are dropped.
+
+  const ownAt = (x, y) => {
+    for (let i = 0; i < actions.length; i++) {
+      const node = actions[i][0];
+      if (!node) continue;
+      const b = boxOf(node);
+      if (b.width && x >= b.left && x < b.right && y >= b.top && y < b.bottom) return actions[i][1];
+    }
+    for (let i = 0; i < marks.length; i++) {
+      const b = boxOf(marks[i].node);
+      if (b.width && x >= b.left && x < b.right && y >= b.top && y < b.bottom) return marks[i];
+    }
+    return null;
+  };
+  const ownOf = (node) => {
+    for (let i = 0; i < actions.length; i++) if (actions[i][0] === node) return actions[i][1];
+    return markerAction(node);
+  };
+  const activeOwn = () => (N.active && shadow ? apply(N.active, shadow, []) : null);
+  const run = (what) => {
+    if (!what) return;
+    if (typeof what === "string") {
+      // A button inside a popover that has closed meanwhile does nothing.
+      if (pop) act(what);
+    } else openMarker(what);
+  };
+  const ownClick = (e) => {
+    // A click from the keyboard (Enter or Space on a button) has no point.
+    const keyed = read(N.detail, e, "detail") === 0;
+    run(keyed ? ownOf(activeOwn()) : ownAt(read(N.x, e, "clientX"), read(N.y, e, "clientY")));
+  };
+  const ownKey = (e) => {
+    const key = read(N.key, e, "key");
+    const active = activeOwn();
+    if (pop) {
+      const meta = read(N.meta, e, "metaKey") || read(N.ctrl, e, "ctrlKey");
+      if (key === "Escape") {
+        preventNow(e);
+        close();
+      } else if (key === "Enter" && active === ui.text && !read(N.composing, e, "isComposing") && (meta || !read(N.shift, e, "shiftKey"))) {
+        preventNow(e);
+        save();
+      } else if ((key === "ArrowUp" || key === "ArrowDown") && read(N.keyAlt, e, "altKey")) {
+        preventNow(e);
+        retarget(key === "ArrowUp");
+      } else if ((key === "ArrowLeft" || key === "ArrowRight") && ownOf(active) && String(ownOf(active)).startsWith("kind:")) {
+        preventNow(e);
+        const at = KINDS.indexOf(pop.intent);
+        const next = (at + (key === "ArrowRight" ? 1 : KINDS.length - 1)) % KINDS.length;
+        pop.intent = KINDS[next];
+        showKind();
+        focusOn(ui.kinds[next]);
+      } else if (key === "Tab") {
+        // The keyboard stays in the popover until it closes.
+        const order = [];
+        if (pop.n === null) {
+          order[order.length] = ui.up;
+          order[order.length] = ui.down;
+        }
+        order[order.length] = ui.kinds[KINDS.indexOf(pop.intent)];
+        order[order.length] = ui.text;
+        if (pop.n !== null) order[order.length] = ui.remove;
+        order[order.length] = ui.cancel;
+        order[order.length] = ui.save;
+        let at = -1;
+        for (let i = 0; i < order.length; i++) if (order[i] === active) at = i;
+        preventNow(e);
+        const step = read(N.shift, e, "shiftKey") ? order.length - 1 : 1;
+        focusOn(order[(at + step + order.length) % order.length]);
+      }
+      return;
+    }
+    const m = markerAction(active);
+    if (m && (key === "Backspace" || key === "Delete")) {
+      preventNow(e);
+      removeItem(m.item.n);
+    } else if (key === "Escape") {
+      // The keyboard left on a marker (after its note closed): Esc gives it back to the page
+      // and, as anywhere else, stops picking.
+      preventNow(e);
+      if (active && N.blur) apply(N.blur, active, []);
+      if (mode !== "off") {
+        send("key", "escape");
+        stopPicking();
+      }
+    }
+  };
+  const grow = () => {
+    if (!ui || !ui.text || !N.scrollHeight) return;
+    prop(ui.text, "height", "auto");
+    prop(ui.text, "height", Math.min(apply(N.scrollHeight, ui.text, []) + 2, 160) + "px");
+  };
+  const own = (e) => {
+    const type = read(N.type, e, "type");
+    if (type === "click") ownClick(e);
+    else if (type === "keydown") ownKey(e);
+    else if (type === "input") grow();
+  };
+  // With the popover open, a press elsewhere closes it, and Esc does wherever the keyboard is.
+  const outside = (e) => {
+    const type = read(N.type, e, "type");
+    if (type === "pointerdown" || type === "mousedown") {
+      if (type === "pointerdown") {
+        returnTo = null;
+        close();
+        dismissed = mode !== "off";
+      }
+    } else if (type === "keydown" && read(N.key, e, "key") === "Escape") {
+      stopNow(e);
+      preventNow(e);
+      close();
+    }
+  };
+  const OWN_EVENTS = [
+    "keydown", "keyup", "keypress", "beforeinput", "input", "textInput", "compositionstart", "compositionupdate",
+    "compositionend", "focusin", "focusout", "focus", "blur", "pointerdown", "pointerup", "pointermove", "pointerover",
+    "pointerout", "pointerenter", "pointerleave", "pointercancel", "gotpointercapture", "lostpointercapture",
+    "mousedown", "mouseup", "mousemove", "mouseover", "mouseout", "mouseenter", "mouseleave", "click", "dblclick",
+    "auxclick", "contextmenu", "copy", "cut", "paste", "select", "selectstart", "dragstart", "drop",
+  ];
+  const guard = (e) => {
+    if (host && read(N.target, e, "target") === host) {
+      stopNow(e);
+      if (e.isTrusted) own(e);
+      return;
+    }
+    if (!e.isTrusted) return;
+    if (pop) outside(e);
+    else if (dismissed && read(N.type, e, "type") === "pointerdown") dismissed = false;
+  };
+  for (let i = 0; i < OWN_EVENTS.length; i++) listen(OWN_EVENTS[i], guard, CAPTURE);
+  listen("wheel", guard, SCROLLS);
 
   // ---- Picking ----
 
@@ -373,6 +1147,8 @@
       altHeld = e.altKey;
       schedule();
     }
+    // The popover's element stays picked while it is open.
+    if (pop) return;
     const el = hit(e.clientX, e.clientY);
     if (el && el !== current) {
       down = [];
@@ -385,7 +1161,7 @@
   };
   const up = () => {
     if (!current) return;
-    const parent = current.parentElement || (current.getRootNode() instanceof ShadowRoot ? current.getRootNode().host : null);
+    const parent = parentOf(current);
     if (parent && parent !== document.documentElement) {
       down.push(current);
       set(parent);
@@ -396,11 +1172,28 @@
   };
   const click = (e) => {
     swallow(e);
+    // The press that closed the popover picks nothing.
+    if (dismissed) {
+      dismissed = false;
+      return;
+    }
+    if (pop) return;
     const h = hit(e.clientX, e.clientY);
-    const el = current && h && current.contains(h) ? current : h || current;
+    let el = current && h && current.contains(h) ? current : h || current;
     if (!el) return;
-    if (mode === "inspect") pinned = el;
-    send("picked", { mode, element: details(el) });
+    if (mode === "inspect") {
+      pinned = el;
+      send("picked", { mode, element: details(el) });
+      return;
+    }
+    // ⌥-click picks the parent of what is under the pointer.
+    if (e.altKey) {
+      const parent = parentOf(el);
+      if (parent && parent !== document.documentElement) el = parent;
+    }
+    // The popover asks for the comment on the page; before the overlay can be drawn (the
+    // page's first second), the pick goes to the panel, whose row asks for it.
+    if (!open(el, null, "fix", "")) send("picked", { mode, element: details(el) });
   };
   const altKey = (e) => {
     if (e.key === "Alt" && altHeld !== (e.type === "keydown")) {
@@ -410,13 +1203,14 @@
   };
   const keydown = (e) => {
     altKey(e);
+    if (pop) return;
     if (e.key === "Escape") {
       swallow(e);
       send("key", "escape");
       stopPicking();
-    } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+    } else if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "[" || e.key === "]") {
       swallow(e);
-      if (e.key === "ArrowUp") up();
+      if (e.key === "ArrowUp" || e.key === "[") up();
       else back();
     }
   };
@@ -452,8 +1246,11 @@
     pinned = null;
     altHeld = false;
     down = [];
+    dismissed = false;
     clearTimeout(hoverTimer);
     hoverTimer = 0;
+    // A new note can't be saved once picking stops; an open one can.
+    if (pop && pop.n === null) close();
     applyMode();
     watch();
     render();
@@ -485,24 +1282,56 @@
       mode = op.mode;
     }
     if (mode !== "inspect") pinned = null;
+    if (mode !== "annotate" && pop && pop.n === null) close();
     return { mode };
   };
+  // The page's markers. A page can call this op too (`__sawitAgent` is on the page); only
+  // Sawit's call, signed with the token no page script can read, carries the notes' comments,
+  // so a page can't put words of its own in a popover the user then saves as theirs.
   const markers = (op) => {
+    const sawit = op.token === TOKEN;
     items = [];
     const placed = [];
     const missing = [];
     for (const item of op.items || []) {
       try {
         resolve({ selector: item.selector });
-        items.push({ n: item.n, selector: item.selector });
+        items.push({
+          n: item.n,
+          selector: item.selector,
+          comment: sawit && typeof item.comment === "string" ? item.comment : "",
+          intent: sawit && typeof item.intent === "string" ? item.intent : "fix",
+          label: typeof item.label === "string" ? item.label : "",
+        });
         placed.push(item.n);
       } catch (_) {
         missing.push(item.n);
       }
     }
+    // An open note whose row went away closes with it.
+    if (pop && pop.n !== null && !placed.includes(pop.n)) {
+      returnTo = null;
+      close();
+    }
+    stale = true;
+    syncMarkers();
     watch();
     render();
     return { placed, missing };
+  };
+  // Sawit's colours for the overlay: `{colors: {bg, fg, muted, border, field, accent, primary,
+  // primaryFg, danger, ring}}`, each a CSS colour.
+  const themeOp = (op) => {
+    const colors = op.colors || {};
+    const names = Object.keys(theme);
+    for (let i = 0; i < names.length; i++) {
+      const v = colors[names[i]];
+      if (typeof v !== "string") continue;
+      const font = names[i] === "font" || names[i] === "mono";
+      if (font ? /^[\w\s"',.-]{1,200}$/.test(v) : /^#[0-9a-f]{3,8}$|^rgba?\([\d.,\s%]+\)$/i.test(v)) theme[names[i]] = v;
+    }
+    applyTheme();
+    return { theme: true };
   };
   const flash = (op) => {
     let el;
@@ -514,14 +1343,13 @@
     el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
     if (ensureHost()) {
       const r = el.getBoundingClientRect();
-      const ring = box("left:" + px(r.left) + ";top:" + px(r.top) + ";width:" + px(r.width) + ";height:" + px(r.height) +
-        ";outline:3px solid " + ACCENT + ";outline-offset:2px;border-radius:2px");
-      ring.setAttribute("data-flash", "");
-      layer.appendChild(ring);
-      if (ring.animate) ring.animate([{ opacity: 1 }, { opacity: 0.15 }, { opacity: 1 }, { opacity: 0 }], { duration: 600 });
-      setTimeout(() => ring.remove(), 600);
+      const ring = make("div");
+      attr(ring, "class", "flash");
+      css(ring, "left:" + px(r.left) + ";top:" + px(r.top) + ";width:" + px(r.width) + ";height:" + px(r.height));
+      put(rootNode, ring);
+      setTimeout(() => drop(ring), 600);
     }
     return { found: true };
   };
-  Object.assign(modules, { overlay, pick, markers, flash });
+  Object.assign(modules, { overlay, pick, markers, flash, theme: themeOp });
 }
