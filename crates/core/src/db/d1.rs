@@ -16,9 +16,7 @@
 //! `miniflare` and `wrangler`; read in miniflare 4.20260730.0 and wrangler
 //! 4.156.0 as published on npm, and checked against the files Wrangler made).
 //!
-//! The Workers detection reads `database_id` only, so a binding with a
-//! `preview_database_id` finds no file here and its file is listed as
-//! unmatched instead: never a guess.
+//! A file no binding's id names is listed as unmatched: never a guess.
 
 use std::path::{Path, PathBuf};
 
@@ -49,12 +47,12 @@ pub fn durable_object_id(unique_key: &str, name: &str) -> String {
         .collect()
 }
 
-/// The id Miniflare keeps a binding's local data under: its database id, else its binding
-/// name (a database only ever used locally needs no id).
+/// The id Miniflare keeps a binding's local data under, as Wrangler's `d1DatabaseEntry` picks
+/// it: the preview database id, which `wrangler dev` uses locally, else the database id, else
+/// the binding name (a database only ever used locally needs no id).
 pub fn miniflare_id(binding: &Binding) -> String {
-    binding
-        .id
-        .clone()
+    (binding.preview_id.clone())
+        .or_else(|| binding.id.clone())
         .unwrap_or_else(|| binding.binding.clone())
 }
 
@@ -295,10 +293,29 @@ mod tests {
                     binding: b.to_string(),
                     name: Some(format!("{b}-db")),
                     id: id.map(str::to_string),
+                    preview_id: None,
                 })
                 .collect(),
             persist_to: None,
         }
+    }
+
+    /// Miniflare keeps a binding's data under its preview database id when it has one (what
+    /// `wrangler dev` uses locally), else its database id, else its binding name.
+    #[test]
+    fn the_preview_database_id_names_the_local_data_first() {
+        let mut b = Binding {
+            kind: BindingKind::D1,
+            binding: "DB".into(),
+            name: Some("shop".into()),
+            id: Some("prod-1".into()),
+            preview_id: Some("dev-1".into()),
+        };
+        assert_eq!(miniflare_id(&b), "dev-1");
+        b.preview_id = None;
+        assert_eq!(miniflare_id(&b), "prod-1");
+        b.id = None;
+        assert_eq!(miniflare_id(&b), "DB");
     }
 
     /// File names Wrangler 4.156.0 (Miniflare 4.20260730.0, workerd) actually made, with

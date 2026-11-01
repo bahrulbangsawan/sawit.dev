@@ -206,6 +206,9 @@ pub struct Binding {
     pub name: Option<String>,
     /// The resource's id when the config gives one: a D1 `database_id`, a KV namespace `id`.
     pub id: Option<String>,
+    /// A D1 binding's `preview_database_id`: the database `wrangler dev` uses locally in its
+    /// place, which Miniflare keeps the local data under ([`crate::db::d1::miniflare_id`]).
+    pub preview_id: Option<String>,
 }
 
 /// One Worker of a project: a folder with its own config.
@@ -654,6 +657,9 @@ fn from_wrangler(config: &Value) -> Config {
                     binding,
                     name: list.name.and_then(|k| text(item, k)),
                     id: list.id.and_then(|k| text(item, k)),
+                    preview_id: (list.tag == "d1")
+                        .then(|| text(item, "preview_database_id"))
+                        .flatten(),
                 });
             }
         }
@@ -665,6 +671,7 @@ fn from_wrangler(config: &Value) -> Config {
                 binding,
                 name: None,
                 id: None,
+                preview_id: None,
             });
         }
     }
@@ -865,6 +872,8 @@ mod typescript {
                     "destinationAddress",
                 ]),
                 id: read(&["id", "databaseId", "namespaceId"]),
+                // cloudflare.config.ts documents no preview id.
+                preview_id: None,
             });
         }
         out
@@ -880,12 +889,28 @@ mod tests {
         std::fs::write(path, text).unwrap();
     }
 
+    /// A D1 binding's `preview_database_id` is read beside its `database_id`: `wrangler dev` uses
+    /// the preview database locally, and Miniflare names its file by it.
+    #[test]
+    fn a_d1_bindings_preview_database_id_is_read() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("wrangler.toml"),
+            "name = \"api\"\n[[d1_databases]]\nbinding = \"DB\"\ndatabase_name = \"shop\"\n\
+             database_id = \"prod-1\"\npreview_database_id = \"dev-1\"\n",
+        );
+        let b = &detect_project(dir.path())[0].bindings[0];
+        assert_eq!(b.id.as_deref(), Some("prod-1"));
+        assert_eq!(b.preview_id.as_deref(), Some("dev-1"));
+    }
+
     fn d1(binding: &str, name: &str, id: Option<&str>) -> Binding {
         Binding {
             kind: BindingKind::D1,
             binding: binding.into(),
             name: Some(name.into()),
             id: id.map(Into::into),
+            preview_id: None,
         }
     }
 
@@ -1057,7 +1082,8 @@ export default defineConfig({
                 kind: BindingKind::D1,
                 binding: "DB".into(),
                 name: None,
-                id: None
+                id: None,
+                preview_id: None,
             }]
         );
     }
