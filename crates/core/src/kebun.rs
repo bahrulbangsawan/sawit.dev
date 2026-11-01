@@ -636,6 +636,8 @@ pub fn saved_profiles(paths: &AppPaths) -> Vec<Kebun> {
     profiles
         .items
         .into_iter()
+        // SQLite and D1 profiles have no server to find.
+        .filter(|profile| profile.kind.is_postgres())
         .map(|profile| Kebun {
             password: resolve_password(&profile),
             via: format!("koneksi tersimpan {}", profile.name),

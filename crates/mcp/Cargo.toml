@@ -20,3 +20,5 @@ tokio-postgres.workspace = true
 # A canvas test writes a canvas file holding more images than FigCraft reads from one file.
 figcraft-format.workspace = true
 tempfile = "3"
+# Builds the D1 and SQLite fixture files the database tools are tested on.
+rusqlite = "0.41"

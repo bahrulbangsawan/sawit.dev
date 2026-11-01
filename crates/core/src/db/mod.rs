@@ -1,18 +1,28 @@
 //! Connections: profiles, DATABASE_URL/.env import, Keychain passwords,
-//! schema browsing, paged table reads and ad-hoc SQL.
+//! schema browsing, paged table reads and ad-hoc SQL. PostgreSQL first;
+//! SQLite files and Cloudflare D1 (local and remote) through [`Conn`].
 
 mod admin;
+mod conn;
+pub mod d1;
 pub mod diagram;
+pub mod explorer;
 mod export;
 mod profile;
 mod query;
+pub mod remote;
 mod rows;
+pub mod sqlite;
 mod tls;
 
+pub use conn::{
+    Conn, Lite, WriteRoute, bulk_sql_for, drop_sql_for, empty_sql_for, holders, relation_sql_for,
+};
+
 pub use profile::{
-    ChannelBinding, ConnProfile, HostPort, Profiles, SessionAttrs, SslMode, delete_password,
-    dotenv_upsert, dotenv_value, load_password, parse_database_url, pgpass_password,
-    read_dotenv_database_url, resolve_password, store_password,
+    ChannelBinding, ConnProfile, DbKind, HostPort, LiteSource, Profiles, SessionAttrs, SslMode,
+    delete_password, dotenv_upsert, dotenv_value, load_password, parse_database_url,
+    pgpass_password, read_dotenv_database_url, resolve_password, store_password,
 };
 
 pub use admin::{

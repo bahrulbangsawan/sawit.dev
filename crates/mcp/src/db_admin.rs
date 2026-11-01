@@ -15,7 +15,9 @@ use crate::{Sawit, expand_home, fail, ok, tilde, tri};
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ExportTableArgs {
-    #[schemars(description = "Sawit instance name or saved connection name")]
+    #[schemars(
+        description = "Sawit instance name, saved connection name, or a D1/SQLite id from detect_databases"
+    )]
     pub target: String,
     #[schemars(description = "Database to connect to (default as in describe_schema)")]
     pub database: Option<String>,
@@ -33,7 +35,9 @@ pub struct ExportTableArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ExportQueryArgs {
-    #[schemars(description = "Sawit instance name or saved connection name")]
+    #[schemars(
+        description = "Sawit instance name, saved connection name, or a D1/SQLite id from detect_databases"
+    )]
     pub target: String,
     #[schemars(description = "Database to connect to (default as in describe_schema)")]
     pub database: Option<String>,
@@ -49,7 +53,7 @@ pub struct ExportQueryArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct BackupArgs {
-    #[schemars(description = "Sawit instance name or saved connection name")]
+    #[schemars(description = "Sawit instance name or saved connection name (PostgreSQL only)")]
     pub target: String,
     #[schemars(description = "Database to back up (default as in describe_schema)")]
     pub database: Option<String>,
@@ -67,7 +71,7 @@ pub struct BackupArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ImportCsvArgs {
-    #[schemars(description = "Sawit instance name or saved connection name")]
+    #[schemars(description = "Sawit instance name or saved connection name (PostgreSQL only)")]
     pub target: String,
     #[schemars(description = "Database to connect to (default as in describe_schema)")]
     pub database: Option<String>,
@@ -83,7 +87,7 @@ pub struct ImportCsvArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct DropRelationArgs {
-    #[schemars(description = "Sawit instance name or saved connection name")]
+    #[schemars(description = "Sawit instance name or saved connection name (PostgreSQL only)")]
     pub target: String,
     #[schemars(description = "Database to connect to (default as in describe_schema)")]
     pub database: Option<String>,
@@ -99,7 +103,7 @@ pub struct DropRelationArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct TruncateArgs {
-    #[schemars(description = "Sawit instance name or saved connection name")]
+    #[schemars(description = "Sawit instance name or saved connection name (PostgreSQL only)")]
     pub target: String,
     #[schemars(description = "Database to connect to (default as in describe_schema)")]
     pub database: Option<String>,
@@ -113,7 +117,7 @@ pub struct TruncateArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RefreshArgs {
-    #[schemars(description = "Sawit instance name or saved connection name")]
+    #[schemars(description = "Sawit instance name or saved connection name (PostgreSQL only)")]
     pub target: String,
     #[schemars(description = "Database to connect to (default as in describe_schema)")]
     pub database: Option<String>,
@@ -179,6 +183,31 @@ impl Sawit {
             &a.path,
             a.overwrite.unwrap_or(false)
         ));
+        if let Some(conn) = tri!(self.lite_conn(&a.target, true)) {
+            let schemas = tri!(conn.load_schema().await.map_err(|e| e.to_string()));
+            let (schema, rel) = tri!(
+                db::find_relation(&schemas, a.schema.as_deref(), &a.table)
+                    .map_err(|e| e.to_string())
+            );
+            let format = tri!(db::ExportFormat::for_path(&path).map_err(|e| e.to_string()));
+            return match conn
+                .export_rows(
+                    schema,
+                    &rel.name,
+                    &rel.primary_key,
+                    &Default::default(),
+                    format,
+                    &rel.columns,
+                    &path,
+                    Default::default(),
+                    Default::default(),
+                )
+                .await
+            {
+                Ok(summary) => ok(exported(summary, &path)),
+                Err(e) => fail(e.to_string()),
+            };
+        }
         let client = tri!(self.connect_target(&a.target, a.database.as_deref()).await);
         match db::export_table(&client, a.schema.as_deref(), &a.table, &path).await {
             Ok(summary) => ok(exported(summary, &path)),
@@ -192,6 +221,23 @@ impl Sawit {
             &a.path,
             a.overwrite.unwrap_or(false)
         ));
+        if let Some(conn) = tri!(self.lite_conn(&a.target, true)) {
+            let format = tri!(db::ExportFormat::for_path(&path).map_err(|e| e.to_string()));
+            let outcome = match conn.run_read_only(&a.sql, db::XLSX_MAX_ROWS as usize).await {
+                Ok(outcome) => outcome,
+                Err(e) => return fail(format!("{e}\n(the query runs read-only)")),
+            };
+            let Some(set) = outcome.results.last() else {
+                return fail("The query returned no rows to export.");
+            };
+            return match db::export_result_set(set, format, "query", &[], &path) {
+                Ok(mut summary) => {
+                    summary.truncated |= set.truncated;
+                    ok(exported(summary, &path))
+                }
+                Err(e) => fail(e.to_string()),
+            };
+        }
         let client = tri!(self.connect_target(&a.target, a.database.as_deref()).await);
         match db::export_query(&client, &a.sql, &path).await {
             Ok(summary) => ok(exported(summary, &path)),

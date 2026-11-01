@@ -39,6 +39,8 @@ pub mod browser_design;
 pub mod config_files;
 pub mod db;
 pub mod db_admin;
+#[cfg(test)]
+mod db_d1_tests;
 pub mod dev_tools;
 pub mod diagrams;
 pub mod files;
@@ -93,7 +95,7 @@ const MAX_OUTPUT: usize = 100_000;
 pub const INSTRUCTIONS: &str = "\
 Sawit is a macOS developer workbench. These tools work without the Sawit app running:
 - Instances: local PostgreSQL servers managed by Sawit (list/create/start/stop/restart/remove, logs, port checks, installed binaries).
-- Databases: detect every reachable database, list/create/drop databases, describe schemas and tables, `query` (always read-only) and `execute_sql` (read-write: can modify data), saved connections, writing DATABASE_URL to a project's .env; export tables or queries to CSV/Excel, pg_dump backups, CSV imports, drop/truncate (with confirm) and refresh relations.
+- Databases: detect every reachable database, list/create/drop databases, describe schemas and tables, `query` (always read-only) and `execute_sql` (read-write: can modify data), saved connections, writing DATABASE_URL to a project's .env; export tables or queries to CSV/Excel, pg_dump backups, CSV imports, drop/truncate (with confirm) and refresh relations. Cloudflare D1 (a Workers project's local SQLite files and remote databases) and SQLite files are targets too, by the ids detect_databases gives with project_dir.
 - Diagrams: render_diagram draws a diagram written in Mermaid syntax to SVG with Pele (https://pele.run, built in and offline; mermaid.js isn't used), any type Pele draws: flowchart, swimlane, sequence, class, state, ER, gantt, git graph, pie, mindmap, kanban, timeline, journey, quadrant, XY, requirement, sankey, architecture, C4, block, agentflow, railroad, tree view, Cynefin, Wardley, event modeling, use case, Venn, Ishikawa, packet, radar, treemap, info (not ZenUML). schema_diagram draws a database schema as Mermaid, DBML or SVG. render_mermaid and canvas_add_mermaid are the old names of render_diagram and canvas_add_diagram.
 - Ports: list listening dev servers and stop them.
 - Cloudflare Local Explorer: local_explorer finds the explorers Workers dev servers (wrangler dev, vite with the Cloudflare plugin, cf dev) serve at http://localhost:<port>/cdn-cgi/local/explorer, the project's Workers, their bindings and whether the installed Wrangler or Vite plugin has it; local_explorer_request calls its API on loopback (GET reads; POST, PUT, PATCH and DELETE write local data and need confirm: true).

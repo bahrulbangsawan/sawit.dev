@@ -5,6 +5,14 @@
 //! Right-clicking a connection, schema or relation offers what to do with
 //! it: open, query, export its rows, back it up with `pg_dump`, import a CSV
 //! file, empty or delete it. Those run in the background and report here.
+//!
+//! Each connection row shows its kind's logo beside the status dot, and says
+//! the kind in its tooltip and accessible name ("PostgreSQL 16 · kyzn"). The
+//! D1 databases of the window's Workers projects follow the saved
+//! connections under "Cloudflare D1" (local first, then remote), and local D1
+//! files no binding names under "Unmatched local D1 databases". What only
+//! PostgreSQL has (`pg_dump` backups, CSV imports, materialized views,
+//! connection strings) isn't offered for SQLite or D1.
 
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -12,11 +20,13 @@ use std::rc::Rc;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sawit_core::db::{self, BackupScope, ConnProfile, ExportFormat, RelKind, Relation};
+use sawit_core::db::{
+    self, BackupScope, ConnProfile, DbKind, ExportFormat, RelKind, Relation, WriteRoute,
+};
 
 use super::actions;
 use super::store::DbStore;
@@ -284,16 +294,70 @@ struct Target {
     schema: String,
     name: String,
     kind: RelKind,
+    /// The database's kind, for its dialect and what it offers.
+    db: DbKind,
 }
 
 impl Target {
     fn qualified(&self) -> String {
-        format!(
-            "{}.{}",
-            db::quote_ident(&self.schema),
-            db::quote_ident(&self.name)
-        )
+        db::relation_sql_for(self.db, &self.schema, &self.name)
     }
+}
+
+/// Where SQLite and D1 changes go, as a badge: through the dev server's Local Explorer,
+/// straight to the file, blocked, or remote (production) in the warning colour. `None` for
+/// PostgreSQL (no route to tell).
+pub(super) fn route_badge(
+    id: &'static str,
+    route: Option<&WriteRoute>,
+    cx: &App,
+) -> Option<AnyElement> {
+    let route = route?;
+    let (icon, colour, bg) = match route {
+        WriteRoute::Remote { .. } => (
+            Lucide::TriangleAlert,
+            cx.theme().warning_foreground,
+            cx.theme().warning,
+        ),
+        WriteRoute::Busy { .. } => (
+            Lucide::Lock,
+            cx.theme().danger_foreground,
+            cx.theme().danger,
+        ),
+        WriteRoute::Explorer { .. } => (
+            Lucide::Zap,
+            cx.theme().secondary_foreground,
+            cx.theme().secondary,
+        ),
+        WriteRoute::File(_) => (
+            Lucide::File,
+            cx.theme().secondary_foreground,
+            cx.theme().secondary,
+        ),
+    };
+    let tip: SharedString = route.describe().into();
+    let label = match route {
+        WriteRoute::Remote { .. } => route.label(),
+        _ => format!("writes {}", route.label()),
+    };
+    Some(
+        h_flex()
+            .id(id)
+            .flex_none()
+            .gap_1()
+            .px_1p5()
+            .rounded(cx.theme().radius)
+            .text_xs()
+            .bg(bg)
+            .text_color(colour)
+            .child(Icon::new(icon).xsmall())
+            .child(label)
+            .aria_label(tip.clone())
+            .tooltip(move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+            })
+            .into_any_element(),
+    )
 }
 
 /// Background jobs and what the context menus run.
@@ -487,7 +551,18 @@ impl DatabasePanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let answer = window.prompt(PromptLevel::Warning, &message, Some(&detail), &buttons, cx);
+        let (level, detail) = match self.store.read(cx).route(&profile) {
+            Some(route @ WriteRoute::Remote { .. }) => (
+                PromptLevel::Critical,
+                format!("{detail}\n\n{}", route.describe()),
+            ),
+            Some(route) => (
+                PromptLevel::Warning,
+                format!("{detail}\n\n{}", route.describe()),
+            ),
+            None => (PromptLevel::Warning, detail),
+        };
+        let answer = window.prompt(level, &message, Some(&detail), &buttons, cx);
         cx.spawn(async move |this, cx| {
             let Ok(choice) = answer.await else { return };
             let Some(sql) = sql.into_iter().nth(choice) else {
@@ -503,17 +578,30 @@ impl DatabasePanel {
 
     fn delete_relation(&mut self, t: Target, window: &mut Window, cx: &mut Context<Self>) {
         let noun = kind_noun(t.kind);
+        // SQLite has no CASCADE: one way to delete.
+        let (detail, buttons, sql) = if t.db.is_postgres() {
+            (
+                "This can't be undone. If views or foreign keys depend on it, \
+                 “Delete with Dependents” removes those too.",
+                vec!["Delete", "Delete with Dependents", "Cancel"],
+                vec![
+                    db::drop_sql(&t.schema, &t.name, t.kind, false),
+                    db::drop_sql(&t.schema, &t.name, t.kind, true),
+                ],
+            )
+        } else {
+            (
+                "This can't be undone.",
+                vec!["Delete", "Cancel"],
+                vec![db::drop_sql_for(t.db, &t.schema, &t.name, t.kind, false)],
+            )
+        };
         self.confirm_sql(
             t.profile.clone(),
             format!("Delete the {noun} {}.{}?", t.schema, t.name),
-            "This can't be undone. If views or foreign keys depend on it, \
-             “Delete with Dependents” removes those too."
-                .into(),
-            vec!["Delete", "Delete with Dependents", "Cancel"],
-            vec![
-                db::drop_sql(&t.schema, &t.name, t.kind, false),
-                db::drop_sql(&t.schema, &t.name, t.kind, true),
-            ],
+            detail.into(),
+            buttons,
+            sql,
             format!("Deleting {}", t.name),
             format!("Deleted the {noun} {}.", t.name),
             window,
@@ -527,7 +615,7 @@ impl DatabasePanel {
             format!("Delete every row in {}.{}?", t.schema, t.name),
             "The table stays, empty. This can't be undone.".into(),
             vec!["Empty Table", "Cancel"],
-            vec![db::truncate_sql(&t.schema, &t.name)],
+            vec![db::empty_sql_for(t.db, &t.schema, &t.name)],
             format!("Emptying {}", t.name),
             format!("Emptied {}.", t.name),
             window,
@@ -579,46 +667,53 @@ fn profile_menu(
     panel: WeakEntity<DatabasePanel>,
     name: String,
     connected: bool,
+    kind: DbKind,
+    saved: bool,
 ) -> PopupMenu {
     let n = |_: ()| name.clone();
     let menu = if connected {
         let (sql, reload, b1, b2, off) = (n(()), n(()), n(()), n(()), n(()));
-        menu.item(panel_item(
-            "New SQL Editor",
-            Some(Lucide::SquareTerminal),
-            &panel,
-            move |_, _, cx| {
-                cx.emit(DbEvent::OpenSql {
-                    profile: sql.clone(),
-                    sql: None,
-                })
-            },
-        ))
-        .item(panel_item(
-            "Reload Schema",
-            Some(Lucide::RefreshCw),
-            &panel,
-            move |this, _, cx| {
-                this.store
-                    .update(cx, |s, cx| s.refresh(&reload, cx))
-                    .detach();
-            },
-        ))
-        .separator()
-        .item(panel_item(
-            "Back Up Database as SQL…",
-            Some(Lucide::Download),
-            &panel,
-            move |this, _, cx| this.backup(b1.clone(), BackupScope::Database, false, cx),
-        ))
-        .item(panel_item(
-            "Back Up Database for pg_restore…",
-            None,
-            &panel,
-            move |this, _, cx| this.backup(b2.clone(), BackupScope::Database, true, cx),
-        ))
-        .separator()
-        .item(panel_item(
+        let menu = menu
+            .item(panel_item(
+                "New SQL Editor",
+                Some(Lucide::SquareTerminal),
+                &panel,
+                move |_, _, cx| {
+                    cx.emit(DbEvent::OpenSql {
+                        profile: sql.clone(),
+                        sql: None,
+                    })
+                },
+            ))
+            .item(panel_item(
+                "Reload Schema",
+                Some(Lucide::RefreshCw),
+                &panel,
+                move |this, _, cx| {
+                    this.store
+                        .update(cx, |s, cx| s.refresh(&reload, cx))
+                        .detach();
+                },
+            ));
+        // pg_dump backs up PostgreSQL only.
+        let menu = if kind.is_postgres() {
+            menu.separator()
+                .item(panel_item(
+                    "Back Up Database as SQL…",
+                    Some(Lucide::Download),
+                    &panel,
+                    move |this, _, cx| this.backup(b1.clone(), BackupScope::Database, false, cx),
+                ))
+                .item(panel_item(
+                    "Back Up Database for pg_restore…",
+                    None,
+                    &panel,
+                    move |this, _, cx| this.backup(b2.clone(), BackupScope::Database, true, cx),
+                ))
+        } else {
+            menu
+        };
+        menu.separator().item(panel_item(
             "Disconnect",
             Some(Lucide::Unplug),
             &panel,
@@ -639,6 +734,10 @@ fn profile_menu(
             },
         ))
     };
+    if !saved {
+        // Found in a Workers project: nothing to set or remove.
+        return menu;
+    }
     let settings = n(());
     menu.item(panel_item(
         "Connection Settings…",
@@ -653,11 +752,12 @@ fn schema_menu(
     panel: WeakEntity<DatabasePanel>,
     profile: String,
     schema: String,
+    kind: DbKind,
 ) -> PopupMenu {
     let (p1, s1) = (profile.clone(), schema.clone());
     let (p2, s2) = (profile.clone(), schema.clone());
     let (p3, s3) = (profile, schema.clone());
-    menu.item(panel_item(
+    let menu = menu.item(panel_item(
         "Show Diagram",
         Some(Lucide::Waypoints),
         &panel,
@@ -667,22 +767,29 @@ fn schema_menu(
                 schema: s1.clone(),
             })
         },
-    ))
-    .separator()
-    .item(panel_item(
-        "Back Up Schema as SQL…",
-        Some(Lucide::Download),
-        &panel,
-        move |this, _, cx| this.backup(p2.clone(), BackupScope::Schema(s2.clone()), false, cx),
-    ))
-    .item(panel_item(
-        "Back Up Schema for pg_restore…",
-        None,
-        &panel,
-        move |this, _, cx| this.backup(p3.clone(), BackupScope::Schema(s3.clone()), true, cx),
-    ))
-    .separator()
-    .item(panel_item(
+    ));
+    let menu = if kind.is_postgres() {
+        menu.separator()
+            .item(panel_item(
+                "Back Up Schema as SQL…",
+                Some(Lucide::Download),
+                &panel,
+                move |this, _, cx| {
+                    this.backup(p2.clone(), BackupScope::Schema(s2.clone()), false, cx)
+                },
+            ))
+            .item(panel_item(
+                "Back Up Schema for pg_restore…",
+                None,
+                &panel,
+                move |this, _, cx| {
+                    this.backup(p3.clone(), BackupScope::Schema(s3.clone()), true, cx)
+                },
+            ))
+    } else {
+        menu
+    };
+    menu.separator().item(panel_item(
         "Copy Name",
         Some(Lucide::Copy),
         &panel,
@@ -737,7 +844,8 @@ fn relation_menu(menu: PopupMenu, panel: WeakEntity<DatabasePanel>, t: Target) -
             &panel,
             with(|this, t, _, cx| this.export(t, ExportFormat::Xlsx, cx)),
         ));
-    if is_table {
+    let postgres = t.db.is_postgres();
+    if is_table && postgres {
         menu = menu.item(panel_item(
             "Import CSV…",
             Some(Lucide::Upload),
@@ -745,32 +853,34 @@ fn relation_menu(menu: PopupMenu, panel: WeakEntity<DatabasePanel>, t: Target) -
             with(|this, t, _, cx| this.import_csv(t, cx)),
         ));
     }
-    menu = menu
-        .separator()
-        .item(panel_item(
-            "Back Up as SQL…",
-            Some(Lucide::Download),
-            &panel,
-            with(|this, t, _, cx| {
-                let scope = BackupScope::Table {
-                    schema: t.schema,
-                    table: t.name,
-                };
-                this.backup(t.profile, scope, false, cx)
-            }),
-        ))
-        .item(panel_item(
-            "Back Up for pg_restore…",
-            None,
-            &panel,
-            with(|this, t, _, cx| {
-                let scope = BackupScope::Table {
-                    schema: t.schema,
-                    table: t.name,
-                };
-                this.backup(t.profile, scope, true, cx)
-            }),
-        ));
+    if postgres {
+        menu = menu
+            .separator()
+            .item(panel_item(
+                "Back Up as SQL…",
+                Some(Lucide::Download),
+                &panel,
+                with(|this, t, _, cx| {
+                    let scope = BackupScope::Table {
+                        schema: t.schema,
+                        table: t.name,
+                    };
+                    this.backup(t.profile, scope, false, cx)
+                }),
+            ))
+            .item(panel_item(
+                "Back Up for pg_restore…",
+                None,
+                &panel,
+                with(|this, t, _, cx| {
+                    let scope = BackupScope::Table {
+                        schema: t.schema,
+                        table: t.name,
+                    };
+                    this.backup(t.profile, scope, true, cx)
+                }),
+            ));
+    }
     if t.kind == RelKind::MaterializedView {
         menu = menu.item(panel_item(
             "Refresh Materialized View",
@@ -882,10 +992,19 @@ pub enum Node {
     Profile {
         /// The profile's key.
         name: String,
-        /// What to show: the custom label, else `name`.
+        /// What to show: the custom label, else `name` (a D1 binding's name).
         label: String,
-        /// The connection string, for the tooltip.
+        /// Beside the label, quieter: a D1 binding's database name.
+        detail: Option<String>,
+        /// Where it points, for the tooltip: the connection string, or the file.
         url: String,
+        kind: DbKind,
+        /// "PostgreSQL 16 · kyzn": the tooltip's first line and the row's accessible name.
+        accessible: String,
+        /// Saved (has settings), rather than found in a Workers project.
+        saved: bool,
+        /// Where its changes go, for SQLite and D1.
+        route: Option<String>,
         connected: bool,
         /// Connecting now or waiting to retry.
         pending: bool,
@@ -895,12 +1014,23 @@ pub enum Node {
     Error {
         message: String,
     },
+    /// A heading over found databases: "Cloudflare D1", "Unmatched local D1 databases".
+    Section {
+        key: String,
+        title: String,
+        count: usize,
+        open: bool,
+        /// Shows the Cloudflare logo.
+        cloudflare: bool,
+    },
     Schema {
         key: String,
         profile: String,
         name: String,
         open: bool,
         count: usize,
+        /// The database's kind, for what its menu offers.
+        db: DbKind,
     },
     /// "Tables", "Views", … under a schema; open unless collapsed.
     Kind {
@@ -917,6 +1047,7 @@ pub enum Node {
         kind: RelKind,
         open: bool,
         readable: bool,
+        db: DbKind,
     },
     Column {
         key: String,
@@ -1008,12 +1139,80 @@ pub fn flatten(store: &DbStore, expanded: &HashSet<String>, query: &str) -> Vec<
     let query = query.trim().to_lowercase();
     let mut out = Vec::new();
     for profile in &store.profiles.items {
+        push_profile(store, profile, true, expanded, &query, &mut out);
+    }
+    let d1: Vec<&ConnProfile> = store
+        .detected
+        .local
+        .iter()
+        .chain(&store.detected.remote)
+        .collect();
+    let sections = [
+        (D1_SECTION, "Cloudflare D1", d1, true),
+        (
+            UNMATCHED_SECTION,
+            "Unmatched local D1 databases",
+            store.detected.unmatched.iter().collect(),
+            false,
+        ),
+    ];
+    for (key, title, profiles, cloudflare) in sections {
+        if profiles.is_empty() {
+            continue;
+        }
+        // Open unless collapsed.
+        let open = !expanded.contains(key);
+        out.push(Node::Section {
+            key: key.into(),
+            title: title.into(),
+            count: profiles.len(),
+            open,
+            cloudflare,
+        });
+        if open {
+            for profile in profiles {
+                push_profile(store, profile, false, expanded, &query, &mut out);
+            }
+        }
+    }
+    out
+}
+
+/// The key of the "Cloudflare D1" section (collapsed when in `expanded`).
+const D1_SECTION: &str = "\u{2}d1";
+const UNMATCHED_SECTION: &str = "\u{2}d1-unmatched";
+
+/// One connection's line and, when open, its schemas.
+fn push_profile(
+    store: &DbStore,
+    profile: &ConnProfile,
+    saved: bool,
+    expanded: &HashSet<String>,
+    query: &str,
+    out: &mut Vec<Node>,
+) {
+    {
         let name = profile.name.clone();
         let state = store.state(&name);
+        // A D1 row: the binding, then its database's name; "remote" is a badge of its own.
+        let (label, detail) = match (&profile.lite, profile.kind) {
+            (Some(lite), DbKind::D1Local | DbKind::D1Remote) => (
+                lite.binding
+                    .clone()
+                    .unwrap_or_else(|| profile.database.clone()),
+                lite.database_name.clone(),
+            ),
+            _ => (profile.display_name().to_string(), None),
+        };
         out.push(Node::Profile {
             name: name.clone(),
-            label: profile.display_name().to_string(),
-            url: profile.connection_string(),
+            label,
+            detail,
+            url: profile.location(),
+            kind: profile.kind,
+            accessible: store.accessible_name(&name),
+            saved,
+            route: store.route(&name).map(WriteRoute::describe),
             connected: store.is_connected(&name),
             pending: state.is_pending(),
             status: state.label(std::time::Instant::now()),
@@ -1027,28 +1226,31 @@ pub fn flatten(store: &DbStore, expanded: &HashSet<String>, query: &str) -> Vec<
             });
         }
         if !expanded.contains(&name) {
-            continue;
+            return;
         }
         let Some(schemas) = store.schemas.get(&name) else {
-            continue;
+            return;
         };
         for schema in schemas {
             let skey = format!("{name}\u{0}{}", schema.name);
             let matching: Vec<&Relation> = schema
                 .relations
                 .iter()
-                .filter(|r| query.is_empty() || r.name.to_lowercase().contains(&query))
+                .filter(|r| query.is_empty() || r.name.to_lowercase().contains(query))
                 .collect();
             if !query.is_empty() && matching.is_empty() {
                 continue;
             }
-            let sopen = !query.is_empty() || (schema.name == "public") != expanded.contains(&skey);
+            // `public`, or SQLite's `main`, starts open.
+            let sopen = !query.is_empty()
+                || (schema.name == profile.kind.default_schema()) != expanded.contains(&skey);
             out.push(Node::Schema {
                 key: skey.clone(),
                 profile: name.clone(),
                 name: schema.name.clone(),
                 open: sopen,
                 count: matching.len(),
+                db: profile.kind,
             });
             if !sopen {
                 continue;
@@ -1086,15 +1288,15 @@ pub fn flatten(store: &DbStore, expanded: &HashSet<String>, query: &str) -> Vec<
                         kind: rel.kind,
                         open: ropen,
                         readable: rel.readable,
+                        db: profile.kind,
                     });
                     if ropen {
-                        relation_children(&rkey, rel, expanded, &mut out);
+                        relation_children(&rkey, rel, expanded, out);
                     }
                 }
             }
         }
     }
-    out
 }
 
 /// Height of every tree line (the list is virtual, so lines are uniform).
@@ -1120,7 +1322,12 @@ impl DatabasePanel {
             Node::Profile {
                 name,
                 label,
+                detail,
                 url,
+                kind,
+                accessible,
+                saved,
+                route,
                 connected,
                 pending,
                 status,
@@ -1134,20 +1341,43 @@ impl DatabasePanel {
                 };
                 let (n1, n2, n3, n4) = (name.clone(), name.clone(), name.clone(), name.clone());
                 let n5 = name.clone();
-                // The full name and where it points, since both truncate.
-                let tip: SharedString = if label == url {
-                    label.clone().into()
-                } else {
-                    format!("{label}\n{url}").into()
-                };
-                row(("db-profile", ix), 0, cx)
-                    .child(div().size(px(7.)).rounded_full().bg(color))
+                // The kind and name, where it points and where changes go: the logo is never
+                // the only way to tell the kind.
+                let mut lines = vec![accessible.clone()];
+                if let Some(detail) = detail {
+                    lines.push(format!("database {detail}"));
+                }
+                lines.push(url.clone());
+                lines.extend(route.clone());
+                let tip: SharedString = lines.join("\n").into();
+                let depth = if *saved { 0 } else { 1 };
+                row(("db-profile", ix), depth, cx)
+                    .role(Role::TreeItem)
+                    .aria_label(accessible.clone())
+                    .child(div().size(px(7.)).flex_none().rounded_full().bg(color))
+                    .child(super::logos::logo(*kind, 14.))
                     .child(
-                        div()
+                        h_flex()
                             .id(("db-profile-name", ix))
                             .flex_1()
-                            .truncate()
-                            .child(label.clone())
+                            .min_w_0()
+                            .gap_1()
+                            .child(div().truncate().child(label.clone()))
+                            .when_some(detail.clone(), |el, d| {
+                                el.child(div().text_xs().text_color(muted).truncate().child(d))
+                            })
+                            .when(*kind == DbKind::D1Remote, |el| {
+                                el.child(
+                                    div()
+                                        .flex_none()
+                                        .px_1()
+                                        .rounded(cx.theme().radius)
+                                        .text_xs()
+                                        .bg(cx.theme().warning)
+                                        .text_color(cx.theme().warning_foreground)
+                                        .child("remote"),
+                                )
+                            })
                             .tooltip(move |window, cx| {
                                 gpui_kit::component::tooltip::Tooltip::new(tip.clone())
                                     .build(window, cx)
@@ -1210,17 +1440,19 @@ impl DatabasePanel {
                                 })),
                         )
                     })
-                    .child(
-                        Button::new(("db-settings", ix))
-                            .ghost()
-                            .xsmall()
-                            .icon(Lucide::Settings2)
-                            .tooltip("Connection Settings")
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.open_settings(&n3, window, cx);
-                            })),
-                    )
+                    .when(*saved, |el| {
+                        el.child(
+                            Button::new(("db-settings", ix))
+                                .ghost()
+                                .xsmall()
+                                .icon(Lucide::Settings2)
+                                .tooltip("Connection Settings")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.open_settings(&n3, window, cx);
+                                })),
+                        )
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if this.store.read(cx).is_connected(&n4) {
                             this.toggle(n4.clone(), cx);
@@ -1231,9 +1463,16 @@ impl DatabasePanel {
                         }
                     }))
                     .context_menu({
-                        let (weak, name, connected) =
-                            (cx.entity().downgrade(), name.clone(), *connected);
-                        move |menu, _, _| profile_menu(menu, weak.clone(), name.clone(), connected)
+                        let (weak, name, connected, kind, saved) = (
+                            cx.entity().downgrade(),
+                            name.clone(),
+                            *connected,
+                            *kind,
+                            *saved,
+                        );
+                        move |menu, _, _| {
+                            profile_menu(menu, weak.clone(), name.clone(), connected, kind, saved)
+                        }
                     })
                     .into_any_element()
             }
@@ -1254,12 +1493,44 @@ impl DatabasePanel {
                     })
                     .into_any_element()
             }
+            Node::Section {
+                key,
+                title,
+                count,
+                open,
+                cloudflare,
+            } => {
+                let k = key.clone();
+                row(
+                    ElementId::Name(format!("db-section\u{0}{key}").into()),
+                    0,
+                    cx,
+                )
+                .mt_1()
+                .text_color(muted)
+                .role(Role::TreeItem)
+                .aria_label(format!("{title}, {count}"))
+                .child(
+                    Icon::new(if *open {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .xsmall(),
+                )
+                .when(*cloudflare, |el| el.child(super::logos::cloudflare(14.)))
+                .child(div().text_xs().font_semibold().child(title.clone()))
+                .child(div().text_xs().child(count.to_string()))
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle(k.clone(), cx)))
+                .into_any_element()
+            }
             Node::Schema {
                 key,
                 profile,
                 name,
                 open,
                 count,
+                db: kind,
             } => {
                 let k = key.clone();
                 let node_profile = profile.clone();
@@ -1297,9 +1568,9 @@ impl DatabasePanel {
                 .on_click(cx.listener(move |this, _, _, cx| this.toggle(k.clone(), cx)))
                 .context_menu({
                     let weak = cx.entity().downgrade();
-                    let (profile, schema) = (node_profile.clone(), name.clone());
+                    let (profile, schema, kind) = (node_profile.clone(), name.clone(), *kind);
                     move |menu, _, _| {
-                        schema_menu(menu, weak.clone(), profile.clone(), schema.clone())
+                        schema_menu(menu, weak.clone(), profile.clone(), schema.clone(), kind)
                     }
                 })
                 .into_any_element()
@@ -1334,6 +1605,7 @@ impl DatabasePanel {
                 kind,
                 open,
                 readable,
+                db: db_kind,
             } => {
                 let id = |part: &str| ElementId::Name(format!("{part}\u{0}{key}").into());
                 let icon = Icon::new(kind_icon(*kind));
@@ -1368,6 +1640,7 @@ impl DatabasePanel {
                     schema: schema.clone(),
                     name: name.clone(),
                     kind: *kind,
+                    db: *db_kind,
                 };
                 let (profile, schema, table) = (profile.clone(), schema.clone(), name.clone());
                 row(id("db-rel"), 3, cx)
@@ -1488,6 +1761,115 @@ impl DatabasePanel {
     }
 }
 
+/// The "+" menu: a PostgreSQL URL, a SQLite file, or a Workers project's D1 databases, each
+/// with its kind's logo.
+impl DatabasePanel {
+    fn add_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let view = cx.entity().downgrade();
+        Button::new("db-add")
+            .ghost()
+            .xsmall()
+            .icon(IconName::Plus)
+            .tooltip("Add a Database")
+            .dropdown_menu(move |menu, _, _| {
+                let item = |kind: Option<DbKind>,
+                            label: &'static str,
+                            f: fn(&mut DatabasePanel, &mut Window, &mut Context<DatabasePanel>)| {
+                    let view = view.clone();
+                    PopupMenuItem::element(move |_, _| {
+                        h_flex()
+                            .gap_2()
+                            .child(match kind {
+                                Some(kind) => super::logos::logo(kind, 14.),
+                                None => super::logos::cloudflare(14.),
+                            })
+                            .child(label)
+                    })
+                    .on_click(move |_, window, cx| {
+                        let _ = view.update(cx, |this, cx| f(this, window, cx));
+                    })
+                };
+                menu.item(item(
+                    Some(DbKind::Postgres),
+                    "PostgreSQL from a DATABASE_URL…",
+                    |this, window, cx| {
+                        this.settings = None;
+                        this.show_url = true;
+                        this.url_input.update(cx, |s, cx| s.focus(window, cx));
+                        cx.notify();
+                    },
+                ))
+                .item(item(
+                    None,
+                    "Cloudflare D1 in a Workers Project…",
+                    |this, _, cx| this.add_workers_project(cx),
+                ))
+                .item(item(
+                    Some(DbKind::Sqlite),
+                    "SQLite File…",
+                    |this, _, cx| this.add_sqlite_file(cx),
+                ))
+            })
+    }
+
+    /// Asks for a Workers project folder, and lists its D1 databases.
+    fn add_workers_project(&mut self, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Choose Workers Project".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else {
+                return;
+            };
+            let Some(dir) = paths.into_iter().next() else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                if sawit_core::cloudflare::detect_project(&dir).is_empty() {
+                    this.error = Some(format!(
+                        "{} has no Wrangler config (wrangler.toml, wrangler.json or wrangler.jsonc) or cloudflare.config.ts.",
+                        dir.display()
+                    ));
+                } else {
+                    this.error = None;
+                    this.expanded.remove(D1_SECTION);
+                    this.store.update(cx, |s, cx| s.add_project_dir(&dir, cx));
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Asks for a SQLite file, saves it as a connection and opens it.
+    fn add_sqlite_file(&mut self, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Open SQLite File".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else {
+                return;
+            };
+            let Some(file) = paths.into_iter().next() else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                let name = this.store.update(cx, |s, cx| s.add_sqlite_file(&file, cx));
+                this.error = None;
+                this.expanded.insert(name);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+}
+
 impl DatabasePanel {
     fn render_settings(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let form = self.settings.as_ref()?;
@@ -1506,6 +1888,11 @@ impl DatabasePanel {
                 .child(div().text_xs().text_color(muted).child(hint))
         };
         let confirm = form.confirm_remove;
+        let postgres = self
+            .store
+            .read(cx)
+            .profile(&form.profile)
+            .is_none_or(|p| p.kind.is_postgres());
         Some(
             v_flex()
                 .p_2()
@@ -1522,23 +1909,25 @@ impl DatabasePanel {
                     &form.label,
                     "Shown in the sidebar. Leave empty to use the connection details.",
                 ))
-                .child(field(
-                    "Connection string",
-                    &form.url,
-                    "Change the host, database or SSL settings here. Saving reconnects.",
-                ))
-                .child(
-                    v_flex()
-                        .gap_1()
-                        .child(div().text_xs().font_medium().child("Password"))
-                        .child(Input::new(&form.password).small().mask_toggle())
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(muted)
-                                .child("Stored in Keychain, never shown."),
-                        ),
-                )
+                .when(postgres, |el| {
+                    el.child(field(
+                        "Connection string",
+                        &form.url,
+                        "Change the host, database or SSL settings here. Saving reconnects.",
+                    ))
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(div().text_xs().font_medium().child("Password"))
+                            .child(Input::new(&form.password).small().mask_toggle())
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child("Stored in Keychain, never shown."),
+                            ),
+                    )
+                })
                 .when_some(form.error.clone(), |el, e| {
                     el.child(div().text_xs().text_color(cx.theme().danger).child(e))
                 })
@@ -1586,7 +1975,7 @@ impl Render for DatabasePanel {
         let store = self.store.read(cx);
         self.nodes = Rc::new(flatten(store, &self.expanded, &query));
         let node_count = self.nodes.len();
-        let empty = store.profiles.items.is_empty();
+        let empty = store.profiles.items.is_empty() && store.detected.is_empty();
         // Something is loaded to search, and nothing in it matches.
         let no_match = !query.is_empty()
             && !store.schemas.is_empty()
@@ -1607,21 +1996,7 @@ impl Render for DatabasePanel {
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(div().flex_1().text_xs().font_semibold().text_color(cx.theme().muted_foreground).child("DATABASE"))
-                    .child(
-                        Button::new("db-add-url")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Plus)
-                            .tooltip("Add from DATABASE_URL")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.settings = None;
-                                this.show_url = !this.show_url;
-                                if this.show_url {
-                                    this.url_input.update(cx, |s, cx| s.focus(window, cx));
-                                }
-                                cx.notify();
-                            })),
-                    )
+                    .child(self.add_menu(cx))
                     .child(
                         Button::new("db-add-env")
                             .ghost()
@@ -1737,7 +2112,7 @@ impl Render for DatabasePanel {
                         el.child(
                             Placeholder::new(Lucide::Database, "No connections yet")
                                 .compact()
-                                .detail("Connect with a DATABASE_URL, a .env file, or a running Sawit instance.")
+                                .detail("Connect with a DATABASE_URL, a .env file, a running Sawit instance, a SQLite file, or a Workers project's D1 databases.")
                                 .action(
                                     Button::new("empty-db-url")
                                         .small()
@@ -1770,9 +2145,10 @@ impl Render for DatabasePanel {
 #[cfg(test)]
 mod tests {
     // Not a glob: `gpui_kit::*` exports a `test` macro that shadows #[test].
-    use super::{Facet, Node, flatten};
+    use super::{D1_SECTION, Facet, Node, flatten};
     use crate::db::lifecycle::ConnState;
     use crate::db::store::DbStore;
+    use sawit_core::db::DbKind;
     use sawit_core::db::FailureKind;
     use sawit_core::db::{
         ColumnInfo, ConnProfile, Constraint, ConstraintKind, IndexInfo, Profiles, RelKind,
@@ -1821,6 +2197,7 @@ mod tests {
             .map(|n| match n {
                 Node::Profile { name, .. } => format!("p:{name}"),
                 Node::Error { .. } => "error".into(),
+                Node::Section { title, .. } => format!("section:{title}"),
                 Node::Schema { name, .. } => format!("s:{name}"),
                 Node::Kind { kind, .. } => format!("k:{}", super::kind_label(*kind)),
                 Node::Relation { name, .. } => format!("r:{name}"),
@@ -2052,6 +2429,133 @@ mod tests {
         assert_eq!(
             lines[1..],
             ["s:public", "k:Tables", "r:accounts"].map(String::from)
+        );
+    }
+
+    /// A Workers project's D1 databases: `DB`'s local file (with a `main` schema loaded), the
+    /// same database on Cloudflare, and a local file no binding names.
+    fn with_d1(store: &mut DbStore) -> (String, String, String) {
+        use sawit_core::db::d1::{Detected, LocalD1};
+        let local = ConnProfile::d1_local(&LocalD1 {
+            project: "/work/api".into(),
+            worker: Some("api".into()),
+            binding: "DB".into(),
+            database_name: Some("shop".into()),
+            miniflare_id: "5d0c".into(),
+            file: "/work/api/.wrangler/state/v3/d1/x/abc.sqlite".into(),
+            exists: true,
+        });
+        let remote = ConnProfile::d1_remote(std::path::Path::new("/work/api"), "DB", "shop");
+        let stray = ConnProfile::sqlite_file(std::path::Path::new("/work/api/stray.sqlite"));
+        let names = (local.name.clone(), remote.name.clone(), stray.name.clone());
+        store.schemas.insert(
+            local.name.clone(),
+            vec![SchemaInfo {
+                name: "main".into(),
+                relations: vec![rel("products", true)],
+            }],
+        );
+        store.detected = Detected {
+            local: vec![local],
+            remote: vec![remote],
+            unmatched: vec![stray],
+        };
+        names
+    }
+
+    #[test]
+    fn d1_databases_follow_saved_connections_local_first() {
+        let (mut store, name) = store();
+        let (local, remote, stray) = with_d1(&mut store);
+        let mut expanded = HashSet::new();
+        assert_eq!(
+            names(&flatten(&store, &expanded, "")),
+            vec![
+                format!("p:{name}"),
+                "section:Cloudflare D1".into(),
+                format!("p:{local}"),
+                format!("p:{remote}"),
+                "section:Unmatched local D1 databases".into(),
+                format!("p:{stray}"),
+            ]
+        );
+        // SQLite's `main` starts open, as `public` does.
+        expanded.insert(local.clone());
+        let lines = names(&flatten(&store, &expanded, ""));
+        assert_eq!(
+            lines[2..6],
+            [
+                format!("p:{local}"),
+                "s:main".into(),
+                "k:Tables".into(),
+                "r:products".into()
+            ]
+        );
+        // Collapsing the section hides its databases.
+        expanded.insert(D1_SECTION.to_string());
+        let lines = names(&flatten(&store, &expanded, ""));
+        assert_eq!(
+            lines[1..3],
+            [
+                "section:Cloudflare D1".to_string(),
+                "section:Unmatched local D1 databases".into()
+            ]
+        );
+    }
+
+    #[test]
+    fn rows_name_their_kind_beside_the_logo() {
+        let (mut store, name) = store();
+        let (local, remote, _) = with_d1(&mut store);
+        store.versions.insert(name.clone(), 16);
+        let nodes = flatten(&store, &HashSet::new(), "");
+        let row = |key: &str| {
+            nodes
+                .iter()
+                .find_map(|n| match n {
+                    Node::Profile {
+                        name,
+                        label,
+                        detail,
+                        kind,
+                        accessible,
+                        saved,
+                        ..
+                    } if name == key => Some((
+                        label.clone(),
+                        detail.clone(),
+                        *kind,
+                        accessible.clone(),
+                        *saved,
+                    )),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(
+            row(&name),
+            (
+                name.clone(),
+                None,
+                DbKind::Postgres,
+                format!("PostgreSQL 16 · {name}"),
+                true
+            )
+        );
+        assert_eq!(
+            row(&local),
+            (
+                "DB".into(),
+                Some("shop".into()),
+                DbKind::D1Local,
+                "Cloudflare D1 (local) · DB".into(),
+                false
+            )
+        );
+        assert_eq!(row(&remote).3, "Cloudflare D1 (remote) · DB");
+        assert_eq!(
+            super::super::logos::logo_path(row(&local).2).0,
+            "db_logos/d1.svg"
         );
     }
 }

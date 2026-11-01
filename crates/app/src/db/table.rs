@@ -12,6 +12,11 @@
 //! matches (streamed over a connection of its own). On a table with a primary
 //! key, rows can be ticked (on this page, across pages, or all that match)
 //! for a bulk update or delete over the read-write connection.
+//!
+//! The same view browses SQLite files and Cloudflare D1 ([`Conn`]): there a
+//! read is a short read-only open of the file, and a change takes the write
+//! route the toolbar shows (the dev server's Local Explorer, the file, or
+//! Wrangler for a remote (production) database).
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -32,10 +37,9 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::db::{
-    self, BulkChange, ExportFormat, ExportSummary, FilterOp, RelKind, ResultSet, RowCount,
-    RowFilter, RowQuery, RowTarget, SortDir,
+    self, BulkChange, Conn, DbKind, ExportFormat, ExportSummary, FilterOp, RelKind, ResultSet,
+    RowCount, RowFilter, RowQuery, RowTarget, SortDir,
 };
-use tokio_postgres::Client;
 
 use super::DbEvent;
 use super::store::DbStore;
@@ -358,7 +362,7 @@ impl TableView {
 
     /// The live read-only client, or `None` after asking the store to
     /// reconnect (the view reloads itself when that finishes).
-    fn client(&mut self, cx: &mut Context<Self>) -> Option<Arc<Client>> {
+    fn client(&mut self, cx: &mut Context<Self>) -> Option<Conn> {
         let client = self.db.read(cx).client(&self.profile, true);
         if client.is_none() {
             self.waiting_reconnect = true;
@@ -400,7 +404,7 @@ impl TableView {
             return;
         };
         self.in_flight = Some(generation);
-        self.cancel = Some(client.cancel_token());
+        self.cancel = client.cancel_token();
         let (schema, table) = (self.schema.clone(), self.table.clone());
         let dead = client.clone();
         let cached = self
@@ -424,11 +428,11 @@ impl TableView {
                 let result = async {
                     let order = match known_order {
                         Some(o) => o,
-                        None => db::primary_key(&client, &schema, &table).await?,
+                        None => client.primary_key(&schema, &table).await?,
                     };
-                    let set =
-                        db::fetch_rows(&client, &schema, &table, &order, &query, page * size, size)
-                            .await?;
+                    let set = client
+                        .fetch_rows(&schema, &table, &order, &query, page * size, size)
+                        .await?;
                     Ok::<_, sawit_core::CoreError>((order, set))
                 }
                 .await;
@@ -439,13 +443,13 @@ impl TableView {
             let counted = async {
                 match count {
                     // The estimate says nothing about a filtered subset.
-                    true if query.is_filtered() => {
-                        db::row_count_matching(&client, &schema, &table, &query)
-                            .await
-                            .ok()
-                            .flatten()
-                    }
-                    true => db::row_count_estimated(&client, &schema, &table, estimate)
+                    true if query.is_filtered() => client
+                        .row_count_matching(&schema, &table, &query)
+                        .await
+                        .ok()
+                        .flatten(),
+                    true => client
+                        .row_count_estimated(&schema, &table, estimate)
                         .await
                         .ok(),
                     false => None,
@@ -527,7 +531,9 @@ impl TableView {
         let (schema, table, query) = (self.schema.clone(), self.table.clone(), self.query.clone());
         let size = self.pager.size;
         let rx = rt::spawn(cx, async move {
-            db::fetch_rows(&client, &schema, &table, &order, &query, next * size, size).await
+            client
+                .fetch_rows(&schema, &table, &order, &query, next * size, size)
+                .await
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(set)) = rx.await {
@@ -704,6 +710,14 @@ fn saved_page_size(cx: &App) -> u64 {
 
 /// Selection and bulk changes.
 impl TableView {
+    /// What kind of database the table is in.
+    fn kind(&self, cx: &App) -> DbKind {
+        self.db
+            .read(cx)
+            .profile(&self.profile)
+            .map_or(DbKind::Postgres, |p| p.kind)
+    }
+
     /// The primary key rows are ticked by; `None` for views and keyless
     /// tables, which can't be changed row by row.
     fn key(&self, cx: &App) -> Option<Vec<String>> {
@@ -879,14 +893,27 @@ impl TableView {
                 "Update Rows",
             ),
         };
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &message,
-            Some(&detail),
-            &[verb, "Cancel"],
-            cx,
+        let (level, detail) = match self.db.read(cx).route(&self.profile) {
+            Some(route @ db::WriteRoute::Remote { .. }) => (
+                PromptLevel::Critical,
+                format!("{detail}\n\n{}", route.describe()),
+            ),
+            Some(route) => (
+                PromptLevel::Warning,
+                format!("{detail}\n\n{}", route.describe()),
+            ),
+            None => (PromptLevel::Warning, detail),
+        };
+        let answer = window.prompt(level, &message, Some(&detail), &[verb, "Cancel"], cx);
+        let columns = self.column_names(cx);
+        let sql = db::bulk_sql_for(
+            self.kind(cx),
+            &self.schema,
+            &self.table,
+            &columns,
+            &target,
+            &change,
         );
-        let sql = db::bulk_sql(&self.schema, &self.table, &target, &change);
         let deleting = matches!(change, BulkChange::Delete);
         cx.spawn_in(window, async move |this, window| {
             if answer.await != Ok(0) {
@@ -1171,12 +1198,28 @@ impl Render for TableView {
             .text_color(cx.theme().muted_foreground)
             .border_b_1()
             .border_color(cx.theme().border)
+            .child({
+                let store = self.db.read(cx);
+                let kind = self.kind(cx);
+                let name: SharedString = store.accessible_name(&self.profile).into();
+                div()
+                    .id("table-kind")
+                    .child(super::logos::logo(kind, 14.))
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(name.clone()).build(window, cx)
+                    })
+            })
             .child(
                 div()
                     .text_color(cx.theme().foreground)
                     .font_semibold()
                     .child(self.title.clone()),
             )
+            .children(super::panel::route_badge(
+                "table-route",
+                self.db.read(cx).route(&self.profile),
+                cx,
+            ))
             .when(self.key(cx).is_none(), |el| {
                 el.child(
                     h_flex()
@@ -1220,9 +1263,8 @@ impl Render for TableView {
                     .tooltip("Open in a SQL Editor")
                     .on_click(cx.listener(|this, _, _, cx| {
                         let sql = format!(
-                            "SELECT *\nFROM {}.{}\nLIMIT 100;",
-                            db::quote_ident(&this.schema),
-                            db::quote_ident(&this.table)
+                            "SELECT *\nFROM {}\nLIMIT 100;",
+                            db::relation_sql_for(this.kind(cx), &this.schema, &this.table)
                         );
                         cx.emit(DbEvent::OpenSql {
                             profile: this.profile.clone(),

@@ -305,3 +305,52 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+================================================================================
+
+SQLite and rusqlite
+-------------------
+
+Sawit opens SQLite files and Cloudflare D1's local databases with rusqlite 0.41.1
+(https://github.com/rusqlite/rusqlite) and libsqlite3-sys 0.39.1, built with their `bundled`
+feature, which compiles SQLite 3.54.1 (https://www.sqlite.org) into Sawit. SQLite is in the public
+domain (https://www.sqlite.org/copyright.html). rusqlite and libsqlite3-sys are licensed under the
+MIT License; rusqlite's LICENSE follows, copied verbatim from the 0.41.1 crate.
+
+Copyright (c) 2014 The rusqlite developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+================================================================================
+
+Database logos
+--------------
+
+The database sidebar identifies each kind of database by its logo (assets/db_logos in Sawit's
+source; sources and terms in SOURCES.md there):
+
+- The PostgreSQL elephant ("Slonik"), unmodified, from https://wiki.postgresql.org/wiki/Logo,
+  used under the PostgreSQL Trademark Policy. Postgres, PostgreSQL and the Slonik Logo are
+  trademarks or registered trademarks of the PostgreSQL Community Association of Canada, and used
+  with their permission.
+- Cloudflare D1's product icon from Cloudflare's developer documentation
+  (https://github.com/cloudflare/cloudflare-docs), licensed under CC BY 4.0 by Cloudflare, Inc.
+  Cloudflare and D1 are trademarks of Cloudflare, Inc.
+- The feather mark of SQLite's logo (https://www.sqlite.org/images/sqlite370_banner.svg), in the
+  public domain; the SQLite name is a trademark of Hipp, Wyrick & Company, Inc.

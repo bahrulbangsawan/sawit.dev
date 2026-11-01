@@ -52,7 +52,9 @@ pub struct RenderArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SchemaDiagramArgs {
-    #[schemars(description = "Sawit instance name or saved connection name")]
+    #[schemars(
+        description = "Sawit instance name, saved connection name, or a D1/SQLite id from detect_databases"
+    )]
     pub target: String,
     #[schemars(description = "Only this schema (default: all user schemas)")]
     pub schema: Option<String>,
@@ -148,8 +150,13 @@ impl Sawit {
             "schema_diagram",
             a.output_path.as_deref()
         ));
-        let client = tri!(self.connect_target(&a.target, a.database.as_deref()).await);
-        let schemas = tri!(db::load_schema(&client).await.map_err(|e| e.to_string()));
+        let schemas = match tri!(self.lite_conn(&a.target, true)) {
+            Some(conn) => tri!(conn.load_schema().await.map_err(|e| e.to_string())),
+            None => {
+                let client = tri!(self.connect_target(&a.target, a.database.as_deref()).await);
+                tri!(db::load_schema(&client).await.map_err(|e| e.to_string()))
+            }
+        };
         let only = a.schema.as_deref().filter(|s| !s.trim().is_empty());
         let tables = diagram::table_count(&schemas, only);
         if tables == 0 {

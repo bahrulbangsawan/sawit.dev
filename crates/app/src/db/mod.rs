@@ -4,12 +4,14 @@
 mod actions;
 mod diagram;
 mod lifecycle;
+mod logos;
 mod panel;
 mod sql;
 mod store;
 mod table;
 
 pub use diagram::DiagramView;
+pub use logos::logo as kind_logo;
 pub use panel::{DatabasePanel, DbEvent};
 pub use sql::{SqlView, init};
 pub use store::DbStore;

@@ -153,6 +153,33 @@ explained. A conflict on the same address can't be forced.
 - From the terminal: `sawit panen`, `sawit backup` and `sawit tanam`
   (see [Databases, ports and instances from the terminal](#databases-ports-and-instances-from-the-terminal)).
 
+#### Cloudflare D1 and SQLite
+
+- **Every connection shows its kind's logo** beside the status dot: PostgreSQL's elephant, Cloudflare D1, SQLite.
+  The tooltip and the accessible name say the kind too ("PostgreSQL 16 · kyzn", "Cloudflare D1 (local) · DB"), so
+  the logo is never the only way to tell. **+** in the sidebar adds a PostgreSQL URL, a Workers project's D1
+  databases, or a **SQLite file**, each with its logo.
+- **D1 databases appear on their own** for each Workers project of the window (a `wrangler.toml`,
+  `wrangler.json(c)` or `cloudflare.config.ts`), under **Cloudflare D1** after the saved connections: each
+  binding's **local** database first (the binding and database names), then the same database **remote**, marked
+  as such. Importing a `.env` looks in its folder too.
+- A binding's local database is the SQLite file Miniflare keeps for it,
+  `.wrangler/state/v3/d1/miniflare-D1DatabaseObject/<id>.sqlite` (or under `--persist-to` from the dev script).
+  Sawit works out `<id>` as Miniflare does (workerd's Durable Object id for the database id, else the binding
+  name), so it never guesses: local D1 files no binding names are listed under **Unmatched local D1 databases**.
+- The table grid, filters, sorting, row search, exports, the schema tree, diagrams and the SQL editor work on them
+  as on PostgreSQL. What only a PostgreSQL server has (`pg_dump` backups, CSV imports, materialized views,
+  instances, roles) isn't offered.
+- **Safe beside a running dev server.** While `wrangler dev`, Vite or `cf dev` runs, workerd owns the file. Sawit
+  reads it read-only (through workerd's `-wal`), holds nothing open between reads, and sends changes through the
+  dev server's **Local Explorer**, so workerd makes them. With no dev server running, changes go straight to the
+  file. Either way Sawit asks first, as it does before PostgreSQL changes, and the toolbar, the SQL editor and the
+  question say which way a change goes. A dev server that holds the file without a Local Explorer blocks writes
+  rather than fighting it. The `-wal` and `-shm` files workerd leaves stay as they were; Sawit leaves none of its
+  own.
+- **Remote D1** goes through your own Wrangler login (`wrangler d1 execute --remote`); Sawit never reads Wrangler's
+  credentials. Reads run as they are; a change is marked **remote (production)** and asked about first.
+
 ### SQL editor
 
 <img src="docs/media/sql-editor.png" alt="SQL editor with an aggregation query and its result table" width="100%">
@@ -981,8 +1008,9 @@ work in the last 30 seconds, with its `id`, `name` (its label on screen), `color
 | Area | Tools |
 |---|---|
 | Instances | `list_instances`, `create_instance`, `start_instance` (refused with an explanation when the port is in use), `stop_instance`, `restart_instance`, `remove_instance`, `instance_logs`, `check_port`, `list_postgres_binaries` |
-| Databases | `list_connections`, `detect_databases`, `list_databases`, `create_database`, `drop_database`, `describe_schema`, `describe_table`, `query` (**always read-only**, up to 500 rows), `execute_sql` (read-write), `save_connection`, `remove_connection`, `write_env` |
+| Databases | `list_connections`, `detect_databases` (with `project_dir`, the project's Cloudflare D1 databases too, each with its `kind`: `postgres`, `d1-local`, `d1-remote` or `sqlite`), `list_databases`, `create_database`, `drop_database`, `describe_schema`, `describe_table`, `query` (**always read-only**, up to 500 rows), `execute_sql` (read-write), `save_connection`, `remove_connection`, `write_env` |
 | Export, backup, import | `export_table`, `export_query` (CSV or Excel), `backup_database` (`pg_dump`), `import_csv`, `drop_relation`, `truncate_table`, `refresh_materialized_view` |
+| Cloudflare D1, SQLite | `query`, `execute_sql`, `describe_schema`, `describe_table`, `list_databases`, `export_table`, `export_query` and `schema_diagram` take a D1 or SQLite id from `detect_databases` as `target` (`d1-local:DB@/path/to/project`, `d1-remote:shop@/path/to/project`, `sqlite:/path/to/file.sqlite`), with the same rules: `query` opens the file read-only; `execute_sql` writes through the running dev server's Local Explorer, else straight to the file, and says which; a write to a remote (production) D1 database needs `confirm: true`. The PostgreSQL-only tools refuse a D1 target and say why |
 | Diagrams | `render_diagram` (a diagram in Mermaid syntax, any type Pele draws, to SVG; `render_mermaid` is its deprecated old name), `schema_diagram` (Mermaid, DBML or SVG) |
 | Ports | `list_ports`, `stop_processes` |
 | Cloudflare Local Explorer | `local_explorer` (the explorers Workers dev servers serve: URL, API, port, process and Workers; and the project's Workers with their bindings, Wrangler or Vite plugin version, upgrade command and the script that starts them), `local_explorer_request` (one call to an explorer's API on loopback, under `/cdn-cgi/local/explorer/api`; long answers are cut) |
@@ -1286,6 +1314,11 @@ Figures for other apps are not listed because they have not been measured on the
   licensed under MIT, which draws every diagram written in Mermaid syntax. See [`NOTICE`](NOTICE).
 - The browser tab's page picker adapts [Visual Annotator](https://github.com/wernerstrauch/visual-annotator),
   Copyright (c) 2026 wernerstrauch, licensed under MIT. See [`NOTICE`](NOTICE).
+- Sawit opens SQLite files and Cloudflare D1's local databases with [rusqlite](https://github.com/rusqlite/rusqlite),
+  Copyright (c) 2014 The rusqlite developers, licensed under MIT, which builds in [SQLite](https://www.sqlite.org)
+  (public domain). The database logos are PostgreSQL's (PostgreSQL Trademark Policy), Cloudflare D1's (CC BY 4.0)
+  and SQLite's (public domain); see [`assets/db_logos/SOURCES.md`](assets/db_logos/SOURCES.md) and
+  [`NOTICE`](NOTICE).
 - The code editors parse with [tree-sitter](https://github.com/tree-sitter/tree-sitter), Copyright (c) 2018 Max
   Brunsfeld, and its grammars for Rust, TypeScript/TSX, JavaScript, JSON, Python, Go, Bash, TOML, YAML, Markdown,
   HTML, CSS, SQL ([tree-sitter-sql](https://github.com/derekstride/tree-sitter-sql)), C and Java, each licensed under

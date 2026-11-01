@@ -58,17 +58,22 @@ pub enum CellKind {
     Bool,
 }
 
-/// The cell kind for a `format_type` name (`integer`, `numeric(10,2)`, …).
+/// The cell kind for a `format_type` name (`integer`, `numeric(10,2)`, …), or a type SQLite
+/// tables declare (`INTEGER`, `REAL`, `INT`, `DOUBLE`, any case).
 pub fn cell_kind(data_type: &str) -> CellKind {
-    let t = data_type.trim();
+    let t = data_type.trim().to_ascii_lowercase();
     if t.ends_with(']') {
         return CellKind::Text;
     }
-    match t.split('(').next().unwrap_or(t).trim() {
+    match t.split('(').next().unwrap_or(&t).trim() {
         "smallint" | "integer" | "bigint" | "real" | "double precision" | "numeric" => {
             CellKind::Number
         }
-        "boolean" => CellKind::Bool,
+        // SQLite's spellings.
+        "int" | "tinyint" | "mediumint" | "int2" | "int8" | "float" | "double" | "decimal" => {
+            CellKind::Number
+        }
+        "boolean" | "bool" => CellKind::Bool,
         _ => CellKind::Text,
     }
 }
@@ -500,7 +505,7 @@ impl<W: Write> Zip<W> {
 }
 
 /// Kinds for `columns`, by name from the schema tree.
-fn kinds_for(columns: &[String], types: &[ColumnInfo]) -> Vec<CellKind> {
+pub(super) fn kinds_for(columns: &[String], types: &[ColumnInfo]) -> Vec<CellKind> {
     columns
         .iter()
         .map(|c| {
@@ -514,7 +519,10 @@ fn kinds_for(columns: &[String], types: &[ColumnInfo]) -> Vec<CellKind> {
 }
 
 /// Writes `path`, removing it again when writing fails part way.
-fn write_file<T>(path: &Path, f: impl FnOnce(BufWriter<std::fs::File>) -> Result<T>) -> Result<T> {
+pub(super) fn write_file<T>(
+    path: &Path,
+    f: impl FnOnce(BufWriter<std::fs::File>) -> Result<T>,
+) -> Result<T> {
     let file = std::fs::File::create(path)?;
     let result = f(BufWriter::with_capacity(1 << 16, file));
     if result.is_err() {

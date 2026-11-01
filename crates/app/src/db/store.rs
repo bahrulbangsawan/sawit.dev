@@ -1,5 +1,11 @@
 //! Connection profiles and live connections shared by the database views.
 //!
+//! Besides the saved profiles, the store holds the Cloudflare D1 databases
+//! of the window's Workers projects ([`DbStore::detected`]), found again
+//! whenever the Database panel is shown and never saved. Every profile is
+//! opened as a [`Conn`]: a PostgreSQL client, or a SQLite file or D1
+//! database that holds nothing open between operations.
+//!
 //! Each profile's connection follows [`ConnState`]: idle until something
 //! needs it, reconnected with backoff when it drops, and closed again after
 //! [`IDLE_TIMEOUT`] unused or [`BACKGROUND_GRACE`] after the app loses
@@ -8,17 +14,15 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use gpui_kit::{Context, Task};
 use sawit_core::db::{
-    self, ConnProfile, FailureKind, Profiles, Relation, SchemaInfo, parse_database_url,
-    read_dotenv_database_url, resolve_password, store_password,
+    self, Conn, ConnProfile, FailureKind, Profiles, Relation, SchemaInfo, WriteRoute,
+    parse_database_url, read_dotenv_database_url, resolve_password, store_password,
 };
 use sawit_core::instances::AppPaths;
-use tokio_postgres::Client;
 
 use super::lifecycle::{ConnState, Event};
 use crate::rt;
@@ -34,10 +38,24 @@ const TICK: Duration = Duration::from_secs(1);
 pub struct DbStore {
     file: PathBuf,
     pub profiles: Profiles,
-    pub clients: HashMap<String, Arc<Client>>,
+    /// The D1 databases of the window's Workers projects: local first, then remote, then the
+    /// local files no binding names. Not saved; found again from the projects.
+    pub detected: db::d1::Detected,
+    /// The folders D1 databases are looked for in: the window's projects, and the folders of
+    /// `.env` files imported.
+    projects: Vec<PathBuf>,
+    extra_dirs: Vec<PathBuf>,
+    /// SQLite files an agent opened by id, kept in the list.
+    extra_files: Vec<PathBuf>,
+    pub clients: HashMap<String, Conn>,
     /// Read-only connections for the table browser (separate from `clients`
     /// so an open transaction in the SQL editor never affects them).
-    pub ro_clients: HashMap<String, Arc<Client>>,
+    pub ro_clients: HashMap<String, Conn>,
+    /// Where writes to each SQLite or D1 database go, as last looked at (on connect and
+    /// reload); each write looks again.
+    pub routes: HashMap<String, WriteRoute>,
+    /// Each PostgreSQL server's major version, once connected.
+    pub versions: HashMap<String, u32>,
     /// Kept while disconnected, so the tree stays browsable.
     pub schemas: HashMap<String, Vec<SchemaInfo>>,
     /// Bumped whenever `schemas` changes, so observers can skip other notifies.
@@ -76,8 +94,14 @@ impl DbStore {
         Self {
             file,
             profiles,
+            detected: db::d1::Detected::default(),
+            projects: Vec::new(),
+            extra_dirs: Vec::new(),
+            extra_files: Vec::new(),
             clients: HashMap::new(),
             ro_clients: HashMap::new(),
+            routes: HashMap::new(),
+            versions: HashMap::new(),
             schemas: HashMap::new(),
             schema_rev: 0,
             states: HashMap::new(),
@@ -112,7 +136,7 @@ impl DbStore {
     }
 
     fn alive(&self, name: &str) -> bool {
-        let alive = |m: &HashMap<String, Arc<Client>>| m.get(name).is_some_and(|c| !c.is_closed());
+        let alive = |m: &HashMap<String, Conn>| m.get(name).is_some_and(|c| !c.is_closed());
         alive(&self.clients) && alive(&self.ro_clients)
     }
 
@@ -125,15 +149,13 @@ impl DbStore {
     /// A query or page holds a connection right now (views keep a clone of
     /// the client only while a request runs).
     fn busy(&self, name: &str) -> bool {
-        let held = |m: &HashMap<String, Arc<Client>>| {
-            m.get(name).is_some_and(|c| Arc::strong_count(c) > 1)
-        };
+        let held = |m: &HashMap<String, Conn>| m.get(name).is_some_and(Conn::in_use);
         held(&self.clients) || held(&self.ro_clients)
     }
 
     /// A live client for `name` (read-only or read-write), if connected.
     /// Counts as use for the idle timeout.
-    pub fn client(&self, name: &str, read_only: bool) -> Option<Arc<Client>> {
+    pub fn client(&self, name: &str, read_only: bool) -> Option<Conn> {
         if !self.is_connected(name) {
             return None;
         }
@@ -169,7 +191,110 @@ impl DbStore {
     }
 
     pub fn profile(&self, name: &str) -> Option<&ConnProfile> {
-        self.profiles.items.iter().find(|p| p.name == name)
+        self.profiles
+            .items
+            .iter()
+            .chain(self.detected.all())
+            .find(|p| p.name == name)
+    }
+
+    /// Saved profiles, then the detected D1 databases.
+    fn names(&self) -> Vec<String> {
+        self.profiles
+            .items
+            .iter()
+            .chain(self.detected.all())
+            .map(|p| p.name.clone())
+            .collect()
+    }
+
+    /// "PostgreSQL 16 · kyzn", "Cloudflare D1 (local) · DB": the tooltip's and accessible
+    /// name's first line.
+    pub fn accessible_name(&self, name: &str) -> String {
+        let version = self.versions.get(name).map(u32::to_string);
+        self.profile(name)
+            .map(|p| p.accessible_name(version.as_deref()))
+            .unwrap_or_else(|| name.to_string())
+    }
+
+    /// Where writes to a SQLite or D1 profile go, as last looked at.
+    pub fn route(&self, name: &str) -> Option<&WriteRoute> {
+        self.routes.get(name)
+    }
+
+    /// Looks for D1 databases in `projects` (the window's project folders) when they changed.
+    pub fn set_projects(&mut self, projects: Vec<PathBuf>, cx: &mut Context<Self>) {
+        if projects != self.projects {
+            self.projects = projects;
+            self.detect(cx);
+        }
+    }
+
+    /// Also looks for D1 databases in `dir` (an imported `.env`'s folder).
+    pub fn add_project_dir(&mut self, dir: &Path, cx: &mut Context<Self>) {
+        if !self.extra_dirs.iter().any(|d| d == dir) {
+            self.extra_dirs.push(dir.to_path_buf());
+        }
+        self.detect(cx);
+    }
+
+    /// Finds the D1 databases of every project again (config and local folder only, nothing
+    /// remote), off the UI thread. Connections of ones that went away close.
+    pub fn detect(&mut self, cx: &mut Context<Self>) {
+        let mut dirs = self.projects.clone();
+        dirs.extend(self.extra_dirs.iter().cloned());
+        let files = self.extra_files.clone();
+        let rx = rt::spawn_blocking(cx, move || {
+            let mut all = db::d1::Detected::default();
+            for dir in dirs {
+                let found = db::d1::detect(&dir);
+                all.local.extend(found.local);
+                all.remote.extend(found.remote);
+                all.unmatched.extend(found.unmatched);
+            }
+            for file in files.iter().filter(|f| f.is_file()) {
+                let profile = ConnProfile::sqlite_file(file);
+                if !all.all().any(|p| p.name == profile.name) {
+                    all.unmatched.push(profile);
+                }
+            }
+            all
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(found) = rx.await else { return };
+            let _ = this.update(cx, |this, cx| this.set_detected(found, cx));
+        })
+        .detach();
+    }
+
+    fn set_detected(&mut self, found: db::d1::Detected, cx: &mut Context<Self>) {
+        if found == self.detected {
+            return;
+        }
+        let gone: Vec<String> = self
+            .detected
+            .all()
+            .filter(|old| !found.all().any(|p| p == *old))
+            .map(|p| p.name.clone())
+            .collect();
+        for name in &gone {
+            self.close(name);
+            self.schemas.remove(name);
+            self.states.remove(name);
+            self.notices.remove(name);
+            self.routes.remove(name);
+        }
+        self.detected = found;
+        self.schema_rev += 1;
+        cx.notify();
+    }
+
+    /// Saves a SQLite file as a connection and opens it.
+    pub fn add_sqlite_file(&mut self, file: &Path, cx: &mut Context<Self>) -> String {
+        let profile = ConnProfile::sqlite_file(file);
+        let name = profile.name.clone();
+        self.replace_profile(profile, cx);
+        name
     }
 
     /// Adds a profile from a DATABASE_URL; its password goes to the Keychain.
@@ -203,6 +328,10 @@ impl DbStore {
     }
 
     pub fn import_env(&mut self, path: PathBuf, cx: &mut Context<Self>) -> Result<String, String> {
+        // A Workers project keeps its D1 databases in its config, not in .env: look there too.
+        if let Some(dir) = path.parent() {
+            self.add_project_dir(dir, cx);
+        }
         match read_dotenv_database_url(&path) {
             Ok(Some(url)) => self.add_url(&url, cx),
             Ok(None) => Err(format!(
@@ -228,6 +357,17 @@ impl DbStore {
         let Some(old) = self.profile(name).cloned() else {
             return Err("This connection no longer exists.".into());
         };
+        if old.kind.is_lite() {
+            // A file has only its label to set.
+            let label = label.trim();
+            self.profiles.upsert(ConnProfile {
+                label: (!label.is_empty()).then(|| label.to_string()),
+                ..old
+            });
+            self.save();
+            cx.notify();
+            return Ok(());
+        }
         let (parsed, url_password) = parse_database_url(url).map_err(|e| e.to_string())?;
         let label = label.trim();
         let profile = ConnProfile {
@@ -357,6 +497,7 @@ impl DbStore {
     fn close(&mut self, name: &str) {
         self.clients.remove(name);
         self.ro_clients.remove(name);
+        self.versions.remove(name);
         *self.epochs.entry(name.to_string()).or_default() += 1;
     }
 
@@ -379,7 +520,28 @@ impl DbStore {
     /// Connects now (also from Failed, Disconnected or a retry wait).
     pub fn connect(&mut self, name: &str, cx: &mut Context<Self>) {
         if self.profile(name).is_none() {
-            return;
+            // A D1 or SQLite id an agent named (app_open_table) before the panel found it: kept
+            // in the list, its folder looked in from now on.
+            let Some(Ok(profile)) = db::d1::resolve(name) else {
+                return;
+            };
+            match db::d1::D1Target::parse(name) {
+                Some(db::d1::D1Target::Local { project, .. })
+                | Some(db::d1::D1Target::Remote { project, .. }) => {
+                    if !self.extra_dirs.contains(&project) {
+                        self.extra_dirs.push(project);
+                    }
+                }
+                Some(db::d1::D1Target::File(file)) if !self.extra_files.contains(&file) => {
+                    self.extra_files.push(file)
+                }
+                _ => {}
+            }
+            match profile.kind {
+                db::DbKind::D1Remote => self.detected.remote.push(profile),
+                db::DbKind::Sqlite => self.detected.unmatched.push(profile),
+                _ => self.detected.local.push(profile),
+            }
         }
         // Marked connected, but the link died before the tick noticed.
         if self.state(name).is_connected() && !self.alive(name) {
@@ -405,13 +567,33 @@ impl DbStore {
         let epoch = self.epochs[name];
         self.notices.remove(name);
         let rx = rt::spawn(cx, async move {
+            if profile.kind.is_lite() {
+                // Nothing to log in to: read the schema read-only, and see where writes go.
+                let (rw, ro) = (
+                    Conn::lite(profile.clone(), false),
+                    Conn::lite(profile, true),
+                );
+                let schema = ro.load_schema().await?;
+                let route = match &rw {
+                    Conn::Lite(lite) => Some(lite.write_route().await),
+                    Conn::Pg(_) => None,
+                };
+                return Ok::<_, sawit_core::CoreError>((rw, ro, schema, route, None));
+            }
             // Keychain: blocking, and may wait on an access prompt.
             let lookup = profile.clone();
             let password = tokio::task::spawn_blocking(move || resolve_password(&lookup))
                 .await
                 .unwrap_or_default();
             let (client, ro, schema) = db::connect_all(&profile, password.as_deref()).await?;
-            Ok::<_, sawit_core::CoreError>((Arc::new(client), Arc::new(ro), schema))
+            let version = db::server_major(&client).await.ok();
+            Ok((
+                Conn::Pg(client.into()),
+                Conn::Pg(ro.into()),
+                schema,
+                None,
+                version,
+            ))
         });
         let name = name.to_string();
         cx.spawn(async move |this, cx| {
@@ -421,9 +603,15 @@ impl DbStore {
                     return; // abandoned: disconnected or superseded
                 }
                 let event = match result {
-                    Ok(Ok((client, ro, schema))) => {
+                    Ok(Ok((client, ro, schema, route, version))) => {
                         this.clients.insert(name.clone(), client);
                         this.ro_clients.insert(name.clone(), ro);
+                        if let Some(route) = route {
+                            this.routes.insert(name.clone(), route);
+                        }
+                        if let Some(version) = version {
+                            this.versions.insert(name.clone(), version);
+                        }
                         this.schemas.insert(name.clone(), schema);
                         this.schema_rev += 1;
                         this.last_used
@@ -479,8 +667,7 @@ impl DbStore {
         let away_long = self
             .background_since
             .is_some_and(|t| now.duration_since(t) >= BACKGROUND_GRACE);
-        let names: Vec<String> = self.profiles.items.iter().map(|p| p.name.clone()).collect();
-        for name in names {
+        for name in self.names() {
             match self.state(&name) {
                 ConnState::Connected if !self.alive(&name) => {
                     self.close(&name);
@@ -519,13 +706,23 @@ impl DbStore {
             self.connect(name, cx);
             return Task::ready(());
         };
-        let rx = rt::spawn(cx, async move { db::load_schema(&client).await });
+        let rx = rt::spawn(cx, async move {
+            let schema = client.load_schema().await;
+            let route = match &client {
+                Conn::Lite(lite) => Some(lite.write_route().await),
+                Conn::Pg(_) => None,
+            };
+            schema.map(|s| (s, route))
+        });
         let name = name.to_string();
         cx.spawn(async move |this, cx| {
             if let Ok(result) = rx.await {
                 let _ = this.update(cx, |this, cx| {
                     match result {
-                        Ok(schema) => {
+                        Ok((schema, route)) => {
+                            if let Some(route) = route {
+                                this.routes.insert(name.clone(), route);
+                            }
                             this.schemas.insert(name.clone(), schema);
                             this.schema_rev += 1;
                             this.notices.remove(&name);

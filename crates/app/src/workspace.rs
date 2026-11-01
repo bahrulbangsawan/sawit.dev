@@ -925,7 +925,7 @@ impl Workspace {
         profile: &str,
         read_only: bool,
         cx: &mut Context<Self>,
-    ) -> Option<std::sync::Arc<tokio_postgres::Client>> {
+    ) -> Option<sawit_core::db::Conn> {
         let client = self.db.read(cx).client(profile, read_only);
         if client.is_none() {
             self.db.update(cx, |s, cx| s.ensure_connecting(profile, cx));
@@ -1476,6 +1476,15 @@ impl Workspace {
                 .update(cx, |p, cx| p.set_projects(roots, cx));
         }
         cx.notify();
+    }
+
+    /// While the Database panel shows, its store looks for the Cloudflare D1 databases of this
+    /// window's projects (nothing to do while they stay the same).
+    fn sync_db_projects(&mut self, cx: &mut Context<Self>) {
+        if self.sidebar == SidebarTab::Database && self.layout.sidebar {
+            let roots = self.roots(cx);
+            self.db.update(cx, |s, cx| s.set_projects(roots, cx));
+        }
     }
 
     /// Shows the tab `step` places after (or before) the active one.
@@ -3332,6 +3341,7 @@ impl Render for Workspace {
         self.sync_canvas_maximized();
         self.sync_boards(window, cx);
         self.sync_browser(cx);
+        self.sync_db_projects(cx);
         // After the canvases: one shown again takes its keyboard back itself, later in the frame.
         let pages: Vec<FocusHandle> = self
             .browsers

@@ -139,6 +139,7 @@ async fn query_is_read_only() {
             sql: "create table t(id int primary key, x text not null default 'a'); insert into t(id) values (1), (2)".into(),
             database: None,
             max_rows: None,
+            confirm: false,
         })
         .await;
     assert_ne!(wrote.is_error, Some(true), "{}", text(&wrote));

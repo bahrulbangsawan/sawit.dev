@@ -1,5 +1,10 @@
 //! SQL editor tab: write SQL, Cmd-Enter to run the selection (or everything),
 //! see results, errors and timing.
+//!
+//! On SQLite and Cloudflare D1, SQL that only reads runs read-only on the
+//! file; SQL that writes is asked about first, saying where it goes (the dev
+//! server's Local Explorer, the file, or a remote (production) database), and
+//! the summary says where it went.
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
@@ -8,7 +13,7 @@ use gpui_kit::component::table::{DataTable, TableState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sawit_core::db::{self, QueryOutcome};
+use sawit_core::db::{Conn, DbKind, Lite, QueryOutcome, ReadOnlyTry, WriteRoute};
 
 use super::store::DbStore;
 use super::table::ResultDelegate;
@@ -117,20 +122,125 @@ impl SqlView {
         };
         self.running = true;
         self.error = None;
-        self.cancel = Some(client.cancel_token());
+        self.cancel = client.cancel_token();
         cx.notify();
-        let rx = rt::spawn(
-            cx,
-            async move { db::run_sql(&client, &sql, MAX_ROWS).await },
-        );
+        if let Conn::Lite(lite) = client {
+            self.run_lite(lite, sql, window, cx);
+            return;
+        }
+        let rx = rt::spawn(cx, async move { client.run_sql(&sql, MAX_ROWS).await });
         cx.spawn_in(window, async move |this, window| {
             let result = rx.await;
             let _ = this.update_in(window, |this, window, cx| {
                 this.running = false;
                 this.cancel = None;
                 match result {
-                    Ok(Ok(outcome)) => this.show(outcome, window, cx),
+                    Ok(Ok(outcome)) => this.show(outcome, None, window, cx),
                     Ok(Err(e)) => this.error = Some(e.to_string()),
+                    Err(_) => {}
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// SQLite and D1: runs `sql` read-only when it only reads, else asks first.
+    fn run_lite(
+        &mut self,
+        lite: std::sync::Arc<Lite>,
+        sql: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (handle, text) = (lite.clone(), sql.clone());
+        let rx = rt::spawn(
+            cx,
+            async move { handle.run_if_read_only(&text, MAX_ROWS).await },
+        );
+        cx.spawn_in(window, async move |this, window| {
+            let result = rx.await;
+            let _ = this.update_in(window, |this, window, cx| {
+                match result {
+                    Ok(Ok(ReadOnlyTry::Read(outcome))) => {
+                        this.running = false;
+                        this.show(outcome, None, window, cx);
+                    }
+                    Ok(Ok(_)) => this.confirm_write(lite, sql, window, cx),
+                    Ok(Err(e)) => {
+                        this.running = false;
+                        this.error = Some(e.to_string());
+                    }
+                    Err(_) => this.running = false,
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Asks before SQL that changes a SQLite or D1 database, saying where the change goes: the
+    /// same question Sawit asks before bulk changes, and a critical one for a remote
+    /// (production) database.
+    fn confirm_write(
+        &mut self,
+        lite: std::sync::Arc<Lite>,
+        sql: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let store = self.db.read(cx);
+        let name = store.accessible_name(&self.profile);
+        let route = store.route(&self.profile).cloned();
+        let remote = lite.profile.kind == DbKind::D1Remote;
+        let message = if remote {
+            format!("Change {name}? It is remote (production).")
+        } else {
+            format!("Change {name}?")
+        };
+        let detail = format!(
+            "{}\n\nThis SQL changes the database, and it can't be undone.",
+            route
+                .as_ref()
+                .map(WriteRoute::describe)
+                .unwrap_or_else(|| "Sawit looks for a running dev server first.".into())
+        );
+        let level = if remote {
+            PromptLevel::Critical
+        } else {
+            PromptLevel::Warning
+        };
+        let answer = window.prompt(level, &message, Some(&detail), &["Run", "Cancel"], cx);
+        cx.spawn_in(window, async move |this, window| {
+            let go = answer.await == Ok(0);
+            let _ = this.update_in(window, |this, window, cx| {
+                if go {
+                    this.write(lite, sql, window, cx);
+                } else {
+                    this.running = false;
+                    this.summary = Some("Canceled: nothing was changed.".into());
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn write(
+        &mut self,
+        lite: std::sync::Arc<Lite>,
+        sql: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let rx = rt::spawn(cx, async move { lite.write(&sql, MAX_ROWS).await });
+        cx.spawn_in(window, async move |this, window| {
+            let result = rx.await;
+            let _ = this.update_in(window, |this, window, cx| {
+                this.running = false;
+                match result {
+                    Ok(Ok((outcome, route))) => this.show(outcome, Some(&route), window, cx),
+                    Ok(Err(e)) => this.error = Some(format!("{e}\nNothing was changed.")),
                     Err(_) => {}
                 }
                 cx.notify();
@@ -144,16 +254,25 @@ impl SqlView {
             && let Some(profile) = self.db.read(cx).profile(&self.profile).cloned()
         {
             // Fire and forget: the running query reports "Query canceled.".
-            drop(rt::spawn(
-                cx,
-                async move { db::cancel(&token, &profile).await },
-            ));
+            drop(rt::spawn(cx, async move {
+                sawit_core::db::cancel(&token, &profile).await
+            }));
         }
     }
 
-    fn show(&mut self, outcome: QueryOutcome, window: &mut Window, cx: &mut Context<Self>) {
+    /// Shows what the SQL returned; `route` is where a SQLite or D1 change went.
+    fn show(
+        &mut self,
+        outcome: QueryOutcome,
+        route: Option<&WriteRoute>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let ms = outcome.duration.as_secs_f64() * 1000.;
         let mut parts = vec![format!("{ms:.1} ms")];
+        if let Some(route) = route {
+            parts.push(format!("written {}", route.label()));
+        }
         if !outcome.affected.is_empty() {
             let total: u64 = outcome.affected.iter().sum();
             let noun = if total == 1 { "row" } else { "rows" };
@@ -202,6 +321,21 @@ impl Render for SqlView {
                     .gap_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
+                    .child({
+                        // The target: its kind's logo, named in the tooltip.
+                        let store = self.db.read(cx);
+                        let kind = store
+                            .profile(&self.profile)
+                            .map_or(DbKind::Postgres, |p| p.kind);
+                        let name: SharedString = store.accessible_name(&self.profile).into();
+                        div()
+                            .id("sql-target")
+                            .child(super::logos::logo(kind, 14.))
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(name.clone())
+                                    .build(window, cx)
+                            })
+                    })
                     .child(
                         div()
                             .text_xs()
@@ -209,6 +343,11 @@ impl Render for SqlView {
                             .flex_1()
                             .child(self.title.clone()),
                     )
+                    .children(super::panel::route_badge(
+                        "sql-route",
+                        self.db.read(cx).route(&self.profile),
+                        cx,
+                    ))
                     .when(self.running, |el| {
                         el.child(
                             Button::new("cancel-sql")

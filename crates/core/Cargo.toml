@@ -28,6 +28,12 @@ objc2-core-graphics = { version = "0.3.2", default-features = false, features = 
 tokio-postgres-rustls = { version = "=0.14.0", default-features = false, features = ["ring"] }
 # Runs Pele (Mermaid to SVG, crates/core/assets/pele) offline.
 rquickjs = "0.14"
+# SQLite files: Cloudflare D1's local databases (Miniflare's .sqlite files) and plain .sqlite
+# files. `bundled` builds SQLite itself (public domain), so it never depends on the system's.
+rusqlite = { version = "0.41", features = ["bundled"] }
+# SHA-256 and HMAC-SHA-256 for Miniflare's Durable Object ids (the D1 file names); already built
+# for rustls.
+ring = "0.17"
 
 [target.'cfg(unix)'.dependencies]
 # Asks the PTY which process group is in the foreground.

@@ -296,11 +296,9 @@ impl Welcome {
             .map(|p| {
                 let name = p.name.clone();
                 Self::row(SharedString::from(format!("welcome-db-{}", p.name)), cx)
-                    .child(
-                        Icon::new(Lucide::Database)
-                            .small()
-                            .text_color(cx.theme().muted_foreground),
-                    )
+                    // The kind's logo, and its name for screen readers.
+                    .aria_label(p.accessible_name(None))
+                    .child(crate::db::kind_logo(p.kind, 16.))
                     .child(
                         div()
                             .flex_1()
@@ -312,7 +310,13 @@ impl Welcome {
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(format!("{}:{}", p.host, p.port)),
+                            .truncate()
+                            .child(match p.kind {
+                                sawit_core::db::DbKind::Postgres => {
+                                    format!("{}:{}", p.host, p.port)
+                                }
+                                kind => kind.title().to_string(),
+                            }),
                     )
                     .on_click(cx.listener(move |_, _, _, cx| {
                         cx.emit(WelcomeEvent::OpenDatabase(name.clone()))

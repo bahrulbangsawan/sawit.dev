@@ -244,6 +244,25 @@ const TOOL_ICONS: &[(&str, &[u8])] = &[(
     include_bytes!("../../../assets/tool_logos/puremac.png"),
 )];
 
+/// Database logos for the database sidebar, its add menu, the SQL editor and the welcome
+/// screen (see assets/db_logos/SOURCES.md and `crate::db::logos`).
+const DB_LOGOS: &[(&str, &[u8])] = &[
+    (
+        "postgresql-color",
+        include_bytes!("../../../assets/db_logos/postgresql-color.svg"),
+    ),
+    ("d1", include_bytes!("../../../assets/db_logos/d1.svg")),
+    (
+        "sqlite-color",
+        include_bytes!("../../../assets/db_logos/sqlite-color.svg"),
+    ),
+];
+
+fn db_logo(path: &str) -> Option<&'static [u8]> {
+    let name = path.strip_prefix("db_logos/")?.strip_suffix(".svg")?;
+    DB_LOGOS.iter().find(|(n, _)| *n == name).map(|(_, b)| *b)
+}
+
 fn tool_logo(path: &str) -> Option<&'static [u8]> {
     let name = path.strip_prefix("tool_logos/")?;
     if let Some(name) = name.strip_suffix(".png") {
@@ -266,7 +285,10 @@ pub const LOGO_MARK: &str = "logo/sawit-mark.svg";
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        if let Some(svg) = agent_logo(path).or_else(|| tool_logo(path)) {
+        if let Some(svg) = agent_logo(path)
+            .or_else(|| tool_logo(path))
+            .or_else(|| db_logo(path))
+        {
             return Ok(Some(Cow::Borrowed(svg)));
         }
         if let Some(svg) = crate::file_icons::asset(path) {

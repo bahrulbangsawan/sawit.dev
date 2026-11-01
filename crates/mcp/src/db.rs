@@ -1,13 +1,19 @@
 //! Databases: finding them, listing/creating/dropping, schemas, read-only
 //! and read-write SQL, saved connections and `.env` files.
+//!
+//! SQLite files and Cloudflare D1 databases (local and remote) are targets
+//! too, by the ids `detect_databases` gives (`d1-local:DB@/project`,
+//! `d1-remote:shop@/project`, `sqlite:/path`). The tools that read and write
+//! data work on them with the same read-only and confirm rules; the ones only
+//! a PostgreSQL server has say so.
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
 use sawit_core::app_control::Store;
 use sawit_core::db::{
-    self, ConnProfile, Profiles, QueryOutcome, format_table, parse_database_url, quote_ident,
-    resolve_password, write_database_url,
+    self, Conn, ConnProfile, DbKind, Profiles, QueryOutcome, ReadOnlyTry, format_table,
+    parse_database_url, quote_ident, resolve_password, write_database_url,
 };
 use sawit_core::instances::{Instance, Registry};
 use sawit_core::kebun::{self, Kebun};
@@ -21,19 +27,129 @@ pub(crate) const MAX_ROWS: usize = 500;
 pub(crate) enum Target {
     Instance(Instance),
     Profile(Box<ConnProfile>),
+    /// A SQLite file or a D1 database.
+    Lite(Box<ConnProfile>),
+}
+
+/// Why a PostgreSQL-only tool won't take a SQLite or D1 target.
+pub(crate) fn postgres_only(p: &ConnProfile) -> String {
+    format!(
+        "Refused: “{}” is {} (SQLite), and this tool works on PostgreSQL only. On it, use query, execute_sql, describe_schema, describe_table, list_databases, export_table, export_query or schema_diagram.",
+        p.name,
+        p.kind.title()
+    )
+}
+
+/// One D1 or SQLite database as a `detect_databases` line.
+fn lite_line(p: &ConnProfile) -> String {
+    let lite = p.lite.clone().unwrap_or_default();
+    let mut parts = vec![format!("- {}", p.name), format!("kind: {}", p.kind.id())];
+    if let Some(binding) = &lite.binding {
+        parts.push(format!("binding {binding}"));
+    }
+    if let Some(name) = &lite.database_name {
+        parts.push(format!("database {name}"));
+    }
+    match (p.kind, p.file()) {
+        (DbKind::D1Remote, _) => parts.push("on Cloudflare, through your Wrangler login".into()),
+        (_, Some(file)) if file.is_file() => parts.push(tilde(file)),
+        (_, Some(file)) => parts.push(format!(
+            "{} (no local data yet: the dev server makes it)",
+            tilde(file)
+        )),
+        _ => {}
+    }
+    parts.join(" · ")
+}
+
+/// A table of a SQLite or D1 database, as `describe_table` tells it.
+async fn describe_lite_table(conn: &Conn, table: &str) -> Result<String, String> {
+    let schemas = conn.load_schema().await.map_err(|e| e.to_string())?;
+    let (_, rel) = db::find_relation(&schemas, None, table).map_err(|e| e.to_string())?;
+    let rows = conn
+        .row_count_matching(db::sqlite::MAIN, table, &Default::default())
+        .await
+        .ok()
+        .flatten()
+        .map(|c| format!(" · {} rows", c.rows))
+        .unwrap_or_default();
+    let kind = match rel.kind {
+        db::RelKind::View => "view",
+        _ => "table",
+    };
+    let mut out = vec![format!(
+        "{kind} {}{rows} ({})",
+        rel.name,
+        conn.kind().title()
+    )];
+    out.push(String::new());
+    out.push("Columns:".into());
+    for c in &rel.columns {
+        out.push(format!(
+            "  {} {}{}{}",
+            c.name,
+            c.data_type,
+            if c.nullable { "" } else { " NOT NULL" },
+            if rel.primary_key.contains(&c.name) {
+                " PK"
+            } else {
+                ""
+            }
+        ));
+    }
+    if !rel.constraints.is_empty() {
+        out.push(String::new());
+        out.push("Constraints:".into());
+        out.extend(
+            rel.constraints
+                .iter()
+                .map(|c| format!("  {}: {}", c.kind.label().to_uppercase(), c.definition)),
+        );
+    }
+    if !rel.indexes.is_empty() {
+        out.push(String::new());
+        out.push("Indexes:".into());
+        out.extend(rel.indexes.iter().map(|i| format!("  {}", i.definition)));
+    }
+    let referenced: Vec<String> = schemas
+        .iter()
+        .flat_map(|s| &s.relations)
+        .flat_map(|r| {
+            r.foreign_keys
+                .iter()
+                .filter(|fk| fk.ref_table == rel.name)
+                .map(move |fk| {
+                    format!(
+                        "  {} ({}) → {}({})",
+                        r.name,
+                        fk.columns.join(", "),
+                        fk.ref_table,
+                        fk.ref_columns.join(", ")
+                    )
+                })
+        })
+        .collect();
+    if !referenced.is_empty() {
+        out.push(String::new());
+        out.push("Referenced by:".into());
+        out.extend(referenced);
+    }
+    Ok(out.join("\n"))
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct TargetArgs {
     #[schemars(
-        description = "Sawit instance name or saved connection name (see list_connections)"
+        description = "Sawit instance name, saved connection name (see list_connections), or a D1/SQLite id from detect_databases (d1-local:…, d1-remote:…, sqlite:…)"
     )]
     pub target: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SchemaArgs {
-    #[schemars(description = "Sawit instance name or saved connection name")]
+    #[schemars(
+        description = "Sawit instance name, saved connection name, or a D1/SQLite id from detect_databases (d1-local:…, d1-remote:…, sqlite:…)"
+    )]
     pub target: String,
     #[schemars(description = "Only this schema (default: every user schema)")]
     pub schema: Option<String>,
@@ -45,7 +161,9 @@ pub struct SchemaArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct TableArgs {
-    #[schemars(description = "Sawit instance name or saved connection name")]
+    #[schemars(
+        description = "Sawit instance name, saved connection name, or a D1/SQLite id from detect_databases (d1-local:…, d1-remote:…, sqlite:…)"
+    )]
     pub target: String,
     #[schemars(description = "Schema of the table (default: public, or the only match)")]
     pub schema: Option<String>,
@@ -57,7 +175,9 @@ pub struct TableArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct QueryArgs {
-    #[schemars(description = "Sawit instance name or saved connection name")]
+    #[schemars(
+        description = "Sawit instance name, saved connection name, or a D1/SQLite id from detect_databases (d1-local:…, d1-remote:…, sqlite:…)"
+    )]
     pub target: String,
     #[schemars(description = "SQL to run. Always executed read-only; one statement.")]
     pub sql: String,
@@ -69,7 +189,9 @@ pub struct QueryArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ExecuteArgs {
-    #[schemars(description = "Sawit instance name or saved connection name")]
+    #[schemars(
+        description = "Sawit instance name, saved connection name, or a D1/SQLite id from detect_databases (d1-local:…, d1-remote:…, sqlite:…)"
+    )]
     pub target: String,
     #[schemars(
         description = "SQL to execute with full privileges; may hold several statements separated by `;`"
@@ -79,19 +201,24 @@ pub struct ExecuteArgs {
     pub database: Option<String>,
     #[schemars(description = "Maximum rows per result set (default and cap: 500)")]
     pub max_rows: Option<usize>,
+    #[schemars(
+        description = "Needed (true) only for SQL that writes to a remote (production) D1 database (a d1-remote: target). Default false"
+    )]
+    #[serde(default)]
+    pub confirm: bool,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct DetectArgs {
     #[schemars(
-        description = "Project folder whose .env (and the .env files above it) DATABASE_URL should be included"
+        description = "Project folder whose .env (and the .env files above it) DATABASE_URL should be included, and whose Wrangler config's D1 databases (local and remote) are listed"
     )]
     pub project_dir: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CreateDbArgs {
-    #[schemars(description = "Sawit instance name or saved connection name")]
+    #[schemars(description = "Sawit instance name or saved connection name (PostgreSQL only)")]
     pub target: String,
     #[schemars(description = "Name of the new database")]
     pub name: String,
@@ -103,7 +230,7 @@ pub struct CreateDbArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct DropDbArgs {
-    #[schemars(description = "Sawit instance name or saved connection name")]
+    #[schemars(description = "Sawit instance name or saved connection name (PostgreSQL only)")]
     pub target: String,
     #[schemars(description = "Database to drop")]
     pub name: String,
@@ -211,7 +338,7 @@ pub(crate) fn create_database_sql(
 fn kebun_line(k: &Kebun) -> String {
     let p = &k.profile;
     format!(
-        "- {} · {}:{} · db {} · user {} · via {}",
+        "- {} · kind: postgres · {}:{} · db {} · user {} · via {}",
         p.name, p.host, p.port, p.database, p.user, k.via
     )
 }
@@ -248,6 +375,9 @@ impl Sawit {
     }
 
     pub(crate) fn resolve_target(&self, target: &str) -> Result<Target, String> {
+        if let Some(found) = db::d1::resolve(target.trim()) {
+            return found.map(|p| Target::Lite(Box::new(p)));
+        }
         if let Ok(inst) = self.instance(target) {
             return Ok(Target::Instance(inst));
         }
@@ -255,7 +385,13 @@ impl Sawit {
             .items
             .into_iter()
             .find(|p| p.name == target)
-            .map(|p| Target::Profile(Box::new(p)))
+            .map(|p| {
+                if p.kind.is_lite() {
+                    Target::Lite(Box::new(p))
+                } else {
+                    Target::Profile(Box::new(p))
+                }
+            })
             .ok_or_else(|| {
                 format!("\"{target}\" is not a known instance or connection. See list_connections.")
             })
@@ -279,6 +415,7 @@ impl Sawit {
                 ),
                 None,
             )),
+            Target::Lite(profile) => Err(postgres_only(&profile)),
             Target::Profile(mut profile) => {
                 // The Keychain entry belongs to the saved database.
                 let saved = profile.clone();
@@ -331,6 +468,15 @@ impl Sawit {
             .map_err(|e| e.to_string())
     }
 
+    /// A handle on a SQLite or D1 target (`None` for PostgreSQL ones): read-only for the
+    /// tools that only read.
+    pub(crate) fn lite_conn(&self, target: &str, read_only: bool) -> Result<Option<Conn>, String> {
+        match self.resolve_target(target)? {
+            Target::Lite(p) => Ok(Some(Conn::lite(*p, read_only))),
+            _ => Ok(None),
+        }
+    }
+
     pub async fn list_connections_tool(&self) -> CallToolResult {
         let mut lines = Vec::new();
         if let Ok(reg) = self.registry() {
@@ -341,11 +487,10 @@ impl Sawit {
             );
         }
         if let Ok(p) = self.profiles() {
-            lines.extend(
-                p.items
-                    .iter()
-                    .map(|p| format!("- {} · {}", p.name, p.url())),
-            );
+            lines.extend(p.items.iter().map(|p| match p.kind {
+                DbKind::Postgres => format!("- {} · {}", p.name, p.url()),
+                kind => format!("- {} ({}) · {}", p.name, kind.title(), p.location()),
+            }));
         }
         if lines.is_empty() {
             ok("No connections yet.")
@@ -360,8 +505,13 @@ impl Sawit {
         schema: Option<&str>,
         database: Option<&str>,
     ) -> CallToolResult {
-        let client = tri!(self.connect_target(target, database).await);
-        let schemas = tri!(db::load_schema(&client).await.map_err(|e| e.to_string()));
+        let schemas = match tri!(self.lite_conn(target, true)) {
+            Some(conn) => tri!(conn.load_schema().await.map_err(|e| e.to_string())),
+            None => {
+                let client = tri!(self.connect_target(target, database).await);
+                tri!(db::load_schema(&client).await.map_err(|e| e.to_string()))
+            }
+        };
         let mut out = Vec::new();
         for s in schemas
             .iter()
@@ -416,8 +566,16 @@ impl Sawit {
         database: Option<&str>,
         max_rows: Option<usize>,
     ) -> CallToolResult {
-        let client = tri!(self.connect_target(target, database).await);
         let limit = max_rows.unwrap_or(MAX_ROWS).clamp(1, MAX_ROWS);
+        if let Some(conn) = tri!(self.lite_conn(target, true)) {
+            return match conn.run_read_only(sql, limit).await {
+                Ok(outcome) => ok(format_outcome(&outcome)),
+                Err(e) => fail(format!(
+                    "{e}\n(query runs read-only; use execute_sql to change data)"
+                )),
+            };
+        }
+        let client = tri!(self.connect_target(target, database).await);
         match db::run_read_only(&client, sql, limit).await {
             Ok(outcome) => ok(format_outcome(&outcome)),
             Err(e) => fail(format!(
@@ -427,8 +585,30 @@ impl Sawit {
     }
 
     pub async fn execute_sql_tool(&self, a: ExecuteArgs) -> CallToolResult {
-        let client = tri!(self.connect_admin(&a.target, a.database.as_deref()).await);
         let limit = a.max_rows.unwrap_or(MAX_ROWS).clamp(1, MAX_ROWS);
+        if let Some(Conn::Lite(lite)) = tri!(self.lite_conn(&a.target, false)) {
+            // Reads run read-only on the file (or remotely); only writes take a write route.
+            match lite.run_if_read_only(&a.sql, limit).await {
+                Ok(ReadOnlyTry::Read(outcome)) => return ok(format_outcome(&outcome)),
+                Ok(_) => {}
+                Err(e) => return fail(e.to_string()),
+            }
+            if lite.profile.kind == DbKind::D1Remote && !a.confirm {
+                return fail(format!(
+                    "Refused: this SQL writes to {}, a remote (production) D1 database on Cloudflare. Nothing was run. Pass confirm=true to run it.",
+                    lite.profile.database
+                ));
+            }
+            return match lite.write(&a.sql, limit).await {
+                Ok((outcome, route)) => ok(format!(
+                    "{}\n\n{}",
+                    format_outcome(&outcome),
+                    route.describe()
+                )),
+                Err(e) => fail(format!("{e}\nNothing was changed.")),
+            };
+        }
+        let client = tri!(self.connect_admin(&a.target, a.database.as_deref()).await);
         match db::run_sql(&client, &a.sql, limit).await {
             Ok(outcome) => ok(format_outcome(&outcome)),
             Err(e) => fail(e.to_string()),
@@ -451,9 +631,12 @@ impl Sawit {
         }
         let paths = self.paths.clone();
         let mut found: Vec<Kebun> = tri!(blocking(move || kebun::saved_profiles(&paths)).await);
+        let mut d1 = db::d1::Detected::default();
         if let Some(dir) = project_dir.filter(|d| !d.trim().is_empty()) {
             let dir = tri!(crate::existing_dir(dir));
-            found.extend(tri!(blocking(move || kebun::dotenv_kebuns(&dir)).await));
+            let env_dir = dir.clone();
+            found.extend(tri!(blocking(move || kebun::dotenv_kebuns(&env_dir)).await));
+            d1 = tri!(blocking(move || db::d1::detect(&dir)).await);
         }
         found.extend(kebun::local_kebuns(&registry).await);
         let mut unique: Vec<Kebun> = Vec::new();
@@ -473,15 +656,55 @@ impl Sawit {
             out.push("Databases (running servers list every database):".to_string());
             out.extend(unique.iter().map(kebun_line));
         }
+        if !d1.local.is_empty() || !d1.remote.is_empty() {
+            out.push(
+                "Cloudflare D1 (pass the first field as `target`; local first, then remote):"
+                    .to_string(),
+            );
+            out.extend(d1.local.iter().chain(&d1.remote).map(lite_line));
+        }
+        if !d1.unmatched.is_empty() {
+            out.push("Unmatched local D1 databases (no binding of the config names them):".into());
+            out.extend(d1.unmatched.iter().map(lite_line));
+        }
         if out.is_empty() {
             return ok(
-                "No databases found: no Sawit instances, saved connections, .env DATABASE_URL or running local Postgres.",
+                "No databases found: no Sawit instances, saved connections, .env DATABASE_URL, Wrangler D1 bindings or running local Postgres.",
             );
         }
         ok(out.join("\n"))
     }
 
     pub async fn list_databases_tool(&self, target: &str) -> CallToolResult {
+        if let Target::Lite(p) = tri!(self.resolve_target(target)) {
+            let lite = p.lite.clone().unwrap_or_default();
+            return match (p.kind, lite.project) {
+                // The account's D1 databases, as `wrangler d1 list` shows them.
+                (DbKind::D1Remote, Some(project)) => {
+                    let Some(wrangler) = db::remote::wrangler(&project) else {
+                        return fail("Wrangler isn't installed in this project or on this Mac.");
+                    };
+                    match db::remote::list(&wrangler, &project).await {
+                        Ok(all) if all.is_empty() => ok("No D1 databases on this account."),
+                        Ok(all) => ok(all
+                            .iter()
+                            .map(|d| {
+                                format!("- d1-remote:{}@{} · {}", d.name, project.display(), d.uuid)
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")),
+                        Err(e) => fail(e.to_string()),
+                    }
+                }
+                // The project's D1 databases.
+                (DbKind::D1Local, Some(project)) => {
+                    let d1 = tri!(blocking(move || db::d1::detect(&project)).await);
+                    ok(d1.all().map(lite_line).collect::<Vec<_>>().join("\n"))
+                }
+                // A file holds one database.
+                _ => ok(lite_line(&p)),
+            };
+        }
         let client = tri!(self.connect_admin(target, None).await);
         match db::list_databases(&client).await {
             Ok(names) if names.is_empty() => ok("No databases."),
@@ -523,6 +746,12 @@ impl Sawit {
     }
 
     pub async fn describe_table_tool(&self, a: TableArgs) -> CallToolResult {
+        if let Some(conn) = tri!(self.lite_conn(&a.target, true)) {
+            return match describe_lite_table(&conn, &a.table).await {
+                Ok(text) => ok(text),
+                Err(e) => fail(e),
+            };
+        }
         let client = tri!(self.connect_target(&a.target, a.database.as_deref()).await);
         let err = |e: tokio_postgres::Error| db::sql_error(e).to_string();
         let found = tri!(client
@@ -783,13 +1012,15 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Find every database reachable from this Mac: Sawit instances, saved connections, DATABASE_URL in a project's .env (optional project_dir), and every database of any running local PostgreSQL (Homebrew, Postgres.app, Sawit). Shows name, host, port, database, user and where it was found"
+        description = "Find every database reachable from this Mac: Sawit instances, saved connections, DATABASE_URL in a project's .env (optional project_dir), every database of any running local PostgreSQL (Homebrew, Postgres.app, Sawit), and with project_dir the Cloudflare D1 databases its Wrangler config binds (local SQLite files and remote databases). Each line starts with the id to pass as `target` and its kind: postgres, d1-local, d1-remote or sqlite"
     )]
     async fn detect_databases(&self, Parameters(a): Parameters<DetectArgs>) -> CallToolResult {
         self.detect_databases_tool(a.project_dir.as_deref()).await
     }
 
-    #[tool(description = "List the databases on a server (instance or saved connection)")]
+    #[tool(
+        description = "List the databases on a server (instance or saved connection); for a D1 target, the project's D1 databases (d1-local) or the Wrangler account's (d1-remote)"
+    )]
     async fn list_databases(&self, Parameters(a): Parameters<TargetArgs>) -> CallToolResult {
         self.list_databases_tool(&a.target).await
     }
@@ -824,7 +1055,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Run one SQL statement READ-ONLY (writes are rejected) and return up to 500 rows as a text table. Use this for SELECTs; it cannot modify anything"
+        description = "Run one SQL statement READ-ONLY (writes are rejected) and return up to 500 rows as a text table. Use this for SELECTs; it cannot modify anything. On a local D1 or SQLite target the file is opened read-only"
     )]
     async fn query(&self, Parameters(a): Parameters<QueryArgs>) -> CallToolResult {
         self.query_tool(&a.target, &a.sql, a.database.as_deref(), a.max_rows)
@@ -832,7 +1063,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Execute SQL READ-WRITE with full privileges (postgres superuser on instances, the saved credentials on connections). CAN MODIFY OR DELETE DATA AND SCHEMA (INSERT/UPDATE/DELETE/DDL); several statements allowed. Prefer `query` for reads"
+        description = "Execute SQL READ-WRITE with full privileges (postgres superuser on instances, the saved credentials on connections). CAN MODIFY OR DELETE DATA AND SCHEMA (INSERT/UPDATE/DELETE/DDL); several statements allowed. Prefer `query` for reads. On a local D1 target, writes go through the running dev server's Local Explorer, else straight to the file (the answer says which); on a remote (production) D1 target they need confirm=true"
     )]
     async fn execute_sql(&self, Parameters(a): Parameters<ExecuteArgs>) -> CallToolResult {
         self.execute_sql_tool(a).await

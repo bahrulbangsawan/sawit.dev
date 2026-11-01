@@ -769,6 +769,10 @@ impl Workspace {
         if store.profile(name).is_some() {
             return Ok(name.to_string());
         }
+        // A D1 or SQLite id from detect_databases: the store opens it when first asked.
+        if let Some(found) = sawit_core::db::d1::resolve(name) {
+            return found.map(|_| name.to_string());
+        }
         let as_instance = format!("{name} (Sawit)");
         if store.profile(&as_instance).is_some() {
             return Ok(as_instance);

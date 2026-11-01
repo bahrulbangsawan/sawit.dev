@@ -1,7 +1,8 @@
 //! Jobs the database views start: exports, `pg_dump` backups, CSV imports
 //! and statements that drop or empty relations. Each runs on the Tokio
 //! runtime and answers through a receiver; `None` means the connection
-//! isn't up (and is being reconnected).
+//! isn't up (and is being reconnected). Backups and CSV imports are
+//! PostgreSQL's only; their menu items aren't offered for SQLite or D1.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,7 +12,7 @@ use futures::channel::oneshot;
 use gpui_kit::*;
 use sawit_core::Result;
 use sawit_core::binaries::PgBinaries;
-use sawit_core::db::{self, BackupScope, ExportFormat, ExportSummary, RowQuery};
+use sawit_core::db::{self, BackupScope, Conn, ExportFormat, ExportSummary, RowQuery};
 
 use super::store::DbStore;
 use crate::rt;
@@ -33,11 +34,7 @@ pub fn save_dir(cx: &App) -> PathBuf {
 }
 
 /// The read-write client, or `None` after asking the store to reconnect.
-fn client(
-    db: &Entity<DbStore>,
-    profile: &str,
-    cx: &mut App,
-) -> Option<Arc<tokio_postgres::Client>> {
+fn client(db: &Entity<DbStore>, profile: &str, cx: &mut App) -> Option<Conn> {
     let client = db.read(cx).client(profile, false);
     if client.is_none() {
         let profile = profile.to_string();
@@ -70,14 +67,21 @@ pub fn export_relation(
         .map(|r| r.columns.clone())
         .unwrap_or_default();
     Some(rt::spawn(cx, async move {
-        let lookup = profile.clone();
-        // Keychain: blocking, and may wait on an access prompt.
-        let password = tokio::task::spawn_blocking(move || db::resolve_password(&lookup))
-            .await
-            .unwrap_or_default();
-        let client = db::connect_read_only(&profile, password.as_deref()).await?;
-        db::export_rows(
-            &client, &schema, &table, &order, &query, format, &types, &path, &rows, &stop,
+        let conn = if profile.kind.is_lite() {
+            // A file is read with a connection of its own each time anyway.
+            Conn::lite(profile, true)
+        } else {
+            let lookup = profile.clone();
+            // Keychain: blocking, and may wait on an access prompt.
+            let password = tokio::task::spawn_blocking(move || db::resolve_password(&lookup))
+                .await
+                .unwrap_or_default();
+            Conn::Pg(Arc::new(
+                db::connect_read_only(&profile, password.as_deref()).await?,
+            ))
+        };
+        conn.export_rows(
+            &schema, &table, &order, &query, format, &types, &path, rows, stop,
         )
         .await
     }))
@@ -93,7 +97,7 @@ pub fn backup(
     cx: &mut App,
 ) -> Option<oneshot::Receiver<Result<()>>> {
     let profile = db.read(cx).profile(profile)?.clone();
-    let client = client(db, &profile.name, cx)?;
+    let client = client(db, &profile.name, cx)?.pg()?.clone();
     Some(rt::spawn(cx, async move {
         let lookup = profile.clone();
         let password = tokio::task::spawn_blocking(move || db::resolve_password(&lookup))
@@ -120,13 +124,14 @@ pub fn import_csv(
     path: PathBuf,
     cx: &mut App,
 ) -> Option<oneshot::Receiver<Result<u64>>> {
-    let client = client(db, profile, cx)?;
+    let client = client(db, profile, cx)?.pg()?.clone();
     Some(rt::spawn(cx, async move {
         db::import_csv(&client, &schema, &table, &path).await
     }))
 }
 
-/// One statement on the read-write connection; answers the rows it changed.
+/// One statement on the read-write connection; answers the rows it changed. On SQLite and D1
+/// it takes the write route the store last saw ([`DbStore::route`]), looked at again now.
 pub fn execute(
     db: &Entity<DbStore>,
     profile: &str,
@@ -134,8 +139,5 @@ pub fn execute(
     cx: &mut App,
 ) -> Option<oneshot::Receiver<Result<u64>>> {
     let client = client(db, profile, cx)?;
-    Some(rt::spawn(
-        cx,
-        async move { db::run_bulk(&client, &sql).await },
-    ))
+    Some(rt::spawn(cx, async move { client.run_bulk(&sql).await }))
 }
