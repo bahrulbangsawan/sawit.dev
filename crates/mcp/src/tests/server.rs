@@ -243,14 +243,32 @@ fn the_readme_and_the_site_give_the_tool_count() {
         }
         found
     };
-    for file in ["README.md", "site/src/routes/index.tsx"] {
-        let text = std::fs::read_to_string(repo.join(file))
-            .unwrap_or_else(|e| panic!("{file} can't be read: {e}"));
+    // The site's home page: its route, and the sections it is made of in components/home.
+    let home = repo.join("site/src/components/home");
+    let mut sections: Vec<std::path::PathBuf> = std::fs::read_dir(&home)
+        .unwrap_or_else(|e| panic!("{} can't be read: {e}", home.display()))
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "tsx"))
+        .collect();
+    sections.sort();
+    let site = [vec![repo.join("site/src/routes/index.tsx")], sections].concat();
+    for (place, files) in [
+        ("README.md", vec![repo.join("README.md")]),
+        ("the site's home page", site),
+    ] {
+        let text = files
+            .iter()
+            .map(|file| {
+                std::fs::read_to_string(file)
+                    .unwrap_or_else(|e| panic!("{} can't be read: {e}", file.display()))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         let found = counts(&text);
-        assert!(found.len() >= 2, "{file} gives the tool count {found:?}");
+        assert!(found.len() >= 2, "{place} gives the tool count {found:?}");
         assert!(
             found.iter().all(|&n| n == tools),
-            "{file} counts {found:?} tools; sawit-mcp has {tools}"
+            "{place} counts {found:?} tools; sawit-mcp has {tools}"
         );
     }
 }
