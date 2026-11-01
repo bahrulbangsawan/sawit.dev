@@ -12,7 +12,8 @@ use gpui_kit::{
 use sawit_core::package_manager::{Available, PackageManager};
 use sawit_core::stack_builder::{Backend, Category, Orm, Stack, WebFrontend};
 
-use super::{Creating, NewProjectEvent, NewProjectPage, job_over};
+use super::create::job_over;
+use super::{Creating, NewProjectEvent, NewProjectPage};
 use crate::terminal::{Origin, TerminalPanel};
 
 fn init(cx: &mut TestAppContext) {
