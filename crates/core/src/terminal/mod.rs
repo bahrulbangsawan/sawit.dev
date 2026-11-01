@@ -1,12 +1,17 @@
 //! Terminal emulation (PTY + alacritty_terminal) without any UI dependency,
 //! so it can be tested headlessly. The app only draws `Snapshot`s.
 
+mod agents;
 mod input;
 mod layout;
 mod palette;
 mod session;
 mod tab;
 
+pub use agents::{
+    AgentKind, ProcessArgs, command_name, detect, names_phrase, parse_procargs, process_args,
+    process_name,
+};
 pub use input::{
     KeyInput, Modes, MouseAction, MouseButton, ScrollAccumulator, cd_bytes, drop_bytes,
     is_shell_lang, key_to_bytes, mouse_report, paste_bytes, run_bytes, shell_commands, shell_quote,

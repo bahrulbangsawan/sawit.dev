@@ -1,5 +1,6 @@
-// The terminal: a new tab runs what is typed into it; a tab can be renamed; the pane menu's keys
-// do what its items do; a file dropped on it types its quoted path.
+// The terminal: a new tab runs what is typed into it; app_state names the coding agent running
+// there; a tab can be renamed; the pane menu's keys do what its items do; a file dropped on it
+// types its quoted path.
 //
 // The strip's tabs read as radio buttons in the "Terminals" tab list; the terminal itself as a
 // text area named "Terminal". Its text is read back over the control socket (terminal_read).
@@ -45,6 +46,24 @@ sawitTest("terminal: a new tab runs what is typed, and its output reads back", a
   await win.press("return");
   const text = await waitForTerminalLine(ctx, "e2e-ok");
   assert.match(text, /echo e2e-ok/);
+});
+
+sawitTest("terminal: app_state names the coding agent running in a tab, until it exits", async (ctx) => {
+  const { win } = ctx;
+  await newTerminal(ctx);
+  // A stand-in for Claude Code: `sleep`, run under the name `claude`. Which agent runs is told from
+  // the process alone, as for the real one.
+  await win.typeKeys("ln -sf /bin/sleep claude && ./claude 600");
+  await win.press("return");
+  const active = async () => (await terminals(ctx)).find((t) => t.active);
+  await until(async () => (await active())?.agent === "claude-code", {
+    what: "app_state to name Claude Code as the tab's agent",
+  });
+  const tab = await active();
+  assert.deepEqual(tab.agents, ["claude-code"]);
+  assert.equal(tab.panes[0].agent, "claude-code");
+  await win.press("ctrl+c");
+  await until(async () => (await active())?.agent === null, { what: "the agent to be gone once it exits" });
 });
 
 sawitTest("terminal: ⇧⌘I renames the tab, and the strip shows the name", async (ctx) => {

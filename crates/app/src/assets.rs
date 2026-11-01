@@ -171,7 +171,8 @@ pub struct AppAssets;
 
 macro_rules! agent_logos {
     ($($name:literal),* $(,)?) => {
-        /// AI client logos for the MCP page (see assets/agent_logos/SOURCES.md).
+        /// AI client logos for the MCP page and the terminal's agents (see
+        /// assets/agent_logos/SOURCES.md).
         const AGENT_LOGOS: &[(&str, &[u8])] = &[
             $(($name, include_bytes!(concat!("../../../assets/agent_logos/", $name, ".svg")))),*
         ];
@@ -189,6 +190,7 @@ agent_logos!(
     "codex-color",
     "cursor",
     "exa-color",
+    "factory-color",
     "figma-color",
     "geminicli-color",
     "githubcopilot",
@@ -198,6 +200,7 @@ agent_logos!(
     "kiro-color",
     "lmstudio",
     "meta-color",
+    "omp-color",
     "opencode",
     "qwen-color",
     "roocode",

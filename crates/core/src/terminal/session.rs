@@ -410,24 +410,8 @@ impl Session {
     /// started here (for a shell: the command it runs), as the OS reports
     /// it. `None` where that can't be read.
     pub fn foreground_name(&self) -> Option<String> {
-        let pgrp = self.foreground_job()?;
-        #[cfg(target_os = "macos")]
-        {
-            // The group's leader has the group's id as its pid.
-            let mut name = [0u8; 64];
-            let len = unsafe {
-                libc::proc_name(
-                    pgrp as libc::c_int,
-                    name.as_mut_ptr().cast(),
-                    name.len() as u32,
-                )
-            };
-            if len > 0 {
-                return Some(String::from_utf8_lossy(&name[..len as usize]).into_owned());
-            }
-        }
-        let _ = pgrp;
-        None
+        // The group's leader has the group's id as its pid.
+        super::agents::process_name(self.foreground_job()?)
     }
 
     /// Starts a selection at screen cell (`col`, `row`); `right_half` is

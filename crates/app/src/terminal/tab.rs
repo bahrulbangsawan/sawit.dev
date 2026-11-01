@@ -22,10 +22,11 @@ use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, ThemeColor, h_fl
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::terminal::{
-    Direction, MIN_COLS, MIN_ROWS, PaneId, Rect, Removed, SplitDir, SplitPath, TabState,
+    AgentKind, Direction, MIN_COLS, MIN_ROWS, PaneId, Rect, Removed, SplitDir, SplitPath, TabState,
     new_pane_id,
 };
 
+use super::agents;
 use super::view::{PAD_X, TerminalEvent, TerminalView, cell_size};
 use super::{
     ClosePane, FocusDown, FocusLeft, FocusNextPane, FocusNextPaneAtPrompt, FocusPreviousPane,
@@ -251,8 +252,9 @@ impl TerminalTab {
     }
 
     /// Opens the pane menu when asked, handles the pane's process ending,
-    /// and redraws the tab strip when the pane's title changes. Events from
-    /// a terminal the pane no longer holds are ignored.
+    /// and redraws the tab strip when the pane's title or agent changes (and
+    /// the pane's header for its agent). Events from a terminal the pane no
+    /// longer holds are ignored.
     fn watch(pane: PaneId, view: &Entity<TerminalView>, cx: &mut Context<Self>) {
         cx.subscribe(view, move |this, view, event: &TerminalEvent, cx| {
             if this.views.get(&pane) != Some(&view) {
@@ -261,6 +263,10 @@ impl TerminalTab {
             match event {
                 TerminalEvent::MenuRequested(at) => this.request_menu(pane, *at, cx),
                 TerminalEvent::TitleChanged => cx.emit(TabEvent::Changed),
+                TerminalEvent::AgentChanged => {
+                    cx.emit(TabEvent::Changed);
+                    cx.notify();
+                }
                 TerminalEvent::Exited => this.pane_exited(pane, cx),
                 TerminalEvent::Focused => this.pane_focused(pane, cx),
             }
@@ -348,6 +354,19 @@ impl TerminalTab {
     pub fn focused_view(&self) -> &Entity<TerminalView> {
         // The focused pane is always one of the layout's panes.
         &self.views[&self.state.focused]
+    }
+
+    /// The coding agent running in each pane that runs one, in reading order (left to right,
+    /// then down), as the tab strip shows them.
+    pub fn agents(&self, cx: &App) -> Vec<(PaneId, AgentKind)> {
+        self.state
+            .reading_order(self.area())
+            .into_iter()
+            .filter_map(|pane| {
+                let agent = self.views.get(&pane)?.read(cx).agent()?;
+                Some((pane, agent))
+            })
+            .collect()
     }
 
     /// Every pane and its terminal, in layout order.
@@ -831,12 +850,15 @@ impl TerminalTab {
     /// folder would be the local `ssh`'s), whether it is zoomed, and its
     /// buttons. A long name or folder is cut short before the buttons are.
     /// The focused pane's header takes the active tab's colours and a heavier
-    /// title ([`pane_style`]).
+    /// title ([`pane_style`]). While a coding agent runs in the pane, its logo
+    /// stands in for the glyph, named for assistive technology and in a
+    /// tooltip; the glyph comes back when the agent exits.
     fn render_header(
         &self,
         pane: PaneId,
         view: &Entity<TerminalView>,
         style: PaneStyle,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let remote = view.read(cx).remote.is_some();
@@ -846,12 +868,31 @@ impl TerminalTab {
             view.update(cx, |v, cx| v.folder(cx)).map(|dir| tilde(&dir))
         };
         let v = view.read(cx);
-        let icon = if remote {
+        let glyph = if remote {
             Lucide::Server
         } else if v.job.is_some() {
             Lucide::Play
         } else {
             Lucide::Terminal
+        };
+        let icon = match v.agent() {
+            Some(agent) => {
+                let running = agents::running_phrase(&[agent]);
+                let tip = running.clone();
+                div()
+                    .id(("pane-agent", pane))
+                    .debug_selector(move || format!("pane-agent-{pane}-{}", agent.id()))
+                    .flex_none()
+                    .role(Role::Image)
+                    .aria_label(running)
+                    .tooltip(move |window, cx| agents::tooltip(vec![tip.clone()], window, cx))
+                    .child(agents::logo(agent, agents::LOGO, window, cx))
+                    .into_any_element()
+            }
+            None => div()
+                .flex_none()
+                .child(Icon::new(glyph).xsmall())
+                .into_any_element(),
         };
         let title = self.pane_label(pane, v);
         let zoomed = self.state.zoomed == Some(pane);
@@ -872,7 +913,7 @@ impl TerminalTab {
             .text_color(style.title)
             .border_b(HEADER_BORDER)
             .border_color(cx.theme().border)
-            .child(div().flex_none().child(Icon::new(icon).xsmall()))
+            .child(icon)
             .child(
                 self.rename_field(cx.entity().downgrade(), pane)
                     .unwrap_or_else(|| {
@@ -1010,14 +1051,20 @@ impl TerminalTab {
         rect: Rect,
         view: &Entity<TerminalView>,
         look: PaneLook,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let style = pane_style(look, cx.theme(), view.read(cx).background());
+        let v = view.read(cx);
+        let style = pane_style(look, cx.theme(), v.background());
+        let agent = v.agent();
         v_flex()
             .id(("pane", pane))
             .debug_selector(move || format!("pane-{pane}-{look:?}"))
             .role(Role::Group)
             .aria_label("Terminal pane")
+            .when_some(agent, |el, agent| {
+                el.aria_description(agents::running_phrase(&[agent]))
+            })
             .aria_selected(pane == self.state.focused)
             .absolute()
             .left(px(rect.x))
@@ -1030,7 +1077,7 @@ impl TerminalTab {
             .on_any_mouse_down(
                 cx.listener(move |this, _, window, cx| this.focus_pane(pane, window, cx)),
             )
-            .child(self.render_header(pane, view, style, cx))
+            .child(self.render_header(pane, view, style, window, cx))
             .children(self.render_banner(pane, view, cx))
             .child(
                 div()
@@ -1205,7 +1252,7 @@ impl Render for TerminalTab {
             if let Some(view) = self.views.get(&pane) {
                 let look = PaneLook::of(pane, self.state.focused, here);
                 panes.push(
-                    self.render_pane(pane, rect, view, look, cx)
+                    self.render_pane(pane, rect, view, look, window, cx)
                         .into_any_element(),
                 );
             }
@@ -1271,14 +1318,16 @@ mod tests {
         TestAppContext, VisualTestContext, Window, WindowBounds, WindowOptions, div, point, px,
         size,
     };
-    use sawit_core::terminal::{Layout, MIN_COLS, MIN_ROWS, SplitDir};
+    use sawit_core::terminal::{
+        AgentKind, Layout, MIN_COLS, MIN_ROWS, SplitDir, run_bytes, shell_quote,
+    };
 
     use super::super::TerminalPanel;
 
     use super::super::testing::{
         SHELLS, focus_terminal, init, open_panel, ready, scratch_dir, start_cat, wait_until,
     };
-    use super::super::view::FOLDER_TTL;
+    use super::super::view::{AGENT_CHECK, FOLDER_TTL, TerminalView};
     use super::{INACTIVE_DIM, PaneLook, pane_menu_items, pane_style};
 
     /// Like `wait_until`, but lets the app handle what the shells sent
@@ -1482,6 +1531,74 @@ mod tests {
             cx.executor().advance_clock(FOLDER_TTL);
             cx.run_until_parked();
         }
+    }
+
+    /// Waits until `view` has looked for its agent and found `agent`, moving the test clock on one
+    /// look at a time, with a moment between for the shell to start or end the program.
+    fn wait_for_agent(
+        cx: &mut TestAppContext,
+        view: &Entity<TerminalView>,
+        agent: Option<AgentKind>,
+    ) {
+        let deadline = Instant::now() + SHELLS;
+        while cx.update(|cx| view.read(cx).agent()) != agent {
+            assert!(
+                Instant::now() < deadline,
+                "the pane never found {agent:?}, only {:?}",
+                cx.update(|cx| view.read(cx).agent())
+            );
+            std::thread::sleep(Duration::from_millis(20));
+            cx.executor().advance_clock(AGENT_CHECK);
+            cx.run_until_parked();
+        }
+    }
+
+    /// Whether the element tests know as `selector` is drawn in window `w`.
+    fn drawn(cx: &mut TestAppContext, w: AnyWindowHandle, selector: String) -> bool {
+        let mut vcx = VisualTestContext::from_window(w, cx);
+        vcx.run_until_parked();
+        vcx.debug_bounds(Box::leak(selector.into_boxed_str()))
+            .is_some()
+    }
+
+    /// While a coding agent runs in a pane of a split tab, the pane's header shows its logo in
+    /// place of the terminal glyph, and once it exits the glyph is back. `cat`, run under the
+    /// name `claude`, plays Claude Code: it runs until its input ends, and what it is comes only
+    /// from its process, as the real agent's would.
+    #[gpui_kit::test]
+    fn a_pane_header_shows_the_agents_logo_while_it_runs(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let (pane, view) = cx.update(|cx| {
+            let t = panel.read(cx).tab(0).read(cx);
+            (t.state.focused, t.focused_view().clone())
+        });
+        ready(cx, &view);
+        let logo = format!("pane-agent-{pane}-claude-code");
+        assert!(!drawn(cx, w, logo.clone()), "no agent runs yet");
+
+        let claude = scratch_dir("agent-stand-in").join("claude");
+        std::os::unix::fs::symlink("/bin/cat", &claude).unwrap();
+        let command = shell_quote(&claude);
+        cx.update(|cx| view.read(cx).write(run_bytes(&command)));
+        wait_for_agent(cx, &view, Some(AgentKind::ClaudeCode));
+        assert!(
+            drawn(cx, w, logo.clone()),
+            "the header shows Claude Code's logo"
+        );
+        cx.update(|cx| {
+            let t = panel.read(cx).tab(0).read(cx);
+            assert_eq!(t.agents(cx), vec![(pane, AgentKind::ClaudeCode)]);
+        });
+
+        // ^D: cat's input ends, and so does the stand-in.
+        cx.update(|cx| view.read(cx).write(vec![4]));
+        wait_for_agent(cx, &view, None);
+        assert!(!drawn(cx, w, logo), "the glyph is back once it exits");
+        cx.update(|cx| assert!(panel.read(cx).tab(0).read(cx).agents(cx).is_empty()));
     }
 
     #[gpui_kit::test]

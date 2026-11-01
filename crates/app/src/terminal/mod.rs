@@ -1,5 +1,7 @@
-//! Bottom-dock terminal: tabs of real terminals (shell or SSH).
+//! Bottom-dock terminal: tabs of real terminals (shell or SSH), each showing the coding agents
+//! (Claude Code, Codex, …) running in it by their logos.
 
+mod agents;
 mod guard;
 mod panel;
 mod tab;
@@ -11,6 +13,9 @@ use gpui_kit::actions;
 
 pub use guard::{Ending, ask_before_closing, end_all};
 pub use panel::{JobTag, Origin, Remote, TerminalPanel, ToggleMaximize};
+// The agents running in the terminals, for the browser's Send to agent.
+#[allow(unused_imports)]
+pub use {panel::RunningAgent, tab::TerminalTab};
 
 actions!(
     terminal,

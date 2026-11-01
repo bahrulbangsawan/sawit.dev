@@ -14,10 +14,11 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::ssh::Launch;
 use sawit_core::terminal::{
-    Command, GridSize, MIN_COLS, MIN_ROWS, PaneId, Rect, Session, SplitDir, default_shell,
-    run_bytes, shell_quote,
+    AgentKind, Command, GridSize, MIN_COLS, MIN_ROWS, PaneId, Rect, Session, SplitDir,
+    default_shell, run_bytes, shell_quote,
 };
 
+use super::agents;
 use super::tab::{TabEvent, TerminalTab, Unsplit};
 use super::view::TerminalView;
 use super::{RenameTab, SplitDown, SplitRight};
@@ -89,6 +90,22 @@ pub enum Origin {
     /// user isn't typing in another terminal, and the keyboard stays where
     /// it is: what the user types next mustn't land in a shell.
     Agent,
+}
+
+/// A coding agent running in a pane ([`TerminalPanel::running_agents`]). The tab strip reads
+/// which agents run where; the browser's Send to agent also reads what the user sees each one
+/// called and which one the user types to.
+#[allow(dead_code)]
+#[derive(Clone)]
+pub struct RunningAgent {
+    pub tab: WeakEntity<TerminalTab>,
+    pub pane: PaneId,
+    pub kind: AgentKind,
+    /// What the user sees the agent's terminal called: the pane's header in a split tab, else
+    /// the tab's label.
+    pub label: SharedString,
+    /// The pane has the keyboard, or had it last of all the panes: where the user types.
+    pub focused: bool,
 }
 
 /// What a script's terminal is doing.
@@ -486,7 +503,9 @@ impl TerminalPanel {
     }
 
     /// Every tab, for `sawit-mcp`: the tab's own fields describe its focused
-    /// pane, and `panes` lists each pane in layout order.
+    /// pane, and `panes` lists each pane in layout order. `agent` is the
+    /// coding agent running in a pane (`claude-code`), and a tab's `agents`
+    /// every distinct one of its panes, as its logos in the strip show them.
     pub fn describe(&self, cx: &App) -> Vec<serde_json::Value> {
         self.tabs
             .iter()
@@ -506,11 +525,17 @@ impl TerminalPanel {
                             "exited": v.exited,
                             "at_prompt": v.at_prompt(),
                             "running_job": v.foreground_job().is_some(),
+                            "agent": v.agent().map(|a| a.id()),
                             "script": v.job.as_ref().map(|j| j.name.clone()),
                             "ssh": v.remote.as_ref().map(|r| r.name.clone()),
                         })
                     })
                     .collect();
+                let tab_agents: Vec<&str> =
+                    agents::distinct(t.agents(cx).into_iter().map(|(_, kind)| kind))
+                        .into_iter()
+                        .map(|kind| kind.id())
+                        .collect();
                 serde_json::json!({
                     "index": ix,
                     "title": t.title(cx).to_string(),
@@ -519,6 +544,8 @@ impl TerminalPanel {
                     "shell": v.shell,
                     "at_prompt": v.at_prompt(),
                     "running_job": v.foreground_job().is_some(),
+                    "agent": v.agent().map(|a| a.id()),
+                    "agents": tab_agents,
                     "script": v.job.as_ref().map(|j| j.name.clone()),
                     "ssh": v.remote.as_ref().map(|r| r.name.clone()),
                     "project": t.group,
@@ -1124,6 +1151,42 @@ impl TerminalPanel {
         running
     }
 
+    /// Every coding agent running in the terminals, in the tab strip's order and then each
+    /// tab's reading order, background tabs too. One pane is `focused`: the one with the
+    /// keyboard, else the one that had it last (the active tab's focused pane, when no pane
+    /// has had it yet).
+    pub fn running_agents(&self, cx: &App) -> Vec<RunningAgent> {
+        let mut last_typed: Option<(std::time::Instant, PaneId)> = None;
+        for (_, pane, view) in self.all_panes(cx) {
+            if let Some(at) = view.read(cx).keyboard_at()
+                && last_typed.is_none_or(|(latest, _)| at > latest)
+            {
+                last_typed = Some((at, pane));
+            }
+        }
+        let typing = last_typed
+            .map(|(_, pane)| pane)
+            .or_else(|| self.tabs.get(self.active).map(|t| t.read(cx).state.focused));
+        let mut running = Vec::new();
+        for tab in &self.tabs {
+            let t = tab.read(cx);
+            for (pane, kind) in t.agents(cx) {
+                let label = match (t.state.is_split(), t.view(pane)) {
+                    (true, Some(view)) => t.pane_label(pane, view.read(cx)),
+                    _ => t.label(cx),
+                };
+                running.push(RunningAgent {
+                    tab: tab.downgrade(),
+                    pane,
+                    kind,
+                    label,
+                    focused: typing == Some(pane),
+                });
+            }
+        }
+        running
+    }
+
     /// A terminal tab has the keyboard.
     pub fn has_focus(&self, window: &Window, cx: &App) -> bool {
         self.tabs
@@ -1249,6 +1312,7 @@ impl Render for TerminalPanel {
             .tabs
             .get(self.active)
             .map(|t| t.read(cx).focused_view().focus_handle(cx));
+        let running = self.running_agents(cx);
         for item in drawn {
             let ix = match item {
                 Drawn::Tab(ix) => ix,
@@ -1323,10 +1387,65 @@ impl Render for TerminalPanel {
                     None if v.exited => (Lucide::Terminal, format!("{} (exited)", t.title(cx))),
                     None => (Lucide::Terminal, t.title(cx).to_string()),
                 };
+                // A live SSH session or a running script: the glyph turns the success colour,
+                // and over agents' logos (which keep their own colours) a dot in it says so.
+                let live = (v.remote.is_some() && !v.exited)
+                    || (v.job.is_some() && v.foreground_job().is_some());
+                let on_tab: Vec<&RunningAgent> = running
+                    .iter()
+                    .filter(|r| r.tab.entity_id() == tab.entity_id())
+                    .collect();
+                let kinds: Vec<AgentKind> = on_tab.iter().map(|r| r.kind).collect();
+                let running_phrase = (!kinds.is_empty()).then(|| agents::running_phrase(&kinds));
+                let icon = match &running_phrase {
+                    None => Icon::new(icon)
+                        .xsmall()
+                        .when(live, |i| i.text_color(cx.theme().success))
+                        .into_any_element(),
+                    Some(phrase) => {
+                        // The tooltip names each pane's agent, by its place in reading order.
+                        let mut lines = vec![phrase.clone()];
+                        if t.state.is_split() {
+                            let order = t.state.reading_order(t.area());
+                            lines.extend(on_tab.iter().map(|r| {
+                                let n = order.iter().position(|p| *p == r.pane).unwrap_or(0) + 1;
+                                format!("Pane {n}: {}", r.kind.name())
+                            }));
+                        }
+                        let badge = agents::badge(kinds.iter().copied());
+                        let ring = if active {
+                            cx.theme().tab_active
+                        } else {
+                            cx.theme().tab_bar
+                        };
+                        agents::logos(&badge, &format!("term-agent-{ix}"), window, cx)
+                            .id(("term-agents", ix))
+                            .debug_selector(move || format!("term-agents-{ix}"))
+                            .relative()
+                            .role(Role::Image)
+                            .aria_label(phrase.clone())
+                            .tooltip(move |window, cx| agents::tooltip(lines.clone(), window, cx))
+                            .when(live, |el| {
+                                el.child(
+                                    div()
+                                        .absolute()
+                                        .right(px(-2.))
+                                        .bottom(px(-2.))
+                                        .size(px(6.))
+                                        .rounded_full()
+                                        .border_1()
+                                        .border_color(ring)
+                                        .bg(cx.theme().success),
+                                )
+                            })
+                            .into_any_element()
+                    }
+                };
                 h_flex()
                     .id(("term-tab", ix))
                     .role(Role::Tab)
                     .aria_label(label.clone())
+                    .when_some(running_phrase, |el, phrase| el.aria_description(phrase))
                     .aria_selected(active)
                     .debug_selector(move || format!("term-tab-{ix}"))
                     .relative()
@@ -1343,11 +1462,7 @@ impl Render for TerminalPanel {
                             .text_color(cx.theme().tab_active_foreground)
                     })
                     .when(!active, |el| el.text_color(cx.theme().tab_foreground))
-                    .child(Icon::new(icon).xsmall().when(
-                        (v.remote.is_some() && !v.exited)
-                            || (v.job.is_some() && v.foreground_job().is_some()),
-                        |i| i.text_color(cx.theme().success),
-                    ))
+                    .child(icon)
                     .map(|el| match rename {
                         Some(field) => el.child(field),
                         None => el.child(label),
@@ -1554,7 +1669,7 @@ fn focused<'a>(tab: &Entity<TerminalTab>, cx: &'a App) -> &'a TerminalView {
 
 /// What runs in `pane` of `tab`, whose terminal is `view`, that closing it would end, by name: a
 /// command in the foreground (by the pane's name, the name of a tab it is alone in, its script's,
-/// else the program's) or a live SSH session. `None` for a shell at its prompt, a script's terminal
+/// its coding agent's, else the program's) or a live SSH session. `None` for a shell at its prompt, a script's terminal
 /// between runs or an ended session.
 fn running_in(tab: &TerminalTab, pane: PaneId, view: &TerminalView) -> Option<String> {
     if view.exited {
@@ -1577,6 +1692,7 @@ fn running_in(tab: &TerminalTab, pane: PaneId, view: &TerminalView) -> Option<St
     Some(
         named
             .or_else(|| view.job.as_ref().map(|j| j.name.clone()))
+            .or_else(|| view.agent().map(|a| a.name().to_string()))
             .or_else(|| view.foreground_name())
             .unwrap_or_else(|| view.title.to_string()),
     )
@@ -1824,7 +1940,7 @@ mod tests {
     };
     use super::{JobTag, Origin, TerminalPanel};
     use gpui_kit::Focusable as _;
-    use sawit_core::terminal::SplitDir;
+    use sawit_core::terminal::{AgentKind, SplitDir};
 
     /// An agent splits the tab the user types in, `pane` of tab `ix` (from the test window `w`),
     /// with `command` in the new half.
@@ -3158,6 +3274,202 @@ mod tests {
             let focused = panes.iter().filter(|p| p["focused"] == true).count();
             assert_eq!(focused, 1);
         });
+    }
+
+    /// Splits tab 0 into a row of three panes with a fourth under the last, and returns them
+    /// in reading order.
+    fn four_panes(
+        cx: &mut TestAppContext,
+        w: AnyWindowHandle,
+        panel: &Entity<TerminalPanel>,
+    ) -> Vec<sawit_core::terminal::PaneId> {
+        focus_terminal(cx, w, panel);
+        cx.simulate_keystrokes(w, "cmd-d cmd-d cmd-shift-d");
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let t = panel.read(cx).tab(0).read(cx);
+            let order = t.state.reading_order(t.area());
+            assert_eq!(order.len(), 4);
+            order
+        })
+    }
+
+    /// Makes the panes of tab 0 look as if `agents` ran in them, in reading order.
+    fn fake_agents(
+        cx: &mut TestAppContext,
+        panel: &Entity<TerminalPanel>,
+        panes: &[sawit_core::terminal::PaneId],
+        agents: &[Option<AgentKind>],
+    ) {
+        cx.update(|cx| {
+            let views: Vec<_> = panes
+                .iter()
+                .map(|pane| panel.read(cx).tab(0).read(cx).view(*pane).unwrap().clone())
+                .collect();
+            for (view, agent) in views.iter().zip(agents) {
+                view.update(cx, |v, cx| v.fake_agent(*agent, cx));
+            }
+        });
+        cx.run_until_parked();
+    }
+
+    /// Where the element tests know as `name` is drawn in window `w`, if it is.
+    fn bounds_of(
+        cx: &mut TestAppContext,
+        w: AnyWindowHandle,
+        name: String,
+    ) -> Option<gpui_kit::Bounds<gpui_kit::Pixels>> {
+        let mut vcx = VisualTestContext::from_window(w, cx);
+        vcx.run_until_parked();
+        vcx.debug_bounds(selector(name))
+    }
+
+    /// A split tab shows every distinct agent running in its panes, focused or not, in the panes'
+    /// reading order, and past three, the first two and "+N". It keeps showing them while another
+    /// tab is in front.
+    #[gpui_kit::test]
+    fn the_tab_shows_each_agent_of_its_panes_in_reading_order(cx: &mut TestAppContext) {
+        use AgentKind::*;
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        let panes = four_panes(cx, w, &panel);
+        let logo = |id: &str| format!("term-agent-0-{id}");
+
+        assert!(bounds_of(cx, w, "term-agents-0".into()).is_none());
+        let plain = bounds_of(cx, w, "term-tab-0".into()).unwrap();
+        fake_agents(
+            cx,
+            &panel,
+            &panes,
+            &[Some(Codex), Some(ClaudeCode), Some(Codex), None],
+        );
+        let codex = bounds_of(cx, w, logo("codex")).expect("Codex's logo");
+        let claude = bounds_of(cx, w, logo("claude-code")).expect("Claude Code's logo");
+        assert!(codex.origin.x < claude.origin.x, "in reading order");
+        assert!(bounds_of(cx, w, logo("more")).is_none());
+        let with_logos = bounds_of(cx, w, "term-tab-0".into()).unwrap();
+        assert_eq!(
+            with_logos.size.height, plain.size.height,
+            "the tab keeps its height"
+        );
+        cx.update(|cx| {
+            let agents: Vec<_> = panel
+                .read(cx)
+                .running_agents(cx)
+                .iter()
+                .map(|r| r.kind)
+                .collect();
+            assert_eq!(agents, [Codex, ClaudeCode, Codex]);
+        });
+
+        fake_agents(
+            cx,
+            &panel,
+            &panes,
+            &[
+                Some(Codex),
+                Some(ClaudeCode),
+                Some(GeminiCli),
+                Some(Opencode),
+            ],
+        );
+        assert!(bounds_of(cx, w, logo("codex")).is_some());
+        assert!(bounds_of(cx, w, logo("claude-code")).is_some());
+        assert!(bounds_of(cx, w, logo("gemini")).is_none(), "past three");
+        assert!(bounds_of(cx, w, logo("opencode")).is_none());
+        assert!(bounds_of(cx, w, logo("more")).is_some(), "+2");
+
+        // In the background, behind a new tab, the agents still show.
+        open_tabs(cx, &panel, 1);
+        assert_ne!(cx.update(|cx| panel.read(cx).active_index()), 0);
+        assert!(bounds_of(cx, w, logo("codex")).is_some());
+
+        // Once they all exit, the terminal glyph is back.
+        fake_agents(cx, &panel, &panes, &[None, None, None, None]);
+        assert!(bounds_of(cx, w, "term-agents-0".into()).is_none());
+    }
+
+    /// app_state reports each pane's agent by its id, the focused pane's as the tab's own, and
+    /// every distinct agent of the tab as its strip shows them.
+    #[gpui_kit::test]
+    fn describe_reports_the_agents(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let panes = cx.update(|cx| {
+            let t = panel.read(cx).tab(0).read(cx);
+            t.state.reading_order(t.area())
+        });
+        fake_agents(
+            cx,
+            &panel,
+            &panes,
+            &[Some(AgentKind::ClaudeCode), Some(AgentKind::Codex)],
+        );
+        cx.update(|cx| {
+            let tabs = panel.read(cx).describe(cx);
+            let tab = &tabs[0];
+            // ⌘D focused the new pane, on the right.
+            assert_eq!(tab["agent"], "codex");
+            assert_eq!(tab["agents"], serde_json::json!(["claude-code", "codex"]));
+            let agents: Vec<_> = tab["panes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p["agent"].clone())
+                .collect();
+            assert_eq!(agents, [serde_json::json!("claude-code"), "codex".into()]);
+        });
+        fake_agents(cx, &panel, &panes, &[None, None]);
+        cx.update(|cx| {
+            let tabs = panel.read(cx).describe(cx);
+            assert_eq!(tabs[0]["agent"], serde_json::Value::Null);
+            assert_eq!(tabs[0]["agents"], serde_json::json!([]));
+        });
+    }
+
+    /// The pane the user types in is the running agent that is `focused`, even in a tab the user
+    /// has left; with no pane ever typed in, the active tab's focused pane is.
+    #[gpui_kit::test]
+    fn running_agents_say_which_one_the_user_types_to(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let panes = cx.update(|cx| {
+            let t = panel.read(cx).tab(0).read(cx);
+            t.state.reading_order(t.area())
+        });
+        fake_agents(
+            cx,
+            &panel,
+            &panes,
+            &[Some(AgentKind::ClaudeCode), Some(AgentKind::Codex)],
+        );
+        let focused = |cx: &mut TestAppContext| {
+            cx.update(|cx| {
+                panel
+                    .read(cx)
+                    .running_agents(cx)
+                    .iter()
+                    .filter(|r| r.focused)
+                    .map(|r| (r.kind, r.label.to_string()))
+                    .collect::<Vec<_>>()
+            })
+        };
+        let typed = focused(cx);
+        assert_eq!(typed.len(), 1);
+        assert_eq!(
+            typed[0].0,
+            AgentKind::Codex,
+            "⌘D gave the new pane the keyboard"
+        );
+        cx.simulate_keystrokes(w, "cmd-[");
+        cx.run_until_parked();
+        assert_eq!(focused(cx)[0].0, AgentKind::ClaudeCode);
     }
 
     #[gpui_kit::test]

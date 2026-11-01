@@ -13,9 +13,9 @@ use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::*;
 use sawit_core::terminal::{
-    CellView, CursorView, GridSize, KeyInput, MouseAction, MouseButton as TermButton, Palette, Rgb,
-    ScrollAccumulator, SelectKind, Session, Snapshot, TermEvent, drop_bytes, key_to_bytes,
-    mouse_report, paste_bytes,
+    AgentKind, CellView, CursorView, GridSize, KeyInput, MouseAction, MouseButton as TermButton,
+    Palette, ProcessArgs, Rgb, ScrollAccumulator, SelectKind, Session, Snapshot, TermEvent, detect,
+    drop_bytes, key_to_bytes, mouse_report, paste_bytes, process_args, process_name,
 };
 
 use super::{
@@ -33,6 +33,10 @@ const TOAST: Duration = Duration::from_millis(1400);
 pub(super) const PAD_X: Pixels = px(8.);
 /// How long a pane header shows a folder before asking the OS again.
 pub(super) const FOLDER_TTL: Duration = Duration::from_millis(500);
+/// How long after output (or a new title) a pane looks again at which coding agent runs in it:
+/// a job that starts or ends draws something, and this is soon after, while a busy program's
+/// stream of output gets one look per interval, not one per frame.
+pub(super) const AGENT_CHECK: Duration = Duration::from_millis(300);
 
 /// Grid origin and cell size on screen.
 type GridLayout = (Point<Pixels>, Size<Pixels>);
@@ -90,6 +94,8 @@ pub(super) fn cell_size(window: &Window, cx: &App) -> Size<Pixels> {
 
 pub enum TerminalEvent {
     TitleChanged,
+    /// A coding agent started or ended in the foreground ([`TerminalView::agent`]).
+    AgentChanged,
     Exited,
     /// A right-click asked for the pane menu, at this window position.
     MenuRequested(Point<Pixels>),
@@ -157,8 +163,27 @@ pub struct TerminalView {
     /// Asks for the folder again a moment after the header last read it,
     /// redrawing if it changed.
     folder_refresh: Option<Task<()>>,
+    /// The coding agent running in the foreground, as last looked at.
+    agent: Option<AgentKind>,
+    /// The foreground job last looked at, by its process group and the name of its program,
+    /// with that program's executable and arguments: read again only when either changes (the
+    /// shell's fork becoming the program it runs changes the name).
+    agent_job: Option<(ForegroundKey, Option<ProcessArgs>)>,
+    /// The foreground job when the program last set the title: the title is that job's own.
+    /// `None` until a program sets one.
+    title_job: Option<Option<u32>>,
+    /// A look for the agent, due [`AGENT_CHECK`] after the output that asked for it.
+    agent_check: Option<Task<()>>,
+    /// When the pane last drew with the keyboard in it.
+    keyboard_at: Option<Instant>,
+    /// Stands in for what runs in the foreground (for tests).
+    #[cfg(test)]
+    fake_agent: Option<Option<AgentKind>>,
     _events: Task<()>,
 }
+
+/// A foreground job and the name of the program it runs.
+type ForegroundKey = (u32, Option<String>);
 
 fn hsla(c: Rgb) -> Hsla {
     Rgba {
@@ -191,6 +216,7 @@ impl TerminalView {
                             TermEvent::Title(t) => {
                                 if !t.is_empty() {
                                     this.title = t.into();
+                                    this.title_job = Some(this.session.foreground_job());
                                     cx.emit(TerminalEvent::TitleChanged);
                                 }
                             }
@@ -201,6 +227,7 @@ impl TerminalView {
                             }
                         }
                     }
+                    this.check_agent_soon(cx);
                     cx.notify();
                 });
                 if alive.is_err() {
@@ -226,6 +253,13 @@ impl TerminalView {
             toast: None,
             folder: None,
             folder_refresh: None,
+            agent: None,
+            agent_job: None,
+            title_job: None,
+            agent_check: None,
+            keyboard_at: None,
+            #[cfg(test)]
+            fake_agent: None,
             _events: task,
         }
     }
@@ -341,6 +375,84 @@ impl TerminalView {
             return None;
         }
         self.session.foreground_name()
+    }
+
+    /// The coding agent running here (Claude Code, Codex, …), as last looked at: soon after
+    /// any output or new title, never on a timer of its own, so an idle pane costs nothing.
+    pub fn agent(&self) -> Option<AgentKind> {
+        self.agent
+    }
+
+    /// When the pane last drew with the keyboard in it: the latest of all panes is where the
+    /// user types, or last typed.
+    pub fn keyboard_at(&self) -> Option<Instant> {
+        self.keyboard_at
+    }
+
+    /// Looks for the agent [`AGENT_CHECK`] from now, unless a look is already due: output
+    /// that keeps coming gets one look per interval.
+    fn check_agent_soon(&mut self, cx: &mut Context<Self>) {
+        if self.agent_check.is_some() {
+            return;
+        }
+        self.agent_check = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(AGENT_CHECK).await;
+            let _ = this.update(cx, |this, cx| {
+                this.agent_check = None;
+                this.look_for_agent(cx);
+            });
+        }));
+    }
+
+    /// Reads which agent runs now, and when that changed, redraws and tells the tab (whose
+    /// strip shows it).
+    fn look_for_agent(&mut self, cx: &mut Context<Self>) {
+        let agent = self.read_agent();
+        if agent != self.agent {
+            self.agent = agent;
+            cx.emit(TerminalEvent::AgentChanged);
+            cx.notify();
+        }
+    }
+
+    /// The agent in the foreground. A local job is known by its process: the process group's
+    /// leader (the command the shell runs), by its name, which the OS gives cheaply, and only
+    /// when that changed, by its executable and arguments ([`detect`]). A title stands in only
+    /// when the job set it, so one left by an agent that has exited doesn't count. An SSH
+    /// session's remote programs can't be seen from here: only a title the session set says
+    /// what runs there.
+    fn read_agent(&mut self) -> Option<AgentKind> {
+        #[cfg(test)]
+        if let Some(fake) = self.fake_agent {
+            return fake;
+        }
+        if self.exited {
+            self.agent_job = None;
+            return None;
+        }
+        if self.remote.is_some() {
+            return self
+                .title_job
+                .and_then(|_| detect(None, Some(self.title.as_ref())));
+        }
+        let Some(job) = self.session.foreground_job() else {
+            self.agent_job = None;
+            return None;
+        };
+        let key = (job, process_name(job));
+        if self.agent_job.as_ref().is_none_or(|(seen, _)| *seen != key) {
+            self.agent_job = Some((key, process_args(job)));
+        }
+        let process = self.agent_job.as_ref().and_then(|(_, p)| p.as_ref());
+        let title = (self.title_job == Some(Some(job))).then_some(self.title.as_ref());
+        detect(process, title)
+    }
+
+    /// Makes the pane look as if `agent` ran in it, whatever really does (for tests).
+    #[cfg(test)]
+    pub(super) fn fake_agent(&mut self, agent: Option<AgentKind>, cx: &mut Context<Self>) {
+        self.fake_agent = Some(agent);
+        self.look_for_agent(cx);
     }
 
     fn modes(&self) -> sawit_core::terminal::Modes {
@@ -689,6 +801,9 @@ impl Render for TerminalView {
         let palette = self.palette.clone();
         let layout = self.layout.clone();
         let focused = self.focus.is_focused(window);
+        if focused {
+            self.keyboard_at = Some(Instant::now());
+        }
         let exited = self.exited;
         let selection = cx.theme().selection;
         let this = cx.entity().downgrade();
