@@ -55,8 +55,9 @@ Kebun (databases), no app needed:
   sawit kyzn leads \"select * from leads where phone is null\"
   sawit kyzn \"delete from leads where id = 3\"
                                            SQL is tried read-only first; SQL
-                                           that writes is shown, then asks
-                                           (-y: run it without asking)
+                                           that writes, or several statements,
+                                           is shown, then asks (-y: run it
+                                           without asking)
   <db> is a Sawit instance, a saved connection, a database named in
   ./.env DATABASE_URL (or a folder above), or a database on a running
   local Postgres. A unique prefix works: kyzn finds kyzn_crm.
@@ -101,7 +102,7 @@ Keys (the app's Keymap Editor; Sawit must be running):
   sawit list keys          every shortcut: its keys, what it runs, where,
                            and whether it's a default, yours or turned off
   sawit list keys | grep -i split
-                           find one (aliases: pintasan, keymap, shortcuts)
+                           find one (aliases: key, keymap, shortcuts, pintasan)
 
 Aliases (every word has an English and an Indonesian name):
   list = ls, daftar · bakar = stop · nyalakan = start · browse = intip
@@ -649,7 +650,7 @@ mod tests {
             "sawit list [instances|db|ports|connections|tools|mcp|config|keys]",
             "sawit list keys ",
             "Sawit must be running",
-            "pintasan, keymap, shortcuts",
+            "key, keymap, shortcuts, pintasan",
         ] {
             assert!(USAGE.contains(said), "the help doesn't say {said:?}");
         }
