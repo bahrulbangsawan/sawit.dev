@@ -28,9 +28,8 @@ are the accepted trade-off.
   with no browser open they answer that it isn't open, rather than open one
   over what the user is looking at. One browser tab per project, in that
   project's tab group (as its canvas), and one for a window with no
-  project. An agent's tools use the browser of the project they name
-  (`project`, which becomes its window's active project), else the active
-  project's.
+  project. An agent's tools use its project's browser (see Whose browser
+  below).
 - **Toolbar (GPUI):** back, forward, reload / stop, an address field, and an
   "Inspect" button (Safari Web Inspector). Enter in the address field
   navigates. Text that isn't a URL becomes a search (DuckDuckGo);
@@ -49,8 +48,8 @@ are the accepted trade-off.
   `slack://…`), from a click, a frame or a new window, asks first ("Open
   this link in another app?": Open or Cancel), one link at a time: WebKit
   doesn't say whether a click made it, so a page could otherwise launch any
-  app. After a Cancel the page's links to other apps are dropped until the
-  user or an agent opens a page.
+  app. After a Cancel (the question says so), the page's links to other
+  apps are dropped until the user or an agent opens a page, or reloads it.
 - **Visibility:** the webview is hidden whenever its tab isn't showing,
   exactly as the canvas is; it keeps running in the background.
 
