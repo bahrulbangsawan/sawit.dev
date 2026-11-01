@@ -321,7 +321,7 @@ impl BoardView {
                     cx.reveal_path(first);
                 }
             }
-            Err(error) => self.show_toast(error.to_string(), cx),
+            Err(error) => self.show_error(&error, cx),
         }
     }
 

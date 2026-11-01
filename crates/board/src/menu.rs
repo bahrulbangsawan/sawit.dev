@@ -13,8 +13,12 @@
 //!   Keyboard shortcuts, because the policy hides the others.
 //!
 //! An item is enabled when the engine has its command or Sawit carries it out itself
-//! ([`crate::policy::UI_COMMANDS`]). It is checked, or unchecked, when it is one of the View
-//! toggles ([`figcraft_engine::cmd::view::checked`]).
+//! ([`crate::policy::UI_COMMANDS`]), and the command applies to what the canvas holds now
+//! ([`applies`]): Frame selection, Group and the rest of what acts on the selection are greyed
+//! out while nothing is selected, Undo while there is nothing to undo, and the few items that
+//! need a dialog the canvas doesn't have yet always are. So are their keys quiet then. It is
+//! checked, or unchecked, when it is one of the View toggles
+//! ([`figcraft_engine::cmd::view::checked`]). Build the menus again when the selection changes.
 
 use figcraft_engine::Session;
 use figcraft_engine::catalog::{MENU, SEP};
@@ -22,7 +26,7 @@ use figcraft_engine::cmd::find_command;
 use figcraft_engine::cmd::view::checked;
 use figcraft_engine::keymap::{self, Platform};
 
-use crate::policy::{is_hidden, is_ui};
+use crate::policy::{is_hidden, is_ui, keeps_text_edit};
 use crate::shortcuts::owned_by_sawit;
 
 /// One entry of a menu.
@@ -153,12 +157,13 @@ pub fn context_menu(s: &Session) -> Vec<MenuNode> {
     menu
 }
 
-/// The keys of command `id` as a Mac menu writes them: the first of its bindings in FigCraft's
-/// keymap, `⇧⌘K` for Shift+Cmd+K. `None` when the command has no keys, or when its keys are
-/// Sawit's while the canvas has the keyboard (⌘W for closing the tab: the policy lists them in
-/// [`crate::policy::SAWIT_WINS`]), because the canvas never gets them.
+/// The keys of command `id` as a Mac menu writes them: the first of its default keys
+/// ([`crate::shortcuts::defaults`]: FigCraft's keymap, then Sawit's), `⇧⌘K` for Shift+Cmd+K.
+/// `None` when the command has no keys, or when its keys are Sawit's while the canvas has the
+/// keyboard (⌘W for closing the tab: the policy lists them in [`crate::policy::SAWIT_WINS`]),
+/// because the canvas never gets them.
 pub fn shortcut_label(id: &str) -> Option<String> {
-    let keys = keymap::primary(id, Platform::Mac)?;
+    let keys = crate::shortcuts::primary(id)?;
     (!owned_by_sawit(keys)).then(|| keymap::display(keys, Platform::Mac))
 }
 
@@ -175,14 +180,170 @@ fn available(id: &str) -> bool {
     find_command(id).is_some() || is_ui(id)
 }
 
-/// An item for command `id` called `label`.
+/// The commands that act on the selected layers, which have nothing to act on while no layer is
+/// selected: the engine refuses them then ("nothing is selected"), and Sawit's Copy as text and
+/// CSS copy nothing. The Select all with same commands are among them too: with nothing selected
+/// there is nothing to match, and they select nothing.
+pub const NEEDS_SELECTION: &[&str] = &[
+    // Edit
+    "edit.copy",
+    "edit.cut",
+    "edit.pasteOver",
+    "edit.pasteReplace",
+    "edit.duplicate",
+    "edit.delete",
+    "edit.copyProperties",
+    "edit.copyAsText",
+    "edit.copyAsCss",
+    "select.sameFill",
+    "select.sameStroke",
+    "select.sameEffect",
+    "select.sameText",
+    "select.sameFont",
+    "select.sameInstance",
+    "select.sameProperties",
+    // Object
+    "object.frameSelection",
+    "object.group",
+    "object.ungroup",
+    "object.removeFrame",
+    "object.resizeToFit",
+    "layout.add",
+    "layout.remove",
+    "layout.suggest",
+    "component.create",
+    "component.createMultiple",
+    "component.combineVariants",
+    "component.resetInstance",
+    "component.detach",
+    "component.goToMain",
+    "component.pushChanges",
+    "component.restoreMain",
+    "object.mask",
+    "object.releaseMask",
+    "image.crop",
+    "arrange.front",
+    "arrange.forward",
+    "arrange.backward",
+    "arrange.back",
+    "object.flipH",
+    "object.flipV",
+    "object.rotate180",
+    "object.rotateLeft",
+    "object.rotateRight",
+    "vector.flatten",
+    "vector.outlineStroke",
+    "bool.union",
+    "bool.subtract",
+    "bool.intersect",
+    "bool.exclude",
+    "bool.flatten",
+    "object.rasterize",
+    "object.toggleVisible",
+    "object.toggleLock",
+    "object.removeFill",
+    "object.removeStroke",
+    "object.swapFillStroke",
+    "object.rename",
+    // Text
+    "text.bold",
+    "text.italic",
+    "text.underline",
+    "text.strikethrough",
+    "text.bulletList",
+    "text.numberList",
+    "text.alignLeft",
+    "text.alignCenter",
+    "text.alignRight",
+    "text.alignJustify",
+    "text.sizeUp",
+    "text.sizeDown",
+    "text.weightUp",
+    "text.weightDown",
+    "text.lineHeightUp",
+    "text.lineHeightDown",
+    "text.trackingUp",
+    "text.trackingDown",
+    "text.caseOriginal",
+    "text.caseUpper",
+    "text.caseLower",
+    "text.caseTitle",
+    // Arrange
+    "align.left",
+    "align.hcenter",
+    "align.right",
+    "align.top",
+    "align.vcenter",
+    "align.bottom",
+    "distribute.horizontal",
+    "distribute.vertical",
+    "arrange.tidy",
+    "arrange.packH",
+    "arrange.packV",
+    "arrange.roundToPixels",
+    // Vector
+    "vector.join",
+    "vector.smoothJoin",
+    "vector.simplify",
+    "vector.reverse",
+];
+
+/// The commands the menus show that need what the canvas has no dialog to ask for yet: a link's
+/// URL, a page, the new names, an offset, a colour profile, the nudge amounts (ruling P6-C18's
+/// follow-up for input dialogs). Run as a menu item runs them, without it, they only refuse or
+/// read the values back. Their items are greyed out and their keys do nothing until the canvas
+/// asks for it; an agent passes it in the command's parameters.
+pub const NEEDS_INPUT: &[&str] = &[
+    "text.link",
+    "vector.offset",
+    "object.moveToPage",
+    "object.batchRename",
+    "file.colorProfile",
+    "pref.nudge",
+];
+
+/// The commands the menus show that never apply on the canvas: Revert to saved, because the canvas
+/// writes its file as it is edited and never holds unsaved changes to drop (the engine says "the
+/// file was never saved").
+pub const NEVER_ON_THE_CANVAS: &[&str] = &["file.revert"];
+
+/// Whether command `id` applies to what the canvas `s` holds now, so that its menu item is enabled
+/// and its key acts:
+/// - not one that needs input the canvas can't ask for ([`NEEDS_INPUT`]), nor one that never
+///   applies on the canvas ([`NEVER_ON_THE_CANVAS`]);
+/// - for a command on the selection ([`NEEDS_SELECTION`]), only with layers selected, or for copy
+///   and paste and the Text menu's styles while text is edited, which act on its characters;
+/// - Undo and Redo only with a step to take back or do again (an edit of text under way is one);
+/// - Delete and heal only while the layers are edited as vectors.
+///
+/// Any other command applies.
+pub fn applies(s: &Session, id: &str) -> bool {
+    if NEEDS_INPUT.contains(&id) || NEVER_ON_THE_CANVAS.contains(&id) {
+        return false;
+    }
+    let ds = s.ds().ok();
+    let editing_text = ds.is_some_and(|ds| ds.text_edit.is_some());
+    let (undo, redo) = s.undo_depth();
+    match id {
+        "edit.undo" => undo > 0 || editing_text,
+        "edit.redo" => redo > 0,
+        "vector.deleteHeal" => ds.is_some_and(|ds| ds.vector_edit.is_some()),
+        _ if NEEDS_SELECTION.contains(&id) => {
+            !s.selection().is_empty() || (editing_text && keeps_text_edit(id))
+        }
+        _ => true,
+    }
+}
+
+/// An item for command `id` called `label`, enabled while the command can run and applies to
+/// what the canvas holds now ([`applies`]).
 fn item(s: &Session, id: &'static str, label: &str) -> MenuNode {
     MenuNode::Item {
         id,
         label: label.to_string(),
         shortcut: shortcut_label(id),
         checked: checked(s, id),
-        enabled: available(id),
+        enabled: available(id) && applies(s, id),
     }
 }
 
@@ -623,18 +784,151 @@ mod tests {
         assert!(available("edit.copyAsPng"));
         assert!(!available("no.such"));
         assert!(!available(""));
-        // Every item the menus show can run.
+        // Every item the context menus show can run. The main menu's can too, but what doesn't
+        // apply now.
         let selected = board_with_sticky();
-        for menu in [
-            main_menu(&selected.session),
-            context_menu(&selected.session),
-            context_menu(&board().session),
+        for (menu, all) in [
+            (main_menu(&selected.session), false),
+            (context_menu(&selected.session), true),
+            (context_menu(&board().session), true),
         ] {
             for node in lists(&menu).into_iter().flatten() {
                 if let MenuNode::Item { id, enabled, .. } = node {
-                    assert!(enabled, "{id} is shown disabled");
+                    let applies = applies(&selected.session, id);
+                    assert_eq!(*enabled, all || applies, "{id}");
+                    assert!(available(id), "{id}");
                 }
             }
+        }
+    }
+
+    /// Whether the item for `id` in `nodes` is enabled.
+    fn enabled(nodes: &[MenuNode], id: &str) -> bool {
+        match item(nodes, id) {
+            MenuNode::Item { enabled, .. } => *enabled,
+            _ => unreachable!(),
+        }
+    }
+
+    /// The user's screenshot: Object ▸ Frame selection with nothing selected said "command
+    /// `object.frameSelection` is not available right now: nothing is selected (pass `ids`)".
+    /// What has nothing to act on is greyed out instead.
+    #[test]
+    fn items_that_do_not_apply_now_are_greyed_out() {
+        let mut empty = board();
+        let menu = main_menu(&empty.session);
+        for id in [
+            "object.frameSelection",
+            "object.group",
+            "edit.duplicate",
+            "edit.copyAsText",
+            "text.bold",
+            "align.left",
+            "select.sameFill",
+            "vector.deleteHeal",
+            "edit.undo",
+            "edit.redo",
+        ] {
+            assert!(!enabled(&menu, id), "{id} is enabled with nothing selected");
+        }
+        // What needs no selection stays enabled.
+        for id in ["select.all", "view.zoomFit", "file.export", "edit.paste"] {
+            assert!(enabled(&menu, id), "{id}");
+        }
+        // With a layer selected they apply, and making it is a step to undo.
+        sticky(&mut empty, 0);
+        let menu = main_menu(&empty.session);
+        for id in [
+            "object.frameSelection",
+            "object.group",
+            "edit.duplicate",
+            "edit.copyAsText",
+            "text.bold",
+            "align.left",
+            "select.sameFill",
+            "edit.undo",
+        ] {
+            assert!(
+                enabled(&menu, id),
+                "{id} is disabled with a sticky selected"
+            );
+        }
+        // Undone, it can be done again.
+        empty.execute("edit.undo", &json!({})).unwrap();
+        assert!(enabled(&main_menu(&empty.session), "edit.redo"));
+        // What needs a dialog the canvas doesn't have, or never applies on a canvas, never is.
+        let selected = board_with_sticky();
+        let menu = main_menu(&selected.session);
+        for id in NEEDS_INPUT.iter().chain(NEVER_ON_THE_CANVAS) {
+            assert!(!applies(&selected.session, id), "{id}");
+            if ids(&menu).contains(id) {
+                assert!(!enabled(&menu, id), "{id}");
+            }
+        }
+    }
+
+    /// While text is edited, copy and paste and the Text menu's styles act on its characters.
+    #[test]
+    fn text_commands_apply_while_text_is_edited() {
+        let mut board = board();
+        let made = board
+            .execute("text.create", &json!({"x": 0, "y": 0, "text": "hi"}))
+            .unwrap();
+        let id = made["id"].clone();
+        board
+            .execute("text.edit.begin", &json!({"id": id}))
+            .unwrap();
+        board.session.set_selection(Vec::new());
+        for id in ["edit.copy", "edit.paste", "text.bold", "edit.undo"] {
+            assert!(applies(&board.session, id), "{id}");
+        }
+        assert!(!applies(&board.session, "object.group"));
+    }
+
+    /// [`NEEDS_SELECTION`] is what the engine refuses with nothing selected: on an empty board and
+    /// on an empty design file, every item of the menus the engine refuses so is on it, and every
+    /// engine command on it is refused so. Only the Select all with same commands, which then
+    /// select nothing, and Sawit's own Copy as are on it by Sawit's choice. A FigCraft bump that
+    /// changes what needs a selection fails here.
+    #[test]
+    fn needs_selection_is_what_the_engine_refuses_with_nothing_selected() {
+        let design = || BoardDoc {
+            session: Session::with_document(figcraft_doc::Document::new("Design")),
+        };
+        let by_choice = |id: &str| id.starts_with("select.same") || is_ui(id);
+        let refused_for_the_selection = |error: &crate::BoardError| match error {
+            crate::BoardError::Unavailable { reason, .. } => {
+                reason.starts_with("nothing is selected")
+            }
+            // "select an instance", "select one layer".
+            other => other.for_user().starts_with("Select "),
+        };
+        for make in [board as fn() -> BoardDoc, design] {
+            let menu_ids = ids(&main_menu(&make().session));
+            for id in menu_ids {
+                if is_ui(id) || crate::policy::is_clipboard(id) || NEEDS_INPUT.contains(&id) {
+                    continue;
+                }
+                let mut doc = make();
+                let refused = doc
+                    .execute(id, &json!({}))
+                    .err()
+                    .filter(refused_for_the_selection);
+                assert_eq!(
+                    NEEDS_SELECTION.contains(&id),
+                    refused.is_some() || by_choice(id),
+                    "{id}: {refused:?}"
+                );
+            }
+        }
+        // Every id on the list is one the menus show: a misspelt one would grey out nothing.
+        let shown = ids(&main_menu(&board().session));
+        for id in NEEDS_SELECTION
+            .iter()
+            .chain(NEEDS_INPUT)
+            .chain(NEVER_ON_THE_CANVAS)
+        {
+            assert!(shown.contains(id), "{id} is in no menu");
         }
     }
 
@@ -649,10 +943,14 @@ mod tests {
         assert_eq!(shortcut_label("tool.section").as_deref(), Some("⇧S"));
         // A command with two keys shows the first, as FigCraft's menus do.
         assert_eq!(shortcut_label("app.actions").as_deref(), Some("⌘K"));
-        // Sawit owns ⌘W, ⌘J and ⌃⌘M, so the canvas has nothing to show for them.
+        // Sawit owns ⌘W, so the canvas has nothing to show for it. It owns ⌘J and ⌃⌘M too, and
+        // gives Join and Use as mask keys of its own.
         assert_eq!(shortcut_label("file.close"), None);
-        assert_eq!(shortcut_label("vector.join"), None);
-        assert_eq!(shortcut_label("object.mask"), None);
+        assert_eq!(shortcut_label("vector.join").as_deref(), Some("⌃J"));
+        assert_eq!(shortcut_label("object.mask").as_deref(), Some("⌃⌥M"));
+        // A key Sawit gives a command FigCraft has none for.
+        assert_eq!(shortcut_label("tool.star").as_deref(), Some("⇧8"));
+        assert_eq!(shortcut_label("view.zoom50").as_deref(), Some("⌥⇧-"));
         // ⌘B and ⇧⌘↩ are Sawit's too, but not while text is edited, so they are shown.
         assert_eq!(shortcut_label("text.bold").as_deref(), Some("⌘B"));
         assert_eq!(shortcut_label("board.nextSticky").as_deref(), Some("⇧⌘↵"));
@@ -666,7 +964,7 @@ mod tests {
         let menu = main_menu(&board().session);
         assert_eq!(shortcut_of(&menu, "edit.duplicate"), Some("⌘D"));
         assert_eq!(shortcut_of(&menu, "help.shortcuts"), Some("⌃⇧?"));
-        assert_eq!(shortcut_of(&menu, "vector.join"), None);
+        assert_eq!(shortcut_of(&menu, "vector.join"), Some("⌃J"));
         assert_eq!(shortcut_of(&menu, "file.revert"), None);
     }
 

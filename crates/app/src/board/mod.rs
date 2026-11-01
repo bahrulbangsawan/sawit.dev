@@ -61,7 +61,7 @@ use sawit_board::overlay::{self, Composition};
 use sawit_board::store::{self, Backup, Stamp, Writer};
 use sawit_board::toolbar::Flyout;
 use sawit_board::view::{self, PREVIEW_QUALITY, Viewport};
-use sawit_board::{BoardDoc, BoardError, DocKind, input, ops, policy, shortcuts};
+use sawit_board::{BoardDoc, BoardError, DocKind, input, menu, ops, policy, shortcuts};
 use serde_json::{Value, json};
 
 use crate::states::Placeholder;
@@ -234,11 +234,11 @@ pub fn command_keys_all(id: &str, cx: &mut App) -> Vec<String> {
 fn live_command_keys(id: &str, cx: &App) -> Vec<String> {
     use figcraft_engine::keymap::{self as figcraft_keys, Platform};
     let names = crate::keymap::names::normalize_keystrokes;
-    // FigCraft's own keys for the command, each as it is bound and as FigCraft writes it.
-    let figcraft: Vec<(String, String)> = figcraft_keys::KEYS
-        .iter()
+    // The command's default keys (FigCraft's, or Sawit's for a command FigCraft gives none),
+    // each as it is bound and as FigCraft writes it.
+    let figcraft: Vec<(String, String)> = shortcuts::defaults()
         .filter(|binding| binding.id == id)
-        .flat_map(|binding| binding.keys(Platform::Mac))
+        .flat_map(|binding| binding.keys.iter().copied())
         .filter_map(|spec| {
             let bound = names(&shortcuts::binding_keystroke(spec)?)?;
             Some((bound, figcraft_keys::display(spec, Platform::Mac)))
@@ -292,12 +292,12 @@ pub fn command_keys(id: &str, cx: &mut App) -> Option<String> {
     command_keys_all(id, cx).into_iter().next()
 }
 
-/// The title of FigCraft's command `id`: its shortcut's, else its menu item's, else its own.
+/// The title of FigCraft's command `id`: its shortcut's (FigCraft's, or Sawit's for a command it
+/// gives a key, `shortcuts::defaults`), else its menu item's, else its own.
 fn command_title(id: &str) -> &str {
-    figcraft_engine::keymap::KEYS
-        .iter()
+    shortcuts::defaults()
         .find(|binding| binding.id == id)
-        .map(|binding| binding.title())
+        .map(|binding| binding.title)
         .or_else(|| {
             figcraft_engine::catalog::items()
                 .find(|item| item.id == id)
@@ -490,6 +490,9 @@ pub struct BoardView {
     toast_timer: Option<Task<()>>,
     /// The toolbar's flyout that is open, if any ([`toolbar`]).
     open_flyout: Option<Flyout>,
+    /// The tool of each of the toolbar's groups used last, by the group's key: a group that shows
+    /// one of its tools at a time shows it while none of them is in use ([`toolbar`]).
+    last_tools: std::collections::HashMap<&'static str, figcraft_engine::ToolId>,
     /// The toolbar's Templates & table picker, while it is open ([`toolbar`]).
     picker: Option<Picker>,
     /// The kind of file the chrome was last drawn for: when another kind is on show, an open
@@ -668,6 +671,7 @@ impl BoardView {
             toast_timer: toast.is_some().then(|| hide_toast_later(cx)),
             toast: toast.map(SharedString::from),
             open_flyout: None,
+            last_tools: Default::default(),
             picker: None,
             shown_kind: None,
             show_layers: design_file,
@@ -887,8 +891,9 @@ impl BoardView {
     /// button, a flyout's or the context bar's choice, an item of the zoom menu. It is the one way
     /// the chrome runs a command (ruling P3-C13), in the order FigCraft's own app runs one
     /// (ui-egui `app/commands.rs`): the engine runs it, the canvas carries out what the engine
-    /// asked of it, then the engine's error shows as a toast (last, so that it is the toast that
-    /// shows), and the canvas redraws. Any command goes through as it is given.
+    /// asked of it, then the engine's error shows as a toast, in plain words
+    /// ([`Self::show_error`]; last, so that it is the toast that shows), and the canvas redraws.
+    /// Any command goes through as it is given.
     ///
     /// A text being typed in on the canvas ends first, unless the command acts on it
     /// ([`Self::end_text_edit`], ruling R-TEXTEDIT).
@@ -911,12 +916,19 @@ impl BoardView {
         let done = match done {
             Ok(done) => Some(done),
             Err(error) => {
-                self.show_toast(error.to_string(), cx);
+                self.show_error(&error, cx);
                 None
             }
         };
         cx.notify();
         done
+    }
+
+    /// Says why `error` stopped what the user did, in a toast, in plain words: the engine's advice
+    /// to agents ("pass `ids`") is for an agent's reply, never for the user
+    /// (`BoardError::for_user`).
+    fn show_error(&mut self, error: &BoardError, cx: &mut Context<Self>) {
+        self.show_toast(error.for_user(), cx);
     }
 
     /// Settles the chrome before it is drawn. A flyout or the picker that is open closes while
@@ -1071,6 +1083,12 @@ impl BoardView {
             cx.propagate();
             return;
         };
+        // A command that needs what the canvas has no dialog to ask for (a link's URL) has
+        // nothing to do from a key: the key does nothing, as one with nothing selected does.
+        if menu::NEEDS_INPUT.contains(&command.id.as_str()) {
+            cx.stop_propagation();
+            return;
+        }
         let key = pressed.as_ref().map(|(key, mods)| (key.as_str(), *mods));
         let routed = input::route_command(board, &command.id, key);
         if !self.finish_key(routed, window, cx) {
@@ -1083,7 +1101,13 @@ impl BoardView {
     ///
     /// The shortcut of a command Sawit carries out itself is carried out here as its menu item is:
     /// copy and paste ([`Self::run_clipboard`]), and import, save, export and copy as
-    /// ([`commands`], ruling P6-C2). A command the engine refuses says why, in a toast.
+    /// ([`commands`], ruling P6-C2).
+    ///
+    /// A key with nothing to act on does nothing and says nothing, as in FigCraft's own keyboard
+    /// and in Figma: a command that doesn't apply now (`sawit_board::menu::applies`: Copy as text
+    /// with nothing selected) doesn't run, and the engine's refusal of one that has nothing to act
+    /// on (⌥⌘G with nothing selected) shows no toast (`BoardError::for_key`). Any other refusal
+    /// says why, in plain words.
     fn finish_key(
         &mut self,
         routed: Result<KeyOutcome, BoardError>,
@@ -1095,8 +1119,11 @@ impl BoardView {
             Ok(KeyOutcome::Unhandled) => false,
             Ok(KeyOutcome::Handled) => true,
             Ok(KeyOutcome::Ui(id)) => {
-                if policy::is_clipboard(id) {
-                    self.run_clipboard(id, None, cx);
+                let applies = (self.board()).is_some_and(|board| menu::applies(&board.session, id));
+                if !applies {
+                    // Nothing to act on: the key is used, quietly.
+                } else if policy::is_clipboard(id) {
+                    self.run_clipboard(id, None, true, cx);
                 } else {
                     commands::run_ui(self, id, window, cx);
                 }
@@ -1104,7 +1131,9 @@ impl BoardView {
             }
             // After the requests' toast, so that the error's is the one that shows.
             Err(error) => {
-                self.show_toast(error.to_string(), cx);
+                if let Some(said) = error.for_key() {
+                    self.show_toast(said, cx);
+                }
                 true
             }
         };
@@ -1129,8 +1158,15 @@ impl BoardView {
     ///   clipboard gets the selected text, and a paste types its text.
     ///
     /// A paste with nothing to paste does nothing and says nothing. A command the engine refuses
-    /// says why, in a toast.
-    fn run_clipboard(&mut self, id: &str, at: Option<(f64, f64)>, cx: &mut Context<Self>) {
+    /// says why, in a toast, in plain words; from a key (`key`), it says nothing when it had
+    /// nothing to act on, as [`Self::finish_key`] has it.
+    fn run_clipboard(
+        &mut self,
+        id: &str,
+        at: Option<(f64, f64)>,
+        key: bool,
+        cx: &mut Context<Self>,
+    ) {
         let done = if self.editing_text() {
             self.clipboard_text(id, cx)
         } else {
@@ -1138,7 +1174,14 @@ impl BoardView {
         };
         self.handle_ui_requests(Vec::new(), cx);
         if let Err(error) = done {
-            self.show_toast(error.to_string(), cx);
+            let said = if key {
+                error.for_key()
+            } else {
+                Some(error.for_user())
+            };
+            if let Some(said) = said {
+                self.show_toast(said, cx);
+            }
         }
         cx.notify();
     }
@@ -1254,7 +1297,7 @@ impl BoardView {
             None => input::end_text_edit(board),
         };
         if let Err(error) = ended {
-            self.show_toast(error.to_string(), cx);
+            self.show_error(&error, cx);
             return false;
         }
         cx.notify();
@@ -1416,7 +1459,7 @@ impl BoardView {
             let queued = this.update(cx, |this, cx| match this.queue_save() {
                 Ok(queued) => queued.map(|doc| (doc, this.writer.clone())),
                 Err(err) => {
-                    this.show_toast(err.to_string(), cx);
+                    this.show_error(&err, cx);
                     None
                 }
             });
@@ -4159,6 +4202,29 @@ mod tests {
         assert!(wrong.is_empty(), "not the canvas's:\n{}", wrong.join("\n"));
     }
 
+    /// The keys Sawit gives the canvas's commands (`shortcuts::SAWIT_KEYS`) are no keys of the
+    /// app's: none runs anything outside the canvas, so on the canvas none shadows a key of the
+    /// workspace's, the app's or gpui-kit's root. (The canvas test above proves each runs its
+    /// command there.)
+    #[gpui_kit::test]
+    fn sawits_canvas_keys_take_no_key_of_the_apps(cx: &mut TestAppContext) {
+        cx.update(bind_app_keys);
+        let workspace = contexts(&["Root", "Workspace"]);
+        cx.update(|cx| {
+            for key in shortcuts::SAWIT_KEYS {
+                for spec in key.keys {
+                    let keystroke = shortcuts::binding_keystroke(spec).unwrap();
+                    let (actions, pending) = resolve(cx, &keystroke, &workspace);
+                    assert!(
+                        actions.is_empty() && !pending,
+                        "{spec} ({}) is the app's: {actions:?}",
+                        key.id
+                    );
+                }
+            }
+        });
+    }
+
     #[gpui_kit::test]
     fn sawit_keeps_its_shortcuts(cx: &mut TestAppContext) {
         cx.update(bind_app_keys);
@@ -4315,6 +4381,69 @@ mod tests {
             let toast = view.read_with(&cx, |view, _| view.toast.clone());
             assert_eq!(toast, None, "{keys}");
         }
+    }
+
+    /// The user's screenshot: ⌥⌘G with nothing selected toasted "command `object.frameSelection`
+    /// is not available right now: nothing is selected (pass `ids`)". A key with nothing to act on
+    /// does nothing and says nothing: FigCraft's keys (⌥⌘G, ⌘G, ⌥⌘V, ⌃⌥⌘K, ⌘C), one of Sawit's
+    /// (⌃⌥M, Use as mask), and the key of what Sawit carries out itself (⌃⌥⌘C, Copy as text).
+    /// With a layer selected, ⌥⌘G frames it.
+    #[gpui_kit::test]
+    fn a_key_with_nothing_to_act_on_says_nothing(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("quiet-keys");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        focus_canvas(&view, &mut cx);
+        let toast = |cx: &VisualTestContext| view.read_with(cx, |view, _| view.toast.clone());
+        for keys in [
+            "alt-cmd-g",
+            "cmd-g",
+            "alt-cmd-v",
+            "ctrl-alt-cmd-k",
+            "cmd-c",
+            "ctrl-alt-m",
+            "ctrl-alt-cmd-c",
+        ] {
+            cx.simulate_keystrokes(keys);
+            cx.run_until_parked();
+            assert_eq!(toast(&cx), None, "{keys}");
+        }
+        let sticky =
+            json!({"op": "command", "command": "board.sticky", "params": {"x": 0, "y": 0}});
+        run_op(&view, sticky, &mut cx);
+        focus_canvas(&view, &mut cx);
+        cx.simulate_keystrokes("alt-cmd-g");
+        cx.run_until_parked();
+        assert_eq!(toast(&cx), None);
+        let framed = view.read_with(&cx, |view, _| {
+            let doc = view.board().unwrap().doc().unwrap();
+            let page = doc.node(doc.first_page().unwrap()).unwrap();
+            (page.children.iter())
+                .filter_map(|id| doc.node(*id))
+                .any(|node| matches!(node.kind, figcraft_doc::NodeKind::Frame))
+        });
+        assert!(framed, "⌥⌘G framed nothing");
+    }
+
+    /// SMOKE-3 still holds: a board's tool's key on a design file says why it does nothing, in
+    /// plain words.
+    #[gpui_kit::test]
+    fn a_boards_tool_key_on_a_design_file_says_why(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("boards-only-key");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        view.update(&mut cx, |view, cx| {
+            let design = figcraft_engine::Session::with_document(Document::new("Design"));
+            view.replace_doc(BoardDoc { session: design });
+            cx.notify();
+        });
+        cx.run_until_parked();
+        focus_canvas(&view, &mut cx);
+        cx.simulate_keystrokes("q");
+        cx.run_until_parked();
+        let toast = view.read_with(&cx, |view, _| view.toast.clone());
+        assert_eq!(
+            toast.as_deref(),
+            Some("This is for boards, and this canvas is a design file")
+        );
     }
 
     /// The canvas chrome's keys are rows of the keymap editor, bound as the app binds them: the
@@ -5213,6 +5342,46 @@ mod tests {
         assert_eq!(open(&cx), None);
     }
 
+    /// The user's ask: the frame and every kind of layer on a board's toolbar. The shape tools
+    /// share one button, the one used last, and a flyout that lists them with Place image…;
+    /// picking Ellipse there chooses it, and the button shows it from then on, as it does for a
+    /// tool chosen by its key.
+    #[gpui_kit::test]
+    fn a_groups_button_shows_the_tool_used_last(cx: &mut TestAppContext) {
+        let tmp = Scratch::new("tool-groups");
+        let (view, mut cx) = chrome_canvas(cx, &tmp);
+        let open = |cx: &VisualTestContext| view.read_with(cx, |view, _| view.open_flyout);
+        // A board's toolbar has the frame, the shapes and the pens.
+        for selector in ["tool.frame", "tool.rectangle", "tool.pen", "tool.sticky"] {
+            assert!(
+                cx.debug_bounds(selector).is_some(),
+                "{selector} isn't drawn"
+            );
+        }
+        assert!(cx.debug_bounds("tool.ellipse").is_none());
+        click(&mut cx, "board-flyout-geometry");
+        cx.run_until_parked();
+        assert_eq!(open(&cx), Some(Flyout::Tools("geometry")));
+        assert!(cx.debug_bounds("board-flyout-item-Place image…").is_some());
+        click(&mut cx, "board-flyout-item-Ellipse");
+        cx.run_until_parked();
+        assert_eq!(active_tool(&view, &cx), ToolId::Ellipse);
+        assert_eq!(open(&cx), None);
+        assert!(cx.debug_bounds("tool.ellipse").is_some());
+        assert!(cx.debug_bounds("tool.rectangle").is_none());
+        // Another tool in use: the group's button still shows the ellipse, the one used last.
+        click(&mut cx, "tool.hand");
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("tool.ellipse").is_some());
+        // A key chooses a tool of the group, and the button shows it.
+        focus_canvas(&view, &mut cx);
+        // ⇧8, which GPUI reports as `*`.
+        cx.simulate_keystrokes("*");
+        cx.run_until_parked();
+        assert_eq!(active_tool(&view, &cx), ToolId::Star);
+        assert!(cx.debug_bounds("tool.star").is_some());
+    }
+
     #[gpui_kit::test]
     fn the_context_bar_runs_the_options_it_shows(cx: &mut TestAppContext) {
         use sawit_board::context_bar::{Control, context_bar};
@@ -5665,6 +5834,8 @@ mod tests {
             .flat_map(|group| group.tools)
             .map(|tool| toolbar::tool_icon(tool.icon));
         let chrome = [
+            // Place image…, at the end of the shape tools' flyout.
+            toolbar::tool_icon(sawit_board::toolbar::ToolIcon::Image),
             toolbar::CHEVRON_ICON,
             toolbar::PICKER_ICON,
             toolbar::CHECK_ICON,
@@ -5764,14 +5935,14 @@ mod tests {
                 );
             }
             let store = crate::keymap::store(cx);
-            // R moves to ⌃⌥R.
+            // R moves to ⌃⌥Y (a key no default uses).
             let rectangle = default_of("tool.rectangle", "r", cx);
             store
                 .update(cx, |store, cx| {
                     store.change(
                         rectangle,
                         Some(shortcuts::CANVAS_CONTEXT),
-                        "ctrl-alt-r",
+                        "ctrl-alt-y",
                         "board::Command",
                         Some(json!({ "id": "tool.rectangle" })),
                         cx,
@@ -5780,7 +5951,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 super::command_keys("tool.rectangle", cx).as_deref(),
-                Some("⌃⌥R")
+                Some("⌃⌥Y")
             );
             // ⌘K is taken out of the palette's keys: its other key, ⌘/, still opens it.
             let palette = default_of("app.actions", "cmd-k", cx);
@@ -5800,7 +5971,7 @@ mod tests {
                     .find(|row| row.id == id)
                     .map(|row| row.keys.clone())
             };
-            assert_eq!(sheet_keys("tool.rectangle").as_deref(), Some("⌃⌥R"));
+            assert_eq!(sheet_keys("tool.rectangle").as_deref(), Some("⌃⌥Y"));
             assert_eq!(sheet_keys("app.actions").as_deref(), Some("⌘/"));
             let mut items = vec![sawit_board::actions::ActionItem {
                 id: "tool.rectangle",
@@ -5809,12 +5980,12 @@ mod tests {
                 shortcut: Some("R".into()),
             }];
             menus::live_actions(&mut items, cx);
-            assert_eq!(items[0].shortcut.as_deref(), Some("⌃⌥R"));
+            assert_eq!(items[0].shortcut.as_deref(), Some("⌃⌥Y"));
             // Taken out too, the rectangle has no key, and leaves the sheet.
             let rows = store.read(cx).rows(false, cx);
             let users = rows
                 .iter()
-                .find(|row| row.keystrokes.as_ref() == "ctrl-alt-r")
+                .find(|row| row.keystrokes.as_ref() == "ctrl-alt-y")
                 .unwrap()
                 .source;
             store

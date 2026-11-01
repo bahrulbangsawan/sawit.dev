@@ -325,16 +325,31 @@ mod tests {
         let mut board = design_file();
         let id = rectangle(&mut board);
         let none = export_bytes(&mut board, &[], &row("png", 1.0));
-        assert!(matches!(none, Err(BoardError::Engine(_))), "{none:?}");
+        assert!(
+            matches!(
+                none,
+                Err(BoardError::Engine(_) | BoardError::Unavailable { .. })
+            ),
+            "{none:?}"
+        );
         for format in ["fig", "penpot", "gif", ""] {
             let refused = export_bytes(&mut board, &[id], &row(format, 1.0));
             assert!(
-                matches!(refused, Err(BoardError::Engine(_))),
+                matches!(
+                    refused,
+                    Err(BoardError::Engine(_) | BoardError::Unavailable { .. })
+                ),
                 "{format:?}: {refused:?}"
             );
         }
         let missing = export_bytes(&mut board, &[NodeId(9_999)], &row("png", 1.0));
-        assert!(matches!(missing, Err(BoardError::Engine(_))), "{missing:?}");
+        assert!(
+            matches!(
+                missing,
+                Err(BoardError::Engine(_) | BoardError::Unavailable { .. })
+            ),
+            "{missing:?}"
+        );
     }
 
     #[test]
@@ -648,7 +663,13 @@ mod tests {
         for rows in [[row("gif", 1.0)], [row("png", f64::NAN)]] {
             let edit = set_export_rows(&sel, &rows);
             let refused = board.execute(edit.command, &edit.params);
-            assert!(matches!(refused, Err(BoardError::Engine(_))), "{refused:?}");
+            assert!(
+                matches!(
+                    refused,
+                    Err(BoardError::Engine(_) | BoardError::Unavailable { .. })
+                ),
+                "{refused:?}"
+            );
         }
         assert_eq!(board.revision(), revision);
         assert_eq!(read(&board, &[id]), sel);

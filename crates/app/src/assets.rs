@@ -102,6 +102,8 @@ gpui_kit::assets::icon_assets!(
         StickyNote,
         Spline,
         Stamp,
+        Signature,
+        ImagePlus,
         LayoutTemplate,
         // The native canvas's Design panel (src/board/design_panel).
         AlignStartVertical,

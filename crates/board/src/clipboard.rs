@@ -469,7 +469,13 @@ mod tests {
         let mut board = board();
         before_paste(&mut board);
         let pasted = paste(&mut board, PasteSource::Canvas, None);
-        assert!(matches!(pasted, Err(BoardError::Engine(_))), "{pasted:?}");
+        assert!(
+            matches!(
+                pasted,
+                Err(BoardError::Engine(_) | BoardError::Unavailable { .. })
+            ),
+            "{pasted:?}"
+        );
         assert!(layers(&board).is_empty());
     }
 

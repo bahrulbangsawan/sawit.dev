@@ -144,9 +144,21 @@ mod tests {
         BoardDoc::new_board("Canvas").unwrap()
     }
 
-    /// The actions of an empty board.
+    /// A board with a sticky on it, selected: what acts on the selection applies.
+    fn board_with_sticky() -> BoardDoc {
+        let mut board = board();
+        board
+            .execute(
+                "board.sticky",
+                &serde_json::json!({"x": 0, "y": 0, "text": "hi"}),
+            )
+            .unwrap();
+        board
+    }
+
+    /// The actions of a board with a sticky selected.
     fn actions() -> Vec<ActionItem> {
-        all_actions(&board().session)
+        all_actions(&board_with_sticky().session)
     }
 
     /// An action called `label`. The tests that rank by label need no more of it.
@@ -181,10 +193,19 @@ mod tests {
 
     #[test]
     fn all_actions_are_the_enabled_menu_items() {
-        let board = board();
-        let ids: Vec<&str> = all_actions(&board.session).iter().map(|a| a.id).collect();
-        assert_eq!(ids, enabled_ids(&main_menu(&board.session)));
+        let selected = board_with_sticky();
+        let ids: Vec<&str> = all_actions(&selected.session)
+            .iter()
+            .map(|a| a.id)
+            .collect();
+        assert_eq!(ids, enabled_ids(&main_menu(&selected.session)));
         assert!(ids.len() > 100, "only {} actions", ids.len());
+        // On an empty board, what acts on the selection is no action: it has nothing to act on.
+        let empty = board();
+        let ids: Vec<&str> = all_actions(&empty.session).iter().map(|a| a.id).collect();
+        assert_eq!(ids, enabled_ids(&main_menu(&empty.session)));
+        assert!(!ids.contains(&"object.frameSelection"), "{ids:?}");
+        assert!(ids.contains(&"view.zoomFit"), "{ids:?}");
         // No id twice: running one means one thing.
         let mut sorted = ids.clone();
         sorted.sort_unstable();
@@ -204,9 +225,9 @@ mod tests {
         assert_eq!(find("edit.copyAsCss").path, "Edit › Copy as › Copy as CSS");
         assert_eq!(find("help.shortcuts").path, "Help › Keyboard shortcuts");
         assert_eq!(find("view.zoomFit").path, "View › Zoom to fit");
-        // Sawit owns ⌘J, and some commands have no keys.
-        assert_eq!(find("vector.join").shortcut, None);
-        assert_eq!(find("file.revert").shortcut, None);
+        // Sawit owns ⌘J and gives Join its own key, and some commands have no keys.
+        assert_eq!(find("vector.join").shortcut.as_deref(), Some("⌃J"));
+        assert_eq!(find("pref.keepTool").shortcut, None);
     }
 
     #[test]

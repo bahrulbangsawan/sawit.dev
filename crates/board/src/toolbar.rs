@@ -4,16 +4,21 @@
 //! a flyout item, with its params, through `BoardView::choose`: the tests here run the same
 //! commands with the same params.
 //!
-//! The groups are the spec's lists ("Toolbar and context bar"), in the order the toolbar shows
-//! them:
+//! The groups, in the order the toolbar shows them, are the spec's lists ("Toolbar and context
+//! bar") with every kind of layer the engine's tools make on that kind of file: the user asked
+//! for the frame and the rest of FigCraft's design tools on a board too, where the engine makes
+//! them as on a design file. A group marked ^ shows one of its tools, the one in use or used
+//! last, with a flyout that lists them all ([`Flyout::Tools`]), as FigCraft's own toolbar does;
+//! the others show each of their tools.
 //!
 //! | File | Groups |
 //! |---|---|
-//! | board | `move` (Move, Hand), `ink` (Marker, Highlighter, Eraser), `sticky` (Sticky), `shape` (Shapes), `connector` (Connector), `text` (Text), `section` (Section), `stamp` (Stamp) |
-//! | design | `move` (Move, Scale, Hand), `frame` (Frame, Section, Slice), `shape` (Rectangle, Line, Arrow, Ellipse, Polygon, Star), `pen` (Pen, Pencil), `text` (Text) |
+//! | board | `move` (Move, Hand), `ink` (Marker, Highlighter, Eraser), `sticky` (Sticky), `shape` (Shapes), `connector` (Connector), `text` ^ (Text, Text on a path), `frame` ^ (Frame, Section, Slice), `geometry` ^ (Rectangle, Line, Arrow, Ellipse, Polygon, Star; Place image…), `pen` ^ (Pen, Pencil), `stamp` (Stamp) |
+//! | design | `move` (Move, Scale, Hand), `frame` ^ (Frame, Section, Slice), `shape` ^ (Rectangle, Line, Arrow, Ellipse, Polygon, Star; Place image…), `pen` ^ (Pen, Pencil), `text` ^ (Text, Text on a path) |
 //!
-//! No other tool is offered: the spec's lists leave them out, and [`crate::policy`] hides the
-//! comment tool and the shape builder.
+//! A design file has no board tools: the engine refuses them there ("this is for boards"). No
+//! other tool is offered: [`crate::policy`] hides the comment tool, the shape builder and the
+//! colour picker.
 
 use figcraft_doc::{BOARD_COLORS, BoardShape, Routing, Stamp};
 use figcraft_engine::keymap::{self, Platform};
@@ -49,6 +54,9 @@ pub enum ToolIcon {
     Shapes,
     Connector,
     Stamp,
+    TextOnPath,
+    /// Place image…, which asks for an image file and places it.
+    Image,
 }
 
 /// One tool button of the toolbar.
@@ -66,8 +74,8 @@ pub struct ToolButton {
     pub icon: ToolIcon,
 }
 
-/// A flyout: the choices that open beside a tool button and set what the tool makes. [`flyout`]
-/// lists them.
+/// A flyout: the choices that open beside a tool button and set what the tool makes, or the
+/// tools of its group. [`flyout`] lists them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Flyout {
     /// The board colours of a new sticky note.
@@ -78,6 +86,21 @@ pub enum Flyout {
     ConnectorStyles,
     /// The stamps.
     Stamps,
+    /// The tools of the group with this key, which shows one of them at a time
+    /// ([`shown_tool`]): picking one chooses it. The group of the Rectangle tool also lists Place
+    /// image…, as Figma's shape tools end with Image.
+    Tools(&'static str),
+}
+
+impl Flyout {
+    /// What the view names the flyout by: the variant, or for a group's tools the group's key
+    /// (`StickyColors`, `geometry`).
+    pub fn name(self) -> String {
+        match self {
+            Flyout::Tools(group) => group.to_string(),
+            other => format!("{other:?}"),
+        }
+    }
 }
 
 /// A run of tool buttons that sit together, and the flyout that belongs to them if they have one.
@@ -92,7 +115,7 @@ pub struct ToolGroup {
 }
 
 /// One choice of a flyout. Picking it runs `command` with `params`. It has the fields of
-/// `context_bar::ControlOption`, so the view can draw the two alike.
+/// `context_bar::ControlOption`, so the view can draw the two alike, and the picture of a tool.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FlyoutItem {
     /// The command picking the item runs: the tool's own, with the choice as its one param. It
@@ -104,8 +127,10 @@ pub struct FlyoutItem {
     pub label: String,
     /// The colour to draw for a colour item, `None` for the others.
     pub swatch: Option<[u8; 4]>,
-    /// Whether the item is the choice the tool makes now.
+    /// Whether the item is the choice the tool makes now, or for a group's tools the tool in use.
     pub selected: bool,
+    /// The picture of a tool, `None` for the other choices.
+    pub icon: Option<ToolIcon>,
 }
 
 /// A board template, as `board.templates` lists it.
@@ -163,6 +188,12 @@ const STICKY: ToolDef = ToolDef::new("tool.sticky", ToolId::Sticky, ToolIcon::St
 const SHAPES: ToolDef = ToolDef::new("tool.shape", ToolId::BoardShape, ToolIcon::Shapes);
 const CONNECTOR: ToolDef = ToolDef::new("tool.connector", ToolId::Connector, ToolIcon::Connector);
 const STAMP: ToolDef = ToolDef::new("tool.stamp", ToolId::Stamp, ToolIcon::Stamp);
+const TEXT_ON_PATH: ToolDef =
+    ToolDef::new("tool.textOnPath", ToolId::TextOnPath, ToolIcon::TextOnPath);
+
+/// The command of Place image…, the last item of the shape tools' flyout: Sawit asks for the
+/// image file (`crate::policy::UI_COMMANDS`).
+pub const PLACE_IMAGE: &str = "file.placeImage";
 
 /// The button for `def`. Its label is FigCraft's own for the tool, and its shortcut is the one a
 /// Mac menu shows for the command: the first of its keys, with ⇧ for Shift.
@@ -171,7 +202,7 @@ fn button(def: ToolDef) -> ToolButton {
         command: def.command,
         tool: def.tool,
         label: def.tool.label(),
-        shortcut: keymap::primary(def.command, Platform::Mac)
+        shortcut: crate::shortcuts::primary(def.command)
             .map(|keys| keymap::display(keys, Platform::Mac)),
         icon: def.icon,
     }
@@ -186,6 +217,15 @@ fn group(key: &'static str, tools: &[ToolDef], flyout: Option<Flyout>) -> ToolGr
     }
 }
 
+/// A group of `tools` under `key` that shows one of them at a time, with a flyout that lists them
+/// ([`Flyout::Tools`]).
+fn tools(key: &'static str, tools: &[ToolDef]) -> ToolGroup {
+    group(key, tools, Some(Flyout::Tools(key)))
+}
+
+/// The shape tools, in FigCraft's order.
+const SHAPE_TOOLS: [ToolDef; 6] = [RECTANGLE, LINE, ARROW, ELLIPSE, POLYGON, STAR];
+
 /// The tool groups of the toolbar of a file of `kind`, in the order the toolbar shows them. A
 /// board and a design file have tools of their own: the module's docs list both.
 pub fn groups(kind: DocKind) -> Vec<ToolGroup> {
@@ -196,22 +236,31 @@ pub fn groups(kind: DocKind) -> Vec<ToolGroup> {
             group("sticky", &[STICKY], Some(Flyout::StickyColors)),
             group("shape", &[SHAPES], Some(Flyout::Shapes)),
             group("connector", &[CONNECTOR], Some(Flyout::ConnectorStyles)),
-            group("text", &[TEXT], None),
-            group("section", &[SECTION], None),
+            tools("text", &[TEXT, TEXT_ON_PATH]),
+            tools("frame", &[FRAME, SECTION, SLICE]),
+            tools("geometry", &SHAPE_TOOLS),
+            tools("pen", &[PEN, PENCIL]),
             group("stamp", &[STAMP], Some(Flyout::Stamps)),
         ],
         DocKind::Design => vec![
             group("move", &[MOVE, SCALE, HAND], None),
-            group("frame", &[FRAME, SECTION, SLICE], None),
-            group(
-                "shape",
-                &[RECTANGLE, LINE, ARROW, ELLIPSE, POLYGON, STAR],
-                None,
-            ),
-            group("pen", &[PEN, PENCIL], None),
-            group("text", &[TEXT], None),
+            tools("frame", &[FRAME, SECTION, SLICE]),
+            tools("shape", &SHAPE_TOOLS),
+            tools("pen", &[PEN, PENCIL]),
+            tools("text", &[TEXT, TEXT_ON_PATH]),
         ],
     }
+}
+
+/// The tool the button of `group` shows when its flyout lists its tools ([`Flyout::Tools`]):
+/// the tool in use when it is one of them, else the one of them used last (`last`, which the view
+/// remembers), else the first. Any other group shows each of its tools.
+pub fn shown_tool(group: &ToolGroup, active: ToolId, last: Option<ToolId>) -> &ToolButton {
+    let find = |tool: ToolId| group.tools.iter().find(|button| button.tool == tool);
+    find(active)
+        .or_else(|| last.and_then(find))
+        .or(group.tools.first())
+        .expect("a toolbar group has a tool")
 }
 
 /// The tool that is chosen now, which the canvas's pointer events go to. It is the session's own
@@ -237,6 +286,7 @@ fn item(command: &'static str, key: &str, value: &str, label: &str, selected: bo
         label: label.to_owned(),
         swatch: None,
         selected,
+        icon: None,
     }
 }
 
@@ -250,6 +300,7 @@ fn item(command: &'static str, key: &str, value: &str, label: &str, selected: bo
 /// | [`Flyout::Shapes`] | `BoardShape::ALL` | `tool.shape {shape}` | the shape the tool places |
 /// | [`Flyout::ConnectorStyles`] | straight, elbow, curved | `tool.connector {style}` | how new connectors run |
 /// | [`Flyout::Stamps`] | `Stamp::ALL` | `tool.stamp {stamp}` | the stamp the tool places |
+/// | [`Flyout::Tools`] | the group's tools, then Place image… for the shape tools | `tool.…`, [`PLACE_IMAGE`] | the tool in use |
 ///
 /// The names in the params are the ones the engine reads: the colour's name, and the camelCase ids
 /// of the shapes, the styles and the stamps. A colour item has its colour as `swatch`. When new
@@ -292,7 +343,47 @@ pub fn flyout(s: &Session, f: Flyout) -> Vec<FlyoutItem> {
                 item("tool.stamp", "stamp", stamp.id(), stamp.label(), selected)
             })
             .collect(),
+        Flyout::Tools(key) => group_tools(s, key),
     }
+}
+
+/// The items of the flyout of the group `key` of the toolbar of `s`'s file: its tools, the one in
+/// use selected, and for the shape tools Place image… last.
+fn group_tools(s: &Session, key: &str) -> Vec<FlyoutItem> {
+    let kind = match s.doc() {
+        Ok(doc) if figcraft_engine::board::is_board(doc) => DocKind::Board,
+        _ => DocKind::Design,
+    };
+    let Some(group) = groups(kind).into_iter().find(|group| group.key == key) else {
+        return Vec::new();
+    };
+    let shapes = group
+        .tools
+        .iter()
+        .any(|tool| tool.tool == ToolId::Rectangle);
+    let mut items: Vec<FlyoutItem> = group
+        .tools
+        .iter()
+        .map(|tool| FlyoutItem {
+            command: tool.command,
+            params: json!({}),
+            label: tool.label.to_owned(),
+            swatch: None,
+            selected: tool.tool == active(s),
+            icon: Some(tool.icon),
+        })
+        .collect();
+    if shapes {
+        items.push(FlyoutItem {
+            command: PLACE_IMAGE,
+            params: json!({}),
+            label: "Place image…".to_owned(),
+            swatch: None,
+            selected: false,
+            icon: Some(ToolIcon::Image),
+        });
+    }
+    items
 }
 
 /// The templates a board offers, in the order the engine lists them (`board.templates`).
@@ -348,7 +439,7 @@ mod tests {
 
     /// Both kinds of file, with how many tool buttons the toolbar of each has. The tests that go
     /// over every button check the count too, so that an empty toolbar fails them.
-    const KINDS: [(DocKind, usize); 2] = [(DocKind::Board, 11), (DocKind::Design, 15)];
+    const KINDS: [(DocKind, usize); 2] = [(DocKind::Board, 22), (DocKind::Design, 16)];
 
     /// Every tool button of the toolbar of a file of `kind`, in order.
     fn buttons(kind: DocKind) -> Vec<ToolButton> {
@@ -408,9 +499,12 @@ mod tests {
         let on_board = commands(DocKind::Board);
         let on_design = commands(DocKind::Design);
         assert!(on_board.contains(&"tool.sticky"));
-        assert!(!on_board.contains(&"tool.frame"));
         assert!(on_design.contains(&"tool.frame"));
         assert!(!on_design.contains(&"tool.sticky"));
+        // The frame and the design tools are on a board too, where the engine makes them.
+        for command in on_design.iter().filter(|command| **command != "tool.scale") {
+            assert!(on_board.contains(command), "{command} isn't on a board");
+        }
         // Comments are not part of the canvas.
         assert!(!on_board.contains(&"tool.comment"));
         assert!(!on_design.contains(&"tool.comment"));
@@ -443,8 +537,26 @@ mod tests {
                     vec!["tool.connector"],
                     Some(Flyout::ConnectorStyles)
                 ),
-                ("text", vec!["tool.text"], None),
-                ("section", vec!["tool.section"], None),
+                (
+                    "text",
+                    vec!["tool.text", "tool.textOnPath"],
+                    Some(Flyout::Tools("text"))
+                ),
+                (
+                    "frame",
+                    vec!["tool.frame", "tool.section", "tool.slice"],
+                    Some(Flyout::Tools("frame"))
+                ),
+                (
+                    "geometry",
+                    SHAPES_TOOLS.to_vec(),
+                    Some(Flyout::Tools("geometry"))
+                ),
+                (
+                    "pen",
+                    vec!["tool.pen", "tool.pencil"],
+                    Some(Flyout::Tools("pen"))
+                ),
                 ("stamp", vec!["tool.stamp"], Some(Flyout::Stamps)),
             ]
         );
@@ -455,24 +567,158 @@ mod tests {
                 (
                     "frame",
                     vec!["tool.frame", "tool.section", "tool.slice"],
-                    None
+                    Some(Flyout::Tools("frame"))
+                ),
+                ("shape", SHAPES_TOOLS.to_vec(), Some(Flyout::Tools("shape"))),
+                (
+                    "pen",
+                    vec!["tool.pen", "tool.pencil"],
+                    Some(Flyout::Tools("pen"))
                 ),
                 (
-                    "shape",
-                    vec![
-                        "tool.rectangle",
-                        "tool.line",
-                        "tool.arrow",
-                        "tool.ellipse",
-                        "tool.polygon",
-                        "tool.star"
-                    ],
-                    None
+                    "text",
+                    vec!["tool.text", "tool.textOnPath"],
+                    Some(Flyout::Tools("text"))
                 ),
-                ("pen", vec!["tool.pen", "tool.pencil"], None),
-                ("text", vec!["tool.text"], None),
             ]
         );
+    }
+
+    /// The shape tools' commands, in the toolbar's order.
+    const SHAPES_TOOLS: [&str; 6] = [
+        "tool.rectangle",
+        "tool.line",
+        "tool.arrow",
+        "tool.ellipse",
+        "tool.polygon",
+        "tool.star",
+    ];
+
+    /// A file of `kind` with nothing on its page.
+    fn empty(kind: DocKind) -> BoardDoc {
+        match kind {
+            DocKind::Board => board(),
+            DocKind::Design => design(),
+        }
+    }
+
+    /// Drags on the page of `doc` from `from` to `to`, at 100%, with the tool in use.
+    fn drag(doc: &mut BoardDoc, from: (f64, f64), to: (f64, f64)) {
+        use figcraft_engine::{PointerEvent, PointerKind};
+        let mid = ((from.0 + to.0) / 2.0, (from.1 + to.1) / 2.0);
+        for (kind, (x, y)) in [
+            (PointerKind::Down, from),
+            (PointerKind::Move, mid),
+            (PointerKind::Move, to),
+            (PointerKind::Up, to),
+        ] {
+            crate::input::pointer(doc, &PointerEvent::at(kind, x, y, 1.0)).unwrap();
+        }
+    }
+
+    /// How many layers the page of `doc` holds, however deep.
+    fn layer_count(doc: &BoardDoc) -> usize {
+        let page = doc.session.page().unwrap();
+        doc.doc().unwrap().subtree(page).len()
+    }
+
+    /// The user's ask: every kind of layer the engine's tools make is on the toolbar, on a board
+    /// as on a design file, and none of them only errors there. A drag with each drawing tool
+    /// makes a layer on both kinds of file; the pen makes a path of two clicks; text on a path
+    /// goes on a rectangle's outline.
+    #[test]
+    fn every_drawing_tool_makes_a_layer_on_both_kinds_of_file() {
+        for (kind, _) in KINDS {
+            let shown = commands(kind);
+            for command in [
+                "tool.frame",
+                "tool.section",
+                "tool.slice",
+                "tool.rectangle",
+                "tool.line",
+                "tool.arrow",
+                "tool.ellipse",
+                "tool.polygon",
+                "tool.star",
+                "tool.pencil",
+            ] {
+                assert!(shown.contains(&command), "{kind:?}: {command} isn't shown");
+                let mut doc = empty(kind);
+                doc.execute(command, &json!({})).unwrap();
+                drag(&mut doc, (10.0, 10.0), (120.0, 90.0));
+                assert!(layer_count(&doc) > 1, "{kind:?}: {command} made nothing");
+            }
+            // The pen: two clicks and Enter make a path.
+            let mut doc = empty(kind);
+            doc.execute("tool.pen", &json!({})).unwrap();
+            drag(&mut doc, (10.0, 10.0), (10.0, 10.0));
+            drag(&mut doc, (120.0, 90.0), (120.0, 90.0));
+            let _ = crate::input::route_key(&mut doc, "Enter", Mods::default());
+            assert!(layer_count(&doc) > 1, "{kind:?}: the pen made nothing");
+            // Text on a path: a click on a rectangle's outline.
+            let mut doc = empty(kind);
+            doc.execute("tool.rectangle", &json!({})).unwrap();
+            drag(&mut doc, (0.0, 0.0), (200.0, 100.0));
+            doc.execute("tool.textOnPath", &json!({})).unwrap();
+            drag(&mut doc, (100.0, 0.0), (100.0, 0.0));
+            // The text takes the rectangle's place, along its outline.
+            let page = doc.session.page().unwrap();
+            let on_path = doc.doc().unwrap().subtree(page).into_iter().any(|id| {
+                let doc = doc.doc().unwrap();
+                doc.node(id)
+                    .and_then(|node| node.kind.text())
+                    .is_some_and(|text| text.path.is_some())
+            });
+            assert!(on_path, "{kind:?}: no text on the path");
+        }
+    }
+
+    #[test]
+    fn a_tools_flyout_lists_its_groups_tools_and_marks_the_one_in_use() {
+        for (kind, _) in KINDS {
+            let mut doc = empty(kind);
+            for group in groups(kind) {
+                let Some(Flyout::Tools(key)) = group.flyout else {
+                    continue;
+                };
+                assert_eq!(key, group.key);
+                let items = flyout(&doc.session, Flyout::Tools(key));
+                let tools: Vec<&str> = group.tools.iter().map(|tool| tool.command).collect();
+                let listed: Vec<&str> = items.iter().map(|item| item.command).collect();
+                let shapes = tools.contains(&"tool.rectangle");
+                let mut expected = tools.clone();
+                if shapes {
+                    expected.push(PLACE_IMAGE);
+                }
+                assert_eq!(listed, expected, "{kind:?} {key}");
+                assert!(items.iter().all(|item| item.icon.is_some()), "{key}");
+                for item in items.iter().filter(|item| item.command != PLACE_IMAGE) {
+                    // Picking a tool chooses it, and it is the one marked.
+                    doc.execute("tool.move", &json!({})).unwrap();
+                    doc.execute(item.command, &item.params).unwrap();
+                    let after = flyout(&doc.session, Flyout::Tools(key));
+                    assert_eq!(selected(&after), [item.label.as_str()], "{key}");
+                }
+            }
+        }
+        // Place image… is Sawit's to carry out: it asks for the file.
+        assert!(crate::policy::is_ui(PLACE_IMAGE));
+    }
+
+    #[test]
+    fn a_group_shows_the_tool_in_use_else_the_one_used_last() {
+        let groups = groups(DocKind::Design);
+        let shapes = groups.iter().find(|group| group.key == "shape").unwrap();
+        // Nothing of the group used yet: its first tool.
+        let shown = |active, last| shown_tool(shapes, active, last).tool;
+        assert_eq!(shown(ToolId::Move, None), ToolId::Rectangle);
+        // The tool in use, when it is one of them.
+        assert_eq!(shown(ToolId::Star, None), ToolId::Star);
+        assert_eq!(shown(ToolId::Star, Some(ToolId::Ellipse)), ToolId::Star);
+        // Else the one used last.
+        assert_eq!(shown(ToolId::Move, Some(ToolId::Ellipse)), ToolId::Ellipse);
+        // A tool of another group used last counts for nothing here.
+        assert_eq!(shown(ToolId::Move, Some(ToolId::Pen)), ToolId::Rectangle);
     }
 
     #[test]
@@ -559,9 +805,27 @@ mod tests {
             let shown = shortcut(on_board, command);
             assert_eq!(shown.as_deref(), Some(key), "{command}");
         }
-        // Polygon and Star have no key.
-        assert_eq!(shortcut(on_design, "tool.polygon"), None);
-        assert_eq!(shortcut(on_design, "tool.star"), None);
+        // Polygon and Star have Sawit's keys, ^ and * (FigCraft has none for them).
+        assert_eq!(shortcut(on_design, "tool.polygon").as_deref(), Some("⇧6"));
+        assert_eq!(shortcut(on_board, "tool.star").as_deref(), Some("⇧8"));
+        // The design tools on a board have their keys there too.
+        for (command, key) in [
+            ("tool.frame", "F"),
+            ("tool.rectangle", "R"),
+            ("tool.ellipse", "O"),
+            ("tool.line", "L"),
+            ("tool.arrow", "⇧L"),
+            ("tool.pen", "P"),
+            ("tool.slice", "S"),
+        ] {
+            assert_eq!(
+                shortcut(on_board, command).as_deref(),
+                Some(key),
+                "{command}"
+            );
+        }
+        // Text on a path has none in FigCraft: Sawit gives it ⇧T, beside Text's T.
+        assert_eq!(shortcut(on_board, "tool.textOnPath").as_deref(), Some("⇧T"));
     }
 
     #[test]

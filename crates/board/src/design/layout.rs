@@ -334,7 +334,13 @@ mod tests {
             assert_eq!(edit.params["ids"], json!([]), "{ids:?}");
             let revision = board.revision();
             let refused = board.execute(edit.command, &edit.params);
-            assert!(matches!(refused, Err(BoardError::Engine(_))), "{refused:?}");
+            assert!(
+                matches!(
+                    refused,
+                    Err(BoardError::Engine(_) | BoardError::Unavailable { .. })
+                ),
+                "{refused:?}"
+            );
             assert_eq!(board.revision(), revision, "{ids:?}");
         }
     }
@@ -391,7 +397,13 @@ mod tests {
             assert_eq!(edit.params["ids"], json!([]), "{ids:?}");
             let revision = board.revision();
             let refused = board.execute(edit.command, &edit.params);
-            assert!(matches!(refused, Err(BoardError::Engine(_))), "{refused:?}");
+            assert!(
+                matches!(
+                    refused,
+                    Err(BoardError::Engine(_) | BoardError::Unavailable { .. })
+                ),
+                "{refused:?}"
+            );
             assert_eq!(board.revision(), revision, "{ids:?}");
         }
     }
@@ -732,7 +744,13 @@ mod tests {
         let edit = align_cell(&read(&board, &[rectangle]), 1, 1);
         let revision = board.revision();
         let refused = board.execute(edit.command, &edit.params);
-        assert!(matches!(refused, Err(BoardError::Engine(_))), "{refused:?}");
+        assert!(
+            matches!(
+                refused,
+                Err(BoardError::Engine(_) | BoardError::Unavailable { .. })
+            ),
+            "{refused:?}"
+        );
         assert_eq!(board.revision(), revision);
     }
 
@@ -784,7 +802,13 @@ mod tests {
         assert_eq!(edit.params["ids"], json!([]));
         let revision = board.revision();
         let refused = board.execute(edit.command, &edit.params);
-        assert!(matches!(refused, Err(BoardError::Engine(_))), "{refused:?}");
+        assert!(
+            matches!(
+                refused,
+                Err(BoardError::Engine(_) | BoardError::Unavailable { .. })
+            ),
+            "{refused:?}"
+        );
         assert_eq!(board.revision(), revision);
     }
 }

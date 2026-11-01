@@ -1,13 +1,17 @@
 //! The floating toolbar at the bottom centre of the canvas (spec D11, "Toolbar and context bar"):
 //! the tools of a board or of a design file in their groups (`sawit_board::toolbar::groups`), a
 //! chevron beside each board tool with choices that opens its flyout, and on a board a last button
-//! for the Templates & table picker. A button or a choice runs its command, with its params,
-//! through [`BoardView::choose`], as the model's tests run them.
+//! for the Templates & table picker. A group of several tools of one kind (the frames, the shapes,
+//! the pens, the texts) shows one of them, the one in use or used last, with a chevron whose
+//! flyout lists them all with their keys, as FigCraft's own toolbar does; the shapes' flyout ends
+//! with Place image…. A button or a choice runs its command, with its params, through
+//! [`BoardView::choose`], as the model's tests run them; Place image… asks for the file
+//! ([`commands::run_ui`]).
 //!
 //! The button of the session's tool is marked on every frame, so a tool chosen by a key shows at
-//! once (Review Focus 3). A flyout or the picker that is open closes when the file on show turns
-//! from a board into a design file or back, and when the UI is hidden
-//! ([`BoardView::settle_chrome`]).
+//! once (Review Focus 3), and so does the group's button, which shows it. A flyout or the picker
+//! that is open closes when the file on show turns from a board into a design file or back, and
+//! when the UI is hidden ([`BoardView::settle_chrome`]).
 
 use figcraft_engine::{ToolId, guard};
 use gpui_kit::assets::IconName as Lucide;
@@ -22,8 +26,8 @@ use sawit_board::toolbar::{
 };
 use serde_json::json;
 
-use super::BoardView;
 use super::top_bar::with_keys;
+use super::{BoardView, commands};
 
 /// The toolbar's height.
 pub(super) const HEIGHT: f32 = 44.;
@@ -84,6 +88,8 @@ pub(super) fn tool_icon(icon: ToolIcon) -> Lucide {
         ToolIcon::Shapes => Lucide::Shapes,
         ToolIcon::Connector => Lucide::Spline,
         ToolIcon::Stamp => Lucide::Stamp,
+        ToolIcon::TextOnPath => Lucide::Signature,
+        ToolIcon::Image => Lucide::ImagePlus,
     }
 }
 
@@ -135,8 +141,21 @@ struct Shown {
 }
 
 /// What the toolbar of `view`'s document shows. It is read on every frame, behind the engine's
-/// guard: a panic in it costs that frame its toolbar, not the app (D15).
-fn shown(view: &BoardView) -> Shown {
+/// guard: a panic in it costs that frame its toolbar, not the app (D15). The tool in use is
+/// remembered for its group, which shows it until another of the group's tools is used.
+fn shown(view: &mut BoardView) -> Shown {
+    let shown = read_shown(view);
+    if let Some(active) = shown.active
+        && let Some(group) =
+            (shown.groups.iter()).find(|group| group.tools.iter().any(|tool| tool.tool == active))
+    {
+        view.last_tools.insert(group.key, active);
+    }
+    shown
+}
+
+/// [`shown`], read.
+fn read_shown(view: &BoardView) -> Shown {
     let Some(board) = view.board() else {
         return Shown::default();
     };
@@ -168,23 +187,42 @@ pub(super) fn render_toolbar(
     let this = cx.entity().downgrade();
     let shown = shown(view);
     let picker = view.picker.clone();
-    // Each tool's keys, as the keymap binds them now.
-    let keys: Vec<Vec<Option<String>>> = (shown.groups.iter())
-        .map(|group| {
-            (group.tools.iter())
+    // The buttons each group shows: all its tools, or for a group whose flyout lists them the one
+    // in use or used last.
+    let buttons: Vec<Vec<ToolButton>> = (shown.groups.iter())
+        .map(|group| match group.flyout {
+            Some(Flyout::Tools(_)) => {
+                let active = shown.active.unwrap_or_default();
+                let last = view.last_tools.get(group.key).copied();
+                vec![model::shown_tool(group, active, last).clone()]
+            }
+            _ => group.tools.clone(),
+        })
+        .collect();
+    // Each button's keys, and those of the open flyout's tools, as the keymap binds them now.
+    let keys: Vec<Vec<Option<String>>> = (buttons.iter())
+        .map(|tools| {
+            (tools.iter())
                 .map(|tool| super::command_keys(tool.command, cx))
                 .collect()
+        })
+        .collect();
+    let flyout_keys: Vec<Option<String>> = (shown.flyout.iter())
+        .flat_map(|(_, items)| items)
+        .map(|item| {
+            item.icon
+                .and_then(|_| super::command_keys(item.command, cx))
         })
         .collect();
     let theme = cx.theme();
     let line = theme.border;
     // The buttons, chevrons and lines, at their full size: the row never shrinks.
     let mut row = h_flex().flex_shrink_0().gap(px(2.));
-    for (i, (group, keys)) in shown.groups.iter().zip(keys).enumerate() {
+    for (i, ((group, tools), keys)) in shown.groups.iter().zip(&buttons).zip(keys).enumerate() {
         if i > 0 {
             row = row.child(divider(line));
         }
-        for (tool, keys) in group.tools.iter().zip(keys) {
+        for (tool, keys) in tools.iter().zip(keys) {
             row = row.child(tool_button(
                 tool,
                 keys,
@@ -195,7 +233,7 @@ pub(super) fn render_toolbar(
         if let Some(f) = group.flyout {
             let items = (shown.flyout.as_ref())
                 .filter(|(open, _)| *open == f)
-                .map(|(_, items)| items.clone());
+                .map(|(_, items)| items.iter().cloned().zip(flyout_keys.clone()).collect());
             row = row.child(flyout(f, items, &this));
         }
     }
@@ -269,50 +307,78 @@ fn flyout_name(f: Flyout) -> &'static str {
         Flyout::Shapes => "Shapes",
         Flyout::ConnectorStyles => "Connector styles",
         Flyout::Stamps => "Stamps",
+        Flyout::Tools("frame") => "Frame tools",
+        Flyout::Tools("shape" | "geometry") => "Shape tools",
+        Flyout::Tools("pen") => "Drawing tools",
+        Flyout::Tools("text") => "Text tools",
+        Flyout::Tools(_) => "Tools",
     }
 }
 
-/// The chevron that opens flyout `f`, and the flyout above it, open while `items` are given.
-fn flyout(f: Flyout, items: Option<Vec<FlyoutItem>>, view: &WeakEntity<BoardView>) -> Popover {
+/// The chevron that opens flyout `f`, and the flyout above it, open while `items` are given, each
+/// with its keys.
+fn flyout(
+    f: Flyout,
+    items: Option<Vec<(FlyoutItem, Option<String>)>>,
+    view: &WeakEntity<BoardView>,
+) -> Popover {
     let open = items.is_some();
     let items = items.unwrap_or_default();
-    let chevron = Button::new(("board-flyout", f as usize))
+    let name = SharedString::from(f.name());
+    let chevron = Button::new(SharedString::from(format!("board-flyout-{name}")))
         .ghost()
         .xsmall()
         .icon(CHEVRON_ICON)
         .w(px(CHEVRON))
         .h(px(BUTTON))
         .tooltip(flyout_name(f))
-        .debug_selector(move || format!("board-flyout-{f:?}"));
+        .debug_selector(move || format!("board-flyout-{name}"));
     let (on_change, view) = (view.clone(), view.clone());
-    Popover::new(("board-flyout-popover", f as usize))
-        .anchor(Anchor::BottomCenter)
-        .trigger(chevron)
-        .open(open)
-        .on_open_change(move |open, _, cx| {
-            let _ = on_change.update(cx, |view, cx| {
-                if *open {
-                    view.open_flyout = Some(f);
-                    view.picker = None;
-                } else if view.open_flyout == Some(f) {
-                    view.open_flyout = None;
-                }
-                cx.notify();
-            });
-        })
-        .content(move |_, _, cx| flyout_items(&items, &view, cx))
+    Popover::new(SharedString::from(format!(
+        "board-flyout-popover-{}",
+        f.name()
+    )))
+    .anchor(Anchor::BottomCenter)
+    .trigger(chevron)
+    .open(open)
+    .on_open_change(move |open, _, cx| {
+        let _ = on_change.update(cx, |view, cx| {
+            if *open {
+                view.open_flyout = Some(f);
+                view.picker = None;
+            } else if view.open_flyout == Some(f) {
+                view.open_flyout = None;
+            }
+            cx.notify();
+        });
+    })
+    .content(move |_, _, cx| flyout_items(&items, &view, cx))
 }
 
 /// A flyout's choices: a row of swatches for colours, else a list of labels with the one the
-/// tool makes now checked. Picking one closes the flyout and runs its command with its params.
-fn flyout_items(items: &[FlyoutItem], view: &WeakEntity<BoardView>, cx: &App) -> AnyElement {
-    let hover = cx.theme().accent;
+/// tool makes now checked, and for a group's tools each tool's picture and keys. Picking one closes
+/// the flyout and runs its command with its params; Place image… asks for the file, as its menu
+/// item does.
+fn flyout_items(
+    items: &[(FlyoutItem, Option<String>)],
+    view: &WeakEntity<BoardView>,
+    cx: &App,
+) -> AnyElement {
+    let theme = cx.theme();
+    let (hover, muted) = (theme.accent, theme.muted_foreground);
     let pick = |item: &FlyoutItem| {
         let (command, params, view) = (item.command, item.params.clone(), view.clone());
-        move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
             let _ = view.update(cx, |view, cx| {
                 view.open_flyout = None;
-                view.choose(command, params.clone(), cx);
+                if sawit_board::policy::is_ui(command) {
+                    // As its menu item: a text being typed in ends first (ruling R-TEXTEDIT).
+                    if view.end_text_edit(Some(command), cx) {
+                        commands::run_ui(view, command, window, cx);
+                    }
+                } else {
+                    view.choose(command, params.clone(), cx);
+                }
             });
         }
     };
@@ -320,8 +386,8 @@ fn flyout_items(items: &[FlyoutItem], view: &WeakEntity<BoardView>, cx: &App) ->
         let label = item.label.clone();
         move || format!("board-flyout-item-{label}")
     };
-    if items.iter().all(|item| item.swatch.is_some()) {
-        let swatches = items.iter().enumerate().map(|(i, item)| {
+    if items.iter().all(|(item, _)| item.swatch.is_some()) {
+        let swatches = items.iter().enumerate().map(|(i, (item, _))| {
             let rgba = item.swatch.unwrap_or_default();
             let id = ("board-flyout-item", i);
             swatch(id, rgba, &item.label, item.selected, pick(item)).debug_selector(selector(item))
@@ -332,7 +398,7 @@ fn flyout_items(items: &[FlyoutItem], view: &WeakEntity<BoardView>, cx: &App) ->
             .children(swatches)
             .into_any_element();
     }
-    let rows = items.iter().enumerate().map(|(i, item)| {
+    let rows = items.iter().enumerate().map(|(i, (item, keys))| {
         h_flex()
             .id(("board-flyout-item", i))
             .debug_selector(selector(item))
@@ -345,7 +411,13 @@ fn flyout_items(items: &[FlyoutItem], view: &WeakEntity<BoardView>, cx: &App) ->
             .child(div().w(px(14.)).when(item.selected, |slot| {
                 slot.child(Icon::new(CHECK_ICON).xsmall())
             }))
-            .child(item.label.clone())
+            .when_some(item.icon, |row, icon| {
+                row.child(Icon::new(tool_icon(icon)).small())
+            })
+            .child(div().flex_1().child(item.label.clone()))
+            .when_some(keys.clone(), |row, keys| {
+                row.child(div().pl_4().text_color(muted).child(keys))
+            })
             .on_click(pick(item))
     });
     v_flex()

@@ -10,13 +10,20 @@ use figcraft_format::FormatError;
 use serde_json::{Value, json};
 use thiserror::Error;
 
-/// Why a canvas call failed. Every message is user-facing, so a toast or an `{ok:false,error}`
-/// reply can show it as it is.
+/// Why a canvas call failed. The message is the one an agent's `{ok:false,error}` reply carries,
+/// as the engine words it, with its advice to agents (`pass ids`). What a toast shows the user is
+/// [`BoardError::for_user`], and a key that has nothing to act on shows nothing
+/// ([`BoardError::for_key`]).
 #[derive(Clone, Debug, PartialEq, Error)]
 pub enum BoardError {
     /// The engine refused a command, or the session holds no document.
     #[error("{0}")]
     Engine(String),
+    /// The command doesn't apply right now: nothing is selected, there is nothing to undo, no
+    /// properties were copied, a board's tool on a design file. The engine's `Disabled` refusal,
+    /// in its words.
+    #[error("command `{command}` is not available right now: {reason}")]
+    Unavailable { command: String, reason: String },
     /// Canvas file bytes could not be read or written: corrupt, truncated or from a newer Sawit.
     #[error("{0}")]
     Format(String),
@@ -51,10 +58,126 @@ fn in_sawits_words(message: &str) -> String {
 
 impl From<EngineError> for BoardError {
     /// The engine's message, with Sawit's words for what it says in FigCraft's
-    /// ([`in_sawits_words`]): the same for a toast and for an agent's reply.
+    /// ([`in_sawits_words`]): the same for a toast and for an agent's reply, wherever in it the
+    /// engine's words are. A command that doesn't apply right now is [`BoardError::Unavailable`].
     fn from(e: EngineError) -> Self {
-        BoardError::Engine(in_sawits_words(&e.to_string()))
+        match e {
+            EngineError::Disabled(command, reason) => BoardError::Unavailable {
+                command,
+                reason: in_sawits_words(&reason),
+            },
+            e => BoardError::Engine(in_sawits_words(&e.to_string())),
+        }
     }
+}
+
+impl BoardError {
+    /// Whether the command doesn't apply right now ([`BoardError::Unavailable`]): it changed
+    /// nothing, and there was nothing for it to act on.
+    pub fn is_unavailable(&self) -> bool {
+        matches!(self, BoardError::Unavailable { .. })
+    }
+
+    /// What a toast tells the user when a command they ran from a menu, a button or the palette
+    /// fails: the reason in plain words, without the engine's advice to agents. "command
+    /// `object.frameSelection` is not available right now: nothing is selected (pass `ids`)"
+    /// reads "Nothing is selected"; any other message loses its advice the same way.
+    pub fn for_user(&self) -> String {
+        match self {
+            // The engine's short reasons, which start in lower case: "nothing is selected".
+            BoardError::Unavailable { reason, .. } => sentence(&plain_words(reason)),
+            BoardError::Engine(message) => match given_what_it_cant_use(message) {
+                Some(what) => sentence(&plain_words(what)),
+                // A message may start with a file's name ("notes.txt: …"): it stays as it is.
+                None => plain_words(message),
+            },
+            BoardError::Format(message) | BoardError::Io(message) => plain_words(message),
+        }
+    }
+
+    /// What a toast tells the user when a key's command fails, if anything. A key with nothing to
+    /// act on does nothing and says nothing, as in FigCraft's own keyboard and in Figma (⌥⌘G with
+    /// nothing selected, ⌥⌘V with no properties copied, ⌃⌥⌘K with no instance selected). A
+    /// board's tool on a design file says why ([`BOARDS_ONLY`], SMOKE-3): there it is the canvas,
+    /// not the selection, that leaves the key nothing to do. Any other failure says why, as
+    /// [`BoardError::for_user`] words it.
+    pub fn for_key(&self) -> Option<String> {
+        match self {
+            BoardError::Unavailable { reason, .. } if reason != BOARDS_ONLY => None,
+            // A key's command runs without parameters: what it lacks is the selection it needs
+            // ("select an instance") or a value only a dialog would ask for.
+            BoardError::Engine(message) if given_what_it_cant_use(message).is_some() => None,
+            error => Some(error.for_user()),
+        }
+    }
+}
+
+/// What the engine says a command was given that it can't use, when `message` is its refusal of
+/// a command's parameters (`EngineError::BadParams`): "select an instance" of "invalid parameters
+/// for `component.goToMain`: select an instance".
+fn given_what_it_cant_use(message: &str) -> Option<&str> {
+    // The engine's own words around the command, so that they can't drift from what it writes.
+    let words = EngineError::BadParams {
+        cmd: "\0".into(),
+        msg: String::new(),
+    }
+    .to_string();
+    let (before, after) = words.split_once('\0')?;
+    let (_, what) = message.strip_prefix(before)?.split_once(after)?;
+    Some(what)
+}
+
+/// `message` as a user reads it: without the advice the engine gives agents, in parentheses or
+/// after a colon or a semicolon ("(pass `ids`)", ": pass `path`", "; use page.duplicate"), and
+/// without the backticks around a parameter's name.
+fn plain_words(message: &str) -> String {
+    let mut text = message.to_string();
+    // Advice in parentheses: "(pass `ids`)", "(use component.restoreMain)".
+    while let Some((open, close)) = advice_in_parentheses(&text) {
+        text.replace_range(open..=close, "");
+    }
+    // Advice after a colon or a semicolon: "the file has no path yet: pass `path`".
+    for separator in [": ", "; "] {
+        if let Some(at) = text.rfind(separator)
+            && is_advice(&text[at + separator.len()..])
+        {
+            text.truncate(at);
+        }
+    }
+    let text = text.replace('`', "");
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `text` with a capital first letter, as a toast's sentence starts.
+fn sentence(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// Where the first parenthesised advice to agents in `text` opens and closes, as byte offsets.
+fn advice_in_parentheses(text: &str) -> Option<(usize, usize)> {
+    let mut from = 0;
+    while let Some(open) = text[from..].find('(').map(|at| from + at) {
+        let close = open + text[open..].find(')')?;
+        if is_advice(&text[open + 1..close]) {
+            return Some((open, close));
+        }
+        from = close + 1;
+    }
+    None
+}
+
+/// Whether `text` is advice to an agent: it names a parameter or a command in backticks, or it
+/// tells what to pass, use or add.
+fn is_advice(text: &str) -> bool {
+    let text = text.trim();
+    text.contains('`')
+        || ["pass ", "use ", "add one with "]
+            .iter()
+            .any(|verb| text.starts_with(verb))
 }
 
 fn format_error(e: FormatError) -> BoardError {
@@ -311,6 +434,99 @@ mod tests {
             b.execute("no.such", &json!({})),
             Err(BoardError::Engine(_))
         ));
+    }
+
+    /// The toast in the user's screenshot: ⌥⌘G with nothing selected. An agent still reads the
+    /// engine's words, with what to pass; the user reads plain words, and a key reads nothing.
+    #[test]
+    fn a_command_that_does_not_apply_speaks_plainly_to_the_user() {
+        let mut b = BoardDoc::new_board("Canvas").unwrap();
+        let refused = b.execute("object.frameSelection", &json!({})).unwrap_err();
+        assert!(refused.is_unavailable(), "{refused:?}");
+        assert_eq!(
+            refused.to_string(),
+            "command `object.frameSelection` is not available right now: nothing is selected \
+             (pass `ids`)"
+        );
+        assert_eq!(refused.for_user(), "Nothing is selected");
+        assert_eq!(refused.for_key(), None);
+        // No properties copied to paste: the same.
+        let paste = b.execute("edit.pasteProperties", &json!({})).unwrap_err();
+        assert!(paste.is_unavailable(), "{paste:?}");
+        assert_eq!(paste.for_user(), "No copied properties");
+        assert_eq!(paste.for_key(), None);
+    }
+
+    #[test]
+    fn a_boards_tool_on_a_design_file_says_why_even_from_a_key() {
+        let mut design = BoardDoc {
+            session: Session::with_document(Document::new("Design")),
+        };
+        let refused = design.execute("tool.sticky", &json!({})).unwrap_err();
+        assert!(refused.is_unavailable(), "{refused:?}");
+        let said = "This is for boards, and this canvas is a design file";
+        assert_eq!(refused.for_user(), said);
+        assert_eq!(refused.for_key().as_deref(), Some(said));
+    }
+
+    #[test]
+    fn plain_words_drop_the_advice_to_agents() {
+        for (engine, user) in [
+            ("nothing is selected (pass `ids`)", "Nothing is selected"),
+            (
+                "the main component was deleted (use component.restoreMain)",
+                "The main component was deleted",
+            ),
+            (
+                "no export settings (add one with export.add)",
+                "No export settings",
+            ),
+            (
+                "the document has unsaved changes (pass force: true to discard)",
+                "The document has unsaved changes",
+            ),
+            (
+                "the file has no path yet: pass `path`",
+                "The file has no path yet",
+            ),
+            (
+                "the saved path ends in .fig: choose Save as or pass `path`",
+                "The saved path ends in .fig",
+            ),
+            (
+                "pages can't be copied; use page.duplicate",
+                "Pages can't be copied",
+            ),
+            // What is no advice stays.
+            (
+                "Frame 1 isn't on a page (it is a library component)",
+                "Frame 1 isn't on a page (it is a library component)",
+            ),
+            ("no copied properties", "No copied properties"),
+        ] {
+            let error = BoardError::Unavailable {
+                command: "some.command".into(),
+                reason: engine.into(),
+            };
+            assert_eq!(error.for_user(), user, "{engine}");
+            assert!(!error.for_user().contains('`'), "{engine}");
+        }
+        // A command given what it can't use says what it lacks, and nothing from a key.
+        let mut b = BoardDoc::new_board("Canvas").unwrap();
+        let refused = b.execute("component.goToMain", &json!({})).unwrap_err();
+        assert_eq!(refused.for_user(), "Select an instance");
+        assert_eq!(refused.for_key(), None);
+        let refused = b.execute("text.link", &json!({})).unwrap_err();
+        assert!(!refused.for_user().contains('`'), "{refused:?}");
+        assert_eq!(refused.for_key(), None);
+        // Other errors lose their advice the same way, and say why from a key too.
+        // A message of its own keeps its first letter: it may start with a file's name.
+        let other = BoardError::Engine("notes.txt: no image in it (pass `data`)".into());
+        assert_eq!(other.for_user(), "notes.txt: no image in it");
+        assert_eq!(
+            other.for_key().as_deref(),
+            Some("notes.txt: no image in it")
+        );
     }
 
     #[test]

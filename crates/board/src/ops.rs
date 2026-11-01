@@ -1518,9 +1518,13 @@ pub fn copy_as(board: &mut BoardDoc, id: &str) -> Result<Copied, BoardError> {
     }
 }
 
-/// The error of a Copy as that needs a selection, with nothing selected.
+/// The error of a Copy as that needs a selection, with nothing selected: it doesn't apply then,
+/// as the engine's commands on the selection don't ([`BoardError::Unavailable`]).
 fn nothing_selected() -> BoardError {
-    BoardError::Engine("nothing is selected".to_string())
+    BoardError::Unavailable {
+        command: "edit.copyAs".to_string(),
+        reason: "nothing is selected".to_string(),
+    }
 }
 
 /// The text of layers `ids`, a line each, for Copy as text ([`copy_as`]). Each text is copied
@@ -5092,7 +5096,8 @@ mod tests {
         let mut board = board();
         for id in ["edit.copyAsText", "edit.copyAsCss"] {
             let error = copy_as(&mut board, id).unwrap_err();
-            assert_eq!(error.to_string(), "nothing is selected", "{id}");
+            assert!(error.is_unavailable(), "{id}: {error:?}");
+            assert_eq!(error.for_user(), "Nothing is selected", "{id}");
         }
         let square = square_at(&mut board, 0.0);
         board.session.set_selection(vec![square]);

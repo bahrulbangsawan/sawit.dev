@@ -171,7 +171,7 @@ impl BoardView {
         self.handle_ui_requests(Vec::new(), cx);
         // After the requests' toast, so that the error's is the one that shows.
         if let Err(error) = done {
-            self.show_toast(error.to_string(), cx);
+            self.show_error(&error, cx);
         }
         cx.notify();
     }

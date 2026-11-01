@@ -174,7 +174,7 @@ impl BoardView {
             return;
         }
         if policy::is_clipboard(id) {
-            self.run_clipboard(id, here, cx);
+            self.run_clipboard(id, here, false, cx);
         } else if policy::is_ui(id) {
             commands::run_ui(self, id, window, cx);
         } else {

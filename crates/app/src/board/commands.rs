@@ -110,7 +110,7 @@ fn import_files(view: &mut BoardView, paths: &[PathBuf], place: bool, cx: &mut C
                 Ok(layers) => made.extend(layers),
                 Err(error) if failed.is_none() => {
                     let name = path.file_name().unwrap_or_default().to_string_lossy();
-                    failed = Some(BoardError::Engine(format!("{name}: {error}")));
+                    failed = Some(BoardError::Engine(format!("{name}: {}", error.for_user())));
                 }
                 Err(_) => {}
             }
@@ -326,18 +326,21 @@ mod tests {
     /// One red rectangle, 100 × 80, as an SVG file holds it.
     const RECT_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80"><rect width="100" height="80" fill="#f00"/></svg>"##;
 
-    /// Review Focus 2 and ruling P6-C12: a menu command the engine refuses says why, in a toast.
+    /// Review Focus 2 and ruling P6-C12: a menu command the engine refuses says why, in a toast,
+    /// in plain words: the user's screenshot showed the engine's words for agents, "command
+    /// `object.frameSelection` is not available right now: nothing is selected (pass `ids`)".
     #[gpui_kit::test]
     fn disabled_command_toasts_reason(cx: &mut TestAppContext) {
         let tmp = Scratch::new("disabled-command");
         let (view, mut cx) = chrome_canvas(cx, &tmp);
-        cx.update(|window, cx| {
-            view.update(cx, |view, cx| {
-                view.run_menu("edit.pasteProperties", window, cx)
-            })
-        });
-        let toast = toast(&view, &cx).unwrap_or_default();
-        assert!(toast.contains("no copied properties"), "{toast}");
+        for (id, said) in [
+            ("edit.pasteProperties", "No copied properties"),
+            ("object.frameSelection", "Nothing is selected"),
+            ("component.goToMain", "Select an instance"),
+        ] {
+            cx.update(|window, cx| view.update(cx, |view, cx| view.run_menu(id, window, cx)));
+            assert_eq!(toast(&view, &cx).as_deref(), Some(said), "{id}");
+        }
     }
 
     /// Review Focus 3: Export frames to PDF on a page without frames says why there is no PDF.
@@ -421,7 +424,7 @@ mod tests {
         let none = json!({"op": "command", "command": "select.none"});
         run_op(&view, none, &mut cx);
         run_ui(&view, "edit.copyAsText", &mut cx);
-        assert_eq!(toast(&view, &cx).as_deref(), Some("nothing is selected"));
+        assert_eq!(toast(&view, &cx).as_deref(), Some("Nothing is selected"));
         assert_eq!(png(&cx), Some(copied));
     }
 

@@ -205,7 +205,9 @@ pub fn route_default_key(
 /// edited, else in [`crate::shortcuts::CANVAS_CONTEXT`]. `None` when the canvas binds no such key
 /// by default.
 fn default_command(key: &str, mods: Mods, editing: bool) -> Option<&'static str> {
-    use crate::shortcuts::{CANVAS_CONTEXT, TEXT_CONTEXT, binding_keystroke, key_bindings};
+    use crate::shortcuts::{
+        CANVAS_CONTEXT, TEXT_CONTEXT, binding_keystroke, defaults, key_bindings,
+    };
     let (key, mods) = figcraft_key(key, mods);
     let context = if editing {
         TEXT_CONTEXT
@@ -213,9 +215,9 @@ fn default_command(key: &str, mods: Mods, editing: bool) -> Option<&'static str>
         CANVAS_CONTEXT
     };
     let bound = key_bindings();
-    keymap::KEYS.iter().find_map(|binding| {
+    defaults().find_map(|binding| {
         binding
-            .keys(Platform::Mac)
+            .keys
             .iter()
             .filter(|spec| keymap::matches(spec, Platform::Mac, &key, mods))
             .find_map(|spec| {
@@ -1491,6 +1493,28 @@ mod tests {
         BoardDoc {
             session: Session::with_document(figcraft_doc::Document::new("Design")),
         }
+    }
+
+    /// Sawit's keys ([`crate::shortcuts::SAWIT_KEYS`]) run their commands as FigCraft's run theirs:
+    /// ⇧6 and ⇧8 (which GPUI reports as `^` and `*`) choose the polygon and the star, and ⌃J
+    /// joins. With nothing to join, ⌃J is refused, and its toast says nothing (the key is quiet).
+    #[test]
+    fn sawits_keys_run_their_commands() {
+        let mut design = design();
+        let outcome = route_default_key(&mut design, "^", NONE).unwrap();
+        assert_eq!(outcome, KeyOutcome::Handled);
+        assert_eq!(design.session.tool.tool, figcraft_engine::ToolId::Polygon);
+        route_default_key(&mut design, "8", SHIFT).unwrap();
+        assert_eq!(design.session.tool.tool, figcraft_engine::ToolId::Star);
+        let ctrl = Mods { ctrl: true, ..NONE };
+        let refused = route_default_key(&mut design, "j", ctrl).unwrap_err();
+        assert!(refused.is_unavailable(), "{refused:?}");
+        assert_eq!(refused.for_key(), None);
+        // ⌘J is Sawit's (the terminal), so it is no key of the canvas's.
+        assert_eq!(
+            route_default_key(&mut design, "j", CMD).unwrap(),
+            KeyOutcome::Unhandled
+        );
     }
 
     /// SMOKE-3: a board tool's key on a design file (Q for a sticky, B for a shape...) says in its

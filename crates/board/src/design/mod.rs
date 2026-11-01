@@ -1091,7 +1091,13 @@ mod tests {
 
         let revision = f.board.revision();
         let refused = f.board.execute(edit.command, &edit.params);
-        assert!(matches!(refused, Err(BoardError::Engine(_))), "{refused:?}");
+        assert!(
+            matches!(
+                refused,
+                Err(BoardError::Engine(_) | BoardError::Unavailable { .. })
+            ),
+            "{refused:?}"
+        );
         assert_eq!(f.board.revision(), revision);
         assert_eq!(read(&f.board, &[f.r1, f.r2]), sel);
     }

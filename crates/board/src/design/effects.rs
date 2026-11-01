@@ -869,7 +869,13 @@ mod tests {
         for edit in edits {
             let revision = board.revision();
             let result = board.execute(edit.command, &edit.params);
-            assert!(matches!(result, Err(BoardError::Engine(_))), "{edit:?}");
+            assert!(
+                matches!(
+                    result,
+                    Err(BoardError::Engine(_) | BoardError::Unavailable { .. })
+                ),
+                "{edit:?}"
+            );
             assert_eq!(board.revision(), revision, "{edit:?}");
         }
         assert_eq!(read(&board, &[r1, r2]), snapshot);

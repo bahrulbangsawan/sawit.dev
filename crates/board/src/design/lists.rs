@@ -217,11 +217,23 @@ mod tests {
         let before = read(&board, &[r]);
         let revision = board.revision();
         let result = board.execute(edit.command, &edit.params);
-        assert!(matches!(result, Err(BoardError::Engine(_))), "{result:?}");
+        assert!(
+            matches!(
+                result,
+                Err(BoardError::Engine(_) | BoardError::Unavailable { .. })
+            ),
+            "{result:?}"
+        );
         // The same edit with a layer named: nothing to set.
         let named = json!({"ids": [r], "props": {}});
         let result = board.execute(edit.command, &named);
-        assert!(matches!(result, Err(BoardError::Engine(_))), "{result:?}");
+        assert!(
+            matches!(
+                result,
+                Err(BoardError::Engine(_) | BoardError::Unavailable { .. })
+            ),
+            "{result:?}"
+        );
         assert_eq!(board.revision(), revision);
         assert_eq!(read(&board, &[r]), before);
     }

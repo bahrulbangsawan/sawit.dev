@@ -1,6 +1,6 @@
-//! The keyboard-shortcuts sheet's model: FigCraft's keymap, grouped as FigCraft's own panel groups
-//! it, less the rows Sawit does not offer. The view in `crates/app/src/board/menus.rs` draws it
-//! (⌃⇧?, or Help ▸ Keyboard shortcuts).
+//! The keyboard-shortcuts sheet's model: the canvas's default keys (FigCraft's keymap, then
+//! Sawit's), grouped as FigCraft's own panel groups them, less the rows Sawit does not offer. The
+//! view in `crates/app/src/board/menus.rs` draws it (⌃⇧?, or Help ▸ Keyboard shortcuts).
 //!
 //! A row is left out when:
 //! - its command is hidden ([`crate::policy::is_hidden`]), because the keyboard cannot reach it;
@@ -13,15 +13,231 @@
 //! with no key left goes too, so it shows nothing for a key the canvas never receives. The keys
 //! Sawit keeps only while the canvas is not editing text (⌘B, ⌥⌘T, ⇧⌘↵) stay: they work then.
 //!
+//! FigCraft's keymap leaves many of the canvas's commands without a key. Sawit gives them keys of
+//! its own ([`SAWIT_KEYS`]), on keys neither FigCraft nor the app uses, and so it does for the
+//! commands whose FigCraft key Sawit keeps (Use as mask, Outline stroke, Join): the sheet lists
+//! them in their groups, after FigCraft's rows. [`defaults`] is both together.
+//!
 //! The same keys are the app's key bindings of the canvas ([`key_bindings`]), which the keymap
-//! editor shows and changes. The sheet here lists FigCraft's own keys; the app shows each row's
-//! keys as the keymap binds them now (its `board::command_keys_all`), and leaves out a row whose
-//! keys the user took out.
+//! editor shows and changes. The sheet here lists the default keys; the app shows each row's keys
+//! as the keymap binds them now (its `board::command_keys_all`), and leaves out a row whose keys
+//! the user took out.
 
-use figcraft_engine::keymap::{self, Binding, Group, KEYS, Platform};
+use figcraft_engine::keymap::{self, Context, Group, KEYS, Platform};
 
 use crate::input::{TEXT_CLIPBOARD, gpui_keystroke};
 use crate::policy::{SAWIT_WINS, SAWIT_WINS_UNLESS_EDITING, is_hidden};
+
+/// A key Sawit gives one of the canvas's commands that FigCraft's keymap leaves without one, or
+/// whose FigCraft key Sawit keeps. Its keys are live on the canvas, not while text is edited.
+#[derive(Clone, Copy, Debug)]
+pub struct SawitKey {
+    /// The group of the shortcuts sheet it is listed in.
+    pub group: Group,
+    pub id: &'static str,
+    /// The Mac keys, written as FigCraft's keymap writes them (`Alt+Shift+Cmd+G`).
+    pub keys: &'static [&'static str],
+    /// What the sheet and the keymap editor call the command, where its menu label says too
+    /// little out of its menu ("Fill" in Edit ▸ Select all with same); empty for its menu label.
+    label: &'static str,
+}
+
+impl SawitKey {
+    /// What the sheet and the keymap editor call the command: its own label, else its menu's.
+    pub fn title(&self) -> &'static str {
+        if self.label.is_empty() {
+            title(self.id)
+        } else {
+            self.label
+        }
+    }
+
+    const fn label(mut self, label: &'static str) -> Self {
+        self.label = label;
+        self
+    }
+}
+
+const fn sawit(group: Group, id: &'static str, keys: &'static [&'static str]) -> SawitKey {
+    SawitKey {
+        group,
+        id,
+        keys,
+        label: "",
+    }
+}
+
+/// The keys Sawit gives the canvas's commands besides FigCraft's ([`SawitKey`]). Figma and
+/// FigJam have no key for these either, so each family of commands shares its modifiers and
+/// FigCraft's neighbouring keys:
+///
+/// - Polygon and Star: ⇧6 and ⇧8, the keys of `^` (a triangle, the polygon the tool draws) and
+///   `*` (a star). Text on a path: ⇧T, beside Text's T.
+/// - Copy as and Export: Copy as PNG is FigCraft's ⇧⌘C and Export its ⇧⌘E; ⌥ makes them SVG, ⌃
+///   CSS for a copy and frames to PDF for an export, and ⌃⌥⌘C copies the text.
+/// - Select all with same: ⌃⇧ and the first letter of what is the same (Fill, Stroke, Effect,
+///   Text, fOnt, Instance, Properties).
+/// - Where Sawit keeps FigCraft's Mac key (⌃⌘M, ⌥⌘O, ⌘J, ⇧⌘J), the command takes FigCraft's
+///   Windows and Linux key, with ⌃ for Ctrl: Use as mask ⌃⌥M, Outline stroke ⌃⌥O, Join ⌃J,
+///   Smooth join ⌃⇧J. Release mask is ⌃⌥⇧M; Simplify and Reverse path are ⌃⌥S and ⌃⌥R, Crop
+///   image ⌃⌥C.
+/// - Beside FigCraft's own: Remove frame ⌥⇧⌘G (Frame selection is ⌥⌘G), Hide other layers ⌥⇧⌘H
+///   (Show/Hide is ⇧⌘H), Create multiple components ⌥⇧⌘K (Create component is ⌥⌘K), Reset
+///   instance ⌥⇧⌘B (Detach is ⌥⌘B), Push changes to and Restore the main component ⌃⌥⌘P and
+///   ⌃⌥⌘R (Go to main is ⌃⌥⌘K), Combine as variants ⌃⌥K, Show outlines for the selection ⌥⇧⌘O
+///   (Show outlines is ⇧⌘O), Soft-proof sRGB ⌃⌥P (Pixel preview is ⌃P), Pack ⌃⌥⇧H and ⌃⌥⇧V
+///   (Distribute is ⌃⌥H and ⌃⌥V).
+/// - Rotate 90° left and right ⌥⇧L and ⌥⇧R, 180° ⌥⇧T; Round to pixels ⌥⇧P, Rasterize ⌥⇧⌘P.
+/// - Text case: ⌥⇧⌘ and U (upper), L (lower), T (title), N (as typed).
+/// - Zoom to 50% and 200%: ⌥⇧- and ⌥⇧=, beside zoom out and in.
+/// - Snap to geometry and to objects: ⌥⇧⌘' and ⌃⇧⌘', beside FigCraft's ⇧⌘' (snap to pixel grid).
+///
+/// None is a key the app keeps on the canvas ([`SAWIT_WINS`]) or one of FigCraft's, and the app's
+/// tests prove that none is a key of the app's.
+pub static SAWIT_KEYS: &[SawitKey] = &[
+    // Tools
+    sawit(Group::Tools, "tool.polygon", &["Shift+6"]),
+    sawit(Group::Tools, "tool.star", &["Shift+8"]),
+    sawit(Group::Tools, "tool.textOnPath", &["Shift+T"]),
+    // View
+    sawit(Group::View, "view.outlinesSelection", &["Alt+Shift+Cmd+O"]),
+    sawit(Group::View, "view.proofSrgb", &["Ctrl+Alt+P"]),
+    sawit(Group::View, "view.snapGeometry", &["Alt+Shift+Cmd+'"]),
+    sawit(Group::View, "view.snapObjects", &["Ctrl+Shift+Cmd+'"]),
+    // Zoom
+    sawit(Group::Zoom, "view.zoom50", &["Alt+Shift+-"]),
+    sawit(Group::Zoom, "view.zoom200", &["Alt+Shift+="]),
+    // Text
+    sawit(Group::Text, "text.caseUpper", &["Alt+Shift+Cmd+U"]),
+    sawit(Group::Text, "text.caseLower", &["Alt+Shift+Cmd+L"]),
+    sawit(Group::Text, "text.caseTitle", &["Alt+Shift+Cmd+T"]),
+    sawit(Group::Text, "text.caseOriginal", &["Alt+Shift+Cmd+N"]),
+    // Shape
+    sawit(Group::Shape, "vector.outlineStroke", &["Ctrl+Alt+O"]),
+    sawit(Group::Shape, "vector.join", &["Ctrl+J"]),
+    sawit(Group::Shape, "vector.smoothJoin", &["Ctrl+Shift+J"]),
+    sawit(Group::Shape, "vector.simplify", &["Ctrl+Alt+S"]),
+    sawit(Group::Shape, "vector.reverse", &["Ctrl+Alt+R"]),
+    sawit(Group::Shape, "object.rasterize", &["Alt+Shift+Cmd+P"]),
+    // Selection
+    sawit(Group::Selection, "select.sameFill", &["Ctrl+Shift+F"])
+        .label("Select all with same fill"),
+    sawit(Group::Selection, "select.sameStroke", &["Ctrl+Shift+S"])
+        .label("Select all with same stroke"),
+    sawit(Group::Selection, "select.sameEffect", &["Ctrl+Shift+E"])
+        .label("Select all with same effect"),
+    sawit(Group::Selection, "select.sameText", &["Ctrl+Shift+T"])
+        .label("Select all with same text properties"),
+    sawit(Group::Selection, "select.sameFont", &["Ctrl+Shift+O"])
+        .label("Select all with same font"),
+    sawit(Group::Selection, "select.sameInstance", &["Ctrl+Shift+I"])
+        .label("Select all with same instance"),
+    sawit(Group::Selection, "select.sameProperties", &["Ctrl+Shift+P"])
+        .label("Select all with same properties"),
+    sawit(Group::Selection, "object.removeFrame", &["Alt+Shift+Cmd+G"]),
+    sawit(Group::Selection, "object.hideOthers", &["Alt+Shift+Cmd+H"]),
+    // Edit
+    sawit(Group::Edit, "edit.copyAsText", &["Ctrl+Alt+Cmd+C"]),
+    sawit(Group::Edit, "edit.copyAsCss", &["Ctrl+Shift+Cmd+C"]),
+    sawit(Group::Edit, "edit.copyAsSvg", &["Alt+Shift+Cmd+C"]),
+    sawit(Group::Edit, "file.exportSvg", &["Alt+Shift+Cmd+E"]),
+    sawit(Group::Edit, "file.exportFramesPdf", &["Ctrl+Shift+Cmd+E"]),
+    // Transform
+    sawit(Group::Transform, "object.mask", &["Ctrl+Alt+M"]),
+    sawit(
+        Group::Transform,
+        "object.releaseMask",
+        &["Ctrl+Alt+Shift+M"],
+    ),
+    sawit(Group::Transform, "image.crop", &["Ctrl+Alt+C"]),
+    sawit(Group::Transform, "object.rotateLeft", &["Alt+Shift+L"]),
+    sawit(Group::Transform, "object.rotateRight", &["Alt+Shift+R"]),
+    sawit(Group::Transform, "object.rotate180", &["Alt+Shift+T"]),
+    // Arrange
+    sawit(Group::Arrange, "arrange.packH", &["Ctrl+Alt+Shift+H"]),
+    sawit(Group::Arrange, "arrange.packV", &["Ctrl+Alt+Shift+V"]),
+    sawit(Group::Arrange, "arrange.roundToPixels", &["Alt+Shift+P"]),
+    // Components
+    sawit(
+        Group::Components,
+        "component.createMultiple",
+        &["Alt+Shift+Cmd+K"],
+    ),
+    sawit(
+        Group::Components,
+        "component.combineVariants",
+        &["Ctrl+Alt+K"],
+    ),
+    sawit(
+        Group::Components,
+        "component.resetInstance",
+        &["Alt+Shift+Cmd+B"],
+    ),
+    sawit(
+        Group::Components,
+        "component.pushChanges",
+        &["Ctrl+Alt+Cmd+P"],
+    ),
+    sawit(
+        Group::Components,
+        "component.restoreMain",
+        &["Ctrl+Alt+Cmd+R"],
+    ),
+];
+
+/// One command's default keys on the canvas: FigCraft's ([`KEYS`]) or Sawit's ([`SAWIT_KEYS`]).
+#[derive(Clone, Copy, Debug)]
+pub struct DefaultKeys {
+    pub group: Group,
+    pub id: &'static str,
+    /// The Mac keys, written as FigCraft's keymap writes them, the first being the one a menu
+    /// shows.
+    pub keys: &'static [&'static str],
+    /// Where they are live: on the canvas, while text is edited, or both.
+    pub context: Context,
+    /// What the shortcuts sheet calls the command: FigCraft's label for it in its own panel, else
+    /// its menu's, else the command's.
+    pub title: &'static str,
+}
+
+/// Every command's default keys on the canvas, FigCraft's first, in its keymap's order, then
+/// Sawit's ([`SAWIT_KEYS`]).
+pub fn defaults() -> impl Iterator<Item = DefaultKeys> {
+    let figcraft = KEYS.iter().map(|binding| DefaultKeys {
+        group: binding.group,
+        id: binding.id,
+        keys: binding.keys(Platform::Mac),
+        context: binding.context,
+        title: binding.title(),
+    });
+    let sawits = SAWIT_KEYS.iter().map(|key| DefaultKeys {
+        group: key.group,
+        id: key.id,
+        keys: key.keys,
+        context: Context::Canvas,
+        title: key.title(),
+    });
+    figcraft.chain(sawits)
+}
+
+/// The first default key of command `id` ([`defaults`]) that the canvas gets, as FigCraft's
+/// keymap writes it: what a menu shows. Not one Sawit keeps ([`owned_by_sawit`]): Join shows
+/// Sawit's ⌃J, not FigCraft's ⌘J. `None` when it has none.
+pub fn primary(id: &str) -> Option<&'static str> {
+    defaults()
+        .filter(|keys| keys.id == id)
+        .flat_map(|keys| keys.keys.iter().copied())
+        .find(|spec| !owned_by_sawit(spec))
+}
+
+/// What FigCraft calls command `id`: its menu item's label, else the command's own.
+fn title(id: &'static str) -> &'static str {
+    figcraft_engine::catalog::items()
+        .find(|item| item.id == id)
+        .map(|item| item.label)
+        .or_else(|| figcraft_engine::find_command(id).map(|command| command.label))
+        .unwrap_or(id)
+}
 
 /// Most keys a row shows: a command's first bindings, as in FigCraft's own panel. The rest stay
 /// as alternatives that work without being listed.
@@ -74,17 +290,17 @@ pub struct ShortcutGroup {
     pub rows: Vec<ShortcutRow>,
 }
 
-/// The sheet: FigCraft's keymap by group, in the keymap's order, without the rows described in
-/// the module's docs. A group with no row left is not listed.
+/// The sheet: the default keys ([`defaults`]) by group, FigCraft's in its keymap's order and then
+/// Sawit's, without the rows described in the module's docs. A group with no row left is not
+/// listed.
 pub fn sheet() -> Vec<ShortcutGroup> {
     Group::ALL
         .into_iter()
         .filter(|group| *group != Group::Prototype)
         .filter_map(|group| {
-            let rows: Vec<ShortcutRow> = KEYS
-                .iter()
+            let rows: Vec<ShortcutRow> = defaults()
                 .filter(|binding| binding.group == group)
-                .filter_map(row)
+                .filter_map(|binding| row(&binding))
                 .collect();
             (!rows.is_empty()).then(|| ShortcutGroup {
                 name: group.label().to_string(),
@@ -95,12 +311,12 @@ pub fn sheet() -> Vec<ShortcutGroup> {
 }
 
 /// The sheet's row for `binding`, if it has one.
-fn row(binding: &Binding) -> Option<ShortcutRow> {
+fn row(binding: &DefaultKeys) -> Option<ShortcutRow> {
     if !is_offered(binding.id) {
         return None;
     }
     let mut keys: Vec<String> = Vec::new();
-    for spec in binding.keys(Platform::Mac) {
+    for spec in binding.keys {
         if owned_by_sawit(spec) {
             continue;
         }
@@ -115,7 +331,7 @@ fn row(binding: &Binding) -> Option<ShortcutRow> {
     }
     Some(ShortcutRow {
         id: binding.id,
-        label: binding.title().to_string(),
+        label: binding.title.to_string(),
         keys: keys.join(" or "),
     })
 }
@@ -134,9 +350,10 @@ pub struct KeyBinding {
     pub context: &'static str,
 }
 
-/// FigCraft's shortcuts as the app binds them, which the keymap editor shows and changes. Each
-/// command's keys, but those of the commands the sheet leaves out (hidden, or of no use in the
-/// canvas) and the keys Sawit keeps ([`SAWIT_WINS`]), in FigCraft's order:
+/// The canvas's default keys ([`defaults`]: FigCraft's shortcuts, then Sawit's) as the app binds
+/// them, which the keymap editor shows and changes. Each command's keys, but those of the
+/// commands the sheet leaves out (hidden, or of no use in the canvas) and the keys Sawit keeps
+/// ([`SAWIT_WINS`]), in [`defaults`]' order:
 ///
 /// - On the canvas ([`CANVAS_CONTEXT`]), the keys of the commands live there, but those Sawit
 ///   keeps while no text is edited ([`SAWIT_WINS_UNLESS_EDITING`]).
@@ -144,11 +361,11 @@ pub struct KeyBinding {
 ///   there, and of copy and paste, which act on the text: plain keys type.
 pub fn key_bindings() -> Vec<KeyBinding> {
     let mut out = Vec::new();
-    for binding in KEYS.iter() {
+    for binding in defaults() {
         if !is_offered(binding.id) {
             continue;
         }
-        for spec in binding.keys(Platform::Mac) {
+        for spec in binding.keys {
             let Some(keystroke) = gpui_keystroke(spec) else {
                 continue;
             };
@@ -329,11 +546,16 @@ mod tests {
         // The rest of those commands' group is on the sheet, so an empty sheet cannot pass this.
         assert!(row_of("vector.flatten").is_some());
         // ⌃⌘M (Mask) and ⌘J (Join selection) are no hidden commands: only the key filter takes
-        // them out. If it were missing, these rows would show.
-        for id in ["object.mask", "vector.join"] {
+        // them out. If it were missing, these rows would show them. Their rows show Sawit's keys
+        // for them instead.
+        for (id, sawits) in [("object.mask", "⌃⌥M"), ("vector.join", "⌃J")] {
             assert!(!is_hidden(id), "{id} is a hidden command");
             assert!(KEYS.iter().any(|b| b.id == id), "{id} has no keys to drop");
-            assert!(row_of(id).is_none(), "{id} is on the sheet");
+            assert_eq!(
+                row_of(id).map(|row| row.keys).as_deref(),
+                Some(sawits),
+                "{id}"
+            );
         }
         // Every key of the policy's list as the keymap binds it, worked out from the list itself.
         let kept: Vec<String> = KEYS
@@ -351,9 +573,17 @@ mod tests {
         for key in &kept {
             assert!(!has_key(key), "the sheet shows {key}");
         }
-        // Outline stroke (⌥⌘O) and Smooth join (⇧⌘J) have no other key, so their rows go too.
-        for id in ["vector.outlineStroke", "vector.smoothJoin"] {
-            assert!(row_of(id).is_none(), "{id} is on the sheet");
+        // Outline stroke (⌥⌘O) and Smooth join (⇧⌘J) have no other FigCraft key: their rows show
+        // only Sawit's.
+        for (id, sawits) in [
+            ("vector.outlineStroke", "⌃⌥O"),
+            ("vector.smoothJoin", "⌃⇧J"),
+        ] {
+            assert_eq!(
+                row_of(id).map(|row| row.keys).as_deref(),
+                Some(sawits),
+                "{id}"
+            );
         }
     }
 
@@ -539,6 +769,163 @@ mod tests {
                     .all(|binding| binding.keystroke != keystroke),
                 "{keystroke} is bound"
             );
+        }
+    }
+
+    /// The commands the canvas offers that get no key by default, each with why. Every other one
+    /// has a key ([`every_offered_command_has_a_key_but_these`]).
+    const LEFT_UNBOUND: &[(&str, &str)] = &[
+        // They need what the canvas has no dialog to ask for yet (`crate::menu::NEEDS_INPUT`): a
+        // key would do nothing. An agent passes it in the command's parameters.
+        ("object.batchRename", "needs the new names"),
+        ("object.moveToPage", "needs the page to move to"),
+        ("vector.offset", "needs the offset"),
+        ("file.colorProfile", "needs the colour profile"),
+        ("pref.nudge", "needs the nudge amounts"),
+        // It never applies on the canvas, which saves its file as it is edited.
+        ("file.revert", "never applies on the canvas"),
+        // Boolean groups ▸ Flatten runs Flatten itself (the engine's vector.flatten), whose keys
+        // are ⌘E and ⌥⇧F.
+        ("bool.flatten", "is Flatten, ⌘E"),
+        // Settings, set once rather than used as actions, as in Figma: a stray chord would turn
+        // off the number keys' opacity or the hover highlight without the user seeing why.
+        ("pref.keepTool", "a preference"),
+        ("pref.highlightHover", "a preference"),
+        ("pref.renameDuplicates", "a preference"),
+        ("pref.showDimensions", "a preference"),
+        ("pref.numberKeysOpacity", "a preference"),
+        ("view.outlinesHiddenLayers", "an option of outline mode"),
+        ("view.outlinesObjectBounds", "an option of outline mode"),
+    ];
+
+    /// Every command the keymap editor offers on the canvas: FigCraft's shortcuts' and its menus'
+    /// commands that the canvas offers ([`is_offered`]), as `board::unbound_rows` lists them.
+    fn offered() -> Vec<&'static str> {
+        let mut ids: Vec<&'static str> = KEYS
+            .iter()
+            .map(|binding| binding.id)
+            .chain(figcraft_engine::catalog::items().map(|item| item.id))
+            .filter(|id| is_offered(id))
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    }
+
+    /// The user's ask: every command has a key by default, but those that shouldn't
+    /// ([`LEFT_UNBOUND`], and the commands the canvas doesn't offer at all: agent-only, Dev Mode,
+    /// the prototype player). A FigCraft bump that adds a command fails here until it gets a key
+    /// or a reason.
+    #[test]
+    fn every_offered_command_has_a_key_but_these() {
+        let bound: Vec<&str> = key_bindings().iter().map(|binding| binding.id).collect();
+        let offered = offered();
+        let missing: Vec<&str> = offered
+            .iter()
+            .copied()
+            .filter(|id| !bound.contains(id))
+            .filter(|id| LEFT_UNBOUND.iter().all(|(unbound, _)| unbound != id))
+            .collect();
+        assert!(missing.is_empty(), "no key: {missing:?}");
+        for (id, why) in LEFT_UNBOUND {
+            assert!(offered.contains(id), "{id} is not offered ({why})");
+            assert!(!bound.contains(id), "{id} has a key ({why})");
+        }
+        // The prototype player's and Dev Mode's commands stay off the keyboard.
+        for id in NOT_OFFERED {
+            assert!(!bound.contains(id), "{id} has a key");
+        }
+        // What needs a dialog gets no key of Sawit's: text.link keeps FigCraft's while text is
+        // edited, and they do nothing until the dialog comes.
+        for id in crate::menu::NEEDS_INPUT {
+            assert!(SAWIT_KEYS.iter().all(|key| key.id != *id), "{id}");
+        }
+    }
+
+    /// Sawit's keys are keys of their own: none is FigCraft's (for any command, in any context),
+    /// one the app keeps, or another of Sawit's, and each is a key FigCraft can read. Each goes to
+    /// a command the canvas offers that has no FigCraft key the canvas gets.
+    #[test]
+    fn sawits_keys_clash_with_no_other_key() {
+        let figcraft: Vec<String> = KEYS
+            .iter()
+            .flat_map(|binding| binding.keys(Platform::Mac))
+            .filter_map(|spec| binding_keystroke(spec))
+            .collect();
+        let mut seen: Vec<String> = Vec::new();
+        for key in SAWIT_KEYS {
+            assert!(is_offered(key.id), "{} is not offered", key.id);
+            assert!(
+                figcraft_engine::find_command(key.id).is_some() || crate::policy::is_ui(key.id),
+                "{} is no command",
+                key.id
+            );
+            let theirs = KEYS
+                .iter()
+                .filter(|binding| binding.id == key.id)
+                .flat_map(|binding| binding.keys(Platform::Mac));
+            for spec in theirs {
+                assert!(owned_by_sawit(spec), "{} has FigCraft's {spec}", key.id);
+            }
+            assert!(!key.keys.is_empty(), "{}", key.id);
+            for spec in key.keys {
+                let keystroke = binding_keystroke(spec)
+                    .unwrap_or_else(|| panic!("{} can't read {spec}", key.id));
+                assert!(
+                    !figcraft.contains(&keystroke),
+                    "{spec} ({}) is FigCraft's",
+                    key.id
+                );
+                let gpui = gpui_keystroke(spec).unwrap();
+                assert!(!SAWIT_WINS.contains(&gpui.as_str()), "{spec} is Sawit's");
+                assert!(
+                    !SAWIT_WINS_UNLESS_EDITING.contains(&gpui.as_str()),
+                    "{spec}"
+                );
+                assert!(!seen.contains(&keystroke), "{spec} ({}) twice", key.id);
+                seen.push(keystroke);
+            }
+        }
+        // They are the canvas's key bindings, and the sheet lists them.
+        let bindings = key_bindings();
+        for key in SAWIT_KEYS {
+            let keystroke = binding_keystroke(key.keys[0]).unwrap();
+            assert!(
+                bindings.iter().any(|b| b.id == key.id
+                    && b.keystroke == keystroke
+                    && b.context == CANVAS_CONTEXT),
+                "{} isn't bound",
+                key.id
+            );
+            assert!(row_of(key.id).is_some(), "{} isn't on the sheet", key.id);
+        }
+        // The family keys read as the module's docs write them.
+        let shown = |id| row_of(id).map(|row| row.keys);
+        assert_eq!(shown("tool.polygon").as_deref(), Some("⇧6"));
+        assert_eq!(shown("tool.star").as_deref(), Some("⇧8"));
+        assert_eq!(shown("edit.copyAsSvg").as_deref(), Some("⌥⇧⌘C"));
+        assert_eq!(shown("select.sameFill").as_deref(), Some("⌃⇧F"));
+        assert_eq!(
+            row_of("select.sameFill").map(|row| row.label).as_deref(),
+            Some("Select all with same fill")
+        );
+    }
+
+    /// No two commands share a key in one context: a key runs one command.
+    #[test]
+    fn no_key_runs_two_commands() {
+        let bindings = key_bindings();
+        for (i, a) in bindings.iter().enumerate() {
+            for b in &bindings[i + 1..] {
+                assert!(
+                    !(a.keystroke == b.keystroke && a.context == b.context && a.id != b.id),
+                    "{} runs {} and {} in {}",
+                    a.keystroke,
+                    a.id,
+                    b.id,
+                    a.context
+                );
+            }
         }
     }
 }

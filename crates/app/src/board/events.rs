@@ -323,7 +323,7 @@ impl BoardView {
         let requests = match to_tools(board, &event) {
             Ok(requests) => requests,
             Err(error) => {
-                self.show_toast(error.to_string(), cx);
+                self.show_error(&error, cx);
                 Vec::new()
             }
         };
@@ -341,7 +341,7 @@ impl BoardView {
             return;
         };
         if let Err(error) = input::pointer_left(board) {
-            self.show_toast(error.to_string(), cx);
+            self.show_error(&error, cx);
         }
         cx.notify();
     }

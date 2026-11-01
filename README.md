@@ -317,12 +317,23 @@ explained. A conflict on the same address can't be forced.
 - **Boards and design files**: the project's canvas is a board, for sticky notes, shapes with text, connectors,
   marker drawing, stamps and sections. A `.sawit` file opened from the **Files** tab gets its own canvas tab,
   as a board or as a design file (frames, vectors, auto layout and components), and saves back to the same file.
-- **Tools and the toolbar**: the toolbar floats at the bottom of the canvas, and each tool's tooltip shows its key when it has one.
+- **Tools and the toolbar**: the toolbar floats at the bottom of the canvas, and each tool's tooltip shows its key.
+  A button with a ^ beside it holds several tools: it shows the one you used last, and the ^ lists them all with
+  their keys.
   - A board has Move and Hand, Marker, Highlighter and Eraser, Sticky notes in eight colours, Shapes, Connectors
-    (straight, elbow or curved), Text, Section, Stamps, and a picker for templates and tables. A bar over the
-    selection offers its colour, shape, text size and connector style and ends.
-  - A design file has Move, Scale and Hand, Frame, Section and Slice, Rectangle, Line, Arrow, Ellipse, Polygon and
-    Star, Pen and Pencil, and Text.
+    (straight, elbow or curved), Text and Text on a path, Frame, Section and Slice, Rectangle, Line, Arrow, Ellipse,
+    Polygon and Star (with **Place image…** at the end of their list), Pen and Pencil, Stamps, and a picker for
+    templates and tables. A bar over the selection offers its colour, shape, text size and connector style and ends.
+  - A design file has Move, Scale and Hand, Frame, Section and Slice, the same shapes and Place image…, Pen and
+    Pencil, and Text and Text on a path. The board's own tools (stickies, shapes with text, connectors, ink, stamps)
+    aren't there: they only work on a board.
+  - Keys: <kbd>V</kbd> move, <kbd>H</kbd> hand, <kbd>F</kbd> or <kbd>A</kbd> frame, <kbd>⇧</kbd><kbd>S</kbd>
+    section, <kbd>S</kbd> slice, <kbd>R</kbd> rectangle, <kbd>L</kbd> line, <kbd>⇧</kbd><kbd>L</kbd> arrow,
+    <kbd>O</kbd> ellipse, <kbd>⇧</kbd><kbd>6</kbd> polygon (<kbd>^</kbd>), <kbd>⇧</kbd><kbd>8</kbd> star
+    (<kbd>*</kbd>), <kbd>⇧</kbd><kbd>⌘</kbd><kbd>K</kbd> place image, <kbd>P</kbd> pen, <kbd>⇧</kbd><kbd>P</kbd>
+    pencil, <kbd>T</kbd> text, <kbd>⇧</kbd><kbd>T</kbd> text on a path, and on a board <kbd>M</kbd> marker,
+    <kbd>U</kbd> highlighter, <kbd>E</kbd> eraser, <kbd>Q</kbd> sticky, <kbd>B</kbd> shape, <kbd>X</kbd>
+    connector, <kbd>W</kbd> stamp.
 - **Layers and Design panels**: the layers panel on the left (<kbd>⌥</kbd><kbd>1</kbd>) lists the pages and layers.
   Click to select, double-click to rename, hide or lock a layer, drag layers to reorder or nest them, and filter by
   name. The Design panel on the right (<kbd>⌥</kbd><kbd>8</kbd>) edits the selection: position and size, auto layout,
@@ -330,7 +341,12 @@ explained. A conflict on the same address can't be forced.
   with both shown, and the top bar toggles them.
 - **Menus and shortcuts**: the ≡ button opens the main menu, and a right-click opens the context menu.
   <kbd>⌘</kbd><kbd>K</kbd> (or <kbd>⌘</kbd><kbd>/</kbd>) opens the **Actions** palette, which finds any menu command
-  by name, and <kbd>⌃</kbd><kbd>⇧</kbd><kbd>?</kbd> lists every shortcut. While the canvas has the keyboard,
+  by name, and <kbd>⌃</kbd><kbd>⇧</kbd><kbd>?</kbd> lists every shortcut. A command that has nothing to act on is
+  greyed out in the menus and left out of the palette (Frame selection, Group or Align with nothing selected, Undo
+  with nothing to undo), and its key does nothing. So are the few items that need a dialog the canvas doesn't have
+  yet (Create link, Offset path, Move to page, Batch rename, Color profile, Nudge amount) and Revert to saved, which
+  never applies since the canvas saves as you go. A refusal that does show says why in plain words. While the
+  canvas has the keyboard,
   <kbd>⌘</kbd><kbd>K</kbd> belongs to the palette, so the chords that start with it (the tab chords,
   <kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd> for the Keymap Editor, and any you add) don't work there. The
   same goes for a chord you add that starts with another key the canvas uses alone.
@@ -531,6 +547,35 @@ French…), the defaults move where macOS menus put them.
 | Files: copy relative path | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>C</kbd> |
 | Files: find in folder | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>F</kbd> |
 | Quit | <kbd>⌘</kbd><kbd>Q</kbd> |
+
+The canvas's keys are FigCraft's, which follow Figma's (the sheet, <kbd>⌃</kbd><kbd>⇧</kbd><kbd>?</kbd>, lists them).
+Sawit adds keys for the canvas commands FigCraft leaves without one, and for those whose FigCraft key Sawit keeps
+(<kbd>⌃</kbd><kbd>⌘</kbd><kbd>M</kbd>, <kbd>⌥</kbd><kbd>⌘</kbd><kbd>O</kbd>, <kbd>⌘</kbd><kbd>J</kbd>,
+<kbd>⇧</kbd><kbd>⌘</kbd><kbd>J</kbd>). They are defaults like any other, so the Keymap Editor changes them:
+
+| Canvas command | Shortcut |
+|---|---|
+| Polygon / Star / Text on a path tools | <kbd>⇧</kbd><kbd>6</kbd> / <kbd>⇧</kbd><kbd>8</kbd> / <kbd>⇧</kbd><kbd>T</kbd> |
+| Copy as SVG / CSS / text | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>C</kbd> / <kbd>⌃</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>C</kbd> / <kbd>⌃</kbd><kbd>⌥</kbd><kbd>⌘</kbd><kbd>C</kbd> (Copy as PNG is <kbd>⇧</kbd><kbd>⌘</kbd><kbd>C</kbd>) |
+| Export selection as SVG / frames to PDF | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>E</kbd> / <kbd>⌃</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>E</kbd> (Export is <kbd>⇧</kbd><kbd>⌘</kbd><kbd>E</kbd>) |
+| Select all with same fill / stroke / effect / text / font / instance / properties | <kbd>⌃</kbd><kbd>⇧</kbd> and <kbd>F</kbd> / <kbd>S</kbd> / <kbd>E</kbd> / <kbd>T</kbd> / <kbd>O</kbd> / <kbd>I</kbd> / <kbd>P</kbd> |
+| Use as mask / release mask | <kbd>⌃</kbd><kbd>⌥</kbd><kbd>M</kbd> / <kbd>⌃</kbd><kbd>⌥</kbd><kbd>⇧</kbd><kbd>M</kbd> |
+| Outline stroke / join / smooth join | <kbd>⌃</kbd><kbd>⌥</kbd><kbd>O</kbd> / <kbd>⌃</kbd><kbd>J</kbd> / <kbd>⌃</kbd><kbd>⇧</kbd><kbd>J</kbd> |
+| Simplify vector / reverse path / crop image | <kbd>⌃</kbd><kbd>⌥</kbd><kbd>S</kbd> / <kbd>⌃</kbd><kbd>⌥</kbd><kbd>R</kbd> / <kbd>⌃</kbd><kbd>⌥</kbd><kbd>C</kbd> |
+| Remove frame / hide other layers | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>G</kbd> / <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>H</kbd> |
+| Rotate 90° left / right / 180° | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>L</kbd> / <kbd>⌥</kbd><kbd>⇧</kbd><kbd>R</kbd> / <kbd>⌥</kbd><kbd>⇧</kbd><kbd>T</kbd> |
+| Round to pixels / rasterize | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>P</kbd> / <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>P</kbd> |
+| Pack horizontal / vertical | <kbd>⌃</kbd><kbd>⌥</kbd><kbd>⇧</kbd><kbd>H</kbd> / <kbd>⌃</kbd><kbd>⌥</kbd><kbd>⇧</kbd><kbd>V</kbd> |
+| Uppercase / lowercase / title case / original case | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⌘</kbd> and <kbd>U</kbd> / <kbd>L</kbd> / <kbd>T</kbd> / <kbd>N</kbd> |
+| Create multiple components / combine as variants | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>K</kbd> / <kbd>⌃</kbd><kbd>⌥</kbd><kbd>K</kbd> |
+| Reset instance / push changes to main / restore main | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>B</kbd> / <kbd>⌃</kbd><kbd>⌥</kbd><kbd>⌘</kbd><kbd>P</kbd> / <kbd>⌃</kbd><kbd>⌥</kbd><kbd>⌘</kbd><kbd>R</kbd> |
+| Show outlines for selection / soft-proof sRGB | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>O</kbd> / <kbd>⌃</kbd><kbd>⌥</kbd><kbd>P</kbd> |
+| Snap to geometry / to objects | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>'</kbd> / <kbd>⌃</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>'</kbd> |
+| Zoom to 50% / 200% | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>-</kbd> / <kbd>⌥</kbd><kbd>⇧</kbd><kbd>=</kbd> |
+
+The Preferences menu's settings, the two Outlines options, Boolean groups ▸ Flatten (it is Flatten,
+<kbd>⌘</kbd><kbd>E</kbd>), Revert to saved and the items that need a dialog have no key; the Keymap Editor lists them
+as unbound, and any of them can be given one there.
 
 ## The `sawit` command
 
