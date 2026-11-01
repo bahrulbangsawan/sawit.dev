@@ -19,8 +19,9 @@ use sawit_core::terminal::{
 };
 
 use super::{
-    ClosePane, FocusDown, FocusLeft, FocusRight, FocusUp, RenamePane, RenameTab, SplitDown,
-    SplitRight, ToggleSendRightClicks, ZoomPane,
+    ClosePane, FocusDown, FocusLeft, FocusNextPane, FocusNextPaneAtPrompt, FocusPreviousPane,
+    FocusRight, FocusUp, RenamePane, RenameTab, SplitDown, SplitRight, ToggleSendRightClicks,
+    ZoomPane,
 };
 use crate::files::DraggedFile;
 
@@ -45,12 +46,18 @@ type GridLayout = (Point<Pixels>, Size<Pixels>);
 /// here too, so they only act in a terminal. Renaming follows Terminal.app's
 /// Edit Title (⇧⌘I, the tab) and iTerm2's Edit Session (⌘I, the pane). ⌘W
 /// stays the workspace's (it closes the center tab), so a pane closes with
-/// ⌥⌘W.
+/// ⌥⌘W. ⌘] and ⌘[ step through the panes as in iTerm2.
+///
+/// Shift-Tab is the one key a program gets that the terminal also uses: at a
+/// shell prompt in a split tab it moves to the next pane, and anywhere else its
+/// action lets it go on to `on_key`. It is bound after its `NoAction`, so it
+/// comes first, while the `NoAction` still keeps Root's Shift-Tab out.
 pub(super) fn bindings() -> Vec<KeyBinding> {
     let ctx = Some("Terminal");
     vec![
         KeyBinding::new("tab", NoAction, ctx),
         KeyBinding::new("shift-tab", NoAction, ctx),
+        KeyBinding::new("shift-tab", FocusNextPaneAtPrompt, ctx),
         KeyBinding::new("cmd-c", NoAction, ctx),
         KeyBinding::new("cmd-d", SplitRight, ctx),
         KeyBinding::new("cmd-shift-d", SplitDown, ctx),
@@ -58,6 +65,8 @@ pub(super) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-alt-right", FocusRight, ctx),
         KeyBinding::new("cmd-alt-up", FocusUp, ctx),
         KeyBinding::new("cmd-alt-down", FocusDown, ctx),
+        KeyBinding::new("cmd-]", FocusNextPane, ctx),
+        KeyBinding::new("cmd-[", FocusPreviousPane, ctx),
         KeyBinding::new("cmd-shift-enter", ZoomPane, ctx),
         KeyBinding::new("cmd-i", RenamePane, ctx),
         KeyBinding::new("cmd-shift-i", RenameTab, ctx),
@@ -295,6 +304,19 @@ impl TerminalView {
     /// The shell is waiting at its prompt, not running a command.
     pub fn at_prompt(&self) -> bool {
         self.shell && !self.exited && self.session.at_prompt()
+    }
+
+    /// The terminal's background colour.
+    pub fn background(&self) -> Hsla {
+        hsla(self.palette.background)
+    }
+
+    /// Nothing here would take a key the panes use (⇧⇥): the shell waits at its prompt with no
+    /// program in the foreground (what the PTY's foreground process group says, read now), or
+    /// the process has ended. An SSH session's remote shell can't be seen from here, so the
+    /// session always takes the key.
+    pub fn nothing_in_front(&self) -> bool {
+        self.exited || self.at_prompt()
     }
 
     /// A plain shell waiting at its prompt: what commands from elsewhere (an agent's, a
@@ -943,6 +965,17 @@ mod tests {
     /// Non-⌘ keys the app deliberately takes over a focused terminal.
     const APP_KEYS: &[&str] = &["ctrl-tab", "ctrl-shift-tab"];
 
+    /// Shell keys the terminal takes only at a shell prompt, and only in a split tab: anywhere
+    /// else their action hands the key on to the program (see the tab's tests).
+    const PROMPT_KEYS: &[(&str, &str)] = &[("shift-tab", "terminal::FocusNextPaneAtPrompt")];
+
+    /// Whether `names`, the actions `key` runs in a terminal, are only a [`PROMPT_KEYS`] one.
+    fn only_at_a_prompt(key: &str, names: &[&str]) -> bool {
+        PROMPT_KEYS
+            .iter()
+            .any(|(k, action)| *k == key && names == [*action])
+    }
+
     fn init(cx: &mut App) {
         gpui_kit::init(cx);
         crate::workspace::init(cx);
@@ -983,7 +1016,10 @@ mod tests {
                 let (bindings, pending) =
                     keymap.bindings_for_input(&[Keystroke::parse(key).unwrap()], &terminal);
                 let names: Vec<_> = bindings.iter().map(|b| b.action().name()).collect();
-                assert!(names.is_empty() && !pending, "{key} is taken by {names:?}");
+                assert!(
+                    (names.is_empty() || only_at_a_prompt(key, &names)) && !pending,
+                    "{key} is taken by {names:?}"
+                );
             }
             // Whatever gets bound later: only ⌘ shortcuts and APP_KEYS may
             // beat the shell.
@@ -1004,7 +1040,7 @@ mod tests {
                 let (bindings, pending) = keymap.bindings_for_input(&keys[..1], &terminal);
                 let names: Vec<_> = bindings.iter().map(|b| b.action().name()).collect();
                 assert!(
-                    names.is_empty() && !pending,
+                    (names.is_empty() || only_at_a_prompt(&name(first), &names)) && !pending,
                     "{} is taken from the terminal by {names:?}",
                     name(first)
                 );

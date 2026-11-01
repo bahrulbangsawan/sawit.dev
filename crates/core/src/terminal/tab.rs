@@ -160,6 +160,40 @@ impl TabState {
         }
     }
 
+    /// The panes in reading order, laid out in `area`: by their top edge, then
+    /// their left one. Without an area (the tab not drawn yet), in the split
+    /// tree's order.
+    pub fn reading_order(&self, area: Option<Rect>) -> Vec<PaneId> {
+        let Some(area) = area else {
+            return self.layout.panes();
+        };
+        let mut rects = self.layout.rects(area);
+        // Whole pixels, so that panes side by side whose top edges differ
+        // by a rounding error still read as one row.
+        rects.sort_by(|(_, a), (_, b)| {
+            a.y.round()
+                .total_cmp(&b.y.round())
+                .then(a.x.round().total_cmp(&b.x.round()))
+        });
+        rects.into_iter().map(|(pane, _)| pane).collect()
+    }
+
+    /// The pane after the focused one in reading order (`forward`), or the
+    /// one before it, wrapping round. `None` with one pane.
+    pub fn next_pane(&self, area: Option<Rect>, forward: bool) -> Option<PaneId> {
+        let order = self.reading_order(area);
+        if order.len() < 2 {
+            return None;
+        }
+        let at = order.iter().position(|p| *p == self.focused).unwrap_or(0);
+        let next = if forward {
+            (at + 1) % order.len()
+        } else {
+            (at + order.len() - 1) % order.len()
+        };
+        Some(order[next])
+    }
+
     /// The panes to draw and where: only the zoomed one when zoomed.
     pub fn visible(&self, area: Rect) -> Vec<(PaneId, Rect)> {
         match self.zoomed {

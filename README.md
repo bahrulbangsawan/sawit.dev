@@ -218,6 +218,14 @@ explained. A conflict on the same address can't be forced.
   key moves between panes. <kbd>⇧⌘↩</kbd> zooms the focused pane of a split (and maximizes the dock when the tab has
   one pane). Splitting and dragging a divider stop at 20 columns by 4 rows; shrinking the dock or the window can still
   make panes smaller.
+- <kbd>⌘]</kbd> and <kbd>⌘[</kbd> go to the next and previous pane, left to right and then down, wrapping round, as in
+  iTerm2. At a shell prompt, <kbd>⇧⇥</kbd> goes to the next pane too. While a program runs in the pane (Claude Code,
+  which switches modes with <kbd>⇧⇥</kbd>, vim, a REPL, an SSH session), <kbd>⇧⇥</kbd> goes to the program, and so
+  it does in a tab of one pane.
+- The pane you type in has an accent border, and its header has the active tab's colours and a bold title. The other
+  panes sit back: their headers are muted and their text slightly dimmed. When you type elsewhere (an editor, the
+  sidebar), the pane you were in keeps its header and bold title, with a quieter border, so you can see where typing
+  goes when you come back.
 - Right-click a pane (or Shift+right-click, even while a program uses the mouse) for the pane menu: Rename pane
   (<kbd>⌘I</kbd>), Split right (<kbd>⌘D</kbd>), Split down (<kbd>⇧⌘D</kbd>), Zoom (<kbd>⇧⌘↩</kbd>), Send right-clicks
   to pane (<kbd>⌥⌘R</kbd>), and Close pane (<kbd>⌥⌘W</kbd>). The menu shows each item's key, and the keys act on the
@@ -604,6 +612,8 @@ French…), the defaults move where macOS menus put them.
 | Files: find in folder | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⌘</kbd><kbd>F</kbd> |
 | Terminal: split right / split down | <kbd>⌘</kbd><kbd>D</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>D</kbd> |
 | Terminal: move to the pane left / right / above / below | <kbd>⌥</kbd><kbd>⌘</kbd> + <kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd> |
+| Terminal: next pane / previous pane (wrapping) | <kbd>⌘</kbd><kbd>]</kbd> / <kbd>⌘</kbd><kbd>[</kbd> |
+| Terminal: next pane, at a shell prompt only (else the program gets it) | <kbd>⇧</kbd><kbd>⇥</kbd> |
 | Terminal: zoom pane (one pane: maximize the terminal) | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>↩</kbd> |
 | Terminal: rename pane / rename tab | <kbd>⌘</kbd><kbd>I</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>I</kbd> |
 | Terminal: send right-clicks to pane (on/off) | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>R</kbd> |

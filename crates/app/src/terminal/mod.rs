@@ -27,6 +27,15 @@ actions!(
         FocusUp,
         /// Focuses the pane below.
         FocusDown,
+        /// Focuses the next pane in reading order (left to right, then top
+        /// to bottom), wrapping round.
+        FocusNextPane,
+        /// Focuses the previous pane in reading order, wrapping round.
+        FocusPreviousPane,
+        /// At a shell prompt in a split tab (no program in the foreground),
+        /// focuses the next pane as `FocusNextPane` does. Anywhere else the
+        /// key goes on to the program: Claude Code switches modes with ⇧⇥.
+        FocusNextPaneAtPrompt,
         /// Zooms the focused pane to fill its tab, or unzooms it. With one
         /// pane the key goes on to the workspace, which maximizes the dock.
         ZoomPane,

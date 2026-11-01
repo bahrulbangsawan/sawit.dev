@@ -868,6 +868,38 @@ fn rename_trims_and_clears() {
     assert!(t.panes[&1].send_right_clicks);
 }
 
+/// A 2×2 tab made the way ⌘D then ⇧⌘D in each half makes it: its split tree lists the left
+/// column before the right one, but the panes read row by row, and stepping wraps round.
+#[test]
+fn next_pane_goes_in_reading_order_and_wraps() {
+    let mut t = TabState::new(1);
+    assert_eq!(t.next_pane(Some(tab_area()), true), None, "one pane");
+    assert!(t.split(SplitDir::Right, 2, tab_area(), TAB_MIN));
+    t.focus(1);
+    assert!(t.split(SplitDir::Down, 3, tab_area(), TAB_MIN));
+    t.focus(2);
+    assert!(t.split(SplitDir::Down, 4, tab_area(), TAB_MIN));
+    // 1 2
+    // 3 4
+    assert_eq!(t.layout.panes(), vec![1, 3, 2, 4]);
+    assert_eq!(t.reading_order(Some(tab_area())), vec![1, 2, 3, 4]);
+    let mut seen = Vec::new();
+    t.focus(1);
+    for _ in 0..4 {
+        let next = t.next_pane(Some(tab_area()), true).unwrap();
+        seen.push(next);
+        t.focus(next);
+    }
+    assert_eq!(seen, vec![2, 3, 4, 1]);
+    assert_eq!(
+        t.next_pane(Some(tab_area()), false),
+        Some(4),
+        "back from the first"
+    );
+    // Not drawn yet: the split tree's order.
+    assert_eq!(t.next_pane(None, true), Some(3));
+}
+
 /// A tab's own name is apart from its panes': splitting, focusing another pane or closing one
 /// leaves it as it is.
 #[test]

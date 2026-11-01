@@ -18,7 +18,7 @@ use gpui_kit::base::POPUP_PRIORITY;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, ThemeColor, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::terminal::{
@@ -28,8 +28,9 @@ use sawit_core::terminal::{
 
 use super::view::{PAD_X, TerminalEvent, TerminalView, cell_size};
 use super::{
-    ClosePane, FocusDown, FocusLeft, FocusRight, FocusUp, RenamePane, RenameTab, SplitDown,
-    SplitRight, ToggleSendRightClicks, ZoomPane,
+    ClosePane, FocusDown, FocusLeft, FocusNextPane, FocusNextPaneAtPrompt, FocusPreviousPane,
+    FocusRight, FocusUp, RenamePane, RenameTab, SplitDown, SplitRight, ToggleSendRightClicks,
+    ZoomPane,
 };
 use crate::states::Banner;
 
@@ -71,6 +72,80 @@ pub fn pane_menu_items(zoomed: bool, send_right_clicks: bool) -> Vec<PaneMenuIte
         ),
         ("Close pane", None, Box::new(ClosePane)),
     ]
+}
+
+/// How a pane of a split tab shows where the keyboard is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PaneLook {
+    /// The tab's focused pane, with the keyboard: what is typed goes here.
+    Active,
+    /// The tab's focused pane while the keyboard is elsewhere in the window
+    /// (an editor, a sidebar panel): where typing goes once the terminal has
+    /// the keyboard back.
+    Current,
+    /// Any other pane.
+    Inactive,
+}
+
+impl PaneLook {
+    /// The look of `pane` in a tab whose focused pane is `focused`, with the
+    /// keyboard in the tab or not.
+    pub fn of(pane: PaneId, focused: PaneId, keyboard_here: bool) -> Self {
+        match (pane == focused, keyboard_here) {
+            (true, true) => PaneLook::Active,
+            (true, false) => PaneLook::Current,
+            (false, _) => PaneLook::Inactive,
+        }
+    }
+}
+
+/// What a pane looks like for its [`PaneLook`]. The focused pane never stands
+/// out by colour alone: its header's title is also heavier.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct PaneStyle {
+    pub border: Hsla,
+    pub header_bg: Hsla,
+    pub title: Hsla,
+    pub title_weight: FontWeight,
+    /// Laid over the terminal to dim it, as iTerm2 dims inactive split panes.
+    pub dim: Option<Hsla>,
+}
+
+/// How much of the terminal's background an inactive pane's terminal is
+/// dimmed with. Its text stays readable: the default palette's #abb2bf on
+/// #282c33 goes from 6.6:1 to 4.8:1, still over the 4.5:1 text needs.
+pub const INACTIVE_DIM: f32 = 0.2;
+
+/// The colours and weight of a pane that looks `look`, in `theme`, over a
+/// terminal whose background is `terminal_bg`. The active pane takes the
+/// theme's accent for its border and the active tab's colours for its header,
+/// as the tab strip's active tab does; the current pane keeps the header but
+/// borders in the quieter focus ring; the others sit back in the tab bar's
+/// colours, their text muted and their terminal dimmed.
+pub fn pane_style(look: PaneLook, theme: &ThemeColor, terminal_bg: Hsla) -> PaneStyle {
+    match look {
+        PaneLook::Active => PaneStyle {
+            border: theme.primary,
+            header_bg: theme.tab_active,
+            title: theme.tab_active_foreground,
+            title_weight: FontWeight::SEMIBOLD,
+            dim: None,
+        },
+        PaneLook::Current => PaneStyle {
+            border: theme.ring,
+            header_bg: theme.tab_active,
+            title: theme.tab_active_foreground,
+            title_weight: FontWeight::SEMIBOLD,
+            dim: None,
+        },
+        PaneLook::Inactive => PaneStyle {
+            border: theme.border,
+            header_bg: theme.tab_bar,
+            title: theme.muted_foreground,
+            title_weight: FontWeight::NORMAL,
+            dim: Some(terminal_bg.opacity(INACTIVE_DIM)),
+        },
+    }
 }
 
 /// Why a pane wasn't split.
@@ -461,6 +536,27 @@ impl TerminalTab {
         }
     }
 
+    /// Focuses the next pane in reading order (`forward`), or the previous
+    /// one, wrapping round. With one pane the key goes on to the next handler.
+    fn step_focus(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        match self.state.next_pane(self.area(), forward) {
+            Some(pane) => self.focus_pane(pane, window, cx),
+            None => cx.propagate(),
+        }
+    }
+
+    /// ⇧⇥: the next pane, when nothing runs in front in the focused one (its
+    /// shell waits at the prompt) and the tab is split. Otherwise the key goes
+    /// on, to the terminal's own key handling and the program.
+    fn step_focus_at_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let idle = self.focused_view().read(cx).nothing_in_front();
+        if idle && self.state.is_split() {
+            self.step_focus(true, window, cx);
+        } else {
+            cx.propagate();
+        }
+    }
+
     /// Zooms `pane`, or unzooms it.
     fn toggle_zoom(&mut self, pane: PaneId, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_pane(pane, window, cx);
@@ -731,10 +827,13 @@ impl TerminalTab {
     /// A pane's header: what runs there and where (not for SSH, whose
     /// folder would be the local `ssh`'s), whether it is zoomed, and its
     /// buttons. A long name or folder is cut short before the buttons are.
+    /// The focused pane's header takes the active tab's colours and a heavier
+    /// title ([`pane_style`]).
     fn render_header(
         &self,
         pane: PaneId,
         view: &Entity<TerminalView>,
+        style: PaneStyle,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let remote = view.read(cx).remote.is_some();
@@ -766,7 +865,8 @@ impl TerminalTab {
             .pr_1()
             .gap_1()
             .text_xs()
-            .bg(cx.theme().tab_bar)
+            .bg(style.header_bg)
+            .text_color(style.title)
             .border_b(HEADER_BORDER)
             .border_color(cx.theme().border)
             .child(div().flex_none().child(Icon::new(icon).xsmall()))
@@ -778,6 +878,7 @@ impl TerminalTab {
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_ellipsis()
+                            .font_weight(style.title_weight)
                             .child(title)
                             .into_any_element()
                     }),
@@ -894,22 +995,21 @@ impl TerminalTab {
         Some(banner.into_any_element())
     }
 
-    /// One pane at `rect`: header, border, banner (once its process has
-    /// ended) and terminal.
+    /// One pane at `rect`, looking `look`: header, border, banner (once its
+    /// process has ended) and terminal, dimmed when the pane is inactive. The
+    /// dimming has no hitbox, so clicks and drops still reach the terminal.
     fn render_pane(
         &self,
         pane: PaneId,
         rect: Rect,
         view: &Entity<TerminalView>,
+        look: PaneLook,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let border = if pane == self.state.focused {
-            cx.theme().ring
-        } else {
-            cx.theme().border
-        };
+        let style = pane_style(look, cx.theme(), view.read(cx).background());
         v_flex()
             .id(("pane", pane))
+            .debug_selector(move || format!("pane-{pane}-{look:?}"))
             .absolute()
             .left(px(rect.x))
             .top(px(rect.y))
@@ -917,13 +1017,40 @@ impl TerminalTab {
             .h(px(rect.h))
             .overflow_hidden()
             .border(PANE_BORDER)
-            .border_color(border)
+            .border_color(style.border)
             .on_any_mouse_down(
                 cx.listener(move |this, _, window, cx| this.focus_pane(pane, window, cx)),
             )
-            .child(self.render_header(pane, view, cx))
+            .child(self.render_header(pane, view, style, cx))
             .children(self.render_banner(pane, view, cx))
-            .child(div().flex_1().min_h_0().child(view.clone()))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(view.clone())
+                    .when_some(style.dim, |el, dim| {
+                        el.child(div().absolute().inset_0().bg(dim))
+                    }),
+            )
+    }
+
+    /// Whether the keyboard is in the tab: in one of its panes, or in the field
+    /// renaming one (which closes once it loses the keyboard).
+    fn keyboard_here(&self, window: &Window, cx: &App) -> bool {
+        self.renaming.is_some() || self.has_focus(window, cx)
+    }
+
+    /// How each pane looks now ([`PaneLook`]), in layout order (for tests).
+    #[cfg(test)]
+    pub(super) fn looks(&self, window: &Window, cx: &App) -> Vec<(PaneId, PaneLook)> {
+        let here = self.keyboard_here(window, cx);
+        self.state
+            .layout
+            .panes()
+            .into_iter()
+            .map(|pane| (pane, PaneLook::of(pane, self.state.focused, here)))
+            .collect()
     }
 }
 
@@ -994,6 +1121,17 @@ impl Render for TerminalTab {
                     cx.propagate();
                 }
             }))
+            .on_action(
+                cx.listener(|this, _: &FocusNextPane, window, cx| {
+                    this.step_focus(true, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &FocusPreviousPane, window, cx| {
+                this.step_focus(false, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &FocusNextPaneAtPrompt, window, cx| {
+                this.step_focus_at_prompt(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &RenamePane, window, cx| {
                 let pane = this.state.focused;
                 this.rename_pane(pane, window, cx)
@@ -1052,10 +1190,15 @@ impl Render for TerminalTab {
         };
 
         let pane_min = min_size(cell_size(window, cx));
+        let here = self.keyboard_here(window, cx);
         let mut panes = Vec::new();
         for (pane, rect) in self.state.visible(area) {
             if let Some(view) = self.views.get(&pane) {
-                panes.push(self.render_pane(pane, rect, view, cx).into_any_element());
+                let look = PaneLook::of(pane, self.state.focused, here);
+                panes.push(
+                    self.render_pane(pane, rect, view, look, cx)
+                        .into_any_element(),
+                );
             }
         }
         let dividers = match self.state.zoomed {
@@ -1124,10 +1267,10 @@ mod tests {
     use super::super::TerminalPanel;
 
     use super::super::testing::{
-        SHELLS, focus_terminal, init, open_panel, ready, scratch_dir, wait_until,
+        SHELLS, focus_terminal, init, open_panel, ready, scratch_dir, start_cat, wait_until,
     };
     use super::super::view::FOLDER_TTL;
-    use super::pane_menu_items;
+    use super::{INACTIVE_DIM, PaneLook, pane_menu_items, pane_style};
 
     /// Like `wait_until`, but lets the app handle what the shells sent
     /// (output, their exit) while it waits.
@@ -1720,6 +1863,9 @@ mod tests {
                 ("terminal::RenameTab", "cmd-shift-i"),
                 ("terminal::ToggleSendRightClicks", "alt-cmd-r"),
                 ("terminal::ClosePane", "alt-cmd-w"),
+                ("terminal::FocusNextPane", "cmd-]"),
+                ("terminal::FocusPreviousPane", "cmd-["),
+                ("terminal::FocusNextPaneAtPrompt", "shift-tab"),
             ] {
                 let row = rows
                     .iter()
@@ -1733,6 +1879,245 @@ mod tests {
                 );
             }
         });
+    }
+
+    /// ⇧⇥ at a shell prompt in a split tab moves to the next pane, wrapping round, and never
+    /// reaches the shell. With a program in front (`cat`, standing in for Claude Code, which
+    /// switches modes with ⇧⇥) it goes to the program, and so it does in a tab of one pane.
+    #[gpui_kit::test]
+    fn shift_tab_moves_to_the_next_pane_only_at_a_prompt(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        let tab = cx.update(|cx| panel.read(cx).tab(0).clone());
+        let one = cx.update(|cx| tab.read(cx).focused_view().clone());
+        ready(cx, &one);
+        // One pane: the shell gets the key.
+        cx.simulate_keystrokes(w, "shift-tab");
+        cx.update(|cx| {
+            assert!(
+                one.read(cx).touched,
+                "a one-pane tab kept ⇧⇥ from the shell"
+            );
+            assert_eq!(tab.read(cx).views().count(), 1);
+        });
+
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let (left, right) = cx.update(|cx| {
+            let t = tab.read(cx);
+            let panes = t.state.layout.panes();
+            (panes[0], panes[1])
+        });
+        let right_view = cx.update(|cx| tab.read(cx).view(right).unwrap().clone());
+        ready(cx, &right_view);
+        let focused = |cx: &mut TestAppContext| cx.update(|cx| tab.read(cx).state.focused);
+        assert_eq!(focused(cx), right);
+        cx.simulate_keystrokes(w, "shift-tab");
+        assert_eq!(
+            focused(cx),
+            left,
+            "⇧⇥ at the prompt didn't wrap to the first pane"
+        );
+        let typed = cx
+            .update_window(w, |_, window, cx| one.focus_handle(cx).is_focused(window))
+            .unwrap();
+        assert!(typed, "the keyboard didn't follow the pane");
+        cx.simulate_keystrokes(w, "shift-tab");
+        assert_eq!(focused(cx), right);
+        cx.update(|cx| {
+            assert!(
+                !right_view.read(cx).touched,
+                "⇧⇥ also reached the shell it left"
+            )
+        });
+
+        // A program in front gets the key, and the focus stays.
+        start_cat(cx, &right_view);
+        cx.simulate_keystrokes(w, "shift-tab");
+        assert_eq!(focused(cx), right, "⇧⇥ left a pane running a program");
+        wait_until(cx, "cat gets ⇧⇥", |cx| {
+            right_view.read(cx).text_tail(5).contains("^[[Z")
+        });
+    }
+
+    /// ⌘] and ⌘[ step through the panes in reading order (left to right, then down), whatever
+    /// runs in them, and wrap round.
+    #[gpui_kit::test]
+    fn cmd_brackets_step_through_the_panes_and_wrap(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        cx.simulate_keystrokes(w, "cmd-shift-d");
+        cx.run_until_parked();
+        let tab = cx.update(|cx| panel.read(cx).tab(0).clone());
+        // left | right-top / right-bottom, the keyboard in right-bottom.
+        let order = cx.update(|cx| {
+            let t = tab.read(cx);
+            t.state.reading_order(t.area())
+        });
+        assert_eq!(order.len(), 3);
+        let focused = |cx: &mut TestAppContext| cx.update(|cx| tab.read(cx).state.focused);
+        assert_eq!(focused(cx), order[2]);
+        let mut seen = Vec::new();
+        for keys in ["cmd-]", "cmd-]", "cmd-[", "cmd-["] {
+            cx.simulate_keystrokes(w, keys);
+            seen.push(focused(cx));
+        }
+        assert_eq!(seen, [order[0], order[1], order[0], order[2]]);
+        // A program in front doesn't stop them.
+        let view = cx.update(|cx| tab.read(cx).focused_view().clone());
+        ready(cx, &view);
+        start_cat(cx, &view);
+        cx.simulate_keystrokes(w, "cmd-]");
+        assert_eq!(focused(cx), order[0]);
+    }
+
+    /// ⌘[ and ⌘] are the terminal's own: nothing in the workspace around it uses them (the
+    /// editors' indent keys and the canvas's have contexts of their own), so a terminal taking
+    /// them takes nothing away.
+    #[gpui_kit::test]
+    fn cmd_brackets_take_no_workspace_key(cx: &mut TestAppContext) {
+        cx.update(init);
+        cx.update(|cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let stack = |contexts: &[&str]| -> Vec<KeyContext> {
+                contexts
+                    .iter()
+                    .map(|c| KeyContext::parse(c).unwrap())
+                    .collect()
+            };
+            for (key, action) in [
+                ("cmd-]", "terminal::FocusNextPane"),
+                ("cmd-[", "terminal::FocusPreviousPane"),
+            ] {
+                let keys = [Keystroke::parse(key).unwrap()];
+                let (outside, _) = keymap.bindings_for_input(&keys, &stack(&["Root", "Workspace"]));
+                assert!(
+                    outside.is_empty(),
+                    "{key} is already {:?}",
+                    outside[0].action().name()
+                );
+                let (inside, _) =
+                    keymap.bindings_for_input(&keys, &stack(&["Root", "Workspace", "Terminal"]));
+                assert_eq!(inside.first().map(|b| b.action().name()), Some(action));
+            }
+        });
+    }
+
+    /// WCAG's contrast ratio of two colours.
+    fn contrast(a: sawit_core::terminal::Rgb, b: sawit_core::terminal::Rgb) -> f32 {
+        let luminance = |c: sawit_core::terminal::Rgb| {
+            let lin = |v: u8| {
+                let v = v as f32 / 255.;
+                if v <= 0.040_45 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+        };
+        let (hi, lo) = {
+            let (la, lb) = (luminance(a), luminance(b));
+            if la > lb { (la, lb) } else { (lb, la) }
+        };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// An inactive pane's terminal is dimmed, yet its text keeps the 4.5:1 text needs on the
+    /// default palette.
+    #[test]
+    fn dimmed_text_stays_readable() {
+        let palette = sawit_core::terminal::Palette::default();
+        let (fg, bg) = (palette.foreground, palette.background);
+        let mix =
+            |f: u8, b: u8| ((1. - INACTIVE_DIM) * f as f32 + INACTIVE_DIM * b as f32).round() as u8;
+        let dimmed = sawit_core::terminal::Rgb {
+            r: mix(fg.r, bg.r),
+            g: mix(fg.g, bg.g),
+            b: mix(fg.b, bg.b),
+        };
+        let ratio = contrast(dimmed, bg);
+        assert!(ratio >= 4.5, "dimmed text is {ratio:.2}:1");
+        assert!(contrast(fg, bg) > ratio);
+    }
+
+    /// The pane with the keyboard looks active: an accent border, the active tab's header
+    /// colours and a heavier title. The others sit back, muted and dimmed. Once the keyboard is
+    /// elsewhere in the window, the tab's focused pane keeps its header and heavier title with a
+    /// quieter border.
+    #[gpui_kit::test]
+    fn the_focused_pane_looks_active_and_the_others_sit_back(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init(cx);
+            crate::theme::apply_zed_one_dark(cx);
+        });
+        let (w, panel) = open_panel(cx);
+        focus_terminal(cx, w, &panel);
+        cx.simulate_keystrokes(w, "cmd-d");
+        cx.run_until_parked();
+        let tab = cx.update(|cx| panel.read(cx).tab(0).clone());
+        let (left, right) = cx.update(|cx| {
+            let panes = tab.read(cx).state.layout.panes();
+            (panes[0], panes[1])
+        });
+        let looks = |cx: &mut TestAppContext| {
+            cx.update_window(w, |_, window, cx| tab.read(cx).looks(window, cx))
+                .unwrap()
+        };
+        assert_eq!(
+            looks(cx),
+            [(left, PaneLook::Inactive), (right, PaneLook::Active)]
+        );
+        // As drawn.
+        let drawn = |cx: &mut TestAppContext, pane: u64, look: PaneLook| {
+            let mut vcx = VisualTestContext::from_window(w, cx);
+            vcx.run_until_parked();
+            let selector: &'static str =
+                Box::leak(format!("pane-{pane}-{look:?}").into_boxed_str());
+            vcx.debug_bounds(selector).is_some()
+        };
+        assert!(drawn(cx, right, PaneLook::Active));
+        assert!(drawn(cx, left, PaneLook::Inactive));
+
+        cx.update(|cx| {
+            let theme = gpui_kit::component::ActiveTheme::theme(cx);
+            let bg = tab.read(cx).focused_view().read(cx).background();
+            let active = pane_style(PaneLook::Active, theme, bg);
+            let current = pane_style(PaneLook::Current, theme, bg);
+            let inactive = pane_style(PaneLook::Inactive, theme, bg);
+            assert_ne!(active.border, inactive.border);
+            assert_ne!(active.header_bg, inactive.header_bg);
+            assert_ne!(active.title, inactive.title);
+            // Never by colour alone.
+            assert!(active.title_weight > inactive.title_weight);
+            assert!(current.title_weight > inactive.title_weight);
+            assert_eq!((active.dim, current.dim), (None, None));
+            assert!(inactive.dim.is_some());
+            assert_ne!(
+                current.border, active.border,
+                "the current pane is as loud as the active one"
+            );
+            assert_eq!(current.header_bg, active.header_bg);
+        });
+
+        // The keyboard goes elsewhere in the window (an editor, say).
+        let elsewhere = cx.update(|cx| cx.focus_handle());
+        cx.update_window(w, |_, window, cx| window.focus(&elsewhere, cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            looks(cx),
+            [(left, PaneLook::Inactive), (right, PaneLook::Current)]
+        );
+        assert!(
+            drawn(cx, right, PaneLook::Current),
+            "the tab wasn't drawn again"
+        );
     }
 
     /// The pane menu's keys act on the pane with the keyboard: ⌘I names it in its header, ⌥⌘R
