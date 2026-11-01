@@ -43,12 +43,14 @@ fn browser_route(open: bool, shown: bool, shows_tab: bool) -> BrowserRoute {
     }
 }
 
-/// The project whose browser an agent's browser op goes to (`None`: the browser for no project),
-/// from the window's project folders, `roots`. With no project named, the one holding the folder
-/// the agent works in, `agent_folder`: its browser_navigate opens that project's dev server, and
-/// the page's cookies, screenshots and exports are that project's (final-seams m1). Else the
-/// active project's, which is the one it named, if it named one ([`crate::cli`] makes it active).
-fn browser_project(
+/// The project whose browser or canvas an agent's op goes to (`None`: the browser or the canvas
+/// for no project), from the window's project folders, `roots`. With no project named, the one
+/// holding the folder the agent works in, `agent_folder`: its browser_navigate opens that
+/// project's dev server, the page's cookies, screenshots and exports are that project's
+/// (final-seams m1), and its canvas is that project's `.nyawit/canvas.figcraft`, the one
+/// sawit-mcp edits while the app is closed (Q12). Else the active project's, which is the one it
+/// named, if it named one ([`crate::cli`] makes it active).
+fn agent_project(
     roots: &[PathBuf],
     agent_folder: Option<&Path>,
     active: Option<PathBuf>,
@@ -56,6 +58,24 @@ fn browser_project(
     agent_folder
         .and_then(|folder| crate::tabs::project_of(roots, folder))
         .or(active)
+}
+
+/// The kind of canvas file `file` is, which an agent's canvas op names: an absolute path to a
+/// `.figcraft` or an `.excalidraw` file. Anything else is the op's error, and no tab opens for it.
+fn canvas_file_kind(file: &Path) -> Result<FileKind, String> {
+    if !file.is_absolute() {
+        return Err(format!(
+            "{} isn't an absolute path: name the canvas file as one.",
+            file.display()
+        ));
+    }
+    match classify(file) {
+        kind @ (FileKind::Figcraft | FileKind::Excalidraw) => Ok(kind),
+        _ => Err(format!(
+            "{} isn't a canvas file: name a .figcraft or .excalidraw file.",
+            file.display()
+        )),
+    }
 }
 
 fn panel_name(tab: SidebarTab) -> &'static str {
@@ -221,8 +241,8 @@ impl Workspace {
 
     /// Runs a window command. `State`, `Focus`, `Open` and `Reload` are
     /// handled for the whole app by the caller. `agent_folder` is the folder the agent works in,
-    /// when it named no project and a project of this window holds it: its browser is that
-    /// project's ([`browser_project`]).
+    /// when it named no project and a project of this window holds it: its browser and its canvas
+    /// are that project's ([`agent_project`]).
     pub fn control(
         &mut self,
         command: Command,
@@ -450,17 +470,26 @@ impl Workspace {
                 self.open_prompt(id, window, cx);
                 done(json!({ "tab": self.active }))
             }
-            // The canvas answers at once, with the op's own reply: `{ok: false, error}` when it
-            // failed.
-            Command::Canvas { op } => {
-                let board = self.open_canvas(cx).ok_or("The canvas didn't open.")?;
+            // The canvas of the agent's project ([`agent_project`]), or of the canvas file it
+            // names, brought forward with its project, as on a click on its tab, but with the
+            // keyboard left where the user has it. It answers at once, with the op's own reply:
+            // `{ok: false, error}` when it failed.
+            Command::Canvas { op, file } => {
+                let board = match file {
+                    Some(file) => self.agent_canvas_file(file, cx)?,
+                    None => {
+                        let root = agent_project(&self.roots(cx), agent_folder, self.root(cx));
+                        let board = self.open_canvas_of(root, cx);
+                        board.ok_or("The canvas didn't open.")?
+                    }
+                };
                 Ok(Answer::Now(board.update(cx, |b, cx| b.run_op(&op, cx))))
             }
-            // The browser of the agent's project ([`browser_project`]). One brought forward comes
+            // The browser of the agent's project ([`agent_project`]). One brought forward comes
             // with its project, as on a click on its tab; one used in the background changes
             // nothing on screen.
             Command::Browser { op } => {
-                let root = browser_project(&self.roots(cx), agent_folder, self.root(cx));
+                let root = agent_project(&self.roots(cx), agent_folder, self.root(cx));
                 let open = self.browser_tab(root.as_deref()).map(|(_, b)| b);
                 let shown = open.is_some() && open == self.active_browser();
                 let browser = match (browser_route(open.is_some(), shown, op.shows_tab()), open) {
@@ -485,12 +514,14 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         match page {
+            // The agent's project's, as for its canvas and browser ops.
             Page::Canvas => {
-                self.open_canvas(cx);
+                let root = agent_project(&self.roots(cx), agent_folder, self.root(cx));
+                self.open_canvas_of(root, cx);
             }
             // The agent's project's, as for its browser ops.
             Page::Browser => {
-                let root = browser_project(&self.roots(cx), agent_folder, self.root(cx));
+                let root = agent_project(&self.roots(cx), agent_folder, self.root(cx));
                 self.open_browser_of(root, None, window, cx);
             }
             // An agent's: the keyboard stays where the user has it.
@@ -518,6 +549,24 @@ impl Workspace {
             Page::Keymap => self.show_keymap_editor(false, window, cx),
         }
         Ok(())
+    }
+
+    /// The canvas of the canvas file an agent's op names, `file`: its tab, opened as `sawit <file>`
+    /// opens it ([`Self::open_board_file`]: a project's canvas file is that project's canvas tab,
+    /// and an `.excalidraw` file's canvas is bound to the `.figcraft` file beside it), shown with
+    /// the tab area and its project, but with the keyboard left where the user has it.
+    fn agent_canvas_file(
+        &mut self,
+        file: PathBuf,
+        cx: &mut Context<Self>,
+    ) -> Result<Entity<BoardView>, String> {
+        let kind = canvas_file_kind(&file)?;
+        self.leave_welcome(CENTER_ONLY, cx);
+        if !self.layout.center {
+            self.layout.toggle(Area::Center);
+        }
+        let board = self.open_board_file(file, kind, cx);
+        board.ok_or_else(|| "The canvas didn't open.".into())
     }
 
     /// A center tab by index (from `state`) or title: exact (any case),
@@ -645,10 +694,12 @@ impl Workspace {
 mod tests {
     use std::path::{Path, PathBuf};
 
+    use sawit_core::files::FileKind;
     use serde_json::json;
 
     use super::{
-        BrowserRoute, browser_project, browser_route, close_answer, script_answer, shell_folder,
+        BrowserRoute, agent_project, browser_route, canvas_file_kind, close_answer, script_answer,
+        shell_folder,
     };
 
     /// MCP-4: a shell an agent starts in a folder starts there or not at all. The PTY ignores a
@@ -744,7 +795,7 @@ mod tests {
         ];
         let shown = Some(PathBuf::from("/code/blog"));
         let browser =
-            |agent: Option<&str>| browser_project(&roots, agent.map(Path::new), shown.clone());
+            |agent: Option<&str>| agent_project(&roots, agent.map(Path::new), shown.clone());
         assert_eq!(
             browser(Some("/code/shop/web")),
             Some(PathBuf::from("/code/shop"))
@@ -761,9 +812,48 @@ mod tests {
         assert_eq!(browser(None), shown, "named, or run from no project");
         assert_eq!(browser(Some("/elsewhere")), shown);
         assert_eq!(
-            browser_project(&roots, None, None),
+            agent_project(&roots, None, None),
             None,
             "the browser for no project"
         );
+    }
+
+    /// Q12: an agent's canvas is the canvas of the project it works in, as its browser is. With
+    /// projects A and B in one window and B shown, an agent in A drew on (or cleared) B's canvas,
+    /// while with the app closed the same call edited A's: it got another board depending on
+    /// whether Sawit ran. An agent that names its project gets that one's, made active.
+    #[test]
+    fn an_agents_canvas_is_its_own_projects() {
+        let (a, b) = (PathBuf::from("/code/a"), PathBuf::from("/code/b"));
+        let roots = [a.clone(), b.clone()];
+        let canvas = |agent: Option<&str>, active: &Path| {
+            agent_project(&roots, agent.map(Path::new), Some(active.to_path_buf()))
+        };
+        assert_eq!(canvas(Some("/code/a"), &b), Some(a.clone()));
+        assert_eq!(canvas(Some("/code/a/web/src"), &b), Some(a.clone()));
+        assert_eq!(canvas(None, &a), Some(a.clone()), "named, and made active");
+        assert_eq!(
+            canvas(Some("/elsewhere"), &b),
+            Some(b),
+            "run from no project of it"
+        );
+    }
+
+    /// An agent's canvas op names a canvas file by its absolute path: a `.figcraft` file, or an
+    /// `.excalidraw` file, whose canvas is bound to the `.figcraft` file beside it. Anything else
+    /// is the op's error, and no tab opens for it.
+    #[test]
+    fn an_agents_canvas_file_is_a_figcraft_or_excalidraw_file_by_its_absolute_path() {
+        let kind = |file: &str| canvas_file_kind(Path::new(file));
+        assert_eq!(kind("/p/design/home.figcraft"), Ok(FileKind::Figcraft));
+        assert_eq!(kind("/p/Old.EXCALIDRAW"), Ok(FileKind::Excalidraw));
+        for (file, says) in [
+            ("design/home.figcraft", "isn't an absolute path"),
+            ("/p/notes.md", "isn't a canvas file"),
+            ("/p/.nyawit/canvas.figcraft.bak", "isn't a canvas file"),
+        ] {
+            let refused = kind(file).unwrap_err();
+            assert!(refused.contains(says), "{file}: {refused}");
+        }
     }
 }

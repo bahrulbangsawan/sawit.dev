@@ -743,6 +743,13 @@ impl Workspace {
         Some(view)
     }
 
+    /// Whether a canvas tab of this window shows the canvas of the canvas file at `path`
+    /// ([`Self::board_tab`]): an `.excalidraw` file's is the one bound to the `.figcraft` file
+    /// beside it. An agent's op on that file goes to this window ([`crate::cli`]).
+    pub(crate) fn shows_canvas_file(&self, path: &Path, cx: &App) -> bool {
+        self.board_tab(&store::bound_file(path), cx).is_some()
+    }
+
     /// The tab of the canvas bound to the `.figcraft` file `file` ([`BoardView::path`]), and the
     /// canvas, whatever opened it: a project's canvas tab, or a canvas file's. Named through a
     /// link or as written, it is one file ([`same_canvas_file`]).
@@ -2412,8 +2419,8 @@ impl Workspace {
 
     /// Opens the active project's canvas as the user's ⌃⌘C and the title bar's Canvas button do:
     /// with the keyboard ([`BoardView::take_keyboard`], CANVAS-UI-2). An agent's canvas op and
-    /// `app_open_page canvas` open it without ([`Self::open_canvas`]), leaving the keyboard where
-    /// the user has it.
+    /// `app_open_page canvas` open the canvas of the agent's own project without
+    /// ([`Self::open_canvas_of`]), leaving the keyboard where the user has it.
     fn show_canvas(&mut self, cx: &mut Context<Self>) {
         if let Some(board) = self.open_canvas(cx) {
             board.update(cx, |board, cx| board.take_keyboard(cx));

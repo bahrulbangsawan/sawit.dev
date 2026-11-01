@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::SystemTime;
 
-use figcraft_doc::Document;
+use figcraft_doc::{Document, NodeId};
 use sawit_core::{files, nyawit};
 
 use crate::doc::{BoardDoc, BoardError};
@@ -70,7 +70,7 @@ pub fn open(path: &Path) -> Result<BoardDoc, BoardError> {
 /// - With notes, the original is first copied to `<path>.lossy.bak`, so the first save can't
 ///   silently drop what the loader left out. When that copy can't be made the file is not opened
 ///   either: it stays as it is rather than get saved over unprotected. The copy has a name of its
-///   own: the backups that an emptying save keeps ([`Writer::save`]) move along, and go.
+///   own: the backups that an emptying save keeps ([`Writer::save_with`]) move along, and go.
 pub fn open_with_issues(path: &Path) -> Result<(BoardDoc, Vec<String>), BoardError> {
     let bytes = match files::read_regular(path, MAX_FILE) {
         Ok(bytes) => bytes,
@@ -179,6 +179,92 @@ pub fn is_empty(doc: &Document) -> bool {
         .all(|page| doc.node(*page).is_none_or(|p| p.children.is_empty()))
 }
 
+/// How many nodes an edit may touch for [`removes_layers`] to look at those alone; past that it
+/// looks at every node of the board as it was.
+const CHANGES_LOOKED_AT: usize = 4096;
+
+/// Whether `after` lacks a layer that `before` has, on any page, a nested one included: a save of
+/// `after` takes layers off the canvas that held `before` (a clear, a deletion, a page deleted with
+/// what is on it, another canvas loaded in its place), so the board the file holds is kept as a
+/// backup first ([`backup_after`]). A page alone is no layer: one deleted with nothing on it takes
+/// nothing off. Nor does an edit that only adds or changes layers.
+pub fn removes_layers(before: &Document, after: &Document) -> bool {
+    let gone = |id: NodeId| !after.contains(id) && !before.pages.contains(&id);
+    // An edit shares the rest of the document with the version it came from, so the nodes it
+    // touched are found in about the time of the edit, not of the document.
+    match after.changed_ids(before, CHANGES_LOOKED_AT) {
+        Some(changed) => changed.into_iter().any(gone),
+        None => before.ids().any(gone),
+    }
+}
+
+/// Which backups a save keeps of the board the file holds before it replaces it
+/// ([`Writer::save_with`]). Each kind has [`BACKUPS`] files of its own beside the canvas file, so
+/// that one kind never pushes the other's out. The stronger of two is the later one here.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Backup {
+    /// None: the save takes nothing off the canvas, or only what the user deleted, which they
+    /// can undo.
+    #[default]
+    None,
+    /// The save takes some layers off the canvas and leaves others, after an agent's op: a
+    /// deletion by id, or an engine command such as `edit.delete`, `edit.cut` or `page.delete`.
+    /// Kept as `<file>.del.bak` ([`deletion_backup_file`]). An agent deletes often and a little at
+    /// a time: with the backups of clears and loads, five small deletions took the board an agent
+    /// cleared first out of the five kept (CANVAS-CORE-3).
+    Deletion,
+    /// The save takes the board off the canvas: it leaves the canvas without layers
+    /// ([`is_empty`]), puts another canvas in its place, or follows an agent's clear. Kept as
+    /// `<file>.bak` ([`backup_file`]).
+    Board,
+}
+
+impl Backup {
+    /// What follows the canvas file's name in the names of this kind's backups, before the number
+    /// of an older one ([`ring_file`]). `None` for a save that keeps none.
+    fn suffix(self) -> Option<&'static str> {
+        match self {
+            Backup::None => None,
+            Backup::Deletion => Some(DELETION_BACKUP),
+            Backup::Board => Some(BOARD_BACKUP),
+        }
+    }
+}
+
+/// The backup the save after an agent's op keeps ([`Writer::save_with`]): `op` is the op's name
+/// (`clear`, `delete`, `replace`, `command`...), and it changed the canvas `before` into `after`.
+/// A `replace` (another canvas loaded in place of this one) and an op that leaves the canvas
+/// without layers take the board off it, and so does a `clear` of the page on show while other
+/// pages keep theirs: [`Backup::Board`]. Any other op that takes layers off ([`removes_layers`])
+/// is a deletion, [`Backup::Deletion`]; one that only adds or changes layers keeps none.
+pub fn backup_after(op: &str, before: &Document, after: &Document) -> Backup {
+    if op == "replace" || is_empty(after) {
+        return Backup::Board;
+    }
+    match removes_layers(before, after) {
+        true if op == "clear" => Backup::Board,
+        true => Backup::Deletion,
+        false => Backup::None,
+    }
+}
+
+/// Opens the canvas a canvas tab shows for the file at `path` (spec D14), as [`open`] opens one:
+/// an `.excalidraw` file's scene, imported ([`import_file`]), while the `.figcraft` file it is
+/// bound to ([`bound_file`]) isn't there, and that file once it is; any other file itself. What
+/// the import left out is only logged. Nothing is written, the `.excalidraw` file least of all:
+/// the first save of the canvas makes the `.figcraft` file, so the scene is imported once.
+pub fn open_bound(path: &Path) -> Result<BoardDoc, BoardError> {
+    let file = bound_file(path);
+    if file == path || file.exists() {
+        return open(&file);
+    }
+    let (board, issues) = import_file(path)?;
+    for issue in issues {
+        log::warn!("{} imported with an issue: {issue}", path.display());
+    }
+    Ok(board)
+}
+
 /// A file's length and modification time, as the canvas read or wrote it: when the file there has
 /// another stamp, something else wrote to it since. FigCraft stamps a document's file the same way
 /// (`library::stat`, #1330), but keeps its stamp to itself.
@@ -236,8 +322,8 @@ enum Msg {
 struct Save {
     path: PathBuf,
     bytes: Vec<u8>,
-    /// The canvas the file holds is kept as a backup first ([`keep_backup`]).
-    backup: bool,
+    /// The backup of the canvas the file holds that is kept first, if any ([`keep_backup`]).
+    backup: Backup,
 }
 
 impl Writer {
@@ -270,19 +356,28 @@ impl Writer {
         }
     }
 
-    /// Queues `bytes` to be written to `path`, and returns at once.
-    ///
-    /// `backup` says the save takes the board off the canvas: the bytes are a canvas without
-    /// layers ([`is_empty`]), or another canvas loaded in its place. Then a file already there
-    /// that has layers, or that doesn't load, is first kept as a backup beside it, `<path>.bak`,
-    /// the backups before it moving along ([`BACKUPS`] are kept), so clearing or replacing the
-    /// canvas can be undone after a restart; if that copy can't be made, the save is not done and
-    /// the error is reported. Such a save is never folded into a newer save of the file, nor the
-    /// save before it into it ([`Batch::add`]), so the backup is of the board as it was last
-    /// handed over. A `.nyawit` folder that is missing is made with its `.gitignore`, any other
-    /// missing folder without. A save over a guarded file that something else wrote to since is
-    /// refused ([`Writer::guard`]), its backup included.
+    /// Queues `bytes` to be written to `path`, and returns at once. `backup` says the save takes
+    /// the board off the canvas ([`Backup::Board`]): the bytes are a canvas without layers
+    /// ([`is_empty`]), or another canvas loaded in its place ([`Writer::save_with`]).
     pub fn save(&self, path: PathBuf, bytes: Vec<u8>, backup: bool) {
+        let backup = if backup { Backup::Board } else { Backup::None };
+        self.save_with(path, bytes, backup);
+    }
+
+    /// Queues `bytes` to be written to `path`, keeping the `backup` it asks for first, and returns
+    /// at once.
+    ///
+    /// With a backup, a file already there that has layers, or that doesn't load, is first kept
+    /// beside it, as `<path>.bak` for [`Backup::Board`] and `<path>.del.bak` for
+    /// [`Backup::Deletion`], the backups of that kind before it moving along ([`BACKUPS`] of each
+    /// are kept), so clearing, replacing or deleting from the canvas can be undone after a
+    /// restart; if that copy can't be made, the save is not done and the error is reported. Such
+    /// a save is never folded into a newer save of the file, nor the save before it into it
+    /// ([`Batch::add`]), so the backup is of the board as it was last handed over. A `.nyawit`
+    /// folder that is missing is made with its `.gitignore`, any other missing folder without. A
+    /// save over a guarded file that something else wrote to since is refused
+    /// ([`Writer::guard`]), its backup included.
+    pub fn save_with(&self, path: PathBuf, bytes: Vec<u8>, backup: Backup) {
         let save = Msg::Save(Save {
             path,
             bytes,
@@ -374,8 +469,8 @@ struct Batch {
 
 impl Batch {
     /// Takes `msg` into the batch. A save replaces the save of its path queued last, so that only
-    /// the newest is written, unless either of them keeps a backup ([`Writer::save`]): then both
-    /// are written, in order. The backup of a save that takes the board off the canvas is of
+    /// the newest is written, unless either of them keeps a backup ([`Writer::save_with`]): then
+    /// both are written, in order. The backup of a save that takes layers off the canvas is of
     /// the file the save before it wrote, the board as the canvas last had it (CANVAS-CORE-3);
     /// and a save that keeps a backup is always written, so its backup is always made.
     fn add(&mut self, msg: Msg) {
@@ -383,8 +478,8 @@ impl Batch {
             Msg::Save(save) => {
                 let last = self.saves.iter().rposition(|older| older.path == save.path);
                 if let Some(last) = last
-                    && !self.saves[last].backup
-                    && !save.backup
+                    && self.saves[last].backup == Backup::None
+                    && save.backup == Backup::None
                 {
                     self.saves.remove(last);
                 }
@@ -448,8 +543,8 @@ fn write(save: &Save, stamps: &Stamps) -> Result<Option<String>, String> {
         refuse_overwriting_changes(path, held)?;
     }
     make_folder(path).map_err(|e| failed(e.to_string()))?;
-    if save.backup {
-        keep_backup(path).map_err(failed)?;
+    if let Some(suffix) = save.backup.suffix() {
+        keep_backup(path, suffix).map_err(failed)?;
     }
     files::write_atomic(path, &save.bytes).map_err(|e| failed(e.to_string()))?;
     if guarded.is_some() {
@@ -521,33 +616,57 @@ fn make_folder(path: &Path) -> io::Result<()> {
     }
 }
 
-/// How many backups of a canvas file are kept beside it ([`keep_backup`]): `<name>.bak`, the
-/// newest, then `<name>.bak.1` to `<name>.bak.4`, each older than the one before.
+/// How many backups of each kind ([`Backup`]) a canvas file keeps beside it ([`keep_backup`]):
+/// `<name>.bak`, the newest, then `<name>.bak.1` to `<name>.bak.4`, each older than the one before;
+/// and `<name>.del.bak` to `<name>.del.bak.4` the same way.
 pub const BACKUPS: usize = 5;
 
-/// The backup of the canvas file `path` that `n` newer ones came after ([`keep_backup`]):
-/// `<path>.bak`, the newest, for 0, else `<path>.bak.<n>`.
+/// What follows a canvas file's name in the name of the newest backup of a save that takes the
+/// board off the canvas ([`Backup::Board`]).
+const BOARD_BACKUP: &str = ".bak";
+
+/// What follows a canvas file's name in the name of the newest backup of an agent's deletion
+/// ([`Backup::Deletion`]).
+const DELETION_BACKUP: &str = ".del.bak";
+
+/// The backup of the canvas file `path` that `n` newer ones came after, of a save that took the
+/// board off the canvas ([`Backup::Board`], [`keep_backup`]): `<path>.bak`, the newest, for 0,
+/// else `<path>.bak.<n>`.
 pub fn backup_file(path: &Path, n: usize) -> PathBuf {
+    ring_file(path, BOARD_BACKUP, n)
+}
+
+/// The backup of the canvas file `path` that `n` newer ones came after, of an agent's deletion
+/// ([`Backup::Deletion`]): `<path>.del.bak`, the newest, for 0, else `<path>.del.bak.<n>`.
+pub fn deletion_backup_file(path: &Path, n: usize) -> PathBuf {
+    ring_file(path, DELETION_BACKUP, n)
+}
+
+/// The backup of the canvas file `path` named with `suffix` (`.bak`, `.del.bak`) that `n` newer
+/// ones came after: `<path><suffix>` for 0, else `<path><suffix>.<n>`.
+fn ring_file(path: &Path, suffix: &str, n: usize) -> PathBuf {
     match n {
-        0 => sibling(path, ".bak"),
-        n => sibling(path, &format!(".bak.{n}")),
+        0 => sibling(path, suffix),
+        n => sibling(path, &format!("{suffix}.{n}")),
     }
 }
 
-/// Before a save that takes the board off the canvas replaces the file at `path` (a canvas
-/// without layers, or another canvas loaded in its place): when that file loads as a canvas
-/// with layers, keeps it as the newest backup, `<path>.bak`, so "clear canvas" (or an agent's
-/// clear or load) can be undone even after the app restarts. So is a file that doesn't load at
-/// all (cut short, or written by a newer FigCraft), which may hold layers too, as the old canvas
-/// kept a scene it couldn't read; an empty file has nothing to keep. On failure the error says
-/// why, and the save must not go on.
+/// Before a save that takes layers off the canvas replaces the file at `path` (a canvas without
+/// layers, another canvas loaded in its place, an agent's clear or deletion): when that file
+/// loads as a canvas with layers, keeps it as the newest backup of its kind, `<path><suffix>`
+/// (`.bak`, or `.del.bak` for a deletion: [`Backup`]), so "clear canvas" (or an agent's clear,
+/// load or deletion) can be undone even after the app restarts. So is a file that doesn't load
+/// at all (cut short, or written by a newer FigCraft), which may hold layers too, as the old
+/// canvas kept a scene it couldn't read; an empty file has nothing to keep. On failure the error
+/// says why, and the save must not go on.
 ///
-/// The backups before it move along one name each, `.bak` to `.bak.1` and so on, and the oldest
-/// of [`BACKUPS`] goes (CANVAS-CORE-3): one `.bak`, replaced by the next clear, lost the board an
-/// agent cleared first when it started over twice. A board the newest backup holds already isn't
-/// kept again, so that a clear of a board cleared before moves none along. A folder at one of
-/// their names stops it, and the save: it is moved nowhere.
-fn keep_backup(path: &Path) -> Result<(), String> {
+/// The backups of that kind before it move along one name each, `.bak` to `.bak.1` and so on, and
+/// the oldest of [`BACKUPS`] goes (CANVAS-CORE-3): one `.bak`, replaced by the next clear, lost
+/// the board an agent cleared first when it started over twice. The other kind's stay as they
+/// are. A board the newest backup holds already isn't kept again, so that a clear of a board
+/// cleared before moves none along. A folder at one of their names stops it, and the save: it is
+/// moved nowhere.
+fn keep_backup(path: &Path, suffix: &str) -> Result<(), String> {
     let old = match files::read_regular(path, MAX_FILE) {
         Ok(old) => old,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -562,12 +681,12 @@ fn keep_backup(path: &Path) -> Result<(), String> {
     if !may_have_layers {
         return Ok(());
     }
-    let newest = backup_file(path, 0);
+    let newest = ring_file(path, suffix, 0);
     if holds(&newest, &old) {
         return Ok(());
     }
     for n in (1..BACKUPS).rev() {
-        let (from, to) = (backup_file(path, n - 1), backup_file(path, n));
+        let (from, to) = (ring_file(path, suffix, n - 1), ring_file(path, suffix, n));
         let moved = match std::fs::symlink_metadata(&from) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
             Ok(meta) if meta.is_dir() => Err(io::Error::other("a folder is in its place")),
@@ -1196,6 +1315,80 @@ mod tests {
         assert!(is_empty(&Document::without_pages("None")));
     }
 
+    /// A save takes layers off the canvas when a layer the board had, on any page and at any
+    /// depth, is gone from what it saves: then the file's board is kept as a backup first. An
+    /// edit that adds, moves or renames layers takes nothing off, nor does deleting an empty page.
+    #[test]
+    fn a_layer_gone_from_any_page_is_a_save_that_takes_layers_off() {
+        let mut board = board_with(&["one", "two"]);
+        let page = board.doc().unwrap().pages[0];
+        let first = board.doc().unwrap().node(page).unwrap().children[0];
+        for (command, params, takes_off) in [
+            ("board.sticky", json!({"x": 900, "y": 0}), false),
+            ("node.set", json!({"id": first, "x": 40, "y": 40}), false),
+            ("node.set", json!({"id": first, "name": "First"}), false),
+            ("edit.delete", json!({"ids": [first]}), true),
+        ] {
+            let before = board.doc().unwrap();
+            board.execute(command, &params).unwrap();
+            let after = board.doc().unwrap();
+            assert_eq!(
+                removes_layers(&before, &after),
+                takes_off,
+                "{command} {params}"
+            );
+        }
+
+        // On another page: a layer in a frame there, the page with it, or an empty page.
+        let mut doc = Document::new("Two pages");
+        let second = doc.add_page("Page 2");
+        let empty = doc.add_page("Page 3");
+        let frame = (doc.create(second, NodeKind::Frame, "F", 0.0, 0.0, 400.0, 400.0)).unwrap();
+        let nested = (doc.create(frame, NodeKind::Rectangle, "R", 10.0, 10.0, 50.0, 50.0)).unwrap();
+        let without = |id| {
+            let mut after = doc.clone();
+            after.remove(id).unwrap();
+            removes_layers(&doc, &after)
+        };
+        assert!(without(nested), "a nested layer");
+        assert!(without(second), "a page with layers on it");
+        assert!(!without(empty), "a page with nothing on it");
+        assert!(!removes_layers(&doc, &doc.clone()));
+    }
+
+    /// A canvas tab opens an `.excalidraw` file imported, bound to the `.figcraft` file beside it
+    /// (spec D14), and so does sawit-mcp with the app closed: the scene while that file isn't
+    /// there, and that file once a save has made it, so the scene is imported once. Neither file
+    /// is written by opening.
+    #[test]
+    fn an_excalidraw_file_opens_imported_until_its_figcraft_is_there() {
+        let dir = tempdir().unwrap();
+        let scene = dir.path().join("sketch.excalidraw");
+        std::fs::write(&scene, FIXTURE).unwrap();
+        let board = open_bound(&scene).unwrap();
+        assert_eq!(top_level(&board), 9);
+        assert_eq!(board.doc().unwrap().name, "sketch");
+        assert_eq!(names(dir.path()), ["sketch.excalidraw"]);
+
+        // Saved once, edited since: the `.figcraft` file is what opens, not the scene again.
+        std::fs::write(dir.path().join("sketch.figcraft"), bytes_with(&["edited"])).unwrap();
+        let board = open_bound(&scene).unwrap();
+        assert_eq!(top_level(&board), 1);
+        assert!(has_text(&board, "edited"));
+        assert_eq!(std::fs::read(&scene).unwrap(), FIXTURE.as_bytes());
+
+        // A `.figcraft` file opens itself, as `open` opens it: one that isn't there is a new board.
+        let file = dir.path().join("board.figcraft");
+        assert_eq!(top_level(&open_bound(&file).unwrap()), 0);
+        assert!(!file.exists());
+        // A scene that can't be imported is the import's error, and nothing is made.
+        let broken = dir.path().join("broken.excalidraw");
+        std::fs::write(&broken, b"{ not json").unwrap();
+        let error = open_bound(&broken).err().unwrap().to_string();
+        assert!(error.contains("broken.excalidraw"), "{error}");
+        assert!(!dir.path().join("broken.figcraft").exists());
+    }
+
     #[test]
     fn writer_creates_nyawit_with_gitignore() {
         let dir = tempdir().unwrap();
@@ -1285,7 +1478,7 @@ mod tests {
             Msg::Save(Save {
                 path: path.into(),
                 bytes: vec![byte],
-                backup: false,
+                backup: Backup::None,
             })
         };
         let mut batch = Batch::default();
@@ -1408,12 +1601,13 @@ mod tests {
         assert!(kept.contains(&drawn), "the drawing is in no backup");
     }
 
-    /// CANVAS-CORE-3: a save that keeps a backup is never folded into another save of its file,
-    /// nor the one before it into it: that one is what the backup is of, the board as the canvas
-    /// last handed it over. Saves between two such saves still fold, the newest written.
+    /// CANVAS-CORE-3: a save that keeps a backup, of either kind, is never folded into another
+    /// save of its file, nor the one before it into it: that one is what the backup is of, the
+    /// board as the canvas last handed it over. Saves between two such saves still fold, the
+    /// newest written.
     #[test]
     fn a_batch_writes_a_save_that_keeps_a_backup_and_the_one_before_it() {
-        let save = |byte: u8, backup: bool| {
+        let save = |byte: u8, backup: Backup| {
             Msg::Save(Save {
                 path: "a".into(),
                 bytes: vec![byte],
@@ -1422,18 +1616,20 @@ mod tests {
         };
         let mut batch = Batch::default();
         for msg in [
-            save(1, false),
-            save(2, false),
-            save(3, true),
-            save(4, false),
-            save(5, false),
-            save(6, true),
-            save(7, true),
+            save(1, Backup::None),
+            save(2, Backup::None),
+            save(3, Backup::Board),
+            save(4, Backup::None),
+            save(5, Backup::None),
+            save(6, Backup::Board),
+            save(7, Backup::Board),
+            save(8, Backup::None),
+            save(9, Backup::Deletion),
         ] {
             batch.add(msg);
         }
         let written: Vec<u8> = batch.saves.iter().map(|s| s.bytes[0]).collect();
-        assert_eq!(written, [2, 3, 5, 6, 7]);
+        assert_eq!(written, [2, 3, 5, 6, 7, 8, 9]);
     }
 
     /// CANVAS-CORE-3: the newest backup is `.bak`; each one before it moves one name along, and
@@ -1481,6 +1677,89 @@ mod tests {
             again == kept,
             "the backups moved along for a board kept already"
         );
+    }
+
+    /// An agent's deletions keep their backups apart from those of clears and loads:
+    /// `<name>.del.bak`, then `<name>.del.bak.1` to `.del.bak.4`. Sharing the five `.bak` files,
+    /// five small deletions after a clear took the board it cleared out of all of them; now only a
+    /// clear, a load or a save that empties the canvas moves the `.bak` files along.
+    #[test]
+    fn deletions_keep_backups_of_their_own_apart_from_a_clears() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("canvas.figcraft");
+        let users = bytes_with(&["the user's board"]);
+        std::fs::write(&path, &users).unwrap();
+        let writer = Writer::spawn();
+        let save = |bytes: Vec<u8>, backup: Backup| {
+            writer.save_with(path.clone(), bytes, backup);
+            writer.flush();
+            assert_eq!(writer.last_error(), None);
+        };
+        save(blank(), Backup::Board);
+        // A drawing of eight stickies, then seven deletions of one sticky each: `drawn[n]` is the
+        // board with the first `n`.
+        let texts: Vec<String> = (0..8).map(|n| format!("sticky {n}")).collect();
+        let drawn: Vec<Vec<u8>> = (0..=8)
+            .map(|n| bytes_with(&texts[..n].iter().map(String::as_str).collect::<Vec<_>>()))
+            .collect();
+        save(drawn[8].clone(), Backup::None);
+        for n in (1..8).rev() {
+            save(drawn[n].clone(), Backup::Deletion);
+        }
+
+        assert_eq!(std::fs::read(backup_file(&path, 0)).unwrap(), users);
+        assert!(!backup_file(&path, 1).exists());
+        // The boards before the five newest deletions, newest first.
+        let kept: Vec<Vec<u8>> = (0..BACKUPS)
+            .map(|n| std::fs::read(deletion_backup_file(&path, n)).unwrap())
+            .collect();
+        assert!(
+            kept == drawn[2..7],
+            "the deletions' backups are out of order"
+        );
+        assert!(!deletion_backup_file(&path, BACKUPS).exists());
+        assert_eq!(
+            deletion_backup_file(&path, 0).file_name().unwrap(),
+            "canvas.figcraft.del.bak"
+        );
+        assert_eq!(
+            deletion_backup_file(&path, 4).file_name().unwrap(),
+            "canvas.figcraft.del.bak.4"
+        );
+    }
+
+    /// The backup the save after an agent's op keeps: the board's for a load, a clear and an op
+    /// that empties the canvas; a deletion's for an op that takes some layers off and leaves
+    /// others, on the page on show or another; none for an op that only adds or changes layers.
+    #[test]
+    fn the_backup_after_an_agents_op_is_the_boards_or_a_deletions() {
+        /// The board before and after `board` runs `command` with `params`.
+        fn run(
+            board: &mut BoardDoc,
+            command: &str,
+            params: serde_json::Value,
+        ) -> [Arc<Document>; 2] {
+            let before = board.doc().unwrap();
+            board.execute(command, &params).unwrap();
+            [before, board.doc().unwrap()]
+        }
+        let mut board = board_with(&["one", "two"]);
+        let page = board.doc().unwrap().pages[0];
+        let first = board.doc().unwrap().node(page).unwrap().children[0];
+        let [before, added] = run(&mut board, "board.sticky", json!({"x": 900, "y": 0}));
+        assert_eq!(backup_after("add", &before, &added), Backup::None);
+        assert_eq!(backup_after("replace", &before, &added), Backup::Board);
+        let [before, deleted] = run(&mut board, "edit.delete", json!({"ids": [first]}));
+        assert_eq!(backup_after("delete", &before, &deleted), Backup::Deletion);
+        assert_eq!(backup_after("command", &before, &deleted), Backup::Deletion);
+        assert_eq!(backup_after("clear", &before, &deleted), Backup::Board);
+        let rest = board.doc().unwrap().node(page).unwrap().children.clone();
+        let [before, emptied] = run(&mut board, "edit.delete", json!({ "ids": rest }));
+        assert!(is_empty(&emptied));
+        assert_eq!(backup_after("delete", &before, &emptied), Backup::Board);
+        // The stronger of two backups asked for between two saves is the one kept.
+        assert_eq!(Backup::Deletion.max(Backup::Board), Backup::Board);
+        assert_eq!(Backup::None.max(Backup::Deletion), Backup::Deletion);
     }
 
     /// CANVAS-CORE-3: a save the changed-on-disk guard refuses changes nothing: not the file, and

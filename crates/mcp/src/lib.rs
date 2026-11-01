@@ -85,10 +85,10 @@ Sawit is a macOS developer workbench. These tools work without the Sawit app run
 These control the running Sawit app (start it with launch_app; app_state shows windows, tabs and terminals):
 - app_*: open files/folders, show panels, layout, tabs, pages (canvas, MCP, tools, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
 - terminal_*: run commands in Sawit's terminal and read their output, type keys (ctrl-c), close tabs or panes. terminal_run, app_run_script and app_ssh_connect return the terminal (tab) and `pane` they used: pass both to terminal_read, terminal_input and terminal_close, since the user may be typing in another terminal, which stays in front (app_state lists tabs and panes). terminal_input needs the tab, and a split tab needs its pane; terminal_read without a tab reads the pane the user has in front, and terminal_close without a pane closes the whole tab.
-- canvas_*: the canvas (FigCraft engine): list, add shapes/stickies/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG. They also work on the saved file when the app is closed.
+- canvas_*: the canvas (FigCraft engine): list, clear and export SVG/PNG the page on show; add shapes/stickies/arrows and Mermaid as editable shapes; update and delete layers by id, on any page; load another canvas in place of every page. They use your project's canvas (.nyawit/canvas.figcraft), or the .figcraft file named by `file` (a design file, say), in a canvas tab of its own. They also work on the saved file when the app is closed, and keep what they clear, load over or delete in backups beside it (.bak, .del.bak), which canvas_load reads back.
 - canvas_command: run any command of the canvas engine by id with its parameters (board.sticky, node.set, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes. With the app closed each call starts from the saved file, so nothing carries over between calls (no undo, no selection, no view): pass ids, or run the steps in one command.batch.
 - browser_*: a browser tab (WebKit) to check the app being built: navigate (default the project's dev server), snapshot the page as an outline with element refs, click/hover/type/press keys/select/scroll by ref or CSS selector, wait for text, screenshot, read console errors and network requests, evaluate JS, resize to a device, read the user's annotations, inspect an element's design, read the page's design system, export it as DESIGN.md + tokens + assets. Take a new browser_snapshot after the page changes; refs reset.
-Most app tools take `project` to pick the window that has that folder open; without it, the window that has the folder sawit-mcp runs in open is used, else the frontmost window. The browser_* tools use that project's own browser tab, even while the user looks at another project of the window.
+Most app tools take `project` to pick the window that has that folder open; without it, the window that has the folder sawit-mcp runs in open is used, else the frontmost window. The browser_* and canvas_* tools (and app_open_page browser or canvas) use that project's own browser tab and canvas, even while the user looks at another project of the window.
 Targets: database tools take a Sawit instance name or a saved connection name (see list_connections).";
 
 #[derive(Debug, Clone)]
@@ -226,8 +226,8 @@ pub(crate) fn expand_home(path: &str) -> PathBuf {
 
 /// The project a tool's files belong to: the `project` argument, else the
 /// folder the agent started `sawit-mcp` in (its project), unless that is
-/// `/` or the home folder. Canvas and diagram files default to its
-/// `.nyawit/`.
+/// `/` or the home folder. The canvas, and the diagrams and exports written
+/// with no path, go by the project that holds it ([`agent_project`]).
 pub(crate) fn project_dir(project: Option<&str>) -> Option<PathBuf> {
     if let Some(p) = project.map(str::trim).filter(|p| !p.is_empty()) {
         return Some(expand_home(p));
@@ -235,6 +235,51 @@ pub(crate) fn project_dir(project: Option<&str>) -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
     let home = std::env::var_os("HOME").map(PathBuf::from);
     (cwd.parent().is_some() && Some(&cwd) != home.as_ref()).then_some(cwd)
+}
+
+/// The project whose canvas the canvas tools use: the `project` argument, else the project that
+/// holds the folder the agent started `sawit-mcp` in ([`project_dir`], [`project_holding`]). The
+/// app takes an agent's folder to mean the project of its window that holds it, so an agent
+/// started in a subfolder (`web/` of a repository) reaches the canvas the app shows for that
+/// project with the app closed too, rather than a canvas of the subfolder's own that the app never
+/// shows (Q12). The diagrams and canvas exports an agent writes with no path go to its `.nyawit/`
+/// too, so that sawit-mcp makes no `.nyawit/` of a subfolder's own.
+pub(crate) fn agent_project(project: Option<&str>) -> Option<PathBuf> {
+    let named = project.is_some_and(|p| !p.trim().is_empty());
+    let folder = project_dir(project)?;
+    if named {
+        return Some(folder);
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    Some(project_holding(&folder, home.as_deref()))
+}
+
+/// The project that holds `folder`, from what is on disk, as the app would have it open: within
+/// the git repository `folder` is in (the nearest folder from it up with `.git`), the nearest
+/// folder whose `.nyawit/` holds a canvas (`canvas.figcraft`, or the old `canvas.excalidraw`),
+/// which the app made for a project it opened (a package of the repository opened as a project of
+/// its own, say); else the repository. Outside a repository, `folder` itself.
+///
+/// A `.nyawit/` with no canvas in it decides nothing: sawit-mcp made one for the diagrams an agent
+/// rendered in `shop/web`, which then took the agent's canvas too, one the app never shows with
+/// `shop` open. Nor does a canvas above the repository: an agent once run in `~/code` left one
+/// there, which every repository under it with no canvas of its own then shared. The home folder
+/// and `/` are never one, nor is a folder above them, as [`project_dir`] has it.
+fn project_holding(folder: &Path, home: Option<&Path>) -> PathBuf {
+    let below_home = |dir: &&Path| dir.parent().is_some() && Some(*dir) != home;
+    let up: Vec<&Path> = folder.ancestors().take_while(below_home).collect();
+    let Some(repository) = up.iter().position(|dir| dir.join(".git").exists()) else {
+        return folder.to_path_buf();
+    };
+    let holds_a_canvas = |dir: &Path| {
+        sawit_core::nyawit::board_file(dir).exists()
+            || sawit_core::nyawit::legacy_canvas_file(dir).exists()
+    };
+    let mut within = up[..=repository].iter().copied();
+    within
+        .find(|dir| holds_a_canvas(dir))
+        .unwrap_or(up[repository])
+        .to_path_buf()
 }
 
 /// Unix seconds as `YYYY-MM-DD HH:MM` (UTC).
@@ -851,8 +896,8 @@ mod tests {
     /// The canvas the tools draw on is the native one, and what an agent is sent says so. Nothing
     /// in it names the web canvas that this one replaced: not a tool's description, not the
     /// description of one of its arguments (those are in the input schema), and not the
-    /// instructions. `canvas_load` alone speaks of that canvas's format, to import it, and only as
-    /// the extension of the files it takes.
+    /// instructions. The canvas tools speak of that canvas's format only as the extension of the
+    /// files they take: `canvas_load` imports one, and every canvas tool's `file` may name one.
     #[test]
     fn canvas_tools_describe_the_native_canvas() {
         const OLD_NAME: &str = "excalidraw";
@@ -869,10 +914,10 @@ mod tests {
 
         let mut stale = Vec::new();
         for (name, text) in &sent {
-            // `canvas_load` takes `.excalidraw` files: that extension is a file's, not a name.
-            let named = match name.as_str() {
-                "canvas_load" => text.replace(".excalidraw", ""),
-                _ => text.clone(),
+            // The canvas tools take `.excalidraw` files: that extension is a file's, not a name.
+            let named = match name.starts_with("canvas_") {
+                true => text.replace(".excalidraw", ""),
+                false => text.clone(),
             };
             if named.to_lowercase().contains(OLD_NAME) {
                 stale.push(format!("{name}: {text}"));
@@ -933,19 +978,43 @@ mod tests {
         }
         // The canvas tab opens only in the app. With the app closed a clear is saved at once, so
         // nothing undoes it, and the save keeps the board it cleared beside the file (m1), and the
-        // ones before it (CANVAS-CORE-3).
+        // ones before it (CANVAS-CORE-3). So does every op that deletes layers, a deletion by id
+        // and an engine command that deletes included, whatever is left on the canvas, in
+        // backups of their own, which never push out a clear's.
         assert!(
             elements.contains("Opens the canvas tab when the app is running"),
             "{elements}"
         );
         let clear = tool("canvas_clear");
         assert!(
-            clear.contains(
-                "The board it held is kept beside the canvas file as canvas.figcraft.bak"
-            ) && clear.contains("the 4 kept before it moving to .bak.1 to .bak.4")
+            clear.contains("The board it held is kept beside the canvas file as <file>.bak (canvas.figcraft.bak for the project's canvas, home.figcraft.bak for home.figcraft)")
+                && clear.contains("the 4 kept before it moving to .bak.1 to .bak.4")
+                && clear.contains("never a deletion")
+                && clear.contains("canvas_load brings it back")
                 && clear.contains("in the app the user can also undo it"),
             "{clear}"
         );
+        let delete = tool("canvas_delete");
+        assert!(
+            delete.contains(
+                "The board they were on is first kept beside the canvas file as <file>.del.bak (canvas.figcraft.del.bak for the project's canvas, home.figcraft.del.bak for home.figcraft)"
+            ) && delete.contains("the 4 kept before it moving to .del.bak.1 to .del.bak.4")
+                && delete.contains("so they never push those out")
+                && delete.contains("canvas_load brings any of them back")
+                && delete.contains("in the app the user can also undo it"),
+            "{delete}"
+        );
+        let command = tool("canvas_command");
+        assert!(
+            command.contains("A command that deletes layers (edit.delete, edit.cut, page.delete, ...) keeps the board they were on beside the canvas file as <file>.del.bak first"),
+            "{command}"
+        );
+        // A backup is named one way everywhere, arguments included: the canvas file's whole name,
+        // then what Sawit adds (`<file>.bak`). `<name>` meant the file's stem in one place and its
+        // whole name in another.
+        for (name, text) in sent.iter().filter(|(name, _)| name.starts_with("canvas_")) {
+            assert!(!text.contains("<name>"), "{name}: {text}");
+        }
         let load = tool("canvas_load");
         assert!(
             load.contains(
@@ -984,6 +1053,40 @@ mod tests {
                 text.contains("filter"),
                 "{what} doesn't mention the filter: {text}"
             );
+        }
+    }
+
+    /// canvas_get, canvas_clear and canvas_export act on the page on show, and say so: they said
+    /// "the canvas", or "the whole canvas" for a clear that leaves the other pages as they are.
+    /// canvas_get says where the other pages and the nested layers are.
+    #[test]
+    fn canvas_tools_say_which_page_they_act_on() {
+        let tools = Sawit::router().list_all();
+        let said = |name: &str| {
+            let tool = tools.iter().find(|tool| tool.name == name).expect(name);
+            tool.description.as_deref().unwrap_or_default().to_string()
+        };
+        let get = said("canvas_get");
+        for part in [
+            "top-level layers of the canvas's page on show",
+            "page.list",
+            "node.get",
+            "page.select",
+        ] {
+            assert!(get.contains(part), "no {part:?} in {get}");
+        }
+        let clear = said("canvas_clear");
+        assert!(
+            clear.contains("page on show; other pages keep theirs"),
+            "{clear}"
+        );
+        let export = said("canvas_export");
+        assert!(
+            export.contains("page on show") && export.contains("file.export"),
+            "{export}"
+        );
+        for name in ["canvas_get", "canvas_clear", "canvas_export"] {
+            assert!(!said(name).contains("whole canvas"), "{name}");
         }
     }
 
@@ -1031,6 +1134,65 @@ mod tests {
             panel.contains("shell_config (the Config Files panel)"),
             "{panel}"
         );
+    }
+
+    /// Q12: an agent that names no project gets its own project's canvas, as it gets its own
+    /// project's browser, and the instructions say so: they said it of the browser alone, while
+    /// the canvas tools used the project in front.
+    #[test]
+    fn agents_are_told_the_canvas_is_their_own_projects() {
+        let line = INSTRUCTIONS
+            .lines()
+            .find(|line| line.starts_with("Most app tools take `project`"))
+            .expect("the line on `project`");
+        for said in [
+            "the window that has the folder sawit-mcp runs in open",
+            "The browser_* and canvas_* tools (and app_open_page browser or canvas) use that project's own browser tab and canvas",
+        ] {
+            assert!(line.contains(said), "no {said:?} in {line}");
+        }
+        let tools = Sawit::router().list_all();
+        for tool in tools.iter().filter(|tool| tool.name.starts_with("canvas_")) {
+            let properties = tool.input_schema.get("properties").cloned();
+            let project = properties.unwrap_or_default()["project"]["description"].clone();
+            let project = project.as_str().unwrap_or_default();
+            assert!(
+                project.contains("Default: the project your working folder is in"),
+                "{}: {project}",
+                tool.name
+            );
+        }
+    }
+
+    /// Every canvas tool takes `file`, a canvas file to work on instead of the project's board (a
+    /// design file, say), and the canvas_* line says so: the tools reached the project's canvas
+    /// alone, though the app opens any `.figcraft` file in a canvas tab of its own.
+    #[test]
+    fn every_canvas_tool_takes_a_file_and_the_instructions_say_so() {
+        let tools = Sawit::router().list_all();
+        let canvas_tools = tools.iter().filter(|tool| tool.name.starts_with("canvas_"));
+        let without: Vec<&str> = canvas_tools
+            .filter(|tool| {
+                let properties = tool.input_schema.get("properties");
+                properties.is_none_or(|p| p.get("file").is_none())
+            })
+            .map(|tool| tool.name.as_ref())
+            .collect();
+        assert!(without.is_empty(), "these take no file: {without:?}");
+        let line = INSTRUCTIONS
+            .lines()
+            .find(|line| line.starts_with("- canvas_*:"))
+            .expect("a canvas_* line");
+        for said in [
+            "your project's canvas (.nyawit/canvas.figcraft)",
+            "the .figcraft file named by `file`",
+            "list, clear and export SVG/PNG the page on show",
+            "update and delete layers by id, on any page",
+            "load another canvas in place of every page",
+            "keep what they clear, load over or delete in backups beside it (.bak, .del.bak)",
+        ] {
+            assert!(line.contains(said), "no {said:?} in {line}");
+        }
     }
 
     /// The terminal_* line says what the tools do now that a terminal tab can hold split panes
@@ -1092,6 +1254,8 @@ mod tests {
             "/p/.nyawit/canvas.excalidraw",
             "/p/.nyawit/canvas.figcraft.bak",
             "/p/.nyawit/canvas.figcraft.bak.3",
+            "/p/.nyawit/canvas.figcraft.del.bak",
+            "/p/design/home.figcraft.del.bak.4",
             "/p/.nyawit/canvas.figcraft.tmp",
         ] {
             assert_eq!(
@@ -1108,6 +1272,71 @@ mod tests {
         ] {
             assert_eq!(refuse_canvas_file("export_query", Path::new(name)), Ok(()));
         }
+    }
+
+    /// Q12: with the app closed, a canvas tool that names no project draws on the canvas of the
+    /// project that holds the agent's folder, as the app does: within the agent's repository, the
+    /// nearest folder up whose `.nyawit/` holds a canvas, else the repository; outside one, the
+    /// folder itself. An agent started in `shop/web` edited `shop/web/.nyawit/canvas.figcraft`,
+    /// which the app never shows. A `.nyawit/` with no canvas in it (one sawit-mcp made for an
+    /// agent's diagrams), or a canvas above the repository (left by an agent run in `~/code`),
+    /// decides nothing: either took the canvas of every agent below it. The home folder is never
+    /// the project, whatever it holds.
+    #[test]
+    fn the_agents_project_is_the_nearest_folder_up_that_is_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let code = home.join("code");
+        let shop = code.join("shop");
+        let web = shop.join("web");
+        let src = web.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let project = |folder: &Path| project_holding(folder, Some(&home));
+        let canvas_in = |folder: &Path, name: &str| {
+            let nyawit = sawit_core::nyawit::dir(folder);
+            std::fs::create_dir_all(&nyawit).unwrap();
+            std::fs::write(nyawit.join(name), "").unwrap();
+        };
+        assert_eq!(project(&src), src, "nothing marks a project");
+
+        std::fs::create_dir(shop.join(".git")).unwrap();
+        assert_eq!(project(&src), shop, "the repository");
+        assert_eq!(project(&shop), shop);
+        // The `.nyawit/` sawit-mcp made in the agent's subfolder for its diagrams.
+        std::fs::create_dir_all(sawit_core::nyawit::diagrams_dir(&web)).unwrap();
+        assert_eq!(project(&src), shop, "a .nyawit/ without a canvas took it");
+        // A canvas above the repository, which an agent once run in `~/code` left there: the
+        // repositories under it keep their own.
+        canvas_in(&code, "canvas.figcraft");
+        assert_eq!(project(&src), shop, "a canvas above the repository took it");
+        let blog = code.join("blog");
+        std::fs::create_dir_all(blog.join(".git")).unwrap();
+        assert_eq!(project(&blog), blog);
+        // A folder of the repository the app has made a canvas for, a package opened as a project
+        // of its own: its old canvas counts too.
+        canvas_in(&web, "canvas.excalidraw");
+        assert_eq!(project(&src), web);
+        canvas_in(&shop, "canvas.figcraft");
+        assert_eq!(project(&src), web, "the nearest");
+        assert_eq!(project(&shop), shop);
+        // A package with a repository of its own (a submodule's `.git` is a file) is its own.
+        let api = shop.join("api");
+        std::fs::create_dir_all(&api).unwrap();
+        std::fs::write(api.join(".git"), "gitdir: ../.git/modules/api").unwrap();
+        assert_eq!(project(&api.join("src")), api);
+        // A file at `.nyawit`'s name holds no canvas.
+        std::fs::remove_dir_all(sawit_core::nyawit::dir(&web)).unwrap();
+        std::fs::write(sawit_core::nyawit::dir(&web), "").unwrap();
+        assert_eq!(project(&src), shop);
+
+        // The home folder isn't one, nor is anything above it.
+        std::fs::create_dir(home.join(".nyawit")).unwrap();
+        std::fs::create_dir(home.join(".git")).unwrap();
+        let notes = home.join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        assert_eq!(project(&notes), notes);
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        assert_eq!(project(&notes), notes);
     }
 
     #[test]

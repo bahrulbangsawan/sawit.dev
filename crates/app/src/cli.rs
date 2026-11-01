@@ -648,8 +648,25 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
         .collect();
     let holding =
         |path: &Path| window_naming(&roots, path).map(|(ix, named)| (spaces[ix].clone(), named));
-    let ((handle, workspace), project, own) = match (&request.project, &request.agent_folder) {
-        (Some(project), _) => {
+    // An op on a canvas file goes to the window that shows that file's canvas, else to the one
+    // whose project holds the file, as `sawit <file>` opens it there: a second canvas of the file
+    // in another window would save over the first's edits.
+    let file_window = match &request.command {
+        ControlCommand::Canvas {
+            file: Some(file), ..
+        } => {
+            let shows = |(_, w): &(AnyWindowHandle, Entity<Workspace>)| {
+                w.read(cx).shows_canvas_file(file, cx)
+            };
+            let showing = spaces.iter().position(shows);
+            canvas_file_window(showing, &roots, file).map(|ix| spaces[ix].clone())
+        }
+        _ => None,
+    };
+    let target = (file_window, &request.project, &request.agent_folder);
+    let ((handle, workspace), project, own) = match target {
+        (Some(window), ..) => (window, None, None),
+        (None, Some(project), _) => {
             let (window, named) = holding(project).ok_or_else(|| {
                 format!(
                     "No Sawit window has {} open. Open it with app_open first.",
@@ -660,8 +677,8 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
         }
         // No project named: the window the agent's own folder is open in,
         // else the frontmost one. The folder goes along, as that window
-        // names it: the agent's browser is its project's.
-        (None, folder) => {
+        // names it: the agent's browser and canvas are its project's.
+        (None, None, folder) => {
             let found = folder.as_deref().and_then(holding);
             let own = found.as_ref().map(|(_, named)| named.clone());
             let window = found
@@ -690,6 +707,18 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
         cx.activate(true);
     }
     Ok(answer)
+}
+
+/// The window an agent's op on the canvas file `file` goes to, of `windows` and each one's
+/// project folders: `showing`, the one with a canvas tab that shows the file, else the one whose
+/// project holds the file ([`window_naming`]), as `sawit <file>` opens it there. `None` leaves
+/// the choice to the project the op names, or the agent's folder.
+fn canvas_file_window<H: Clone>(
+    showing: Option<H>,
+    windows: &[(H, Vec<PathBuf>)],
+    file: &Path,
+) -> Option<H> {
+    showing.or_else(|| window_naming(windows, file).map(|(window, _)| window))
 }
 
 /// The window whose project holds the folder an agent named, `path`, and `path` as that window's
@@ -965,7 +994,9 @@ pub fn install_cli(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::{bundle_of, still_open, window_holding, window_naming, window_with_root};
+    use super::{
+        bundle_of, canvas_file_window, still_open, window_holding, window_naming, window_with_root,
+    };
     use gpui_kit::{KeyContext, MenuItem, OperatingSystem, OsAction, TestAppContext};
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
@@ -1013,6 +1044,28 @@ mod tests {
         assert_eq!(window("/code/shop/web"), Some("front"));
         assert_eq!(window("/code/other"), Some("back"));
         assert_eq!(window("/tmp/elsewhere"), None);
+    }
+
+    /// An agent's op on a canvas file goes to the window that shows that file's canvas, whatever
+    /// project it names or works in: a second canvas of the file in another window would save
+    /// over the first's edits. Else to the window whose project holds the file, as `sawit <file>`
+    /// opens it there; a file that no window holds leaves the choice to the op's project or the
+    /// agent's folder.
+    #[test]
+    fn a_canvas_files_op_goes_to_the_window_that_shows_or_holds_it() {
+        let windows = vec![
+            ("front", vec![PathBuf::from("/code/shop")]),
+            ("back", vec![PathBuf::from("/code/blog")]),
+        ];
+        let file = Path::new("/code/blog/design/home.figcraft");
+        assert_eq!(canvas_file_window(None, &windows, file), Some("back"));
+        assert_eq!(
+            canvas_file_window(Some("front"), &windows, file),
+            Some("front"),
+            "the window that shows it"
+        );
+        let elsewhere = Path::new("/elsewhere/home.figcraft");
+        assert_eq!(canvas_file_window(None, &windows, elsewhere), None);
     }
 
     /// SITE-1: ⌘Q, the app's own Quit (as the menu's Quit Sawit sends it), asks to save a file

@@ -8,7 +8,7 @@ use sawit_core::binaries::{SearchRoots, discover};
 use sawit_core::control::{self, Preflight};
 use sawit_core::instances::{AppPaths, Instance, ListenScope, Registry};
 use sawit_mcp::Sawit;
-use sawit_mcp::app::{CanvasCommandArgs, WindowArgs};
+use sawit_mcp::app::{CanvasCommandArgs, CanvasTargetArgs};
 use sawit_mcp::db::{CreateDbArgs, DropDbArgs, ExecuteArgs, TableArgs};
 use sawit_mcp::diagrams::{SchemaDiagramArgs, SchemaFormat, Theme};
 use serde_json::{Value, json};
@@ -312,13 +312,19 @@ fn names(dir: &Path) -> Vec<String> {
 
 async fn get(server: &Sawit, project: &Path) -> CallToolResult {
     let project = project_arg(project);
-    server.canvas_get_tool(WindowArgs { project }).await
+    server
+        .canvas_get_tool(CanvasTargetArgs {
+            file: None,
+            project,
+        })
+        .await
 }
 
 async fn command(server: &Sawit, project: &Path, id: &str, params: Value) -> CallToolResult {
     let args = CanvasCommandArgs {
         command: id.into(),
         params: Some(params),
+        file: None,
         project: project_arg(project),
     };
     server.canvas_command_tool(args).await

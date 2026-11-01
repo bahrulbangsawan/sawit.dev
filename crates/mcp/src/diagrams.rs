@@ -89,8 +89,10 @@ pub(crate) fn palette(theme: Theme) -> Palette {
 }
 
 impl Sawit {
-    /// The file `named` ([`crate::output_path`]), or a fresh one in the project's `.nyawit/diagrams/`
-    /// (else `<cache>/diagrams`).
+    /// The file `named` ([`crate::output_path`]), or a fresh one in the `.nyawit/diagrams/` of the
+    /// project the agent works in (else `<cache>/diagrams`): the project that holds its folder, as
+    /// the canvas tools take it ([`crate::agent_project`]). A diagram an agent rendered in a
+    /// subfolder made a `.nyawit/` there, which then took the agent's canvas too.
     fn output_file(&self, named: Option<PathBuf>, stem: &str, ext: &str) -> PathBuf {
         if let Some(path) = named {
             return path;
@@ -100,7 +102,7 @@ impl Sawit {
             .map(|d| d.as_millis())
             .unwrap_or_default();
         let name = format!("{stem}-{stamp}.{ext}");
-        if let Some(project) = crate::project_dir(None) {
+        if let Some(project) = crate::agent_project(None) {
             let dir = sawit_core::nyawit::diagrams_dir(&project);
             if sawit_core::nyawit::ensure(&project, &dir).is_ok() {
                 return dir.join(name);

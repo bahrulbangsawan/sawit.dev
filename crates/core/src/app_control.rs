@@ -216,8 +216,13 @@ pub enum Command {
         id: String,
     },
     /// Changes the canvas (opening it if needed): one op of `sawit_board::ops`, answered at once.
+    /// The canvas is the one of the agent's project, or with `file` the canvas of that file (an
+    /// absolute path to a `.figcraft` or `.excalidraw` file), in a canvas tab of its own as
+    /// `sawit <file>` opens it.
     Canvas {
         op: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file: Option<PathBuf>,
     },
     /// Drives the browser tab (opening it if needed); see `crate::browser`.
     Browser {
@@ -508,6 +513,40 @@ mod tests {
             br#"{"cmd":"browser","op":{"op":"navigate","url":"http://localhost:5173"}}"#
         );
         assert_eq!(decode(&bytes), Some(Ok(request)));
+    }
+
+    /// A canvas op names the canvas file it is for, when it is for one; without one it goes as it
+    /// always went, and a request from an older `sawit-mcp` reads as the project's canvas.
+    #[test]
+    fn canvas_ops_round_trip_with_the_file_they_name() {
+        let op = serde_json::json!({"op": "get"});
+        for (file, wire) in [
+            (
+                Some(PathBuf::from("/code/shop/design/home.figcraft")),
+                r#"{"cmd":"canvas","op":{"op":"get"},"file":"/code/shop/design/home.figcraft"}"#,
+            ),
+            (None, r#"{"cmd":"canvas","op":{"op":"get"}}"#),
+        ] {
+            let request = Request {
+                project: None,
+                agent_folder: None,
+                command: Command::Canvas {
+                    op: op.clone(),
+                    file,
+                },
+            };
+            let bytes = encode(&request);
+            assert_eq!(&bytes[MAGIC.len()..], wire.as_bytes());
+            assert_eq!(decode(&bytes), Some(Ok(request)));
+        }
+        let old = decode(b"sawit-control/1\n{\"cmd\":\"canvas\",\"op\":{\"op\":\"clear\"}}");
+        assert!(matches!(
+            old,
+            Some(Ok(Request {
+                command: Command::Canvas { file: None, .. },
+                ..
+            }))
+        ));
     }
 
     #[test]

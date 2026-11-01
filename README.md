@@ -314,19 +314,25 @@ explained. A conflict on the same address can't be forced.
   with no project or for a canvas file outside a project's `.nyawit/` (a `.figcraft` opened from the Files tab, say),
   and Sawit shows them in Finder. **Save as…** (<kbd>⇧</kbd><kbd>⌘</kbd><kbd>S</kbd>) writes a `.figcraft` copy
   anywhere. `.nyawit/` has its own `.gitignore`, so nothing in it is committed until you delete that file.
-- **Copies it keeps beside the file**:
-  - A save that leaves the canvas empty, or puts another canvas in its place (an agent's `canvas_clear` or
-    `canvas_load`), first keeps the board the file held as `<name>.bak`. The four before it move along to
-    `<name>.bak.1` … `<name>.bak.4`, and the oldest goes. `canvas_load` reads any of them back.
+- **Copies it keeps beside the file** (`<file>` is the canvas file's whole name, such as `canvas.figcraft`):
+  - A save that leaves the canvas empty, or follows an agent's `canvas_clear` or a `canvas_load` that put another
+    canvas in its place, first keeps the board the file held as `<file>.bak`. The four before it move along to
+    `<file>.bak.1` … `<file>.bak.4`, and the oldest goes.
+  - The save after an agent's deletion (`canvas_delete`, or a `canvas_command` such as `edit.delete` or
+    `page.delete`) keeps the board as `<file>.del.bak` instead, with four of its own before it (`<file>.del.bak.1`
+    … `<file>.del.bak.4`), so a run of small deletions never pushes out a board a clear or a load kept.
+    `canvas_load` reads any of these back. Your own deletions keep none: <kbd>⌘</kbd><kbd>Z</kbd> undoes them.
   - A file that opens with something the canvas can't save back (it says what) is first copied to
-    `<name>.lossy.bak`.
+    `<file>.lossy.bak`.
   - A save that would replace what another app or window wrote to the file since is refused, and the canvas says
     why. If the tab then closes, or Sawit quits, with edits it couldn't save, they're kept in
     `<name> (unsaved <date>).figcraft` beside the file (`-2`, `-3`… when that name is taken), or in `unsaved/` in
     Sawit's data folder when nothing can be written there. The canvas doesn't announce these copies, so look for
     them there.
-  - Outside `.nyawit/` (a `.figcraft` opened from the Files tab in a repository, say), these files show in
-    `git status`.
+  - Outside `.nyawit/` (a `.figcraft` opened from the Files tab in a repository, or one an agent names with
+    `file`), these files show in `git status`, and staging everything (`git add -A`) puts them in the next commit:
+    full copies of the file, images included. Add `*.figcraft.*bak*` to the repository's `.gitignore` to keep the
+    backups out.
 - **From the old canvas**: a project that has only its old `.nyawit/canvas.excalidraw` opens it imported the first
   time. The `.excalidraw` file is never changed, and the canvas says what the import left out (the hand-drawn look
   doesn't carry over). An `.excalidraw` file in the Files tab opens the same way and saves as `<name>.figcraft`
@@ -334,7 +340,14 @@ explained. A conflict on the same address can't be forced.
 - Agents draw on it through the `canvas_*` MCP tools. `canvas_add_mermaid` turns Mermaid into **editable shapes**:
   boxes, connectors joined to them, and labels. Charts (pie, Gantt, XY, quadrant, journey, Sankey, architecture) are
   placed as one picture. Pele, the renderer the rest of the app uses, lays the diagram out. `canvas_command` runs any
-  other canvas command by its id.
+  other canvas command by its id. With no `project`, an agent draws on the canvas of the project it works in, with
+  Sawit open or closed. With Sawit closed, that is, within the agent's git repository, the nearest folder up from
+  the agent's whose `.nyawit/` holds a canvas, else the repository's root (outside a repository, the agent's own
+  folder); a diagram it renders with no path goes to that project's `.nyawit/diagrams/`. A `.nyawit/` with no canvas
+  in it, or one above the repository, doesn't count. `file` names any other canvas file instead, such as a design
+  file in the repository: the agent works on it in its own canvas tab, which opens without taking your keyboard,
+  or on the file while Sawit is closed. An `.excalidraw` file is imported once into the `.figcraft` file beside it,
+  as the Files tab opens it.
 
 ### Git
 
@@ -562,7 +575,8 @@ sawit pupuk bun -y                           # upgrade one tool without asking
 
 The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 117 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
-the agent's project open (or the one `project` names), else the frontmost window.
+the agent's project open (or the one `project` names), else the frontmost window. An agent's browser and canvas are
+its own project's, even while you look at another project of that window.
 
 | Area | Tools |
 |---|---|
@@ -582,7 +596,7 @@ the agent's project open (or the one `project` names), else the frontmost window
 | App control (app running) | `launch_app`, `app_state`, `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, changelog, git_graph, github, instance, keymap), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
 | Terminal (app running) | `terminal_run`, `terminal_read`, `terminal_input`, `terminal_close` (`terminal_run`, `app_run_script` and `app_ssh_connect` return the tab and `pane` they used; `terminal_input` needs the tab, and a split tab needs its pane) |
 | Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (what the user annotated), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`) |
-| Canvas | `canvas_get`, `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear`, `canvas_load`, `canvas_export`, `canvas_command` (any command of the canvas engine, by id), `canvas_commands` (lists them; pass a `filter` to see what each takes). All of them work on the saved canvas file when the app is closed; then each call starts from that file, so no undo or selection carries over to the next: pass `canvas_command` the ids, or its steps in one `command.batch` |
+| Canvas | `canvas_get` (the top-level layers of the page on show), `canvas_add_elements`, `canvas_add_mermaid`, `canvas_update`, `canvas_delete`, `canvas_clear` (the page on show), `canvas_load`, `canvas_export` (the page on show, as SVG or PNG), `canvas_command` (any command of the canvas engine, by id: `page.list` and `node.get` reach the other pages), `canvas_commands` (lists them; pass a `filter` to see what each takes). Each takes `file`, a `.figcraft` file (a design file, say) or an `.excalidraw` file to work on instead of the project's canvas, in a canvas tab of its own. All of them work on the saved canvas file when the app is closed; then each call starts from that file, so no undo or selection carries over to the next: pass `canvas_command` the ids, or its steps in one `command.batch` |
 
 Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`
 and `uninstall_mcp_server` take the name again as `confirm` (so does `remove_instance` when it deletes the data), and `install_dev_tools` and `upgrade_dev_tools` need
