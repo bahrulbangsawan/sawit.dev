@@ -83,6 +83,16 @@ pub enum InstanceAction {
     Restart,
 }
 
+/// Where a terminal split puts the new pane, as the pane menu's Split right and Split down do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SplitDirection {
+    /// Side by side, the new pane on the right (⌘D).
+    Right,
+    /// Stacked, the new pane below (⇧⌘D).
+    Down,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Command {
@@ -225,6 +235,22 @@ pub enum Command {
     },
     Reload {
         store: Store,
+    },
+    /// Splits pane `pane` of terminal tab `tab` (a split tab needs it
+    /// named), as the pane menu's Split right and Split down do, and starts
+    /// a shell in the new half: in `cwd`, else the split pane's folder. It
+    /// types `command` and Enter there when given. The new pane never takes
+    /// the keyboard, and a split that would leave a half under 20 columns by
+    /// 4 rows is refused.
+    TerminalSplit {
+        tab: usize,
+        #[serde(default)]
+        pane: Option<usize>,
+        direction: SplitDirection,
+        #[serde(default)]
+        command: Option<String>,
+        #[serde(default)]
+        cwd: Option<PathBuf>,
     },
 }
 
@@ -518,6 +544,56 @@ mod tests {
         assert_eq!(key_bytes("up"), Some(b"\x1b[A".to_vec()));
         assert_eq!(key_bytes("ctrl-1"), None);
         assert_eq!(key_bytes("hyper"), None);
+    }
+
+    /// An agent's split names its tab and the way to split, and leaves the rest out when it has
+    /// nothing to say: the app splits the tab's only pane, starts the shell in its folder and runs
+    /// nothing.
+    #[test]
+    fn a_terminal_split_round_trips() {
+        let request = Request {
+            project: None,
+            agent_folder: Some("/code/app".into()),
+            command: Command::TerminalSplit {
+                tab: 2,
+                pane: Some(1),
+                direction: SplitDirection::Down,
+                command: Some("npm test -- --watch".into()),
+                cwd: Some("/code/app/web".into()),
+            },
+        };
+        let bytes = encode(&request);
+        assert_eq!(decode(&bytes), Some(Ok(request)));
+        let bare = decode(
+            br#"sawit-control/1
+{"cmd":"terminal_split","tab":0,"direction":"right"}"#,
+        );
+        assert_eq!(
+            bare,
+            Some(Ok(Request {
+                project: None,
+                agent_folder: None,
+                command: Command::TerminalSplit {
+                    tab: 0,
+                    pane: None,
+                    direction: SplitDirection::Right,
+                    command: None,
+                    cwd: None,
+                },
+            }))
+        );
+        for wrong in [
+            br#"{"cmd":"terminal_split","tab":0,"direction":"left"}"#.as_slice(),
+            br#"{"cmd":"terminal_split","direction":"down"}"#.as_slice(),
+        ] {
+            let mut bytes = MAGIC.to_vec();
+            bytes.extend_from_slice(wrong);
+            assert!(
+                decode(&bytes).unwrap().is_err(),
+                "{}",
+                String::from_utf8_lossy(wrong)
+            );
+        }
     }
 
     #[test]

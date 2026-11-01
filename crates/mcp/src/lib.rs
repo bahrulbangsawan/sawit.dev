@@ -84,7 +84,7 @@ Sawit is a macOS developer workbench. These tools work without the Sawit app run
 - MCP servers: the MCP page catalog and the AI clients on this Mac; install or remove a server in a client's config.
 These control the running Sawit app (start it with launch_app; app_state shows windows, tabs and terminals):
 - app_*: open files/folders, show panels, layout, tabs, pages (canvas, MCP, tools, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
-- terminal_*: run commands in Sawit's terminal and read their output, type keys (ctrl-c), close tabs or panes. terminal_run, app_run_script and app_ssh_connect return the terminal (tab) and `pane` they used: pass both to terminal_read, terminal_input and terminal_close, since the user may be typing in another terminal, which stays in front (app_state lists tabs and panes). terminal_input needs the tab, and a split tab needs its pane; terminal_read without a tab reads the pane the user has in front, and terminal_close without a pane closes the whole tab.
+- terminal_*: run commands in Sawit's terminal and read their output, split a pane to run something beside it (terminal_split), type keys (ctrl-c), close tabs or panes. terminal_run, terminal_split, app_run_script and app_ssh_connect return the terminal (tab) and `pane` they used: pass both to terminal_read, terminal_input and terminal_close, since the user may be typing in another terminal, which stays in front (app_state lists tabs and panes). terminal_input and terminal_split need the tab, and a split tab needs its pane; terminal_read without a tab reads the pane the user has in front, and terminal_close without a pane closes the whole tab.
 - canvas_*: the canvas (FigCraft engine): list, add shapes/stickies/arrows, Mermaid as editable shapes, update, delete, clear, load, export SVG/PNG. They also work on the saved file when the app is closed.
 - canvas_command: run any command of the canvas engine by id with its parameters (board.sticky, node.set, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes. With the app closed each call starts from the saved file, so nothing carries over between calls (no undo, no selection, no view): pass ids, or run the steps in one command.batch.
 - browser_*: a browser tab (WebKit) to check the app being built: navigate (default the project's dev server), snapshot the page as an outline with element refs, click/hover/type/press keys/select/scroll by ref or CSS selector, wait for text, screenshot, read console errors and network requests, evaluate JS, resize to a device, read the user's annotations, inspect an element's design, read the page's design system, export it as DESIGN.md + tokens + assets. Take a new browser_snapshot after the page changes; refs reset.
@@ -374,6 +374,7 @@ const DESTRUCTIVE: &[&str] = &[
     "browser_evaluate",
     "browser_annotations",
     "browser_export_design",
+    "terminal_split",
 ];
 
 /// The tools that change things but only add: a database, an instance, a prompt, rows, shapes on
@@ -450,6 +451,7 @@ const OPEN_WORLD: &[&str] = &[
     "browser_inspect",
     "browser_design",
     "browser_export_design",
+    "terminal_split",
 ];
 
 /// MCP's hints for the tool `name`, from [`READ_ONLY`], [`DESTRUCTIVE`], [`ADDS`] and
@@ -666,6 +668,8 @@ mod tests {
             "browser_inspect",
             "browser_design",
             "browser_export_design",
+            // terminal splits
+            "terminal_split",
         ];
         expected.sort();
         assert_eq!(names, expected);
@@ -1055,7 +1059,12 @@ mod tests {
         take_a_pane.sort();
         assert_eq!(
             take_a_pane,
-            ["terminal_close", "terminal_input", "terminal_read"]
+            [
+                "terminal_close",
+                "terminal_input",
+                "terminal_read",
+                "terminal_split"
+            ]
         );
         for name in &take_a_pane {
             assert!(line.contains(name.as_str()), "no {name} in {line}");
@@ -1075,7 +1084,12 @@ mod tests {
     #[test]
     fn tools_that_start_a_terminal_say_where() {
         let tools = Sawit::router().list_all();
-        for name in ["terminal_run", "app_run_script", "app_ssh_connect"] {
+        for name in [
+            "terminal_run",
+            "terminal_split",
+            "app_run_script",
+            "app_ssh_connect",
+        ] {
             let tool = tools.iter().find(|t| t.name == name).expect(name);
             let said = tool.description.as_deref().unwrap_or_default();
             for word in ["pane", "terminal_read", "terminal_input"] {

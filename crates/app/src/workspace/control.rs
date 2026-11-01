@@ -134,6 +134,16 @@ fn shell_folder(cwd: Option<PathBuf>) -> Result<Option<PathBuf>, String> {
     }
 }
 
+/// The terminal's way of splitting a pane, for the way `sawit-mcp` names.
+fn split_dir(direction: sawit_core::app_control::SplitDirection) -> sawit_core::terminal::SplitDir {
+    use sawit_core::app_control::SplitDirection;
+    use sawit_core::terminal::SplitDir;
+    match direction {
+        SplitDirection::Right => SplitDir::Right,
+        SplitDirection::Down => SplitDir::Down,
+    }
+}
+
 fn sidebar_tab(panel: Panel) -> SidebarTab {
     match panel {
         Panel::Instances => SidebarTab::Servers,
@@ -472,6 +482,37 @@ impl Workspace {
                 };
                 Ok(Answer::Later(browser.update(cx, |b, cx| b.apply(op, cx))))
             }
+            // ⌘D or ⇧⌘D for an agent: the new pane shows as terminal_run's terminal does, and the
+            // keyboard stays where the user has it. The dock shows first, as for terminal_run: one
+            // never on screen can't tell how much room its panes have, and the split asked again
+            // once it shows can be measured.
+            Command::TerminalSplit {
+                tab,
+                pane,
+                direction,
+                command,
+                cwd,
+            } => {
+                let cwd = shell_folder(cwd)?;
+                let dir = split_dir(direction);
+                self.leave_welcome(TERMINAL_ONLY, cx);
+                self.layout.terminal = true;
+                cx.notify();
+                let (tab, pane) = self.terminal.update(cx, |t, cx| {
+                    t.split(
+                        tab,
+                        pane,
+                        dir,
+                        cwd,
+                        command.as_deref(),
+                        Origin::Agent,
+                        window,
+                        cx,
+                    )
+                })?;
+                let pane = self.terminal.read(cx).pane_index(tab, pane, cx);
+                done(json!({ "terminal": tab, "pane": pane }))
+            }
         };
         cx.notify();
         result
@@ -647,9 +688,19 @@ mod tests {
 
     use serde_json::json;
 
+    use super::split_dir;
     use super::{
         BrowserRoute, browser_project, browser_route, close_answer, script_answer, shell_folder,
     };
+
+    /// terminal_split's right and down are the pane menu's Split right (⌘D) and Split down (⇧⌘D).
+    #[test]
+    fn a_split_goes_the_way_the_agent_names() {
+        use sawit_core::app_control::SplitDirection;
+        use sawit_core::terminal::SplitDir;
+        assert_eq!(split_dir(SplitDirection::Right), SplitDir::Right);
+        assert_eq!(split_dir(SplitDirection::Down), SplitDir::Down);
+    }
 
     /// MCP-4: a shell an agent starts in a folder starts there or not at all. The PTY ignores a
     /// `chdir` that fails, so a relative folder or one that isn't there started the shell in the

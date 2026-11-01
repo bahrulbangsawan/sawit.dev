@@ -796,6 +796,32 @@ fn split_focuses_the_new_pane_and_unzooms() {
     assert_eq!(t.panes.len(), 3);
 }
 
+/// An agent splits the pane it names, which may not be the one the user has focused, and the
+/// focus stays with the user's pane; the new pane goes beside the named one.
+#[test]
+fn split_pane_splits_the_named_pane_and_leaves_the_focus() {
+    let mut t = TabState::new(1);
+    assert!(t.split(SplitDir::Right, 2, tab_area(), TAB_MIN));
+    t.focus(1);
+    assert!(t.toggle_zoom());
+    assert!(t.split_pane(2, SplitDir::Down, 3, tab_area(), TAB_MIN));
+    assert_eq!(t.focused, 1, "the agent's split took the focus");
+    assert_eq!(t.zoomed, None, "the new half is hidden behind the zoom");
+    assert_eq!(t.layout.panes(), vec![1, 2, 3]);
+    assert!(t.panes.contains_key(&3));
+    // A pane the tab doesn't have, or one too small to halve, is refused and nothing changes.
+    assert!(!t.split_pane(9, SplitDir::Down, 4, tab_area(), TAB_MIN));
+    let small = Rect {
+        x: 0.,
+        y: 0.,
+        w: 300.,
+        h: 400.,
+    };
+    assert!(!t.split_pane(1, SplitDir::Right, 5, small, TAB_MIN));
+    assert_eq!(t.layout.panes(), vec![1, 2, 3]);
+    assert_eq!(t.panes.len(), 3);
+}
+
 #[test]
 fn split_is_refused_when_the_pane_is_too_small() {
     let mut t = TabState::new(1);

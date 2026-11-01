@@ -47,11 +47,30 @@ impl TabState {
     /// when either half would be smaller than `min` (width, height).
     /// On success the new pane gets focus and zoom is cleared.
     pub fn split(&mut self, dir: SplitDir, new: PaneId, area: Rect, min: (f32, f32)) -> bool {
+        if !self.split_pane(self.focused, dir, new, area, min) {
+            return false;
+        }
+        self.focused = new;
+        true
+    }
+
+    /// Splits `pane`, which needn't be the focused one, and leaves the
+    /// focus where it is: an agent's split, made while the user may type
+    /// in another pane. Refused as [`Self::split`] is. On success zoom is
+    /// cleared, so that both halves show.
+    pub fn split_pane(
+        &mut self,
+        pane: PaneId,
+        dir: SplitDir,
+        new: PaneId,
+        area: Rect,
+        min: (f32, f32),
+    ) -> bool {
         let Some((_, rect)) = self
             .layout
             .rects(area)
             .into_iter()
-            .find(|(id, _)| *id == self.focused)
+            .find(|(id, _)| *id == pane)
         else {
             return false;
         };
@@ -59,11 +78,10 @@ impl TabState {
             SplitDir::Right => rect.w / 2. < min.0,
             SplitDir::Down => rect.h / 2. < min.1,
         };
-        if too_small || !self.layout.split(self.focused, dir, new) {
+        if too_small || !self.layout.split(pane, dir, new) {
             return false;
         }
         self.panes.insert(new, PaneMeta::default());
-        self.focused = new;
         self.zoomed = None;
         true
     }
