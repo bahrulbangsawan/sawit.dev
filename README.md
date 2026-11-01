@@ -504,6 +504,7 @@ sawit src/main.rs:42:5   # open a file at line 42, column 5 (grep/rustc output f
 sawit new.sql            # a file that doesn't exist opens empty; ⌘S creates it
 sawit -n ~/code/other    # always in a new window
 sawit -r ~/code/other    # replace the project in the frontmost window
+sawit -- -notes.md       # after --, every argument is a path, even one that starts with -
 ls -la | sawit -         # open stdin as a file
 git config --global core.editor "sawit --wait"   # wait until the file tab is closed
 sawit browse             # this project's running dev server, in Sawit's browser tab (also: intip)
@@ -556,9 +557,13 @@ sawit pupuk bun -y                           # upgrade one tool without asking
   Postgres running locally. A unique prefix also works (`kyzn` finds `kyzn_crm`). If a file or folder with that name
   exists, it's opened instead. To open a folder named after a subcommand (`list`, `bakar`, `panen`, `backup`,
   `tanam`, `pasang`, `pupuk`, …), use `sawit ./list`.
-- Every word has an English and an Indonesian name: `list`/`ls`, `panen`/`export`/`ekspor`,
-  `backup`/`dump`/`cadangkan`, `tanam`/`import`/`impor`, `pasang`/`install`, `pupuk`/`upgrade`, and for `list`: `db`/`blok`,
-  `ports`/`lahan`, `instances`/`kebun`, `connections`/`konsesi`, `tools`/`alat`/`perkakas`.
+- Every word has an English and an Indonesian name: `list`/`ls`/`daftar`, `bakar`/`stop`, `nyalakan`/`start`,
+  `browse`/`intip`, `panen`/`export`/`ekspor`, `backup`/`dump`/`cadangkan`, `tanam`/`import`/`impor`,
+  `pasang`/`install` and `pupuk`/`upgrade`. So do the targets, for `list`: `all`/`semua`,
+  `instances`/`instance`/`kebun`, `db`/`dbs`/`database`/`databases`/`blok`, `ports`/`port`/`lahan`,
+  `connections`/`connection`/`conn`/`koneksi`/`konsesi`, `tools`/`tool`/`alat`/`perkakas`; for `bakar`:
+  `ports`/`port`/`lahan` and `instances`/`instance`/`kebun`; and the flags: `-y`/`--yes`/`--ya` and
+  `--ulang`/`--restart`. `sawit --help` lists them all.
 - `panen` and `backup` ask before replacing an existing file; `-y` replaces it without asking. Without a terminal
   they refuse instead of prompting. `panen` with SQL runs it read-only.
 - SQL runs read-only first, as the `query` MCP tool runs it. SQL that writes (or several statements, which can't be

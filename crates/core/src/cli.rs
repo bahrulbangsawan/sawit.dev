@@ -33,9 +33,12 @@ Usage:
 Examples:
   sawit .                  open this folder as a project (joins the open
                            window next to its other projects)
+  sawit -n ~/code/shop     open a folder in a new window of its own
+  sawit -r ~/code/blog     open it in place of the front window's project
   sawit src/main.rs:42     open a file at line 42
   sawit -w COMMIT_EDITMSG  wait until the file's tab is closed (git core.editor)
   ls | sawit -             open stdin as a new file
+  sawit -- -notes.md       a name that starts with - (after --, all are paths)
 
 Browser (the project's tab in Sawit, which starts if it isn't running):
   sawit browse             this project's running dev server
@@ -58,6 +61,7 @@ Kebun (databases), no app needed:
   local Postgres. A unique prefix works: kyzn finds kyzn_crm.
 
   sawit list               instances, databases, ports and connections
+  sawit list db            just one: instances, db, ports or connections
   sawit bakar ports        stop dev servers on ports (asks first;
                            SIGTERM, then SIGKILL for the stubborn)
   sawit bakar ports 3000   stop whatever listens on :3000
@@ -75,10 +79,6 @@ Kebun (databases), no app needed:
   sawit backup kyzn crm.leads leads.sql    one schema or table
   sawit tanam kyzn leads leads.csv         load a CSV file into a table
   An existing file is replaced only after asking (or with -y).
-  Aliases: panen = export, ekspor · backup = dump, cadangkan ·
-  tanam = import, impor · pasang = install · pupuk = upgrade.
-  `sawit ./panen` opens a
-  folder named panen.
 
 Tools (the app's Tools page):
   sawit list tools         package managers, runtimes, AI agents (alat)
@@ -88,11 +88,23 @@ Tools (the app's Tools page):
                            release (shown as → in `list tools`)
   sawit pupuk bun          upgrade just bun (asks first; -y to skip)
 
+Aliases (every word has an English and an Indonesian name):
+  list = ls, daftar · bakar = stop · nyalakan = start · browse = intip
+  panen = export, ekspor · backup = dump, cadangkan · tanam = import, impor
+  pasang = install · pupuk = upgrade
+  list: all = semua · instances = instance, kebun · db = dbs, database,
+    databases, blok · ports = port, lahan · connections = connection,
+    conn, koneksi, konsesi · tools = tool, alat, perkakas
+  bakar: ports = port, lahan · instances = instance, kebun
+  -y = --yes, --ya (don't ask first) · --ulang = --restart
+  `sawit ./panen` opens a folder named panen; so for every word here.
+
 Options:
   -n, --new         always open in a new window
   -r, --reuse       use the frontmost window, replacing its active project
   -w, --wait        wait until every opened file is closed
   -                 read stdin into a temporary file and open it
+  --                the rest are paths, even when they start with -
       --foreground  run the app in this terminal (debugging)
   -v, --version     print the version
   -h, --help        print this help
@@ -192,10 +204,10 @@ pub fn parse_args(
     let args: Vec<OsString> = args.into_iter().collect();
     let words: Vec<&str> = args.iter().filter_map(|a| a.to_str()).collect();
     match words.first().copied() {
-        Some("list" | "ls") if words.len() == args.len() && words.len() <= 2 => {
+        Some("list" | "ls" | "daftar") if words.len() == args.len() && words.len() <= 2 => {
             return ListWhat::parse(words.get(1).copied()).map(Invocation::List);
         }
-        Some("bakar") if words.len() == args.len() => {
+        Some("bakar" | "stop") if words.len() == args.len() => {
             return BakarArgs::parse(&words[1..]).map(Invocation::Bakar);
         }
         Some("install" | "pasang") if words.len() == args.len() => {
@@ -684,6 +696,94 @@ mod tests {
         ));
         assert!(matches!(parse(&["./browse"]), Ok(Invocation::Open { .. })));
         assert!(matches!(parse(&["./intip"]), Ok(Invocation::Open { .. })));
+    }
+
+    /// `list` and `bakar` have their names in both languages: `daftar` and `stop`. Neither is a
+    /// database, and `./stop` is still a folder.
+    #[test]
+    fn list_and_bakar_in_both_languages() {
+        assert_eq!(
+            parse(&["daftar", "ports"]),
+            Ok(Invocation::List(ListWhat::Ports))
+        );
+        let Ok(Invocation::Bakar(bakar)) = parse(&["stop", "lahan", "3000", "-y"]) else {
+            panic!()
+        };
+        assert_eq!(bakar.targets, ["3000"]);
+        assert!(bakar.yes);
+        assert!(parse(&["stop"]).is_err());
+        assert!(matches!(parse(&["./daftar"]), Ok(Invocation::Open { .. })));
+        assert!(matches!(parse(&["./stop"]), Ok(Invocation::Open { .. })));
+    }
+
+    /// `sawit --help` names every word `sawit` takes as a command, every target of `list` and
+    /// `bakar` and every flag, each alias among them: it left out `ls`, most targets, `--yes`
+    /// and `--`.
+    #[test]
+    fn the_help_names_every_word_and_alias() {
+        let named: std::collections::HashSet<&str> = USAGE
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .collect();
+        for word in crate::kebun::SUBCOMMANDS {
+            assert!(named.contains(word), "--help doesn't name {word}");
+        }
+        for target in [
+            "all",
+            "semua",
+            "instances",
+            "instance",
+            "kebun",
+            "db",
+            "dbs",
+            "database",
+            "databases",
+            "blok",
+            "ports",
+            "port",
+            "lahan",
+            "connections",
+            "connection",
+            "conn",
+            "koneksi",
+            "konsesi",
+            "tools",
+            "tool",
+            "alat",
+            "perkakas",
+        ] {
+            assert!(ListWhat::parse(Some(target)).is_ok(), "{target}");
+            assert!(named.contains(target), "--help doesn't name list {target}");
+        }
+        for target in ["ports", "port", "lahan", "instances", "instance", "kebun"] {
+            assert!(BakarArgs::parse(&[target]).is_ok(), "{target}");
+            assert!(named.contains(target), "--help doesn't name bakar {target}");
+        }
+        for flag in [
+            "-y",
+            "--yes",
+            "--ya",
+            "--ulang",
+            "--restart",
+            "--",
+            "-",
+            "-n",
+            "--new",
+            "-r",
+            "--reuse",
+            "-w",
+            "--wait",
+            "--foreground",
+            "-v",
+            "--version",
+            "-h",
+            "--help",
+        ] {
+            assert!(named.contains(flag), "--help doesn't name {flag}");
+        }
+        // The lines a terminal shows whole.
+        for line in USAGE.lines() {
+            assert!(line.chars().count() <= 81, "too wide: {line}");
+        }
     }
 
     #[test]

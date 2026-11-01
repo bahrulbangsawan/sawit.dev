@@ -27,7 +27,7 @@ use crate::ports::PortJob;
 use crate::probe;
 
 /// Words `sawit` takes as commands rather than database names.
-const SUBCOMMANDS: &[&str] = &[
+pub(crate) const SUBCOMMANDS: &[&str] = &[
     "list",
     "ls",
     "bakar",
@@ -48,6 +48,8 @@ const SUBCOMMANDS: &[&str] = &[
     "nyalakan",
     "browse",
     "intip",
+    "daftar",
+    "stop",
 ];
 
 /// Rows printed per result set at most.
@@ -2070,6 +2072,8 @@ mod tests {
         assert_eq!(q(&["list"]), None);
         assert_eq!(q(&["bakar", "ports"]), None);
         assert_eq!(q(&["ls", "db"]), None);
+        assert_eq!(q(&["daftar"]), None);
+        assert_eq!(q(&["stop", "ports"]), None);
     }
 
     #[test]
