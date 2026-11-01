@@ -1162,8 +1162,11 @@ impl BrowserView {
                 return self.inspect_op(target, format, reply, cx);
             }
             BrowserOp::Design { part } => return self.design_op(part, reply, cx),
-            BrowserOp::ExportDesign { include_videos } => {
-                let _ = reply.send(self.export_op(include_videos, cx));
+            BrowserOp::ExportDesign {
+                include_videos,
+                replace,
+            } => {
+                let _ = reply.send(self.export_op(include_videos, replace, cx));
                 return;
             }
             BrowserOp::ExportStatus => {

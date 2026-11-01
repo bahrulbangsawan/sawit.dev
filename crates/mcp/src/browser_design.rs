@@ -51,6 +51,11 @@ pub struct ExportDesignArgs {
     #[schemars(description = "Also download the page's videos (default false)")]
     #[serde(default)]
     pub include_videos: bool,
+    #[schemars(
+        description = "Replace what is in the host's export folder: an earlier export, a DESIGN.md edited by hand included. Without it (default false), a folder that holds anything is refused and nothing is written"
+    )]
+    #[serde(default)]
+    pub replace: bool,
     pub project: Option<String>,
 }
 
@@ -149,7 +154,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Export the page's design system to .nyawit/design/<host>/: DESIGN.md, tokens.json (DTCG), theme.css (Tailwind v4), shadcn.css, components and assets. Waits for downloads (up to 10 minutes)"
+        description = "Export the page's design system to the host's folder in the browser's project, .nyawit/design/<host>/ (a dev server's keeps its port, localhost-5173; for the browser of no project ~/Downloads/sawit-design/<host>/): DESIGN.md, tokens.json (DTCG), theme.css (Tailwind v4), shadcn.css, components and assets. DESTRUCTIVE: it replaces everything an earlier export left in that folder, a DESIGN.md edited by hand included, so a folder that holds anything needs replace: true; without it the answer lists what is there and nothing is written. Waits for downloads (up to 10 minutes)"
     )]
     async fn browser_export_design(
         &self,
@@ -159,7 +164,8 @@ impl Sawit {
             self.browser(
                 &a.project,
                 BrowserOp::ExportDesign {
-                    include_videos: a.include_videos
+                    include_videos: a.include_videos,
+                    replace: a.replace,
                 }
             )
             .await
@@ -231,6 +237,32 @@ mod tests {
         assert!(t.contains("2 videos were not included (include_videos: true downloads them)."));
         let e = export_report(&json!({"done": true, "folder": "/f", "error": "disk full"}));
         assert!(e.unwrap_err().starts_with("The export failed: disk full"));
+    }
+
+    /// browser_export_design says where it writes and that it replaces what an earlier export
+    /// left there, a hand-edited DESIGN.md included, which it does only with `replace: true`; the
+    /// op it sends carries that, and replaces nothing by default.
+    #[test]
+    fn the_export_says_what_it_replaces_and_asks_for_replace() {
+        let tools = Sawit::router().list_all();
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == "browser_export_design")
+            .expect("browser_export_design");
+        let sent = serde_json::to_string(tool).unwrap();
+        for said in [
+            ".nyawit/design/<host>/",
+            "localhost-5173",
+            "~/Downloads/sawit-design/<host>/",
+            "DESTRUCTIVE: it replaces everything an earlier export left in that folder, a DESIGN.md edited by hand included",
+            "needs replace: true",
+        ] {
+            assert!(sent.contains(said), "no {said:?} in {sent}");
+        }
+        let args: ExportDesignArgs = serde_json::from_value(json!({})).unwrap();
+        assert!(!args.replace && !args.include_videos);
+        let args: ExportDesignArgs = serde_json::from_value(json!({"replace": true})).unwrap();
+        assert!(args.replace);
     }
 
     #[test]

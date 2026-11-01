@@ -270,6 +270,10 @@ pub enum BrowserOp {
     ExportDesign {
         #[serde(default)]
         include_videos: bool,
+        /// Replace what an earlier export left in the folder; without it, a
+        /// folder that holds anything is refused, and nothing starts.
+        #[serde(default)]
+        replace: bool,
     },
     /// How the last design export is doing.
     ExportStatus,
@@ -1690,8 +1694,9 @@ mod tests {
             (
                 BrowserOp::ExportDesign {
                     include_videos: true,
+                    replace: true,
                 },
-                json!({"op": "export_design", "include_videos": true}),
+                json!({"op": "export_design", "include_videos": true, "replace": true}),
             ),
             (BrowserOp::ExportStatus, json!({"op": "export_status"})),
         ] {
@@ -1700,11 +1705,13 @@ mod tests {
             assert!(op.is_native(), "{op:?}");
             assert!(!op.shows_tab(), "{op:?}");
         }
+        // An export replaces nothing unless asked to.
         let bare: BrowserOp = serde_json::from_str(r#"{"op":"export_design"}"#).unwrap();
         assert_eq!(
             bare,
             BrowserOp::ExportDesign {
-                include_videos: false
+                include_videos: false,
+                replace: false,
             }
         );
     }
