@@ -1,6 +1,8 @@
 //! The schema tree: schemas, their tables and views with columns, keys, constraints, indexes
 //! and row estimates.
 
+use std::collections::HashMap;
+
 use tokio_postgres::types::Type;
 use tokio_postgres::{Client, SimpleQueryMessage};
 
@@ -170,6 +172,8 @@ pub async fn load_schema(client: &Client) -> Result<Vec<SchemaInfo>> {
     );
     let mut statement = 0;
     let mut schemas: Vec<SchemaInfo> = Vec::new();
+    // Where each relation is, by (schema, name), once the constraint rows start.
+    let mut at: HashMap<(String, String), (usize, usize)> = HashMap::new();
     for msg in client.simple_query(&sql).await.map_err(sql_error)? {
         let row = match msg {
             SimpleQueryMessage::Row(row) => row,
@@ -223,14 +227,18 @@ pub async fn load_schema(client: &Client) -> Result<Vec<SchemaInfo>> {
                 }
             }
             _ => {
-                let (schema, name) = (text(0), text(1));
-                let Some(rel) = schemas
-                    .iter_mut()
-                    .find(|s| s.name == schema)
-                    .and_then(|s| s.relations.iter_mut().find(|r| r.name == name))
-                else {
+                if at.is_empty() {
+                    for (si, s) in schemas.iter().enumerate() {
+                        for (ri, r) in s.relations.iter().enumerate() {
+                            at.entry((s.name.clone(), r.name.clone()))
+                                .or_insert((si, ri));
+                        }
+                    }
+                }
+                let Some(&(si, ri)) = at.get(&(text(0), text(1))) else {
                     continue;
                 };
+                let rel = &mut schemas[si].relations[ri];
                 if statement == 3 {
                     rel.indexes.push(IndexInfo {
                         name: text(2),
