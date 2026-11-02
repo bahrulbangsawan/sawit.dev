@@ -20,6 +20,9 @@
 //! checked, or unchecked, when it is one of the View toggles
 //! ([`figcraft_engine::cmd::view::checked`]). Build the menus again when the selection changes.
 
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
 use figcraft_engine::Session;
 use figcraft_engine::catalog::{MENU, SEP};
 use figcraft_engine::cmd::view::checked;
@@ -169,9 +172,20 @@ pub fn context_menu(s: &Session) -> Vec<MenuNode> {
 /// keyboard (⌘W for closing the tab: the policy lists them in [`crate::policy::SAWIT_WINS`]),
 /// because the canvas never gets them.
 pub fn shortcut_label(id: &str) -> Option<String> {
-    let keys = crate::shortcuts::primary(id)?;
-    (!owned_by_sawit(keys)).then(|| keymap::display(keys, Platform::Mac))
+    SHORTCUT_LABELS.get(id).cloned()
 }
+
+/// [`shortcut_label`] of every command that has default keys, worked out once: the defaults never
+/// change while Sawit runs, and finding the first key of one command walks the keys of them all.
+static SHORTCUT_LABELS: LazyLock<HashMap<&'static str, String>> = LazyLock::new(|| {
+    let label = |id| {
+        let keys = crate::shortcuts::primary(id)?;
+        (!owned_by_sawit(keys)).then(|| keymap::display(keys, Platform::Mac))
+    };
+    crate::shortcuts::defaults()
+        .filter_map(|keys| Some((keys.id, label(keys.id)?)))
+        .collect()
+});
 
 /// The empty canvas's context menu, the spec's four items.
 const ON_EMPTY_CANVAS: &[(&str, &str)] = &[
