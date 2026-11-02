@@ -31,8 +31,9 @@ pub struct TerminalPanel {
     active: usize,
     /// The active project's folder: where new terminals start.
     cwd: Option<PathBuf>,
-    /// Every project open in the window, in switcher order.
-    projects: Vec<PathBuf>,
+    /// Every project open in the window, in switcher order (shared with the tab menus, which
+    /// move a tab to another).
+    projects: Rc<[PathBuf]>,
     /// Groups whose tabs are folded away.
     collapsed: HashSet<PathBuf>,
     /// The tab strip's scroll, which brings the active tab into view.
@@ -122,7 +123,7 @@ impl TerminalPanel {
             tabs: vec![],
             active: 0,
             cwd: None,
-            projects: Vec::new(),
+            projects: Rc::new([]),
             collapsed: HashSet::new(),
             tab_scroll: ScrollHandle::new(),
             scrolled_to: None,

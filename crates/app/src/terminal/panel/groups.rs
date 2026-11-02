@@ -26,7 +26,7 @@ impl TerminalPanel {
         cx: &mut Context<Self>,
     ) {
         let first = self.cwd.is_none() && active.is_some();
-        self.projects = projects;
+        self.projects = projects.into();
         self.cwd = active;
         self.collapsed.retain(|r| self.projects.contains(r));
         for tab in &self.tabs {
@@ -74,12 +74,18 @@ impl TerminalPanel {
 
     /// Where a tab of `group` goes: at the end of that group's tabs.
     fn insert_at(&self, group: Option<&Path>, cx: &App) -> usize {
-        insert_index(&slots(&self.groups(cx)), false, group)
+        insert_index(&self.slots(cx), false, group)
     }
 
-    /// The group of each tab, in strip order.
-    pub(super) fn groups(&self, cx: &App) -> Vec<Option<PathBuf>> {
-        self.tabs.iter().map(|t| t.read(cx).group.clone()).collect()
+    /// Every tab as grouping sees it, in strip order: terminal tabs are never pinned.
+    pub(super) fn slots<'a>(&self, cx: &'a App) -> Vec<Slot<'a>> {
+        self.tabs
+            .iter()
+            .map(|t| Slot {
+                pinned: false,
+                group: t.read(cx).group.as_deref(),
+            })
+            .collect()
     }
 
     /// The colour of the group of project `root`.
@@ -130,15 +136,4 @@ impl TerminalPanel {
             cx.notify();
         }
     }
-}
-
-/// Tabs in `groups` as grouping sees them: terminal tabs are never pinned.
-pub(super) fn slots(groups: &[Option<PathBuf>]) -> Vec<Slot<'_>> {
-    groups
-        .iter()
-        .map(|g| Slot {
-            pinned: false,
-            group: g.as_deref(),
-        })
-        .collect()
 }
