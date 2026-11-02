@@ -80,6 +80,21 @@ impl GitPanel {
             });
         let (ahead, behind) = (status.ahead, status.behind);
         let has_upstream = status.upstream.is_some();
+        let plural = |n: u32| if n == 1 { "" } else { "s" };
+        // What each icon button does, its tooltip and the name assistive technology reads: a
+        // tooltip alone names nothing, and the count beside the arrow says little on its own.
+        let pull = if behind > 0 {
+            format!("Pull {behind} Commit{}", plural(behind))
+        } else {
+            "Pull".to_string()
+        };
+        let push = if !has_upstream {
+            "Publish Branch to origin".to_string()
+        } else if ahead > 0 {
+            format!("Push {ahead} Commit{}", plural(ahead))
+        } else {
+            "Push".to_string()
+        };
         h_flex()
             .px_1()
             .py_1()
@@ -99,6 +114,7 @@ impl GitPanel {
                     .ghost()
                     .xsmall()
                     .icon(Lucide::RefreshCw)
+                    .accessibility_label("Fetch from All Remotes")
                     .tooltip("Fetch from All Remotes")
                     .disabled(busy)
                     .on_click(cx.listener(|this, _, _, cx| this.sync(Sync::Fetch, cx))),
@@ -109,11 +125,8 @@ impl GitPanel {
                     .xsmall()
                     .icon(Lucide::ArrowDown)
                     .when(behind > 0, |b| b.label(behind.to_string()))
-                    .tooltip(if behind > 0 {
-                        format!("Pull {behind} Commit{}", if behind == 1 { "" } else { "s" })
-                    } else {
-                        "Pull".to_string()
-                    })
+                    .accessibility_label(pull.clone())
+                    .tooltip(pull)
                     .disabled(busy || !has_upstream)
                     .on_click(cx.listener(|this, _, _, cx| this.sync(Sync::Pull, cx))),
             )
@@ -123,13 +136,8 @@ impl GitPanel {
                     .xsmall()
                     .icon(Lucide::ArrowUp)
                     .when(ahead > 0, |b| b.label(ahead.to_string()))
-                    .tooltip(if !has_upstream {
-                        "Publish Branch to origin".to_string()
-                    } else if ahead > 0 {
-                        format!("Push {ahead} Commit{}", if ahead == 1 { "" } else { "s" })
-                    } else {
-                        "Push".to_string()
-                    })
+                    .accessibility_label(push.clone())
+                    .tooltip(push)
                     .disabled(busy || status.head.is_none())
                     .on_click(cx.listener(|this, _, _, cx| this.sync(Sync::Push, cx))),
             )

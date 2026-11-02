@@ -125,10 +125,15 @@ impl ThreadView {
             Load::Ready(_) => Some(self.entries.len() + 1),
             _ => None,
         };
-        let tab = |id: &'static str, which: Tab, current: Tab, cx: &App| {
+        // A tab to assistive technology too, as the workspace's tabs are: named by its label,
+        // selected while on show.
+        let tab = |id: &'static str, which: Tab, label: &'static str, current: Tab, cx: &App| {
             let active = which == current;
             h_flex()
                 .id(id)
+                .role(Role::Tab)
+                .aria_label(label)
+                .aria_selected(active)
                 .h(px(34.))
                 .px_2()
                 .gap_1p5()
@@ -146,37 +151,46 @@ impl ThreadView {
                     cx.theme().muted_foreground
                 })
                 .hover(|el| el.text_color(cx.theme().foreground))
+                .child(label)
         };
         let current = self.tab;
         let count = |n: String, cx: &App| div().text_color(cx.theme().muted_foreground).child(n);
         h_flex()
+            .id("gh-thread-tabs")
+            .role(Role::TabList)
+            .aria_label(if self.item.pull {
+                "Pull Request"
+            } else {
+                "Issue"
+            })
             .mt_1()
             .gap_2()
             .child(
-                tab("gh-tab-summary", Tab::Summary, current, cx)
-                    .child("Summary")
+                tab("gh-tab-summary", Tab::Summary, "Summary", current, cx)
                     .on_click(cx.listener(|this, _, _, cx| this.set_tab(Tab::Summary, cx))),
             )
             .when(self.item.pull, |el| {
                 let stats = self.pull.as_ref().map(|p| (p.additions, p.deletions));
                 el.child(
-                    tab("gh-tab-changes", Tab::Changes, current, cx)
-                        .child("Changes")
+                    tab("gh-tab-changes", Tab::Changes, "Changes", current, cx)
                         .when_some(stats, |el, (add, del)| {
-                            el.child(
-                                div()
-                                    .text_color(cx.theme().success)
-                                    .child(format!("+{add}")),
-                            )
-                            .child(div().text_color(cx.theme().danger).child(format!("−{del}")))
+                            el.aria_description(format!("{add} lines added, {del} removed"))
+                                .child(
+                                    div()
+                                        .text_color(cx.theme().success)
+                                        .child(format!("+{add}")),
+                                )
+                                .child(div().text_color(cx.theme().danger).child(format!("−{del}")))
                         })
                         .on_click(cx.listener(|this, _, _, cx| this.set_tab(Tab::Changes, cx))),
                 )
             })
             .child(
-                tab("gh-tab-timeline", Tab::Timeline, current, cx)
-                    .child("Timeline")
-                    .when_some(entries, |el, n| el.child(count(n.to_string(), cx)))
+                tab("gh-tab-timeline", Tab::Timeline, "Timeline", current, cx)
+                    .when_some(entries, |el, n| {
+                        el.aria_description(format!("{n} entries"))
+                            .child(count(n.to_string(), cx))
+                    })
                     .on_click(cx.listener(|this, _, _, cx| this.set_tab(Tab::Timeline, cx))),
             )
     }

@@ -106,15 +106,26 @@ impl GitHubView {
             .thread
             .as_ref()
             .is_some_and(|t| t.read(cx).number() == item.number);
-        let (icon, color) = match (item.pull, item.open) {
-            (true, true) => (Lucide::GitPullRequest, cx.theme().success),
-            (true, false) => (Lucide::GitMerge, cx.theme().muted_foreground),
-            (false, true) => (Lucide::CircleDot, cx.theme().success),
-            (false, false) => (Lucide::CircleCheck, cx.theme().muted_foreground),
+        let muted = cx.theme().muted_foreground;
+        let (icon, color, kind) = match (item.pull, item.open) {
+            (true, true) => (
+                Lucide::GitPullRequest,
+                cx.theme().success,
+                "open pull request",
+            ),
+            (true, false) => (Lucide::GitMerge, muted, "closed pull request"),
+            (false, true) => (Lucide::CircleDot, cx.theme().success, "open issue"),
+            (false, false) => (Lucide::CircleCheck, muted, "closed issue"),
         };
         let number = item.number;
+        let updated = ago(item.updated_at, now());
         h_flex()
             .id(("gh-item", ix))
+            // A row opens its thread: a button to assistive technology, named by its number, its
+            // title and the state its icon shows.
+            .role(Role::Button)
+            .aria_label(format!("#{number} {}, {kind}", item.title))
+            .aria_description(format!("{} · {updated}", item.author))
             .w_full()
             .h(px(ITEM_HEIGHT))
             .px_3()
@@ -135,13 +146,8 @@ impl GitHubView {
                         div()
                             .text_xs()
                             .truncate()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(format!(
-                                "#{} · {} · {}",
-                                item.number,
-                                item.author,
-                                ago(item.updated_at, now())
-                            )),
+                            .text_color(muted)
+                            .child(format!("#{number} · {} · {updated}", item.author)),
                     ),
             )
             .when(item.comments > 0, |el| {
