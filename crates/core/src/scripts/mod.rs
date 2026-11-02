@@ -140,8 +140,10 @@ fn strip_jsonc(text: &str) -> String {
                 }
             }
             (',', _) => {
-                let rest: String = chars.clone().collect();
-                if !rest.trim_start().starts_with(['}', ']']) {
+                // A trailing comma: past the blanks after it, the object or list closes. Only
+                // that far is read, not the rest of the file.
+                let next = chars.clone().find(|n| !n.is_whitespace());
+                if !matches!(next, Some('}' | ']')) {
                     out.push(c);
                 }
             }
