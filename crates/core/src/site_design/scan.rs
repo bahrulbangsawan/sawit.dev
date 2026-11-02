@@ -2,6 +2,8 @@
 //!
 //! Field names are the wire format: `browser_design.js` produces exactly these.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -170,11 +172,18 @@ impl Scan {
                 self.font_faces.push(face);
             }
         }
-        for (name, value) in rules.variables {
-            if !self.variables.iter().any(|(n, _)| *n == name) {
-                self.variables.push((name, value));
-            }
-        }
+        // A name keeps the first value it was seen with, here or in an earlier sheet.
+        let new: Vec<bool> = {
+            let mut names: HashSet<&str> = self.variables.iter().map(|(n, _)| n.as_str()).collect();
+            rules
+                .variables
+                .iter()
+                .map(|(n, _)| names.insert(n))
+                .collect()
+        };
+        let sheets = rules.variables.into_iter().zip(new);
+        self.variables
+            .extend(sheets.filter_map(|(v, new)| new.then_some(v)));
         self.breakpoints.extend(rules.breakpoints);
         self.breakpoints.sort_unstable();
         self.breakpoints.dedup();
