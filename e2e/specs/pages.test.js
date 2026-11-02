@@ -57,7 +57,7 @@ sawitTest("pages: the Pages menu opens Tools, MCP, Skills, Canvas, Browser and K
 sawitTest("pages: the account menu lists the same pages under the sign-in", async (ctx) => {
   const { win } = ctx;
   // Signed out, as every test starts: the title bar's account control is "Sign In".
-  await win.click({ role: "button", name: "Sign In to GitHub" });
+  await win.openMenu({ role: "button", name: "Sign In to GitHub…" });
   await win.waitFor({ role: "menuitem", name: "Sign In with GitHub…" });
   for (const page of PAGES.filter((p) => p.item)) {
     await win.waitFor({ role: "menuitem", name: page.item });

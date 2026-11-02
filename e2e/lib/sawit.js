@@ -29,7 +29,7 @@ export async function waitForTab(ctx, kind, { timeoutMs = 15_000 } = {}) {
  * does. The account menu at the title bar's end lists the same pages.
  */
 export async function openPage(ctx, item) {
-  await ctx.win.click({ role: "button", name: "Pages" });
+  await ctx.win.openMenu({ role: "button", name: "Pages" });
   await ctx.win.click({ role: "menuitem", name: item });
 }
 

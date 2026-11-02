@@ -16,7 +16,7 @@ sawitTest("launch: a project folder opens a project window", async (ctx) => {
   assert.equal(chip.value, true);
   // The pages are in the footer's Pages menu (and under the account at the title bar's end).
   await win.waitFor({ role: "button", name: "Pages" });
-  await win.waitFor({ role: "button", name: "Sign In to GitHub" });
+  await win.waitFor({ role: "button", name: "Sign In to GitHub…" });
   await win.waitFor({ name: "README.md", within: "Files" });
   await win.waitFor({ name: "src", within: "Files" });
 });

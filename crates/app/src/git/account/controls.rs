@@ -259,7 +259,8 @@ pub fn account_control(account: &Entity<GitHubAccount>, pages: Pages, cx: &App) 
                 None => Icon::new(Lucide::CircleUser),
             })
             .label(label)
-            .accessibility_label(format!("{label} to GitHub"))
+            // An ellipsis, as on any Mac: a menu of choices opens, nothing signs in yet.
+            .accessibility_label(format!("{label} to GitHub…"))
             .tooltip(notice.unwrap_or_else(|| {
                 "One sign-in for every GitHub feature: pull requests, issues, cloning and more"
                     .into()

@@ -11,9 +11,11 @@ use super::{OpenBrowser, OpenCanvas, OpenDevTools, OpenMcp, OpenNewProject, Open
 use crate::keymap::OpenKeymapEditor;
 
 /// Adds the pages to `menu`, each with its icon and the action that opens it, so the shortcut
-/// bound to that action shows beside it.
+/// bound to that action shows beside it. The Keymap Editor's is a chord (⌘K ⌘S), and a menu shows
+/// only a binding's first keystroke, so its item runs the action without naming it: no "⌘K" that
+/// opens nothing.
 pub(crate) fn pages(menu: PopupMenu) -> PopupMenu {
-    let pages: [(&'static str, Icon, Box<dyn Action>); 7] = [
+    let pages: [(&'static str, Icon, Box<dyn Action>); 6] = [
         ("Canvas", crate::board::ICON.into(), Box::new(OpenCanvas)),
         (
             "Browser",
@@ -28,15 +30,17 @@ pub(crate) fn pages(menu: PopupMenu) -> PopupMenu {
             Lucide::FolderPlus.into(),
             Box::new(OpenNewProject),
         ),
-        (
-            "Keymap Editor",
-            Lucide::Keyboard.into(),
-            Box::new(OpenKeymapEditor),
-        ),
     ];
-    pages.into_iter().fold(menu, |menu, (label, icon, action)| {
-        menu.item(PopupMenuItem::new(label).icon(icon).action(action))
-    })
+    pages
+        .into_iter()
+        .fold(menu, |menu, (label, icon, action)| {
+            menu.item(PopupMenuItem::new(label).icon(icon).action(action))
+        })
+        .item(
+            PopupMenuItem::new("Keymap Editor")
+                .icon(Lucide::Keyboard)
+                .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenKeymapEditor), cx)),
+        )
 }
 
 /// The footer's Pages menu. The footer is the window's foot, so the menu opens upwards, its right
