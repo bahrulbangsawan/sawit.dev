@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use futures::StreamExt;
+use futures::channel::oneshot;
 use gpui_kit::*;
 use sawit_core::app_control::{self, Command as ControlCommand, reply_error, reply_ok};
 use sawit_core::cli::{OpenRequest, REPLY_ERROR, Target, decode};
@@ -15,6 +16,7 @@ use sawit_core::instances::AppPaths;
 
 use super::open::handle;
 use super::{frontmost, open_window, workspaces};
+use crate::rt;
 use crate::workspace::{Answer, Workspace};
 
 /// A request from the socket: the CLI's, or `sawit-mcp`'s.
@@ -26,6 +28,14 @@ enum Incoming {
 
 /// How long a browser op may take before `sawit-mcp` hears it timed out.
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The answers [`answer`] handed to the blocking pool that may still be writing: quitting waits
+/// for them (within GPUI's shutdown timeout), so a large answer an agent is reading when the user
+/// quits or restarts to update still reaches it whole, as when the UI thread wrote it.
+#[derive(Default)]
+struct Writing(Vec<oneshot::Receiver<()>>);
+
+impl Global for Writing {}
 
 /// Listens on the CLI socket; requests are handled on the UI thread.
 pub fn serve(cx: &mut App) {
@@ -50,6 +60,13 @@ pub fn serve(cx: &mut App) {
         }
     };
     let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    cx.on_app_quit(|cx| {
+        let writing = std::mem::take(&mut cx.default_global::<Writing>().0);
+        async move {
+            futures::future::join_all(writing).await;
+        }
+    })
+    .detach();
     let (tx, mut rx) = futures::channel::mpsc::unbounded::<(Incoming, UnixStream)>();
     let accept = move || {
         for mut stream in listener.incoming().flatten() {
@@ -102,28 +119,48 @@ pub(super) fn reply(stream: &mut UnixStream, line: &str) {
 
 /// Runs a `sawit-mcp` command and answers on `stream`: right away, or for
 /// browser ops once the page replies (or [`CONTROL_TIMEOUT`] passes).
-fn handle_control(request: app_control::Request, mut stream: UnixStream, cx: &mut App) {
+fn handle_control(request: app_control::Request, stream: UnixStream, cx: &mut App) {
     match control(request, cx) {
-        Ok(Answer::Now(value)) => reply(&mut stream, &reply_ok(&value)),
-        Err(e) => reply(&mut stream, &reply_error(&e)),
+        Ok(Answer::Now(value)) => answer(stream, Ok(value), cx),
+        Err(e) => answer(stream, Err(e), cx),
         Ok(Answer::Later(rx)) => {
             let timer = cx.background_executor().timer(CONTROL_TIMEOUT);
-            cx.spawn(async move |_| {
-                let line = match futures::future::select(rx, timer).await {
-                    futures::future::Either::Left((Ok(Ok(value)), _)) => reply_ok(&value),
-                    futures::future::Either::Left((Ok(Err(e)), _)) => reply_error(&e),
+            cx.spawn(async move |cx| {
+                let result = match futures::future::select(rx, timer).await {
+                    futures::future::Either::Left((Ok(result), _)) => result,
                     futures::future::Either::Left((Err(_), _)) => {
-                        reply_error("The browser or canvas closed before answering.")
+                        Err("The browser or canvas closed before answering.".to_string())
                     }
-                    futures::future::Either::Right(_) => reply_error(
-                        "The browser page didn't answer in time. Is the Sawit window visible?",
+                    futures::future::Either::Right(_) => Err(
+                        "The browser page didn't answer in time. Is the Sawit window visible?"
+                            .to_string(),
                     ),
                 };
-                reply(&mut stream, &line);
+                cx.update(|cx| answer(stream, result, cx));
             })
             .detach();
         }
     }
+}
+
+/// Answers a `sawit-mcp` command on `stream`, off the UI thread: the line is made and written on
+/// the runtime's blocking pool. `sawit-mcp` reads it through a socket that holds 8 KiB at a time,
+/// so a large answer (a screenshot, a canvas's scene) held the UI thread until it had read it all.
+pub(super) fn answer(
+    mut stream: UnixStream,
+    result: Result<serde_json::Value, String>,
+    cx: &mut App,
+) {
+    let written = rt::spawn_blocking(cx, move || {
+        let line = match result {
+            Ok(value) => reply_ok(&value),
+            Err(e) => reply_error(&e),
+        };
+        reply(&mut stream, &line);
+    });
+    let writing = &mut cx.default_global::<Writing>().0;
+    writing.retain_mut(|rx| matches!(rx.try_recv(), Ok(None)));
+    writing.push(written);
 }
 
 fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String> {

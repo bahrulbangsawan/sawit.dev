@@ -348,3 +348,28 @@ fn bundle_detection() {
     );
     assert_eq!(bundle_of(Path::new("/repo/target/release/sawit")), None);
 }
+
+/// An answer to `sawit-mcp` is written off the UI thread. A screenshot's answer is far more than
+/// the socket holds, and written on the UI thread it held the UI until `sawit-mcp` had read it
+/// all. Here `sawit-mcp` starts reading only once the answer has been handed over, and gets it
+/// whole.
+#[gpui_kit::test]
+fn a_large_answer_is_written_off_the_ui_thread(cx: &mut TestAppContext) {
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+    cx.update(|cx| cx.set_global(crate::rt::Rt(sawit_core::rt::Runtime::start())));
+    let shot = "A".repeat(1 << 20);
+    let (ui, mcp) = UnixStream::pair().unwrap();
+    // Written on the UI thread, the answer would wait for a reader that hasn't started yet: it
+    // gives up after a while instead of hanging, and the line read below comes out cut short.
+    ui.set_write_timeout(Some(Duration::from_secs(10))).unwrap();
+    let answer = serde_json::json!({ "png_base64": shot });
+    cx.update(|cx| super::server::answer(ui, Ok(answer), cx));
+    let mut line = String::new();
+    BufReader::new(mcp).read_line(&mut line).unwrap();
+    let json = line.strip_prefix(sawit_core::app_control::REPLY_OK);
+    let value: serde_json::Value =
+        serde_json::from_str(json.unwrap_or_default()).unwrap_or_default();
+    assert_eq!(value["png_base64"].as_str().map(str::len), Some(1 << 20));
+}
