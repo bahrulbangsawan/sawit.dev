@@ -13,7 +13,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::browser::{BrowserOp, DEVICES, ViewportMode};
 
-use super::{BrowserView, Panel, TOOLBAR_HEIGHT, caption, device_of, rotated};
+use super::viewport::{caption, device_of, rotated};
+use super::{BrowserView, Panel, TOOLBAR_HEIGHT};
 
 impl BrowserView {
     pub(super) fn toolbar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
