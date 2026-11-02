@@ -4,7 +4,8 @@
 use gpui_kit::*;
 
 use super::{
-    BoardView, context_bar, design_panel, events, layers_panel, paint, text_input, toolbar, top_bar,
+    BoardView, context_bar, design_panel, events, layers_panel, paint, screens, text_input,
+    toolbar, top_bar,
 };
 use crate::states::Placeholder;
 
@@ -88,9 +89,14 @@ impl BoardView {
         let this = cx.entity().downgrade();
         let painted = this.clone();
         let cursor = self.cursor();
-        let over_selection = chrome
+        // A screen selected alone has its own bar, with Preview, the downloads and Send to Agent.
+        let screen_bar = chrome
+            .then(|| screens::render_screen_bar(self, cx))
+            .flatten();
+        let over_selection = (chrome && screen_bar.is_none())
             .then(|| context_bar::render_context_bar(self, window, cx))
             .flatten();
+        let preview = screens::render_preview(self, cx);
         let tools = chrome.then(|| toolbar::render_toolbar(self, window, cx));
         let toast = self.render_toast(chrome, cx);
         let agents = self.render_agents(cx);
@@ -116,9 +122,15 @@ impl BoardView {
             .child(
                 canvas(
                     move |bounds, window, cx| {
-                        this.update(cx, |this, cx| this.prepaint(bounds, window, cx))
-                            .ok()
-                            .flatten()
+                        this.update(cx, |this, cx| {
+                            this.web_bench_step(window, cx);
+                            let started = std::time::Instant::now();
+                            let painting = this.prepaint(bounds, window, cx);
+                            this.web_prepaint_took(started);
+                            painting
+                        })
+                        .ok()
+                        .flatten()
                     },
                     move |bounds, painting, window, cx| {
                         events::track_drags(&painted, window);
@@ -132,8 +144,10 @@ impl BoardView {
                 .size_full(),
             )
             .children(agents)
+            .children(screen_bar)
             .children(over_selection)
             .children(tools)
+            .children(preview)
             .children(toast)
     }
 

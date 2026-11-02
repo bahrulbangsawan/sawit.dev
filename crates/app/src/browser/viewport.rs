@@ -68,6 +68,7 @@ impl BrowserView {
                     .map(sawit_core::browser::data_store_id),
                 visible: self.page_shown(),
                 frame: page_frame(frame(bounds), &self.viewport).0,
+                screen: None,
             },
             move |event| {
                 let _ = to_view.unbounded_send(FromPage::Engine(event));

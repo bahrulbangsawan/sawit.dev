@@ -130,7 +130,7 @@ struct ContextPopup {
 }
 
 impl Menus {
-    fn any_open(&self) -> bool {
+    pub(super) fn any_open(&self) -> bool {
         self.palette_open || self.sheet_open || self.context_menu_at.is_some()
     }
 }

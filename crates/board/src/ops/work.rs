@@ -15,6 +15,7 @@ use sawit_core::agents::work::{
 };
 use serde_json::{Map, Value, json};
 
+use super::screen::{SCREEN_SIZE, new_screen};
 use super::{BATCH, failure};
 use crate::doc::BoardDoc;
 use crate::skeleton;
@@ -63,8 +64,10 @@ fn not_on_the_canvas(work: &str) -> String {
 }
 
 /// The `begin` op (`{name, frame: {x, y, width?, height?} | {near, side?, width?, height?},
-/// steps?, kind?}`): a frame named `name` where `frame` says, marked as a new work's, in one undo
-/// step and with the selection left as it is. It answers `{ok, work, frame, page, name, steps}`.
+/// steps?, kind?, taken?}`): a frame named `name` where `frame` says, marked as a new work's, in
+/// one undo step and with the selection left as it is. It answers `{ok, work, frame, page, name,
+/// steps, kind}`; a screen's (`kind: "screen"`) also its folder's name, `screen`, free of the
+/// screens in the document and of `taken`, and its `viewport` ([`super::screen`]).
 pub(super) fn begin(board: &mut BoardDoc, op: &Value) -> Value {
     match begin_work(board, op) {
         Ok(reply) => reply,
@@ -87,13 +90,19 @@ fn begin_work(board: &mut BoardDoc, op: &Value) -> Result<Value, String> {
     };
     let doc = board.doc().map_err(|e| e.to_string())?;
     let shown = board.session.page().map_err(|e| e.to_string())?;
-    let (page, [x, y, width, height]) = place(&doc, shown, op.get("frame"))?;
+    let screen = kind == "screen";
+    let size = if screen { SCREEN_SIZE } else { WORK_SIZE };
+    let (page, [x, y, width, height]) = place(&doc, shown, op.get("frame"), size)?;
     let work = new_work_id(seed());
-    let data = json!({
+    let mut data = json!({
         (WORK_KEY): work,
         (WORK_KIND_KEY): kind,
         (WORK_STEPS_KEY): serde_json::to_string(&steps).unwrap_or_default(),
     });
+    let made_screen = screen.then(|| new_screen(&doc, name, op, (width, height)));
+    if let Some((_, value)) = &made_screen {
+        data[crate::screens::SCREEN_KEY] = json!(value);
+    }
     let args = json!({
         "x": x, "y": y, "width": width, "height": height, "name": name,
         "parent": page, "select": false, "props": {"pluginData": data},
@@ -102,10 +111,15 @@ fn begin_work(board: &mut BoardDoc, op: &Value) -> Result<Value, String> {
         .map_err(|e| e.to_string())?;
     let frame = made.get("id").and_then(figcraft_engine::params::id_of);
     let frame = frame.ok_or("the frame wasn't made")?;
-    Ok(json!({
+    let mut reply = json!({
         "ok": true, "work": work, "frame": frame.to_string(), "page": page.to_string(),
-        "name": name, "steps": steps,
-    }))
+        "name": name, "steps": steps, "kind": kind,
+    });
+    if let Some((screen, _)) = made_screen {
+        reply["screen"] = json!(screen);
+        reply["viewport"] = json!({"w": width, "h": height});
+    }
+    Ok(reply)
 }
 
 /// A seed for a new work's id: the time, the process and a count.
@@ -120,11 +134,12 @@ fn seed() -> u128 {
 
 /// Where `begin`'s `frame` puts the frame, and on which page: at its `x`, `y` on the page on show
 /// (`shown`), or beside the layer it is `near` on that layer's page, on its `side` (`right`, the
-/// default, `left`, `above` or `below`). Its size is `width` and `height`, else [`WORK_SIZE`].
+/// default, `left`, `above` or `below`). Its size is `width` and `height`, else `default`.
 fn place(
     doc: &Document,
     shown: NodeId,
     frame: Option<&Value>,
+    default: (f64, f64),
 ) -> Result<(NodeId, [f64; 4]), String> {
     let frame = frame.and_then(Value::as_object).ok_or(
         "it needs a `frame`: {\"x\": 0, \"y\": 0, \"width\": 320, \"height\": 240}, or \
@@ -137,7 +152,7 @@ fn place(
             .filter(|n| n.is_finite())
     };
     let size = |key: &str, default: f64| number(key).filter(|n| *n > 0.0).unwrap_or(default);
-    let (w, h) = (size("width", WORK_SIZE.0), size("height", WORK_SIZE.1));
+    let (w, h) = (size("width", default.0), size("height", default.1));
     if let Some(near) = frame.get("near") {
         let id = match near {
             Value::String(id) => id.clone(),

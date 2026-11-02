@@ -51,6 +51,9 @@ impl BoardView {
     /// was before that edit. The user's own deletions keep none: they have undo, and a backup at
     /// each ⌫ would soon push the ones an agent's ops kept out of the five there are.
     pub fn run_op(&mut self, op: &Value, cx: &mut Context<Self>) -> Value {
+        if self.web.is_some() && op.get("op").and_then(Value::as_str) == Some("web") {
+            return self.web_op(op, cx);
+        }
         self.run_op_with(op, |board| ops::run(board, op), cx)
     }
 

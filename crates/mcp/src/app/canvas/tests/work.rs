@@ -11,7 +11,7 @@ use crate::app::canvas::{
 };
 use crate::app::tests::{answer, native, said};
 
-fn begin(project: &Path, name: &str, frame: Value) -> CanvasBeginArgs {
+pub(super) fn begin(project: &Path, name: &str, frame: Value) -> CanvasBeginArgs {
     CanvasBeginArgs {
         name: name.into(),
         frame,
@@ -122,25 +122,16 @@ async fn with_sawit_closed_a_work_is_built_in_the_saved_file() {
     );
 }
 
-/// A screen isn't built yet, and an agent may not move the user's view or page: both are refused,
-/// with the app closed too, and nothing is written.
+/// An agent may not move the user's view or page: it is refused, with the app closed too, and
+/// nothing is written.
 #[tokio::test]
-async fn screens_and_view_commands_are_refused() {
+async fn view_commands_are_refused() {
     let dir = tempfile::tempdir().unwrap();
     let server = native(dir.path());
     let project = project_in(dir.path());
     let file = board_file(&project);
     write_board(&file, 1);
     let before = std::fs::read(&file).unwrap();
-    let mut screen = begin(&project, "Home", json!({"x": 0, "y": 0}));
-    screen.kind = Some("screen".into());
-    let refused = server.canvas_begin(Parameters(screen)).await;
-    assert_eq!(refused.is_error, Some(true));
-    assert!(
-        said(&refused).contains("isn't built yet"),
-        "{}",
-        said(&refused)
-    );
     for (command, params) in [
         ("page.select", json!({"index": 0})),
         ("view.zoomFit", json!({})),

@@ -51,12 +51,14 @@ mod presence;
 mod render;
 mod run;
 mod save;
+mod screens;
 mod scroll;
 mod shown;
 mod text_input;
 mod toast;
 mod toolbar;
 mod top_bar;
+mod web;
 mod worker;
 
 use std::collections::HashSet;
@@ -323,6 +325,11 @@ pub struct BoardView {
     /// The agents at work on the canvas, their placeholders and their ops waiting to run
     /// ([`presence`]).
     agents: presence::Presence,
+    /// Web frames ([`web`]): UI screens, and URL frames behind `SAWIT_WEB_FRAMES=1`. `None` only
+    /// in a view made without them.
+    web: Option<web::WebFrames>,
+    /// UI screens' bar, Preview and Send to Agent ([`screens`]).
+    screen_ui: screens::ScreenUi,
     _frames: Task<()>,
     _quit: Subscription,
     _release: Subscription,

@@ -70,6 +70,7 @@ mod gesture;
 mod input_ops;
 mod refusal;
 mod replace;
+mod screen;
 #[cfg(test)]
 mod tests;
 mod work;
@@ -84,6 +85,7 @@ use replace::replace;
 
 pub use diagram::{PreparedDiagram, prepare_diagram, run_prepared};
 pub use files::{engine_name, is_canvas_file, is_sawit_file};
+pub use screen::{SCREEN_SIZE, export_with_pictures};
 pub use work::{PROGRESS_UNSHOWN, WORK_SIZE, agent_refusal, work_frame, work_of, work_steps};
 
 // The document's side of the commands Sawit carries out itself (spec, "Menu policy": UI-handled
@@ -177,7 +179,10 @@ const BATCH: &str = "command.batch";
 ///   that nothing shows its progress, which the app shows instead ([`work`]). An op that names a
 ///   `work` runs inside that work's frame: `add`, `update` and `mermaid` place from the frame's
 ///   corner, and what `add` and `mermaid` draw goes into the frame. `update` takes `append` too,
-///   text added to the end of a layer's.
+///   text added to the end of a layer's. A `begin` with `kind: "screen"` makes a UI screen's frame
+///   (1440 × 900 when the frame names no size), its folder's name free of the op's `taken`, and
+///   answers `screen` and `viewport` too; `screen` (`{work?, screen?}`) finds a screen by the work
+///   that made it or by name ([`screen`]). Their files are the caller's ([`crate::screens`]).
 ///
 /// While the user holds a drag on the canvas, every op that changes the document (`add`,
 /// `update`, `delete`, `clear`, `replace`, `mermaid`, `begin` and `command`) answers
@@ -211,6 +216,7 @@ fn run_unguarded(board: &mut BoardDoc, op: &Value) -> Value {
     match name {
         Some("begin") => work::begin(board, op),
         Some("progress") => work::progress(board, op),
+        Some("screen") => screen::screen(board, op),
         _ => work::in_work(board, op, run_named),
     }
 }

@@ -70,7 +70,7 @@ pub(super) fn same_listener(before: Option<Listener>, after: Option<Listener>) -
 }
 
 /// What became of a canvas op offered to the app ([`offer`]).
-enum Offered {
+pub(super) enum Offered {
     /// The app is running, and this is its answer.
     Answered(Result<Value, String>),
     /// No app is listening: the op and its canvas file, unsent, for the stored canvas.
@@ -104,7 +104,7 @@ impl Sawit {
 
     /// [`offer`]s canvas op `op` to the running app, for the canvas of `project` or of the canvas
     /// file `file`, off the async threads, once the requests it may send are made.
-    async fn offer_to_app(
+    pub(super) async fn offer_to_app(
         &self,
         project: Option<String>,
         file: Option<PathBuf>,
@@ -127,7 +127,7 @@ impl Sawit {
     /// project one of its windows has open. A name that is no folder (a project's name rather than
     /// its path, say) would otherwise get a canvas of its own, in a new folder of that name, where
     /// neither the agent nor the user would look.
-    fn canvas_board_file(&self, project: Option<&str>) -> Result<PathBuf, String> {
+    pub(super) fn canvas_board_file(&self, project: Option<&str>) -> Result<PathBuf, String> {
         let named = project.is_some_and(|project| !project.trim().is_empty());
         let dir = crate::agent_project(project);
         if named

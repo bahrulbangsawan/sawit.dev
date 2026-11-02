@@ -33,9 +33,9 @@ use flyouts::flyout;
 use picker::picker_button;
 
 /// The toolbar's height.
-pub(super) const HEIGHT: f32 = 44.;
+pub(in crate::board) const HEIGHT: f32 = 44.;
 /// How far the toolbar floats off the canvas's bottom edge.
-pub(super) const BOTTOM: f32 = 16.;
+pub(in crate::board) const BOTTOM: f32 = 16.;
 /// The least room the toolbar leaves at each side of the canvas: in a canvas narrower than the
 /// toolbar and this room, the toolbar is as wide as the canvas less it, and its buttons scroll.
 const MARGIN: f32 = 8.;
@@ -241,7 +241,7 @@ fn tool_button(
 }
 
 /// A thin line between groups of buttons.
-pub(super) fn divider(color: Hsla) -> Div {
+pub(in crate::board) fn divider(color: Hsla) -> Div {
     div().w(px(1.)).h(px(20.)).mx(px(4.)).bg(color)
 }
 

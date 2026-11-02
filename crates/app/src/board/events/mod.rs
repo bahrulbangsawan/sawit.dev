@@ -71,6 +71,9 @@ impl BoardView {
         self.end_colour_scrub(cx);
         self.end_drag(event.position, event.modifiers, cx);
         self.pan = None;
+        if self.web_press(event.position, event.click_count, cx) {
+            return;
+        }
         if self.space_held {
             self.start_pan(MouseButton::Left, event.position, cx);
             return;

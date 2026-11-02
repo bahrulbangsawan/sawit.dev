@@ -26,11 +26,11 @@ use crate::agents::Look;
 use crate::board::BoardView;
 
 /// The document and the depth of its undo history, before an op.
-pub(super) type UndoState = Option<(Arc<Document>, usize)>;
+pub(in crate::board) type UndoState = Option<(Arc<Document>, usize)>;
 
 impl BoardView {
     /// The document on show and how many undo steps it has.
-    pub(super) fn undo_state(&self) -> UndoState {
+    pub(in crate::board) fn undo_state(&self) -> UndoState {
         let ds = self.board()?.session.ds().ok()?;
         Some((ds.doc.clone(), ds.history.undo.len()))
     }
@@ -94,7 +94,13 @@ impl BoardView {
     /// An op of work `id`, `look`'s, ran: its agent was heard from, its pointer goes to the
     /// work's corner, and what the op changed joins the work's undo step when it can (`before` is
     /// the undo state before the op).
-    pub(super) fn work_op_ran(&mut self, id: &str, look: &Look, before: UndoState, now: Instant) {
+    pub(in crate::board) fn work_op_ran(
+        &mut self,
+        id: &str,
+        look: &Look,
+        before: UndoState,
+        now: Instant,
+    ) {
         if !self.know_work(id, look, now) {
             return;
         }
@@ -103,6 +109,32 @@ impl BoardView {
         }
         self.join_undo(id, before);
         self.point_at_work(id, look, now);
+    }
+
+    /// `look`'s agent did `doing` to frame `frame` outside a work (a screen it names): its pointer
+    /// rests at the frame's top-right corner.
+    pub(in crate::board) fn point_at_frame(
+        &mut self,
+        frame: NodeId,
+        look: &Look,
+        doing: &str,
+        now: Instant,
+    ) {
+        self.agents.saw(look, doing, now);
+        let Some(doc) = self
+            .board()
+            .and_then(|b| b.session.ds().ok())
+            .map(|ds| ds.doc.clone())
+        else {
+            return;
+        };
+        if let (Some(page), Some(b)) = (doc.page_of(frame), doc.world_bounds(frame)) {
+            let corner = Target {
+                point: (b.x1, b.y0),
+                rects: Vec::new(),
+            };
+            self.agents.point_at(look, page, corner, None, now);
+        }
     }
 
     /// `look`'s agent's pointer rests at work `id`'s top-right corner.
@@ -258,7 +290,7 @@ impl BoardView {
 
     /// Redraws, keeps the canvas ticking while agents show, and tells the tab when they start or
     /// stop work.
-    pub(super) fn after_agents_changed(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::board) fn after_agents_changed(&mut self, cx: &mut Context<Self>) {
         self.keep_agents_ticking(cx);
         let now = cx.background_executor().now();
         let at_work = self.agents.at_work(now).is_some();

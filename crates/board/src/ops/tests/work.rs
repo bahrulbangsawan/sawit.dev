@@ -101,8 +101,8 @@ fn begin_says_what_it_needs() {
         json!({"op": "begin", "name": "Card", "frame": {"x": 1}}),
     );
     assert!(half.contains("`x` and `y`"), "{half}");
-    let screen = json!({"op": "begin", "name": "Home", "frame": frame, "kind": "screen"});
-    assert!(refusal(&mut board, screen).contains("isn't built yet"));
+    let page = json!({"op": "begin", "name": "Home", "frame": frame, "kind": "page"});
+    assert!(refusal(&mut board, page).contains("isn't one"));
     let nowhere = json!({"op": "begin", "name": "Card", "frame": {"near": "nope"}});
     assert!(refusal(&mut board, nowhere).contains("no layer has the id “nope”"));
     let steps = json!({"op": "begin", "name": "Card", "frame": frame, "steps": [1]});

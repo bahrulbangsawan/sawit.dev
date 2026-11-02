@@ -10,7 +10,7 @@ use gpui_kit::{App, Bounds, Corners, Pixels, RenderImage, Window, fill, point, p
 use sawit_board::view::placement;
 
 use super::overlay_paint::{self, Overlay};
-use super::presence;
+use super::{presence, web};
 
 /// One paint of the canvas, worked out in its prepaint.
 pub(super) struct Painting {
@@ -22,6 +22,8 @@ pub(super) struct Painting {
     /// The images frames have replaced since the last paint, to take out of the window's sprite
     /// atlas: each frame is a new image, and the atlas would otherwise keep them all.
     pub stale: Vec<Arc<RenderImage>>,
+    /// The web frames' textures, over the frame and under the overlay ([`web`]).
+    pub web: web::Painted,
     /// What goes over the frame, as the view is now.
     pub overlay: Overlay,
     /// The agents at work on the page, over everything else ([`presence`]).
@@ -30,6 +32,8 @@ pub(super) struct Painting {
 
 /// Paints `painting` over the canvas at `bounds`.
 pub(super) fn paint(bounds: Bounds<Pixels>, painting: Painting, window: &mut Window, cx: &mut App) {
+    let started = std::time::Instant::now();
+    let times = painting.web.times();
     for image in painting.stale {
         let _ = window.drop_image(image);
     }
@@ -40,8 +44,12 @@ pub(super) fn paint(bounds: Bounds<Pixels>, painting: Painting, window: &mut Win
     {
         log::error!("the canvas frame couldn't be painted: {err}");
     }
+    let web_ms = web::paint(painting.web, window);
     overlay_paint::paint(bounds.origin, painting.overlay, window, cx);
     presence::paint(bounds.origin, painting.agents, window, cx);
+    if let Some(times) = times {
+        times.set((started.elapsed().as_secs_f64() * 1000.0, web_ms));
+    }
 }
 
 /// Where in the window to paint `frame`, a render of the page area it names, now that the view

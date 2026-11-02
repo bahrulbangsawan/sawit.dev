@@ -43,6 +43,12 @@ impl BoardView {
         if std::mem::replace(&mut self.shown, shown) == shown {
             return;
         }
+        if let Some(web) = &mut self.web {
+            web.set_shown(shown);
+        }
+        if !shown {
+            self.web_exit(cx);
+        }
         if shown {
             if std::mem::take(&mut self.gave_keyboard) && home.is_focused(window) {
                 self.wants_keyboard = true;

@@ -58,8 +58,14 @@ wry = { version = "0.57", default-features = false, features = ["os-webview", "d
 # Browser tab screenshots (WKWebView takeSnapshot → PNG); same versions as wry's.
 objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKSnapshotConfiguration"] }
 # NSWorkspace: whether VoiceOver or Switch Control is on (workspace::screen_reader_on).
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSResponder", "NSView", "NSWorkspace", "NSAccessibility"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSResponder", "NSView", "NSWorkspace", "NSAccessibility", "NSGraphicsContext", "objc2-core-graphics"] }
+# Canvas web frames (UI screens, and URL frames behind SAWIT_WEB_FRAMES=1): WebKit snapshots as
+# CGImages drawn into BGRA bitmaps off the main thread (browser::engine::web_frame).
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "objc2", "CGImage", "CGColorSpace", "CGContext", "CGBitmapContext", "CGDirectDisplay", "CGDisplayConfiguration"] }
 block2 = "0.6"
+# Canvas screens' folders, watched so a change on disk shows (board::web::watch); the version
+# gpui-component already links.
+notify = "8.2.1"
 serde_json = "1"
 # The arguments of actions bound in the keymap (`board::Command`): GPUI builds them from JSON and
 # describes them with a schema.

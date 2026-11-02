@@ -20,6 +20,7 @@ mod input_ops;
 mod reads;
 mod replace;
 mod scenes;
+mod screen;
 mod update;
 mod work;
 mod writes;

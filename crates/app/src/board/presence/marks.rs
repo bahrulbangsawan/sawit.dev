@@ -3,6 +3,7 @@
 //! failed one's dashed frame; slow ops' placeholders; and the pointers, with the free pointers'
 //! names ([`labels`](super::labels)), the most recent agent's on top.
 
+use std::collections::HashSet;
 use std::time::Instant;
 
 use figcraft_doc::{Document, NodeId};
@@ -66,6 +67,7 @@ impl Presence {
         doc: &Document,
         view: &ViewState,
         page: NodeId,
+        pictured: &HashSet<NodeId>,
         now: Instant,
         reduce: bool,
     ) -> Vec<Mark> {
@@ -81,6 +83,8 @@ impl Presence {
             };
             let frame = [b.x0, b.y0, b.x1, b.y1];
             match work.row(now) {
+                // A screen's skeleton gives way to its first picture.
+                RowLook::Working { .. } if pictured.contains(&work.frame) => {}
                 RowLook::Working { stalled } => {
                     let phase = work.shimmer(now, reduce || stalled);
                     for bar in skeleton(doc, work.frame, frame) {
@@ -245,11 +249,13 @@ pub(in crate::board) struct Painted(pub Vec<(Mark, Option<Shaped>)>);
 impl BoardView {
     /// The agents' marks to paint over page `page` of `doc` shown as `view`, when agents' cursors
     /// show; and the next frame asked for while something of them moves.
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::board) fn agents_paint(
         &self,
         doc: &Document,
         view: &ViewState,
         page: NodeId,
+        pictured: &HashSet<NodeId>,
         now: Instant,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -262,7 +268,7 @@ impl BoardView {
             let view = cx.entity_id();
             window.on_next_frame(move |_, cx| cx.notify(view));
         }
-        let marks = self.agents.marks(doc, view, page, now, reduce);
+        let marks = self.agents.marks(doc, view, page, pictured, now, reduce);
         labels::shape(marks, &cx.theme().font_family, window)
     }
 }

@@ -1,5 +1,8 @@
 //! The web view behind the browser tab, and news of the Mac's fonts ([`font_changes`]). This is
-//! the only file that names wry, objc2 or block2; the rest of the tab talks to [`Engine`].
+//! the only file that names wry, objc2 or block2, with [`web_frame`], what the canvas's web frames
+//! ask of a view; the rest of the tab talks to [`Engine`].
+
+pub(crate) mod web_frame;
 
 use std::ffi::c_void;
 use std::sync::Mutex;
@@ -31,6 +34,9 @@ pub struct EngineSpec {
     pub data_store: Option<[u8; 16]>,
     pub visible: bool,
     pub frame: Frame,
+    /// A canvas screen the view shows: its own folder, served through the screens' URL scheme
+    /// ([`web_frame::serve_screen`]), and nothing else.
+    pub screen: Option<web_frame::ScreenSource>,
 }
 
 /// What the page reports, from handlers on any thread.
@@ -113,6 +119,9 @@ impl Engine {
         if let Some(id) = spec.data_store {
             use wry::WebViewBuilderExtDarwin as _;
             builder = builder.with_data_store_identifier(id);
+        }
+        if let Some(screen) = spec.screen {
+            builder = web_frame::serve_screen(builder, screen);
         }
         let webview = builder.build_as_child(window).map_err(|e| e.to_string())?;
         Ok(Engine { webview })

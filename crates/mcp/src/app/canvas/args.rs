@@ -166,7 +166,7 @@ pub struct CanvasBeginArgs {
     )]
     pub steps: Option<Vec<String>>,
     #[schemars(
-        description = "\"component\" (the default): a frame you draw into with the canvas tools. \"screen\" (an HTML screen) isn't built yet and is refused"
+        description = "\"component\" (the default): a frame you draw into with the canvas tools. \"screen\": a UI screen, an HTML page in .nyawit/screens/<screen>/ shown in the frame (1440 × 900 when `frame` names no size, its CSS viewport); write it with canvas_screen_write and the answer's `screen`"
     )]
     pub kind: Option<String>,
     #[schemars(description = CANVAS_FILE)]
@@ -190,6 +190,71 @@ pub struct CanvasProgressArgs {
         description = "Why it failed, in a few plain words: \"Couldn't load the logo image\""
     )]
     pub message: Option<String>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
+/// What names a screen: the work that made it, or its name.
+const SCREEN_WORK: &str = "The work canvas_begin {kind: \"screen\"} answered (\"w_7f3a91c2\"): the screen it made, and its row on the canvas shows you at work";
+const SCREEN_NAME: &str = "The screen's name: its folder's (\"pricing-page\", as canvas_begin answered it) or its frame's (\"Pricing page\"). Give `work` or `screen`";
+
+/// `canvas_screen_write`'s arguments.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasScreenWriteArgs {
+    #[schemars(description = SCREEN_WORK)]
+    pub work: Option<String>,
+    #[schemars(description = SCREEN_NAME)]
+    pub screen: Option<String>,
+    #[schemars(
+        description = "The whole page, index.html: a complete HTML document. Relative links reach the screen's other files (css/site.css, img/logo.png); nothing loads from the network"
+    )]
+    pub html: Option<String>,
+    #[schemars(
+        description = "Changes instead of the whole page, in order: [{\"find\": \"<h1>Hi</h1>\", \"replace\": \"<h1>Hello</h1>\"}]. Each `find` must be in the file exactly once; `path` picks another file than index.html. If one fails, nothing is written"
+    )]
+    pub edits: Option<Vec<Value>>,
+    #[schemars(
+        description = "Other files of the screen, whole: [{\"path\": \"css/site.css\", \"content\": \"...\"}], or an image as {\"path\": \"img/logo.png\", \"base64\": \"...\"}. Paths are from the screen's folder"
+    )]
+    pub files: Option<Vec<Value>>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
+/// `canvas_screen_get`'s arguments.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasScreenGetArgs {
+    #[schemars(description = SCREEN_WORK)]
+    pub work: Option<String>,
+    #[schemars(
+        description = "The screen's name: its folder's (\"pricing-page\") or its frame's (\"Pricing page\"). Without `work` or `screen`, the screens on the canvas are listed"
+    )]
+    pub screen: Option<String>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
+/// `canvas_screen_export`'s arguments.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasScreenExportArgs {
+    #[schemars(description = SCREEN_WORK)]
+    pub work: Option<String>,
+    #[schemars(description = SCREEN_NAME)]
+    pub screen: Option<String>,
+    #[schemars(
+        description = "html (default): one .html file with its CSS and images inlined. react: a .tsx component, its .css beside it, and the images it uses in a <Component>-assets folder beside them"
+    )]
+    pub format: Option<String>,
+    #[schemars(
+        description = "Absolute path (or ~/…) of the .html or .tsx file to write; default the project's .nyawit/exports folder"
+    )]
+    pub path: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]

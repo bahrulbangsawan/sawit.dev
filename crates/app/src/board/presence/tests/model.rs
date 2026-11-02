@@ -162,7 +162,7 @@ fn placeholders_land_or_fail() {
         ..ViewState::default()
     };
     let ghosts = |p: &Presence| {
-        p.marks(&blank, &view, page, t0, false)
+        p.marks(&blank, &view, page, &Default::default(), t0, false)
             .into_iter()
             .filter(|m| matches!(m, Mark::Ghost { .. }))
             .count()
@@ -186,7 +186,7 @@ fn placeholders_land_or_fail() {
     presence.fail(failed, true, t0);
     assert!(
         presence
-            .marks(&blank, &view, page, t0, false)
+            .marks(&blank, &view, page, &Default::default(), t0, false)
             .iter()
             .any(|m| matches!(m, Mark::Ghost { failed: true, .. }))
     );

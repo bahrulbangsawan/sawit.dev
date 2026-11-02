@@ -8,6 +8,7 @@ mod guide;
 mod load;
 mod running;
 mod saves;
+mod screens;
 mod stored;
 mod work;
 

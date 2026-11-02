@@ -45,6 +45,15 @@ impl BoardView {
             cx.stop_propagation();
             return;
         }
+        if self.preview_open() && event.keystroke.key == "escape" {
+            self.close_preview(cx);
+            cx.stop_propagation();
+            return;
+        }
+        if self.web_key(&event.keystroke.key, cx) {
+            cx.stop_propagation();
+            return;
+        }
         let keystroke = &event.keystroke;
         let Some(key) = input::key_name(&keystroke.key) else {
             return;
@@ -85,9 +94,15 @@ impl BoardView {
             cx.propagate();
             return;
         }
-        let pressed = cx
+        let keystroke = cx
             .try_global::<PressedKey>()
-            .and_then(|pressed| pressed.0.as_ref())
+            .and_then(|pressed| pressed.0.clone());
+        if keystroke.as_ref().is_some_and(|k| self.web_key(&k.key, cx)) {
+            cx.stop_propagation();
+            return;
+        }
+        let pressed = keystroke
+            .as_ref()
             .and_then(|k| Some((input::key_name(&k.key)?, events::mods(k.modifiers))));
         let Some(board) = self.board_mut() else {
             cx.propagate();

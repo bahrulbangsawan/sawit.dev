@@ -56,14 +56,15 @@ fn statuses_are_read_as_progress_names_them() {
     assert_eq!(WorkStatus::Failed("x".into()).name(), "failed");
 }
 
-/// A component is the only kind built now; a screen is refused with what to do instead.
+/// A work is a component (the default) or an HTML screen, in any case; another kind is refused
+/// with the ones there are.
 #[test]
-fn only_components_are_begun_for_now() {
+fn components_and_screens_are_begun() {
     assert_eq!(check_kind(None), Ok("component"));
     assert_eq!(check_kind(Some("Component")), Ok("component"));
-    let screen = check_kind(Some("screen")).unwrap_err();
-    assert!(screen.contains("isn't built yet"), "{screen}");
-    assert!(check_kind(Some("page")).is_err());
+    assert_eq!(check_kind(Some(" screen ")), Ok("screen"));
+    let page = check_kind(Some("page")).unwrap_err();
+    assert!(page.contains("\"screen\""), "{page}");
 }
 
 #[test]

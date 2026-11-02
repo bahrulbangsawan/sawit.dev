@@ -7,6 +7,7 @@ mod args;
 mod dispatch;
 mod files;
 mod guide;
+mod screens;
 mod stored;
 #[cfg(test)]
 mod tests;
@@ -22,7 +23,8 @@ use serde_json::{Value, json};
 pub use args::{
     CanvasBeginArgs, CanvasCommandArgs, CanvasCommandsArgs, CanvasDeleteArgs,
     CanvasDesignGuideArgs, CanvasElementsArgs, CanvasExportArgs, CanvasLoadArgs, CanvasMermaidArgs,
-    CanvasProgressArgs, CanvasTargetArgs, CanvasUpdateArgs,
+    CanvasProgressArgs, CanvasScreenExportArgs, CanvasScreenGetArgs, CanvasScreenWriteArgs,
+    CanvasTargetArgs, CanvasUpdateArgs,
 };
 use dispatch::{command_list, in_work};
 use files::{absolute_path, canvas_file, export_path, is_sawit_file, read_scene};
@@ -281,16 +283,51 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Begin a component before you build it, and begin each component that way: its named frame appears on the canvas at once, and while you build the canvas shows a skeleton in it, a row above it with its name and step, your name and a progress badge. Pass the `work` this answers to canvas_add_elements, canvas_update, canvas_add_diagram, canvas_delete and canvas_command: their ops go inside the frame (x and y from its top-left corner) and its undo step. Say each step, and that it is done or failed, with canvas_progress. Answers {work, frame, page}. With the app closed the frame is made in the saved file. Designing UI? Read canvas_design_guide first and follow it"
+        description = "Begin a component before you build it, and begin each component that way: its named frame appears on the canvas at once, and while you build the canvas shows a skeleton in it, a row above it with its name and step, your name and a progress badge. Pass the `work` this answers to canvas_add_elements, canvas_update, canvas_add_diagram, canvas_delete and canvas_command: their ops go inside the frame (x and y from its top-left corner) and its undo step. Say each step, and that it is done or failed, with canvas_progress. Answers {work, frame, page}. kind \"screen\" makes a UI screen instead: the frame and its HTML folder (.nyawit/screens/<screen>/) at once; build it with canvas_screen_write. With the app closed the frame is made in the saved file. Designing UI? Read canvas_design_guide first and follow it"
     )]
     async fn canvas_begin(&self, Parameters(a): Parameters<CanvasBeginArgs>) -> CallToolResult {
+        let screen = (a.kind.as_deref()).is_some_and(|k| k.trim().eq_ignore_ascii_case("screen"));
         let op = json!({
             "op": "begin", "name": a.name, "frame": a.frame, "steps": a.steps, "kind": a.kind,
         });
-        match self.canvas(a.project, a.file, op).await {
+        let begun = match screen {
+            true => self.begin_screen(a.project, a.file, op).await,
+            false => self.canvas(a.project, a.file, op).await,
+        };
+        match begun {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
         }
+    }
+
+    #[tool(
+        description = "Write a UI screen's HTML (begun with canvas_begin {kind: \"screen\"}): the whole page (`html`), or `edits` to it, and its other files (`files`: CSS, scripts, SVG, images as base64). Each write re-renders the screen on the canvas, so the user watches it build: lay it out, then fill in copy, then style it, writing as you go, and say each step with canvas_progress. The page has no network: put fonts, images and scripts in its folder, or use system fonts. Answers the files written. With the app closed the files are written and nothing renders. Designing UI? Read canvas_design_guide first and follow it"
+    )]
+    async fn canvas_screen_write(
+        &self,
+        Parameters(a): Parameters<CanvasScreenWriteArgs>,
+    ) -> CallToolResult {
+        self.canvas_screen_write_tool(a).await
+    }
+
+    #[tool(
+        description = "Read a UI screen: its HTML (index.html), its files, its frame and viewport, and a PNG of it as the canvas renders it (with the app running). Without `work` or `screen`, list the screens on the canvas. With the app closed nothing is rendered, so there is no PNG"
+    )]
+    async fn canvas_screen_get(
+        &self,
+        Parameters(a): Parameters<CanvasScreenGetArgs>,
+    ) -> CallToolResult {
+        self.canvas_screen_get_tool(a).await
+    }
+
+    #[tool(
+        description = "Export a UI screen to a file: format html, one .html file with its CSS and images inlined; or react, a mechanical conversion to a .tsx component with its .css (and the images it uses) beside it, for an app to adapt. Works with the app closed too"
+    )]
+    async fn canvas_screen_export(
+        &self,
+        Parameters(a): Parameters<CanvasScreenExportArgs>,
+    ) -> CallToolResult {
+        self.canvas_screen_export_tool(a).await
     }
 
     #[tool(

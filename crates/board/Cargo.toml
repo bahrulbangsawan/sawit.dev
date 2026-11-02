@@ -24,6 +24,13 @@ sawit-core = { path = "../core" }
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
+# UI screens' HTML, read for the React and single-file exports (src/screens/): the WHATWG parser
+# and the DOM gpui-component already links, at its versions, so the app's binary gains only the
+# converter.
+html5ever = "=0.27.0"
+markup5ever_rcdom = "=0.3.0"
 
 [dev-dependencies]
 tempfile = "3"
+# Pictures for the screens' export tests; the app's own version.
+image = { version = "0.25", default-features = false, features = ["png"] }

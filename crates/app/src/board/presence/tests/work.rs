@@ -57,7 +57,8 @@ fn marks(view: &Entity<BoardView>, cx: &mut TestAppContext) -> Vec<Mark> {
     view.read_with(cx, |view, cx| {
         let ds = view.board().unwrap().session.ds().unwrap();
         let now = cx.background_executor().now();
-        view.agents.marks(&ds.doc, &ds.view, ds.page, now, false)
+        view.agents
+            .marks(&ds.doc, &ds.view, ds.page, &Default::default(), now, false)
     })
 }
 

@@ -10,7 +10,7 @@ use figcraft_render::{Options, View};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
 use sawit_board::DocKind;
-use sawit_board::overlay::{self, Composition};
+use sawit_board::overlay::{self, Composition, Shape};
 use sawit_board::view::{self, PREVIEW_QUALITY, Viewport};
 
 use super::paint::{self, Painting};
@@ -95,6 +95,7 @@ impl BoardView {
         let scale_factor = f64::from(window.scale_factor());
         let now = cx.background_executor().now();
         let zooming = self.zooming_until.is_some_and(|until| until > now);
+        let live = self.web_live();
         let board = self.board.as_mut().ok()?;
         board.session.set_ui_dark(dark);
         board.session.apply_view_prefs();
@@ -168,14 +169,23 @@ impl BoardView {
         let font = &cx.theme().font_family;
         // A frame an agent builds in has its name on the work's row instead ([`presence`]).
         let shapes = self.agents.without_work_names(shapes, now);
+        // A live screen's name would sit over the page's view: it goes while it is live.
+        let shapes: Vec<_> = (shapes.into_iter())
+            .filter(
+                |shape| !matches!(shape, Shape::Label { node: Some(id), .. } if Some(*id) == live),
+            )
+            .collect();
         let (overlay, names) = overlay_paint::layout(shapes, font, &ds.doc, &ds.view, window);
         board.session.tool.labels = names;
         // Over it all, the agents at work on the page on show.
-        let agents = self.agents_paint(&doc, &shown_view, page, now, window, cx);
+        let pictured = self.web_pictured();
+        let agents = self.agents_paint(&doc, &shown_view, page, &pictured, now, window, cx);
+        let web = self.web_prepaint(bounds, window, cx);
         let painting = Painting {
             page: screen_rgb,
             frame,
             stale: std::mem::take(&mut self.stale),
+            web,
             overlay,
             agents,
         };

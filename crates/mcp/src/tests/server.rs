@@ -149,6 +149,9 @@ fn every_tool_is_routed() {
         "canvas_commands",
         "canvas_begin",
         "canvas_progress",
+        "canvas_screen_write",
+        "canvas_screen_get",
+        "canvas_screen_export",
         // browser
         "browser_navigate",
         "browser_snapshot",

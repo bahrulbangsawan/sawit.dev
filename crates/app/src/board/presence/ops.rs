@@ -35,6 +35,10 @@ impl BoardView {
         if let Some(refused) = agent_refusal(&op) {
             return Answer::Now(json!({"ok": false, "error": refused}));
         }
+        let op = match self.agent_screen_op(op, &look, cx) {
+            Ok(answer) => return answer,
+            Err(op) => op,
+        };
         if op.get("op").and_then(Value::as_str) == Some("progress") {
             return Answer::Now(self.agent_progress(&op, &look, cx));
         }
@@ -109,7 +113,7 @@ impl BoardView {
 
     /// Runs `look`'s op `op`, and shows the agent where it landed; the placeholder `ghost`, if it
     /// has one, waits for the frame with the result, or shows its error mark.
-    fn run_agent_op(
+    pub(in crate::board) fn run_agent_op(
         &mut self,
         op: &Value,
         look: &Look,

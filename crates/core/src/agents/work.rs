@@ -16,8 +16,9 @@ pub const WORK_STEPS_KEY: &str = "sawit.work.steps";
 /// The plugin data key on a work's frame that holds its kind (`component`).
 pub const WORK_KIND_KEY: &str = "sawit.work.kind";
 
-/// The kinds of work an agent can begin today.
-pub const WORK_KINDS: [&str; 1] = ["component"];
+/// The kinds of work an agent can begin: a component it draws with the canvas tools, or a UI
+/// screen it writes as HTML (`canvas_screen_write`).
+pub const WORK_KINDS: [&str; 2] = ["component", "screen"];
 
 /// How long a work that is still running may go without an op or a progress of its agent before
 /// it shows as stalled: its agent may have crashed, or forgotten to say it is done.
@@ -67,19 +68,19 @@ impl WorkStatus {
 }
 
 /// Whether `kind` (`canvas_begin`'s, `component` when none is given) is a kind of work the canvas
-/// builds today; the error says what to do instead.
+/// builds; the error says which there are.
 pub fn check_kind(kind: Option<&str>) -> Result<&'static str, String> {
     match kind.map(str::trim).filter(|k| !k.is_empty()) {
         None => Ok(WORK_KINDS[0]),
-        Some(kind) if kind.eq_ignore_ascii_case("component") => Ok(WORK_KINDS[0]),
-        Some(kind) if kind.eq_ignore_ascii_case("screen") => Err(
-            "kind “screen” (an HTML screen) isn't built yet: begin it as a \"component\" (the \
-             default) and draw it with the canvas tools for now"
-                .into(),
-        ),
-        Some(other) => Err(format!(
-            "kind “{other}” isn't one: the canvas builds \"component\" work"
-        )),
+        Some(kind) => WORK_KINDS
+            .into_iter()
+            .find(|known| kind.eq_ignore_ascii_case(known))
+            .ok_or_else(|| {
+                format!(
+                    "kind “{kind}” isn't one: the canvas builds \"component\" work (drawn with \
+                     the canvas tools) and \"screen\" work (an HTML screen)"
+                )
+            }),
     }
 }
 

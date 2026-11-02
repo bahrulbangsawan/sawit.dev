@@ -164,6 +164,26 @@ impl Workspace {
         Some(view)
     }
 
+    /// Runs `command` in a new terminal tab in `project`, the terminal shown: a canvas screen sent
+    /// to a coding agent's CLI. The new terminal takes the keyboard, as the agent may ask something
+    /// first (whether to trust the folder).
+    pub(crate) fn run_agent_in_new_terminal(
+        &mut self,
+        project: Option<PathBuf>,
+        command: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if !self.layout.terminal {
+            self.layout.toggle(Area::Terminal);
+        }
+        self.terminal.update(cx, |t, cx| {
+            t.run_in_new(project, command, crate::terminal::Origin::User, window, cx)
+        })?;
+        cx.notify();
+        Ok(())
+    }
+
     /// Listens to a new canvas: its Maximize button, and its agents starting or stopping work,
     /// which its tab's dot shows.
     fn watch_board(&mut self, view: &Entity<BoardView>, cx: &mut Context<Self>) {

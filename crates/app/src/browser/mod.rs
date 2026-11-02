@@ -13,7 +13,7 @@
 mod agents;
 mod annotate;
 mod design;
-mod engine;
+pub(crate) mod engine;
 mod events;
 mod navigation;
 mod notes;
@@ -45,7 +45,7 @@ use sawit_core::probe;
 use sawit_core::terminal::AgentKind;
 use serde_json::{Value, json};
 
-pub use agents::{AgentSource, open_command, write_prompt};
+pub use agents::{AgentSource, installed_agents, open_command, write_prompt};
 pub use annotate::notes_lost;
 use annotate::{AnnotateEvent, AnnotatePanel};
 use design::{DesignEvent, DesignPanel};
