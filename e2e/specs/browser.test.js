@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 
 import { sawitTest } from "../lib/harness.js";
 import { until } from "../lib/wait.js";
-import { waitForTab, windowState } from "../lib/sawit.js";
+import { openPage, waitForTab, windowState } from "../lib/sawit.js";
 
 /** The browser tab's state, as `app_state` reports it: url, title, viewport, … */
 async function browser(ctx) {
@@ -13,7 +13,8 @@ async function browser(ctx) {
 
 sawitTest("browser: loads the fixture site, and the device menu picks iPhone 15", { site: true }, async (ctx) => {
   const { win, site } = ctx;
-  await win.click({ role: "button", name: "Browser" });
+  // The footer's Pages menu opens it (the title bar's page buttons moved there).
+  await openPage(ctx, "Browser");
   await waitForTab(ctx, "browser");
 
   // Typing the address: the field's value is written, then Return goes to the field.
@@ -49,7 +50,8 @@ sawitTest("browser: loads the fixture site, and the device menu picks iPhone 15"
 /** Opens the browser on the fixture site and waits for it to load. */
 async function openSite(ctx) {
   const { win, site } = ctx;
-  await win.click({ role: "button", name: "Browser" });
+  // The footer's Pages menu opens it (the title bar's page buttons moved there).
+  await openPage(ctx, "Browser");
   await waitForTab(ctx, "browser");
   await win.setValue({ role: "textfield", name: "Search or enter address" }, site.url);
   await win.focus({ role: "textfield", name: "Search or enter address" });
