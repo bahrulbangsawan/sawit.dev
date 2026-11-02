@@ -106,6 +106,47 @@ opt-level = 3
 [profile.dev.package.harfrust]
 opt-level = 3
 
+# Hot CPU path: Mermaid diagrams (the canvas, the Markdown and .mmd previews, the schema diagram,
+# the MCP tools) run Pele in QuickJS's interpreter, and the browser's evaluate compiles agents'
+# scripts in it: C built by rquickjs-sys's build script at the package's opt-level. At opt-level
+# 0 it is ~4.4x slower (a 150-node flowchart took ~1 s to render).
+[profile.dev.package.rquickjs-sys]
+opt-level = 3
+
+# Hot CPU path: PNG and deflate, in browser screenshots (decoded, shrunk to 1x and encoded again),
+# canvas PNG export and Copy as PNG, the images GPUI decodes, and the Excel export's zip. At
+# opt-level 0 they are 4-30x slower (a 2560x1600 screenshot took ~1.5 s, Copy as PNG of a
+# 150-node diagram ~2 s, 100,000 rows to Excel ~5 s).
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.flate2]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.crc32fast]
+opt-level = 3
+[profile.dev.package.simd-adler32]
+opt-level = 3
+[profile.dev.package.image]
+opt-level = 3
+
+# Hot CPU path: SQLite files (the table browser, SQL editor, schema tree and exports), C built by
+# libsqlite3-sys's build script at the package's opt-level, read through rusqlite. At opt-level 0
+# they are 1.5-2.9x slower (a whole-row search of 100,000 rows took 2.9x as long).
+[profile.dev.package.libsqlite3-sys]
+opt-level = 3
+[profile.dev.package.rusqlite]
+opt-level = 3
+
+# Hot CPU path: every byte a terminal prints goes through alacritty's parser onto its grid. At
+# opt-level 0 it is ~1.6x slower (10 MB of colored output took ~0.7 s of CPU).
+[profile.dev.package.alacritty_terminal]
+opt-level = 3
+[profile.dev.package.vte]
+opt-level = 3
+
 [profile.release]
 lto = "fat"
 strip = true
