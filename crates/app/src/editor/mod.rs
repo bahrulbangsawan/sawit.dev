@@ -267,9 +267,9 @@ impl FileEditor {
         self._subscriptions = vec![
             cx.subscribe(&state, |this, state, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
-                    let text = state.read(cx).value();
-                    let dirty =
-                        text.len() != this.saved_text.len() || text.as_ref() != this.saved_text;
+                    // Compared in place: the text as a string would copy the whole file on each
+                    // keystroke.
+                    let dirty = *state.read(cx).text() != this.saved_text;
                     if dirty != this.dirty {
                         this.dirty = dirty;
                         cx.emit(FileEditorEvent::Changed);

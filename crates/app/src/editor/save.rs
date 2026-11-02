@@ -89,7 +89,7 @@ impl FileEditor {
                 this.formatting = false;
                 match result {
                     Ok(Ok(formatted)) => {
-                        let unchanged = state.read(cx).value().as_ref() == formatted;
+                        let unchanged = *state.read(cx).text() == formatted;
                         if !unchanged {
                             apply_formatted(&state, formatted, window, cx);
                         }

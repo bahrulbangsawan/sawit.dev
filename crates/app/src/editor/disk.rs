@@ -91,7 +91,7 @@ impl FileEditor {
                 let (Some(state), None) = (this.state.clone(), file.read_only_reason) else {
                     return;
                 };
-                if this.dirty || state.read(cx).value().as_ref() == file.text {
+                if this.dirty || *state.read(cx).text() == file.text {
                     return;
                 }
                 state.update(cx, |s, cx| {
