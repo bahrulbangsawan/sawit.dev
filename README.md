@@ -42,7 +42,7 @@
 
 Sawit is built for local development. That work usually takes Docker Desktop, a database client,
 an editor, a terminal, a browser, a design tool, and a few installers, each a separate app. In Sawit
-they all live in a single Rust binary of about **60 MiB** (see [Size & memory](#size--memory)), and AI
+they all live in a single Rust binary of about **80 MiB** (see [Size & memory](#size--memory)), and AI
 agents can drive it through the `sawit-mcp` server.
 The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (the "One Dark" palette).
 
@@ -77,7 +77,7 @@ curl -fsSL https://raw.githubusercontent.com/bahrulbangsawan/sawit.dev/main/scri
 ```
 
 This installs the latest release into `/Applications` (or `~/Applications`). To install a given release instead, add
-`SAWIT_VERSION=v0.0.8` (or another tag from [Releases](https://github.com/bahrulbangsawan/sawit.dev/releases)) before `sh`.
+`SAWIT_VERSION=v0.0.9` (or another tag from [Releases](https://github.com/bahrulbangsawan/sawit.dev/releases)) before `sh`.
 After that, the app updates itself. A running Sawit is quit before it is replaced, so run the command from another
 terminal app: in Sawit's own terminal, the script stops and says so.
 
@@ -1311,7 +1311,7 @@ work in the last 30 seconds, with its `id`, `name` (its label on screen), `color
 | App control (app running) | `launch_app`, `app_state` (with `github: {signed_in, login}`), `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, skills, changelog, git_graph, github: the sign-in card while signed out, instance, keymap, new_project), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
 | Terminal (app running) | `terminal_run`, `terminal_split` (a pane split right or down, with a command in the new half), `terminal_read`, `terminal_input`, `terminal_rename` (names a tab, or a pane of a split tab, as Rename Tab does), `terminal_close` (`terminal_run`, `terminal_split`, `app_run_script` and `app_ssh_connect` return the tab and `pane` they used; `terminal_input` needs the tab, and a split tab needs its pane; `app_state` names the coding agent running in each tab and pane, as `agent`: `claude-code`, `codex`, …) |
 | Keymap (app running) | `keymap_list` (every binding: what a key does, which key runs an action, what clashes), `keymap_bind`, `keymap_unbind` (with the Keymap Editor's checks; `restore` brings back a default) |
-| Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (the user's notes as Markdown: each element's selector, path, attributes, role, box, styles, neighbours, source file and screenshot), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`; replacing an earlier export needs `replace: true`) |
+| Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (the user's notes as Markdown: each element's selector, path, attributes, role, box, styles, neighbours, source file and screenshot), `browser_mesurer` (Annotate's page tools: what is on the page, open or close them, set X-ray, rulers, the tool, guides and layout guides, or clear them), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`; replacing an earlier export needs `replace: true`) |
 | Canvas | `canvas_design_guide` (Sawit's design standard for UI on the canvas, the text of the Canvas Design skill: agents read it before they design, build or review UI there, and run its checklist before they call a design done; `section` gives one section with the checklist), `canvas_get` (the top-level layers of the page on show), `canvas_add_elements`, `canvas_add_diagram` (a diagram in Mermaid syntax as editable shapes; `canvas_add_mermaid` is its deprecated old name), `canvas_update`, `canvas_delete`, `canvas_clear` (the page on show), `canvas_load`, `canvas_export` (the page on show, as SVG or PNG), `canvas_command` (any command of the canvas engine, by id: `page.list` and `node.get` reach the other pages), `canvas_commands` (lists them; pass a `filter` to see what each takes), `canvas_begin` (a component's named frame, made at once, which the canvas shows the agent building: a skeleton, its name and step, the agent and a progress badge; the other tools' `work` puts their ops inside it; `kind: "screen"` makes an HTML screen's frame and folder), `canvas_progress` (the step running, done or failed), `canvas_screen_write` (a screen's page, edits to it or its other files, rendered again at each write), `canvas_screen_get` (a screen's HTML, files and a PNG of it; without a screen, the list), `canvas_screen_export` (a screen as one HTML file or a React component, at a path) and `canvas_add_routes` (the dev server's routes as live frames at chosen viewports, in a section named for the server, found in the app's files or its links; shown as the agent's work while it runs). Agents never move the user's tab, page or view: `view.*` and `page.select` are refused. The tools that make UI and the server's instructions send agents to `canvas_design_guide` first. Each of the others takes `file`, a `.sawit` file (a design file, say) or an `.excalidraw` file to work on instead of the project's canvas, in a canvas tab of its own. All of them work on the saved canvas file when the app is closed; then each call starts from that file, so no undo or selection carries over to the next: pass `canvas_command` the ids, or its steps in one `command.batch` |
 
 Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`,
@@ -1554,6 +1554,11 @@ crates/core   sawit-core — no GPUI, tested with plain cargo test
   agent_config           coding agents' config files on this Mac and in projects
   scripts, search        a project's run scripts and saved commands; text search in a folder
   dev_tools              the Tools page catalog, detection, latest releases, install, upgrade and uninstall
+  skills, sawit_skills   the Skills page catalog, agents' skills folders and installs; Sawit Skills
+  package_manager        npx, pnpm dlx, bunx and yarn dlx, and global installs, for every package install
+  cloudflare             Workers projects on disk, their bindings, and Cloudflare Local Explorer
+  keymap                 the key bindings' ops and rows for sawit-mcp and `sawit list keys`
+  agents                 the agents that drive the app through sawit-mcp: who each is, its colour and label
   browser                the browser tab's agent ops and page scripts, device sizes, console and network logs
   annotations, date      Annotate's notes, their Markdown and screenshot names; calendar dates
   site_design            the Design panel's colors (OKLCH, contrast, ramps), tokens, Tailwind classes and export files
@@ -1562,7 +1567,7 @@ crates/core   sawit-core — no GPUI, tested with plain cargo test
   kebun                  sawit <db>, list, bakar, panen, backup, tanam, pasang, pupuk, cabut (no app needed)
   stack_builder          Better-T-Stack's options, presets, compatibility rules and command (New Project page)
   new_project, semai     a project's create: location, checks, remembered stack; sawit new (no app needed)
-  rt                     Tokio runtime on its own thread
+  rt, cmd, error         Tokio runtime on its own thread; running programs; the error type
 crates/board  sawit-board — the canvas's document logic around the FigCraft engine; no GPUI, tested with
               plain cargo test (its GPUI views are in crates/app/src/board)
 crates/app    sawit — GPUI UI only (draws & forwards input)
@@ -1594,11 +1599,12 @@ crates/mcp    sawit-mcp — stdio MCP server on top of core and board
 
 ## Size & memory
 
-Measured on an Apple Silicon MacBook (M3, macOS 26.6.1) on 2026-11-01, release build (`lto = "fat"`, `strip`):
+Measured on an Apple Silicon MacBook (M3, macOS 26.6.1), release build (`lto = "fat"`, `strip`); the binary on
+2026-11-03, the rest on 2026-11-01:
 
 | | |
 |---|---|
-| `sawit` | 60.5 MiB (single file, no JVM/Chromium/Node runtime; includes the MCP server, reached as `sawit-mcp` through a symlink, the FigCraft canvas engine and the canvas's Inter fonts) |
+| `sawit` | 79.5 MiB (single file, no JVM/Chromium/Node runtime; includes the MCP server, reached as `sawit-mcp` through a symlink, the FigCraft canvas engine and the canvas's Inter fonts) |
 | `Sawit.app` installed · DMG · update zip | 63.6 MB · 22.7 MB · 29.9 MB |
 | Idle memory (1 window, 1 terminal tab, 10 seconds after launch) | RSS 114 MB · physical footprint 73 MB (peak 121 MB during startup); the same a minute later |
 | The same with an empty canvas open | Physical footprint 160 MB; up to 380 MB for about half a minute after the first canvas opens, which reads the system's fonts |
