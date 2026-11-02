@@ -100,7 +100,12 @@ impl GraphView {
                 }
                 None => None,
             };
-            git::log(&repo, limit, rel.as_deref()).await
+            // The lanes are laid out here too, off the UI thread: Show More makes the history
+            // long.
+            let commits = git::log(&repo, limit, rel.as_deref()).await?;
+            let rows = git::graph(&commits);
+            let lanes = git::lane_count(&rows).min(MAX_LANES);
+            Ok::<_, sawit_core::CoreError>((commits, rows, lanes))
         });
         cx.spawn(async move |this, cx| {
             let Ok(result) = rx.await else {
@@ -109,9 +114,9 @@ impl GraphView {
             let _ = this.update(cx, |this, cx| {
                 this.loading = false;
                 match result {
-                    Ok(commits) => {
-                        this.rows = git::graph(&commits);
-                        this.lanes = git::lane_count(&this.rows).min(MAX_LANES);
+                    Ok((commits, rows, lanes)) => {
+                        this.rows = rows;
+                        this.lanes = lanes;
                         this.commits = commits;
                         this.error = None;
                     }
