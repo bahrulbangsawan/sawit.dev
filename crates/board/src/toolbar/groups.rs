@@ -1,6 +1,8 @@
 //! The tool groups of the toolbar of each kind of file, the tool a group shows, and the tool in
 //! use.
 
+use std::sync::LazyLock;
+
 use figcraft_engine::keymap::{self, Platform};
 use figcraft_engine::{Session, ToolId};
 
@@ -89,6 +91,22 @@ const SHAPE_TOOLS: [ToolDef; 6] = [RECTANGLE, LINE, ARROW, ELLIPSE, POLYGON, STA
 /// The tool groups of the toolbar of a file of `kind`, in the order the toolbar shows them. A
 /// board and a design file have tools of their own: the module's docs list both.
 pub fn groups(kind: DocKind) -> Vec<ToolGroup> {
+    tool_groups(kind).to_vec()
+}
+
+/// [`groups`], made once for each kind of file: their tools and keys never change while the app
+/// runs, and the toolbar reads them on every frame.
+pub(super) fn tool_groups(kind: DocKind) -> &'static [ToolGroup] {
+    static BOARD: LazyLock<Vec<ToolGroup>> = LazyLock::new(|| make_groups(DocKind::Board));
+    static DESIGN: LazyLock<Vec<ToolGroup>> = LazyLock::new(|| make_groups(DocKind::Design));
+    match kind {
+        DocKind::Board => &BOARD,
+        DocKind::Design => &DESIGN,
+    }
+}
+
+/// [`groups`], put together.
+fn make_groups(kind: DocKind) -> Vec<ToolGroup> {
     match kind {
         DocKind::Board => vec![
             group("move", &[MOVE, HAND], None),

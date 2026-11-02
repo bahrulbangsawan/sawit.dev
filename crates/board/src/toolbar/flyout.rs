@@ -5,7 +5,8 @@ use figcraft_doc::{BOARD_COLORS, BoardShape, Routing, Stamp};
 use figcraft_engine::{Session, ToolId};
 use serde_json::json;
 
-use super::{Flyout, FlyoutItem, ToolIcon, active, groups};
+use super::groups::tool_groups;
+use super::{Flyout, FlyoutItem, ToolIcon, active};
 use crate::DocKind;
 
 /// The command of Place image…, the last item of the shape tools' flyout: Sawit asks for the
@@ -96,7 +97,7 @@ fn group_tools(s: &Session, key: &str) -> Vec<FlyoutItem> {
         Ok(doc) if figcraft_engine::board::is_board(doc) => DocKind::Board,
         _ => DocKind::Design,
     };
-    let Some(group) = groups(kind).into_iter().find(|group| group.key == key) else {
+    let Some(group) = tool_groups(kind).iter().find(|group| group.key == key) else {
         return Vec::new();
     };
     let shapes = group
