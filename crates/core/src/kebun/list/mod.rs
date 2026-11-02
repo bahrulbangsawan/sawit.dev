@@ -15,7 +15,7 @@ use crate::probe;
 
 use super::args::ListWhat;
 use super::bakar::{burnable, ports_of};
-use super::find::{dotenv_places, local_kebuns, saved_places};
+use super::find::{dotenv_places, local_kebuns_in, saved_places};
 use super::ink::{Ink, clip, tilde};
 use super::keys::list_keys;
 use config::list_config;
@@ -60,9 +60,15 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
             );
         }
     }
+    // The databases and the ports both start from what listens (`lsof`, `ps`): asked once.
+    let listening = match what.shows(ListWhat::Databases) || what.shows(ListWhat::Ports) {
+        true => probe::listening_jobs().await,
+        false => Ok(Vec::new()),
+    };
     if what.shows(ListWhat::Databases) {
         ink.section("🌾 Blok tanam (databases)");
-        let mut kebuns = local_kebuns(&registry).await;
+        let jobs = listening.as_deref().unwrap_or_default();
+        let mut kebuns = local_kebuns_in(&registry, jobs).await;
         // Where each one goes, never its password: none is read.
         kebuns.extend(dotenv_places(cwd));
         kebuns.extend(saved_places(paths));
@@ -87,11 +93,11 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
     }
     if what.shows(ListWhat::Ports) {
         ink.section("🔥 Lahan terbuka (ports)");
-        match probe::listening_jobs().await {
+        match &listening {
             Ok(jobs) if jobs.is_empty() => ink.empty("tidak ada port terbuka. Nihil titik api."),
             Ok(jobs) => {
                 let instance_ports: Vec<u16> = registry.instances.iter().map(|i| i.port).collect();
-                for job in &jobs {
+                for job in jobs {
                     let tag = if burnable(job, &instance_ports) {
                         ink.red("titik api")
                     } else if job.is_docker() {

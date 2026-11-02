@@ -7,6 +7,7 @@ use crate::db::{
     self, ConnProfile, Profiles, parse_database_url, read_dotenv_database_url, resolve_password,
 };
 use crate::instances::{AppPaths, Registry};
+use crate::ports::PortJob;
 use crate::probe;
 
 use super::ink::tilde;
@@ -138,12 +139,18 @@ fn with_password(mut kebun: Kebun) -> Kebun {
 /// Every database of the Postgres servers running here: Sawit instances,
 /// then any other `postgres` listening on a port (Homebrew, Postgres.app).
 pub async fn local_kebuns(registry: &Registry) -> Vec<Kebun> {
+    let jobs = probe::listening_jobs().await.unwrap_or_default();
+    local_kebuns_in(registry, &jobs).await
+}
+
+/// [`local_kebuns`] with `jobs`, what [`probe::listening_jobs`] found listening.
+pub(super) async fn local_kebuns_in(registry: &Registry, jobs: &[PortJob]) -> Vec<Kebun> {
     let mut servers: Vec<(u16, String)> = registry
         .instances
         .iter()
         .map(|i| (i.port, format!("instance {}", i.name)))
         .collect();
-    for job in probe::listening_jobs().await.unwrap_or_default() {
+    for job in jobs {
         let postgres = job
             .listeners
             .iter()
