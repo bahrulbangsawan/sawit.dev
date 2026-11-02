@@ -13,7 +13,7 @@ use sawit_core::package_manager::{Available, PackageManager};
 use sawit_core::stack_builder::{Backend, Category, Orm, Stack, WebFrontend};
 
 use super::create::job_over;
-use super::{Creating, NewProjectEvent, NewProjectPage};
+use super::{Creating, NewProjectEvent, NewProjectPage, SETTLE};
 use crate::terminal::{Origin, TerminalPanel};
 
 fn init(cx: &mut TestAppContext) {
@@ -245,18 +245,63 @@ fn create_refuses_a_folder_that_exists(cx: &mut TestAppContext) {
     });
 }
 
-/// The poll's reading of a job: over once seen running and idle again, when its terminal is
-/// gone, or after a long while never seen running.
+/// The poll's state for one create's job, looked at as [`NewProjectPage::poll`] does.
+struct Looks {
+    since: Instant,
+    seen: bool,
+    idle: Option<Instant>,
+}
+
+impl Looks {
+    fn new() -> Self {
+        Self {
+            since: Instant::now(),
+            seen: false,
+            idle: None,
+        }
+    }
+
+    /// A look `ms` after the create started: whether its job is over.
+    fn at(&mut self, ms: u64, running: Option<bool>, made: bool) -> bool {
+        let now = self.since + Duration::from_millis(ms);
+        job_over(
+            running,
+            made,
+            &mut self.seen,
+            &mut self.idle,
+            self.since,
+            now,
+        )
+    }
+}
+
+/// The poll's reading of a job: over once seen running and idle again with the project made,
+/// when its terminal is gone, or after a long while never seen running.
 #[test]
 fn a_job_is_over_once_it_ran_and_the_shell_is_idle() {
-    let mut seen = false;
-    assert!(!job_over(Some(false), &mut seen, Duration::from_secs(1)));
-    assert!(!job_over(Some(true), &mut seen, Duration::from_secs(2)));
-    assert!(seen);
-    assert!(job_over(Some(false), &mut seen, Duration::from_secs(3)));
-    let mut never = false;
-    assert!(job_over(Some(false), &mut never, Duration::from_secs(21)));
-    assert!(job_over(None, &mut never, Duration::ZERO));
+    let mut job = Looks::new();
+    assert!(!job.at(1000, Some(false), false));
+    assert!(!job.at(2000, Some(true), false));
+    assert!(job.seen);
+    assert!(job.at(3000, Some(false), true));
+    assert!(Looks::new().at(21_000, Some(false), false));
+    assert!(Looks::new().at(0, None, false));
+}
+
+/// A program the login shell ran as it started, then the shell idle with no project, isn't
+/// the create's end: that takes [`SETTLE`] idle, and a command running meanwhile (the create)
+/// starts the wait over.
+#[test]
+fn a_job_that_made_nothing_is_over_only_once_the_shell_settles() {
+    let mut job = Looks::new();
+    assert!(!job.at(150, Some(true), false));
+    assert!(!job.at(400, Some(false), false));
+    assert!(!job.at(650, Some(true), false));
+    assert_eq!(job.idle, None);
+    assert!(!job.at(900, Some(false), false));
+    let settled = 900 + SETTLE.as_millis() as u64;
+    assert!(!job.at(settled - 1, Some(false), false));
+    assert!(job.at(settled, Some(false), false));
 }
 
 /// Runs the page's create with `command` standing in for the CLI, in a real terminal, watching
@@ -343,6 +388,26 @@ fn a_created_project_is_opened(cx: &mut TestAppContext) {
     page.read_with(cx, |p, _| {
         assert_eq!(p.creating, Creating::Done(dir.join("made")));
         assert_eq!(p.work(), None);
+    });
+}
+
+/// A login shell runs programs of its own as it starts (nvm's `printf`, a greeting) before it
+/// reads the create typed ahead, and may stay busy a while after one: a program that ran and
+/// made nothing, the shell then idle, isn't the create ending. Here the line does the same:
+/// a program, the shell itself busy (a `wait` keeps the terminal), then the create.
+#[gpui_kit::test]
+fn a_job_before_the_create_isnt_its_end(cx: &mut TestAppContext) {
+    let dir = crate::testing::scratch_dir("new-project-late")
+        .canonicalize()
+        .unwrap();
+    let (page, opened) = create_with(
+        cx,
+        &dir,
+        "sleep 0.6; sleep 0.6 & wait; mkdir made && echo '{}' > made/package.json && sleep 1",
+    );
+    assert_eq!(opened, [dir.join("made")]);
+    page.read_with(cx, |p, _| {
+        assert_eq!(p.creating, Creating::Done(dir.join("made")));
     });
 }
 

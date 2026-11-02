@@ -1,12 +1,12 @@
 //! Creating the project: the create checked and handed to the workspace to run in a terminal,
 //! watched until its job is over, then opened, or said to have failed.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use gpui_kit::*;
 use sawit_core::{new_project, stack_builder};
 
-use super::{CreateJob, Creating, NEVER_RAN, NewProjectEvent, NewProjectPage, POLL};
+use super::{CreateJob, Creating, NEVER_RAN, NewProjectEvent, NewProjectPage, POLL, SETTLE};
 use crate::terminal::{JobTag, TerminalPanel};
 
 impl NewProjectPage {
@@ -46,6 +46,7 @@ impl NewProjectPage {
             key,
             since: Instant::now(),
             seen: false,
+            idle: None,
         };
         self.keep(cx);
         cx.notify();
@@ -86,7 +87,11 @@ impl NewProjectPage {
     /// One look at the create's job; true once it is over and the page has said how it went.
     pub(super) fn poll(&mut self, cx: &mut Context<Self>) -> bool {
         let Creating::Running {
-            key, since, seen, ..
+            dir,
+            key,
+            since,
+            seen,
+            idle,
         } = &mut self.creating
         else {
             return true;
@@ -97,7 +102,8 @@ impl NewProjectPage {
             .and_then(|t| t.upgrade())
             .and_then(|t| t.read(cx).job_status(key, cx))
             .map(|s| s.running.is_some());
-        if !job_over(running, seen, since.elapsed()) {
+        let made = new_project::created(dir);
+        if !job_over(running, made, seen, idle, *since, Instant::now()) {
             return false;
         }
         self.finish(cx);
@@ -120,17 +126,28 @@ impl NewProjectPage {
     }
 }
 
-/// Whether the create's job is over: `running` is its terminal's state (gone: `None`; its
-/// command running: `Some(true)`; the shell idle: `Some(false)`). Seen running once, it is over
-/// when the shell is idle again; never seen running (it failed at once, between two looks), once
-/// [`NEVER_RAN`] has passed.
-pub(super) fn job_over(running: Option<bool>, seen: &mut bool, waited: Duration) -> bool {
+/// Whether the create's job is over: `running` is its terminal's state (gone: `None`; a command
+/// running: `Some(true)`; the shell idle: `Some(false)`), `made` whether the project is there.
+/// Seen running once, it is over when the shell is idle again with the project made, or idle
+/// for [`SETTLE`] without it: what ran may have been the login shell's own startup, the create
+/// still to come, and a command running meanwhile starts the wait over. Never seen running (it
+/// failed at once, between two looks), once [`NEVER_RAN`] has passed since `since`.
+pub(super) fn job_over(
+    running: Option<bool>,
+    made: bool,
+    seen: &mut bool,
+    idle: &mut Option<Instant>,
+    since: Instant,
+    now: Instant,
+) -> bool {
     match running {
         None => true,
         Some(true) => {
             *seen = true;
+            *idle = None;
             false
         }
-        Some(false) => *seen || waited >= NEVER_RAN,
+        Some(false) if !*seen => now.duration_since(since) >= NEVER_RAN,
+        Some(false) => made || now.duration_since(*idle.get_or_insert(now)) >= SETTLE,
     }
 }

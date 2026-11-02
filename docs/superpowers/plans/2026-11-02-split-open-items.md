@@ -12,16 +12,6 @@ but didn't change.
 
 ## Calls that are yours
 
-- **New Project can call a create failed before it starts** (a bug from before the split). The page takes any
-  foreground program the new tab's login shell runs while it starts up (nvm's `printf` in `~/.zshrc`, a greeting,
-  `ssh-add`) as the create's own job, and calls the create over at the next idle look, when the typed command hasn't
-  run yet. With such a startup file and a shell that keeps working for more than 250 ms after it, the page shows
-  "Creation failed" with Try Again; the create then succeeds in the terminal, but the project never opens. This is
-  why `new_project_page::tests::a_created_project_is_opened` fails about one run in five under load (it failed the
-  same way before the split). A fix that waits for the shell to stay idle 3 s before calling a create that made no
-  `package.json` failed (a real failure shows about 3 s later) took the failure rate from 15/80 to 0/80 under load;
-  a regression test that types `sleep 0.6; sleep 0.6 & wait;` before the create fails 3/3 without it. It wasn't
-  applied: the split changed no behavior.
 - **Faster, but a visible change**:
   - MCP replies are pretty-printed: `app_state` is 5.3 KB against 2.8 KB compact, `canvas_get` of 60 layers
     13.2 KB against 8.3 KB (an agent's tokens).

@@ -41,6 +41,10 @@ const CARD_GAP: f32 = 8.;
 const POLL: Duration = Duration::from_millis(250);
 /// A create whose command was never seen running counts as over after this long idle.
 const NEVER_RAN: Duration = Duration::from_secs(20);
+/// A command that ran and made no project counts as the create failing once the shell has been
+/// idle this long after it: a login shell runs programs of its own as it starts (nvm's
+/// `printf`, a greeting), each then idle a while, before it reads the create typed ahead.
+const SETTLE: Duration = Duration::from_secs(3);
 
 /// What the page asks the workspace to do.
 pub enum NewProjectEvent {
@@ -65,12 +69,14 @@ pub struct CreateJob {
 #[derive(Debug, Clone, PartialEq)]
 enum Creating {
     Idle,
-    /// Handed to the terminal, its job `key` watched; `seen` once its command ran.
+    /// Handed to the terminal, its job `key` watched; `seen` once a command ran, `idle` since
+    /// the shell was idle again after one that made no project.
     Running {
         dir: PathBuf,
         key: String,
         since: Instant,
         seen: bool,
+        idle: Option<Instant>,
     },
     /// Over without a project: the terminal says why.
     Failed {
@@ -188,6 +194,7 @@ impl NewProjectPage {
             dir,
             since: Instant::now(),
             seen: true,
+            idle: None,
         };
         Self::register(window, cx);
         page
