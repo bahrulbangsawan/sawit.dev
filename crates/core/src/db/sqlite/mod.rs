@@ -65,8 +65,14 @@ pub fn value_text(value: ValueRef<'_>) -> Option<String> {
         ValueRef::Real(f) => f.to_string(),
         ValueRef::Text(t) => String::from_utf8_lossy(t).into_owned(),
         ValueRef::Blob(b) => {
-            let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
-            format!("\\x{hex}")
+            const HEX: &[u8; 16] = b"0123456789abcdef";
+            let mut text = String::with_capacity(2 + 2 * b.len());
+            text.push_str("\\x");
+            for &x in b {
+                text.push(char::from(HEX[usize::from(x >> 4)]));
+                text.push(char::from(HEX[usize::from(x & 0xf)]));
+            }
+            text
         }
     })
 }
