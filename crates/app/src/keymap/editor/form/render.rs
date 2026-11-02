@@ -7,7 +7,7 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{BindingForm, FormTarget, known_contexts};
+use super::{BindingForm, FormTarget};
 use crate::keymap::names;
 use crate::states::Banner;
 
@@ -23,7 +23,7 @@ impl Render for BindingForm {
                 .text_color(muted)
                 .child(text)
         };
-        let known_contexts = known_contexts(cx);
+        let known_contexts = self.known_contexts.clone();
         let new = self.is_new();
         v_flex()
             .id("binding-form")

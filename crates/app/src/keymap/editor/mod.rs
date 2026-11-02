@@ -71,6 +71,10 @@ pub struct KeymapEditor {
     keys_filter: Entity<KeystrokeRecorder>,
     keystroke_search: bool,
     show_unbound: bool,
+    /// Every row of the keymap as last read (with the actions nothing binds while
+    /// `show_unbound`), sorted, each after what the filter finds it by ([`haystack`]): read again
+    /// when the keymap changes, not at each key typed in the filter.
+    all: Vec<(String, Row)>,
     /// The rows the filter leaves, sorted.
     rows: Vec<Row>,
     /// How many active bindings each (context, keystrokes) has, for conflicts.
@@ -93,10 +97,12 @@ impl KeymapEditor {
             cx.observe(&store, |this, _, cx| this.refresh(cx)),
             cx.subscribe(&filter, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
-                    this.refresh(cx);
+                    this.apply_filter(cx);
                 }
             }),
-            cx.subscribe(&keys_filter, |this, _, _: &Changed, cx| this.refresh(cx)),
+            cx.subscribe(&keys_filter, |this, _, _: &Changed, cx| {
+                this.apply_filter(cx)
+            }),
             // ⎋ or ↩ in the search field: the list takes the keyboard, for ↑, ↓ and ↩.
             cx.subscribe_in(&keys_filter, window, |this, _, _: &Done, window, cx| {
                 window.focus(&this.focus, cx)
@@ -109,6 +115,7 @@ impl KeymapEditor {
             keys_filter,
             keystroke_search: false,
             show_unbound: false,
+            all: Vec::new(),
             rows: Vec::new(),
             conflicts: HashMap::new(),
             selected: None,
@@ -125,19 +132,30 @@ impl KeymapEditor {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let all = self.store.read(cx).rows(self.show_unbound, cx);
         self.conflicts = binding_counts(&all);
+        self.all = all.into_iter().map(|row| (haystack(&row), row)).collect();
+        self.apply_filter(cx);
+    }
+
+    /// Filters the keymap as last read ([`Self::refresh`]): all a key typed in the filter, or
+    /// pressed for keystroke search, changes.
+    fn apply_filter(&mut self, cx: &mut Context<Self>) {
         let selected = self
             .selected
             .and_then(|ix| self.rows.get(ix))
             .map(|row| (row.source, row.action.clone(), row.args.clone()));
         self.rows = if self.keystroke_search {
             let keys = self.keys_filter.read(cx).keystrokes();
-            all.into_iter()
-                .filter(|row| keys.is_empty() || starts_with_keys(&row.keystrokes, &keys))
+            self.all
+                .iter()
+                .filter(|(_, row)| keys.is_empty() || starts_with_keys(&row.keystrokes, &keys))
+                .map(|(_, row)| row.clone())
                 .collect()
         } else {
             let query = self.filter.read(cx).value().trim().to_lowercase();
-            all.into_iter()
-                .filter(|row| matches_query(row, &query))
+            self.all
+                .iter()
+                .filter(|(haystack, _)| has_words(haystack, &query))
+                .map(|(_, row)| row.clone())
                 .collect()
         };
         self.selected = selected.and_then(|(source, action, args)| {
@@ -236,7 +254,7 @@ impl KeymapEditor {
             self.filter
                 .update(cx, |filter, cx| filter.focus(window, cx));
         }
-        self.refresh(cx);
+        self.apply_filter(cx);
     }
 
     fn focus_filter(&mut self, _: &FocusFilter, window: &mut Window, cx: &mut Context<Self>) {
@@ -263,20 +281,31 @@ impl Focusable for KeymapEditor {
 
 /// Whether `row` matches the filter's `query` (lower case): its name, action, keys or context.
 pub(crate) fn matches_query(row: &Row, query: &str) -> bool {
-    if query.is_empty() {
-        return true;
+    query.is_empty() || has_words(&haystack(row), query)
+}
+
+/// What the filter finds `row` by: its name, action, keys (as the keymap file and as a menu
+/// writes them), context and arguments, in lower case, a line each.
+fn haystack(row: &Row) -> String {
+    let mut haystack = String::new();
+    for text in [
+        &*row.label,
+        &*row.action,
+        &*row.keystrokes,
+        &*row.display,
+        row.context.as_deref().unwrap_or_default(),
+        row.args.as_deref().unwrap_or_default(),
+    ] {
+        haystack.push_str(&text.to_lowercase());
+        haystack.push('\n');
     }
-    let haystacks = [
-        row.label.to_lowercase(),
-        row.action.to_lowercase(),
-        row.keystrokes.to_lowercase(),
-        row.display.to_lowercase(),
-        row.context.as_deref().unwrap_or_default().to_lowercase(),
-        row.args.as_deref().unwrap_or_default().to_lowercase(),
-    ];
-    query
-        .split_whitespace()
-        .all(|word| haystacks.iter().any(|h| h.contains(word)))
+    haystack
+}
+
+/// Whether `haystack` ([`haystack`]) has every word of `query` (lower case) in it. A word has no
+/// whitespace, so none spans two of its lines.
+fn has_words(haystack: &str, query: &str) -> bool {
+    query.split_whitespace().all(|word| haystack.contains(word))
 }
 
 /// Whether `keystrokes` start with `keys` (both as the keymap file writes them).

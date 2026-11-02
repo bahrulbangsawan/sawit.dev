@@ -125,3 +125,56 @@ fn the_form_warns_of_a_chord_on_bound_keys(cx: &mut TestAppContext) {
     })
     .unwrap();
 }
+
+/// The notes under the form's fields follow the keys, the context (which a context button sets
+/// without telling the form) and the keymap, though the form works them out once for each rather
+/// than at every frame.
+#[gpui_kit::test]
+fn the_forms_notes_follow_its_keys_context_and_the_keymap(cx: &mut TestAppContext) {
+    let scratch = Scratch::new("form-notes");
+    let (window, editor) = open(cx, &scratch);
+    let (context, recorder) = cx
+        .update_window(window, |_, window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.create(&super::CreateBinding, window, cx)
+            });
+            let form = editor.read(cx).form.clone().unwrap();
+            let form = form.read(cx);
+            (form.context.clone(), form.keys.clone())
+        })
+        .unwrap();
+    let notes = |cx: &mut TestAppContext| -> Vec<&'static str> {
+        cx.update(|cx| {
+            let form = editor.read(cx).form.clone().unwrap();
+            let notes = form.update(cx, |form, cx| form.clash_notes(cx));
+            notes.into_iter().map(|(id, _)| id).collect()
+        })
+    };
+    cx.update_window(window, |_, window, cx| {
+        context.update(cx, |c, cx| c.set_value("Workspace", window, cx));
+        recorder.update(cx, |r, cx| r.set_keystrokes("cmd-k", cx));
+    })
+    .unwrap();
+    assert_eq!(notes(cx), ["binding-starts-chords"]);
+    cx.update(|cx| recorder.update(cx, |r, cx| r.set_keystrokes("cmd-j", cx)));
+    assert_eq!(notes(cx), ["binding-clash"]);
+    cx.update_window(window, |_, window, cx| {
+        context.update(cx, |c, cx| c.set_value("Editor", window, cx))
+    })
+    .unwrap();
+    assert_eq!(notes(cx), ["binding-elsewhere"]);
+    // Another binding of the keys there, saved meanwhile.
+    cx.update(|cx| {
+        crate::keymap::store(cx).update(cx, |store, cx| {
+            store.add(
+                Some("Editor"),
+                "cmd-j",
+                "keymap_editor_test::Other",
+                None,
+                cx,
+            )
+        })
+    })
+    .unwrap();
+    assert_eq!(notes(cx), ["binding-clash"]);
+}

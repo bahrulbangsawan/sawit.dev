@@ -39,8 +39,22 @@ pub(super) struct BindingForm {
     pub(super) keys: Entity<KeystrokeRecorder>,
     /// The action names the action field's text matches, while it is being picked.
     suggestions: Vec<&'static str>,
+    /// The keymap's rows, which the keys may clash with, and the contexts its defaults use most
+    /// ([`known_contexts`]), as last read: read again when the keymap changes, not at every frame.
+    rows: Vec<Row>,
+    known_contexts: Vec<SharedString>,
+    /// What the keys clash with, for the keys and context it was worked out for ([`Notes`]).
+    notes: Option<Notes>,
     pub(super) error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// The notes under the form's fields on what the keys clash with ([`clash_notes`]), and the keys
+/// and context they are for: worked out again when either has changed, or the keymap has.
+struct Notes {
+    keys: String,
+    context: String,
+    notes: Vec<(&'static str, SharedString)>,
 }
 
 impl BindingForm {
@@ -85,6 +99,7 @@ impl BindingForm {
             }
             recorder
         });
+        let store = store(cx);
         let subscriptions = vec![
             cx.subscribe(&action, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -107,6 +122,13 @@ impl BindingForm {
                     Done::Confirmed => this.save(window, cx),
                 },
             ),
+            // keymap.json was read again, or a change saved: the rows and contexts may differ.
+            cx.observe(&store, |this, store, cx| {
+                this.rows = store.read(cx).rows(false, cx);
+                this.known_contexts = known_contexts(cx);
+                this.notes = None;
+                cx.notify();
+            }),
         ];
         Self {
             target,
@@ -117,6 +139,9 @@ impl BindingForm {
             context,
             keys,
             suggestions: Vec::new(),
+            rows: store.read(cx).rows(false, cx),
+            known_contexts: known_contexts(cx),
+            notes: None,
             error: None,
             _subscriptions: subscriptions,
         }
@@ -208,12 +233,27 @@ impl BindingForm {
         chord_clashes(&rows, &keys, &context, self.own())
     }
 
-    /// What the keys being recorded clash with, as notes under the fields ([`clash_notes`]).
-    fn clash_notes(&self, cx: &App) -> Vec<(&'static str, String)> {
+    /// What the keys being recorded clash with, as notes under the fields ([`clash_notes`]),
+    /// worked out again only when the keys, the context or the keymap have changed since.
+    pub(super) fn clash_notes(&mut self, cx: &App) -> Vec<(&'static str, SharedString)> {
         let keys = self.keys.read(cx).keystrokes();
         let context = self.context.read(cx).value().trim().to_string();
-        let rows = store(cx).read(cx).rows(false, cx);
-        clash_notes(&rows, &keys, &context, self.own())
+        if let Some(notes) = &self.notes
+            && notes.keys == keys
+            && notes.context == context
+        {
+            return notes.notes.clone();
+        }
+        let notes: Vec<_> = clash_notes(&self.rows, &keys, &context, self.own())
+            .into_iter()
+            .map(|(id, note)| (id, note.into()))
+            .collect();
+        self.notes = Some(Notes {
+            keys,
+            context,
+            notes: notes.clone(),
+        });
+        notes
     }
 
     pub(super) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
