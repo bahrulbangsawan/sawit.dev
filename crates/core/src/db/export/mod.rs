@@ -166,8 +166,17 @@ fn write_csv_row(w: &mut impl Write, values: &[Option<&str>]) -> io::Result<()> 
             w.write_all(b",")?;
         }
         let v = v.unwrap_or("");
-        if v.contains([',', '"', '\n', '\r']) || v.starts_with(' ') || v.ends_with(' ') {
-            write!(w, "\"{}\"", v.replace('"', "\"\""))?;
+        // ASCII bytes are never part of another character in UTF-8, so bytes can be checked.
+        let special = |b: &u8| matches!(b, b',' | b'"' | b'\n' | b'\r');
+        if v.as_bytes().iter().any(special) || v.starts_with(' ') || v.ends_with(' ') {
+            w.write_all(b"\"")?;
+            for (i, part) in v.split('"').enumerate() {
+                if i > 0 {
+                    w.write_all(b"\"\"")?;
+                }
+                w.write_all(part.as_bytes())?;
+            }
+            w.write_all(b"\"")?;
         } else {
             w.write_all(v.as_bytes())?;
         }
