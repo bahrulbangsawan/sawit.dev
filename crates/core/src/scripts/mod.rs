@@ -8,6 +8,7 @@ mod saved;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -46,6 +47,17 @@ pub struct ScriptGroup {
 /// The package manager of the JS project in `dir`: the `packageManager`
 /// field, else the lockfile in `dir` or a parent up to `root`, else npm.
 pub fn package_manager(dir: &Path, root: &Path, manifest: &Value) -> &'static str {
+    package_manager_with(dir, root, manifest, &mut lockfile)
+}
+
+/// [`package_manager`], with `lockfile` saying whose lockfile a folder holds: [`scan`] looks in
+/// each folder once, though its packages share their parents (`apps/`, the root).
+fn package_manager_with(
+    dir: &Path,
+    root: &Path,
+    manifest: &Value,
+    lockfile: &mut impl FnMut(&Path) -> Option<&'static str>,
+) -> &'static str {
     if let Some(pm) = manifest.get("packageManager").and_then(Value::as_str) {
         for tool in ["pnpm", "yarn", "bun", "npm"] {
             if pm.starts_with(tool) {
@@ -55,16 +67,8 @@ pub fn package_manager(dir: &Path, root: &Path, manifest: &Value) -> &'static st
     }
     let mut at = Some(dir);
     while let Some(d) = at {
-        for (lock, tool) in [
-            ("bun.lock", "bun"),
-            ("bun.lockb", "bun"),
-            ("pnpm-lock.yaml", "pnpm"),
-            ("yarn.lock", "yarn"),
-            ("package-lock.json", "npm"),
-        ] {
-            if d.join(lock).is_file() {
-                return tool;
-            }
+        if let Some(tool) = lockfile(d) {
+            return tool;
         }
         if d == root {
             break;
@@ -72,6 +76,20 @@ pub fn package_manager(dir: &Path, root: &Path, manifest: &Value) -> &'static st
         at = d.parent();
     }
     "npm"
+}
+
+/// The tool whose lockfile is in `dir`, if one is.
+fn lockfile(dir: &Path) -> Option<&'static str> {
+    [
+        ("bun.lock", "bun"),
+        ("bun.lockb", "bun"),
+        ("pnpm-lock.yaml", "pnpm"),
+        ("yarn.lock", "yarn"),
+        ("package-lock.json", "npm"),
+    ]
+    .into_iter()
+    .find(|(lock, _)| dir.join(lock).is_file())
+    .map(|(_, tool)| tool)
 }
 
 /// `name` as one shell word.
@@ -199,10 +217,14 @@ fn folder_label(rel: &str, root: &Path) -> String {
     }
 }
 
-/// The `package.json` scripts of `dir`.
-fn js_group(dir: &Path, root: &Path) -> Option<(ScriptGroup, Value)> {
+/// The `package.json` scripts of `dir`; `lockfile` as [`package_manager_with`] takes it.
+fn js_group(
+    dir: &Path,
+    root: &Path,
+    lockfile: &mut impl FnMut(&Path) -> Option<&'static str>,
+) -> Option<(ScriptGroup, Value)> {
     let manifest = read_json(&dir.join("package.json"))?;
-    let tool = package_manager(dir, root, &manifest);
+    let tool = package_manager_with(dir, root, &manifest, lockfile);
     let rel = rel_of(dir, root);
     let scripts: Vec<Script> = string_entries(&manifest, "scripts")
         .into_iter()
@@ -342,11 +364,21 @@ pub fn make_targets(text: &str) -> Vec<String> {
 /// first, then workspace packages, then other tools.
 pub fn scan(root: &Path) -> Vec<ScriptGroup> {
     let mut groups = Vec::new();
-    if let Some((group, manifest)) = js_group(root, root) {
+    // Each folder's lockfile, looked for once in this scan.
+    let mut seen: HashMap<PathBuf, Option<&'static str>> = HashMap::new();
+    let mut cached = |dir: &Path| {
+        if let Some(&tool) = seen.get(dir) {
+            return tool;
+        }
+        let tool = lockfile(dir);
+        seen.insert(dir.to_path_buf(), tool);
+        tool
+    };
+    if let Some((group, manifest)) = js_group(root, root, &mut cached) {
         let patterns = workspace_patterns(root, &manifest);
         groups.push(group);
         for dir in expand_workspaces(root, &patterns) {
-            if let Some((group, _)) = js_group(&dir, root) {
+            if let Some((group, _)) = js_group(&dir, root, &mut cached) {
                 groups.push(group);
             }
         }
