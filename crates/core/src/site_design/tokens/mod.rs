@@ -121,9 +121,11 @@ pub fn derive(scan: &Scan, date: &str) -> Tokens {
     let text = derive_type(scan);
     let (spacing_base, spacing) = derive_spacing(scan);
     let radius = derive_radius(scan);
-    let mut variables = scan.variables.clone();
+    // Sorted and cut as references: only the variables kept are copied.
+    let mut variables: Vec<&(String, String)> = scan.variables.iter().collect();
     variables.sort_by(|a, b| a.0.cmp(&b.0));
     variables.truncate(MAX_VARIABLES);
+    let variables: Vec<(String, String)> = variables.into_iter().cloned().collect();
     let mut breakpoints: Vec<u32> = scan
         .breakpoints
         .iter()
