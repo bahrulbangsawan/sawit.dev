@@ -3,6 +3,144 @@
 Every change to Sawit, by version. Each push to `main` is a new release: the patch version is bumped and
 its section is written automatically by `.githooks/pre-push` (`scripts/release.sh`) from the commit messages.
 
+## [0.0.9] - 2026-11-03
+
+### Features
+
+- **mcp**: agents can rename a terminal tab, and create a project without opening it
+- **canvas**: live localhost routes, with Add Routes from Dev Server
+- **browser**: mesurer's measuring and markup tools in Annotate mode
+- **canvas**: UI screens are live HTML on the canvas, with Preview, downloads and Send to Agent
+- **skills**: Sawit Skills, one click teaches every coding agent to use Sawit
+- **canvas**: agent presence redesign, with each component shown as it is built
+- **canvas**: agents build components live with canvas_begin and canvas_progress
+- **mcp**: canvas_design_guide, and agents are told to read it
+- **skills**: Sawit's canvas design standard ships as a built-in skill
+- **github**: Your Repositories in the catalog list layout
+- **new-project**: Create Project opens the project; its menu can only create it
+- **workspace**: the pages move into the account menu and a footer Pages menu
+- **mcp**: GitHub's MCP server on Sawit's one GitHub sign-in
+- **new-project**: a New Project page that builds a TypeScript stack
+- **db**: Cloudflare D1 and SQLite in the Database sidebar, with each kind's logo
+- **canvas**: an agent's diagram shows its placeholder while Pele renders it off the UI thread
+- **canvas**: every Pele diagram type comes onto the canvas
+- **browser**: collapsible annotations, sent to an agent's chat
+- **agents**: show each agent's cursor on the canvas and in the browser
+- **cloudflare**: open Cloudflare Local Explorer from Sawit
+- **github**: one GitHub sign-in for every GitHub button
+- **terminal**: show the logo of each agent CLI running in a pane and tab
+- **tools**: add PureMac
+- **skills**: add shadcn's improve
+- **canvas**: .sawit is the only canvas file; .figcraft is no longer read
+- **a11y**: name Sawit's controls for screen readers and test drivers
+- **browser**: annotate in the page, and a redesigned Design panel
+- **canvas**: an icon beside every option in the canvas's menus
+- **terminal**: Shift+Tab and ⌘] / ⌘[ move between panes; the active pane stands out
+- **editor**: tree-sitter parses 16 languages
+- **terminal**: rename tabs, keys for the pane menu, and file drops that land
+- **skills**: a Skills page, and npm, pnpm, bun or yarn for every package install
+- **canvas**: a key for every command, quiet refusals, and every tool on the toolbar
+- **catalog**: choose how many rows a page shows
+- **canvas**: canvas files are .sawit, Sawit's own name
+
+### Fixes
+
+- **app**: menus, popovers and dialogs show over the browser's page and the canvas's web views
+- **core**: a tool lock waits a moment before it counts as busy
+- **core**: tests keep tool locks of their own
+- **canvas**: agent canvas ops no longer take the user's tab, project or view
+- **github**: name the pull request rows, thread tabs and Git sync buttons
+- **workspace**: no half shortcut on Keymap Editor; menus open as menus in e2e
+- **app**: embed the icons the Pages menu, repository rows and diagram draw
+- **canvas**: a load of the backup a clear just kept gets that board
+- **new-project**: a program the login shell runs as it starts isn't the create's end
+- **git**: drop a pull request's diff that a refresh replaced
+- **db**: match a local D1 database by its preview_database_id
+- **tools**: leave app copies Sawit didn't install alone
+- **browser**: the device menu opens over the page
+
+### Performance
+
+- **build**: optimize QuickJS, PNG, SQLite and the terminal in debug builds (Mermaid 4.3x, screenshot 14x, SQLite 1.5-2.9x, terminal 1.6x)
+- **mcp**: ask the running app its version once per app (app_state per canvas-file op 1 -> 0)
+- **mcp**: send a canvas op on the connection that found the app (connections per call 2-3 -> 1)
+- **browser**: screenshots are scaled down off the main thread (main thread per full-view capture ~9-10 s -> 0, debug build)
+- **browser**: the Annotate panel groups its notes without cloning them every frame (render 2.09 ms -> 1.33 ms)
+- **browser**: the Colors tab is worked out once per scan, not every frame (render 733 ms -> 23 ms)
+- **browser**: the Design panel lists the Mac's font families once, not every frame (Fonts and Inspect renders: 46.6 ms of CoreText -> none)
+- **browser**: page logs, requests and hovers no longer redraw the browser (view notifications per 300 such messages 300 -> 0)
+- **canvas**: apply sets each kept paint on all its layers in one command (799 skeletons 178.8 -> 151.4 ms CPU, debug)
+- **db**: load a SQLite schema without a sqlite_master scan per index (300 tables: 349.1 ms -> 57.6 ms)
+- **db**: lay out an ERD with one slot buffer for every group (2000 tables: 7.33 ms -> 6.10 ms)
+- **db**: one percent-encoder without a String per byte, and D1 locations borrowed (location() x 999: 7.29 ms -> 3.20 ms)
+- **db**: check and quote CSV fields without copying them (20k rows x 8: 244.4 ms -> 45.7 ms)
+- **db**: hex-encode SQLite blobs into one String (100 x 4 KiB blobs: 65.1 ms -> 15.4 ms)
+- **db**: find a constraint's or index's relation in a map when loading a schema (1500 tables, client CPU: 222.1 ms -> 101.7 ms)
+- **browser**: merge fetched sheets' variables through a set of names (merge_rules 4.15 ms -> 1.18 ms debug)
+- **browser**: sort a scan's variables by reference and copy only those kept (derive -0.3 ms debug)
+- **browser**: merge and cluster a scan's colors without re-converting them (derive 18.6 ms -> 8.9 ms debug)
+- **browser**: parse a CSS color without allocating (Tailwind classes 3.96 us -> 3.56 us)
+- **browser**: decode an inline asset once when saving it (100 inline assets 95.9 ms -> 60.0 ms)
+- **browser**: decode a data URL without copying its payload (60 data URLs 38.2 ms -> 28.2 ms)
+- **canvas**: outline a layer without a throwaway list (1000 selected 3.51 -> 3.06 ms debug)
+- **canvas**: work the selection's frame out once per overlay (1000 selected 4.04 -> 3.51 ms debug)
+- **canvas**: make the toolbar's tool groups once (toolbar groups 71 -> 5 µs debug)
+- **canvas**: make the canvas's key bindings once (agent key 1095 -> 40 µs debug)
+- **canvas**: look a key up in the keymap only when it counts (unbound key 11.6 -> 0.65 µs debug)
+- **canvas**: make the canvas's default keys once (toolbar groups 398 -> 71 µs debug)
+- **terminal**: read each script's state once and copy less in the tab strip (dock render 584 -> 496 µs debug)
+- **canvas**: move get's elements, commands' list and command's result into their replies (get of 2000 elements 54 -> 35 ms CPU, debug)
+- **canvas**: find a page's connector labels in one pass when an agent reads it (summarize of 2000 elements 103 -> 35 ms CPU, debug)
+- **editor**: draw a file's icon without allocating (40 rows: 56.4 -> 39.4 us a render)
+- **editor**: keep a preview copy of the text only in files that preview (1 MB: 74 -> 36 us, 0 in code files)
+- **editor**: tell unsaved changes from the rope, not a copy of the file (1 MB: 160 us -> 42 ns a keystroke)
+- **editor**: flatten the Files tree's rows only when it changes (20,734 rows: 3.44 ms -> 83 ns per render)
+- **canvas**: make the toolbar's tool groups once (toolbar render 922 µs -> 469 µs debug)
+- **core**: ask about every listener on a port at once (port with 2 listeners: median 97 ms -> 93 ms)
+- **core**: list a folder without a stat per file or a lowercase per comparison (2220 entries 8.7 ms -> 1.7 ms)
+- **core**: ask git for the status and a merge at once (median 70 ms -> 44 ms)
+- **core**: run lsof and ps at once for the listening jobs (median 140 ms -> 98 ms)
+- **keymap**: read the keymap once per change in the editor and its form (filter key + frame 36.1 -> 21.3 ms)
+- **pages**: work out the New Project stack's picks once a frame for the nav (81 µs -> 6 µs)
+- **workspace**: write sawit-mcp's answers off the UI thread (4 MiB answer: UI held 11.7 ms -> 11 µs)
+- **terminal**: draw a frame from the last one, redoing only what changed (unchanged 203x50 frame 1181 µs -> 739 µs)
+- **terminal**: read a terminal's last lines from the bottom up (last 200 of 10,000 lines 70.9 ms -> 0.33 ms)
+- **terminal**: take snapshots row by row, colours worked out once (200x50 snapshot 258 µs -> 107 µs)
+- **core**: look for each folder's lockfile once per script scan (40-package monorepo 5.55 ms -> 4.81 ms)
+- **core**: read JSONC without copying the rest of the file at each comma (9 KB wrangler.jsonc 42.2 ms -> 0.95 ms)
+- **core**: sawit list and sawit bakar instances ask every instance's status at once (42 ms -> 14 ms)
+- **core**: sawit list asks lsof and ps once for its databases and its ports (1.03 s -> 0.79 s)
+- **core**: sawit list and sawit <db> read only the passwords they use (list 1.41 s -> 1.03 s)
+- **git**: render the Git sidebar without copying the status (render 4.5 ms -> 0.71 ms with 5,000 changed files)
+- **git**: search prompts and filter repositories once per render, not twice
+- **git**: read a repository's status, branches and remote at once (refresh 160 ms -> 81 ms)
+- **git**: lay out the commit graph off the UI thread (UI thread 9.9 ms -> 0 for 2,587 commits)
+- **git**: group a pull request's timeline when it changes, not twice per render (143 us -> 0 per render at 200 events)
+- **git**: parse a commit's and a pull request's diff off the UI thread (UI thread 960 ms -> 0 on a 1.6 MB patch)
+- **canvas**: read a paint list or the effects once per Design panel frame (rich selection 7.2 ms -> 2.6 ms)
+- **canvas**: search the palette's commands once per query, not every frame (frame for "dup" 147 us -> 42 us)
+- **canvas**: find where an agent's op landed without walking every layer up its page (add on 6000 layers 27.1 ms -> 2.5 ms)
+- **browser**: ask about each JSON name once when redacting a body (4 KB list 383 -> 152 µs debug, 44 -> 19 µs optimized)
+- **browser**: splice the page script once (page_script 101 -> 4.3 µs debug, 33 -> 4.4 µs optimized)
+- **canvas**: make a list row's whole numbers integers in place (effects rows 2.3 µs -> 1.2 µs)
+- **canvas**: make a layer's numbers floats in place when the Design panel reads it (read 20.3 µs -> 13.9 µs)
+- **canvas**: lay the main menu out once and only fill in each canvas's state (main menu 330 µs -> 45 µs)
+- **canvas**: look the menus' shortcut labels up in a table built once (context menu 1.37 ms -> 8.7 µs)
+- **db**: build no paths for diagram edges off the canvas (67 of 299 in view: 24.8 ms -> 5.9 ms a frame)
+- **db**: make the diagram from the schema tree in place (reload 5.6 ms -> 3.2 ms)
+- **db**: keep the diagram cards' text and look search matches up in order (40 cards: 152 µs -> 2.4 µs a frame)
+- **db**: read the page's keys in place for the grid header's tick (1000 rows: 78 µs -> 4 ns a frame)
+- **db**: keep each grid cell's text with its page (40 x 12 cells: 117 µs -> 4.3 µs a frame)
+- **db**: flatten the connection tree again only when what it shows changed (render 1.18 ms -> 0.45 µs)
+- **mcp**: describe_table sends its four catalog queries together (describe_table 28.7 ms -> 23.9 ms)
+- **mcp**: list_instances asks every instance's pg_ctl at once (4 instances 41.6 ms -> 14.5 ms)
+- **mcp**: git_diff runs up to eight files' git diff at once (24 changed files 1.12 s -> 0.47 s)
+- **mcp**: diagnose_network pings the router beside the other checks (diagnose_network 1.74 s -> 0.89 s)
+
+### Other
+
+- **canvas**: drop the app toolbar's own cache of its tool groups (no gain since 895cf2d)
+
 ## [0.0.8] - 2026-11-01
 
 ### Features
