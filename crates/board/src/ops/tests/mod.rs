@@ -21,6 +21,7 @@ mod reads;
 mod replace;
 mod scenes;
 mod update;
+mod work;
 mod writes;
 
 fn board() -> BoardDoc {

@@ -4,10 +4,11 @@ use std::time::Duration;
 
 use super::{AgentIdentity, GONE_AFTER};
 
-/// A colour the app gives agents, as `#rrggbb`. Each one carries white text at 4.5:1 or more and
-/// reads at 4.5:1 or more on the canvas's light page; on the dark UI the app outlines the pointer
-/// and the pill in white, which keeps their shape clear there too.
-pub const PALETTE: [&str; 8] = [
+/// A colour the app gives agents, as `#rrggbb`: twelve, so that a dozen agents at work at once each
+/// have their own. Each one carries white text at 4.5:1 or more and reads at 4.5:1 or more on the
+/// canvas's light page ([`LIGHT_PAGE`]); on the dark UI the app outlines the pointer and the pill
+/// in white, which keeps their shape clear there too. None is red, which says that work failed.
+pub const PALETTE: [&str; 12] = [
     "#2563eb", // blue
     "#c2410c", // orange
     "#15803d", // green
@@ -16,7 +17,14 @@ pub const PALETTE: [&str; 8] = [
     "#0e7490", // cyan
     "#b45309", // amber
     "#a21caf", // fuchsia
+    "#4338ca", // indigo
+    "#4d7c0f", // olive
+    "#0f766e", // teal
+    "#854d0e", // brown
 ];
+
+/// The canvas's light page, FigCraft's default page colour: every [`PALETTE`] colour reads on it.
+pub const LIGHT_PAGE: &str = "#f5f5f5";
 
 /// The text colour on a [`PALETTE`] colour.
 pub const INK: &str = "#ffffff";

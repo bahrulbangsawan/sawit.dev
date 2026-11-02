@@ -115,6 +115,8 @@ struct Fields {
     height: Option<f64>,
     text: Option<String>,
     label: Option<Label>,
+    /// Text added to the end of the layer's: long copy sent in parts.
+    append: Option<String>,
     name: Option<String>,
     #[serde(rename = "backgroundColor")]
     background_color: Option<String>,
@@ -217,7 +219,21 @@ fn change_layer(
         at.insert("ids".into(), json!([layer]));
         session.execute("transform.moveTo", &Value::Object(at))?;
     }
-    if let Some(text) = change.text()
+    let appended = (fields.append.as_deref()).map(|more| {
+        let doc = session.doc().ok();
+        let now = doc.and_then(|doc| {
+            let text = summary::text_layer(doc, layer)?;
+            Some(doc.node(text)?.kind.text()?.characters.clone())
+        });
+        // After the `text` this change sets, if it sets one.
+        let start = change
+            .text()
+            .map(str::to_string)
+            .or(now)
+            .unwrap_or_default();
+        start + more
+    });
+    if let Some(text) = appended.as_deref().or(change.text())
         && !set_text(session, layer, text)?
     {
         let kind = summary::element_type(session.doc()?, layer);

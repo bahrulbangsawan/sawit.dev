@@ -146,6 +146,7 @@ impl Sawit {
     /// which every version of the app runs.
     pub async fn canvas_add_diagram_tool(&self, a: CanvasMermaidArgs) -> CallToolResult {
         let op = json!({ "op": "mermaid", "source": a.source, "x": a.x, "y": a.y });
+        let op = in_work(op, a.work);
         match self.canvas(a.project, a.file, op).await {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
@@ -172,6 +173,12 @@ impl Sawit {
             .params
             .map(|params| with_files_resolved(&a.command, params));
         let op = json!({ "op": "command", "command": a.command, "params": params });
+        // The view and the page on show are the user's, with the app closed too: an agent that
+        // moved them there would move them once the app runs.
+        if let Some(refused) = sawit_board::ops::agent_refusal(&op) {
+            return fail(refused);
+        }
+        let op = in_work(op, a.work);
         match self.canvas(a.project, a.file, op).await {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
@@ -320,6 +327,14 @@ pub(super) fn refuse_an_app_without_canvas_files(
 pub(super) fn app_reads_canvas_files(version: &str) -> bool {
     let since = APP_WITH_CANVAS_FILES.min(Version::current());
     Version::parse(version).is_some_and(|app| app >= since)
+}
+
+/// `op` with the `work` it belongs to, when it names one.
+pub(super) fn in_work(mut op: Value, work: Option<String>) -> Value {
+    if let Some(work) = work.filter(|work| !work.trim().is_empty()) {
+        op["work"] = json!(work);
+    }
+    op
 }
 
 /// The fields `canvas_get` shows for one saved element.

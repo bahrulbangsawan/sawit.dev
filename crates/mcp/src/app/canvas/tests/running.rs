@@ -21,7 +21,7 @@ use crate::app::tests::{answer, native, said};
 /// A stand-in for the running app: it listens where the app does, and answers each canvas
 /// request with the next of `answers` (`{ok: true}` once they are used up). The ops it was
 /// asked to run come out of the receiver.
-fn fake_app(paths: &AppPaths, answers: Vec<Value>) -> Receiver<Value> {
+pub(super) fn fake_app(paths: &AppPaths, answers: Vec<Value>) -> Receiver<Value> {
     std::fs::create_dir_all(&paths.root).unwrap();
     let listener = UnixListener::bind(paths.cli_socket()).unwrap();
     let (asked, ops) = std::sync::mpsc::channel();
@@ -52,7 +52,7 @@ fn fake_app(paths: &AppPaths, answers: Vec<Value>) -> Receiver<Value> {
 
 /// The next op the stand-in app was asked for. It is waited for, but not for ever: a tool that
 /// didn't go to the app fails the test instead of hanging it.
-fn next(asked: &Receiver<Value>) -> Value {
+pub(super) fn next(asked: &Receiver<Value>) -> Value {
     asked
         .recv_timeout(Duration::from_secs(5))
         .expect("the app was asked for an op")
@@ -91,6 +91,7 @@ async fn a_running_app_answers_every_canvas_tool() {
             elements: vec![json!({"type": "rectangle"})],
             file: None,
             project: project_arg(&project),
+            work: None,
         }))
         .await;
     assert_eq!(failed.is_error, Some(true), "{}", said(&failed));
@@ -103,6 +104,7 @@ async fn a_running_app_answers_every_canvas_tool() {
             params: Some(json!({"x": 0, "y": 0})),
             file: None,
             project: project_arg(&project),
+            work: None,
         })
         .await;
     assert_eq!(answer(&ran)["result"]["id"], json!("9"));
@@ -141,6 +143,7 @@ async fn canvas_command_sends_the_files_it_names_as_the_agent_means_them() {
             params: Some(params),
             file: None,
             project: project_arg(&project),
+            work: None,
         });
         async {
             let ran = run.await;
@@ -256,6 +259,7 @@ async fn a_canvas_tool_takes_one_connection_to_the_app() {
             elements: vec![json!({"type": "sticky", "x": 0, "y": 0, "text": "a"})],
             file: None,
             project: project_arg(&project),
+            work: None,
         }))
         .await;
     assert_ne!(added.is_error, Some(true), "{}", said(&added));

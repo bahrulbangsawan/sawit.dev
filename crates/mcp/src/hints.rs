@@ -155,6 +155,8 @@ const ADDS: &[&str] = &[
     "canvas_add_elements",
     "canvas_add_diagram",
     "canvas_add_mermaid",
+    "canvas_begin",
+    "canvas_progress",
 ];
 
 /// The tools that reach past this Mac's own state: the internet, a remote host, a database that

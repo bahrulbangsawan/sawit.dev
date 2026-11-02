@@ -84,11 +84,12 @@ fn colours_and_labels_are_given_once_and_duplicates_are_numbered() {
 #[test]
 fn colours_are_reused_once_free() {
     let mut roster = Roster::default();
-    for (i, id) in ["a", "b", "c", "d", "e", "f", "g", "h"].iter().enumerate() {
+    let ids = ["a", "b", "c", "d", "e", "f", "g", "h", "k", "l", "m", "n"];
+    for (i, id) in ids.iter().enumerate() {
         assert_eq!(roster.meet(&agent(id, id, None), secs(0)).color, i);
     }
     assert_eq!(roster.meet(&agent("i", "i", None), secs(1)).color, 0);
-    // `a` to `h` went quiet; `i` (colour 0) too, but `j` meets it at 31 s, and `i` at 1 s.
+    // `a` to `n` went quiet; `i` (colour 0) too, but `j` meets it at 31 s, and `i` at 1 s.
     roster.meet(&agent("b", "b", None), secs(29));
     let later = roster.meet(&agent("j", "j", None), secs(31)).color;
     assert_eq!(later, 0, "the first colour no recent agent has");

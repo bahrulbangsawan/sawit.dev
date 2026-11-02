@@ -44,7 +44,9 @@ pub fn prepare_diagram(op: &Value) -> Option<PreparedDiagram> {
 pub fn run_prepared(board: &mut BoardDoc, prepared: PreparedDiagram) -> Value {
     let PreparedDiagram { op, items } = prepared;
     run_guarded(board, &op, |board, op| {
-        before_op(board, "mermaid", op).unwrap_or_else(|| draw_diagram(board, op, items))
+        before_op(board, "mermaid", op).unwrap_or_else(|| {
+            super::work::in_work(board, op, |board, op| draw_diagram(board, op, items))
+        })
     })
 }
 
@@ -55,7 +57,16 @@ pub(super) fn mermaid(board: &mut BoardDoc, op: &Value) -> Value {
 
 /// Draws `items`, the skeletons of the diagram of `op` (or why there are none), where `op` says,
 /// and answers the op.
+/// Drawn into a work's frame ([`super::work::INTO_FRAME`]), its layers go into the frame, those a
+/// frame can hold.
 fn draw_diagram(board: &mut BoardDoc, op: &Value, items: Result<Vec<Skeleton>, String>) -> Value {
+    let into = op.get(super::work::INTO_FRAME).and_then(Value::as_str);
+    let items = items.map(|mut items| {
+        for item in items.iter_mut().filter(|item| item.frame_id.is_none()) {
+            item.frame_id = into.map(str::to_string);
+        }
+        items
+    });
     let drawn = items.and_then(|items| {
         let (left, top, _, _) = skeleton::bounds(&items).ok_or("the diagram is empty")?;
         let (x, y) = diagram_corner(board, op).map_err(|error| error.to_string())?;

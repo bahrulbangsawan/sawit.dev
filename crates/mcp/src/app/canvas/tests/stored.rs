@@ -51,6 +51,7 @@ async fn a_file_by_the_engines_own_name_is_no_canvas() {
             elements: vec![json!({"type": "sticky", "x": 0, "y": 0, "text": "new"})],
             file: None,
             project: project_arg(&project),
+            work: None,
         }))
         .await;
     assert_eq!(answer(&added)["added"], json!(1), "{}", said(&added));
@@ -61,6 +62,7 @@ async fn a_file_by_the_engines_own_name_is_no_canvas() {
             elements: vec![json!({"type": "sticky", "x": 0, "y": 300, "text": "no"})],
             file: Some(old.display().to_string()),
             project: None,
+            work: None,
         }))
         .await;
     assert_eq!(refused.is_error, Some(true), "{}", said(&refused));
@@ -96,6 +98,7 @@ async fn the_other_canvas_tools_edit_the_stored_canvas_while_the_app_is_closed()
                 ],
                 file: None,
                 project: project_arg(&project),
+                work: None,
             }))
             .await;
     assert_eq!(answer(&added)["added"], json!(3), "{}", said(&added));
@@ -107,6 +110,7 @@ async fn the_other_canvas_tools_edit_the_stored_canvas_while_the_app_is_closed()
             elements: vec![json!({"id": "db", "text": "Database"})],
             file: None,
             project: project_arg(&project),
+            work: None,
         }))
         .await;
     assert_eq!(answer(&updated)["updated"], json!(1), "{}", said(&updated));
@@ -133,6 +137,7 @@ async fn the_other_canvas_tools_edit_the_stored_canvas_while_the_app_is_closed()
             y: Some(400.0),
             file: None,
             project: project_arg(&project),
+            work: None,
         }))
         .await;
     assert!(
@@ -146,10 +151,11 @@ async fn the_other_canvas_tools_edit_the_stored_canvas_while_the_app_is_closed()
     // A command without parameters.
     let zoomed = server
         .canvas_command_tool(CanvasCommandArgs {
-            command: "view.zoomFit".into(),
+            command: "select.all".into(),
             params: None,
             file: None,
             project: project_arg(&project),
+            work: None,
         })
         .await;
     assert_ne!(zoomed.is_error, Some(true), "{}", said(&zoomed));
@@ -159,6 +165,7 @@ async fn the_other_canvas_tools_edit_the_stored_canvas_while_the_app_is_closed()
             ids: vec!["calls".into(), "nope".into()],
             file: None,
             project: project_arg(&project),
+            work: None,
         }))
         .await;
     let deleted = answer(&deleted);
@@ -196,6 +203,7 @@ async fn parallel_calls_each_land_in_the_stored_canvas() {
                 elements: vec![json!({"type": "rectangle", "id": format!("box-{n}"), "x": n * 200, "y": 0, "width": 100, "height": 60})],
                 file: None,
                 project: project_arg(&project),
+                work: None,
             }))
         });
     for result in futures::future::join_all(calls).await {
@@ -299,6 +307,7 @@ fn an_agent_in_a_subfolder_draws_on_its_projects_canvas() {
                 elements,
                 file: None,
                 project: None,
+                work: None,
             };
             server.canvas_add_elements(Parameters(args)).await
         };
@@ -362,18 +371,14 @@ async fn the_page_tools_act_on_the_page_on_show_and_reach_the_others_by_command(
             params: Some(params),
             file: None,
             project: project_arg(&project),
+            work: None,
         });
         async {
             let ran = run.await;
             answer(&ran)["result"].clone()
         }
     };
-    let steps = json!({"commands": [
-        {"command": "page.add", "params": {"name": "Two"}},
-        {"command": "board.sticky", "params": {"x": 0, "y": 0, "text": "on two"}},
-        {"command": "page.select", "params": {"index": 0}},
-    ]});
-    command("command.batch", steps).await;
+    add_pages(&board_file(&project), &[("Two", "on two")]);
     let window = || CanvasTargetArgs {
         file: None,
         project: project_arg(&project),

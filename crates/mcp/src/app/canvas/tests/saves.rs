@@ -35,6 +35,7 @@ async fn a_canvas_that_can_not_be_saved_is_an_error() {
             params: Some(json!({"x": 0, "y": 0})),
             file: None,
             project: project_arg(&project),
+            work: None,
         })
         .await;
     writable(0o755).unwrap();

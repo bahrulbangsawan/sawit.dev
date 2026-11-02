@@ -10,6 +10,12 @@ const CANVAS_FILE: &str = "A canvas file to work on instead of the project's can
 /// What a canvas tool's `project` names: the project whose canvas it uses ([`crate::agent_project`]).
 const CANVAS_PROJECT: &str = "Project folder whose canvas (.nyawit/canvas.sawit) to use, in the window that has it open. Default: the project your working folder is in (with the app closed: within its git repository, the nearest folder up from it whose .nyawit/ holds a canvas, else the repository's root; outside a repository, the folder itself)";
 
+/// What a canvas tool's `work` names: the work item its op belongs to ([`CanvasBeginArgs`]).
+const CANVAS_WORK: &str = "The work this belongs to, as canvas_begin answered it (\"w_7f3a91c2\"): the op goes inside that work's frame, and its row on the canvas shows the agent at work. With a work, x and y are from the frame's top-left corner, and what is drawn goes into the frame";
+
+/// What `canvas_delete`'s and `canvas_command`'s `work` names.
+const CANVAS_WORK_TAG: &str = "The work this belongs to, as canvas_begin answered it: its row on the canvas shows the agent at work, and the undo step joins the work's";
+
 /// canvas_get's and canvas_clear's arguments: which canvas.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasTargetArgs {
@@ -25,6 +31,8 @@ pub struct CanvasElementsArgs {
         description = "Element skeletons, e.g. {\"type\":\"rectangle\",\"id\":\"a\",\"x\":0,\"y\":0,\"width\":160,\"height\":60,\"label\":{\"text\":\"API\"}}, {\"type\":\"arrow\",\"x\":160,\"y\":30,\"start\":{\"id\":\"a\"},\"end\":{\"id\":\"b\"}}, {\"type\":\"text\",\"x\":0,\"y\":-40,\"text\":\"Title\"}. Types: rectangle, ellipse, diamond, sticky, text, arrow, line, frame. With no colour given, shapes and stickies are sticky yellow (#FFE78A): pass backgroundColor for another, \"transparent\" for no fill. A line through more than two points is drawn as ink, #1E1E1E unless strokeColor names another. Arrows and lines run straight"
     )]
     pub elements: Vec<Value>,
+    #[schemars(description = CANVAS_WORK)]
+    pub work: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
@@ -41,6 +49,8 @@ pub struct CanvasMermaidArgs {
     #[schemars(description = "Where to put it; default right of the existing content")]
     pub x: Option<f64>,
     pub y: Option<f64>,
+    #[schemars(description = CANVAS_WORK)]
+    pub work: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
@@ -50,9 +60,11 @@ pub struct CanvasMermaidArgs {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasUpdateArgs {
     #[schemars(
-        description = "Changes per element: {\"id\":\"a\", \"x\":10, \"text\":\"New label\", \"strokeColor\":\"#e03131\", \"backgroundColor\":\"#ffc9c9\", ...}"
+        description = "Changes per element: {\"id\":\"a\", \"x\":10, \"text\":\"New label\", \"strokeColor\":\"#e03131\", \"backgroundColor\":\"#ffc9c9\", ...}. {\"id\":\"a\", \"append\":\" more words\"} adds text to the end of the layer's, so long copy can arrive in parts"
     )]
     pub elements: Vec<Value>,
+    #[schemars(description = CANVAS_WORK)]
+    pub work: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
@@ -63,6 +75,8 @@ pub struct CanvasUpdateArgs {
 pub struct CanvasDeleteArgs {
     #[schemars(description = "Element ids (from canvas_get)")]
     pub ids: Vec<String>,
+    #[schemars(description = CANVAS_WORK_TAG)]
+    pub work: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
@@ -93,6 +107,8 @@ pub struct CanvasCommandArgs {
         description = "The command's parameters as an object, e.g. {\"x\": 0, \"y\": 0, \"text\": \"Idea\"} for board.sticky"
     )]
     pub params: Option<Value>,
+    #[schemars(description = CANVAS_WORK_TAG)]
+    pub work: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
@@ -128,6 +144,52 @@ pub struct CanvasExportArgs {
         description = "Absolute path (or ~/…) to write the file to; default the project's .nyawit/exports folder (Sawit's cache folder outside a project)"
     )]
     pub output_path: Option<String>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
+/// `canvas_begin`'s arguments: the component an agent is about to build.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasBeginArgs {
+    #[schemars(
+        description = "The component's name, as the canvas shows it on its frame: \"Pricing card\""
+    )]
+    pub name: String,
+    #[schemars(
+        description = "Where its frame goes: {\"x\": 0, \"y\": 0, \"width\": 320, \"height\": 240} in page units on the page on show, or beside a layer: {\"near\": \"<id>\", \"side\": \"right\" | \"left\" | \"above\" | \"below\", \"width\"?, \"height\"?}. The size is 320 × 240 when not given"
+    )]
+    pub frame: Value,
+    #[schemars(
+        description = "The steps it goes through, shown one at a time on its row: [\"Laying out\", \"Writing copy\", \"Styling\"]. canvas_progress says which is running"
+    )]
+    pub steps: Option<Vec<String>>,
+    #[schemars(
+        description = "\"component\" (the default): a frame you draw into with the canvas tools. \"screen\" (an HTML screen) isn't built yet and is refused"
+    )]
+    pub kind: Option<String>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
+/// `canvas_progress`'s arguments: where a work stands.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasProgressArgs {
+    #[schemars(description = "The work, as canvas_begin answered it")]
+    pub work: String,
+    #[schemars(description = "The step now running: one of the work's steps, or other words")]
+    pub step: Option<String>,
+    #[schemars(
+        description = "working, done or failed. A failed work keeps its message on the canvas until you retry (any op or progress of the work) or the user dismisses it"
+    )]
+    pub status: Option<String>,
+    #[schemars(
+        description = "Why it failed, in a few plain words: \"Couldn't load the logo image\""
+    )]
+    pub message: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]

@@ -124,6 +124,7 @@ async fn command(server: &Sawit, project: &Path, id: &str, params: Value) -> Cal
         params: Some(params),
         file: None,
         project: project_arg(project),
+        work: None,
     };
     server.canvas_command_tool(args).await
 }
@@ -235,9 +236,10 @@ async fn offline_get_and_other_reads_write_nothing() {
     let before = on_disk(&board_file(&project));
 
     elements(&get(&server, &project).await);
-    // A view command changes what is on show and not the document.
+    // A view command would move the user's view: agents may not run it, and it changes nothing.
     let zoom = command(&server, &project, "view.zoomIn", json!({})).await;
-    assert_ne!(zoom.is_error, Some(true), "{}", text(&zoom));
+    assert_eq!(zoom.is_error, Some(true), "{}", text(&zoom));
+    assert!(text(&zoom).contains("moves the view"), "{}", text(&zoom));
 
     assert_eq!(on_disk(&board_file(&project)), before);
     assert_eq!(names(&project.join(".nyawit")), ["canvas.sawit"]);

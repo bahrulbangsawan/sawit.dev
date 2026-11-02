@@ -22,6 +22,7 @@ async fn an_export_never_overwrites_the_canvas_file() {
             params: Some(json!({"path": file})),
             file: None,
             project: project_arg(&project),
+            work: None,
         })
         .await;
     assert_eq!(refused.is_error, Some(true), "{}", said(&refused));

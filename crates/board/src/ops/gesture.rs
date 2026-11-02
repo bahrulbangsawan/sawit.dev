@@ -22,8 +22,8 @@ pub(super) fn before_op(board: &mut BoardDoc, name: &str, op: &Value) -> Option<
 
 /// The ops that change the document, which wait for a drag on the canvas to end
 /// ([`waits_for_the_drag`]).
-const CHANGES_THE_DOCUMENT: [&str; 7] = [
-    "add", "update", "delete", "clear", "replace", "mermaid", "command",
+const CHANGES_THE_DOCUMENT: [&str; 8] = [
+    "add", "update", "delete", "clear", "replace", "mermaid", "command", "begin",
 ];
 
 /// What op `name` has to wait for on the canvas, if anything, said for its refusal: it changes
@@ -69,7 +69,7 @@ fn waits_for_the_drag(board: &BoardDoc, name: &str) -> Option<&'static str> {
 /// gesture open, and the user's next click on a layer cancelled it: the typing and every op since
 /// were gone, though each answered ok, and the autosave wrote that (Plan 7 final review I-2).
 ///
-/// - `add`, `update`, `delete`, `clear`, `replace` and `mermaid` end the edit.
+/// - `add`, `update`, `delete`, `clear`, `replace`, `mermaid` and `begin` end the edit.
 /// - `command` ends it unless the command acts on the text being typed in, or changes nothing
 ///   ([`command_keeps_text_edit`]: the Text menu's commands, and a copy), or is a
 ///   `command.batch` whose every step does. A command refused up front runs nothing, and ends
@@ -80,7 +80,7 @@ fn waits_for_the_drag(board: &BoardDoc, name: &str) -> Option<&'static str> {
 /// With no text being typed in, it does nothing.
 fn end_text_edit_before_op(board: &mut BoardDoc, name: &str, op: &Value) -> Result<(), BoardError> {
     let ends = match name {
-        "add" | "update" | "delete" | "clear" | "replace" | "mermaid" => true,
+        "add" | "update" | "delete" | "clear" | "replace" | "mermaid" | "begin" => true,
         "command" => op.get("command").and_then(Value::as_str).is_some_and(|id| {
             let params = op.get("params").unwrap_or(&Value::Null);
             refused(id, params).is_none() && !command_keeps_text_edit(id, params)

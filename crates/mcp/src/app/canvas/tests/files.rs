@@ -49,6 +49,7 @@ async fn the_canvas_tools_work_on_a_design_file_named_by_file_with_sawit_closed(
             ],
             file: file(),
             project: project_arg(&project),
+            work: None,
         }))
         .await;
     assert_eq!(answer(&added)["added"], json!(2), "{}", said(&added));
@@ -92,6 +93,7 @@ async fn the_canvas_tools_work_on_a_design_file_named_by_file_with_sawit_closed(
             ids: vec!["hero".into()],
             file: file(),
             project: project_arg(&project),
+            work: None,
         }))
         .await;
     assert_eq!(answer(&deleted)["deleted"], json!(1), "{}", said(&deleted));
@@ -132,6 +134,7 @@ async fn an_excalidraw_file_named_by_file_is_imported_once_into_the_sawit_file_b
             elements: vec![json!({"type": "sticky", "x": 900, "y": 0, "text": "added"})],
             file: Some(scene.display().to_string()),
             project: project_arg(&project),
+            work: None,
         }))
         .await;
     assert_ne!(added.is_error, Some(true), "{}", said(&added));

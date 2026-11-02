@@ -20,11 +20,11 @@ use sawit_board::store;
 use serde_json::{Value, json};
 
 pub use args::{
-    CanvasCommandArgs, CanvasCommandsArgs, CanvasDeleteArgs, CanvasDesignGuideArgs,
-    CanvasElementsArgs, CanvasExportArgs, CanvasLoadArgs, CanvasMermaidArgs, CanvasTargetArgs,
-    CanvasUpdateArgs,
+    CanvasBeginArgs, CanvasCommandArgs, CanvasCommandsArgs, CanvasDeleteArgs,
+    CanvasDesignGuideArgs, CanvasElementsArgs, CanvasExportArgs, CanvasLoadArgs, CanvasMermaidArgs,
+    CanvasProgressArgs, CanvasTargetArgs, CanvasUpdateArgs,
 };
-use dispatch::command_list;
+use dispatch::{command_list, in_work};
 use files::{absolute_path, canvas_file, export_path, is_sawit_file, read_scene};
 
 use super::{base64_decode, pretty};
@@ -77,7 +77,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "List the top-level layers of the canvas's page on show: id, type, position, size, text, color and what a connector joins. For the other pages and nested layers use canvas_command: page.list lists the pages, node.get {id} reads a page's or a layer's own layers, and page.select shows another page (with the app closed, only for the rest of one command.batch). Works from the saved file when the app isn't running; the page on show is then the one last saved"
+        description = "List the top-level layers of the canvas's page on show: id, type, position, size, text, color and what a connector joins. For the other pages and nested layers use canvas_command: page.list lists the pages, and node.get {id} reads a page's or a layer's own layers, without showing them: the page and the view on show are the user's, so page.select and view.* are refused. Works from the saved file when the app isn't running; the page on show is then the one last saved"
     )]
     async fn canvas_get(&self, Parameters(a): Parameters<CanvasTargetArgs>) -> CallToolResult {
         self.canvas_get_tool(a).await
@@ -85,22 +85,19 @@ impl Sawit {
 
     #[tool(description = concat!(
         "Draw on Sawit's canvas: add shapes, stickies, labels, text and arrows (arrows bind to \
-         shapes by id). Shapes and stickies with no backgroundColor come in sticky yellow. Opens \
-         the canvas tab when the app is running. ",
+         shapes by id). Shapes and stickies with no backgroundColor come in sticky yellow. To \
+         build a component, begin it with canvas_begin first and pass the `work` it answers here: \
+         the elements go inside its frame, x and y from its top-left corner. With the app running \
+         the canvas's tab opens in the background if it isn't open; the user's tab, page and view \
+         stay as they are. ",
         design_guide_first!()
     ))]
     async fn canvas_add_elements(
         &self,
         Parameters(a): Parameters<CanvasElementsArgs>,
     ) -> CallToolResult {
-        match self
-            .canvas(
-                a.project,
-                a.file,
-                json!({ "op": "add", "elements": a.elements }),
-            )
-            .await
-        {
+        let op = in_work(json!({ "op": "add", "elements": a.elements }), a.work);
+        match self.canvas(a.project, a.file, op).await {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
         }
@@ -127,18 +124,14 @@ impl Sawit {
     }
 
     #[tool(description = concat!(
-        "Change canvas elements by id: position, size, colors, text. ",
+        "Change canvas elements by id: position, size, colors, text. `append` adds text to the \
+         end of a layer's, for long copy sent in parts; new text shows at reading speed on the \
+         canvas. ",
         design_guide_first!()
     ))]
     async fn canvas_update(&self, Parameters(a): Parameters<CanvasUpdateArgs>) -> CallToolResult {
-        match self
-            .canvas(
-                a.project,
-                a.file,
-                json!({ "op": "update", "elements": a.elements }),
-            )
-            .await
-        {
+        let op = in_work(json!({ "op": "update", "elements": a.elements }), a.work);
+        match self.canvas(a.project, a.file, op).await {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
         }
@@ -148,10 +141,8 @@ impl Sawit {
         description = "Delete canvas elements by id, on any page (a connector's label goes with it). The board they were on is first kept beside the canvas file as <file>.del.bak (canvas.sawit.del.bak for the project's canvas, home.sawit.del.bak for home.sawit), the 4 kept before it moving to .del.bak.1 to .del.bak.4 (the oldest goes). Deletions keep these apart from the .bak files canvas_clear and canvas_load keep, so they never push those out; a deletion that leaves the canvas empty keeps a .bak, as a clear does. canvas_load brings any of them back; in the app the user can also undo it"
     )]
     async fn canvas_delete(&self, Parameters(a): Parameters<CanvasDeleteArgs>) -> CallToolResult {
-        match self
-            .canvas(a.project, a.file, json!({ "op": "delete", "ids": a.ids }))
-            .await
-        {
+        let op = in_work(json!({ "op": "delete", "ids": a.ids }), a.work);
+        match self.canvas(a.project, a.file, op).await {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
         }
@@ -275,17 +266,48 @@ impl Sawit {
 
     #[tool(description = concat!(
         "Run one command of the canvas engine by its id, with its parameters as JSON: \
-         board.sticky {x, y, text}, node.set, align.left, edit.undo, view.zoomFit, ... The reply \
-         is the command's result, and a command the engine refuses is an error. canvas_commands \
-         lists the ids, and with a filter what each takes. With the app closed each call starts \
-         from the saved file, so nothing carries over between calls (no undo, no selection, no \
-         view): pass ids, or run the steps in one command.batch. A command that deletes layers \
-         (edit.delete, edit.cut, page.delete, ...) keeps the board they were on beside the canvas \
-         file as <file>.del.bak first, as canvas_delete does. ",
+         board.sticky {x, y, text}, node.set, align.left, edit.undo, ... Commands that move the \
+         view or the page the user has on show (view.*, page.select) are refused: address pages \
+         and layers by id. The reply is the command's result, and a command the engine refuses \
+         is an error. canvas_commands lists the ids, and with a filter what each takes. With the \
+         app closed each call starts from the saved file, so nothing carries over between calls \
+         (no undo, no selection, no view): pass ids, or run the steps in one command.batch. A \
+         command that deletes layers (edit.delete, edit.cut, page.delete, ...) keeps the board \
+         they were on beside the canvas file as <file>.del.bak first, as canvas_delete does. ",
         design_guide_first!()
     ))]
     async fn canvas_command(&self, Parameters(a): Parameters<CanvasCommandArgs>) -> CallToolResult {
         self.canvas_command_tool(a).await
+    }
+
+    #[tool(
+        description = "Begin a component before you build it, and begin each component that way: its named frame appears on the canvas at once, and while you build the canvas shows a skeleton in it, a row above it with its name and step, your name and a progress badge. Pass the `work` this answers to canvas_add_elements, canvas_update, canvas_add_diagram, canvas_delete and canvas_command: their ops go inside the frame (x and y from its top-left corner) and its undo step. Say each step, and that it is done or failed, with canvas_progress. Answers {work, frame, page}. With the app closed the frame is made in the saved file. Designing UI? Read canvas_design_guide first and follow it"
+    )]
+    async fn canvas_begin(&self, Parameters(a): Parameters<CanvasBeginArgs>) -> CallToolResult {
+        let op = json!({
+            "op": "begin", "name": a.name, "frame": a.frame, "steps": a.steps, "kind": a.kind,
+        });
+        match self.canvas(a.project, a.file, op).await {
+            Ok(v) => ok(pretty(&v)),
+            Err(e) => fail(e),
+        }
+    }
+
+    #[tool(
+        description = "Say where a component begun with canvas_begin stands: `step`, the step now running, and `status` done or failed (with a `message`, the reason, which stays on the canvas until you retry or the user dismisses it). A work with no op or progress for 60 s shows as stalled. With the app closed nothing shows progress, so it changes nothing and says so"
+    )]
+    async fn canvas_progress(
+        &self,
+        Parameters(a): Parameters<CanvasProgressArgs>,
+    ) -> CallToolResult {
+        let op = json!({
+            "op": "progress", "work": a.work, "step": a.step, "status": a.status,
+            "message": a.message,
+        });
+        match self.canvas(a.project, a.file, op).await {
+            Ok(v) => ok(pretty(&v)),
+            Err(e) => fail(e),
+        }
     }
 
     #[tool(description = concat!(

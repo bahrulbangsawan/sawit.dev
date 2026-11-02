@@ -71,6 +71,7 @@ async fn starting_over_twice_with_sawit_closed_keeps_the_users_board() {
             elements: vec![json!({"type": "rectangle", "x": 0, "y": 0})],
             file: None,
             project: project_arg(&project),
+            work: None,
         }))
         .await;
     assert_ne!(drawn.is_error, Some(true), "{}", said(&drawn));
@@ -130,6 +131,7 @@ async fn every_deletion_with_sawit_closed_keeps_the_board_it_took_layers_off() {
             params: Some(params),
             file: None,
             project: project_arg(&project),
+            work: None,
         });
         async {
             let ran = run.await;
@@ -147,6 +149,7 @@ async fn every_deletion_with_sawit_closed_keeps_the_board_it_took_layers_off() {
             ids: vec![id_of("note 0")],
             file: None,
             project: project_arg(&project),
+            work: None,
         }))
         .await;
     assert_eq!(answer(&deleted)["deleted"], json!(1));
@@ -161,14 +164,7 @@ async fn every_deletion_with_sawit_closed_keeps_the_board_it_took_layers_off() {
     );
 
     // Two more pages with a sticky each, the first page on show again: nothing is taken off.
-    let steps = json!({"commands": [
-        {"command": "page.add", "params": {"name": "Two"}},
-        {"command": "board.sticky", "params": {"x": 0, "y": 0, "text": "on two"}},
-        {"command": "page.add", "params": {"name": "Three"}},
-        {"command": "board.sticky", "params": {"x": 0, "y": 0, "text": "on three"}},
-        {"command": "page.select", "params": {"index": 0}},
-    ]});
-    command("command.batch", steps).await;
+    add_pages(&file, &[("Two", "on two"), ("Three", "on three")]);
     assert_eq!(deletion_backups_of(&file).len(), 2);
     assert!(backups_of(&file).is_empty());
 
@@ -231,6 +227,7 @@ async fn deletions_after_a_clear_never_push_out_the_board_it_cleared() {
             elements: stickies,
             file: None,
             project: project_arg(&project),
+            work: None,
         }))
         .await;
     assert_ne!(drawn.is_error, Some(true), "{}", said(&drawn));
@@ -244,6 +241,7 @@ async fn deletions_after_a_clear_never_push_out_the_board_it_cleared() {
                 ids: vec![id],
                 file: None,
                 project: project_arg(&project),
+                work: None,
             }))
             .await;
         assert_eq!(answer(&deleted)["deleted"], json!(1), "{}", said(&deleted));

@@ -72,6 +72,7 @@ mod refusal;
 mod replace;
 #[cfg(test)]
 mod tests;
+mod work;
 
 use command::{command, commands};
 use diagram::mermaid;
@@ -83,6 +84,7 @@ use replace::replace;
 
 pub use diagram::{PreparedDiagram, prepare_diagram, run_prepared};
 pub use files::{engine_name, is_canvas_file, is_sawit_file};
+pub use work::{PROGRESS_UNSHOWN, WORK_SIZE, agent_refusal, work_frame, work_of, work_steps};
 
 // The document's side of the commands Sawit carries out itself (spec, "Menu policy": UI-handled
 // ids): the files File ▸ Export and Import from file… make and read, and what Edit ▸ Copy as
@@ -113,6 +115,7 @@ const BATCH: &str = "command.batch";
 ///   - `x`, `y`, `width` and `height`: the layer's box, in page coordinates, as `get` gives it;
 ///   - `text` (or `label.text`): a connector's label, the note of a sticky, the text of a shape or
 ///     of a text layer;
+///   - `append`: text added to the end of that text (after a `text` the element sets too);
 ///   - `name`: the layer's name, a section's title;
 ///   - `backgroundColor` and `strokeColor`, by the rules `add` colours by ([`skeleton::set_colors`]).
 ///
@@ -168,8 +171,16 @@ const BATCH: &str = "command.batch";
 ///   error "not editing text". A sticky or a text layer is edited once the pointer or a key
 ///   starts it, as with a mouse and a keyboard: the sticky tool's click, a double-click, Enter.
 ///
+/// - `begin` (`{name, frame, steps?, kind?}`) makes a named frame for a component an agent is
+///   about to build, marked as a new work's, and answers `{ok, work, frame, page, name, steps}`;
+///   `progress` (`{work, step?, status?, message?}`) checks the work is on the canvas and answers
+///   that nothing shows its progress, which the app shows instead ([`work`]). An op that names a
+///   `work` runs inside that work's frame: `add`, `update` and `mermaid` place from the frame's
+///   corner, and what `add` and `mermaid` draw goes into the frame. `update` takes `append` too,
+///   text added to the end of a layer's.
+///
 /// While the user holds a drag on the canvas, every op that changes the document (`add`,
-/// `update`, `delete`, `clear`, `replace`, `mermaid` and `command`) answers
+/// `update`, `delete`, `clear`, `replace`, `mermaid`, `begin` and `command`) answers
 /// "<op>: finish the drag on the canvas first" and changes nothing, and while the Pen draws a path
 /// "<op>: finish the path the Pen draws on the canvas first" ([`waits_for_the_drag`]).
 pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
@@ -198,6 +209,15 @@ fn run_unguarded(board: &mut BoardDoc, op: &Value) -> Value {
         return refused;
     }
     match name {
+        Some("begin") => work::begin(board, op),
+        Some("progress") => work::progress(board, op),
+        _ => work::in_work(board, op, run_named),
+    }
+}
+
+/// [`run_unguarded`]'s ops that act on the document as it is, once a work's frame is found.
+fn run_named(board: &mut BoardDoc, op: &Value) -> Value {
+    match op.get("op").and_then(Value::as_str) {
         Some("get") => get(board),
         Some("add") => add(board, op),
         Some("update") => update(board, op),

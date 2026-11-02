@@ -137,14 +137,20 @@ fn canvas_tools_describe_the_native_canvas() {
     ] {
         assert!(elements.contains(said), "no {said:?} in {elements}");
     }
-    // The canvas tab opens only in the app. With the app closed a clear is saved at once, so
+    // The canvas tab opens only in the app, in the background. Components are begun first. With the app closed a clear is saved at once, so
     // nothing undoes it, and the save keeps the board it cleared beside the file (m1), and the
     // ones before it (CANVAS-CORE-3). So does every op that deletes layers, a deletion by id
     // and an engine command that deletes included, whatever is left on the canvas, in
     // backups of their own, which never push out a clear's.
     assert!(
-        elements.contains("Opens the canvas tab when the app is running"),
+        elements.contains("canvas's tab opens in the background if it isn't open")
+            && elements.contains("begin it with canvas_begin first and pass the `work`"),
         "{elements}"
+    );
+    let begin = tool("canvas_begin");
+    assert!(
+        begin.contains("Begin a component before you build it"),
+        "{begin}"
     );
     let clear = tool("canvas_clear");
     assert!(

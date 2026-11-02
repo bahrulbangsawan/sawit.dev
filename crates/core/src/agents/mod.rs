@@ -1,7 +1,7 @@
 //! The agents that drive the app through `sawit-mcp`, as the app shows them: who each one is
 //! ([`AgentIdentity`], sent with every control op), the colour and label the app gives it
 //! ([`Roster`]), how long its presence lasts on a surface ([`opacity`]), and what it is doing
-//! there, in words ([`canvas_action`]).
+//! there, in words ([`canvas_action`]), and the components it builds there ([`work`]).
 //!
 //! Each `sawit-mcp` process is one agent session: Claude Code, Codex and Cursor each start their
 //! own stdio server per session, and a session's subagents share it. So the identity is the
@@ -14,6 +14,9 @@ mod presence;
 mod roster;
 #[cfg(test)]
 mod tests;
+pub mod work;
+#[cfg(test)]
+mod work_tests;
 
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +25,7 @@ pub use actions::{
     page_name, slow_canvas_op,
 };
 pub use presence::{FADE_AFTER, FADE_TIME, FADED, GONE_AFTER, glide, opacity, shows_action};
-pub use roster::{INK, Known, PALETTE, Roster};
+pub use roster::{INK, Known, LIGHT_PAGE, PALETTE, Roster};
 
 /// Who sent a control op: one `sawit-mcp` process. `name` is the client's own name for itself,
 /// made readable ([`client_name`]), `label` the project or folder its session works in, when it

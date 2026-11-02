@@ -9,6 +9,7 @@ mod load;
 mod running;
 mod saves;
 mod stored;
+mod work;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -46,6 +47,20 @@ fn write_board(path: &Path, stickies: usize) {
         board.execute("board.sticky", &sticky).unwrap();
     }
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, board.to_bytes().unwrap()).unwrap();
+}
+
+/// Adds a page with a sticky to the canvas file at `path` for each of `pages` (its name, the
+/// sticky's text), the first page on show again, as the user would: an agent may not show another
+/// page (`ops::agent_refusal`).
+fn add_pages(path: &Path, pages: &[(&str, &str)]) {
+    let mut board = store::open(path).unwrap();
+    for (name, text) in pages {
+        board.execute("page.add", &json!({"name": name})).unwrap();
+        let sticky = json!({"x": 0, "y": 0, "text": text});
+        board.execute("board.sticky", &sticky).unwrap();
+    }
+    board.execute("page.select", &json!({"index": 0})).unwrap();
     std::fs::write(path, board.to_bytes().unwrap()).unwrap();
 }
 
