@@ -58,7 +58,12 @@ impl Anchor {
 }
 
 impl<'a> Maker<'a> {
-    pub(super) fn shape(&mut self, item: &Skeleton, element: Element) -> EngineResult<NodeId> {
+    pub(super) fn shape(
+        &mut self,
+        index: usize,
+        item: &Skeleton,
+        element: Element,
+    ) -> EngineResult<NodeId> {
         let shape = match element {
             Element::Ellipse => "ellipse",
             Element::Diamond => "diamond",
@@ -79,7 +84,7 @@ impl<'a> Maker<'a> {
         if let Some(label) = made.get("text").and_then(id_of) {
             self.font_size(label, size)?;
         }
-        self.colour(id, item)?;
+        self.colour(index, id, item)?;
         Ok(id)
     }
 
@@ -94,17 +99,17 @@ impl<'a> Maker<'a> {
         Ok(())
     }
 
-    pub(super) fn sticky(&mut self, item: &Skeleton) -> EngineResult<NodeId> {
+    pub(super) fn sticky(&mut self, index: usize, item: &Skeleton) -> EngineResult<NodeId> {
         let (x, y) = self.at(item);
         // `author: false`: a note an agent makes is not signed with the user's name.
         let mut args = json!({"x": x, "y": y, "color": default_fill(), "author": false});
         put(&mut args, "text", label_or_text(item));
         let id = self.create("board.sticky", &args)?;
-        self.colour(id, item)?;
+        self.colour(index, id, item)?;
         Ok(id)
     }
 
-    pub(super) fn text(&mut self, item: &Skeleton) -> EngineResult<NodeId> {
+    pub(super) fn text(&mut self, index: usize, item: &Skeleton) -> EngineResult<NodeId> {
         let (x, y) = self.at(item);
         let text = text_or_label(item).unwrap_or_default();
         let mut args = json!({"type": "text", "x": x, "y": y, "text": text});
@@ -112,11 +117,11 @@ impl<'a> Maker<'a> {
         put(&mut args, "width", item.width.filter(|w| *w > 0.0));
         let id = self.create("node.create", &args)?;
         self.font_size(id, item.font_size)?;
-        self.colour(id, item)?;
+        self.colour(index, id, item)?;
         Ok(id)
     }
 
-    pub(super) fn frame(&mut self, item: &Skeleton) -> EngineResult<NodeId> {
+    pub(super) fn frame(&mut self, index: usize, item: &Skeleton) -> EngineResult<NodeId> {
         let (x, y) = self.at(item);
         let mut args = json!({"type": "section", "x": x, "y": y});
         put(&mut args, "width", item.width);
@@ -124,7 +129,7 @@ impl<'a> Maker<'a> {
         let title = item.name.as_deref().filter(|n| !n.is_empty());
         put(&mut args, "name", title.or(label_or_text(item)));
         let id = self.create("node.create", &args)?;
-        self.colour(id, item)?;
+        self.colour(index, id, item)?;
         Ok(id)
     }
 
@@ -228,7 +233,7 @@ impl<'a> Maker<'a> {
             }
             let args = json!({"points": points, "color": default_ink()});
             let id = self.create("board.ink", &args)?;
-            self.colour(id, item)?;
+            self.colour(index, id, item)?;
             return Ok(Some(id));
         }
         self.connector(index, item, element, &points)
@@ -278,7 +283,7 @@ impl<'a> Maker<'a> {
             label_or_text(item).filter(|t| !t.is_empty()),
         );
         let id = self.create("board.connector", &args)?;
-        self.colour(id, item)?;
+        self.colour(index, id, item)?;
         Ok(Some(id))
     }
 

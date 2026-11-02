@@ -7,8 +7,9 @@ use figcraft_engine::params::id_of;
 use figcraft_engine::{EngineError, Result as EngineResult, Session};
 use serde_json::{Value, json};
 
+use super::colors::{self, Later};
 use super::element::{Element, STAGES};
-use super::{Applied, Maker, SAWIT_ID, Skeleton, TYPES, agent_id, node_id, set_colors};
+use super::{Applied, Maker, SAWIT_ID, Skeleton, TYPES, agent_id, node_id};
 
 impl<'a> Maker<'a> {
     pub(super) fn new(session: &'a mut Session, offset: (f64, f64)) -> EngineResult<Self> {
@@ -27,6 +28,7 @@ impl<'a> Maker<'a> {
             before,
             made: HashMap::new(),
             notes: Vec::new(),
+            later: Later::default(),
         })
     }
 
@@ -48,6 +50,9 @@ impl<'a> Maker<'a> {
                     .map_err(|e| in_element(index, item, e))?;
             }
         }
+        std::mem::take(&mut self.later)
+            .set(self.session)
+            .map_err(|(index, e)| in_element(index, &items[index], e))?;
         for (index, (item, node)) in items.iter().zip(&nodes).enumerate() {
             self.place_in_frame(item, *node)
                 .map_err(|e| in_element(index, item, e))?;
@@ -67,11 +72,11 @@ impl<'a> Maker<'a> {
     ) -> EngineResult<Option<NodeId>> {
         let node = match element {
             Element::Rectangle | Element::Ellipse | Element::Diamond => {
-                Some(self.shape(item, element)?)
+                Some(self.shape(index, item, element)?)
             }
-            Element::Sticky => Some(self.sticky(item)?),
-            Element::Text => Some(self.text(item)?),
-            Element::Frame => Some(self.frame(item)?),
+            Element::Sticky => Some(self.sticky(index, item)?),
+            Element::Text => Some(self.text(index, item)?),
+            Element::Frame => Some(self.frame(index, item)?),
             Element::Image => self.image(index, item)?,
             Element::Arrow | Element::Line | Element::Freedraw => {
                 self.line(index, item, element)?
@@ -99,12 +104,14 @@ impl<'a> Maker<'a> {
         (item.x + self.offset.0, item.y + self.offset.1)
     }
 
-    pub(super) fn colour(&mut self, id: NodeId, item: &Skeleton) -> EngineResult<()> {
-        set_colors(
+    /// Colour layer `id`, drawn for element `index` (`item`), keeping the paints it can for the end.
+    pub(super) fn colour(&mut self, index: usize, id: NodeId, item: &Skeleton) -> EngineResult<()> {
+        colors::colour(
             self.session,
             id,
             item.background_color.as_deref(),
             item.stroke_color.as_deref(),
+            Some((&mut self.later, index)),
         )
     }
 

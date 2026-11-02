@@ -264,3 +264,49 @@ fn what_is_drawn_does_not_depend_on_the_users_tools_or_name() {
     assert_eq!(stroke(&picked, node(&done, 13)), css("#1971c2"));
     assert_eq!(stroke(&picked, node(&done, 14)), css("#2f9e44"));
 }
+
+/// Paints are set together once everything is drawn, and `edit.repeat` after an apply still
+/// repeats what the apply ran last: the last element drawn, or the `node.set` of its last paint.
+#[test]
+fn repeat_after_an_apply_repeats_its_last_command() {
+    let mut b = board();
+    let done = add(
+        &mut b,
+        json!([
+            {"type": "rectangle", "id": "a", "x": 0, "y": 0, "width": 100, "height": 50,
+             "strokeColor": "#1971c2"},
+            {"type": "rectangle", "id": "b", "x": 300, "y": 0, "width": 100, "height": 50,
+             "strokeColor": "#1971c2"},
+            {"type": "arrow", "x": 100, "y": 25, "start": {"id": "a"}, "end": {"id": "b"}},
+        ]),
+    );
+    let before = layers(&b);
+    b.execute("edit.repeat", &json!({})).unwrap();
+    let new: Vec<NodeId> = layers(&b)
+        .into_iter()
+        .filter(|l| !before.contains(l))
+        .collect();
+    assert_eq!(new.len(), 1, "one layer more: {new:?}");
+    let again = connector(&b, new[0]);
+    assert_eq!(
+        again.from.node(),
+        Some(node(&done, 0)),
+        "the arrow is drawn again"
+    );
+    assert_eq!(again.to.node(), Some(node(&done, 1)));
+
+    let done = add(
+        &mut b,
+        json!([{"type": "rectangle", "x": 0, "y": 200, "width": 100, "height": 50,
+                "strokeColor": "#e03131"}]),
+    );
+    let drawn = outline(&b, node(&done, 0));
+    assert_eq!(
+        b.session.last_command,
+        Some((
+            "node.set".into(),
+            json!({"ids": [drawn], "props": {"stroke": "#e03131"}})
+        )),
+        "the shape's stroke, as the node.set that set it on its own"
+    );
+}

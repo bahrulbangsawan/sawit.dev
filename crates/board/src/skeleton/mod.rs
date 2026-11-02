@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::doc::{BoardDoc, BoardError};
+use colors::Later;
 use element::{Element, line_extent};
 
 pub use colors::set_colors;
@@ -235,4 +236,6 @@ struct Maker<'a> {
     /// means that call's own element, whatever the board already held under it.
     made: HashMap<String, NodeId>,
     notes: Vec<String>,
+    /// The paints of what has been drawn, set once everything is.
+    later: Later,
 }
