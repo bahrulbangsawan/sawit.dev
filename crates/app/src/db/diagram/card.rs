@@ -5,20 +5,51 @@ use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use sawit_core::db::diagram;
 
 use super::layout::short_type;
 use super::{CARD_PAD, DETAIL_ZOOM, DiagramView, HEADER_H, ROW_H};
+
+/// What a card says, made once per schema load rather than on every frame: the table's name and
+/// schema, and each column's name and type ("varchar(255)", with "?" when nullable).
+pub(super) struct CardText {
+    name: SharedString,
+    schema: SharedString,
+    columns: Vec<(SharedString, SharedString)>,
+}
+
+impl CardText {
+    pub(super) fn new(table: &diagram::ErdTable) -> Self {
+        Self {
+            name: table.name.clone().into(),
+            schema: table.schema.clone().into(),
+            columns: table
+                .columns
+                .iter()
+                .map(|col| {
+                    let ty = format!(
+                        "{}{}",
+                        short_type(&col.data_type),
+                        if col.nullable { "?" } else { "" }
+                    );
+                    (col.name.clone().into(), ty.into())
+                })
+                .collect(),
+        }
+    }
+}
 
 impl DiagramView {
     pub(super) fn render_card(&self, ix: usize, dim: bool, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let table = &self.erd.tables[ix];
+        let card = &self.texts[ix];
         let z = self.zoom;
         let at = self.to_screen(self.pos[ix]) - self.viewport.get().origin;
         let size = self.sizes[ix];
         let selected = self.selected == Some(ix);
         let current_hit = self.hits.get(self.hit).copied();
-        let table_hit = self.hits.contains(&(ix, None));
+        let table_hit = self.is_hit((ix, None));
         let border = if selected {
             theme.primary
         } else if table_hit {
@@ -50,7 +81,7 @@ impl DiagramView {
                     .truncate()
                     .font_semibold()
                     .text_color(theme.foreground)
-                    .child(table.name.clone()),
+                    .child(card.name.clone()),
             )
             .when(detail, |el| {
                 el.child(div().flex_1()).child(
@@ -58,13 +89,14 @@ impl DiagramView {
                         .flex_none()
                         .text_size(px(10.5 * z))
                         .text_color(theme.muted_foreground)
-                        .child(table.schema.clone()),
+                        .child(card.schema.clone()),
                 )
             });
         let rows =
             detail.then(|| {
-                table.columns.iter().enumerate().map(move |(c, col)| {
-                    let hit = self.hits.contains(&(ix, Some(c)));
+                let columns = table.columns.iter().zip(&card.columns);
+                columns.enumerate().map(move |(c, (col, (name, ty)))| {
+                    let hit = self.is_hit((ix, Some(c)));
                     let current = current_hit == Some((ix, Some(c)));
                     let key = if col.pk {
                         Some((Lucide::KeyRound, theme.warning))
@@ -96,7 +128,7 @@ impl DiagramView {
                                 .truncate()
                                 .text_color(theme.foreground)
                                 .when(col.pk, |el| el.font_semibold())
-                                .child(col.name.clone()),
+                                .child(name.clone()),
                         )
                         .child(
                             div()
@@ -106,11 +138,7 @@ impl DiagramView {
                                 .font_family(theme.mono_font_family.clone())
                                 .text_size(px(11. * z))
                                 .text_color(theme.muted_foreground)
-                                .child(format!(
-                                    "{}{}",
-                                    short_type(&col.data_type),
-                                    if col.nullable { "?" } else { "" }
-                                )),
+                                .child(ty.clone()),
                         )
                 })
             });

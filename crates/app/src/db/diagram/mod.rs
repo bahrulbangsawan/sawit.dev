@@ -26,6 +26,7 @@ use sawit_core::db::diagram::{self, Erd};
 
 use super::store::DbStore;
 use crate::states::Placeholder;
+use card::CardText;
 use layout::{card_size, load_layouts};
 
 /// Card geometry in world units (pixels at 100%).
@@ -66,6 +67,8 @@ pub struct DiagramView {
     /// World position (top-left) and size of each table's card.
     pos: Vec<Point<f32>>,
     sizes: Vec<gpui_kit::Size<f32>>,
+    /// What each table's card says.
+    texts: Vec<CardText>,
     /// Screen offset of the world origin from the viewport's top-left.
     offset: Point<Pixels>,
     zoom: f32,
@@ -77,6 +80,8 @@ pub struct DiagramView {
     hovered: Option<usize>,
     search: Entity<InputState>,
     hits: Vec<(usize, Option<usize>)>,
+    /// `hits` in order, to look a table or a column up while drawing.
+    sorted_hits: Vec<(usize, Option<usize>)>,
     hit: usize,
     show_dbml: bool,
     show_minimap: bool,
@@ -136,6 +141,7 @@ impl DiagramView {
             erd: Erd::default(),
             pos: Vec::new(),
             sizes: Vec::new(),
+            texts: Vec::new(),
             offset: point(px(0.), px(0.)),
             zoom: 1.,
             viewport: Rc::new(Cell::new(Bounds::default())),
@@ -145,6 +151,7 @@ impl DiagramView {
             hovered: None,
             search,
             hits: Vec::new(),
+            sorted_hits: Vec::new(),
             hit: 0,
             show_dbml: false,
             show_minimap: true,
@@ -174,6 +181,7 @@ impl DiagramView {
         let first = self.erd.tables.is_empty();
         self.erd = diagram::erd(&schemas, only);
         self.sizes = self.erd.tables.iter().map(card_size).collect();
+        self.texts = self.erd.tables.iter().map(CardText::new).collect();
         let saved = load_layouts()
             .remove(&self.layout_key())
             .unwrap_or_default();

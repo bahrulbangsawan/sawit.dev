@@ -99,12 +99,25 @@ impl DiagramView {
     pub(super) fn run_search(&mut self, cx: &mut Context<Self>) {
         let query = self.search.read(cx).value();
         self.hits = diagram::search(&self.erd, &query);
+        self.sorted_hits = self.hits.clone();
+        self.sorted_hits.sort_unstable();
         self.hit = 0;
         if let Some(&(t, c)) = self.hits.first() {
             self.focus(t, c, cx);
         } else {
             cx.notify();
         }
+    }
+
+    /// `hit` (a table, or a column of one) is one of the search's matches.
+    pub(super) fn is_hit(&self, hit: (usize, Option<usize>)) -> bool {
+        self.sorted_hits.binary_search(&hit).is_ok()
+    }
+
+    /// The search matches `table`'s name or one of its columns.
+    pub(super) fn has_hit(&self, table: usize) -> bool {
+        let at = self.sorted_hits.partition_point(|h| h.0 < table);
+        self.sorted_hits.get(at).is_some_and(|h| h.0 == table)
     }
 
     pub(super) fn step_hit(&mut self, step: isize, cx: &mut Context<Self>) {

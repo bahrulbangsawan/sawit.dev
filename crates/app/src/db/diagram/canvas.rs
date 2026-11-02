@@ -123,7 +123,7 @@ impl DiagramView {
             .map(|i| {
                 let dim = match &focus {
                     Some(set) => !set[i],
-                    None => searching && !self.hits.iter().any(|h| h.0 == i),
+                    None => searching && !self.has_hit(i),
                 };
                 self.render_card(i, dim, cx)
             })
