@@ -98,6 +98,28 @@ fn json_bodies_keep_their_shape_and_lose_their_secrets() {
     );
 }
 
+/// The objects of a list repeat their names, which are read once: every object loses its
+/// secrets, also past the names the redaction remembers (a hundred more here).
+#[test]
+fn every_object_of_a_list_loses_its_secrets() {
+    let item = |i: usize, token: &str| format!(r#"{{"id":{i},"token":{token},"k{i}":"v{i}"}}"#);
+    let body = format!(
+        "[{}]",
+        (0..100)
+            .map(|i| item(i, &format!(r#""t{i}""#)))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let redacted = format!(
+        "[{}]",
+        (0..100)
+            .map(|i| item(i, r#""[redacted]""#))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    assert_eq!(redact_body(&body), redacted);
+}
+
 /// The page agent cuts long bodies (`… (5000 chars)`): a cut JSON body is redacted as far as
 /// it goes, a secret cut in the middle too, and the note stays.
 #[test]

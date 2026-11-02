@@ -177,6 +177,9 @@ fn redact_json(json: &str) -> String {
     let bytes = json.as_bytes();
     let mut out = String::with_capacity(json.len());
     let mut open: Vec<Open> = Vec::new();
+    // The names read so far, as written, and whether each is a secret's: the objects of a list
+    // repeat theirs, so each name is looked at once (up to `NAMES` of them).
+    let mut names: Vec<(&str, bool)> = Vec::new();
     // In an object: whether the next string is a name, and whether the value after the last
     // name is a secret.
     let (mut name_next, mut value_secret) = (false, false);
@@ -213,7 +216,17 @@ fn redact_json(json: &str) -> String {
                 let text = &json[at..end];
                 if name_next {
                     let inherited = open.last().is_some_and(|o| o.secret);
-                    value_secret = inherited || secret_name(text);
+                    value_secret = inherited
+                        || match names.iter().find(|(name, _)| *name == text) {
+                            Some(&(_, secret)) => secret,
+                            None => {
+                                let secret = secret_name(text);
+                                if names.len() < NAMES {
+                                    names.push((text, secret));
+                                }
+                                secret
+                            }
+                        };
                     name_next = false;
                     out.push_str(text);
                 } else if secret {
@@ -235,9 +248,18 @@ fn redact_json(json: &str) -> String {
                 });
                 at += len;
             }
-            // Spaces, `:`, `true`, `false` and `null`, a whole character at a time.
+            // Spaces, `:`, `true`, `false` and `null`: all of it up to what an arm above reads,
+            // at once (those are ASCII, so the cut falls between characters).
             _ => {
-                let len = json[at..].chars().next().map_or(1, char::len_utf8);
+                let len = bytes[at..]
+                    .iter()
+                    .position(|b| {
+                        matches!(
+                            b,
+                            b'{' | b'[' | b'}' | b']' | b',' | b'"' | b'-' | b'0'..=b'9'
+                        )
+                    })
+                    .unwrap_or(bytes.len() - at);
                 out.push_str(&json[at..at + len]);
                 at += len;
             }
@@ -245,6 +267,9 @@ fn redact_json(json: &str) -> String {
     }
     out
 }
+
+/// How many names [`redact_json`] remembers the answer of [`secret_name`] for.
+const NAMES: usize = 64;
 
 /// Where the JSON string whose `"` is at `start` ends: after its closing `"`, or at the end of a
 /// text cut short inside it.
