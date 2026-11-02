@@ -15,7 +15,7 @@ fn clear_asks_before_dropping_notes_not_sent(cx: &mut gpui_kit::TestAppContext) 
     let add = |note: &str, cx: &mut VisualTestContext| {
         cx.update(|window, cx| {
             panel.update(cx, |p, cx| p.add(at("http://a/1", 1), false, window, cx));
-            let comment = panel.read(cx).rows.last().unwrap().comment.clone();
+            let comment = panel.read(cx).rows.last().unwrap().comment.clone().unwrap();
             comment.update(cx, |c, cx| c.set_value(note.to_string(), window, cx));
         });
     };
@@ -41,7 +41,7 @@ fn clear_asks_before_dropping_notes_not_sent(cx: &mut gpui_kit::TestAppContext) 
     assert_eq!(cx.update(|_, cx| panel.read(cx).unsent(cx)), 0);
     // A note edited after it was sent is unsent again.
     cx.update(|window, cx| {
-        let comment = panel.read(cx).rows[0].comment.clone();
+        let comment = panel.read(cx).rows[0].comment.clone().unwrap();
         comment.update(cx, |c, cx| {
             c.set_value("Make it red".to_string(), window, cx)
         });

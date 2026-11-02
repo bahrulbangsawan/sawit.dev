@@ -234,3 +234,73 @@ fn agent_script_parses() {
             .unwrap_or_else(|e| panic!("agent script doesn't parse: {e:?}"));
     });
 }
+
+/// While one of mesurer's tools, its toolbar or a panel is under the pointer (mesurer's host is
+/// the first thing there, and the event's target at the window), the picker leaves the pointer
+/// to it: no pick, no hover, nothing swallowed. Elsewhere it picks as it does without mesurer.
+#[test]
+fn the_picker_yields_the_pointer_to_mesurer() {
+    let got = on_stand_in_page(
+        r#"
+            var mesurer = { hasAttribute: function (n) { return n === "data-sawit-mesurer"; } };
+            var stopped = 0;
+            var stop = function () { stopped++; };
+            var at = function (type, target) {
+                fire(type, { isTrusted: true, type: type, target: target, clientX: 5, clientY: 5, altKey: false,
+                    preventDefault: stop, stopImmediatePropagation: stop });
+            };
+            __sawitAgent.run({ op: "pick", mode: "annotate" });
+            var from = posted.length;
+            document.elementsFromPoint = function () { return [mesurer, el]; };
+            at("pointermove", mesurer);
+            at("pointerdown", mesurer);
+            at("mousedown", mesurer);
+            at("click", mesurer);
+            var onMesurer = { picked: count(from, "picked"), stopped: stopped };
+            document.elementsFromPoint = function () { return [el]; };
+            at("pointermove", el);
+            at("pointerdown", el);
+            at("click", el);
+            JSON.stringify({ onMesurer: onMesurer, onPage: { picked: count(from, "picked"), stopped: stopped > 0 } })
+        "#,
+    );
+    assert_eq!(
+        got,
+        json!({"onMesurer": {"picked": 0, "stopped": 0}, "onPage": {"picked": 1, "stopped": true}})
+    );
+}
+
+/// An agent's click on an element under mesurer's host (its toolbar, a comment pin, a tool's
+/// full-page layer) or Sawit's overlay goes to the element: those layers are Sawit's, not the
+/// page's. An element of the page on top still covers it.
+#[test]
+fn an_agents_click_goes_through_sawits_layers() {
+    let got = on_stand_in_page(
+        r##"
+            var events = [];
+            el.scrollIntoView = noop;
+            el.closest = function () { return null; };
+            el.dispatchEvent = function (e) { events[events.length] = e.type; return true; };
+            el.focus = noop;
+            el.tabIndex = 0;
+            el.parentNode = null;
+            document.querySelector = function () { return el; };
+            function MouseEvent(type, init) { this.type = type; }
+            var host = { hasAttribute: function (n) { return n === "data-sawit-overlay" || n === "data-sawit-mesurer"; } };
+            var other = { hasAttribute: function () { return false; }, localName: "div", id: "", className: "",
+                classList: [], getAttribute: function () { return null; }, parentNode: null, innerText: "" };
+            document.elementFromPoint = function () { return host; };
+            document.elementsFromPoint = function () { return [host, el]; };
+            var under = JSON.parse(__sawitAgent.run({ op: "click", selector: "#buy" }));
+            document.elementFromPoint = function () { return other; };
+            document.elementsFromPoint = function () { return [other, el]; };
+            var covered = JSON.parse(__sawitAgent.run({ op: "click", selector: "#buy" }));
+            JSON.stringify({ under: under.ok, clicked: events.indexOf("click") >= 0, covered: covered.ok,
+                why: /covered/.test(covered.error || "") })
+        "##,
+    );
+    assert_eq!(
+        got,
+        json!({"under": true, "clicked": true, "covered": false, "why": true})
+    );
+}

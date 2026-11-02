@@ -23,14 +23,14 @@ fn the_annotate_tooltip_follows_the_keymap(cx: &mut gpui_kit::TestAppContext) {
         })
     };
     let off = || Box::new(Unbind("browser::ToggleAnnotate".into()));
-    assert_eq!(tooltip(cx).as_ref(), "Annotate (⇧⌘.)");
+    assert_eq!(tooltip(cx).as_ref(), "Annotate and measure (⇧⌘.)");
 
     bind("cmd->", off(), cx);
     bind("ctrl-alt-a", Box::new(browser::ToggleAnnotate), cx);
-    assert_eq!(tooltip(cx).as_ref(), "Annotate (⌃⌥A)");
+    assert_eq!(tooltip(cx).as_ref(), "Annotate and measure (⌃⌥A)");
 
     bind("ctrl-alt-a", off(), cx);
-    assert_eq!(tooltip(cx).as_ref(), "Annotate");
+    assert_eq!(tooltip(cx).as_ref(), "Annotate and measure");
 }
 
 /// ⇧⌘. toggles Annotate while Sawit's side of the tab has the keyboard: the Annotate and

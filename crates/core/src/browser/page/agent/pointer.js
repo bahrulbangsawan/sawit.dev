@@ -17,8 +17,13 @@
       }),
     );
   };
+  // What a click at (x, y) lands on in the page. Sawit's own layers over it (its overlay, and
+  // mesurer's host in Annotate: toolbar, pins, a tool's full-page layer) are not the page's, so
+  // what is under them counts.
+  const sawitLayer = (node) => !!(node && node.hasAttribute && node.hasAttribute("data-sawit-overlay"));
   const hitTest = (x, y) => {
     let hit = document.elementFromPoint(x, y);
+    if (sawitLayer(hit) && document.elementsFromPoint) hit = document.elementsFromPoint(x, y).find((c) => !sawitLayer(c)) || null;
     while (hit && hit.shadowRoot) {
       const inner = hit.shadowRoot.elementFromPoint(x, y);
       if (!inner || inner === hit) break;

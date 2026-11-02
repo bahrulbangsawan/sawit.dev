@@ -87,3 +87,26 @@
     text: clip(oneLine(el.innerText || el.textContent), max),
     rect: rectOf(el),
   });
+  // `elements_at {points}`: the element under each point (`{x, y}`, CSS px from the page's top
+  // left: mesurer keeps its marks where they are on the page) as Sawit's notes name one, its
+  // selector and label; `null` for a point outside the viewport, or over no element of the page's
+  // own. Sawit's overlay and mesurer's host are looked through: only the page's elements count.
+  const elementsAt = (op) => {
+    const points = Array.isArray(op.points) ? op.points.slice(0, 500) : [];
+    const sx = window.scrollX || 0;
+    const sy = window.scrollY || 0;
+    const at = (p) => {
+      const x = Number(p && p.x) - sx;
+      const y = Number(p && p.y) - sy;
+      if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return null;
+      const under = document.elementsFromPoint(x, y);
+      for (let i = 0; i < under.length; i++) {
+        const el = under[i];
+        if (el.localName === HOST_TAG || isMesurer(el)) continue;
+        if (el === document.documentElement || el === document.body) return null;
+        return { selector: selectorFor(el), label: short(el) };
+      }
+      return null;
+    };
+    return { elements: points.map(at) };
+  };

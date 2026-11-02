@@ -64,7 +64,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with device sizes and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (140 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (141 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 | 🌱 **New projects from a stack** | Pick a TypeScript stack from Better-T-Stack's builder (TanStack, Next.js, Hono, Convex, Drizzle, Better Auth, …); Sawit shows what doesn't fit and why, runs `create-better-t-stack` in its terminal and opens the project. |
 | ✨ **Agent skills** | Sawit's own Canvas Design, Superpowers, shadcn's improve, Cloudflare's skills, MCP Apps, unslop and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
@@ -493,8 +493,13 @@ one project's block; each asks first, `-y` skips it). Agents use `install_sawit_
   apps do nothing until you reload it or open another page.
 - **Keys**: once you click the page (or press Enter in the address field), <kbd>⌘</kbd><kbd>C</kbd>,
   <kbd>⌘</kbd><kbd>X</kbd>, <kbd>⌘</kbd><kbd>V</kbd> and <kbd>⌘</kbd><kbd>A</kbd> act in the page, through the
-  **Edit** menu. Sawit's own shortcuts (<kbd>⌘</kbd><kbd>W</kbd>, <kbd>⌘</kbd><kbd>T</kbd>,
-  <kbd>⌘</kbd><kbd>1</kbd>–<kbd>⌘</kbd><kbd>9</kbd>…) still work there, before the page sees them.
+  **Edit** menu, and <kbd>⌘</kbd><kbd>Z</kbd>, <kbd>⇧</kbd><kbd>⌘</kbd><kbd>Z</kbd> and <kbd>⌘</kbd><kbd>,</kbd>
+  reach the page as typed. Sawit's own shortcuts (<kbd>⌘</kbd><kbd>W</kbd>, <kbd>⌘</kbd><kbd>T</kbd>,
+  <kbd>⌘</kbd><kbd>1</kbd>–<kbd>⌘</kbd><kbd>9</kbd>…) still work there, before the page sees them. While Annotate's
+  measuring tools are on the page, <kbd>⌘</kbd><kbd>K</kbd> and <kbd>⇧</kbd><kbd>⌘</kbd><kbd>K</kbd> are theirs
+  there (the <kbd>⌘</kbd><kbd>K</kbd> chords, such as <kbd>⌘</kbd><kbd>K</kbd> <kbd>W</kbd>, still work from the
+  address field, the side panel and the rest of the window), and so is <kbd>⌘</kbd><kbd>A</kbd> in their **Select**
+  tool.
 - **Device sizes**: the device menu lays the page out as an iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop or
   Desktop, scaled to fit the tab. **Rotate** turns the device, and **Responsive** fills the tab again. The device
   button shows the device in use (its name, or the size an agent set), and the menu ticks it, and **Rotate** while
@@ -506,7 +511,8 @@ one project's block; each asks first, `-y` skips it). Agents use `install_sawit_
   - A click opens a note on the page, beside the element: what it is (its role, name and size), the kind (**Fix**,
     **Change**, **Question** or **Copy**, which also hands the agent its HTML) and your comment. <kbd>↩</kbd> saves it
     (<kbd>⇧</kbd><kbd>↩</kbd> for a new line), <kbd>Esc</kbd> or a click elsewhere cancels it, and <kbd>Esc</kbd>
-    again stops picking. Its arrows pick the parent or the child before you save.
+    again stops picking (with mesurer's toolbar shown, it hides that first: see below). Its arrows pick the parent
+    or the child before you save.
   - Each saved note leaves a numbered marker on its element. Click a marker to reopen its note, edit it or
     **Remove** it; with a marker focused, <kbd>⌫</kbd> removes it. The panel lists every note by page, with the
     page's title, and stays in step with the markers: edit a comment or the kind in either place.
@@ -528,6 +534,79 @@ one project's block; each asks first, `-y` skips it). Agents use `install_sawit_
     Screenshots, and the notes an opened agent starts with, go to `.nyawit/annotations/`. **Clear** asks first when
     it would take several notes or one not yet sent, and a cleared or removed note can be brought back with **Undo**
     for a few seconds.
+  - **Measure, guides and drawing (mesurer)**: Annotate also puts [mesurer](https://github.com/ibelick/mesurer)
+    0.2.7's toolbar on the page (top left; drag it anywhere, or dock it to an edge, where it snaps and stands
+    upright, and let it auto-hide). It is the same switch: the Annotate button, <kbd>⇧</kbd><kbd>⌘</kbd><kbd>.</kbd>,
+    an agent's `panel` op or `browser_mesurer open` show it, and closing Annotate (or opening Design, whose
+    **Inspect** is Sawit's own) takes it off the page. Its **Minimize** button (or <kbd>Esc</kbd> twice) folds it
+    away; the panel's **Page tools** line, which counts what mesurer has on the page, then offers **Show tools**.
+    Its letter keys need the page's keyboard: click the page, or press Enter in the address field.
+    - **Who gets a click**: with no mesurer tool on, a click on the page writes a Sawit note, as above. With a tool on
+      (Inspect, Guides, Arrows, Pen, Text, Comments, Screenshot…), and wherever the pointer is over mesurer's
+      toolbar or panels, the click is mesurer's and Sawit picks nothing. X-ray and the rulers leave the pointer
+      free, so notes work under X-ray. The panel's status line names the tool that has the pointer and how to
+      leave it (`Guides · Esc to leave`).
+    - **Inspect** (<kbd>I</kbd>): click an element for its size, padding, margin and gaps; click again on the same
+      spot to cycle through the elements stacked there, <kbd>⇧</kbd>-click or drag a marquee to measure several,
+      and hold <kbd>⌥</kbd> for the distances to what is under the pointer (<kbd>⌥</kbd><kbd>S</kbd> or
+      <kbd>⌥</kbd>-click pins one). Boxes snap to elements and follow them as the page moves, inside same-origin
+      iframes and open shadow roots too. Its card shows the selector (click to copy), the CSS that matters, the
+      spacing drawn on the page, the typography (face, size, weight, line height, letter spacing; pin it to keep
+      it shown) and, on an animated element, a motion player (play, scrub, speed, copy the keyframes). **Stack**
+      (multi-measure) keeps several measurements on the page at once.
+    - **Guides** (<kbd>G</kbd>): click to place a guide, vertical, or across after <kbd>H</kbd> (the orientation
+      menu sets either, or both); guides snap to elements and to each other, drag to move them (after a short
+      hold), and right-click for their menu and style. **Rulers**, turned on from the guides menu, run along the
+      edges, with their opacity and an edge reveal; drag a guide out of one while no tool is on. (mesurer 0.2.7's
+      <kbd>R</kbd> key doesn't turn them on.)
+    - **Layout guides** (<kbd>L</kbd>): columns, rows or a pixel grid over the page, with their count, size, gutter,
+      offset and alignment in their panel; they stay with the page.
+    - **X-ray** (<kbd>X</kbd>): outlines every element of the page. A page whose `style-src` policy refuses
+      inline styles may keep it from showing.
+    - **Responsive** (<kbd>B</kbd>): the page at up to six screen sizes side by side (twelve devices, and the
+      page's own breakpoints), zoomed to fit or 25–100 %, in the order you drag them to. Each preview loads the page
+      again (its dev server's live reload and analytics too); mesurer stays out of the previews, and so do agents.
+      Sawit's device menu is another thing: it sizes the tab itself, for you and agents alike.
+    - **Arrows** (<kbd>D</kbd>): drag one, or click its start and end (straight or curved), bend it, and its ends
+      snap to elements. **Pen** (<kbd>N</kbd>): ink, marker and eraser, with pressure. **Text** (<kbd>T</kbd>): a
+      note on the page, with its style card. **Select** (<kbd>S</kbd>) moves, resizes, rotates, mirrors and groups
+      them, <kbd>⌫</kbd> deletes, and <kbd>⌘</kbd><kbd>A</kbd> selects them all. <kbd>1</kbd> and <kbd>2</kbd>
+      switch between the inspect tools and the drawing tools. <kbd>⌘</kbd><kbd>Z</kbd> and
+      <kbd>⇧</kbd><kbd>⌘</kbd><kbd>Z</kbd> undo and redo.
+    - **Comments** (<kbd>M</kbd>): a thread pinned to an element (it finds the element again after a reload),
+      with replies, edits, deletes, resolve and reopen, a new target, the element's selector to copy, search, the
+      **Open**, **Resolved** and **All** filters, and delete all or resolve all. <kbd>⌘</kbd><kbd>K</kbd> copies
+      the open ones for an agent (the page's address, the viewport, each thread and its selector), and
+      <kbd>⇧</kbd><kbd>⌘</kbd><kbd>K</kbd> resolves them all. Each thread is also a **Comment** row in the Annotate
+      panel, with the element's details and a screenshot, and goes out with **Send**, **Copy** and agents'
+      `browser_annotations`; mesurer's pin is its marker.
+    - **Sample colour** (<kbd>P</kbd>): Sawit's colour sampler picks a colour anywhere on the screen; it copies as
+      hex, rgb, hsl or oklch, in the format set.
+    - **Screenshot** (<kbd>C</kbd>): drag a region, move or resize it, then **Copy** (a PNG on the pasteboard) or
+      **Download**, to the project's `.nyawit/browser/captures/`. **Record** (<kbd>V</kbd>, or Capture set to
+      Record) records a region of the page for up to 60 seconds (start it with its **Start recording** button:
+      <kbd>Return</kbd> doesn't reach it), with an editor to play it, trim it and speed it up
+      (1×, 2×, 3×); WebKit records MP4 (mesurer's WebM and GIF exports are there too), saved beside the
+      screenshots.
+    - **Settings** (<kbd>⌘</kbd><kbd>,</kbd>): every section of mesurer's settings, **Use defaults**, **Clear
+      workspace**, whether the workspace stays across reloads, its shortcuts, its appearance (Sawit's light or dark
+      until you pick one), the dock, auto-hide and the version. Its **Website** link opens in your default browser,
+      not in the tab.
+    - **Esc** unwinds from the innermost layer out: Sawit's note first, then mesurer's open menu, tool or
+      selection, then mesurer's toolbar (it minimizes), and only then Sawit stops picking. <kbd>↑</kbd>
+      <kbd>↓</kbd> <kbd>[</kbd> <kbd>]</kbd> walk Sawit's element only while it has one under the pointer.
+    - **Where it's kept**: what mesurer draws on a page (guides, layout guides, drawings, measurements, comments)
+      is kept per project and site in `.nyawit/browser/mesurer/<site>.json` (with no project, in Sawit's data
+      folder), so it is there after a reload or a restart; its settings are app-wide, in Sawit's data folder
+      (`~/Library/Application Support/sawit/browser/mesurer/settings.json`).
+    - **Agents**: `browser_mesurer` reads what mesurer has on the page (`state`), shows or hides it (`open`,
+      `close`), sets X-ray, the rulers, the tool, the toolbar, guides and layout guides (`set`), and clears
+      drawings, guides, layout guides or comments (`clear`); agents never write comments. Agents' screenshots
+      leave mesurer out unless they ask for it, and `browser_annotations` includes the comments and a summary of
+      the page's markup.
+    - mesurer runs in a world of its own, apart from the page's scripts, which can't reach its code or what it
+      tells Sawit; it renders in a shadow root over the page. Its review sharing isn't included. See
+      [Credits](#credits).
 - **Design**: five tabs, each with its own empty and loading state; the refresh button beside them reads the page
   again after it changed.
   - **Inspect**: hover an element to read its box model, typography (in its own face when this Mac has it), colors
@@ -1170,7 +1249,7 @@ sawit github token --header                  # the GitHub sign-in as {"Authoriza
 
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 140 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 141 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
 the agent's project open (or the one `project` names), else the frontmost window. An agent's browser and canvas are
 its own project's, even while you look at another project of that window.
@@ -1356,7 +1435,7 @@ without the pointer; key presses (Return, ⌘S, the text typed into a terminal o
 a focused dropdown button, which is how one opens without a click) are real key events, sent to that
 Sawit process only, so they never land in another app. They do count as input for the Mac's idle clock.
 The tests run with `--headed` move the real pointer (drawing on the canvas, right-click menus, dropping
-a file on the terminal), so they need a Mac nobody is using, or a separate user session or VM. A run
+a file on the terminal, clicking in the browser's page beside mesurer), so they need a Mac nobody is using, or a separate user session or VM. A run
 first waits until the keyboard and mouse have been idle for 60 s, waits again (15 s) before each test
 while someone is using the Mac, and puts back the app that was in front.
 
@@ -1527,6 +1606,9 @@ Figures for other apps are not listed because they have not been measured on the
   licensed under MIT, which draws every diagram written in Mermaid syntax. See [`NOTICE`](NOTICE).
 - The browser tab's page picker adapts [Visual Annotator](https://github.com/wernerstrauch/visual-annotator),
   Copyright (c) 2026 wernerstrauch, licensed under MIT. See [`NOTICE`](NOTICE).
+- The browser's Annotate tools are [mesurer](https://github.com/ibelick/mesurer) 0.2.7, Copyright (c) 2026 Julien
+  Thibeaut, licensed under MIT, bundled with React and React DOM (Copyright (c) Meta Platforms, Inc. and affiliates,
+  MIT). See [`NOTICE`](NOTICE).
 - Sawit opens SQLite files and Cloudflare D1's local databases with [rusqlite](https://github.com/rusqlite/rusqlite),
   Copyright (c) 2014 The rusqlite developers, licensed under MIT, which builds in [SQLite](https://www.sqlite.org)
   (public domain). The database logos are PostgreSQL's (PostgreSQL Trademark Policy), Cloudflare D1's (CC BY 4.0)

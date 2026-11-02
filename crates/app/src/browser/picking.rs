@@ -2,8 +2,10 @@
 //! (Annotate notes the element, Design's Inspect reads it), Sawit's own keys (⇧⌘., Esc), and the
 //! overlay's colours.
 
+use futures::channel::oneshot;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
+use sawit_core::browser::BrowserOp;
 use serde_json::{Value, json};
 
 use super::annotate::Picking;
@@ -81,6 +83,12 @@ impl BrowserView {
         let annotating = self.panel == Some(Panel::Annotate);
         self.annotate
             .update(cx, |a, cx| a.set_shown(annotating, cx));
+        // mesurer is on the page while Annotate is open, and only then.
+        if annotating {
+            self.mesurer_open(cx);
+        } else {
+            self.mesurer_close(cx);
+        }
         cx.notify();
     }
 
@@ -141,19 +149,84 @@ impl BrowserView {
         }
     }
 
-    /// An agent's ⇧⌘., or Esc while picking: does what the user's key does and answers
-    /// where that left the panel and the picker. `None` for a key that is the page's.
-    pub(super) fn press_own_key(&mut self, key: &str, cx: &mut Context<Self>) -> Option<Value> {
+    /// An agent's ⇧⌘., or Esc while picking: does what the user's key does; the receiver gets
+    /// where that left the panel and the picker. `None` for a key that is the page's. With
+    /// mesurer on the page, an Esc while picking goes to the page first, as the user's does
+    /// (`page/overlay/picking.js`): picking stops only if nothing there took it.
+    pub(super) fn press_own_key(
+        &mut self,
+        key: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<OpResult>> {
         match own_key(key)? {
             OwnKey::ToggleAnnotate => self.annotate_key(cx),
+            OwnKey::Escape if self.pick != PickMode::Off && self.mesurer.mounted => {
+                return Some(self.escape_through_page(key, cx));
+            }
             OwnKey::Escape if self.pick != PickMode::Off => self.set_pick(PickMode::Off, cx),
             OwnKey::Escape => return None,
         }
-        Some(json!({
-            "pressed": key,
-            "panel": self.panel.map(Panel::as_str),
-            "picking": self.pick.as_str(),
-        }))
+        let (tx, rx) = oneshot::channel();
+        let _ = tx.send(Ok(self.own_key_answer(key, json!({}))));
+        Some(rx)
+    }
+
+    /// `answer`, with where the panel and the picker are now.
+    fn own_key_answer(&self, key: &str, mut answer: Value) -> Value {
+        if !answer.is_object() {
+            answer = json!({});
+        }
+        answer["pressed"] = json!(key);
+        answer["panel"] = json!(self.panel.map(Panel::as_str));
+        answer["picking"] = json!(self.pick.as_str());
+        answer
+    }
+
+    /// An agent's Esc, to the page (mesurer's tool, menu or toolbar take it first); then
+    /// [`Self::escape_answered`].
+    fn escape_through_page(
+        &mut self,
+        key: &str,
+        cx: &mut Context<Self>,
+    ) -> oneshot::Receiver<OpResult> {
+        let (tx, rx) = oneshot::channel();
+        let (page_tx, page_rx) = oneshot::channel();
+        let op = BrowserOp::Press { key: key.into() };
+        if self.engine.is_some() {
+            self.run(op, page_tx, cx);
+        } else {
+            self.queued.push((op, page_tx));
+        }
+        let key = key.to_string();
+        cx.spawn(async move |this, cx| {
+            let pressed = page_rx
+                .await
+                .unwrap_or_else(|_| Err("The page didn't answer.".into()));
+            let answer = this
+                .update(cx, |this, cx| this.escape_answered(&key, pressed, cx))
+                .unwrap_or_else(|_| Err("The browser closed.".into()));
+            let _ = tx.send(answer);
+        })
+        .detach();
+        rx
+    }
+
+    /// The page's answer to an agent's Esc: picking stops unless something there took the key
+    /// (`prevented`, as the page agent reports it).
+    pub(super) fn escape_answered(
+        &mut self,
+        key: &str,
+        pressed: OpResult,
+        cx: &mut Context<Self>,
+    ) -> OpResult {
+        let pressed = pressed?;
+        let taken = pressed["prevented"] == json!(true);
+        if !taken && self.pick != PickMode::Off {
+            self.set_pick(PickMode::Off, cx);
+        }
+        let mut answer = self.own_key_answer(key, pressed);
+        answer["taken_by_page"] = json!(taken);
+        Ok(answer)
     }
 
     /// Arms (or disarms) picking on the page.

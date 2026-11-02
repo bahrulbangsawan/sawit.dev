@@ -2,6 +2,7 @@
 //! gets while the tab has no page to run it.
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 /// What an agent's op that doesn't open the browser gets while the project has none open.
 pub const NOT_OPEN: &str = "The browser isn't open. Open a page with browser_navigate.";
@@ -100,10 +101,14 @@ pub enum BrowserOp {
     Settled {
         id: u64,
     },
-    /// The visible page, or one element's box. Answers `png_base64`.
+    /// The visible page, or one element's box. Answers `png_base64`. mesurer, while it is on the
+    /// page, is hidden (`hide`, the default), shows its drawings, guides and pins without its
+    /// toolbar and panels (`drawings`), or shows as it is (`show`).
     Screenshot {
         #[serde(flatten)]
         target: Target,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mesurer: Option<String>,
     },
     Console {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -178,6 +183,14 @@ pub enum BrowserOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tab: Option<String>,
     },
+    /// mesurer, Annotate's tools on the page (`browser::mesurer`): `state` answers whether it is
+    /// mounted, its version, the page's key and origin, its summary, chrome and markup; the other
+    /// actions (`open`, `close`, `set`, `clear`) are `browser_mesurer`'s, with their `args`.
+    Mesurer {
+        action: String,
+        #[serde(flatten)]
+        args: Map<String, Value>,
+    },
 }
 
 impl BrowserOp {
@@ -201,6 +214,7 @@ impl BrowserOp {
                 | Self::ExportDesign { .. }
                 | Self::ExportStatus
                 | Self::Panel { .. }
+                | Self::Mesurer { .. }
         )
     }
 

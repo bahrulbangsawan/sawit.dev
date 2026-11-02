@@ -139,7 +139,87 @@ pub struct ScreenshotArgs {
         description = "Absolute path (or ~/…) to write the PNG to; default Sawit's cache folder"
     )]
     pub output_path: Option<String>,
+    #[schemars(
+        description = "While Annotate's page tools (mesurer) are on the page: hide (default) leaves them out; drawings keeps their drawings, guides, layout guides and comment pins, without the toolbar and panels; show keeps everything"
+    )]
+    pub mesurer: Option<String>,
     pub project: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize, schemars::JsonSchema)]
+pub struct MesurerArgs {
+    #[schemars(
+        description = "state (default): what the page tools have on the page; open or close: Annotate with its page tools; set: change them; clear: remove what is on the page"
+    )]
+    pub action: Option<String>,
+    #[schemars(description = "state: include each comment thread's HTML preview of its element")]
+    #[serde(default)]
+    pub full: bool,
+    #[schemars(description = "set: X-ray (every element's box outlined) on or off")]
+    pub xray: Option<bool>,
+    #[schemars(description = "set: rulers on or off")]
+    pub rulers: Option<bool>,
+    #[schemars(
+        description = "set: the tool in hand: none, select (inspect), selection, guides, arrows, pen, text or comments"
+    )]
+    pub tool: Option<String>,
+    #[schemars(description = "set: the toolbar minimized, or shown")]
+    pub minimized: Option<bool>,
+    #[schemars(
+        description = "set: the page's guides, in place of the ones there: CSS px from the viewport's left (vertical) or top (horizontal)"
+    )]
+    pub guides: Option<Vec<GuideArg>>,
+    #[schemars(
+        description = "set: the page's layout guides, in place of the ones there: columns, rows or a pixel grid"
+    )]
+    pub layout_guides: Option<Vec<LayoutGuideArg>>,
+    #[schemars(
+        description = "clear: drawings (arrows, pen strokes, text notes), measurements, guides, layout_guides, comments, or all; on the page on show"
+    )]
+    pub what: Option<String>,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct GuideArg {
+    #[schemars(description = "vertical (default) or horizontal")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<String>,
+    #[schemars(description = "CSS px from the viewport's left or top")]
+    pub position: f64,
+}
+
+#[derive(Debug, Default, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct LayoutGuideArg {
+    #[schemars(description = "columns (default), rows or grid")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[schemars(description = "How many columns or rows, 1 to 24 (default 5)")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
+    #[schemars(
+        description = "Each column's or row's width in px, used with align min, center or max (with stretch they fill the page); a grid's square (default 72)"
+    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<f64>,
+    #[schemars(description = "Px between columns or rows (default 20)")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gutter: Option<f64>,
+    #[schemars(description = "Px from the edge (default 0)")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<f64>,
+    #[schemars(description = "stretch (default), min, center or max")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub align: Option<String>,
+    #[schemars(description = "A CSS colour (default #FF0000)")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[schemars(description = "0 to 1 (default 0.1)")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f64>,
+    #[schemars(description = "Shown (default true)")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]

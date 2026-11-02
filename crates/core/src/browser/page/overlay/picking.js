@@ -1,9 +1,18 @@
   // ---- Picking ----
 
+  // Whether the last `hit` found mesurer's host on top: mesurer has the pointer, so the picker
+  // draws no hover box and picks nothing there.
+  let yielded = false;
   const hit = (x, y) => {
     let el = null;
+    yielded = false;
     for (const candidate of document.elementsFromPoint(x, y)) {
-      if (candidate !== host && !candidate.hasAttribute("data-sawit-overlay")) {
+      if (candidate === host) continue;
+      if (isMesurer(candidate)) {
+        yielded = true;
+        return null;
+      }
+      if (!candidate.hasAttribute("data-sawit-overlay")) {
         el = candidate;
         break;
       }
@@ -36,12 +45,23 @@
     // The popover's element stays picked while it is open.
     if (pop) return;
     const el = hit(e.clientX, e.clientY);
+    if (yielded) {
+      if (current) {
+        down = [];
+        set(null);
+      }
+      return;
+    }
     if (el && el !== current) {
       down = [];
       set(el);
     }
   };
+  // A press, click or wheel on mesurer (its toolbar, a panel, or a tool's overlay over the page;
+  // as seen at the window, the event's target is mesurer's host) is mesurer's: left untouched.
+  const onMesurer = (e) => isMesurer(read(N.target, e, "target"));
   const swallow = (e) => {
+    if (onMesurer(e)) return;
     e.preventDefault();
     e.stopImmediatePropagation();
   };
@@ -57,6 +77,7 @@
     if (down.length) set(down.pop());
   };
   const click = (e) => {
+    if (onMesurer(e)) return;
     swallow(e);
     // The press that closed the popover picks nothing.
     if (dismissed) {
@@ -87,21 +108,74 @@
       schedule();
     }
   };
+  // ---- Keys beside mesurer ----
+  //
+  // While mesurer's host is on the page (`data-sawit-mesurer`, Annotate's measuring tools), Esc
+  // unwinds from the innermost layer out: Sawit's popover first (its guard runs before anything),
+  // then whatever mesurer has open (a menu, a tool, a selection), then mesurer itself (it
+  // minimizes), and only then Sawit's picking. So the picker doesn't swallow Esc there: once the
+  // event has gone through the page (a task later), it stops picking only if no one took the key
+  // (`defaultPrevented`, read through the native getter: mesurer, and its keyboard gate while
+  // mesurer has the keyboard, prevent it). The walk keys (↑ ↓ [ ]) are Sawit's only while it has
+  // the pointer (an element under it); over mesurer they are mesurer's. A page can put up a host
+  // of its own with that mark: Esc is then left to it as well, which only keeps the picker on.
+  const PREVENTED = getter(EV, "defaultPrevented");
+  const BY_ID = method(DOC, "getElementById");
+  const mesurerShown = () => {
+    try {
+      const id = "mesurer-extension-host";
+      const found = BY_ID ? apply(BY_ID, document, [id]) : typeof document.getElementById === "function" ? document.getElementById(id) : null;
+      return isMesurer(found);
+    } catch {
+      return false;
+    }
+  };
+  // Esc typed into one of mesurer's own fields (its comment search, a text note) is the field's:
+  // mesurer leaves it there, so Sawit keeps picking.
+  const ROOT_OF = getter(ELEM, "shadowRoot");
+  const TAG = getter(ELEM, "tagName");
+  const EDITABLE = getter(HTML, "isContentEditable");
+  const typingInMesurer = (e) => {
+    try {
+      const target = read(N.target, e, "target");
+      if (!isMesurer(target)) return false;
+      const root = ROOT_OF ? apply(ROOT_OF, target, []) : target.shadowRoot;
+      const a = root ? (N.active ? apply(N.active, root, []) : root.activeElement) : null;
+      if (!a) return false;
+      const tag = TAG ? apply(TAG, a, []) : a.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (EDITABLE ? apply(EDITABLE, a, []) : a.isContentEditable) === true;
+    } catch {
+      return false;
+    }
+  };
+  const escapeAfter = (e) => {
+    setTimeout(() => {
+      if (read(PREVENTED, e, "defaultPrevented") || mode === "off") return;
+      send("key", "escape");
+      stopPicking();
+    }, 0);
+  };
   const keydown = (e) => {
     altKey(e);
     if (pop) return;
+    const beside = mesurerShown();
     if (e.key === "Escape") {
+      if (beside) {
+        if (!typingInMesurer(e)) escapeAfter(e);
+        return;
+      }
       swallow(e);
       send("key", "escape");
       stopPicking();
     } else if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "[" || e.key === "]") {
+      if (beside && !current) return;
       swallow(e);
       if (e.key === "ArrowUp" || e.key === "[") up();
       else back();
     }
   };
   const wheel = (e) => {
-    if (!e.altKey) return;
+    if (!e.altKey || onMesurer(e)) return;
     swallow(e);
     if (e.deltaY < 0) up();
     else if (e.deltaY > 0) back();

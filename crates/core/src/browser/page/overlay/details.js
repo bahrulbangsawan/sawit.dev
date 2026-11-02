@@ -215,3 +215,9 @@
     const who = r ? r + (name ? " “" + name + "”" : "") + " · " : "";
     return who + sizeOf(el);
   };
+  // `details {selector}`: what a note says of the element `selector` names, as a pick tells it:
+  // for a comment left with mesurer's tools, whose element Sawit didn't pick.
+  const detailsOf = (op) => {
+    if (typeof op.selector !== "string" || !op.selector) throw new Error("Give a selector.");
+    return { element: details(resolve({ selector: op.selector })) };
+  };

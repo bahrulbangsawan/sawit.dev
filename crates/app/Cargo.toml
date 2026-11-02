@@ -55,13 +55,17 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["s
 tokio.workspace = true
 tokio-postgres.workspace = true
 wry = { version = "0.57", default-features = false, features = ["os-webview", "devtools"] }
-# Browser tab screenshots (WKWebView takeSnapshot → PNG); same versions as wry's.
-objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKSnapshotConfiguration"] }
-# NSWorkspace: whether VoiceOver or Switch Control is on (workspace::screen_reader_on).
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSResponder", "NSView", "NSWorkspace", "NSAccessibility", "NSGraphicsContext", "objc2-core-graphics"] }
-# Canvas web frames (UI screens, and URL frames behind SAWIT_WEB_FRAMES=1): WebKit snapshots as
-# CGImages drawn into BGRA bitmaps off the main thread (browser::engine::web_frame).
-objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "objc2", "CGImage", "CGColorSpace", "CGContext", "CGBitmapContext", "CGDirectDisplay", "CGDisplayConfiguration"] }
+# Browser tab screenshots (WKWebView takeSnapshot → PNG) and mesurer's content world (WKContentWorld,
+# a script message handler with reply); same versions as wry's.
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKSnapshotConfiguration", "WKContentWorld", "WKUserContentController", "WKScriptMessage", "WKScriptMessageHandlerWithReply", "WKFrameInfo", "WKWebViewConfiguration"] }
+# NSWorkspace: whether VoiceOver or Switch Control is on (workspace::screen_reader_on). mesurer's
+# captures (a snapshot's CGImage encoded off the main thread) and its colour sampler
+# (NSColorSampler, the colour in sRGB): browser::engine::{capture, color}.
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-core-foundation", "objc2-core-graphics", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphicsContext", "NSResponder", "NSView", "NSWorkspace", "NSAccessibility", "NSColor", "NSColorSampler", "NSColorSpace"] }
+# A snapshot's pixels (CGImage), handed off the main thread: encoded for mesurer's captures, and
+# drawn into BGRA bitmaps for the canvas's web frames (UI screens, and URL frames behind
+# SAWIT_WEB_FRAMES=1; browser::engine::web_frame).
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGImage", "objc2", "CGColorSpace", "CGContext", "CGBitmapContext", "CGDirectDisplay", "CGDisplayConfiguration"] }
 block2 = "0.6"
 # Canvas screens' folders, watched so a change on disk shows (board::web::watch); the version
 # gpui-component already links.

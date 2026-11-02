@@ -13,6 +13,7 @@ mod base64;
 mod evaluate;
 mod ipc;
 mod logs;
+pub mod mesurer;
 mod ops;
 mod page;
 mod project;

@@ -69,6 +69,7 @@
     createElement: method(DOC, "createElement"),
     attachShadow: method(ELEM, "attachShadow"),
     setAttribute: method(ELEM, "setAttribute"),
+    hasAttribute: method(ELEM, "hasAttribute"),
     removeAttribute: method(ELEM, "removeAttribute"),
     box: method(ELEM, "getBoundingClientRect"),
     scrollHeight: getter(ELEM, "scrollHeight"),
@@ -104,4 +105,15 @@
   const prop = (node, name, value) => apply(N.setProperty, apply(N.style, node, []), [name, value]);
   const boxOf = (node) => apply(N.box, node, []);
   const find = (root, selector) => apply(N.query, root, [selector]);
+  // Whether `node` is mesurer's host (`data-sawit-mesurer`, see browser/page/mesurer/host.js):
+  // one of mesurer's tools, its toolbar or a panel is under the pointer, and the picker leaves
+  // the pointer to it.
+  const isMesurer = (node) => {
+    if (!node || typeof node !== "object") return false;
+    try {
+      return N.hasAttribute ? apply(N.hasAttribute, node, ["data-sawit-mesurer"]) : !!(node.hasAttribute && node.hasAttribute("data-sawit-mesurer"));
+    } catch {
+      return false;
+    }
+  };
   const focusOn = (node) => apply(N.focus, node, [{ __proto__: null, preventScroll: true }]);

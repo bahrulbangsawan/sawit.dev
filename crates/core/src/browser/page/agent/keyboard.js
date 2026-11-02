@@ -130,7 +130,9 @@
       }
     }
     target.dispatchEvent(new KeyboardEvent("keyup", init));
-    return { pressed: op.key, focused: describe(document.activeElement || document.body), url: location.href };
+    // `prevented`: a listener took the keydown (mesurer's Esc, which Sawit reads before it stops
+    // picking on an agent's Esc).
+    return { pressed: op.key, focused: describe(document.activeElement || document.body), url: location.href, prevented: !proceed };
   };
 
   const select = (op) => {

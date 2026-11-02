@@ -17,14 +17,19 @@ use crate::app::{base64_decode, pretty};
 use crate::{Sawit, fail, ok, tri};
 
 mod args;
+mod mesurer;
 mod page;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_mesurer;
 
 pub use args::{
-    AnnotationsArgs, ClickArgs, ConsoleArgs, ElementArgs, EvaluateArgs, KeyArgs, NavigateArgs,
-    NetworkArgs, PageArgs, ResizeArgs, ScreenshotArgs, ScrollArgs, SelectArgs, TypeArgs, WaitArgs,
+    AnnotationsArgs, ClickArgs, ConsoleArgs, ElementArgs, EvaluateArgs, GuideArg, KeyArgs,
+    LayoutGuideArg, MesurerArgs, NavigateArgs, NetworkArgs, PageArgs, ResizeArgs, ScreenshotArgs,
+    ScrollArgs, SelectArgs, TypeArgs, WaitArgs,
 };
+use mesurer::{mesurer_op, screenshot_mesurer};
 use page::{navigate_op, screenshot_path, timeout, waits_out};
 pub(crate) use page::{required, target};
 
@@ -221,7 +226,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Screenshot the browser tab's visible page (or one element by ref/selector) as PNG: returned as an image and written to a file"
+        description = "Screenshot the browser tab's visible page (or one element by ref/selector) as PNG: returned as an image and written to a file. Annotate's page tools (mesurer) are left out unless mesurer is drawings or show"
     )]
     async fn browser_screenshot(
         &self,
@@ -234,6 +239,7 @@ impl Sawit {
         let path = named.unwrap_or_else(|| screenshot_path(&self.paths.cache_dir()));
         let op = BrowserOp::Screenshot {
             target: target(a.reference, a.selector),
+            mesurer: tri!(screenshot_mesurer(a.mesurer.as_deref())),
         };
         let v = tri!(self.browser(&a.project, op).await);
         let encoded = v["png_base64"].as_str().unwrap_or_default().to_string();
@@ -310,7 +316,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Read the annotations the user made in the browser tab, as Markdown: what to change and its kind, and for each element its selector, DOM path, tag and key attributes (data-testid, aria-*, href…), accessible role and name, text, source file and component in a dev build, box in the viewport and on the page, main computed styles, neighbours, and a screenshot path; the page's console errors too. clear removes them after reading"
+        description = "Read the annotations the user made in the browser tab, as Markdown: what to change and its kind, and for each element its selector, DOM path, tag and key attributes (data-testid, aria-*, href…), accessible role and name, text, source file and component in a dev build, box in the viewport and on the page, main computed styles, neighbours, and a screenshot path; the page's console errors too. The comment threads the user pinned with Annotate's page tools (mesurer) come as notes of kind Comment, with their replies (resolved ones left out), and each page's other markup (text notes, arrows and pen strokes with the elements under them, pinned distances, measurements, guides, layout guides, X-ray, captures) as a Page markup section. clear removes them after reading, and deletes the comment threads it returned"
     )]
     async fn browser_annotations(
         &self,
@@ -334,6 +340,15 @@ impl Sawit {
                 ))
             }
         }
+    }
+
+    #[tool(
+        description = "Annotate's page tools in the browser tab (mesurer: inspect, guides, rulers, layout guides, X-ray, arrows, pen, text notes, comments, Responsive previews): state says whether they are on the page and what they have there (comment threads, guides, layout guides, drawings, measurements; full adds comments' HTML); open or close turns Annotate on or off; set changes X-ray, rulers, the tool, minimized, or replaces the page's guides or layout guides (e.g. layout_guides [{kind: columns, count: 12, gutter: 20}]); clear removes the page's drawings, measurements, guides, layout_guides, comments or all. It never writes a comment: those are the user's words. Read them with browser_annotations"
+    )]
+    async fn browser_mesurer(&self, Parameters(a): Parameters<MesurerArgs>) -> CallToolResult {
+        let op = tri!(mesurer_op(&a));
+        let v = tri!(self.browser(&a.project, op).await);
+        ok(pretty(&v))
     }
 
     #[tool(

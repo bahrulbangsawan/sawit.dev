@@ -3,10 +3,11 @@
 mod labels;
 mod rows;
 mod send;
+mod threads;
 
 use super::AnnotatePanel;
 use crate::terminal::RunningAgent;
-use sawit_core::annotations::{Annotation, ElementDetails, Intent, Rect};
+use sawit_core::annotations::{Annotation, ElementDetails, Intent, Rect, Source};
 use sawit_core::terminal::AgentKind;
 
 fn at(url: &str, n: u32) -> Annotation {
@@ -30,6 +31,7 @@ fn at(url: &str, n: u32) -> Annotation {
         intent: Intent::Fix,
         screenshot: None,
         include_screenshot: true,
+        source: Source::Note,
     }
 }
 

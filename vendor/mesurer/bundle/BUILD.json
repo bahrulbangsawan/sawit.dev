@@ -1,0 +1,34 @@
+{
+  "mesurer": {
+    "version": "0.2.7",
+    "commit": "5c2fdaefde54591329d94b179af6ef5f32e15676",
+    "repository": "https://github.com/ibelick/mesurer"
+  },
+  "tools": {
+    "node": "26.12.1",
+    "pnpm": "11.21.0",
+    "esbuild": "0.27.7",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "scheduler": "0.27.0",
+    "tailwindcss": "4.2.2"
+  },
+  "files": {
+    "mesurer.js": {
+      "bytes": 800330,
+      "gzip": 235588,
+      "sha256": "59985e7c09bd869f08b6c75274761813618bf7cfe85deeb7b07e11f7506362fb",
+      "packages": [
+        "react",
+        "react-dom",
+        "scheduler"
+      ]
+    },
+    "gate.js": {
+      "bytes": 7713,
+      "gzip": 3214,
+      "sha256": "995b601a313af6ef324582025b4ae7f575fb235a3653ada6bf0d7b2f97211319",
+      "packages": []
+    }
+  }
+}

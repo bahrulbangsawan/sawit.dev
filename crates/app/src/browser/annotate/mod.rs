@@ -3,6 +3,11 @@
 //! (`browser/page/overlay.js`); the panel is their list, kept in step both ways. `BrowserView` owns
 //! the flow around it (pick, capture, markers, copy); the panel owns the rows, and where the
 //! notes go: an agent running in a terminal, or a new one ([`super::agents`]).
+//!
+//! mesurer's comment threads are rows too ("Comment"), one list with the notes: the browser adds,
+//! updates and drops them as mesurer saves its workspace (`browser::mesurer::agents`). Their words
+//! are written in mesurer, so their cards show the thread rather than a field; removing one here
+//! deletes the thread in mesurer, and Undo puts it back ([`ThreadChange`]).
 
 mod card;
 mod rows;
@@ -12,9 +17,11 @@ mod view;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashSet;
+
 use gpui_kit::component::input::TextareaState;
 use gpui_kit::*;
-use sawit_core::annotations::{Annotation, Intent, Rect, page_key};
+use sawit_core::annotations::{Annotation, Intent, Rect, Thread, page_key};
 use sawit_core::terminal::{AgentKind, PaneId};
 
 use super::agents::AgentSource;
@@ -51,12 +58,33 @@ struct Row {
     /// others are removed, and its toggle keeps its focus by this.
     key: u64,
     annotation: Annotation,
-    comment: Entity<TextareaState>,
+    /// A note's comment, as typed in the panel or the page's popover; none for a comment thread,
+    /// whose words are written in mesurer.
+    comment: Option<Entity<TextareaState>>,
     /// Shown as one line, until the user opens it again.
     collapsed: bool,
     /// The card's head, which folds and opens it, keeps the keyboard through both.
     head: FocusHandle,
-    _changed: Subscription,
+    _changed: Option<Subscription>,
+}
+
+impl Row {
+    /// What the row says: a note's comment as typed so far, a thread's first message.
+    fn text(&self, cx: &App) -> String {
+        match (&self.comment, self.annotation.thread()) {
+            (Some(comment), _) => comment.read(cx).value().to_string(),
+            (None, Some(thread)) => thread.first().to_string(),
+            (None, None) => self.annotation.comment.clone(),
+        }
+    }
+}
+
+/// A comment thread's row removed in the panel, or put back by Undo: the browser deletes the
+/// thread from mesurer's workspace, or restores it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ThreadChange {
+    Removed(Thread),
+    Restored(Thread),
 }
 
 /// Whether the page picks, as the panel's status line says.
@@ -97,6 +125,13 @@ pub struct AnnotatePanel {
     source: Option<AgentSource>,
     /// The panel is open, so it keeps the agents up to date.
     shown: bool,
+    /// What mesurer has on the page on show, while it is mounted (`browser::mesurer`): the
+    /// "Page tools" line and the status line draw it (lane 3).
+    mesurer: Option<sawit_core::browser::mesurer::Summary>,
+    /// Comment rows removed or put back, for the browser to carry to mesurer.
+    thread_changes: Vec<ThreadChange>,
+    /// The threads copied for an agent with mesurer's "Copy for agent", by id.
+    copied_threads: HashSet<String>,
     _poll: Option<Task<()>>,
 }
 
@@ -122,6 +157,9 @@ impl AnnotatePanel {
             last_kind: None,
             source: None,
             shown: false,
+            mesurer: None,
+            thread_changes: Vec::new(),
+            copied_threads: HashSet::new(),
             _poll: None,
         }
     }
@@ -161,6 +199,29 @@ impl AnnotatePanel {
 
     pub fn include_errors(&self) -> bool {
         self.include_errors
+    }
+
+    /// What mesurer has on the page on show; `None` while it isn't on the page.
+    pub fn set_mesurer_summary(
+        &mut self,
+        summary: Option<sawit_core::browser::mesurer::Summary>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.mesurer != summary {
+            self.mesurer = summary;
+            cx.notify();
+        }
+    }
+
+    #[cfg(test)]
+    pub fn mesurer_summary(&self) -> Option<&sawit_core::browser::mesurer::Summary> {
+        self.mesurer.as_ref()
+    }
+
+    /// The footer's note (for tests).
+    #[cfg(test)]
+    pub fn note(&self) -> Option<SharedString> {
+        self.note.clone()
     }
 }
 

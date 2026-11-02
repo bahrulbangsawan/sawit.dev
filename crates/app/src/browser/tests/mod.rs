@@ -2,6 +2,10 @@
 
 mod events;
 mod keyboard;
+mod mesurer;
+mod mesurer_agents;
+mod mesurer_capture;
+mod mesurer_keys;
 mod navigation;
 mod notes;
 mod ops;

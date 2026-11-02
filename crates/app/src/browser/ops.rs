@@ -11,6 +11,7 @@ use sawit_core::browser::{BrowserOp, Target, resize_mode};
 use serde_json::{Value, json};
 
 use super::engine::Engine;
+use super::shots::MesurerShot;
 use super::{BrowserView, FromPage, OpResult};
 
 impl BrowserView {
@@ -25,8 +26,11 @@ impl BrowserView {
         if let BrowserOp::Press { key } = &op
             && let Some(answer) = self.press_own_key(key, cx)
         {
-            let _ = tx.send(Ok(answer));
-            return rx;
+            return answer;
+        }
+        // mesurer's op needs no page while mesurer isn't mounted.
+        if let BrowserOp::Mesurer { action, args } = &op {
+            return self.mesurer_apply(action, args, cx);
         }
         // Reloaded by the user (the toolbar) or an agent: the page's links to other apps may ask
         // again, as after opening a page. A page's own reload doesn't come this way.
@@ -138,18 +142,7 @@ impl BrowserView {
                 evaluate(Rc::downgrade(&engine), script, reply);
                 return;
             }
-            BrowserOp::Annotations { clear } => {
-                let markdown = self.annotations_markdown(cx);
-                let count = self.annotate.read(cx).annotations(cx).len();
-                self.annotate.update(cx, |a, cx| {
-                    if clear {
-                        a.clear(cx);
-                    } else {
-                        a.mark_sent(cx);
-                    }
-                });
-                json!({ "markdown": markdown, "count": count })
-            }
+            BrowserOp::Annotations { clear } => self.annotations_op(clear, cx),
             BrowserOp::Inspect { target, format } => {
                 let target = serde_json::to_value(&target).unwrap_or_default();
                 return self.inspect_op(target, format, reply, cx);
@@ -170,10 +163,28 @@ impl BrowserView {
                 let _ = reply.send(self.panel_op(panel.as_deref(), tab.as_deref(), cx));
                 return;
             }
-            BrowserOp::Screenshot { target } if target.is_empty() => {
-                return self.shoot(None, reply, cx);
+            BrowserOp::Mesurer { action, args } => {
+                let answer = self.mesurer_apply(&action, &args, cx);
+                cx.spawn(async move |_, _| {
+                    let _ = reply.send(answer.await.unwrap_or_else(|_| Err("No answer.".into())));
+                })
+                .detach();
+                return;
             }
-            BrowserOp::Screenshot { target } => {
+            BrowserOp::Screenshot { target, mesurer } => {
+                let mode = match MesurerShot::named(mesurer.as_deref()) {
+                    Ok(mode) => mode,
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                        return;
+                    }
+                };
+                if target.is_empty() {
+                    return self.shoot_with(None, mode, reply, cx);
+                }
+                if mode != MesurerShot::Hide {
+                    return self.shoot_element(&target, mode, reply, cx);
+                }
                 // The element's box first (scrolled into view), then the capture.
                 let to_view = self.to_view.clone();
                 let reply = Mutex::new(Some(reply));
@@ -182,14 +193,7 @@ impl BrowserView {
                     let Some(reply) = reply.lock().ok().and_then(|mut r| r.take()) else {
                         return;
                     };
-                    let rect = agent_result(&result).and_then(|r| {
-                        let field = |k: &str| r[k].as_f64().unwrap_or_default();
-                        let rect = (field("x"), field("y"), field("width"), field("height"));
-                        if rect.2 < 1. || rect.3 < 1. {
-                            return Err("The element isn't visible on screen.".to_string());
-                        }
-                        Ok(rect)
-                    });
+                    let rect = agent_result(&result).and_then(|r| element_rect(&r));
                     match rect {
                         Ok(rect) => {
                             let _ = to_view.unbounded_send(FromPage::Shoot {
@@ -221,6 +225,55 @@ impl BrowserView {
         let _ = reply.send(Ok(value));
     }
 
+    /// `browser_annotations`: the notes as Markdown, which count as sent, or (`clear`) go; the
+    /// comment threads read go from mesurer with them.
+    pub(super) fn annotations_op(&mut self, clear: bool, cx: &mut Context<Self>) -> Value {
+        let markdown = self.annotations_markdown(cx);
+        // What went: notes, and comment threads but resolved ones.
+        let read: Vec<_> = (self.annotate.read(cx).annotations(cx).into_iter())
+            .filter(|a| !a.resolved())
+            .collect();
+        let threads: Vec<_> = read.iter().filter_map(|a| a.thread().cloned()).collect();
+        self.annotate.update(cx, |a, cx| {
+            if clear {
+                a.clear(cx);
+            } else {
+                a.mark_sent(cx);
+            }
+        });
+        let mut answer = json!({ "markdown": markdown, "count": read.len() });
+        if clear && !threads.is_empty() {
+            answer["comments_deleted"] = self.mesurer_delete_threads(&threads, cx).into();
+        }
+        answer
+    }
+
+    /// Captures `target`'s box (scrolled into view) with as much of mesurer as `mode` says.
+    fn shoot_element(
+        &mut self,
+        target: &Target,
+        mode: MesurerShot,
+        reply: oneshot::Sender<OpResult>,
+        cx: &mut Context<Self>,
+    ) {
+        let rect = self.page_op(rect_op(target));
+        cx.spawn(async move |this, cx| {
+            let rect = (rect.await)
+                .unwrap_or_else(|_| Err("The page didn't answer.".into()))
+                .and_then(|r| element_rect(&r));
+            match rect {
+                Ok(rect) => {
+                    let _ =
+                        this.update(cx, |this, cx| this.shoot_with(Some(rect), mode, reply, cx));
+                }
+                Err(e) => {
+                    let _ = reply.send(Err(e));
+                }
+            }
+        })
+        .detach();
+    }
+
     /// Runs `op` on the page and answers with what the page says.
     pub(crate) fn page_op(&self, op: Value) -> oneshot::Receiver<OpResult> {
         let (tx, rx) = oneshot::channel();
@@ -249,6 +302,16 @@ impl BrowserView {
 /// agent (it is still loading, or isn't a web page).
 pub(super) fn agent_call(op: &Value) -> String {
     format!("(() => {{ const a = window.__sawitAgent; return a ? a.run({op}) : \"\"; }})()")
+}
+
+/// An element's box as the page's `rect` op answers it, refused when it has no size on screen.
+fn element_rect(r: &Value) -> Result<(f64, f64, f64, f64), String> {
+    let field = |k: &str| r[k].as_f64().unwrap_or_default();
+    let rect = (field("x"), field("y"), field("width"), field("height"));
+    if rect.2 < 1. || rect.3 < 1. {
+        return Err("The element isn't visible on screen.".to_string());
+    }
+    Ok(rect)
 }
 
 pub(super) fn rect_op(target: &Target) -> Value {

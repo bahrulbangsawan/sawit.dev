@@ -1,7 +1,7 @@
 //! The markdown that carries annotations to an agent: a section per page, a line per detail,
 //! and the page's own text kept to data.
 
-use super::{Annotation, Intent, Neighbour, PageGroup, PageInfo, Rect};
+use super::{Annotation, Intent, Neighbour, PageGroup, PageInfo, Rect, Thread};
 use crate::browser::ConsoleEntry;
 
 /// Text longer than this is cut with `…`.
@@ -27,9 +27,14 @@ pub fn markdown(groups: &[PageGroup], errors: Option<(&str, &[ConsoleEntry])>) -
             out.push_str(&format!(" ({})", one_line(device)));
         }
         out.push('\n');
-        for item in &g.items {
+        // A resolved comment thread is done with: it doesn't go to the agent.
+        for item in g.items.iter().filter(|a| !a.resolved()) {
             out.push('\n');
             out.push_str(&item_markdown(item, &g.page));
+        }
+        if let Some(markup) = g.markup.as_ref().filter(|m| !m.is_empty()) {
+            out.push('\n');
+            out.push_str(&markup.markdown());
         }
         sections.push(out);
     }
@@ -62,7 +67,7 @@ fn error_lines(e: &ConsoleEntry) -> String {
 }
 
 /// Page text as one line: line breaks and other control characters become spaces.
-fn one_line(text: &str) -> String {
+pub(super) fn one_line(text: &str) -> String {
     text.split(|c: char| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
         .map(str::trim)
         .filter(|part| !part.is_empty())
@@ -76,7 +81,7 @@ fn longest_ticks(text: &str) -> usize {
 }
 
 /// `text` as an inline code span on one line, between more backticks than it holds.
-fn code(text: &str) -> String {
+pub(super) fn code(text: &str) -> String {
     let text = one_line(text);
     let fence = "`".repeat(longest_ticks(&text) + 1);
     if text.starts_with('`') || text.ends_with('`') {
@@ -146,10 +151,19 @@ const URL_ATTRIBUTES: [&str; 5] = ["href", "src", "action", "formaction", "poste
 
 fn item_markdown(a: &Annotation, page: &PageInfo) -> String {
     let el = &a.element;
-    let mut out = format!("## {}. {} — {}\n", a.n, code(&el.label), a.intent.label());
-    // The user's own words, as typed.
-    if !a.comment.trim().is_empty() {
-        out.push_str(&format!("- **Comment:** {}\n", a.comment));
+    let kind = if a.thread().is_some() {
+        "Comment"
+    } else {
+        a.intent.label()
+    };
+    let mut out = format!("## {}. {} — {kind}\n", a.n, code(&el.label));
+    match a.thread() {
+        Some(thread) => out.push_str(&thread_lines(thread)),
+        // The user's own words, as typed.
+        None if !a.comment.trim().is_empty() => {
+            out.push_str(&format!("- **Comment:** {}\n", a.comment));
+        }
+        None => {}
     }
     out.push_str(&format!("- **Selector:** {}\n", code(&el.selector)));
     if let Some(path) = el.path.as_deref().filter(|p| !p.trim().is_empty()) {
@@ -217,6 +231,15 @@ fn item_markdown(a: &Annotation, page: &PageInfo) -> String {
     }
 
     let r = &el.rect;
+    // A comment left in a preview: the element's size there, and the preview's.
+    if let Some((w, h)) = a.thread().and_then(|t| t.preview) {
+        out.push_str("- **Box:** ");
+        if r.width > 0. && r.height > 0. {
+            out.push_str(&format!("{}×{}, ", r.width.round(), r.height.round()));
+        }
+        out.push_str(&format!("in a {w}×{h} Responsive preview\n"));
+        return rest_of_item(out, a);
+    }
     out.push_str(&format!("- **Box:** {}", box_at(r)));
     // Where it is on the page too, once the page has scrolled.
     if let Some(p) = el
@@ -235,6 +258,16 @@ fn item_markdown(a: &Annotation, page: &PageInfo) -> String {
         out.push_str(&format!(", picked in a {w}×{h} viewport"));
     }
     out.push('\n');
+    rest_of_item(out, a)
+}
+
+/// An item's lines after its box: frames, styles, context, route, screenshot, HTML.
+fn rest_of_item(mut out: String, a: &Annotation) -> String {
+    let el = &a.element;
+    if let Some(frames) = a.thread().map(|t| &t.frames).filter(|f| !f.is_empty()) {
+        let frames: Vec<String> = frames.iter().map(|f| code(f)).collect();
+        out.push_str(&format!("- **Frame:** {}\n", frames.join(" > ")));
+    }
     if !el.styles.is_empty() {
         let styles: Vec<String> = el
             .styles
@@ -293,4 +326,33 @@ fn cut_at(text: &str, max: usize) -> String {
         Some((i, _)) => format!("{}…", &text[..i]),
         None => text.to_string(),
     }
+}
+
+/// A comment thread's messages, the user's own words: the first as the comment, the others as
+/// replies under it, each line of a message kept inside its item.
+fn thread_lines(thread: &Thread) -> String {
+    let mut out = String::new();
+    for (i, message) in thread.messages.iter().enumerate() {
+        let text = message.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let (head, indent) = if i == 0 {
+            ("- **Comment:** ", "  ")
+        } else {
+            ("  - **Reply:** ", "    ")
+        };
+        let mut lines = text.lines();
+        out.push_str(head);
+        out.push_str(lines.next().unwrap_or_default().trim_end());
+        out.push('\n');
+        for line in lines {
+            if !line.trim().is_empty() {
+                out.push_str(indent);
+                out.push_str(line.trim_end());
+            }
+            out.push('\n');
+        }
+    }
+    out
 }

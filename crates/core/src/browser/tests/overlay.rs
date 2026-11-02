@@ -119,6 +119,15 @@ fn the_overlay_adds_its_ops() {
     let got = on_overlay("JSON.stringify(Object.keys(modules))");
     assert_eq!(
         got,
-        json!(["overlay", "pick", "markers", "flash", "theme", "presence"])
+        json!([
+            "overlay",
+            "pick",
+            "markers",
+            "flash",
+            "theme",
+            "presence",
+            "details",
+            "elements_at"
+        ])
     );
 }

@@ -1,7 +1,10 @@
 //! Visual feedback: what the user pointed at on a page, and the markdown
-//! that carries it to a terminal or an agent.
+//! that carries it to a terminal or an agent. A row is a note made with Sawit's picker, or one of
+//! mesurer's comment threads ([`Source`]); a page's other mesurer markup (text notes, arrows,
+//! strokes, guides…) goes with its notes as [`PageMarkup`] ([`mesurer`]).
 
 mod markdown;
+pub mod mesurer;
 #[cfg(test)]
 mod tests;
 
@@ -10,6 +13,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub use markdown::markdown;
+pub use mesurer::{MarkPoint, Near, PageMarkup, Thread, ThreadMessage, ThreadStatus};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -131,6 +135,33 @@ pub struct Annotation {
     pub intent: Intent,
     pub screenshot: Option<PathBuf>,
     pub include_screenshot: bool,
+    /// A note of Sawit's picker, or a comment thread of mesurer's.
+    pub source: Source,
+}
+
+/// Where a row comes from: a note the user wrote with Sawit's picker (its comment and intent are
+/// the row's), or a comment thread pinned in mesurer (`browser::mesurer`), whose messages are the
+/// user's words and which mesurer keeps in its workspace.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Source {
+    #[default]
+    Note,
+    Comment(Thread),
+}
+
+impl Annotation {
+    /// The thread, when the row is one of mesurer's comments.
+    pub fn thread(&self) -> Option<&Thread> {
+        match &self.source {
+            Source::Comment(thread) => Some(thread),
+            Source::Note => None,
+        }
+    }
+
+    /// A resolved comment thread: dimmed in the panel, and left out of what goes to an agent.
+    pub fn resolved(&self) -> bool {
+        self.thread().is_some_and(Thread::resolved)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -145,6 +176,8 @@ pub struct PageInfo {
 pub struct PageGroup {
     pub page: PageInfo,
     pub items: Vec<Annotation>,
+    /// What mesurer has drawn on the page besides its comments; `None` with nothing drawn.
+    pub markup: Option<PageMarkup>,
 }
 
 /// The next annotation number for `url`'s page (hash ignored).

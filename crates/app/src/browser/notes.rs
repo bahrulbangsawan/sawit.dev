@@ -1,12 +1,13 @@
 //! Annotate, from the browser's side: a pick becomes a note with a screenshot of its element,
-//! the panel and the page's markers follow each other, and the notes go out as Markdown.
+//! the panel and the page's markers follow each other, and the notes go out as Markdown, with
+//! mesurer's comment threads (resolved ones left out) and each page's mesurer markup.
 
 use std::path::PathBuf;
 
 use futures::channel::oneshot;
 use gpui_kit::*;
 use sawit_core::annotations::{
-    Annotation, ElementDetails, Intent, PageGroup, PageInfo, next_number, page_key,
+    Annotation, ElementDetails, Intent, PageGroup, PageInfo, Source, next_number, page_key,
     relative_source, screenshot_dir, screenshot_name,
 };
 use sawit_core::browser::ViewportMode;
@@ -19,7 +20,7 @@ use super::shots::within;
 
 /// How long a pick waits for its screenshot (its turn included) before adding its row
 /// without one.
-const PICK_SHOT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+pub(super) const PICK_SHOT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 
 impl BrowserView {
     /// Where Annotate finds the agents running in the terminals, to send its notes to.
@@ -49,14 +50,18 @@ impl BrowserView {
         self.annotate.read(cx).unsent(cx)
     }
 
-    /// The annotations as the markdown agents read; `None` without any.
+    /// The annotations as the markdown agents read: the notes, mesurer's comment threads but
+    /// resolved ones, and each page's mesurer markup; `None` without any.
     pub fn annotations_markdown(&self, cx: &App) -> Option<String> {
         let panel = self.annotate.read(cx);
-        let items = panel.annotations(cx);
-        if items.is_empty() {
+        let items: Vec<Annotation> = (panel.annotations(cx).into_iter())
+            .filter(|a| !a.resolved())
+            .collect();
+        let url = self.current_url();
+        let markup_here = self.mesurer_markup(&url);
+        if items.is_empty() && markup_here.is_none() {
             return None;
         }
-        let url = self.current_url();
         let viewport = self.viewport_json();
         let size = (
             viewport["width"].as_f64().unwrap_or_default() as u32,
@@ -66,9 +71,19 @@ impl BrowserView {
             ViewportMode::Fixed { name, .. } => name.clone(),
             ViewportMode::Responsive => None,
         };
-        let groups: Vec<PageGroup> = group_order(&url, items.iter().map(|a| a.url.as_str()))
+        let mut keys = group_order(&url, items.iter().map(|a| a.url.as_str()));
+        // A page with markup and no notes goes first, as the page on show's group does.
+        if markup_here.is_some() && !keys.iter().any(|k| k == page_key(&url)) {
+            keys.insert(0, page_key(&url).to_string());
+        }
+        let groups: Vec<PageGroup> = keys
             .into_iter()
             .map(|key| {
+                let markup = if key == page_key(&url) {
+                    markup_here.clone()
+                } else {
+                    self.mesurer_markup(&key)
+                };
                 // Another page's title as it was when its first note was made.
                 let title = if key == page_key(&url) && !self.title.is_empty() {
                     self.title.clone()
@@ -90,6 +105,7 @@ impl BrowserView {
                         .filter(|a| page_key(&a.url) == key)
                         .cloned()
                         .collect(),
+                    markup,
                 }
             })
             .collect();
@@ -162,6 +178,7 @@ impl BrowserView {
                     intent,
                     screenshot,
                     include_screenshot: true,
+                    source: Source::Note,
                 };
                 if !from_page {
                     // The keyboard moves from the page to the panel.
@@ -218,10 +235,15 @@ impl BrowserView {
         self.annotate.update(cx, |a, cx| a.set_errors(errors, cx));
     }
 
-    /// Draws the numbered markers of the page on show (none clears them).
-    pub(super) fn sync_markers(&self, cx: &App) {
+    /// The rows changed: draws the numbered markers of the page on show (none clears them), and
+    /// carries comment rows removed or put back to mesurer.
+    pub(super) fn sync_markers(&mut self, cx: &mut Context<Self>) {
         let markers = self.annotate.read(cx).markers_for(&self.current_url(), cx);
         drop(self.page_op(markers_op(&self.token, &markers)));
+        let changes = self.annotate.update(cx, |a, _| a.take_thread_changes());
+        if !changes.is_empty() {
+            self.mesurer_threads_changed(changes, cx);
+        }
     }
 }
 
@@ -250,7 +272,7 @@ pub(super) fn intent_of(v: &Value) -> Intent {
 
 /// Writes a screenshot answer (`png_base64`) to the project's annotation
 /// folder (else the app cache); `None` when it can't be saved.
-fn save_screenshot(
+pub(super) fn save_screenshot(
     shot: &Value,
     project: Option<&std::path::Path>,
     url: &str,

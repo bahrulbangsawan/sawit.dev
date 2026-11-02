@@ -15,6 +15,7 @@ mod annotate;
 mod design;
 pub(crate) mod engine;
 mod events;
+mod mesurer;
 mod navigation;
 mod notes;
 mod ops;
@@ -63,6 +64,18 @@ pub const ICON: Lucide = Lucide::Globe;
 pub const TITLE: &str = "Browser";
 
 actions!(browser, [ToggleAnnotate]);
+// mesurer's shortcuts, while it is on the page (`mesurer/keys.rs`).
+actions!(
+    browser,
+    [
+        CopyCommentsForAgent,
+        ResolveAllComments,
+        SelectAllAnnotations
+    ]
+);
+
+/// The Annotate panel's Show tools: mesurer, minimized, shows its toolbar again.
+pub struct ShowMesurerTools;
 
 /// ⇧⌘. toggles Annotate, through this binding alone, the keymap's: the page's
 /// overlay answers no one's, and Sawit answers an agent's (`own_key`). A Mac
@@ -83,6 +96,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd->", ToggleAnnotate, Some("Browser")),
         KeyBinding::new("cmd-c", NoAction, Some("Browser")),
     ]);
+    cx.bind_keys(BrowserView::mesurer_bindings());
 }
 
 /// The side panel's modes; one at a time.
@@ -195,6 +209,8 @@ pub struct BrowserView {
     external: ExternalGate,
     /// The agents at work in the browser ([`presence`]).
     agents: presence::Agents,
+    /// mesurer, Annotate's tools on the page ([`mesurer`]).
+    mesurer: mesurer::MesurerState,
     _ipc: Task<()>,
     /// Hands the Mac's font changes to the Design panel ([`engine::font_changes`]).
     _fonts: Task<()>,
@@ -215,7 +231,7 @@ impl BrowserView {
         let annotate = cx.new(|cx| AnnotatePanel::new(window, cx));
         let design_panel = cx.new(|_| DesignPanel::new());
         cx.default_global::<crate::local_explorer::Running>();
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             // The Explorer button comes and goes with the page's dev server's Local Explorer.
             cx.observe_global::<crate::local_explorer::Running>(|_, cx| cx.notify()),
             cx.subscribe_in(
@@ -249,6 +265,7 @@ impl BrowserView {
             // Agents' cursors turned off: the page's go.
             cx.observe_global::<crate::agents::Agents>(|this, cx| this.agents_setting_changed(cx)),
         ];
+        subscriptions.extend(Self::mesurer_subscriptions(&annotate, cx));
         let (to_view, mut from_page) = unbounded();
         let ipc = cx.spawn_in(window, async move |this, cx| {
             while let Some(message) = from_page.next().await {
@@ -317,6 +334,7 @@ impl BrowserView {
             queued: Vec::new(),
             external: ExternalGate::default(),
             agents: presence::Agents::new(crate::agents::shown(cx)),
+            mesurer: Default::default(),
             _ipc: ipc,
             _fonts: fonts,
             _subscriptions: subscriptions,
@@ -333,6 +351,7 @@ impl BrowserView {
             "panel": self.panel.map(Panel::as_str),
             "pick_mode": self.pick.as_str(),
             "last_pick": self.last_pick,
+            "mesurer": self.mesurer_describe(),
         })
     }
 
@@ -434,11 +453,12 @@ impl Render for BrowserView {
             );
         let side = self.panel.map(|panel| self.side_panel(panel, cx));
         v_flex()
-            .key_context("Browser")
+            .key_context(self.mesurer_key_context(window))
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &ToggleAnnotate, _, cx| {
                 this.annotate_key(cx);
             }))
+            .map(|el| Self::with_mesurer_keys(el, cx))
             .size_full()
             .child(self.toolbar(&url, window, cx))
             .child(

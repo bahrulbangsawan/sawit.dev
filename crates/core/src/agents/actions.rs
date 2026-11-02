@@ -193,6 +193,10 @@ pub fn browser_action(op: &crate::browser::BrowserOp) -> Action {
         Op::Console { .. } | Op::Network { .. } => Action::new("reading the logs", "read the logs"),
         Op::Annotations { .. } => Action::new("reading your notes", "read your notes"),
         Op::Devtools | Op::Panel { .. } => Action::new("working", "worked"),
+        Op::Mesurer { action, .. } if action == "state" => {
+            Action::new("reading the page tools", "read the page tools")
+        }
+        Op::Mesurer { .. } => Action::new("using the page tools", "used the page tools"),
     }
 }
 

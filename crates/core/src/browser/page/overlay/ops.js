@@ -90,4 +90,4 @@
     }
     return { found: true };
   };
-  Object.assign(modules, { overlay, pick, markers, flash, theme: themeOp, presence });
+  Object.assign(modules, { overlay, pick, markers, flash, theme: themeOp, presence, details: detailsOf, elements_at: elementsAt });

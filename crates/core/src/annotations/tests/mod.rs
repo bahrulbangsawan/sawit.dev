@@ -1,6 +1,7 @@
 //! Tests of the annotations: the shared fixtures here, the tests by topic in the submodules.
 
 mod markdown;
+mod mesurer;
 mod naming;
 mod payload;
 
@@ -47,6 +48,7 @@ fn annotation() -> Annotation {
         intent: Intent::Fix,
         screenshot: Some("/p/.nyawit/annotations/2026-10-29/localhost-5173-1.png".into()),
         include_screenshot: true,
+        source: Source::Note,
     }
 }
 
@@ -63,6 +65,7 @@ fn group(items: Vec<Annotation>) -> PageGroup {
     PageGroup {
         page: page(),
         items,
+        markup: None,
     }
 }
 

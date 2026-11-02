@@ -107,7 +107,9 @@ impl BrowserView {
             }
             FromPage::Engine(EngineEvent::Load { started, url }) => {
                 self.loading = started;
-                if !started {
+                if started {
+                    self.mesurer_load_started(cx);
+                } else {
                     self.agent_page_loaded();
                 }
                 if started {
@@ -138,6 +140,14 @@ impl BrowserView {
                 self.show_address(window, cx);
                 let url = self.current_url();
                 self.sync_page_info(&url, cx);
+                if !started {
+                    self.mesurer_after_load(cx);
+                }
+            }
+            // mesurer's world says something, or asks: answered by `mesurer/`, drawing nothing.
+            FromPage::Engine(EngineEvent::World { body, reply }) => {
+                self.mesurer_message(body, reply, cx);
+                return;
             }
             FromPage::Engine(EngineEvent::Title(title)) => {
                 self.title = title;

@@ -1,5 +1,6 @@
 //! A note's card: folded to one line (its number, kind, element and the note's first line), or
-//! open with its kind, its comment and its actions.
+//! open with its kind, its comment and its actions. A comment thread's card shows its messages,
+//! as written in mesurer, and whether it is resolved, which dims it.
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
@@ -9,7 +10,7 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sawit_core::annotations::{Annotation, Intent};
+use sawit_core::annotations::{Annotation, Intent, Thread};
 
 use super::{AnnotateEvent, AnnotatePanel};
 use crate::browser::panel;
@@ -21,12 +22,18 @@ impl AnnotatePanel {
         let row = &self.rows[ix];
         let theme = cx.theme();
         let collapsed = row.collapsed;
+        let resolved = row.annotation.resolved();
+        let thread = row.annotation.thread().cloned();
         v_flex()
             .rounded(theme.radius)
             .border_1()
             .border_color(theme.border)
+            .when(resolved, |el| el.opacity(0.6))
             .child(self.card_head(ix, cx))
-            .when(!collapsed, |el| el.child(self.card_body(ix, cx)))
+            .when(!collapsed, |el| match thread {
+                Some(thread) => el.child(self.thread_body(ix, &thread, cx)),
+                None => el.child(self.card_body(ix, cx)),
+            })
     }
 
     /// The part of a card that folds it: a button that says whether the card is open.
@@ -37,14 +44,18 @@ impl AnnotatePanel {
         let muted = theme.muted_foreground;
         let mono = theme.mono_font_family.clone();
         let collapsed = row.collapsed;
-        let comment = row.comment.read(cx).value().to_string();
+        let comment = row.text(cx);
         let first = first_line(&comment);
-        let kind = intent_name(a.intent);
+        let kind = match a.thread() {
+            Some(thread) if thread.resolved() => "Resolved",
+            Some(_) => "Comment",
+            None => intent_name(a.intent),
+        };
         let inner = theme.radius - px(1.);
-        let label = if first.is_empty() {
-            format!("Annotation {}, {kind}, no note yet", a.n)
-        } else {
-            format!("Annotation {}, {kind}: {first}", a.n)
+        let label = match (a.thread().is_some(), first.is_empty()) {
+            (true, _) => format!("Comment {}, {kind}: {first}", a.n),
+            (false, true) => format!("Annotation {}, {kind}, no note yet", a.n),
+            (false, false) => format!("Annotation {}, {kind}: {first}", a.n),
         };
         let head = gpui_kit::base::Button::new(("annotate-card", row.key))
             .track_focus(&row.head)
@@ -163,11 +174,11 @@ impl AnnotatePanel {
                         }
                     })),
             )
-            .child(
-                Textarea::new(&row.comment)
+            .children(row.comment.as_ref().map(|comment| {
+                Textarea::new(comment)
                     .h(px(64.))
-                    .aria_label(format!("Comment for annotation {}", a.n)),
-            )
+                    .aria_label(format!("Comment for annotation {}", a.n))
+            }))
             .child(
                 h_flex()
                     .gap_1()
@@ -220,6 +231,108 @@ impl AnnotatePanel {
                             .icon(Lucide::Trash)
                             .label("Delete")
                             .accessibility_label(format!("Delete annotation {}", a.n))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.remove(ix, cx);
+                            })),
+                    ),
+            )
+    }
+}
+
+impl AnnotatePanel {
+    /// An open comment thread's card: its messages, whether it is resolved or was copied for an
+    /// agent, and its actions. Its words are edited in mesurer, on the page.
+    fn thread_body(&self, ix: usize, thread: &Thread, cx: &mut Context<Self>) -> impl IntoElement {
+        let a = &self.rows[ix].annotation;
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let selector = a.element.selector.clone();
+        let shot = a.include_screenshot;
+        let has_shot = a.screenshot.is_some();
+        let replies = thread.messages.len().saturating_sub(1);
+        let mut state = vec![match replies {
+            0 => "No replies".to_string(),
+            1 => "1 reply".to_string(),
+            n => format!("{n} replies"),
+        }];
+        if thread.resolved() {
+            state.push("resolved, left out of what goes to an agent".into());
+        }
+        if let Some((w, h)) = thread.preview {
+            state.push(format!("in a {w}×{h} preview"));
+        }
+        if self.thread_copied(&thread.id) {
+            state.push("copied for an agent".into());
+        }
+        let on_page = thread.in_document();
+        v_flex()
+            .gap_2()
+            .px_3()
+            .pb_3()
+            .child(
+                v_flex()
+                    .gap_1p5()
+                    .children(thread.messages.iter().enumerate().map(|(i, m)| {
+                        div()
+                            .text_xs()
+                            .when(i > 0, |el| {
+                                el.pl_2().border_l_2().border_color(theme.border)
+                            })
+                            .child(m.text.clone())
+                    })),
+            )
+            .child(div().text_xs().text_color(muted).child(state.join(" · ")))
+            .child(
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        Button::new(("annotate-show", ix))
+                            .ghost()
+                            .xsmall()
+                            .icon(Lucide::Eye)
+                            .label("Show")
+                            .disabled(!on_page)
+                            .tooltip(if on_page {
+                                "Scroll the page to the element and flash it"
+                            } else {
+                                "The element is in a preview or a frame: mesurer's pin shows it"
+                            })
+                            .accessibility_label(format!("Show comment {} on the page", a.n))
+                            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                                cx.emit(AnnotateEvent::Show(selector.clone()));
+                            })),
+                    )
+                    .child(
+                        Button::new(("annotate-shot", ix))
+                            .ghost()
+                            .xsmall()
+                            .icon(if shot { Lucide::Check } else { Lucide::Camera })
+                            .label("Screenshot")
+                            .selected(shot && has_shot)
+                            .disabled(!has_shot)
+                            .tooltip(if has_shot {
+                                "Whether the screenshot goes with the comment"
+                            } else {
+                                "No screenshot was taken of this element"
+                            })
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                if let Some(r) = this.rows.get_mut(ix) {
+                                    r.annotation.include_screenshot =
+                                        !r.annotation.include_screenshot;
+                                    cx.notify();
+                                }
+                            })),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        Button::new(("annotate-delete", ix))
+                            .ghost()
+                            .xsmall()
+                            .icon(Lucide::Trash)
+                            .label("Delete")
+                            .tooltip("Delete the thread in mesurer too; you can undo it")
+                            .accessibility_label(format!("Delete comment {}", a.n))
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 this.remove(ix, cx);
                             })),

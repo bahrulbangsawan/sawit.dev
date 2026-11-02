@@ -325,6 +325,21 @@ export class Window {
     return this.desktop.call(["press", combo, "--window-id", this.id]);
   }
 
+  /**
+   * `press` for a key meant for the web page in the browser tab. The keyboard focus is then the
+   * WKWebView's content, which agent-desktop can't confirm as this window's (STALE_REF), so the
+   * window (already in front) is focused by its id and the key sent again.
+   */
+  async pressInPage(combo) {
+    try {
+      return await this.press(combo);
+    } catch (e) {
+      if (e.envelope?.error?.code !== "STALE_REF") throw e;
+      await this.desktop.call(["focus-window", "--window-id", this.id]);
+      return this.press(combo);
+    }
+  }
+
   /** Types `text` as key presses, one combo each, in one agent-desktop batch. */
   async typeKeys(text) {
     const entries = [...text].map((ch) => ({

@@ -168,6 +168,7 @@ fn every_tool_is_routed() {
         "browser_evaluate",
         "browser_resize",
         "browser_annotations",
+        "browser_mesurer",
         "browser_inspect",
         "browser_design",
         "browser_export_design",

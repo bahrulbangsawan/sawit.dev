@@ -243,6 +243,106 @@ SOFTWARE.
 
 ================================================================================
 
+Mesurer
+-------
+
+Sawit's browser tab runs Mesurer 0.2.7 (https://github.com/ibelick/mesurer), commit
+5c2fdaefde54591329d94b179af6ef5f32e15676, Copyright (c) 2026 Julien Thibeaut, as its Annotate
+tools on the page: inspect and measure, guides, rulers, layout guides, typography, X-ray,
+responsive previews, colour sampling, drawing, comments, screenshots and recordings. It is used
+unmodified, bundled with esbuild into vendor/mesurer/bundle/ in Sawit's source (built by
+vendor/mesurer/rebuild.sh), with its LICENSE beside it at vendor/mesurer/LICENSE. Mesurer is
+licensed under the MIT License; its LICENSE follows, copied verbatim from that commit.
+
+MIT License
+
+Copyright (c) 2026 Julien Thibeaut
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+
+React, React DOM and scheduler
+------------------------------
+
+The Mesurer bundle (vendor/mesurer/bundle/mesurer.js) includes React 19.2.4, React DOM 19.2.4 and
+scheduler 0.27.0 (https://github.com/facebook/react), Copyright (c) Meta Platforms, Inc. and
+affiliates, each licensed under the MIT License. Their LICENSE files are at
+vendor/mesurer/licenses/ in Sawit's source, copied verbatim from the npm packages; they are the
+same text, which follows.
+
+MIT License
+
+Copyright (c) Meta Platforms, Inc. and affiliates.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+
+Tailwind CSS (generated styles)
+-------------------------------
+
+The Mesurer bundle carries the stylesheet Mesurer generates with Tailwind CSS 4.2.2
+(https://tailwindcss.com), which includes Tailwind's own base styles, Copyright (c) Tailwind Labs,
+Inc., licensed under the MIT License. Its LICENSE is at vendor/mesurer/licenses/tailwindcss.LICENSE
+in Sawit's source, copied verbatim from the npm package tailwindcss@4.2.2, and follows.
+
+MIT License
+
+Copyright (c) Tailwind Labs, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+
 tree-sitter and its grammars
 ----------------------------
 

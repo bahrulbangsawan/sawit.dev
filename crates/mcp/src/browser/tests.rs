@@ -88,6 +88,7 @@ async fn a_screenshot_path_is_read_as_every_tool_reads_one() {
             reference: None,
             selector: None,
             output_path: Some(output),
+            mesurer: None,
             project: None,
         })
     };
@@ -280,6 +281,7 @@ async fn a_screenshot_never_replaces_a_canvas_file() {
             reference: None,
             selector: None,
             output_path: Some(output.display().to_string()),
+            mesurer: None,
             project: None,
         })
     };

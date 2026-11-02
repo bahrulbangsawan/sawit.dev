@@ -194,11 +194,12 @@ fn explorer_button(
 }
 
 /// The Annotate button's tooltip, with the key that toggles Annotate as the keymap is now
-/// (`Annotate (⇧⌘.)`); its name alone when no key does.
+/// (`Annotate and measure (⇧⌘.)`: Annotate brings mesurer's measuring tools); its name alone
+/// when no key does.
 pub(super) fn annotate_tooltip(window: &Window) -> SharedString {
     match crate::keymap::keys_for(&super::ToggleAnnotate, "Browser", window) {
-        keys if keys.is_empty() => "Annotate".into(),
-        keys => format!("Annotate ({keys})").into(),
+        keys if keys.is_empty() => "Annotate and measure".into(),
+        keys => format!("Annotate and measure ({keys})").into(),
     }
 }
 

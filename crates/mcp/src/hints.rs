@@ -135,6 +135,7 @@ const DESTRUCTIVE: &[&str] = &[
     "browser_network",
     "browser_evaluate",
     "browser_annotations",
+    "browser_mesurer",
     "browser_export_design",
     "keymap_bind",
     "keymap_unbind",
@@ -220,6 +221,7 @@ const OPEN_WORLD: &[&str] = &[
     "browser_resize",
     "browser_inspect",
     "browser_design",
+    "browser_mesurer",
     "browser_export_design",
 ];
 

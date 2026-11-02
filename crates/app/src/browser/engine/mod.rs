@@ -1,8 +1,15 @@
-//! The web view behind the browser tab, and news of the Mac's fonts ([`font_changes`]). This is
-//! the only file that names wry, objc2 or block2, with [`web_frame`], what the canvas's web frames
-//! ask of a view; the rest of the tab talks to [`Engine`].
+//! The web view behind the browser tab, and news of the Mac's fonts ([`font_changes`]). `engine/`
+//! is the only place in `browser/` that names wry, objc2 or block2; the rest of the tab talks to
+//! [`Engine`]. [`world`] is the `sawit-mesurer` content world mesurer runs in; `capture` and
+//! `color` are mesurer's captures and colour sampling; [`web_frame`] is what the canvas's web
+//! frames ask of a view.
 
+mod capture;
+mod color;
 pub(crate) mod web_frame;
+mod world;
+
+pub use world::WorldReply;
 
 use std::ffi::c_void;
 use std::sync::Mutex;
@@ -54,10 +61,17 @@ pub enum EngineEvent {
     /// The page (or a frame in it) went to a link another app handles
     /// (`mailto:`, `slack://…`).
     External(String),
+    /// A message from mesurer's world (`browser::mesurer`), and the reply it waits for.
+    World {
+        body: String,
+        reply: WorldReply,
+    },
 }
 
 pub struct Engine {
     webview: WebView,
+    /// mesurer's content world and its message handler.
+    world: world::World,
 }
 
 /// A capture as WebKit took it, at the display's scale: a PNG to bring to `width` CSS px wide
@@ -89,6 +103,7 @@ impl Engine {
         let loads = on_event.clone();
         let titles = on_event.clone();
         let external = on_event.clone();
+        let worlds = on_event.clone();
         let opens = on_event;
         // wry unwraps the `NSURL` it makes of the address.
         let url = if loadable(&spec.url) {
@@ -124,7 +139,8 @@ impl Engine {
             builder = web_frame::serve_screen(builder, screen);
         }
         let webview = builder.build_as_child(window).map_err(|e| e.to_string())?;
-        Ok(Engine { webview })
+        let world = world::World::register(&webview, Box::new(worlds))?;
+        Ok(Engine { webview, world })
     }
 
     /// Loads `url`; text that isn't a URL WebKit reads ([`loadable`]) is refused.

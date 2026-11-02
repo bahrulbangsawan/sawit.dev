@@ -11,16 +11,27 @@ use gpui_kit::*;
 use sawit_core::annotations::page_key;
 
 use super::{AnnotateEvent, AnnotatePanel, Picking, Row, group_order};
-use crate::browser::panel;
+use crate::browser::{ShowMesurerTools, panel};
+use crate::catalog::label;
+
+impl EventEmitter<ShowMesurerTools> for AnnotatePanel {}
 
 impl AnnotatePanel {
-    /// The line under the header: whether the page picks, and how to start again.
+    /// The line under the header: what a click on the page does now, and how to start again.
     fn status(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let (dot, text) = match self.picking {
-            Picking::On => (theme.primary, "Click an element on the page to annotate it"),
-            Picking::Waiting => (theme.muted_foreground, "Waiting for the page to load…"),
-            Picking::Off => (theme.muted_foreground, "Picking is off"),
+        let tool = self.mesurer_tool();
+        let dot = match (self.picking, tool) {
+            (Picking::On, None) => theme.primary,
+            (Picking::On, Some(_)) => theme.warning,
+            _ => theme.muted_foreground,
+        };
+        // Esc's next step, beside the line: mesurer's toolbar hides before picking stops.
+        let shown = self.mesurer.as_ref().is_some_and(|m| !m.minimized);
+        let esc = match (self.picking, tool) {
+            (Picking::On, None) if shown => Some("hides tools"),
+            (Picking::On, None) => Some("stops"),
+            _ => None,
         };
         h_flex()
             .flex_none()
@@ -32,7 +43,11 @@ impl AnnotatePanel {
             .border_color(theme.border)
             .child(div().size(px(6.)).flex_none().rounded_full().bg(dot))
             .child(
+                // Read out as it changes (GPUI gives assistive technology no plain text).
                 div()
+                    .id("annotate-status")
+                    .role(Role::Status)
+                    .aria_label(self.status_text())
                     .flex_1()
                     .min_w_0()
                     .truncate()
@@ -42,7 +57,7 @@ impl AnnotatePanel {
                     } else {
                         theme.muted_foreground
                     })
-                    .child(text),
+                    .child(self.status_text()),
             )
             .when(self.picking == Picking::Off, |el| {
                 el.child(
@@ -56,14 +71,105 @@ impl AnnotatePanel {
                         })),
                 )
             })
-            .when(self.picking == Picking::On, |el| {
-                el.child(panel::key("Esc", cx)).child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child("stops"),
+            .children(esc.map(|what| {
+                let key = panel::key("Esc", cx);
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(key)
+                    .child(muted(what, cx))
+            }))
+    }
+
+    /// The status line's text: what a click on the page does now.
+    pub(in crate::browser) fn status_text(&self) -> SharedString {
+        match (self.picking, self.mesurer_tool()) {
+            (Picking::On, Some(tool)) => format!("{tool} · Esc to leave").into(),
+            (Picking::On, None) => "Click an element to add a note".into(),
+            (Picking::Waiting, _) => "Waiting for the page to load…".into(),
+            (Picking::Off, _) => "Picking is off".into(),
+        }
+    }
+
+    /// mesurer's tool that has the pointer, by the name its toolbar gives it; `None` with no
+    /// tool (X-ray and Rulers leave the pointer free), or while mesurer is minimized or away.
+    fn mesurer_tool(&self) -> Option<&'static str> {
+        let summary = self.mesurer.as_ref().filter(|m| !m.minimized)?;
+        Some(match summary.tool.as_str() {
+            "select" => "Inspect",
+            "selection" => "Select",
+            "guides" => "Guides",
+            "arrows" => "Arrows",
+            "pen" => "Pen",
+            "text" => "Text",
+            "comments" => "Comments",
+            _ => return None,
+        })
+    }
+
+    /// The "Page tools" line: what mesurer has on the page, and whether its toolbar is hidden
+    /// (Show tools). `None` while there is nothing to say.
+    pub(in crate::browser) fn page_tools(&self) -> Option<(String, bool)> {
+        let m = self.mesurer.as_ref()?;
+        let counts = [
+            (m.comments_open, "comment", "comments"),
+            (m.guides, "guide", "guides"),
+            (m.layout_guides, "layout guide", "layout guides"),
+            (m.arrows, "arrow", "arrows"),
+            (m.texts, "text note", "text notes"),
+            (m.strokes, "pen stroke", "pen strokes"),
+            (m.distances, "pinned distance", "pinned distances"),
+        ];
+        let mut parts: Vec<String> = counts
+            .iter()
+            .filter(|(n, _, _)| *n > 0)
+            .map(|(n, one, many)| format!("{n} {}", if *n == 1 { one } else { many }))
+            .collect();
+        if m.xray {
+            parts.push("X-ray on".into());
+        }
+        match (parts.is_empty(), m.minimized) {
+            (true, false) => None,
+            (true, true) => Some(("Tools hidden".into(), true)),
+            (false, hidden) => Some((parts.join(" · "), hidden)),
+        }
+    }
+
+    /// The "Page tools" line under the status line, with Show tools while mesurer is minimized.
+    fn page_tools_line(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let (text, hidden) = self.page_tools()?;
+        let theme = cx.theme();
+        Some(
+            h_flex()
+                .flex_none()
+                .min_h(px(30.))
+                .px_3()
+                .gap_2()
+                .items_center()
+                .border_b_1()
+                .border_color(theme.border)
+                .child(muted("Page tools", cx))
+                .child(
+                    label("annotate-page-tools", text)
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs(),
                 )
-            })
+                .when(hidden, |el| {
+                    el.child(
+                        Button::new("annotate-show-tools")
+                            .outline()
+                            .xsmall()
+                            .icon(Lucide::RulerDimensionLine)
+                            .label("Show tools")
+                            .tooltip("Show mesurer's toolbar on the page")
+                            .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
+                                cx.emit(ShowMesurerTools);
+                            })),
+                    )
+                }),
+        )
     }
 
     /// How to start, and the keys, while there is nothing yet.
@@ -119,6 +225,17 @@ impl AnnotatePanel {
                             "Annotate on or off",
                         ))
                     }),
+                cx,
+            ))
+            .child(panel::section(
+                "Measure, guides and drawing",
+                None,
+                v_flex()
+                    .gap_1p5()
+                    .children(MESURER_KEYS.iter().map(|(keys, what)| {
+                        let keys = keys.split(' ').map(|k| panel::key(k, cx)).collect();
+                        line(keys, what)
+                    })),
                 cx,
             ))
     }
@@ -324,10 +441,41 @@ impl Render for AnnotatePanel {
         v_flex()
             .size_full()
             .child(self.status(cx))
+            .children(self.page_tools_line(cx))
             .child(panel::scroll("annotate-list").child(list))
             .child(self.footer(window, cx))
     }
 }
+
+/// Small text in the muted colour.
+fn muted(text: &'static str, cx: &App) -> Div {
+    div()
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .child(text)
+}
+
+/// mesurer's keys, as the empty panel lists them beside Sawit's (the page must have the keyboard:
+/// a press in it gives it).
+const MESURER_KEYS: [(&str, &str); 17] = [
+    ("I", "Inspect: sizes, spacing, type; click to pin"),
+    ("X", "X-ray: outline every element"),
+    ("G H", "Guides; H lays the next one across"),
+    ("R", "Rulers; drag a guide out of one"),
+    ("L", "Layout guides: columns, rows, pixel grid"),
+    ("B", "Responsive: the page at several sizes"),
+    ("P", "Sample a colour on the screen"),
+    ("S", "Select: move, resize, rotate annotations"),
+    ("D N T", "Arrows, pen, text"),
+    ("M", "Comments pinned to elements"),
+    ("C V", "Screenshot or record a region (MP4)"),
+    ("1 2", "Inspect tools, drawing tools"),
+    ("⌥ ⌥S", "Distances; ⌥S pins the one shown"),
+    ("⌘Z ⇧⌘Z ⌘,", "Undo, redo, mesurer's settings"),
+    ("⌘K ⇧⌘K", "Copy comments for an agent; resolve all"),
+    ("⌘A", "Select every annotation, in S"),
+    ("Esc", "Leave the tool, then hide the tools"),
+];
 
 /// The path a group header shows under the page's title, when it says more than the title
 /// alone: not the home page's bare `/`.

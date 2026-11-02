@@ -83,10 +83,11 @@
       removeItem(m.item.n);
     } else if (key === "Escape") {
       // The keyboard left on a marker (after its note closed): Esc gives it back to the page
-      // and, as anywhere else, stops picking.
+      // and, as anywhere else, stops picking. Beside mesurer (picking.js) the marker is the
+      // innermost layer: Esc leaves it, and the next one unwinds mesurer's before picking stops.
       preventNow(e);
       if (active && N.blur) apply(N.blur, active, []);
-      if (mode !== "off") {
+      if (mode !== "off" && !mesurerShown()) {
         send("key", "escape");
         stopPicking();
       }
