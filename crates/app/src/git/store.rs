@@ -138,11 +138,15 @@ impl GitStore {
         self.generation += 1;
         let generation = self.generation;
         let rx = rt::spawn(cx, async move {
-            let status = git::status(&repo).await;
-            let branches = git::branches(&repo).await.unwrap_or_default();
-            let slug = git::remote_url(&repo)
-                .await
-                .and_then(|url| git::github_slug(&url));
+            // Three reads that don't wait on each other: at once, so what an action changed
+            // shows sooner.
+            let (status, branches, remote) = futures::join!(
+                git::status(&repo),
+                git::branches(&repo),
+                git::remote_url(&repo)
+            );
+            let branches = branches.unwrap_or_default();
+            let slug = remote.and_then(|url| git::github_slug(&url));
             (status, branches, slug)
         });
         cx.spawn(async move |this, cx| {
