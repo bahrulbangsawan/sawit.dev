@@ -151,9 +151,11 @@ measured, because each rebuilds gpui or the whole FigCraft stack:
   (the whole test 111 ms instead of 353 ms on a quiet machine).
 - Under heavy load (load average 60 and up), `download::tests::existing_install_is_reused_without_network` and
   `mcp_clients::tests::a_cli_finds_the_node_nvm_keeps_elsewhere` can hit their 10 s stubs.
-- The first e2e test of a run can fail its first `set-value` while a freshly built app is still starting
-  (agent-desktop's window move and resize time out just before): `browser: loads the fixture site…` failed that way
-  once, then passed twice in a row.
+- The first e2e test of a full run, `browser: loads the fixture site…`, failed in 2 of 3 full runs: right after
+  the app starts, agent-desktop's window move and resize time out, then its `set-value` doesn't take, or its Return
+  isn't sent because the window's focus can't be confirmed. Launched alone on an idle Mac it passed 5 of 5 times with
+  the baseline build and 5 of 5 with the final one. Waiting for the window to take the accessibility calls before
+  the first step would make the suite steadier.
 - sawit-core's `new_project` tests leave `sawit-new-project-{home,names,remembered,target}-<pid>` folders in the
   temp dir on every run (their `scratch` helper never removes them).
 - The app's debug test binary links with "`__eh_frame` section too large (max 16MB)" (as before the split).
