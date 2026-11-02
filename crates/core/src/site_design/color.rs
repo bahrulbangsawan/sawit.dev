@@ -1,5 +1,7 @@
 //! CSS color parsing, OKLCH/OKLab, WCAG contrast and 50-950 ramps.
 
+use std::borrow::Cow;
+
 use serde::{Serialize, Serializer};
 
 pub const RAMP_L: [f64; 11] = [
@@ -138,7 +140,13 @@ fn trim(v: f64, dp: usize) -> String {
 // ---------- parsing ----------
 
 pub fn parse(css: &str) -> Option<Rgba> {
-    let s = css.trim().to_ascii_lowercase();
+    let s = css.trim();
+    // Computed styles come lowercase: only other values are copied to lower them.
+    let s: Cow<str> = if s.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(s.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(s)
+    };
     if s == "transparent" {
         return Some(Rgba {
             r: 0,
@@ -155,7 +163,7 @@ pub fn parse(css: &str) -> Option<Rgba> {
     let name = s[..open].trim();
     let (parts, alpha) = split_args(inner)?;
     let alpha = match alpha {
-        Some(a) => parse_alpha(&a)?,
+        Some(a) => parse_alpha(a)?,
         None => 1.0,
     };
     match name {
@@ -183,9 +191,9 @@ pub fn parse(css: &str) -> Option<Rgba> {
             if parts.len() != 3 {
                 return None;
             }
-            let h = parse_hue(&parts[0])?;
-            let sat = pct(&parts[1])?.clamp(0.0, 1.0);
-            let lig = pct(&parts[2])?.clamp(0.0, 1.0);
+            let h = parse_hue(parts[0])?;
+            let sat = pct(parts[1])?.clamp(0.0, 1.0);
+            let lig = pct(parts[2])?.clamp(0.0, 1.0);
             let k = |n: f64| (n + h / 30.0) % 12.0;
             let a = sat * lig.min(1.0 - lig);
             let f = |n: f64| lig - a * (k(n) - 3.0).min(9.0 - k(n)).clamp(-1.0, 1.0);
@@ -201,13 +209,13 @@ pub fn parse(css: &str) -> Option<Rgba> {
             if parts.len() != 3 {
                 return None;
             }
-            let l = num_or_pct(&parts[0], 1.0)?;
+            let l = num_or_pct(parts[0], 1.0)?;
             let (la, a, b) = if name == "oklch" {
-                let c = num_or_pct(&parts[1], 0.4)?;
-                let h = parse_hue(&parts[2])?;
+                let c = num_or_pct(parts[1], 0.4)?;
+                let h = parse_hue(parts[2])?;
                 lch_to_lab(l, c, h)
             } else {
-                (l, num_or_pct(&parts[1], 0.4)?, num_or_pct(&parts[2], 0.4)?)
+                (l, num_or_pct(parts[1], 0.4)?, num_or_pct(parts[2], 0.4)?)
             };
             let (r, g, bl) = oklab_to_lin(la, a, b);
             Some(lin_to_rgba(r, g, bl, alpha))
@@ -216,7 +224,7 @@ pub fn parse(css: &str) -> Option<Rgba> {
             if parts.len() != 4 {
                 return None;
             }
-            let space = parts[0].as_str();
+            let space = parts[0];
             let v: Vec<f64> = parts[1..]
                 .iter()
                 .map(|p| num_or_pct(p, 1.0))
@@ -259,20 +267,16 @@ fn parse_hex(h: &str) -> Option<Rgba> {
 }
 
 /// Splits "a, b, c / d", "a b c / d" or "a, b, c, d" into (components, alpha).
-fn split_args(inner: &str) -> Option<(Vec<String>, Option<String>)> {
+fn split_args(inner: &str) -> Option<(Vec<&str>, Option<&str>)> {
     let (main, mut alpha) = match inner.split_once('/') {
-        Some((m, a)) => (m, Some(a.trim().to_string())),
+        Some((m, a)) => (m, Some(a.trim())),
         None => (inner, None),
     };
-    let mut parts: Vec<String> = main
+    let mut parts: Vec<&str> = main
         .split(|c: char| c == ',' || c.is_whitespace())
         .filter(|p| !p.is_empty())
-        .map(String::from)
         .collect();
-    let is_color_fn = matches!(
-        parts.first().map(String::as_str),
-        Some("srgb" | "display-p3")
-    );
+    let is_color_fn = matches!(parts.first().copied(), Some("srgb" | "display-p3"));
     if alpha.is_none() && !is_color_fn && parts.len() == 4 {
         alpha = parts.pop();
     }
