@@ -34,12 +34,16 @@ pub struct ResultDelegate {
     /// A leading checkbox column ticking rows in this view, by the positions
     /// of the key columns in `set` (table browser on a keyed table).
     picks: Option<(WeakEntity<TableView>, Vec<usize>)>,
+    /// What each cell drawn so far shows ([`cell_preview`]), kept with the rows so a redraw or
+    /// a scroll doesn't make it again. A row gets its slots when it is first drawn.
+    previews: Vec<Box<[Option<SharedString>]>>,
 }
 
 impl ResultDelegate {
     pub fn new(set: ResultSet) -> Self {
         Self {
             columns: set.columns.iter().map(|c| column_for(c, "")).collect(),
+            previews: vec![Box::default(); set.rows.len()],
             set,
             first_row: None,
             sorts: None,
@@ -53,11 +57,28 @@ impl ResultDelegate {
         columns.extend(set.columns.iter().map(|c| column_for(c, "")));
         Self {
             columns,
+            previews: vec![Box::default(); set.rows.len()],
             set,
             first_row: Some(offset),
             sorts: None,
             picks: None,
         }
+    }
+
+    /// What cell `col_ix` of row `row_ix` shows, made the first time it is drawn; `None` for
+    /// NULL.
+    fn preview(&mut self, row_ix: usize, col_ix: usize) -> Option<SharedString> {
+        let row = self.set.rows.get(row_ix)?;
+        let value = row.get(col_ix)?.as_deref()?;
+        let slots = &mut self.previews[row_ix];
+        if slots.is_empty() {
+            *slots = vec![None; row.len()].into();
+        }
+        Some(
+            slots[col_ix]
+                .get_or_insert_with(|| cell_preview(value).into())
+                .clone(),
+        )
     }
 
     /// Leading columns before the data: the checkbox and the row number.
@@ -214,9 +235,9 @@ impl TableDelegate for ResultDelegate {
             Some(_) => col_ix - 1,
             None => col_ix,
         };
-        match self.set.rows.get(row_ix).and_then(|r| r.get(col_ix)) {
-            Some(Some(v)) => div().truncate().child(cell_preview(v)),
-            _ => div()
+        match self.preview(row_ix, col_ix) {
+            Some(text) => div().truncate().child(text),
+            None => div()
                 .text_color(cx.theme().muted_foreground)
                 .italic()
                 .child("NULL"),
