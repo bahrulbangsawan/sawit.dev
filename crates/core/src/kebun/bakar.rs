@@ -3,8 +3,10 @@
 use std::path::Path;
 use std::time::Duration;
 
+use futures::future::join_all;
+
 use crate::control;
-use crate::instances::{AppPaths, Registry};
+use crate::instances::{AppPaths, Instance, Registry};
 use crate::pgctl::PgCtlStatus;
 use crate::ports::PortJob;
 use crate::probe;
@@ -211,12 +213,16 @@ async fn bakar_instances(args: BakarArgs, paths: &AppPaths) -> i32 {
         );
         return 1;
     }
+    let chosen: Vec<&Instance> = registry
+        .instances
+        .iter()
+        .filter(|inst| args.targets.is_empty() || args.targets.contains(&inst.name))
+        .collect();
+    // One `pg_ctl status` per instance, all at once.
+    let statuses = join_all(chosen.iter().copied().map(control::status)).await;
     let mut burning = Vec::new();
-    for inst in &registry.instances {
-        if !args.targets.is_empty() && !args.targets.contains(&inst.name) {
-            continue;
-        }
-        if let Ok(PgCtlStatus::Running { pid }) = control::status(inst).await {
+    for (inst, status) in chosen.into_iter().zip(statuses) {
+        if let Ok(PgCtlStatus::Running { pid }) = status {
             burning.push((inst, pid));
         }
     }

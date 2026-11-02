@@ -8,6 +8,8 @@ mod skills;
 
 use std::path::Path;
 
+use futures::future::join_all;
+
 use crate::control;
 use crate::instances::{AppPaths, Registry};
 use crate::pgctl::PgCtlStatus;
@@ -33,8 +35,10 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
             ink.empty("belum ada kebun. Hutannya masih utuh, untuk sementara.");
         }
         let mut padam = false;
-        for inst in &registry.instances {
-            let status = match control::status(inst).await {
+        // One `pg_ctl status` per instance, all at once.
+        let statuses = join_all(registry.instances.iter().map(control::status)).await;
+        for (inst, status) in registry.instances.iter().zip(statuses) {
+            let status = match status {
                 Ok(PgCtlStatus::Running { pid }) => ink.green(&format!("menyala (PID {pid})")),
                 Ok(PgCtlStatus::Stopped) => {
                     padam = true;
