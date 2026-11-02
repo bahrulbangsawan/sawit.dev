@@ -74,6 +74,7 @@ export function sawitTest(name, opts, body) {
       });
       ctx.win = ctx.desktop.window(await ctx.desktop.windowOf(ctx.app.pid));
       await ctx.win.fill().catch((e) => log(`the window kept its size: ${e.message}`));
+      await ctx.win.takeFocus();
       await body(ctx);
     } catch (e) {
       failed = true;

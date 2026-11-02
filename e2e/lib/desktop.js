@@ -182,6 +182,26 @@ export class Window {
   }
 
   /**
+   * Brings the window to the front and waits until macOS confirms it has the focus. The first
+   * test of a run starts while another app (the terminal that started the suite) is in front,
+   * and macOS may hold a new app back from taking it for a moment; keys sent before then are
+   * refused ("the named window's exact focus could not be confirmed").
+   */
+  async takeFocus({ timeoutMs = 15_000 } = {}) {
+    await until(
+      async () => {
+        try {
+          await this.desktop.call(["focus-window", "--window-id", this.id]);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      { timeoutMs, intervalMs: 500, what: "the window to have the focus" },
+    );
+  }
+
+  /**
    * Makes the window as large as the main display, so the lists' feet (the pager, the Show menu)
    * are on screen: agent-desktop presses only what is visible.
    */
