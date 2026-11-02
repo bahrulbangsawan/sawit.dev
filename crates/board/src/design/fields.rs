@@ -81,7 +81,11 @@ const CORNERS: [&str; 4] = [
 static DEFAULT_VALUES: LazyLock<Vec<(&'static str, Value)>> = LazyLock::new(|| {
     DEFAULTS
         .iter()
-        .filter_map(|(key, json)| Some((*key, floats(serde_json::from_str(json).ok()?))))
+        .filter_map(|(key, json)| {
+            let mut value = serde_json::from_str(json).ok()?;
+            floats(&mut value);
+            Some((*key, value))
+        })
         .collect()
 });
 
@@ -140,7 +144,9 @@ fn is_never_negative(key: &str) -> bool {
 /// - `blend` is the layer's own, `"normal"` or `"passThrough"` included.
 /// - `constrainProportions` comes from the layer, and so does `textAlignVertical` for a text.
 pub(super) fn layer_props(doc: &Document, node: &Node) -> Map<String, Value> {
-    let Value::Object(mut props) = floats(node_json(doc, node.id, 0)) else {
+    let mut json = node_json(doc, node.id, 0);
+    floats(&mut json);
+    let Value::Object(mut props) = json else {
         return Map::new();
     };
     props.remove("id");
@@ -161,20 +167,19 @@ pub(super) fn layer_props(doc: &Document, node: &Node) -> Map<String, Value> {
     props
 }
 
-/// `value` with every number held as an `f64`. `serde_json` compares numbers by the way they are
-/// stored, so `100` and `100.0` differ, and the engine reports sizes as floats but some counts as
-/// integers, while [`DEFAULTS`] are plain JSON.
-fn floats(value: Value) -> Value {
+/// Holds every number in `value` as an `f64`, changing the numbers where they are. `serde_json`
+/// compares numbers by the way they are stored, so `100` and `100.0` differ, and the engine reports
+/// sizes as floats but some counts as integers, while [`DEFAULTS`] are plain JSON.
+fn floats(value: &mut Value) {
     match value {
-        Value::Number(n) => match n.as_f64().and_then(Number::from_f64) {
-            Some(float) => Value::Number(float),
-            None => Value::Number(n),
-        },
-        Value::Array(items) => Value::Array(items.into_iter().map(floats).collect()),
-        Value::Object(fields) => {
-            Value::Object(fields.into_iter().map(|(k, v)| (k, floats(v))).collect())
+        Value::Number(n) => {
+            if let Some(float) = n.as_f64().and_then(Number::from_f64) {
+                *n = float;
+            }
         }
-        other => other,
+        Value::Array(items) => items.iter_mut().for_each(floats),
+        Value::Object(fields) => fields.values_mut().for_each(floats),
+        _ => {}
     }
 }
 
