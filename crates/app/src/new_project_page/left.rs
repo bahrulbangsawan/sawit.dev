@@ -275,10 +275,9 @@ impl NewProjectPage {
     fn render_nav(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme().clone();
         let query = self.query(cx);
+        let selected = stack_builder::selected(&self.stack);
         let chips = self.sections(&query).into_iter().map(|(category, _)| {
-            let chosen = stack_builder::selected(&self.stack)
-                .iter()
-                .any(|(c, _)| *c == category);
+            let chosen = selected.iter().any(|(c, _)| *c == category);
             Button::new(SharedString::from(format!(
                 "new-project-nav-{}",
                 category.id()
