@@ -6,6 +6,7 @@ use figcraft_doc::{Document, NodeId, NodeKind};
 use figcraft_engine::arc_handles::ArcHandle;
 use figcraft_engine::shape_handles::ShapeHandle;
 use figcraft_engine::{DocState, Session, ToolId, ViewState, board, components, tools};
+use figcraft_geom::Point;
 use figcraft_geom::kurbo::{self, PathEl};
 
 use super::geometry::{at, extent, node_quad, screen, whole};
@@ -54,12 +55,17 @@ pub(super) fn selection(out: &mut Vec<Shape>, s: &Session, ds: &DocState) {
     if s.tool.tool == ToolId::ShapeBuilder {
         return;
     }
-    let (Some(corners), Some((_, width, height))) = (
-        tools::selection_box(doc, sel),
-        tools::selection_frame(doc, sel),
-    ) else {
+    let Some((frame, width, height)) = tools::selection_frame(doc, sel) else {
         return;
     };
+    // The corners `tools::selection_box` gives, from this one frame: each of the two works the
+    // frame out (the selection's top layers and their bounds) on every frame.
+    let corners = [
+        frame * Point::ZERO,
+        frame * Point::new(width, 0.0),
+        frame * Point::new(width, height),
+        frame * Point::new(0.0, height),
+    ];
     let line = match sel.as_slice() {
         [id] => doc
             .node(*id)
