@@ -220,8 +220,16 @@ impl ThreadView {
         let (token, owner, name, number) = self.api();
         self.diff = Some(Load::Loading);
         cx.notify();
+        // Parsing a big pull request's diff takes long enough to freeze the UI, so it happens
+        // next to the download.
         let rx = rt::spawn(cx, async move {
-            github::pull_diff(&token, &owner, &name, number).await
+            let patch = github::pull_diff(&token, &owner, &name, number).await?;
+            let parsed = tokio::task::spawn_blocking(move || {
+                DiffFile::parse(&patch).map_err(|e| e.message().to_string())
+            })
+            .await
+            .unwrap_or_else(|_| Err("The diff parser stopped.".into()));
+            Ok::<_, sawit_core::CoreError>(parsed)
         });
         cx.spawn(async move |this, cx| {
             let Ok(result) = rx.await else {
@@ -229,13 +237,9 @@ impl ThreadView {
             };
             let _ = this.update(cx, |this, cx| {
                 this.diff = Some(match result {
-                    Ok(patch) => match DiffFile::parse(&patch) {
-                        Ok(files) if files.is_empty() => Load::Ready(None),
-                        Ok(files) => Load::Ready(Some(cx.new(|cx| DiffState::new(files, cx)))),
-                        Err(e) => {
-                            Load::Failed(format!("Unable to show this diff. {}", e.message()))
-                        }
-                    },
+                    Ok(Ok(files)) if files.is_empty() => Load::Ready(None),
+                    Ok(Ok(files)) => Load::Ready(Some(cx.new(|cx| DiffState::new(files, cx)))),
+                    Ok(Err(e)) => Load::Failed(format!("Unable to show this diff. {e}")),
                     Err(e) if this.refused(&e, cx) => Load::Loading,
                     Err(e) => Load::Failed(e.to_string()),
                 });

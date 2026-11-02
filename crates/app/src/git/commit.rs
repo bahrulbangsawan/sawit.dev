@@ -25,16 +25,28 @@ impl CommitView {
     pub fn new(store: Entity<GitStore>, commit: Commit, cx: &mut Context<Self>) -> Self {
         if let Some(repo) = store.read(cx).repo.clone() {
             let hash = commit.hash.clone();
-            let rx = rt::spawn(cx, async move { git::show(&repo, &hash).await });
+            // Parsing a big commit (lockfiles, generated code) takes long enough to freeze the
+            // UI, so it happens next to the `git show` call, as in the diff tab.
+            let rx = rt::spawn(cx, async move {
+                let detail = git::show(&repo, &hash).await;
+                let files = match &detail {
+                    Ok(d) => {
+                        let patch = d.patch.clone();
+                        tokio::task::spawn_blocking(move || DiffFile::parse(&patch).ok())
+                            .await
+                            .ok()
+                            .flatten()
+                    }
+                    Err(_) => None,
+                };
+                (detail, files)
+            });
             cx.spawn(async move |this, cx| {
-                let Ok(result) = rx.await else {
+                let Ok((result, files)) = rx.await else {
                     return;
                 };
                 let _ = this.update(cx, |this, cx| {
-                    this.diff = result
-                        .as_ref()
-                        .ok()
-                        .and_then(|d| DiffFile::parse(&d.patch).ok())
+                    this.diff = files
                         .filter(|files| !files.is_empty())
                         .map(|files| cx.new(|cx| DiffState::new(files, cx)));
                     this.detail = Some(result.map_err(|e| e.to_string()));
