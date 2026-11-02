@@ -103,7 +103,13 @@ pub async fn run_shell_holding(
     run_script(name, command, on_line).await
 }
 
-/// Holds tool `id`'s lock until dropped; fails at once when it's held.
+/// How many times, [`LOCK_RETRY`] apart, a lock that's held is tried again before it counts as
+/// busy: a process forked elsewhere in Sawit holds a copy of every open file until it execs, so a
+/// lock just let go can look held for a moment.
+const LOCK_TRIES: u32 = 10;
+const LOCK_RETRY: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// Holds tool `id`'s lock until dropped; fails when it's still held after [`LOCK_TRIES`] tries.
 fn lock_tool(id: &str, name: &str) -> Result<std::fs::File> {
     use std::os::fd::AsRawFd as _;
     let dir = std::env::temp_dir().join("sawit-tool-locks");
@@ -117,16 +123,21 @@ fn lock_tool(id: &str, name: &str) -> Result<std::fs::File> {
         .truncate(false)
         .write(true)
         .open(dir.join(format!("{id}.lock")))?;
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        let e = std::io::Error::last_os_error();
-        if e.raw_os_error() == Some(libc::EWOULDBLOCK) {
-            return Err(CoreError::Config(format!(
-                "{name} is already being installed, upgraded or removed (from the Dev Tools page, an agent, `sawit pasang`, `sawit pupuk` or `sawit cabut`). Try again when that's done."
-            )));
+    for tries_left in (0..LOCK_TRIES).rev() {
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(file);
         }
-        return Err(e.into());
+        let e = std::io::Error::last_os_error();
+        if e.raw_os_error() != Some(libc::EWOULDBLOCK) {
+            return Err(e.into());
+        }
+        if tries_left > 0 {
+            std::thread::sleep(LOCK_RETRY);
+        }
     }
-    Ok(file)
+    Err(CoreError::Config(format!(
+        "{name} is already being installed, upgraded or removed (from the Dev Tools page, an agent, `sawit pasang`, `sawit pupuk` or `sawit cabut`). Try again when that's done."
+    )))
 }
 
 /// Ends the process group `shell()` started (curl, bash and whatever the
