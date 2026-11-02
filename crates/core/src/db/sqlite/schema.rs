@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use super::{MAIN, lite_error};
 use crate::Result;
@@ -20,20 +20,22 @@ fn is_internal(name: &str) -> bool {
 /// The tables and views of the database, as one schema, `main`, with their columns, keys,
 /// foreign keys and indexes. Row counts are exact (see [`row_count`](super::row_count)), so no estimate.
 pub fn load_schema(conn: &Connection) -> Result<Vec<SchemaInfo>> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY name",
-        )
-        .map_err(lite_error)?;
-    let names: Vec<(String, String)> = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-        .map_err(lite_error)?
-        .collect::<std::result::Result<_, _>>()
-        .map_err(lite_error)?;
-    let mut relations = Vec::new();
-    for (name, kind) in names.into_iter().filter(|(n, _)| !is_internal(n)) {
-        relations.push(relation(conn, &name, kind == "view")?);
-    }
+    // The indexes' CREATE statements are read once for all the tables, so the schema must not
+    // change while the tables are read: another process may change it (a local D1 file is
+    // wrangler's). The schema version says when it did, and the tables are read again.
+    let version = |conn: &Connection| -> Result<i64> {
+        conn.query_row("PRAGMA schema_version", [], |r| r.get(0))
+            .map_err(lite_error)
+    };
+    let mut tries = 0;
+    let mut relations = loop {
+        let before = version(conn)?;
+        let relations = read_relations(conn)?;
+        tries += 1;
+        if version(conn)? == before || tries == 3 {
+            break relations;
+        }
+    };
     // A foreign key to the parent's primary key names no columns: fill them in.
     let keys: HashMap<String, Vec<String>> = relations
         .iter()
@@ -52,7 +54,36 @@ pub fn load_schema(conn: &Connection) -> Result<Vec<SchemaInfo>> {
     }])
 }
 
-fn relation(conn: &Connection, name: &str, view: bool) -> Result<Relation> {
+/// The tables and views, read with every index's CREATE statement looked up in one query.
+fn read_relations(conn: &Connection) -> Result<Vec<Relation>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY name",
+        )
+        .map_err(lite_error)?;
+    let names: Vec<(String, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(lite_error)?
+        .collect::<std::result::Result<_, _>>()
+        .map_err(lite_error)?;
+    // Each index's CREATE statement by name (none for those SQLite makes), read once.
+    let index_sql: HashMap<String, Option<String>> = conn
+        .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index'")
+        .and_then(|mut s| s.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect())
+        .map_err(lite_error)?;
+    let mut relations = Vec::new();
+    for (name, kind) in names.into_iter().filter(|(n, _)| !is_internal(n)) {
+        relations.push(relation(conn, &name, kind == "view", &index_sql)?);
+    }
+    Ok(relations)
+}
+
+pub(super) fn relation(
+    conn: &Connection,
+    name: &str,
+    view: bool,
+    index_sql: &HashMap<String, Option<String>>,
+) -> Result<Relation> {
     let mut rel = Relation {
         name: name.into(),
         kind: if view { RelKind::View } else { RelKind::Table },
@@ -61,7 +92,7 @@ fn relation(conn: &Connection, name: &str, view: bool) -> Result<Relation> {
     };
     let mut pk: Vec<(i64, String)> = Vec::new();
     let mut stmt = conn
-        .prepare(r#"SELECT name, type, "notnull", pk, hidden FROM pragma_table_xinfo(?1)"#)
+        .prepare_cached(r#"SELECT name, type, "notnull", pk, hidden FROM pragma_table_xinfo(?1)"#)
         .map_err(lite_error)?;
     let mut rows = stmt.query([name]).map_err(lite_error)?;
     while let Some(row) = rows.next().map_err(lite_error)? {
@@ -93,7 +124,7 @@ fn relation(conn: &Connection, name: &str, view: bool) -> Result<Relation> {
         });
     }
     let mut stmt = conn
-        .prepare(
+        .prepare_cached(
             r#"SELECT id, "table", "from", "to" FROM pragma_foreign_key_list(?1) ORDER BY id, seq"#,
         )
         .map_err(lite_error)?;
@@ -133,21 +164,31 @@ fn relation(conn: &Connection, name: &str, view: bool) -> Result<Relation> {
         });
     }
     let mut stmt = conn
-        .prepare(
-            r#"SELECT l.name, l."unique", l.origin, m.sql FROM pragma_index_list(?1) l
-               LEFT JOIN sqlite_master m ON m.type = 'index' AND m.name = l.name ORDER BY l.name"#,
-        )
+        .prepare_cached(r#"SELECT name, "unique", origin FROM pragma_index_list(?1) ORDER BY name"#)
         .map_err(lite_error)?;
     let indexes: Vec<(String, bool, String, Option<String>)> = stmt
         .query_map([name], |r| {
-            Ok((r.get(0)?, r.get::<_, i64>(1)? != 0, r.get(2)?, r.get(3)?))
+            let index: String = r.get(0)?;
+            // One made after the map was read is looked up on its own.
+            let sql = match index_sql.get(&index) {
+                Some(sql) => sql.clone(),
+                None => conn
+                    .query_row(
+                        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                        [&index],
+                        |r| r.get::<_, Option<String>>(0),
+                    )
+                    .optional()?
+                    .flatten(),
+            };
+            Ok((index, r.get::<_, i64>(1)? != 0, r.get(2)?, sql))
         })
         .map_err(lite_error)?
         .collect::<std::result::Result<_, _>>()
         .map_err(lite_error)?;
     for (index, unique, origin, sql) in indexes {
         let columns: Vec<String> = conn
-            .prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")
+            .prepare_cached("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")
             .and_then(|mut s| {
                 s.query_map([&index], |r| r.get::<_, Option<String>>(0))?
                     .map(|c| c.map(Option::unwrap_or_default))

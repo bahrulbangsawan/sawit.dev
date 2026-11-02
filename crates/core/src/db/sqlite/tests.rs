@@ -295,3 +295,15 @@ fn missing_files_are_never_created() {
     assert!(with_write(&path, |c| run_write(c, "CREATE TABLE t (x)", 1)).is_err());
     assert!(files(dir.path()).is_empty());
 }
+
+/// An index the read-once map of CREATE statements doesn't hold (one another process made after
+/// the map was read) is looked up on its own: never shown as an index SQLite made.
+#[test]
+fn an_index_missing_from_the_map_is_looked_up_on_its_own() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE t (a INTEGER, b TEXT); CREATE INDEX t_b ON t (b);")
+        .unwrap();
+    let rel = schema::relation(&conn, "t", false, &std::collections::HashMap::new()).unwrap();
+    assert_eq!(rel.indexes.len(), 1);
+    assert_eq!(rel.indexes[0].definition, "CREATE INDEX t_b ON t (b)");
+}
