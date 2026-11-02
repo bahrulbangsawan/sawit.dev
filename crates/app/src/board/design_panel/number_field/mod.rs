@@ -58,6 +58,9 @@ pub struct TextField {
     icon: Option<Lucide>,
     /// The field's width, when it isn't to share its row's width with the others.
     width: Option<f32>,
+    /// What the field shows for the layers, when the section has read it already: else the rule
+    /// reads it.
+    shown: Option<SharedString>,
     rule: Rule,
 }
 
@@ -117,6 +120,7 @@ impl TextField {
             label: None,
             icon: None,
             width: None,
+            shown: None,
             rule,
         }
     }
@@ -139,6 +143,13 @@ impl TextField {
         self
     }
 
+    /// Shows `text` for the layers: what the rule reads of them, from the row the section has read
+    /// already, so that the rule doesn't read the whole list again for each field of each row.
+    pub fn showing(mut self, text: SharedString) -> Self {
+        self.shown = Some(text);
+        self
+    }
+
     /// The field as `view`'s panel draws it for the layers of `sel`. Its input shows what the rule
     /// reads, unless it has the keyboard.
     pub(super) fn render(
@@ -153,9 +164,11 @@ impl TextField {
             label,
             icon,
             width,
+            shown,
             rule,
         } = self;
-        let shown = guarded("ui.design", SharedString::default(), || (rule.show)(sel));
+        let shown = shown
+            .unwrap_or_else(|| guarded("ui.design", SharedString::default(), || (rule.show)(sel)));
         let input = view.field_input(id.clone(), rule, window, cx);
         view.show_in_field(&id, shown, window, cx);
         let handle = label.map(|label| handle(&id, label, icon, cx));

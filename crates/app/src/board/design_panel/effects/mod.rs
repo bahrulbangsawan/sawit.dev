@@ -200,16 +200,16 @@ fn editor(
 ) -> Vec<AnyElement> {
     match effect.kind {
         EffectKind::DropShadow | EffectKind::InnerShadow => {
-            let x = field(view, sel, index, Part::X, window, cx);
-            let y = field(view, sel, index, Part::Y, window, cx);
-            let blur = field(view, sel, index, Part::Blur, window, cx);
-            let spread = field(view, sel, index, Part::Spread, window, cx);
+            let x = field(view, sel, index, effect, Part::X, window, cx);
+            let y = field(view, sel, index, effect, Part::Y, window, cx);
+            let blur = field(view, sel, index, effect, Part::Blur, window, cx);
+            let spread = field(view, sel, index, effect, Part::Spread, window, cx);
             let of = ColourOf::Shadow { index };
             let id = format!("effects-{index}");
             let swatch =
                 paints::colour_swatch(view, &id, of, &effect.hex, effect.opacity, window, cx);
-            let hex = field(view, sel, index, Part::Hex, window, cx);
-            let opacity = field(view, sel, index, Part::Opacity, window, cx);
+            let hex = field(view, sel, index, effect, Part::Hex, window, cx);
+            let opacity = field(view, sel, index, effect, Part::Opacity, window, cx);
             vec![
                 row().child(x).child(y).into_any_element(),
                 row().child(blur).child(spread).into_any_element(),
@@ -222,7 +222,7 @@ fn editor(
             ]
         }
         EffectKind::LayerBlur | EffectKind::BackgroundBlur => {
-            let blur = field(view, sel, index, Part::Blur, window, cx);
+            let blur = field(view, sel, index, effect, Part::Blur, window, cx);
             // Half the row, as wide as a shadow's fields.
             vec![row().child(blur).child(div().flex_1()).into_any_element()]
         }
@@ -230,11 +230,13 @@ fn editor(
     }
 }
 
-/// The field of `part` of effect `index`.
+/// The field of `part` of effect `index`, `effect` as the section read it: the field shows the
+/// part of it, which is what its rule reads, without reading the effects again.
 fn field(
     view: &mut BoardView,
     sel: &DesignSelection,
     index: usize,
+    effect: &EffectRow,
     part: Part,
     window: &mut Window,
     cx: &mut Context<BoardView>,
@@ -242,7 +244,8 @@ fn field(
     let field = TextField::new(
         format!("effects.{index}.{}", part.name()),
         rule(index, part),
-    );
+    )
+    .showing(part.show(effect));
     let field = match part.label() {
         Some(label) => field.label(label),
         None => field,

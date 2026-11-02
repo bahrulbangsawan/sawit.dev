@@ -163,11 +163,14 @@ fn paint_row(
         PaintKind::Solid { hex, opacity } => {
             let of = ColourOf::Paint { key, index };
             let swatch = colour_swatch(view, &id, of, hex, *opacity, window, cx);
+            // The row's hex and opacity as the section read them, which is what their rules read.
             let hex = TextField::new(format!("{key}.{index}.hex"), hex_rule(key, index))
+                .showing(hex_text(hex))
                 .render(view, sel, window, cx);
             let opacity =
                 TextField::new(format!("{key}.{index}.opacity"), opacity_rule(key, index))
                     .width(OPACITY_WIDTH)
+                    .showing(number_field::percent(*opacity))
                     .render(view, sel, window, cx);
             row.child(swatch).child(hex).child(opacity)
         }

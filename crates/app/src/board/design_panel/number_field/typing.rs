@@ -74,7 +74,8 @@ impl BoardView {
         if field.editing.is_some() || field.input.focus_handle(cx).is_focused(window) {
             return;
         }
-        if field.shown != text || field.input.read(cx).value() != text {
+        // The input's text read in place: `value` would copy it out for each field each frame.
+        if field.shown != text || *field.input.read(cx).text() != *text {
             field.shown = text.clone();
             field
                 .input
