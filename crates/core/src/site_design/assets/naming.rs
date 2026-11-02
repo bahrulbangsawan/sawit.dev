@@ -51,6 +51,21 @@ fn is_ext(e: &str) -> bool {
 }
 
 pub fn file_name(asset: &AssetRef, taken: &mut HashSet<String>) -> String {
+    let data_mime = asset
+        .url
+        .as_deref()
+        .filter(|u| u.starts_with("data:"))
+        .and_then(decode_data_url)
+        .map(|(mime, _)| mime);
+    name_for(asset, data_mime.as_deref(), taken)
+}
+
+/// [`file_name`], with the MIME type of the asset's `data:` URL as its caller decoded it.
+pub(super) fn name_for(
+    asset: &AssetRef,
+    data_mime: Option<&str>,
+    taken: &mut HashSet<String>,
+) -> String {
     let url = asset.url.as_deref().filter(|u| !u.starts_with("data:"));
     let segment = url.and_then(|u| {
         let path = u.split(['?', '#']).next().unwrap_or("");
@@ -73,21 +88,16 @@ pub fn file_name(asset: &AssetRef, taken: &mut HashSet<String>) -> String {
     if stem.is_empty() {
         stem = kind_name(asset.kind).to_string();
     }
-    let data_ext = asset
-        .url
-        .as_deref()
-        .filter(|u| u.starts_with("data:"))
-        .and_then(decode_data_url)
-        .and_then(|(m, _)| match m.as_str() {
-            "image/png" => Some("png"),
-            "image/jpeg" => Some("jpg"),
-            "image/gif" => Some("gif"),
-            "image/webp" => Some("webp"),
-            "image/avif" => Some("avif"),
-            "image/svg+xml" => Some("svg"),
-            "image/x-icon" | "image/vnd.microsoft.icon" => Some("ico"),
-            _ => None,
-        });
+    let data_ext = data_mime.and_then(|m| match m {
+        "image/png" => Some("png"),
+        "image/jpeg" => Some("jpg"),
+        "image/gif" => Some("gif"),
+        "image/webp" => Some("webp"),
+        "image/avif" => Some("avif"),
+        "image/svg+xml" => Some("svg"),
+        "image/x-icon" | "image/vnd.microsoft.icon" => Some("ico"),
+        _ => None,
+    });
     let ext = seg_ext
         .filter(|e| is_ext(e))
         .or(data_ext.map(String::from))

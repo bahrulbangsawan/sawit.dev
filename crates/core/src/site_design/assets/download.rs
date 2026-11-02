@@ -1,6 +1,7 @@
 //! Saving a page's assets into the export's folder under one size budget: inline data written,
 //! a `file://` page's files copied, the rest downloaded with curl, six at a time.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::Path;
@@ -12,7 +13,7 @@ use futures::StreamExt;
 use super::curl::{DOWNLOAD_OUT, curl_args, download_report};
 use super::data_url::{decode_data_url, percent_decode};
 use super::hosts::local_page;
-use super::naming::{file_name, names_in, sub_dir};
+use super::naming::{file_name, name_for, names_in, sub_dir};
 use super::policy::{download_allowed, may_download};
 use crate::cmd;
 use crate::site_design::scan::{AssetKind, AssetOutcome, AssetRef};
@@ -50,16 +51,16 @@ fn write_local(
     taken: &mut HashSet<String>,
     total: &AtomicU64,
 ) -> AssetOutcome {
-    let bytes = if let Some(svg) = &a.svg {
-        svg.as_bytes().to_vec()
+    // An SVG is written as it is, and a data URL decoded once: for its bytes and its type.
+    let (bytes, name) = if let Some(svg) = &a.svg {
+        (Cow::Borrowed(svg.as_bytes()), file_name(a, taken))
     } else {
-        match a.url.as_deref().and_then(decode_data_url).map(|(_, b)| b) {
-            Some(b) => b,
+        match a.url.as_deref().and_then(decode_data_url) {
+            Some((mime, b)) => (Cow::Owned(b), name_for(a, Some(mime.as_str()), taken)),
             None => return outcome(a, None, 0, Some("Couldn't read the inline data.".into())),
         }
     };
     let sub = sub_dir(a.kind);
-    let name = file_name(a, taken);
     let target = dir.join(sub);
     let res =
         std::fs::create_dir_all(&target).and_then(|_| std::fs::write(target.join(&name), &bytes));
