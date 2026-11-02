@@ -1,7 +1,7 @@
 //! Tests of the connection tree's lines.
 
 // Not a glob: `gpui_kit::*` exports a `test` macro that shadows #[test].
-use super::tree::{D1_SECTION, Facet, Node, flatten};
+use super::tree::{D1_SECTION, Facet, Node, TreeCache, flatten};
 use crate::db::lifecycle::ConnState;
 use crate::db::store::DbStore;
 use sawit_core::db::DbKind;
@@ -11,6 +11,7 @@ use sawit_core::db::{
     SchemaInfo,
 };
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 fn rel(name: &str, readable: bool) -> Relation {
@@ -413,4 +414,33 @@ fn rows_name_their_kind_beside_the_logo() {
         super::super::logos::logo_path(row(&local).2).0,
         "db_logos/d1.svg"
     );
+}
+
+/// A render that changes nothing the tree shows reuses its lines; a change to the open lines,
+/// the filter, a connection's status or the schemas, or a store notification, makes them again.
+#[test]
+fn the_tree_is_flattened_again_only_when_what_it_shows_changed() {
+    let (mut store, name) = store();
+    let mut cache = TreeCache::default();
+    let mut expanded = HashSet::new();
+    let first = cache.lines(&store, &expanded, "");
+    assert!(Rc::ptr_eq(&first, &cache.lines(&store, &expanded, "")));
+    let fresh = |cache: &mut TreeCache, store: &DbStore, expanded: &HashSet<String>| {
+        *cache.lines(store, expanded, "s") == flatten(store, expanded, "s")
+    };
+    expanded.insert(name.clone());
+    assert!(fresh(&mut cache, &store, &expanded));
+    store.set_state(&name, ConnState::Connecting { attempt: 0 });
+    assert!(fresh(&mut cache, &store, &expanded));
+    store.schemas.get_mut(&name).unwrap()[1]
+        .relations
+        .push(rel("sessions", true));
+    store.schema_rev += 1;
+    assert!(fresh(&mut cache, &store, &expanded));
+    // Whatever else changes, the store notifies about, and the panel clears the cache.
+    store
+        .notices
+        .insert(name.clone(), "Unable to reload".into());
+    cache.clear();
+    assert!(fresh(&mut cache, &store, &expanded));
 }

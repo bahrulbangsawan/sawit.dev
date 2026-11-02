@@ -36,7 +36,7 @@ use super::store::DbStore;
 use crate::servers::ServerStore;
 use crate::states::{Banner, Placeholder};
 use settings::SettingsForm;
-use tree::{Node, flatten};
+use tree::{Node, TreeCache};
 
 #[derive(Clone)]
 #[allow(clippy::enum_variant_names)] // Each one opens a tab.
@@ -77,8 +77,10 @@ pub struct DatabasePanel {
     /// The connection whose settings are open.
     settings: Option<SettingsForm>,
     expanded: HashSet<String>,
-    /// The tree lines, flattened once per render for the virtual list.
+    /// The tree lines for the virtual list.
     nodes: Rc<Vec<Node>>,
+    /// Flattens them again only when what they show changed.
+    tree: TreeCache,
     scroll: UniformListScrollHandle,
     error: Option<String>,
     /// Background jobs (backups, exports, imports, drops) still running.
@@ -100,7 +102,10 @@ impl DatabasePanel {
         });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Filter tables"));
         let subscriptions = vec![
-            cx.observe(&store, |_, _, cx| cx.notify()),
+            cx.observe(&store, |this, _, cx| {
+                this.tree.clear();
+                cx.notify();
+            }),
             cx.subscribe(&search, |_, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
                     cx.notify();
@@ -122,6 +127,7 @@ impl DatabasePanel {
             settings: None,
             expanded: HashSet::new(),
             nodes: Rc::default(),
+            tree: TreeCache::default(),
             scroll: UniformListScrollHandle::new(),
             error: None,
             jobs: Vec::new(),
@@ -198,7 +204,7 @@ impl Render for DatabasePanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let query = self.search.read(cx).value().trim().to_string();
         let store = self.store.read(cx);
-        self.nodes = Rc::new(flatten(store, &self.expanded, &query));
+        self.nodes = self.tree.lines(store, &self.expanded, &query);
         let node_count = self.nodes.len();
         let empty = store.profiles.items.is_empty() && store.detected.is_empty();
         // Something is loaded to search, and nothing in it matches.

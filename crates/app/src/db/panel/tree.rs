@@ -2,6 +2,8 @@
 //! schemas, relation kinds and relations, and a relation's columns, indexes and constraints.
 
 use std::collections::HashSet;
+use std::rc::Rc;
+use std::time::Instant;
 
 use gpui_kit::assets::IconName as Lucide;
 use sawit_core::db::{ConnProfile, DbKind, RelKind, Relation, WriteRoute};
@@ -249,6 +251,67 @@ pub fn flatten(store: &DbStore, expanded: &HashSet<String>, query: &str) -> Vec<
         }
     }
     out
+}
+
+/// The lines last flattened and what they show, so a render that changes none of it (a hover, a
+/// job's banner, typing in Connection Settings) reuses them instead of walking every schema
+/// again.
+#[derive(Default)]
+pub(super) struct TreeCache {
+    lines: Rc<Vec<Node>>,
+    made_from: Option<TreeInputs>,
+}
+
+/// What the lines were made from: the filter, the open lines, and what in the store can change
+/// without a notification.
+#[derive(PartialEq)]
+struct TreeInputs {
+    schema_rev: u64,
+    query: String,
+    expanded: HashSet<String>,
+    /// Each connection's liveness and status line: a link that drops, or a retry countdown,
+    /// changes them between the store's notifications.
+    live: Vec<(bool, Option<String>)>,
+}
+
+impl TreeCache {
+    /// Forgets the lines, for a store that changed: the next call flattens again.
+    pub(super) fn clear(&mut self) {
+        self.made_from = None;
+    }
+
+    /// [`flatten`]'s lines: the last ones again while nothing they show changed.
+    pub(super) fn lines(
+        &mut self,
+        store: &DbStore,
+        expanded: &HashSet<String>,
+        query: &str,
+    ) -> Rc<Vec<Node>> {
+        let now = Instant::now();
+        let live: Vec<_> = store
+            .profiles
+            .items
+            .iter()
+            .chain(store.detected.all())
+            .map(|p| (store.is_connected(&p.name), store.state(&p.name).label(now)))
+            .collect();
+        let unchanged = self.made_from.as_ref().is_some_and(|m| {
+            m.schema_rev == store.schema_rev
+                && m.query == query
+                && m.expanded == *expanded
+                && m.live == live
+        });
+        if !unchanged {
+            self.lines = Rc::new(flatten(store, expanded, query));
+            self.made_from = Some(TreeInputs {
+                schema_rev: store.schema_rev,
+                query: query.to_string(),
+                expanded: expanded.clone(),
+                live,
+            });
+        }
+        self.lines.clone()
+    }
 }
 
 /// The key of the "Cloudflare D1" section (collapsed when in `expanded`).
