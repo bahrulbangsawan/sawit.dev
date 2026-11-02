@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use super::files::canvas_files_by_bytes;
 use super::refusal::{handled, refused};
-use super::{BATCH, failure};
+use super::{BATCH, failure, success};
 use crate::doc::{BoardDoc, BoardError};
 use crate::policy;
 
@@ -21,7 +21,7 @@ pub(super) fn commands() -> Value {
         .filter(|command| listed(command.id))
         .map(|command| json!({"id": command.id, "label": command.label, "params": command.params}))
         .collect();
-    json!({"ok": true, "commands": commands})
+    success("commands", Value::Array(commands))
 }
 
 /// Whether the `commands` op offers command `id`: the canvas doesn't hide it, and the `command`
@@ -56,7 +56,7 @@ pub(super) fn command(board: &mut BoardDoc, op: &Value) -> Value {
         single(board, id, &params)
     };
     match ran {
-        Ok(result) => json!({"ok": true, "result": result}),
+        Ok(result) => success("result", result),
         Err(error) => {
             if let Some(history) = history {
                 history.restore(&mut board.session);

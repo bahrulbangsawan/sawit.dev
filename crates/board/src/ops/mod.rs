@@ -221,3 +221,11 @@ fn run_unguarded(board: &mut BoardDoc, op: &Value) -> Value {
 fn failure(error: impl Display) -> Value {
     json!({"ok": false, "error": error.to_string()})
 }
+
+/// `{ok: true, <key>: value}`, with `value` moved in: `json!` would serialize it into a copy of
+/// its own, and a page's elements or a command's result can be large.
+fn success(key: &str, value: Value) -> Value {
+    let mut reply = json!({"ok": true});
+    reply[key] = value;
+    reply
+}

@@ -6,14 +6,14 @@ use figcraft_engine::{EngineError, Result as EngineResult, Session};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::failure;
+use super::{failure, success};
 use crate::doc::{BoardDoc, BoardError, DocKind};
 use crate::skeleton::{self, Applied, Label, Skeleton};
 use crate::summary;
 
 pub(super) fn get(board: &BoardDoc) -> Value {
     match summaries(board) {
-        Ok(elements) => json!({"ok": true, "elements": elements}),
+        Ok(elements) => success("elements", Value::Array(elements)),
         Err(error) => failure(error),
     }
 }
