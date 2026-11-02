@@ -23,6 +23,8 @@
 //! as the keymap binds them now (its `board::command_keys_all`), and leaves out a row whose keys
 //! the user took out.
 
+use std::sync::LazyLock;
+
 use figcraft_engine::keymap::{Context, Group, KEYS, Platform};
 
 mod bindings;
@@ -54,21 +56,27 @@ pub struct DefaultKeys {
 /// Every command's default keys on the canvas, FigCraft's first, in its keymap's order, then
 /// Sawit's ([`SAWIT_KEYS`]).
 pub fn defaults() -> impl Iterator<Item = DefaultKeys> {
-    let figcraft = KEYS.iter().map(|binding| DefaultKeys {
-        group: binding.group,
-        id: binding.id,
-        keys: binding.keys(Platform::Mac),
-        context: binding.context,
-        title: binding.title(),
+    // Made once: the keymap and Sawit's keys never change while the app runs, and each title is a
+    // search of FigCraft's menus, which every lookup (`primary`, for each toolbar button on
+    // every frame) made again for every command it went past.
+    static DEFAULTS: LazyLock<Vec<DefaultKeys>> = LazyLock::new(|| {
+        let figcraft = KEYS.iter().map(|binding| DefaultKeys {
+            group: binding.group,
+            id: binding.id,
+            keys: binding.keys(Platform::Mac),
+            context: binding.context,
+            title: binding.title(),
+        });
+        let sawits = SAWIT_KEYS.iter().map(|key| DefaultKeys {
+            group: key.group,
+            id: key.id,
+            keys: key.keys,
+            context: Context::Canvas,
+            title: key.title(),
+        });
+        figcraft.chain(sawits).collect()
     });
-    let sawits = SAWIT_KEYS.iter().map(|key| DefaultKeys {
-        group: key.group,
-        id: key.id,
-        keys: key.keys,
-        context: Context::Canvas,
-        title: key.title(),
-    });
-    figcraft.chain(sawits)
+    DEFAULTS.iter().copied()
 }
 
 /// The first default key of command `id` ([`defaults`]) that the canvas gets, as FigCraft's
