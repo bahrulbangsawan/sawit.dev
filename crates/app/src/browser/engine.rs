@@ -54,6 +54,25 @@ pub struct Engine {
     webview: WebView,
 }
 
+/// A capture as WebKit took it, at the display's scale: a PNG to bring to `width` CSS px wide
+/// ([`Capture::at_1x`]), slow work that stays off the main thread.
+pub struct Capture {
+    png: Vec<u8>,
+    width: u32,
+}
+
+impl Capture {
+    /// The capture at the page's CSS size, answered as `png_base64` with its size.
+    pub fn at_1x(self) -> Result<Value, String> {
+        let (png, w, h) = at_1x(self.png, self.width)?;
+        Ok(json!({
+            "png_base64": sawit_core::browser::base64_encode(&png),
+            "width": w,
+            "height": h,
+        }))
+    }
+}
+
 impl Engine {
     pub fn build(
         spec: EngineSpec,
@@ -186,15 +205,15 @@ impl Engine {
         self.webview.open_devtools();
     }
 
-    /// Captures the view (or `css_rect` of it, in CSS px) as a PNG, resized
-    /// to `css_width` px wide, answered as `png_base64` with its size. The
-    /// rect is scaled by `scale` (the page zoom) into the view's points.
+    /// Captures the view (or `css_rect` of it, in CSS px) as a PNG, `css_width` px wide at the
+    /// display's scale; [`Capture::at_1x`] brings it to that size. The rect is scaled by `scale`
+    /// (the page zoom) into the view's points.
     pub fn snapshot(
         &self,
         css_rect: Option<(f64, f64, f64, f64)>,
         css_width: f64,
         scale: f64,
-        reply: oneshot::Sender<Result<Value, String>>,
+        reply: oneshot::Sender<Result<Capture, String>>,
     ) {
         use objc2::MainThreadMarker;
         use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
@@ -243,12 +262,10 @@ impl Engine {
                     )
                 }
                 .ok_or("The screenshot couldn't be saved as PNG.")?;
-                let (png, w, h) = at_1x(png.to_vec(), css_width.round() as u32)?;
-                Ok(json!({
-                    "png_base64": sawit_core::browser::base64_encode(&png),
-                    "width": w,
-                    "height": h,
-                }))
+                Ok(Capture {
+                    png: png.to_vec(),
+                    width: css_width.round() as u32,
+                })
             })();
             let _ = reply.send(result);
         });

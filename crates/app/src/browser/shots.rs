@@ -6,6 +6,7 @@ use gpui_kit::*;
 use sawit_core::browser::ViewportMode;
 use serde_json::{Value, json};
 
+use super::engine::Capture;
 use super::{BrowserView, OpResult};
 
 /// How long a shot waits for the overlay to hide, and then for WebKit's capture, so a
@@ -25,7 +26,9 @@ pub(super) async fn within<F: std::future::Future + Unpin>(
 
 impl BrowserView {
     /// Takes a screenshot of the page without the overlay in it: hides the
-    /// overlay, captures, and shows the overlay again whatever happened.
+    /// overlay, captures, and shows the overlay again whatever happened. The
+    /// capture is then brought to the page's CSS size off the UI thread: that
+    /// takes the CPU a while for a retina capture of a whole view.
     pub(crate) fn shoot(
         &mut self,
         css_rect: Option<(f64, f64, f64, f64)>,
@@ -49,7 +52,7 @@ impl BrowserView {
             }
             let (tx, rx) = oneshot::channel();
             let started = this.update(cx, |this, _| this.snap(css_rect, tx));
-            let result = if started.is_ok() {
+            let captured = if started.is_ok() {
                 let timer = cx.background_executor().timer(SHOT_STEP_TIMEOUT);
                 match within(rx, timer).await {
                     Some(shot) => {
@@ -63,17 +66,28 @@ impl BrowserView {
             } else {
                 Err("The browser isn't open.".into())
             };
-            let _ = this.update(cx, |this, _| {
-                drop(this.page_op(show));
-                this.shots.leave();
-            });
+            let _ = this.update(cx, |this, _| drop(this.page_op(show)));
+            let result = match captured {
+                Ok(capture) => {
+                    let scaled = cx
+                        .background_executor()
+                        .spawn(async move { capture.at_1x() });
+                    scaled.await
+                }
+                Err(e) => Err(e),
+            };
+            let _ = this.update(cx, |this, _| this.shots.leave());
             let _ = reply.send(result);
         })
         .detach();
     }
 
     /// Captures the view, or `rect` of the page.
-    fn snap(&self, rect: Option<(f64, f64, f64, f64)>, reply: oneshot::Sender<OpResult>) {
+    fn snap(
+        &self,
+        rect: Option<(f64, f64, f64, f64)>,
+        reply: oneshot::Sender<Result<Capture, String>>,
+    ) {
         match &self.engine {
             Some(engine) => {
                 let width = shot_width(rect, self.bounds, &self.viewport);
