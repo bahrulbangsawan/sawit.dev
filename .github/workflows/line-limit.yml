@@ -1,0 +1,22 @@
+# Keeps every hand-written source file at 500 lines or fewer (scripts/check-line-limit.sh), on
+# every pull request and every push to main. `cargo test` runs the same check
+# (crates/core/tests/line_limit.rs), so it fails locally before it fails here.
+name: Line limit
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - run: sh scripts/check-line-limit.sh
