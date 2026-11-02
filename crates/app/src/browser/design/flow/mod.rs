@@ -1574,7 +1574,7 @@ mod tests {
 
     fn style() -> StyleInfo {
         serde_json::from_str(include_str!(
-            "../../../../core/src/site_design/fixtures/style_button.json"
+            "../../../../../core/src/site_design/fixtures/style_button.json"
         ))
         .unwrap()
     }
