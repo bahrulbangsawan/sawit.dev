@@ -1,5 +1,7 @@
 //! The canvas's default keys as the app's key bindings, and the keystrokes GPUI reports for them.
 
+use std::sync::LazyLock;
+
 use figcraft_engine::keymap;
 
 use super::{defaults, is_offered};
@@ -31,6 +33,19 @@ pub struct KeyBinding {
 /// - While text is edited ([`TEXT_CONTEXT`]), the keys with ⌘, ⌥ or ⌃ of the commands live
 ///   there, and of copy and paste, which act on the text: plain keys type.
 pub fn key_bindings() -> Vec<KeyBinding> {
+    default_bindings().to_vec()
+}
+
+/// [`key_bindings`], made once: they follow from the default keys and the policy, which never
+/// change while the app runs, and every key an agent sends is looked up in them
+/// (`input::route_default_key`).
+pub(crate) fn default_bindings() -> &'static [KeyBinding] {
+    static BINDINGS: LazyLock<Vec<KeyBinding>> = LazyLock::new(make_bindings);
+    &BINDINGS
+}
+
+/// [`key_bindings`], worked out.
+fn make_bindings() -> Vec<KeyBinding> {
     let mut out = Vec::new();
     for binding in defaults() {
         if !is_offered(binding.id) {

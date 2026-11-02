@@ -72,7 +72,7 @@ pub fn route_default_key(
 /// by default.
 fn default_command(key: &str, mods: Mods, editing: bool) -> Option<&'static str> {
     use crate::shortcuts::{
-        CANVAS_CONTEXT, TEXT_CONTEXT, binding_keystroke, defaults, key_bindings,
+        CANVAS_CONTEXT, TEXT_CONTEXT, binding_keystroke, default_bindings, defaults,
     };
     let (key, mods) = figcraft_key(key, mods);
     let context = if editing {
@@ -80,7 +80,7 @@ fn default_command(key: &str, mods: Mods, editing: bool) -> Option<&'static str>
     } else {
         CANVAS_CONTEXT
     };
-    let bound = key_bindings();
+    let bound = default_bindings();
     defaults().find_map(|binding| {
         binding
             .keys

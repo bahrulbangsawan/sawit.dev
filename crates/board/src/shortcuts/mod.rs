@@ -31,10 +31,10 @@ mod bindings;
 mod sawit_keys;
 mod sheet;
 
-pub(crate) use bindings::owned_by_sawit;
 pub use bindings::{
     CANVAS_CONTEXT, KeyBinding, TEXT_CONTEXT, binding_keystroke, key_bindings, unshifted,
 };
+pub(crate) use bindings::{default_bindings, owned_by_sawit};
 pub use sawit_keys::{SAWIT_KEYS, SawitKey};
 pub use sheet::{ShortcutGroup, ShortcutRow, is_offered, sheet};
 
