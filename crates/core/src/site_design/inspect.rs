@@ -265,7 +265,7 @@ mod tests {
         serde_json::from_str(include_str!("fixtures/style_button.json")).unwrap()
     }
 
-    /// What `browser_design.js`'s `style` emits, field for field.
+    /// What `style` (`browser/page/design/style.js`) emits, field for field.
     #[test]
     fn page_output_is_the_contract() {
         crate::site_design::assert_wire_exact::<StyleInfo>(include_str!(

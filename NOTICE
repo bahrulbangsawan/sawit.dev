@@ -214,8 +214,9 @@ Visual Annotator
 
 Sawit's browser tab adapts the picker and selector logic of Visual Annotator
 (https://github.com/wernerstrauch/visual-annotator), Copyright (c) 2026 wernerstrauch, in the page
-overlay it injects into pages (crates/core/src/browser_overlay.js in Sawit's source). Visual
-Annotator is licensed under the MIT License; its LICENSE follows, copied verbatim from revision
+overlay it injects into pages (crates/core/src/browser/page/overlay.js and the parts in
+crates/core/src/browser/page/overlay/ in Sawit's source). Visual Annotator is licensed under the
+MIT License; its LICENSE follows, copied verbatim from revision
 4ec9a2df5a2c24a0c2baa889935efa4f6012ed21.
 
 MIT License

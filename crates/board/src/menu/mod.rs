@@ -1,5 +1,5 @@
 //! The menus as plain data: the ≡ main menu, built from FigCraft's catalog under Sawit's menu
-//! policy, and the context menu the spec defines. The view in `crates/app/src/board/menus.rs`
+//! policy, and the context menu the spec defines. The view in `crates/app/src/board/menus/`
 //! turns the [`MenuNode`]s into popup menus and runs the `id` of the item picked, and the tests
 //! here read the same nodes.
 //!

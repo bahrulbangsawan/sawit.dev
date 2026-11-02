@@ -1,6 +1,6 @@
 //! The layers panel's model: the rows of the layer tree and of the page list, where a dragged layer
 //! lands, and which layers to open so that a selection made on the canvas shows. The view in
-//! `crates/app/src/board/layers_panel.rs` draws what [`rows`] and [`pages`] return, runs
+//! `crates/app/src/board/layers_panel/` draws what [`rows`] and [`pages`] return, runs
 //! `node.reparent` with what [`drop_target`] returns, and keeps the set of open layers that
 //! [`rows`] reads and [`reveal`] adds to. It ports the decisions of FigCraft's own panel,
 //! `ui-egui/src/panels/layers.rs` (`collect`, `drop_zone`, `drop_layers`, `reveal_selection`),

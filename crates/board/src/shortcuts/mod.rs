@@ -1,6 +1,6 @@
 //! The keyboard-shortcuts sheet's model: the canvas's default keys (FigCraft's keymap, then
 //! Sawit's), grouped as FigCraft's own panel groups them, less the rows Sawit does not offer. The
-//! view in `crates/app/src/board/menus.rs` draws it (⌃⇧?, or Help ▸ Keyboard shortcuts).
+//! view in `crates/app/src/board/menus/` draws it (⌃⇧?, or Help ▸ Keyboard shortcuts).
 //!
 //! A row is left out when:
 //! - its command is hidden ([`crate::policy::is_hidden`]), because the keyboard cannot reach it;

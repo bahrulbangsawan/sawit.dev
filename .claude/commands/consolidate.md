@@ -71,17 +71,17 @@ How the pieces fit:
   `Sawit::router` (`crates/mcp/src/lib.rs`). Tools that work without the app (instances, db, diagrams, ports,
   network, ssh, scripts, git, prompts, files) call `sawit-core` directly. After changing a store the app
   also shows, they call `app_control::notify_reload` with the right `Store`.
-- `crates/mcp/src/app.rs` drives the **running app** over the control socket. It sends
-  `sawit_core::app_control::Command` (`crates/core/src/app_control.rs`), which the app handles in
-  `crates/app/src/workspace/control.rs`, and starts the app first when it isn't running.
+- `crates/mcp/src/app/` drives the **running app** over the control socket. It sends
+  `sawit_core::app_control::Command` (`crates/core/src/app_control/command.rs`), which the app handles in
+  `crates/app/src/workspace/control/`, and starts the app first when it isn't running.
 
 Check every user-facing change from Phases 1–2 (`git diff $(git describe --tags --abbrev=0) --stat`, plus
 the uncommitted diff) against this list, and fill each gap:
 
 1. **A new or changed panel, page, tab, view or action in the app** →
-   - add the variant to `Panel`/`Page` or a new `Command` in `app_control.rs` (serde `snake_case`);
-   - handle it in `workspace/control.rs`, returning a useful reply (what was opened, ids, or a clear error);
-   - add the MCP tool in `app.rs` that sends it.
+   - add the variant to `Panel`/`Page` or a new `Command` in `app_control/command.rs` (serde `snake_case`);
+   - handle it in `workspace/control/`, returning a useful reply (what was opened, ids, or a clear error);
+   - add the MCP tool that sends it in `app/` (its launch, window, terminal, panels or canvas module).
 
    Opening a screen is not enough: the agent must be able to perform the action itself (start, stop,
    run, save, export, close, …) and read the result back.
@@ -93,8 +93,8 @@ the uncommitted diff) against this list, and fill each gap:
 4. **Parity check**: every `Command` variant, `Panel` and `Page` must be reachable from at least one MCP tool:
 
    ```bash
-   sed -n '/pub enum Command/,/^}/p;/pub enum Panel/,/^}/p;/pub enum Page/,/^}/p' crates/core/src/app_control.rs
-   grep -n 'Command::\|Panel::\|Page::' crates/mcp/src/app.rs
+   sed -n '/pub enum Command/,/^}/p;/pub enum Panel/,/^}/p;/pub enum Page/,/^}/p' crates/core/src/app_control/command.rs
+   grep -rn 'Command::\|Panel::\|Page::' crates/mcp/src/app/
    ```
 
    Also compare the sidebar tabs, pages and title bar buttons in `crates/app/src` with that list. Report
@@ -119,9 +119,9 @@ Skip it only when nothing user-facing changed, and say so in the report.
 
 How it fits together:
 
-- `crates/core/src/cli.rs`: `parse_args` → `Invocation`, the `Usage:`/examples help text printed by
+- `crates/core/src/cli/`: `parse_args` → `Invocation`, the `Usage:`/examples help text printed by
   `sawit --help`, opening paths in the running app over `sawit.sock`, and its tests.
-- `crates/core/src/kebun.rs`: the subcommands that work without the app. These are `sawit <db> [table]
+- `crates/core/src/kebun/`: the subcommands that work without the app. These are `sawit <db> [table]
   ["sql"]`, `sawit list [instances|db|ports|connections]` (`ListWhat`) and `sawit bakar ports|instances`
   (`BakarWhat`). Reserved words are in `SUBCOMMANDS`. Output is in Indonesian with karhutla/plantation jokes,
   tables go to stdout and status and timing go to stderr.
@@ -140,7 +140,7 @@ For each user-facing change:
    without a terminal unless given `-y`. `bakar` keeps skipping protected processes (`protected`,
    `burnable`). Passwords never print.
 5. **Help**: `sawit --help` lists every subcommand, target and flag, with an example for each new one.
-6. **Tests**: add parser tests in `cli.rs`/`kebun.rs` (the same style as `parse(&["list"])` and
+6. **Tests**: add parser tests in `cli/tests/`/`kebun/tests/` (the same style as `parse(&["list"])` and
    `BakarArgs::parse(...)`) for each new word, alias, flag and error case.
 7. **Proof**: run the release binary with a scratch `SAWIT_HOME` (`target/release/sawit --help`,
    `sawit list <new>`, the new subcommand against demo data, the `-y`/no-terminal paths) and quote the output.
@@ -175,7 +175,7 @@ List what is new with `git log --oneline $(git describe --tags --abbrev=0)..HEAD
 1. **Text**: update the matching README section, or add one. Keep README's style: short plain sentences,
    bullets, `<kbd>` shortcuts. Keep these in sync with the code:
    - the feature table under *Overview*;
-   - the sidebar tab list under *Welcome screen* (compare with `Panel` in `crates/core/src/app_control.rs`);
+   - the sidebar tab list under *Welcome screen* (compare with `Panel` in `crates/core/src/app_control/command.rs`);
    - *Keyboard shortcuts* (compare with the key bindings in `crates/app/src`);
    - *The `sawit` command* and *Databases, ports and instances from the terminal*: every subcommand,
      `list` target, `bakar` target, alias and flag from `sawit --help` after Phase 3, with an example each;
@@ -193,7 +193,7 @@ List what is new with `git log --oneline $(git describe --tags --abbrev=0)..HEAD
    - Build release, launch with demo data and its own home: `SAWIT_HOME=<scratchpad>/home target/release/sawit --foreground`.
      Homebrew PostgreSQL 16 is used for the demo instances.
    - Synthetic clicks don't reach the window. Drive the app over its control socket instead: send
-     `sawit-control/1\n` + a JSON `Command` from `crates/core/src/app_control.rs` (for example
+     `sawit-control/1\n` + a JSON `Command` from `crates/core/src/app_control/command.rs` (for example
      `{"cmd":"show_panel","panel":"ports"}`, `{"cmd":"open_page","page":"tools"}`, `open_table`, `open_sql`,
      `open_diagram`), then close the write half and read the reply. With a long `SAWIT_HOME`, the socket
      falls back to `/tmp/sawit-$USER-<hash>.sock`. Send `{"cmd":"state"}` to find yours.

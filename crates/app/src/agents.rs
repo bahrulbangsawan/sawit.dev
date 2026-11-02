@@ -4,8 +4,9 @@
 //! ([`reduce_motion`]), and the words the app announces for what they did ([`sentence`]).
 //!
 //! Where each agent is and what it does is the surface's own: the canvas draws its agents
-//! (`crate::board`), the browser's page draws its own (`browser_overlay.js`). The app only gives
-//! them one colour and one name per agent, so an agent reads the same on every surface.
+//! (`crate::board`), the browser's page draws its own (sawit-core's `browser/page/overlay.js`).
+//! The app only gives them one colour and one name per agent, so an agent reads the same on every
+//! surface.
 
 use std::cell::Cell;
 use std::path::PathBuf;

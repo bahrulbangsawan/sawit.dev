@@ -1,6 +1,6 @@
 //! The Annotate panel: one card per element the user picked, with a comment, an intent and a
 //! screenshot, grouped by page. Notes are written in a popover on the page itself
-//! (`browser_overlay.js`); the panel is their list, kept in step both ways. `BrowserView` owns
+//! (`browser/page/overlay.js`); the panel is their list, kept in step both ways. `BrowserView` owns
 //! the flow around it (pick, capture, markers, copy); the panel owns the rows, and where the
 //! notes go: an agent running in a terminal, or a new one ([`super::agents`]).
 

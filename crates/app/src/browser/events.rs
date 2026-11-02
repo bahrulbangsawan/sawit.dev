@@ -63,7 +63,7 @@ impl BrowserView {
                     self.inspect_element(selector.to_string(), false, cx);
                 }
             }
-            // From the page: Esc while picking. ⇧⌘. never comes from it (browser_overlay.js):
+            // From the page: Esc while picking. ⇧⌘. never comes from it (browser/page/overlay/):
             // the user's own is the keymap's, and Sawit answers an agent's itself.
             FromPage::Event(PageEvent::Key(key)) => {
                 if key == "escape" {

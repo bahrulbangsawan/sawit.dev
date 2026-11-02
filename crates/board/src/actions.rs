@@ -1,5 +1,5 @@
 //! The Actions palette's model: every command the main menu shows, flattened into a list, and the
-//! search over it. The view in `crates/app/src/board/menus.rs` draws the best matches and runs
+//! search over it. The view in `crates/app/src/board/menus/` draws the best matches and runs
 //! the `id` of the one picked, as a click in the main menu would.
 //!
 //! The list is the main menu's ([`crate::menu::main_menu`]), so it holds what the menu holds: no

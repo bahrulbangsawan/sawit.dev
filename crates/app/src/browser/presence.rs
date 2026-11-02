@@ -1,5 +1,5 @@
 //! Agents in the browser: the page's overlay draws each agent's pointer and pill
-//! (`browser_overlay.js`, its `presence` op), and the browser keeps what each agent did last
+//! (`browser/page/overlay.js`, its `presence` op), and the browser keeps what each agent did last
 //! (`app_state.agents`), says it to screen readers, and shows an agent's page opening in the
 //! toolbar until the page has loaded.
 //!

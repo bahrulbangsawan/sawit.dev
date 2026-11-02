@@ -1,4 +1,4 @@
-  // ---- Color math (pure: no DOM; browser.rs tests it in QuickJS) ----
+  // ---- Color math (pure: no DOM; browser/tests/design.rs tests it in QuickJS) ----
 
   // A CSS color as WebKit computes it → sRGB [r, g, b, a] (0–255, alpha 0–1),
   // or null. Reads rgb()/rgba(), hex, oklch(), oklab(), lab(), lch() and

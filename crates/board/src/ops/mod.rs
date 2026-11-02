@@ -86,7 +86,7 @@ pub use files::{engine_name, is_canvas_file, is_sawit_file};
 
 // The document's side of the commands Sawit carries out itself (spec, "Menu policy": UI-handled
 // ids): the files File ▸ Export and Import from file… make and read, and what Edit ▸ Copy as
-// copies. The canvas's view (crates/app/src/board/commands.rs) asks for files and writes them, and
+// copies. The canvas's view (crates/app/src/board/commands/) asks for files and writes them, and
 // puts what is copied on the system clipboard.
 pub use copy_as::{COPY_PNG_MAX_SIDE, Copied, copy_as, copy_png_scale};
 pub use export::{export_page, frames_pdf};

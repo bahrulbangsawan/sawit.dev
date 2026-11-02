@@ -1,6 +1,6 @@
 //! The toolbar's model: which tools a board and a design file offer and in which groups, which tool
 //! is active, what each flyout holds, and the templates and tables a board can place. The view in
-//! `crates/app/src/board/toolbar.rs` draws what these return and runs the `command` of a button or
+//! `crates/app/src/board/toolbar/` draws what these return and runs the `command` of a button or
 //! a flyout item, with its params, through `BoardView::choose`: the tests here run the same
 //! commands with the same params.
 //!

@@ -19,7 +19,7 @@
     return text.length > 20000 ? clip(text, 20000) : JSON.parse(text);
   };
   // `op.fn` is the agent's script as Sawit's call compiled it (`evaluate_call` in
-  // browser.rs): compiling it here would be an `eval`, which a page's CSP may forbid.
+  // browser/evaluate.rs): compiling it here would be an `eval`, which a page's CSP may forbid.
   const evaluate = (op) => {
     if (typeof op.fn !== "function") throw new Error("Nothing to evaluate.");
     const value = apply(op.fn, window, []);

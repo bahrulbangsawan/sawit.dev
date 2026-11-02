@@ -1,6 +1,6 @@
 // Sawit's page design module: reads the page's styles, stylesheets and assets
 // for the Design panel. Spliced into the page agent after the overlay module
-// (see browser_agent.js), so `resolve`, `clip`, `modules` and `helpers`
+// (see agent.js), so `resolve`, `clip`, `modules` and `helpers`
 // (`helpers.selectorFor`) are in scope.
 //
 // Ops (their JSON is the contract in crates/core/src/site_design):

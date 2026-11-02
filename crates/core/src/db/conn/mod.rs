@@ -1,6 +1,6 @@
 //! One handle for every kind of database, so the sidebar, table grid, SQL
 //! editor, diagrams, exports and `sawit-mcp` call the same operations
-//! whether the profile is PostgreSQL ([`Conn::Pg`], the code in `query.rs`
+//! whether the profile is PostgreSQL ([`Conn::Pg`], the code in `query/`
 //! as it was) or SQLite underneath ([`Conn::Lite`]: a `.sqlite` file, a D1
 //! binding's local file, or a remote D1 database through Wrangler).
 //!

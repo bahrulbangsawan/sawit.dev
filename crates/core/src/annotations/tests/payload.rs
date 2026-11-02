@@ -11,7 +11,7 @@ fn picked_payload_deserializes() {
     assert!(!d.off_screen);
 }
 
-/// What the overlay now sends for a pick (`browser_overlay.js` `details`), field for field.
+/// What the overlay now sends for a pick (`browser/page/overlay/details.js`), field for field.
 #[test]
 fn full_picked_payload_deserializes() {
     let json = r##"{"selector":"#shop-now","label":"button#shop-now.btn","tag":"button","id":"shop-now",

@@ -1,4 +1,4 @@
-  // Page modules (see browser.rs `page_script`) add ops and share helpers.
+  // Page modules (see browser/page.rs `page_script`) add ops and share helpers.
   const modules = {};
   const helpers = {};
   /*__SAWIT_MODULES__*/

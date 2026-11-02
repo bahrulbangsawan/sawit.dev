@@ -15,7 +15,7 @@ figcraft-format.workspace = true
 figcraft-geom.workspace = true
 figcraft-render.workspace = true
 figcraft-text.workspace = true
-# Mermaid's SVG as board shapes (mermaid.rs): its geometry and its markup. Both versions are
+# Mermaid's SVG as board shapes (src/mermaid/): its geometry and its markup. Both versions are
 # already locked; kurbo is FigCraft's own.
 kurbo = "0.13"
 log = "0.4"

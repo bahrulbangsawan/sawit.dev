@@ -132,12 +132,12 @@ gpui_kit::assets::icon_assets!(
         ArrowDownToLine,
         UnfoldVertical,
         UnfoldHorizontal,
-        // The native canvas's layers panel (src/board/layers_panel.rs).
+        // The native canvas's layers panel (src/board/layers_panel/).
         LockOpen,
         Group,
         Component,
         Diamond,
-        // The pictures of the canvas's choices (src/board/option_icons.rs).
+        // The pictures of the canvas's choices (src/board/option_icons/).
         Diff,
         RulerDimensionLine,
         FoldHorizontal,
@@ -149,20 +149,20 @@ gpui_kit::assets::icon_assets!(
         Monitor,
         MonitorSmartphone,
         Proportions,
-        // The browser's Annotate panel (src/browser/annotate.rs).
+        // The browser's Annotate panel (src/browser/annotate/).
         Camera,
-        // The Dev Tools and MCP catalogs (src/catalog.rs, tools_page.rs, mcp_page.rs).
+        // The Dev Tools and MCP catalogs (src/catalog/, tools_page/, mcp_page/).
         CircleArrowUp,
         CircleDashed,
         CircleMinus,
         Clock,
         SearchX,
-        // The Skills page (src/skills_page.rs).
+        // The Skills page (src/skills_page/).
         Sparkles,
         Workflow,
         Blocks,
         Clapperboard,
-        // The New Project page (src/new_project_page.rs).
+        // The New Project page (src/new_project_page/).
         FolderPlus,
         ListChecks
     ]

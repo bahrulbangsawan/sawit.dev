@@ -1,5 +1,5 @@
 // Sawit's browser agent, injected into every page of the browser tab before
-// the page's own scripts (see crates/core/src/browser.rs).
+// the page's own scripts (see crates/core/src/browser/page.rs).
 //
 // - Reports console messages, page errors, requests and URL changes to the
 //   app over IPC, each message signed with the webview's token. The token is

@@ -1,4 +1,4 @@
-// Sawit's control protocol (crates/core/src/app_control.rs): one JSON command per connection on
+// Sawit's control protocol (crates/core/src/app_control/): one JSON command per connection on
 // the app's Unix socket. The client writes the magic line and the request, closes its sending
 // half, and reads one reply line, `ok <json>` or `error: <message>`.
 //
