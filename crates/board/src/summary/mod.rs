@@ -15,6 +15,8 @@
 //! A connector's label is a layer of the page of its own. An agent doesn't see it: its text is the
 //! connector's `text`, and it is edited and deleted through the connector.
 
+use std::collections::HashMap;
+
 use figcraft_color::{Color, Paint, PaintKind};
 use figcraft_doc::{BoardItem, Document, End, Node, NodeId, NodeKind};
 use figcraft_engine::board::{label_of, text_of};
@@ -26,10 +28,26 @@ pub fn summarize(doc: &Document, page: NodeId) -> Vec<Value> {
     let Some(page) = doc.node(page) else {
         return Vec::new();
     };
+    let labels = labels_among(doc, &page.children);
     page.children
         .iter()
-        .filter_map(|&id| summary(doc, id))
+        .filter_map(|&id| summary(doc, id, &labels))
         .collect()
+}
+
+/// The label of each connector among `layers`, the layers of one page: the first of them that is
+/// its label, as [`label_of`] finds it. They are found in one pass: [`label_of`] looks through the
+/// whole page for each connector, so reading a page took as long as its connectors times its
+/// layers.
+fn labels_among(doc: &Document, layers: &[NodeId]) -> HashMap<NodeId, NodeId> {
+    let mut labels = HashMap::new();
+    for &layer in layers {
+        let board = doc.node(layer).and_then(|node| node.board.as_ref());
+        if let Some(BoardItem::Label { connector }) = board {
+            labels.entry(*connector).or_insert(layer);
+        }
+    }
+    labels
 }
 
 /// The type name of layer `id` in a summary: one of `rectangle`, `roundedRectangle`, `ellipse`,
@@ -77,12 +95,21 @@ pub fn element_type(doc: &Document, id: NodeId) -> &'static str {
 /// a connector's label, else the note of a sticky or the text of a shape. `None` for what has no
 /// text.
 pub(crate) fn text_layer(doc: &Document, id: NodeId) -> Option<NodeId> {
+    text_layer_with(doc, id, |connector| label_of(doc, connector))
+}
+
+/// [`text_layer`], where `label` gives the label of a connector.
+fn text_layer_with(
+    doc: &Document,
+    id: NodeId,
+    label: impl FnOnce(NodeId) -> Option<NodeId>,
+) -> Option<NodeId> {
     let node = doc.node(id)?;
     if matches!(node.kind, NodeKind::Text(_)) {
         return Some(id);
     }
     match node.board {
-        Some(BoardItem::Connector(_)) => text_of(doc, label_of(doc, id)?),
+        Some(BoardItem::Connector(_)) => text_of(doc, label(id)?),
         _ => text_of(doc, id),
     }
 }
@@ -91,8 +118,9 @@ fn is_image(paint: &Paint) -> bool {
     matches!(paint.kind, PaintKind::Image(_))
 }
 
-/// The summary of layer `id`, or `None` for a label, which is no element of its own.
-fn summary(doc: &Document, id: NodeId) -> Option<Value> {
+/// The summary of layer `id`, or `None` for a label, which is no element of its own. `labels` are
+/// those of the connectors on its page ([`labels_among`]).
+fn summary(doc: &Document, id: NodeId, labels: &HashMap<NodeId, NodeId>) -> Option<Value> {
     let node = doc.node(id)?;
     if matches!(node.board, Some(BoardItem::Label { .. })) {
         return None;
@@ -106,7 +134,7 @@ fn summary(doc: &Document, id: NodeId) -> Option<Value> {
         "width": bounds.width(),
         "height": bounds.height(),
     });
-    let text = text_layer(doc, id)
+    let text = text_layer_with(doc, id, |connector| labels.get(&connector).copied())
         .and_then(|layer| doc.node(layer)?.kind.text())
         .map(|text| text.characters.as_str())
         .filter(|text| !text.is_empty());
