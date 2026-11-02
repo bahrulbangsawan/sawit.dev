@@ -31,14 +31,18 @@ but didn't change.
   given an op larger than the socket buffer holds the call instead of timing out. The code before had the same
   exposure for every op that names no file.
 
-## By design, noted while checking
+## Noted while checking, unchanged since before the split
 
-- **`stop_processes` and `sawit bakar ports` leave alone any job whose command line contains a protected word**
-  (`claude`, `mcp-server`, `language-server`, `tsserver`, `copilot`, `code helper`, `orca`, `electron`: the same
-  list as the `kill-dev` script), anywhere in it. That is what keeps a coding agent run through Node
-  (`node …/claude-code/cli.js`) safe. A dev server started from a folder whose path holds one of the words
-  (`/tmp/claude-501/…`) is left running too, and is reported as protected; a narrower match would stop it, but
-  could also stop an agent the list is there for. Unchanged since before the split.
+- **By design: `stop_processes` and `sawit bakar ports` leave alone any job whose command line contains a protected
+  word** (`claude`, `mcp-server`, `language-server`, `tsserver`, `copilot`, `code helper`, `orca`, `electron`: the
+  same list as the `kill-dev` script), anywhere in it. That is what keeps a coding agent run through Node
+  (`node …/claude-code/cli.js`) safe. Only the command line counts, not the folder a job runs in: a dev server
+  started as `node /tmp/claude-501/app/server.js`, or by a shell that runs `cd /tmp/claude-501/… && …` and waits for
+  it, is reported as protected and left running, while the same server started in that folder by name is stopped. A
+  narrower match would stop the first two, but could also stop an agent the list is there for.
+- A SQLite file an agent opens by its path (`app_open_table` or `app_open_sql` with `sqlite:<file>`) before the
+  Database panel has found it is listed under "Unmatched local D1 databases" (`db/store/connection.rs`), a heading
+  meant for Wrangler's local D1 files that no binding names.
 
 ## Dropped after review
 
@@ -150,11 +154,10 @@ measured, because each rebuilds gpui or the whole FigCraft stack:
   (the whole test 111 ms instead of 353 ms on a quiet machine).
 - Under heavy load (load average 60 and up), `download::tests::existing_install_is_reused_without_network` and
   `mcp_clients::tests::a_cli_finds_the_node_nvm_keeps_elsewhere` can hit their 10 s stubs.
-- The first e2e test of a full run, `browser: loads the fixture site…`, failed in 2 of 3 full runs: right after
-  the app starts, agent-desktop's window move and resize time out, then its `set-value` doesn't take, or its Return
-  isn't sent because the window's focus can't be confirmed. Launched alone on an idle Mac it passed 5 of 5 times with
-  the baseline build and 5 of 5 with the final one. Waiting for the window to take the accessibility calls before
-  the first step would make the suite steadier.
+- The e2e suite's first test after a fresh launch, `browser: loads the fixture site…`, failed in 2 of 3 full runs
+  before c8e41db: agent-desktop's calls raced the new window taking the focus (alone it passed 5 of 5 with the
+  baseline build and 5 of 5 with the final one). c8e41db makes each test wait until its window has the focus before
+  its first step; the full suite has passed since, 29 of 29 with 1 todo on 721630d and again on a065cd0.
 - sawit-core's `new_project` tests leave `sawit-new-project-{home,names,remembered,target}-<pid>` folders in the
   temp dir on every run (their `scratch` helper never removes them).
 - The app's debug test binary links with "`__eh_frame` section too large (max 16MB)" (as before the split).
