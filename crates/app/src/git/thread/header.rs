@@ -122,7 +122,7 @@ impl ThreadView {
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let entries = match &self.events {
-            Load::Ready(_) => Some(self.entries().len() + 1),
+            Load::Ready(_) => Some(self.entries.len() + 1),
             _ => None,
         };
         let tab = |id: &'static str, which: Tab, current: Tab, cx: &App| {

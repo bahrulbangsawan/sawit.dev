@@ -30,12 +30,12 @@ impl Filter {
 }
 
 impl ThreadView {
-    /// The timeline rows: who opened it, then everything since.
-    pub(super) fn entries(&self) -> Vec<Entry> {
-        let Load::Ready(events) = &self.events else {
-            return Vec::new();
+    /// Groups `events` into the timeline rows again: call it whenever they change.
+    pub(super) fn regroup(&mut self) {
+        self.entries = match &self.events {
+            Load::Ready(events) => github::group(events),
+            _ => Vec::new(),
         };
-        github::group(events)
     }
 
     pub(super) fn render_timeline(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -54,7 +54,7 @@ impl ThreadView {
                     )
                     .into_any_element();
             }
-            Load::Ready(_) => self.entries(),
+            Load::Ready(_) => &self.entries,
         };
         let count = |f: Filter| match f {
             // Commits, not pushes.

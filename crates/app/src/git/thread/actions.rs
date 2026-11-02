@@ -34,6 +34,7 @@ impl ThreadView {
                                 body: c.body,
                             });
                         }
+                        this.regroup();
                         this.item.comments += 1;
                         this.comment.update(cx, |s, cx| s.set_value("", window, cx));
                         this.tab = Tab::Timeline;

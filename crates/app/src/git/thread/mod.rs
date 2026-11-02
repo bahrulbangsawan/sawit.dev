@@ -18,7 +18,7 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sawit_core::github::{self, Event, Item, PullState, TIMELINE_PAGE};
+use sawit_core::github::{self, Entry, Event, Item, PullState, TIMELINE_PAGE};
 
 use crate::rt;
 use crate::states::Banner;
@@ -60,6 +60,10 @@ pub struct ThreadView {
     filter: Filter,
     pull: Option<PullState>,
     events: Load<Vec<Event>>,
+    /// The timeline rows, `events` grouped ([`github::group`]): who opened it, then everything
+    /// since. Grouped again whenever `events` changes ([`Self::regroup`]), not on every render:
+    /// each keystroke in the comment box renders the thread again.
+    entries: Vec<Entry>,
     /// Pages of the timeline loaded so far.
     pages: u32,
     more: bool,
@@ -106,6 +110,7 @@ impl ThreadView {
             filter: Filter::All,
             pull: None,
             events: Load::Loading,
+            entries: Vec::new(),
             pages: 0,
             more: false,
             loading_more: false,
@@ -143,6 +148,7 @@ impl ThreadView {
         let (token, owner, name, number) = self.api();
         let pull = self.item.pull;
         self.events = Load::Loading;
+        self.regroup();
         self.pages = 0;
         self.diff = None;
         cx.notify();
@@ -170,6 +176,7 @@ impl ThreadView {
                     Err(e) if this.refused(&e, cx) => {}
                     Err(e) => this.events = Load::Failed(e.to_string()),
                 }
+                this.regroup();
                 if this.tab == Tab::Changes {
                     this.load_diff(cx);
                 }
@@ -203,6 +210,7 @@ impl ThreadView {
                         if let Load::Ready(events) = &mut this.events {
                             events.extend(more);
                         }
+                        this.regroup();
                     }
                     Err(e) if this.refused(&e, cx) => {}
                     Err(e) => this.error = Some(e.to_string()),
