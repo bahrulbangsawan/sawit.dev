@@ -11,6 +11,7 @@
 
 mod args;
 mod bakar;
+mod bibit;
 mod browse;
 mod db_job;
 mod find;
@@ -27,6 +28,7 @@ pub use args::{
     PupukArgs, QueryArgs, query_args,
 };
 pub use bakar::{PROTECTED, bakar, burnable, protected};
+pub use bibit::{BibitAction, BibitArgs, bibit};
 pub use browse::browse;
 pub use db_job::db_job;
 pub use find::{Kebun, dotenv_kebuns, find, local_kebuns, saved_profiles};
@@ -69,6 +71,10 @@ pub(crate) const SUBCOMMANDS: &[&str] = &[
     "semai",
     // `sawit github token`: never a database named github.
     "github",
+    // `sawit skills install`: never a database named skills.
+    "skills",
+    "skill",
+    "bibit",
 ];
 
 /// Runs `fut` on a fresh Tokio runtime (the CLI runs before the app's).

@@ -1,5 +1,5 @@
-//! The status bar: instances and the branch on the left; the project's folder, the CLI and the
-//! version on the right.
+//! The status bar: instances and the branch on the left; the project's folder, Sawit Skills, the
+//! CLI and the version on the right.
 
 use super::*;
 
@@ -113,6 +113,7 @@ impl Workspace {
             })
             .child(super::pages_menu::pages_button())
             .child(crate::catalog::divider(cx))
+            .children(crate::sawit_skills::footer_button(self.root(cx), cx))
             .when(!self.cli_status.read(cx).installed, |el| {
                 el.child(
                     Button::new("install-cli")

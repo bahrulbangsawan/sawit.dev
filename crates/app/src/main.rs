@@ -23,6 +23,7 @@ mod ports;
 mod prompts;
 mod rt;
 mod run;
+mod sawit_skills;
 mod servers;
 mod shell_config;
 mod skills_page;
@@ -163,6 +164,7 @@ fn main() -> std::process::ExitCode {
         git::account::init(cx);
         highlight::prewarm(cx);
         cli::init(cx);
+        sawit_skills::init(cx);
         update::init(cx);
         // Last of the key bindings: what every feature bound above is the defaults.
         keymap::init(cx);

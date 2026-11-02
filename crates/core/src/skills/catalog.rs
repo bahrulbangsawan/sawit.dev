@@ -42,13 +42,40 @@ const CLOUDFLARE: &[&str] = &[
     "wrangler",
 ];
 
-/// Where the skill Sawit ships lives in its repository.
+/// Where the skills Sawit ships live in its repository.
 const CANVAS_DESIGN_HOME: &str =
     "https://github.com/bahrulbangsawan/sawit.dev/tree/main/skills/sawit-canvas-design";
+const SAWIT_HOME: &str = "https://github.com/bahrulbangsawan/sawit.dev/tree/main/skills";
+
+/// The Sawit pack's id: the skills that teach agents to use Sawit, which Install Skills installs.
+pub const SAWIT_PACK: &str = "sawit";
 
 /// The catalog. Each pack's commands are the ones its source documents
 /// (README, docs page); see `home` and `repo`.
 pub const PACKS: &[Pack] = &[
+    // First: what Install Skills in the footer installs. Each skill's name is Sawit's (`sawit-…`),
+    // so a folder of that name in an agent's skills folder is another's only when its SKILL.md
+    // names another skill.
+    Pack {
+        id: SAWIT_PACK,
+        name: "Sawit",
+        by: "Sawit",
+        about: "Teaches agents to use Sawit through its MCP server: local PostgreSQL instances instead of Docker, Sawit's browser instead of Chrome or Playwright for testing, the canvas for designs and diagrams, and Sawit's terminals and Run panel for dev servers, ports and SSH.",
+        category: Category::Workflow,
+        skills: &[
+            "sawit",
+            "sawit-databases",
+            "sawit-browser-testing",
+            "sawit-canvas",
+            "sawit-terminal",
+        ],
+        home: SAWIT_HOME,
+        repo: SAWIT_HOME,
+        methods: &[Method::Bundled],
+        note: Some(
+            "Ships inside Sawit: installs this Sawit's version, offline. Install Skills in the footer also adds a short block to each agent's instruction file and Sawit's MCP server where it's missing.",
+        ),
+    },
     // Not `canvas-design`: Anthropic's skills (and their example-skills plugin) have a skill of
     // that name, and a folder of it is theirs.
     Pack {
@@ -60,9 +87,7 @@ pub const PACKS: &[Pack] = &[
         skills: &["sawit-canvas-design"],
         home: CANVAS_DESIGN_HOME,
         repo: CANVAS_DESIGN_HOME,
-        methods: &[Method::Bundled {
-            name: "sawit-canvas-design",
-        }],
+        methods: &[Method::Bundled],
         note: Some("Ships inside Sawit: installs this Sawit's version, offline."),
     },
     Pack {

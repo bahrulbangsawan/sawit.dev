@@ -115,6 +115,17 @@ impl Render for Workspace {
                 this.open_browser(None, w, cx);
             }))
             .on_action(cx.listener(|this, _: &OpenSkills, w, cx| this.open_skills_page(w, cx)))
+            .on_action(cx.listener(
+                |this, _: &crate::sawit_skills::AddSawitSkillsToProject, w, cx| {
+                    let (project, window) = (this.root(cx), w.window_handle());
+                    crate::sawit_skills::run(
+                        crate::sawit_skills::Job::Project,
+                        project,
+                        window,
+                        cx,
+                    );
+                },
+            ))
             .on_action(cx.listener(|this, _: &OpenDevTools, w, cx| this.open_tools_page(w, cx)))
             .on_action(
                 cx.listener(|this, _: &OpenNewProject, w, cx| this.open_new_project_page(w, cx)),

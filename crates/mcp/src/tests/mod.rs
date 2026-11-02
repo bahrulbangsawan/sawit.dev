@@ -5,6 +5,7 @@ use crate::{clip, utc_time};
 
 mod app_control;
 mod canvas;
+mod sawit_skills;
 mod server;
 
 #[test]

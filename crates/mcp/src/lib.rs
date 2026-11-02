@@ -53,6 +53,7 @@ pub mod new_project;
 mod paths;
 pub mod ports;
 pub mod prompts;
+pub mod sawit_skills;
 pub mod scripts;
 pub mod skills;
 pub mod ssh;
@@ -118,7 +119,7 @@ These tools work without the Sawit app running:
 - Dev tools: the Tools page catalog (Homebrew, Bun, uv, Claude Code, …): install, upgrade, uninstall.
 - MCP servers: the MCP page catalog; install or remove a server in an AI client's config.
 - New project: stack_options, stack_check and stack_create build a Better-T-Stack project.
-- Skills: the Skills page's skill packs and which agents have each; install, update or remove one.
+- Skills: the Skills page's packs per agent: install, update, remove; install_sawit_skills (Sawit's own).
 These need the running app (launch_app starts it; app_state shows windows, tabs and terminals):
 - app_*: open files and folders, panels, layout, tabs, pages (canvas, MCP, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
 - GitHub: only the user can sign in to GitHub in Sawit; app_state's `github` says if they have.
@@ -245,6 +246,7 @@ impl Sawit {
             + Self::dev_tools_router()
             + Self::mcp_servers_router()
             + Self::skills_router()
+            + Self::sawit_skills_router()
             + Self::new_project_router()
             + Self::config_files_router()
             // App-control tools (need the app running).

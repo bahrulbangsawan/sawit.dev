@@ -104,7 +104,7 @@ pub enum Status {
     Installed {
         plugin: bool,
     },
-    /// The skill Sawit ships that it installs is there, Sawit's own, but differs from this
+    /// Every skill Sawit ships that it installs is there, Sawit's own, but one differs from this
     /// Sawit's version: edited there, or another Sawit's version (an update is available).
     Differs,
     /// Some of its skills are there.
@@ -130,11 +130,22 @@ impl Status {
 /// `pack`'s state in a target that has `installed`. A skill Sawit ships counts only as a folder
 /// whose SKILL.md is Sawit's, compared with this Sawit's version.
 pub fn status(pack: &Pack, installed: &Installed) -> Status {
-    if let Some(name) = pack.bundled() {
-        return match installed.bundled.get(name) {
-            Some(Held::Same) => Status::Installed { plugin: false },
-            Some(Held::Differs) => Status::Differs,
-            Some(Held::Other) | None => Status::Missing,
+    if let Some(names) = pack.bundled() {
+        let held = |name: &&str| installed.bundled.get(*name).copied();
+        let sawits = names
+            .iter()
+            .filter(|n| matches!(held(n), Some(Held::Same | Held::Differs)))
+            .count();
+        return match sawits {
+            0 => Status::Missing,
+            n if n < names.len() => Status::Partial {
+                have: n,
+                of: names.len(),
+            },
+            _ if names.iter().all(|n| held(n) == Some(Held::Same)) => {
+                Status::Installed { plugin: false }
+            }
+            _ => Status::Differs,
         };
     }
     if pack

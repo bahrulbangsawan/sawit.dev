@@ -173,7 +173,7 @@ impl Sawit {
                         } else {
                             let only = match method {
                                 Method::Plugin { .. } => " (Claude Code profiles only)",
-                                Method::Bundled { .. } => " (ships inside Sawit, no download)",
+                                Method::Bundled => " (ships inside Sawit, no download)",
                                 _ => "",
                             };
                             out.push(format!(
@@ -366,14 +366,14 @@ impl Sawit {
 #[tool_router(router = skills_router, vis = "pub(crate)")]
 impl Sawit {
     #[tool(
-        description = "List the agent skill packs of Sawit's Skills page (Sawit's own Canvas Design, Superpowers, shadcn's improve, Interface Skills, unslop, Animate, MCP Apps, Cloudflare's cf CLI, …): who publishes each, its skills, its source, the exact install command for each way it installs (the skills CLI per package manager: npx, pnpm dlx, bunx, yarn dlx; a Claude Code plugin; a git clone and copy; built in: a copy of the skill Sawit ships), and which agents on this Mac have it (Claude Code per profile, Codex, Cursor, …, by skills folder). Works without the app"
+        description = "List the agent skill packs of Sawit's Skills page (Sawit's own Sawit pack and Canvas Design, Superpowers, shadcn's improve, Interface Skills, unslop, Animate, MCP Apps, Cloudflare's cf CLI, …): who publishes each, its skills, its source, the exact install command for each way it installs (the skills CLI per package manager: npx, pnpm dlx, bunx, yarn dlx; a Claude Code plugin; a git clone and copy; built in: a copy of the skill Sawit ships), and which agents on this Mac have it (Claude Code per profile, Codex, Cursor, …, by skills folder). Works without the app"
     )]
     async fn list_skills(&self) -> CallToolResult {
         self.list_skills_tool().await
     }
 
     #[tool(
-        description = "Install (or update, when every agent given has it) a skill pack from list_skills into the agents given, the way its source documents: the skills CLI run with the package manager picked (package_manager: npm, pnpm, bun or yarn), a Claude Code plugin (Claude Code profiles only), a git clone and copy, or built in for a skill Sawit ships (sawit-canvas-design: written out into Sawit's data folder and copied from there, installing this Sawit's version with no download; a copy there that differs is kept in Sawit's data folder (skill-backups/<agent>/<skill>, out of the agents' reach), and a folder of that name that isn't Sawit's is left alone). Replaces the pack's skill folders and, unless the pack is built in, downloads from the internet: needs confirm=true. Returns the commands it ran and each agent's state after. Works without the app"
+        description = "Install (or update, when every agent given has it) a skill pack from list_skills into the agents given, the way its source documents: the skills CLI run with the package manager picked (package_manager: npm, pnpm, bun or yarn), a Claude Code plugin (Claude Code profiles only), a git clone and copy, or built in for the packs Sawit ships (sawit and sawit-canvas-design: written out into Sawit's data folder and copied from there, installing this Sawit's version with no download; a copy there that differs is kept in Sawit's data folder (skill-backups/<agent>/<skill>, out of the agents' reach), and a folder of that name that isn't Sawit's is left alone). Replaces the pack's skill folders and, unless the pack is built in, downloads from the internet: needs confirm=true. Returns the commands it ran and each agent's state after. Works without the app"
     )]
     async fn install_skill(&self, Parameters(a): Parameters<InstallSkillArgs>) -> CallToolResult {
         self.install_skill_tool(a).await

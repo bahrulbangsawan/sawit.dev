@@ -102,6 +102,7 @@ fn every_tool_is_routed() {
         "list_skills",
         "install_skill",
         "uninstall_skill",
+        "install_sawit_skills",
         // config files
         "list_config_files",
         // new project

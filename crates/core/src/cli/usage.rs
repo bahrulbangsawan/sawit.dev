@@ -18,6 +18,7 @@ Usage:
   sawit pasang <tool ...> [-y]
   sawit pupuk [tool ...] [-y]
   sawit cabut <tool ...> [-y]
+  sawit skills install|update|remove [--project [dir]] [-y]
   sawit github token --header | --exec <program> [args ...]
 
 Examples:
@@ -94,6 +95,21 @@ Tools (the app's Tools page):
   sawit cabut bun          uninstall bun: only the copy its own installer,
                            Homebrew or npm put there (asks first; -y to skip)
 
+Sawit Skills (the footer's Install Skills; asks first, -y to skip):
+  sawit skills install     every agent on this Mac: the Sawit skills in its
+                           skills folder, a short block in its own instruction
+                           file (~/.claude/CLAUDE.md, ~/.codex/AGENTS.md, …)
+                           and Sawit's MCP server where a client lacks it
+  sawit skills update      the same: brings everything to this Sawit's version
+  sawit skills install --project
+                           only the block, in this folder's project: the one
+                           of AGENTS.md, CLAUDE.md, .cursorrules and .github/
+                           copilot-instructions.md that has it, else the one
+                           there, else a new AGENTS.md
+  sawit skills remove      the skills, the blocks (a file Sawit made goes once
+                           it holds nothing else) and the MCP entries install
+                           added; an entry that was there before stays
+
 More lists, shown only when asked:
   sawit list mcp           the MCP page: servers and the AI clients that
                            have them (colokan)
@@ -127,6 +143,8 @@ Aliases (every word has an English and an Indonesian name):
   new = semai · --create = --buat · --dir = --lokasi
   panen = export, ekspor · backup = dump, cadangkan · tanam = import, impor
   pasang = install · pupuk = upgrade · cabut = uninstall
+  skills = skill, bibit: install = pasang · update = upgrade, pupuk ·
+    remove = uninstall, cabut · --project = --proyek
   list: all = semua · instances = instance, kebun · db = dbs, database,
     databases, blok · ports = port, lahan · connections = connection,
     conn, koneksi, konsesi · tools = tool, alat, perkakas · mcp = colokan ·

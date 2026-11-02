@@ -264,3 +264,82 @@ fn list_and_bakar_in_both_languages() {
     assert!(matches!(parse(&["./daftar"]), Ok(Invocation::Open { .. })));
     assert!(matches!(parse(&["./stop"]), Ok(Invocation::Open { .. })));
 }
+
+/// `sawit skills install|update|remove`, in both languages, globally or for a project (this
+/// folder, or one named); `sawit skills` alone, with another word, or `./skills` is still a
+/// folder; `skills` is never a database; and the help says what each does.
+#[test]
+fn skills_install_update_and_remove() {
+    use crate::kebun::{BibitAction, BibitArgs};
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().canonicalize().unwrap();
+    std::fs::create_dir(cwd.join("shop")).unwrap();
+    let parse_in = |args: &[&str]| parse_args(args.iter().map(OsString::from), &cwd);
+    let global = |action, yes| {
+        Ok(Invocation::Bibit(BibitArgs {
+            action,
+            project: None,
+            yes,
+        }))
+    };
+    assert_eq!(
+        parse_in(&["skills", "install"]),
+        global(BibitAction::Install, false)
+    );
+    assert_eq!(
+        parse_in(&["bibit", "pasang", "-y"]),
+        global(BibitAction::Install, true)
+    );
+    assert_eq!(
+        parse_in(&["skills", "update"]),
+        global(BibitAction::Install, false)
+    );
+    assert_eq!(
+        parse_in(&["skill", "pupuk"]),
+        global(BibitAction::Install, false)
+    );
+    assert_eq!(
+        parse_in(&["skills", "remove", "--yes"]),
+        global(BibitAction::Remove, true)
+    );
+    assert_eq!(
+        parse_in(&["skills", "cabut"]),
+        global(BibitAction::Remove, false)
+    );
+    let project = |dir: &Path| {
+        Ok(Invocation::Bibit(BibitArgs {
+            action: BibitAction::Install,
+            project: Some(dir.to_path_buf()),
+            yes: true,
+        }))
+    };
+    assert_eq!(
+        parse_in(&["skills", "install", "--project", "-y"]),
+        project(&cwd)
+    );
+    assert_eq!(
+        parse_in(&["skills", "install", "--project", "shop", "-y"]),
+        project(&cwd.join("shop"))
+    );
+    assert!(parse_in(&["skills", "install", "--project", "nope"]).is_err());
+    assert!(parse_in(&["skills", "install", "--everywhere"]).is_err());
+    for words in [
+        &["skills"][..],
+        &["skills", "shop"],
+        &["./skills", "install"],
+    ] {
+        assert!(
+            matches!(parse_in(words), Ok(Invocation::Open { .. })),
+            "{words:?}"
+        );
+    }
+    assert!(crate::kebun::SUBCOMMANDS.contains(&"skills"));
+    for said in [
+        "sawit skills install|update|remove [--project [dir]] [-y]",
+        "sawit skills install --project",
+        "an entry that was there before stays",
+        "skills = skill, bibit",
+    ] {
+        assert!(USAGE.contains(said), "no {said:?} in the help");
+    }
+}

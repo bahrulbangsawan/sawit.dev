@@ -20,6 +20,15 @@ impl SkillsPage {
     /// Detects the agents, what each has, and the package managers, `claude`
     /// and `git` (off the UI thread).
     pub(super) fn reload(&mut self, cx: &mut Context<Self>) {
+        // A pack installed or removed here, or Detect Again: the Sawit Skills card and the
+        // footer's button look again too.
+        crate::sawit_skills::refresh(cx);
+        self.detect(cx);
+    }
+
+    /// [`Self::reload`] of this page's list alone: after a Sawit Skills run, which detects for
+    /// the card and the footer itself.
+    pub(super) fn detect(&mut self, cx: &mut Context<Self>) {
         self.loading = true;
         let rx = rt::spawn_blocking(cx, || Detected {
             report: skills::report(),

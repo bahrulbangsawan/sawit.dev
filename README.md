@@ -64,7 +64,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with device sizes and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (136 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (137 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 | 🌱 **New projects from a stack** | Pick a TypeScript stack from Better-T-Stack's builder (TanStack, Next.js, Hono, Convex, Drizzle, Better Auth, …); Sawit shows what doesn't fit and why, runs `create-better-t-stack` in its terminal and opens the project. |
 | ✨ **Agent skills** | Sawit's own Canvas Design, Superpowers, shadcn's improve, Cloudflare's skills, MCP Apps, unslop and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
@@ -98,8 +98,8 @@ Picking anything lays the window out for that job. **Continue Without a Project*
 
 The window is split into a sidebar with ten tabs (**Instances**, **Files**, **Git**, **Database**, **Run**, **Ports**,
 **Network**, **SSH**, **Config Files**, **Prompts**), a tabbed center area, a terminal dock at the bottom, and a status bar. The status bar shows how many
-instances are running (a click shows them), the Git branch, the project path with a button that copies it, **Install CLI**
-while the `sawit` command isn't installed, and the version.
+instances are running (a click shows them), the Git branch, the project path with a button that copies it, the
+[Sawit Skills](#sawit-skills) button, **Install CLI** while the `sawit` command isn't installed, and the version.
 
 ### Local PostgreSQL instances
 
@@ -394,6 +394,63 @@ explained. A conflict on the same address can't be forced.
   with the **Installed** and **Not Installed** tabs or to one category, and sort it; from the keyboard as on the
   Dev Tools page. Closing the tab or its window and quitting ask first while something installs, and stop it.
 - From the terminal: `sawit list skills`. Agents use `list_skills`, `install_skill` and `uninstall_skill`.
+
+#### Sawit Skills
+
+Sawit Skills teach the coding agents on your Mac to use Sawit: local PostgreSQL through Sawit's instances instead of
+Docker, Sawit's browser instead of Chrome, Playwright or Puppeteer for testing, the canvas for designs and diagrams,
+and Sawit's terminals and Run panel for dev servers, ports and SSH, all through Sawit's MCP server. **Install Skills**
+in the footer, beside **Install CLI**, does it in one click:
+
+- **The Sawit pack**, Built In like Canvas Design, into every agent's skills folder: `sawit` (an overview that sends
+  each job to the right skill), `sawit-databases` (`create_instance`, `start_instance`, `query`, `execute_sql`,
+  `write_env` for `DATABASE_URL`, `detect_databases`, D1 and SQLite targets), `sawit-browser-testing` (the
+  `browser_*` tools: navigate, snapshot, click, type, screenshot, console, network, resize, annotations),
+  `sawit-canvas` (`canvas_design_guide` first, diagrams with `canvas_add_diagram`) and `sawit-terminal`
+  (`terminal_run`, `app_run_script`, `list_ports`, `stop_processes`, SSH). Each says what to do when the sawit MCP
+  server isn't connected. Their sources are in [skills/](https://github.com/bahrulbangsawan/sawit.dev/tree/main/skills).
+- **A short block** in each agent's own instruction file, the one it reads for every project, between
+  `<!-- sawit:start -->` and `<!-- sawit:end -->`, with its version on the line after the start (`<!-- Sawit Skills
+  v1: … -->`): prefer Sawit for these jobs, which skill to load for each, and that the sawit MCP server has the tools.
+  The files, from each agent's docs: Claude Code's `~/.claude/CLAUDE.md` and each profile's
+  (`CLAUDE_CONFIG_DIR/CLAUDE.md`), Codex's `~/.codex/AGENTS.md` (its `AGENTS.override.md` when that's the one Codex
+  reads), Gemini CLI's and Antigravity's `~/.gemini/GEMINI.md`, Qwen Code's `~/.qwen/QWEN.md`, Amp's
+  `~/.config/amp/AGENTS.md`, GitHub Copilot CLI's `~/.copilot/copilot-instructions.md`, Factory Droid's
+  `~/.factory/AGENTS.md`, Goose's `~/.config/goose/.goosehints`, Zed's `~/.config/zed/AGENTS.md`, Junie's
+  `~/.junie/AGENTS.md`, Crush's `~/.config/crush/CRUSH.md`, Cline's `~/.agents/AGENTS.md`, Kiro's
+  `~/.kiro/steering/AGENTS.md`, and Windsurf's (Devin's) `~/.devin/global_rules.md` when it's there. opencode and
+  Kilo Code read Claude Code's `CLAUDE.md` while they have no `AGENTS.md` of their own, so they share it rather than
+  get a file that would hide it. Cursor, VS Code, Claude Desktop, Roo Code, Augment, Continue, Warp, Trae, Amazon Q
+  and LM Studio get none: their instructions live in their settings, a folder of separate rule files, or nowhere,
+  and the result says so for each.
+- **Sawit's MCP server** in each AI client that has no entry named `sawit`, as the MCP Servers page installs it. An
+  entry there already stays, wherever it points. Each entry it adds is noted in Sawit's data folder
+  (`mcp-entries.json`), so **Remove** can take out exactly those.
+
+Then it shows what changed, part by part, with every path. The block works the way TanStack Intent's does: updated in
+place, every byte outside it kept; a file without it gets it at the top (after its frontmatter, when it has some),
+then a blank line. Each file is written whole (a file beside it, then moved over it), read back and checked, and
+nothing is written when nothing would change. A file Sawit hasn't changed before is copied into Sawit's data folder
+first (`instruction-backups/home/…`); `instruction-files.json` there remembers the files Sawit made. A link (dotfiles
+in a repository) stays a link: the file it points at changes. Markers that don't pair up (a start without an end, an
+end without a start, a start inside a block) leave the file untouched, and the result names the line; two whole
+blocks become one. Markers in a fenced code block are text. A newer Sawit's block stays as it is.
+
+The button reads **Install Skills** while no agent has any of it, **Update Skills** when this Sawit ships a newer
+version (or an agent found since, or a client without the MCP server, needs it), and **Skills Installed** once every
+part is current; a click then opens the Skills page. Its menu has **Update Skills**, **Add to This Project** and
+**Remove Skills…**. **Add to This Project** puts the block in the instruction file the open project's agents read: of
+`AGENTS.md`, `CLAUDE.md`, `.cursorrules` and `.github/copilot-instructions.md`, the one that has the block (as Intent
+picks it), else the one the project has (a project with only `CLAUDE.md` gets it there, where Claude Code reads it; with
+several, the first in that order), else a new `AGENTS.md`. **Remove Skills…** asks first, then takes out the pack's
+skills (only Sawit's own copies), the blocks, and the MCP entries Install Skills added, as the MCP Servers page removes
+a server; a file is deleted only when Sawit made it and nothing else is left in it, and an MCP entry that was there
+before Install Skills (or that now runs another `sawit-mcp`) stays, which the result says. The Skills page shows Sawit
+Skills first, with the same actions.
+
+From the terminal, `sawit skills install`, `sawit skills update` and `sawit skills remove` (`--project [folder]` for
+one project's block; each asks first, `-y` skips it). Agents use `install_sawit_skills` (`scope`: `global` or
+`project`, `remove`, and `confirm: true`, since it writes your files).
 
 ### New project
 
@@ -998,6 +1055,9 @@ sawit pupuk bun -y                           # upgrade one tool without asking
 sawit cabut bun                              # "uproot": uninstall a dev tool, its installer's copy only (asks; -y skips)
 sawit list mcp                               # the MCP page: servers and the AI clients that have them
 sawit list skills                            # the Skills page: skill packs, how each installs, the agents that have them
+sawit skills install                         # Sawit Skills for every agent: skills, instruction blocks, MCP server (asks; -y skips)
+sawit skills install --project               # only the block, in this folder's project's own file (AGENTS.md, CLAUDE.md, …)
+sawit skills remove                          # take out the skills, the blocks and the MCP entries install added
 sawit list config                            # shell startup files and coding agents' config files
 sawit list keys                              # every shortcut and what it runs (asks the running app)
 sawit list explorer                          # Cloudflare Local Explorers running, and this folder's Workers
@@ -1067,7 +1127,7 @@ sawit github token --header                  # the GitHub sign-in as {"Authoriza
 
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 136 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 137 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
 the agent's project open (or the one `project` names), else the frontmost window. An agent's browser and canvas are
 its own project's, even while you look at another project of that window.
@@ -1098,7 +1158,7 @@ work in the last 30 seconds, with its `id`, `name` (its label on screen), `color
 | Dev tools | `list_dev_tools` (with newer releases, where each was found and its uninstall command), `install_dev_tools` (`package_manager`: npm, pnpm, bun or yarn for the tools npm installs globally), `upgrade_dev_tools` (with the package manager that installed the copy), `uninstall_dev_tools` (the copy its own installer, Homebrew or the package manager put in place) |
 | MCP servers | `list_mcp_servers`, `install_mcp_server` (`package_manager`: a local server and the remote bridge run with `npx -y`, `pnpm dlx`, `bunx` or `yarn dlx`; `github` is refused with "Sign in to GitHub in Sawit first" while Sawit is signed out, since agents can't sign in for you), `uninstall_mcp_server` |
 | New project | `stack_options` (every category, option and preset, and the default stack), `stack_check` (a stack by `create-better-t-stack`'s flag names, resolved: what the compatibility rules change, every disabled option and why, the command), `stack_create` (in `<location>/<name>`, never over a folder that exists; in a Sawit terminal that opens the project when the app runs, else here) |
-| Skills | `list_skills` (each pack, its skills, source and install commands per package manager, and the agents that have it), `install_skill` (into the agents given: the skills CLI with `package_manager`, a Claude Code plugin, a clone and copy, or built in for the `sawit-canvas-design` skill Sawit ships, which installs this Sawit's version), `uninstall_skill` |
+| Skills | `list_skills` (each pack, its skills, source and install commands per package manager, and the agents that have it), `install_skill` (into the agents given: the skills CLI with `package_manager`, a Claude Code plugin, a clone and copy, or built in for the packs Sawit ships, Canvas Design and Sawit, which install this Sawit's version), `uninstall_skill`, `install_sawit_skills` (what **Install Skills** does: `scope` `global` or `project`, `remove`; every path it changed) |
 | App control (app running) | `launch_app`, `app_state` (with `github: {signed_in, login}`), `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, skills, changelog, git_graph, github: the sign-in card while signed out, instance, keymap, new_project), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
 | Terminal (app running) | `terminal_run`, `terminal_split` (a pane split right or down, with a command in the new half), `terminal_read`, `terminal_input`, `terminal_close` (`terminal_run`, `terminal_split`, `app_run_script` and `app_ssh_connect` return the tab and `pane` they used; `terminal_input` needs the tab, and a split tab needs its pane; `app_state` names the coding agent running in each tab and pane, as `agent`: `claude-code`, `codex`, …) |
 | Keymap (app running) | `keymap_list` (every binding: what a key does, which key runs an action, what clashes), `keymap_bind`, `keymap_unbind` (with the Keymap Editor's checks; `restore` brings back a default) |
@@ -1110,7 +1170,8 @@ Destructive tools say so and need an explicit confirmation: `drop_database`, `dr
 `remove_command` take the name or id again as `confirm` (so do `remove_instance` when it deletes the data, and
 `update_ssh_host` when it moves a host off password sign-in, which deletes its saved password). `install_dev_tools`,
 `upgrade_dev_tools`, `install_skill` and `stack_create` need `confirm: true` because they run install scripts or
-download from the internet; so do `uninstall_dev_tools` (it deletes the
+download from the internet; so does `install_sawit_skills`, because it writes your agents' instruction files, skills
+folders and MCP configs; so do `uninstall_dev_tools` (it deletes the
 tools' files), `stop_processes`, `local_explorer_request` for anything but GET (it writes to a dev server's
 local KV, R2, D1, Durable Objects or Workflows), and `write_env` when it would replace a different `DATABASE_URL`. `terminal_close`
 needs `confirm: true` while a program runs in that terminal or you're typing in it, and `keymap_bind` and

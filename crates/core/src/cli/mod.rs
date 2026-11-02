@@ -15,7 +15,9 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 
-use crate::kebun::{BakarArgs, CabutArgs, DbJob, ListWhat, NyalakanArgs, PasangArgs, PupukArgs};
+use crate::kebun::{
+    BakarArgs, BibitArgs, CabutArgs, DbJob, ListWhat, NyalakanArgs, PasangArgs, PupukArgs,
+};
 
 #[cfg(test)]
 mod tests;
@@ -68,6 +70,8 @@ pub enum Invocation {
     Semai(Box<crate::semai::SemaiArgs>),
     /// `sawit github token …`: the GitHub sign-in, handed to an MCP client.
     GitHub(crate::github_token::TokenArgs),
+    /// `sawit skills install|update|remove …`: Sawit Skills, as the footer's Install Skills.
+    Bibit(BibitArgs),
 }
 
 /// What `sawit browse` opens in Sawit's browser.
@@ -146,6 +150,13 @@ pub fn parse_args(
         Some("new" | "semai") if words.len() == args.len() => {
             return crate::semai::SemaiArgs::parse(&words[1..])
                 .map(|args| Invocation::Semai(Box::new(args)));
+        }
+        // `sawit skills` alone (or with a word that isn't an action) is still a folder or file.
+        Some("skills" | "skill" | "bibit")
+            if words.len() == args.len()
+                && let Some(parsed) = BibitArgs::parse(&words[1..], cwd) =>
+        {
+            return parsed.map(Invocation::Bibit);
         }
         Some("browse" | "intip") if words.len() == args.len() => {
             return BrowseTarget::parse(&words[1..]).map(Invocation::Browse);

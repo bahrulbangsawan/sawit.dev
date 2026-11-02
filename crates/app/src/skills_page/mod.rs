@@ -146,6 +146,10 @@ pub struct SkillsPage {
     /// told to end: what quitting waits for.
     ended: Option<oneshot::Receiver<()>>,
     _quit: Subscription,
+    /// Sawit Skills' card follows every detection and run.
+    _sawit_skills: Option<Subscription>,
+    /// A Sawit Skills run was going on when the card last looked: its end changes the list too.
+    sawit_running: bool,
     sheet: Option<Sheet>,
     filter: Filter,
     category: Option<Category>,
@@ -232,6 +236,16 @@ impl SkillsPage {
             stop: None,
             ended: None,
             _quit: cx.on_app_quit(|this, _| this.stop_for_quit()),
+            _sawit_skills: crate::sawit_skills::try_status(cx).map(|status| {
+                cx.observe(&status, |this, status, cx| {
+                    let running = status.read(cx).running.is_some();
+                    if std::mem::replace(&mut this.sawit_running, running) && !running {
+                        this.detect(cx);
+                    }
+                    cx.notify();
+                })
+            }),
+            sawit_running: false,
             sheet: None,
             filter: Filter::All,
             category: None,
@@ -333,6 +347,7 @@ impl Render for SkillsPage {
                             .p_6()
                             .gap_4()
                             .child(self.render_header(cx))
+                            .children(crate::sawit_skills::card(cx))
                             .child(self.render_toolbar(&query, cx))
                             .child(self.render_list(&query, cx)),
                     ),

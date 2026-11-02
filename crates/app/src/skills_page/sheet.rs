@@ -379,9 +379,7 @@ impl SkillsPage {
                             .icon(Lucide::RefreshCw)
                             .label(format!("Update {}", update.len()))
                             .tooltip(match method {
-                                Method::Bundled { .. } => {
-                                    "Copy This Sawit's Version Where It's Installed"
-                                }
+                                Method::Bundled => "Copy This Sawit's Version Where It's Installed",
                                 _ => "Fetch the Latest Where It's Installed",
                             })
                             .disabled(update.is_empty() || busy || blocked.is_some())

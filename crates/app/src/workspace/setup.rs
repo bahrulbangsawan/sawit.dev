@@ -33,7 +33,7 @@ impl Workspace {
         let welcome = cx.new(|cx| Welcome::new(servers.clone(), db.clone(), cx));
         let focus = cx.focus_handle();
         let keyboard = KeyboardHome::new(focus.clone(), window, cx);
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             cx.observe(&servers, |_, _, cx| cx.notify()),
             cx.observe(&cli_status, |_, _, cx| cx.notify()),
             cx.observe(&updater, |_, _, cx| cx.notify()),
@@ -176,6 +176,10 @@ impl Workspace {
                 }
             }),
         ];
+        // The footer's Sawit Skills button follows every detection and run.
+        if let Some(sawit_skills) = crate::sawit_skills::try_status(cx) {
+            subscriptions.push(cx.observe(&sawit_skills, |_, _, cx| cx.notify()));
+        }
         Self {
             server_list: cx.new(|cx| ServerList::new(servers.clone(), cx)),
             server_detail: cx.new(|cx| ServerDetail::new(servers.clone(), window, cx)),

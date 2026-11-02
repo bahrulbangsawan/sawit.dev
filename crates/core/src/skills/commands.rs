@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::backups::backup;
+use super::built_in::{bundled_lines, not_sawits};
 use super::bundled::{self, Held};
 use super::{ClaudeHome, Installed, Method, Pack, Target};
 use crate::instances::AppPaths;
@@ -40,10 +40,17 @@ pub fn sample(pack: &Pack, method: Method, pm: PackageManager, env: &Env) -> Str
                 path.trim_matches('/')
             )
         }
-        Method::Bundled { name } => format!(
-            "cp -R {} <agent's skills folder>/",
-            env.path(&env.bundled.join(name))
-        ),
+        Method::Bundled => pack
+            .skills
+            .iter()
+            .map(|name| {
+                format!(
+                    "cp -R {} <agent's skills folder>/",
+                    env.path(&env.bundled.join(name))
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" && "),
     }
 }
 
@@ -207,50 +214,8 @@ pub fn script(
             lines.extend(copy_lines(&from, places, env));
             lines
         }
-        Method::Bundled { name } => bundled_lines(name, places, env)?,
+        Method::Bundled => bundled_lines(pack.skills, places, env)?,
     })
-}
-
-/// Copies the skill `name` Sawit ships from the folder [`run`] writes it out into first, into
-/// each place: the lines stop before anything is removed when that folder isn't there (copied and
-/// run without Sawit); a copy that differs from this Sawit's version is kept in Sawit's data folder
-/// ([`backup`]), an older one replaced; a folder of that name that isn't Sawit's is never touched,
-/// so that place fails.
-fn bundled_lines(name: &str, places: &[Place], env: &Env) -> Result<Vec<String>, String> {
-    if let Some((target, _)) = places
-        .iter()
-        .find(|(_, i)| i.bundled.get(name) == Some(&Held::Other))
-    {
-        return Err(format!(
-            "{} has a {name} folder that isn't Sawit's skill (its SKILL.md names another, or none), and Sawit leaves it alone: move it away to install there.",
-            target.label
-        ));
-    }
-    let from = env.path(&env.bundled.join(name));
-    // Its messages are in double quotes, holding nothing the shell reads there.
-    let missing = "is missing: Sawit writes the skill out there as it installs it, so install it from Sawit (its Skills page, or install_skill).";
-    let mut lines = vec![format!(
-        "[ -d {from} ] || {{ echo {from} \"{missing}\" >&2; exit 1; }}"
-    )];
-    for (target, installed) in places {
-        let dir = env.path(&target.dir);
-        let at = env.path(&target.dir.join(name));
-        lines.push(format!("mkdir -p {dir}"));
-        if installed.bundled.get(name) == Some(&Held::Differs) {
-            let kept = backup(env, target, name);
-            let parent = env.path(kept.parent().unwrap_or(&kept));
-            let bak = env.path(&kept);
-            lines.push(format!("rm -rf {bak}"));
-            lines.push(format!("mkdir -p {parent}"));
-            lines.push(format!("mv {at} {bak}"));
-            let kept = "Kept the copy that differs from this Sawit's version as";
-            lines.push(format!("echo \"{kept}\" {bak}"));
-        } else {
-            lines.push(format!("rm -rf {at}"));
-        }
-        lines.push(format!("cp -R {from} {dir}/"));
-    }
-    Ok(lines)
 }
 
 /// Copies each skill folder of `from` (the skill, and its folder as the shell reads it) into the
@@ -358,14 +323,11 @@ fn remove_script(pack: &Pack, places: &[Place], env: &Env) -> Result<Vec<String>
             .collect::<Vec<_>>()
             .join(", ");
         // A folder of its name that another skill has.
-        if let Some(name) = pack.bundled()
-            && let Some((t, _)) = places
-                .iter()
-                .find(|(_, i)| i.bundled.get(name) == Some(&Held::Other))
+        if let Some(names) = pack.bundled()
+            && let Some((label, name)) = not_sawits(names, places)
         {
             return Err(format!(
-                "The {name} folder in {} isn't Sawit's skill (its SKILL.md names another, or none): Sawit leaves it alone, so there's nothing to remove.",
-                t.label
+                "The {name} folder in {label} isn't Sawit's skill (its SKILL.md names another, or none): Sawit leaves it alone, so there's nothing to remove."
             ));
         }
         // Its skills are there, but another pack's plugin brings them.
@@ -448,16 +410,18 @@ pub async fn run(
         started: false,
     };
     let lock = dev_tools::lock(&format!("skill-{}", pack.id), pack.name).map_err(before)?;
-    if let Some(name) = pack.bundled()
+    if let Some(names) = pack.bundled()
         && action != Action::Remove
     {
-        bundled::write_out(name, &env.bundled).map_err(|e| {
-            before(CoreError::Config(format!(
-                "Sawit couldn't write out {} into {}: {e}",
-                pack.name,
-                env.bundled.display()
-            )))
-        })?;
+        for name in names {
+            bundled::write_out(name, &env.bundled).map_err(|e| {
+                before(CoreError::Config(format!(
+                    "Sawit couldn't write out {} into {}: {e}",
+                    pack.name,
+                    env.bundled.display()
+                )))
+            })?;
+        }
     }
     dev_tools::run_shell_holding(&lock, pack.name, &lines.join("\n"), on_line)
         .await

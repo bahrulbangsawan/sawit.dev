@@ -29,17 +29,19 @@ fn the_catalog_is_well_formed() {
             );
         }
         assert_eq!(get(pack.id), Some(pack));
-        // A built-in skill is one Sawit ships, and the pack's only one: the folder it copies. Its
-        // name is Sawit's own (another publisher's folder of a name is theirs), and its SKILL.md
-        // gives that name, by which an agent's copy counts as Sawit's.
-        for method in pack.methods {
-            if let Method::Bundled { name } = method {
+        // A built-in pack's skills are each one Sawit ships: the folders it copies. Their names
+        // are Sawit's own (another publisher's folder of a name is theirs), and each SKILL.md
+        // gives its name, by which an agent's copy counts as Sawit's.
+        if pack.methods.contains(&Method::Bundled) {
+            assert_eq!(pack.bundled(), Some(pack.skills), "{}", pack.id);
+            for name in pack.skills {
                 assert!(bundled::files(name).is_some(), "{name} isn't built in");
-                assert_eq!(pack.skills, [*name], "{}", pack.id);
-                assert!(name.starts_with("sawit-"), "{name}");
+                assert!(*name == "sawit" || name.starts_with("sawit-"), "{name}");
                 let skill = bundled::text(name, "SKILL.md").unwrap();
                 assert_eq!(bundled::skill_name(skill), Some(*name));
             }
+        } else {
+            assert_eq!(pack.bundled(), None, "{}", pack.id);
         }
     }
 }
@@ -59,13 +61,8 @@ fn canvas_design_ships_inside_sawit() {
     assert_eq!(design[0], "sawit-canvas-design");
     assert_eq!((pack.name, pack.by), ("Canvas Design", "Sawit"));
     assert_eq!(pack.skills, ["sawit-canvas-design"]);
-    assert_eq!(
-        pack.methods,
-        [Method::Bundled {
-            name: "sawit-canvas-design"
-        }]
-    );
-    assert_eq!(pack.bundled(), Some("sawit-canvas-design"));
+    assert_eq!(pack.methods, [Method::Bundled]);
+    assert_eq!(pack.bundled(), Some(&["sawit-canvas-design"][..]));
     let folder =
         "https://github.com/bahrulbangsawan/sawit.dev/tree/main/skills/sawit-canvas-design";
     assert_eq!((pack.home, pack.repo), (folder, folder));

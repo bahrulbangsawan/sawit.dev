@@ -26,7 +26,7 @@ pub(super) fn guard(from: &str) -> String {
 #[test]
 fn built_in_reaches_every_agent() {
     let method = canvas_design().methods[0];
-    assert_eq!(method, Method::Bundled { name: NAME });
+    assert_eq!(method, Method::Bundled);
     assert_eq!((method.id(), method.label()), ("built-in", "Built In"));
     assert!(!method.uses_package_manager());
     assert_eq!(method.plugin_key(), None);
@@ -322,4 +322,67 @@ pub(super) fn run_in(home: &Path, lines: &[String]) -> String {
         String::from_utf8_lossy(&ran.stderr)
     );
     String::from_utf8_lossy(&ran.stdout).into_owned()
+}
+
+/// The Sawit pack is several skills Sawit ships: a guard for each folder written out, then each
+/// copied into every agent's folder. It counts as installed only with every one there, each
+/// Sawit's own and this Sawit's version; a copy that differs is kept aside, and a folder of one's
+/// name that isn't Sawit's stops the install there.
+#[test]
+fn a_pack_of_several_built_in_skills() {
+    use bundled::Held;
+    let pack = get(SAWIT_PACK).unwrap();
+    let n = pack.skills.len();
+    assert_eq!((pack.methods, n), (&[Method::Bundled][..], 5));
+    assert_eq!(pack.bundled(), Some(pack.skills));
+    let from =
+        |skill: &str| format!("\"$HOME/Library/Application Support/sawit/bundled-skills/{skill}\"");
+    let sample = sample(pack, Method::Bundled, PackageManager::Npm, &env());
+    assert_eq!(sample.matches("cp -R ").count(), n, "{sample}");
+    let target = claude(None);
+    let none = Installed::default();
+    let lines = script(
+        pack,
+        Method::Bundled,
+        Action::Install,
+        &[(&target, &none)],
+        PackageManager::Npm,
+        &env(),
+    )
+    .unwrap();
+    assert_eq!(lines.len(), n + 1 + 2 * n, "{lines:#?}");
+    for (ix, skill) in pack.skills.iter().enumerate() {
+        assert_eq!(lines[ix], guard(&from(skill)));
+        let copy = format!("cp -R {} \"$HOME/.claude/skills\"/", from(skill));
+        assert!(lines.contains(&copy), "{copy}");
+    }
+
+    let mut some = Installed::default();
+    some.bundled.insert("sawit".into(), Held::Same);
+    assert_eq!(status(pack, &some), Status::Partial { have: 1, of: n });
+    for skill in pack.skills {
+        some.bundled.insert(skill.to_string(), Held::Same);
+    }
+    assert_eq!(status(pack, &some), Status::Installed { plugin: false });
+    some.bundled.insert("sawit-canvas".into(), Held::Differs);
+    assert_eq!(status(pack, &some), Status::Differs);
+    assert_eq!(
+        kept(pack, &[(&target, &some)], &env()),
+        [home().join("Library/Application Support/sawit/skill-backups/claude-code/sawit-canvas")]
+    );
+    some.bundled.insert("sawit".into(), Held::Other);
+    assert_eq!(status(pack, &some), Status::Partial { have: n - 1, of: n });
+    let refused = script(
+        pack,
+        Method::Bundled,
+        Action::Install,
+        &[(&target, &some)],
+        PackageManager::Npm,
+        &env(),
+    )
+    .unwrap_err();
+    assert!(
+        refused.contains("a sawit folder that isn't Sawit's skill"),
+        "{refused}"
+    );
 }

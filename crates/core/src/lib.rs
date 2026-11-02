@@ -42,6 +42,7 @@ pub mod probe;
 pub mod prompts;
 pub mod recent;
 pub mod rt;
+pub mod sawit_skills;
 pub mod scripts;
 pub mod search;
 pub mod semai;

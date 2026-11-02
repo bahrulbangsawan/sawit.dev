@@ -13,6 +13,7 @@
 //! whose SKILL.md is Sawit's), or uninstalls its plugin.
 
 mod backups;
+mod built_in;
 pub mod bundled;
 mod catalog;
 mod commands;
@@ -22,7 +23,8 @@ mod targets;
 mod tests;
 
 pub use backups::{backup, kept};
-pub use catalog::{PACKS, get};
+pub use built_in::not_sawits;
+pub use catalog::{PACKS, SAWIT_PACK, get};
 pub use commands::{Action, Env, Failure, Place, removes_from, run, sample, script};
 pub use installed::{Installed, Report, Status, read_installed, report, status};
 pub use targets::{ClaudeHome, Target, find_targets, targets, targets_for};
@@ -76,12 +78,12 @@ pub enum Method {
         url: &'static str,
         path: &'static str,
     },
-    /// The skill `name` that Sawit ships (`skills/<name>` in its repository, built into it):
-    /// written out into Sawit's data folder (`bundled-skills/<name>`), then that folder copied
-    /// into the agents' skills folders, as a copy does. Nothing is downloaded, and what installs
-    /// is this Sawit's version. An agent's folder of that name counts only when its SKILL.md
-    /// names the skill, and only then is it replaced or removed.
-    Bundled { name: &'static str },
+    /// The pack's skills, each one Sawit ships (`skills/<name>` in its repository, built into
+    /// it): written out into Sawit's data folder (`bundled-skills/<name>`), then those folders
+    /// copied into the agents' skills folders, as a copy does. Nothing is downloaded, and what
+    /// installs is this Sawit's version. An agent's folder of a skill's name counts only when its
+    /// SKILL.md names the skill, and only then is it replaced or removed.
+    Bundled,
 }
 
 impl Method {
@@ -91,7 +93,7 @@ impl Method {
             Method::SkillsCli { .. } => "skills-cli",
             Method::Plugin { .. } => "plugin",
             Method::Copy { .. } => "copy",
-            Method::Bundled { .. } => "built-in",
+            Method::Bundled => "built-in",
         }
     }
 
@@ -100,7 +102,7 @@ impl Method {
             Method::SkillsCli { .. } => "skills CLI",
             Method::Plugin { .. } => "Claude Code plugin",
             Method::Copy { .. } => "Git clone & copy",
-            Method::Bundled { .. } => "Built In",
+            Method::Bundled => "Built In",
         }
     }
 
@@ -116,7 +118,7 @@ impl Method {
         match self {
             Method::SkillsCli { .. } => target.cli_agent.is_some(),
             Method::Plugin { .. } => target.claude.is_some(),
-            Method::Copy { .. } | Method::Bundled { .. } => true,
+            Method::Copy { .. } | Method::Bundled => true,
         }
     }
 
@@ -159,12 +161,12 @@ impl Pack {
         self.methods.iter().copied().find(|m| m.id() == id)
     }
 
-    /// The skill Sawit ships that it installs, when it installs one ([`Method::Bundled`]).
-    pub fn bundled(&self) -> Option<&'static str> {
-        self.methods.iter().find_map(|m| match m {
-            Method::Bundled { name } => Some(*name),
-            _ => None,
-        })
+    /// The skills Sawit ships that it installs, when it installs them Built In
+    /// ([`Method::Bundled`]): its skills.
+    pub fn bundled(&self) -> Option<&'static [&'static str]> {
+        self.methods
+            .contains(&Method::Bundled)
+            .then_some(self.skills)
     }
 
     /// Its plugin, when it is one.

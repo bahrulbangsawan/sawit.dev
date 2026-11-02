@@ -8,15 +8,19 @@ use super::commands::{Env, Place};
 use super::{Pack, Target};
 
 /// Where an install or update of `pack` in `places` keeps the copies it replaces that differ from
-/// this Sawit's version (a skill Sawit ships only): see [`backup`].
+/// this Sawit's version (skills Sawit ships only): see [`backup`].
 pub fn kept(pack: &Pack, places: &[Place], env: &Env) -> Vec<PathBuf> {
-    let Some(name) = pack.bundled() else {
+    let Some(names) = pack.bundled() else {
         return Vec::new();
     };
     places
         .iter()
-        .filter(|(_, i)| i.bundled.get(name) == Some(&Held::Differs))
-        .map(|(t, _)| backup(env, t, name))
+        .flat_map(|(t, i)| {
+            names
+                .iter()
+                .filter(|name| i.bundled.get(**name) == Some(&Held::Differs))
+                .map(|name| backup(env, t, name))
+        })
         .collect()
 }
 

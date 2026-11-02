@@ -105,6 +105,7 @@ const DESTRUCTIVE: &[&str] = &[
     "uninstall_mcp_server",
     "install_skill",
     "uninstall_skill",
+    "install_sawit_skills",
     "stack_create",
     "app_close_tab",
     "app_run_script",

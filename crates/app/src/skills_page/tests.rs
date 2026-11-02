@@ -210,12 +210,7 @@ fn canvas_design_installs_built_in(cx: &mut TestAppContext) {
     let from = "\"$HOME/Library/Application Support/sawit/bundled-skills/sawit-canvas-design\"";
     page.read_with(cx, |page, _| {
         let method = page.sheet.as_ref().unwrap().method;
-        assert_eq!(
-            method,
-            skills::Method::Bundled {
-                name: "sawit-canvas-design"
-            }
-        );
+        assert_eq!(method, skills::Method::Bundled);
         assert_eq!(page.blocked(method), None);
         let lines = page
             .sheet_script(Action::Install, &page.picked(super::Pick::Install))
