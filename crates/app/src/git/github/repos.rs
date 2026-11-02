@@ -164,7 +164,8 @@ impl GitHubView {
     }
 
     pub(super) fn render_repos(&self, cx: &mut Context<Self>) -> AnyElement {
-        let repos = self.filtered_repos(cx);
+        // Filtered once per render and shared with the virtual list.
+        let repos = std::rc::Rc::new(self.filtered_repos(cx));
         let count = repos.len();
         let list: AnyElement = match &self.repos {
             Load::Failed(e) => Placeholder::error("Unable to load your repositories")
@@ -189,8 +190,7 @@ impl GitHubView {
             Load::Ready(_) => uniform_list(
                 "gh-repos",
                 count,
-                cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                    let repos = this.filtered_repos(cx);
+                cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                     range
                         .filter_map(|ix| Some(this.render_repo_row(ix, repos.get(ix)?.clone(), cx)))
                         .collect()

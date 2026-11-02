@@ -89,7 +89,7 @@ impl PromptsPanel {
     }
 
     fn render_row(&self, ix: usize, id: &str, cx: &mut Context<Self>) -> AnyElement {
-        let Some(p) = self.store.read(cx).library.get(id).cloned() else {
+        let Some(p) = self.store.read(cx).library.get(id) else {
             return div().into_any_element();
         };
         let muted = cx.theme().muted_foreground;
@@ -171,7 +171,8 @@ impl PromptsPanel {
 
 impl Render for PromptsPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let results = self.results(cx);
+        // Searched once per render and shared with the virtual list.
+        let results = std::rc::Rc::new(self.results(cx));
         let store = self.store.read(cx);
         let total = store.library.items.len();
         let query = self.search.read(cx).value().to_string();
@@ -231,7 +232,6 @@ impl Render for PromptsPanel {
                                 "prompt-rows",
                                 count,
                                 cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                                    let results = this.results(cx);
                                     range
                                         .filter_map(|ix| {
                                             let id = results.get(ix)?.clone();
