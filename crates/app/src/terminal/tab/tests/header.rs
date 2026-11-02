@@ -3,12 +3,12 @@
 use std::time::{Duration, Instant};
 
 use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext, VisualTestContext};
-use sawit_core::terminal::{AgentKind, run_bytes, shell_quote};
+use sawit_core::terminal::{AgentKind, shell_quote};
 
 use super::test_remote;
 use crate::terminal::tab::look::{INACTIVE_DIM, PaneLook, pane_style};
 use crate::terminal::testing::{
-    SHELLS, focus_terminal, init, open_panel, ready, scratch_dir, wait_until,
+    SHELLS, focus_terminal, init, open_panel, ready, scratch_dir, start, wait_until,
 };
 use crate::terminal::view::{AGENT_CHECK, FOLDER_TTL, TerminalView};
 use crate::terminal::{JobTag, Origin};
@@ -69,7 +69,9 @@ fn drawn(cx: &mut TestAppContext, w: AnyWindowHandle, selector: String) -> bool 
 /// While a coding agent runs in a pane of a split tab, the pane's header shows its logo in
 /// place of the terminal glyph, and once it exits the glyph is back. `cat`, run under the
 /// name `claude`, plays Claude Code: it runs until its input ends, and what it is comes only
-/// from its process, as the real agent's would.
+/// from its process, as the real agent's would. Like the real agent, it prints once it runs
+/// (the empty line it echoes): a pane looks for its agent only after output, and on a busy
+/// machine the shell may start the program after the look its last output asked for.
 #[gpui_kit::test]
 fn a_pane_header_shows_the_agents_logo_while_it_runs(cx: &mut TestAppContext) {
     cx.update(init);
@@ -87,8 +89,9 @@ fn a_pane_header_shows_the_agents_logo_while_it_runs(cx: &mut TestAppContext) {
 
     let claude = scratch_dir("agent-stand-in").join("claude");
     std::os::unix::fs::symlink("/bin/cat", &claude).unwrap();
-    let command = shell_quote(&claude);
-    cx.update(|cx| view.read(cx).write(run_bytes(&command)));
+    // macOS names a symlinked program after its target.
+    start(cx, &view, &shell_quote(&claude), "cat");
+    cx.update(|cx| view.read(cx).write(b"\r".to_vec()));
     wait_for_agent(cx, &view, Some(AgentKind::ClaudeCode));
     assert!(
         drawn(cx, w, logo.clone()),
