@@ -15,7 +15,7 @@ use crate::probe;
 
 use super::args::ListWhat;
 use super::bakar::{burnable, ports_of};
-use super::find::{dotenv_kebuns, local_kebuns, saved_profiles};
+use super::find::{dotenv_places, local_kebuns, saved_places};
 use super::ink::{Ink, clip, tilde};
 use super::keys::list_keys;
 use config::list_config;
@@ -63,8 +63,9 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
     if what.shows(ListWhat::Databases) {
         ink.section("🌾 Blok tanam (databases)");
         let mut kebuns = local_kebuns(&registry).await;
-        kebuns.extend(dotenv_kebuns(cwd));
-        kebuns.extend(saved_profiles(paths));
+        // Where each one goes, never its password: none is read.
+        kebuns.extend(dotenv_places(cwd));
+        kebuns.extend(saved_places(paths));
         if kebuns.is_empty() {
             ink.empty("tidak ada Postgres yang menyala. Udara bersih, ISPU hijau.");
         }
@@ -125,7 +126,7 @@ pub async fn list(what: ListWhat, paths: &AppPaths, cwd: &Path) -> i32 {
     }
     if what.shows(ListWhat::Connections) {
         ink.section("📜 Konsesi (connections)");
-        let profiles = saved_profiles(paths);
+        let profiles = saved_places(paths);
         if profiles.is_empty() {
             ink.empty("belum ada izin konsesi. Belum ada yang “diatur”.");
         }

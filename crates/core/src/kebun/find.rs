@@ -30,7 +30,8 @@ impl Kebun {
 /// Finds `name`: a Sawit instance or saved connection with that name, else
 /// a database called `name` in a saved connection, a `.env` DATABASE_URL in
 /// `cwd` or above, or a running local Postgres. Failing that, `kyzn` finds
-/// `kyzn_crm` when no other database starts with it.
+/// `kyzn_crm` when no other database starts with it. Only the one found has
+/// its saved password read: each read asks the Keychain (`security`) twice.
 pub async fn find(name: &str, paths: &AppPaths, cwd: &Path) -> Result<Option<Kebun>, String> {
     let registry = Registry::load(&paths.instances_file()).unwrap_or_default();
     if let Some(inst) = registry.get(name) {
@@ -40,35 +41,41 @@ pub async fn find(name: &str, paths: &AppPaths, cwd: &Path) -> Result<Option<Keb
             via: format!("instance {}", inst.name),
         }));
     }
-    let profiles = saved_profiles(paths);
+    let profiles = saved_places(paths);
     if let Some(found) = profiles.iter().find(|k| k.profile.name == name) {
-        return Ok(Some(found.clone()));
+        return Ok(Some(with_password(found.clone())));
     }
     let mut candidates = profiles;
-    candidates.extend(dotenv_kebuns(cwd));
+    candidates.extend(dotenv_places(cwd));
     if let Some(found) = candidates.iter().find(|k| k.profile.database == name) {
-        return Ok(Some(found.clone()));
+        return Ok(Some(with_password(found.clone())));
     }
+    // The saved and `.env` ones come first; the local ones have read theirs to list databases.
+    let unread = candidates.len();
     candidates.extend(local_kebuns(&registry).await);
-    if let Some(found) = candidates.iter().find(|k| k.profile.database == name) {
-        return Ok(Some(found.clone()));
+    let pick = |ix: usize| match ix < unread {
+        true => with_password(candidates[ix].clone()),
+        false => candidates[ix].clone(),
+    };
+    if let Some(ix) = candidates.iter().position(|k| k.profile.database == name) {
+        return Ok(Some(pick(ix)));
     }
-    let mut partial: Vec<&Kebun> = Vec::new();
-    for k in candidates
-        .iter()
-        .filter(|k| k.profile.database.starts_with(name))
-    {
-        if !partial.iter().any(|p| p.same_place(k)) {
-            partial.push(k);
+    let mut partial: Vec<usize> = Vec::new();
+    for (ix, k) in candidates.iter().enumerate() {
+        if k.profile.database.starts_with(name)
+            && !partial.iter().any(|&p| candidates[p].same_place(k))
+        {
+            partial.push(ix);
         }
     }
     match partial.as_slice() {
         [] => Ok(None),
-        [one] => Ok(Some((*one).clone())),
+        [one] => Ok(Some(pick(*one))),
         many => Err(format!(
             "“{name}” cocok dengan {} kebun — sengketa lahan:\n{}\nSebut nama lengkapnya. Batas konsesi harus jelas, tidak seperti di peta resmi.",
             many.len(),
             many.iter()
+                .map(|&ix| &candidates[ix])
                 .map(|k| format!("   · {} ({})", k.profile.database, k.via))
                 .collect::<Vec<_>>()
                 .join("\n")
@@ -77,6 +84,12 @@ pub async fn find(name: &str, paths: &AppPaths, cwd: &Path) -> Result<Option<Keb
 }
 
 pub fn saved_profiles(paths: &AppPaths) -> Vec<Kebun> {
+    saved_places(paths).into_iter().map(with_password).collect()
+}
+
+/// [`saved_profiles`] without their passwords: where each connection goes, for what never shows
+/// a password (`sawit list`) and for [`find`], which reads the password of the one it picks.
+pub(super) fn saved_places(paths: &AppPaths) -> Vec<Kebun> {
     let Ok(profiles) = Profiles::load(&paths.root.join("profiles.toml")) else {
         return Vec::new();
     };
@@ -86,7 +99,7 @@ pub fn saved_profiles(paths: &AppPaths) -> Vec<Kebun> {
         // SQLite and D1 profiles have no server to find.
         .filter(|profile| profile.kind.is_postgres())
         .map(|profile| Kebun {
-            password: resolve_password(&profile),
+            password: None,
             via: format!("koneksi tersimpan {}", profile.name),
             profile,
         })
@@ -95,18 +108,31 @@ pub fn saved_profiles(paths: &AppPaths) -> Vec<Kebun> {
 
 /// DATABASE_URL from `.env` in `cwd` and every folder above it.
 pub fn dotenv_kebuns(cwd: &Path) -> Vec<Kebun> {
+    dotenv_places(cwd).into_iter().map(with_password).collect()
+}
+
+/// [`dotenv_kebuns`] with only the passwords their URLs hold, as [`saved_places`].
+pub(super) fn dotenv_places(cwd: &Path) -> Vec<Kebun> {
     cwd.ancestors()
         .map(|dir| dir.join(".env"))
         .filter_map(|path| {
             let url = read_dotenv_database_url(&path).ok()??;
             let (profile, password) = parse_database_url(&url).ok()?;
             Some(Kebun {
-                password: password.or_else(|| resolve_password(&profile)),
+                password,
                 via: format!(".env di {}", tilde(path.parent()?)),
                 profile,
             })
         })
         .collect()
+}
+
+/// `kebun` with the password the Keychain or `~/.pgpass` keeps for its profile, unless it has one.
+fn with_password(mut kebun: Kebun) -> Kebun {
+    if kebun.password.is_none() {
+        kebun.password = resolve_password(&kebun.profile);
+    }
+    kebun
 }
 
 /// Every database of the Postgres servers running here: Sawit instances,
