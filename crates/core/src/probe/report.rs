@@ -134,28 +134,33 @@ pub async fn check_port_with(
         managed,
     };
     let looks_docker = |l: &Listener| classify(l, "", &OwnerContext::default()) != Owner::Other;
-    if let Some(docker) = &env.docker
-        && listeners.iter().any(looks_docker)
-        && let Ok(out) = cmd::run(
-            docker,
-            ["ps", "--format", "{{.Names}}\t{{.Ports}}"],
-            TIMEOUT,
-        )
-        .await
-    {
+    let docker = env
+        .docker
+        .as_ref()
+        .filter(|_| listeners.iter().any(looks_docker));
+    let listeners: Vec<Listener> = listeners.into_iter().filter(|l| l.port == port).collect();
+    // Docker's published ports and every listener's command line, asked all at once.
+    let (published, command_lines) = tokio::join!(
+        async {
+            let docker = docker?;
+            let format = ["ps", "--format", "{{.Names}}\t{{.Ports}}"];
+            cmd::run(docker, format, TIMEOUT).await.ok()
+        },
+        futures::future::join_all(listeners.iter().map(|l| command_line(&env.ps, l.pid))),
+    );
+    if let Some(out) = published {
         ctx.docker_ports = parse_docker_ps(&out.stdout);
     }
 
-    let mut owners = Vec::with_capacity(listeners.len());
-    for listener in listeners.into_iter().filter(|l| l.port == port) {
-        let command_line = command_line(&env.ps, listener.pid).await;
-        let owner = classify(&listener, &command_line, &ctx);
-        owners.push(OwnedListener {
+    let owners = listeners
+        .into_iter()
+        .zip(command_lines)
+        .map(|(listener, command_line)| OwnedListener {
+            owner: classify(&listener, &command_line, &ctx),
             listener,
-            owner,
             command_line,
-        });
-    }
+        })
+        .collect();
     Ok(PortReport {
         port,
         intended: intended.to_vec(),
