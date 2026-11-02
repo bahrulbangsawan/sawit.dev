@@ -7,6 +7,7 @@ pub(crate) mod ops;
 mod render;
 pub mod search;
 mod tree;
+mod versioned;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -23,6 +24,7 @@ use sawit_core::files::{Entry, list_dir};
 
 use crate::rt;
 use ops::Op;
+use versioned::Versioned;
 
 actions!(
     files,
@@ -157,10 +159,20 @@ enum Row {
     Edit(usize),
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum EditKind {
     New { dir: bool },
     Rename(PathBuf),
+}
+
+/// What the tree's rows are flattened from: the folders read and opened (by their versions),
+/// the project folder, and where a name is typed.
+#[derive(PartialEq)]
+struct RowsOf {
+    children: u64,
+    expanded: u64,
+    root: Option<PathBuf>,
+    edit: Option<(EditKind, PathBuf)>,
 }
 
 /// A name being typed in the tree.
@@ -254,11 +266,13 @@ impl Default for Disk {
 
 pub struct FilesPanel {
     pub root: Option<PathBuf>,
-    expanded: HashSet<PathBuf>,
-    children: HashMap<PathBuf, Vec<Entry>>,
+    expanded: Versioned<HashSet<PathBuf>>,
+    children: Versioned<HashMap<PathBuf, Vec<Entry>>>,
     selected: Option<PathBuf>,
-    /// The tree rows, flattened once per render for the virtual list.
+    /// The tree rows, flattened for the virtual list when the tree changes.
     rows: Rc<Vec<Row>>,
+    /// What `rows` were flattened from ([`Self::update_rows`]).
+    rows_of: Option<RowsOf>,
     /// Why the project folder itself can't be listed.
     root_error: Option<String>,
     /// Top folder of the Git repository the project is in, from the project's Git store.
@@ -302,10 +316,11 @@ impl FilesPanel {
         });
         Self {
             root: None,
-            expanded: HashSet::new(),
-            children: HashMap::new(),
+            expanded: Versioned::default(),
+            children: Versioned::default(),
             selected: None,
             rows: Rc::default(),
+            rows_of: None,
             root_error: None,
             repo: None,
             clip: None,

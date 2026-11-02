@@ -17,13 +17,28 @@ use super::{
     AddToGitExclude, AddToGitignore, CollapseAll, CopyEntry, CopyPath, CopyRelativePath, Cut,
     Delete, DraggedFile, Duplicate, Edit, EditKind, ExpandAll, FilesEvent, FilesPanel,
     FindInFolder, NewFile, NewFolder, OpenInDefaultApp, OpenInTerminal, Paste, Redo, Rename,
-    Request, RevealInFinder, Row, Trash, TrashWithoutAsking, Undo, ViewHistory,
+    Request, RevealInFinder, Row, RowsOf, Trash, TrashWithoutAsking, Undo, ViewHistory,
 };
 use crate::states::{Banner, Placeholder};
 
 const ROW_HEIGHT: f32 = 22.;
 
 impl FilesPanel {
+    /// Flattens the tree's rows again if what they come from changed since: a render for a
+    /// hover, a scroll or the keyboard leaves them as they are.
+    fn update_rows(&mut self) {
+        let of = RowsOf {
+            children: self.children.version(),
+            expanded: self.expanded.version(),
+            root: self.root.clone(),
+            edit: (self.edit.as_ref()).map(|edit| (edit.kind.clone(), edit.parent.clone())),
+        };
+        if self.rows_of.as_ref() != Some(&of) {
+            self.rows = Rc::new(self.flat());
+            self.rows_of = Some(of);
+        }
+    }
+
     fn rows(&self, dir: &Path, depth: usize, out: &mut Vec<Row>) {
         if let Some(edit) = &self.edit
             && matches!(edit.kind, EditKind::New { .. })
@@ -208,7 +223,7 @@ impl FilesPanel {
 
 impl Render for FilesPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.rows = Rc::new(self.flat());
+        self.update_rows();
         let count = self.rows.len();
         let title = self
             .root
