@@ -107,6 +107,10 @@ pub async fn run_shell_holding(
 fn lock_tool(id: &str, name: &str) -> Result<std::fs::File> {
     use std::os::fd::AsRawFd as _;
     let dir = std::env::temp_dir().join("sawit-tool-locks");
+    // This crate's tests keep locks of their own, so a run elsewhere on the Mac (another
+    // checkout's tests, or Sawit itself) never holds the ones they take and test.
+    #[cfg(test)]
+    let dir = dir.join(format!("test-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     let file = std::fs::OpenOptions::new()
         .create(true)
