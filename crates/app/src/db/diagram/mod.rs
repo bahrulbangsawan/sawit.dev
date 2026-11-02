@@ -169,17 +169,24 @@ impl DiagramView {
     /// first, then the automatic layout for tables never moved (placed
     /// below the saved ones).
     fn rebuild(&mut self, cx: &mut Context<Self>) {
-        let Some(schemas) = self.db.read(cx).schemas.get(&self.profile).cloned() else {
+        let only = Some(self.schema.as_str());
+        // Read where they are: the profile's whole tree isn't copied for one schema.
+        let built = self
+            .db
+            .read(cx)
+            .schemas
+            .get(&self.profile)
+            .map(|schemas| (diagram::to_dbml(schemas, only), diagram::erd(schemas, only)));
+        let Some((dbml, erd)) = built else {
             self.error =
                 Some("Not connected. Connect to the database, then click Reload Schema.".into());
             cx.notify();
             return;
         };
-        let only = Some(self.schema.as_str());
         self.error = None;
-        self.dbml = diagram::to_dbml(&schemas, only);
+        self.dbml = dbml;
         let first = self.erd.tables.is_empty();
-        self.erd = diagram::erd(&schemas, only);
+        self.erd = erd;
         self.sizes = self.erd.tables.iter().map(card_size).collect();
         self.texts = self.erd.tables.iter().map(CardText::new).collect();
         let saved = load_layouts()
