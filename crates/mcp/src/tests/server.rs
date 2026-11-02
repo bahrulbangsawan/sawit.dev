@@ -134,6 +134,7 @@ fn every_tool_is_routed() {
         "terminal_split",
         "terminal_read",
         "terminal_input",
+        "terminal_rename",
         "terminal_close",
         "canvas_design_guide",
         "canvas_get",

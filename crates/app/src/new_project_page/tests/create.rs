@@ -48,7 +48,7 @@ fn create_with_open(
         .detach();
     });
     let job = page
-        .update(cx, |p, cx| p.begin_create_and(open, cx))
+        .update(cx, |p, cx| p.begin_create(open, cx))
         .expect("the create starts");
     assert_eq!(job.dir, location.join("made"));
     assert_eq!(

@@ -81,6 +81,10 @@ pub struct StackCreateArgs {
     #[serde(flatten)]
     pub stack: StackArgs,
     #[schemars(
+        description = "With the app running: true (the default) opens the project in Sawit once it is made, as Create Project does; false makes it without opening it, as Create Project Only does (the page then offers Open Project). Without the app, nothing is opened either way"
+    )]
+    pub open: Option<bool>,
+    #[schemars(
         description = "Must be true: creating downloads create-better-t-stack and the project's packages from the internet, and runs their install scripts"
     )]
     pub confirm: bool,
@@ -193,6 +197,7 @@ impl Sawit {
             let command = Command::NewProject {
                 location,
                 stack: resolved.stack.clone(),
+                open: a.open.unwrap_or(true),
             };
             let mut reply = tri!(self.app_call(None, command).await);
             if !resolved.changes.is_empty() {
@@ -247,7 +252,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Create a project from a stack (choices as in stack_check) in <location>/<name>, which must not exist. With the Sawit app running, the New Project page shows the stack and runs create-better-t-stack in a terminal tab of its own, and Sawit opens the folder as a project when it is made: returns the folder, the command and the terminal and pane (terminal_read shows progress). Without the app, runs it here and returns the CLI's output (it can take minutes: it installs dependencies). Downloads and runs install scripts: needs confirm=true"
+        description = "Create a project from a stack (choices as in stack_check) in <location>/<name>, which must not exist. With the Sawit app running, the New Project page shows the stack and runs create-better-t-stack in a terminal tab of its own, and Sawit opens the folder as a project when it is made (open=false makes it without opening it, as Create Project Only does): returns the folder, the command and the terminal and pane (terminal_read shows progress). Without the app, runs it here and returns the CLI's output (it can take minutes: it installs dependencies). Downloads and runs install scripts: needs confirm=true"
     )]
     async fn stack_create(&self, Parameters(a): Parameters<StackCreateArgs>) -> CallToolResult {
         self.stack_create_tool(a).await
@@ -355,6 +360,7 @@ mod tests {
                 name: Some(name.into()),
                 ..Default::default()
             },
+            open: None,
             confirm,
         };
         let r = sawit.stack_create_tool(create("shop", false)).await;
@@ -365,5 +371,21 @@ mod tests {
         assert!(said(&r).contains("already exists"), "{}", said(&r));
         assert!(!dir.join("shop").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `open` reads beside the stack's flags: left out it is Create Project's (the app opens the
+    /// project), and false is Create Project Only's.
+    #[test]
+    fn a_create_says_whether_it_opens_the_project() {
+        let args = |json: serde_json::Value| -> StackCreateArgs {
+            serde_json::from_value(json).expect("the arguments read")
+        };
+        let only =
+            args(json!({"location": "/tmp", "name": "shop", "open": false, "confirm": true}));
+        assert_eq!(only.open, Some(false));
+        assert_eq!(only.stack.name.as_deref(), Some("shop"));
+        let default = args(json!({"location": "/tmp", "frontend": ["next"], "confirm": true}));
+        assert_eq!(default.open, None);
+        assert_eq!(default.stack.frontend, Some(vec!["next".to_string()]));
     }
 }

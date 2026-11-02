@@ -230,7 +230,7 @@ fn create_refuses_a_folder_that_exists(cx: &mut TestAppContext) {
     let refused = vcx.update(|_, cx| {
         page.update(cx, |p, cx| {
             p.stack.project_name = "taken".into();
-            p.begin_create(cx)
+            p.begin_create(true, cx)
         })
     });
     let Err(why) = refused else {

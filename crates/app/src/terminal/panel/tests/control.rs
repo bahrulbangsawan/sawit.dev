@@ -175,3 +175,38 @@ fn a_bad_pane_index_is_an_error(cx: &mut TestAppContext) {
         );
     });
 }
+
+/// An agent's terminal_rename names a tab as Rename Tab does, and answers the name the strip
+/// shows: a tab of one pane is named itself, its pane named or not, as that pane's own Rename
+/// does there; a blank name clears it, and a tab or pane that isn't there is an error.
+#[gpui_kit::test]
+fn an_agent_names_a_tab_and_a_blank_name_clears_it(cx: &mut TestAppContext) {
+    cx.update(init);
+    let (_w, panel) = open_panel(cx);
+    open_tabs(cx, &panel, 1);
+    let rename = |cx: &mut TestAppContext, ix: usize, pane: Option<usize>, name: &str| {
+        cx.update(|cx| panel.update(cx, |p, cx| p.rename(ix, pane, name, cx)))
+    };
+    let label = |cx: &mut TestAppContext, ix: usize| {
+        cx.update(|cx| panel.read(cx).tab(ix).read(cx).label(cx).to_string())
+    };
+    let before = label(cx, 1);
+
+    let named = rename(cx, 1, None, "  dev server ").expect("tab 1 is there");
+    assert_eq!(named["terminal"], 1);
+    assert_eq!(named["named"], "tab");
+    assert_eq!(named["name"], "dev server");
+    assert_eq!(label(cx, 1), "dev server");
+    assert_ne!(label(cx, 0), "dev server", "only tab 1 was named");
+
+    let by_pane = rename(cx, 1, Some(0), "tests").expect("its pane 0 is there");
+    assert_eq!(by_pane["named"], "tab", "a tab of one pane is named itself");
+    assert_eq!(label(cx, 1), "tests");
+
+    let cleared = rename(cx, 1, None, "").expect("tab 1 is there");
+    assert_eq!(cleared["name"], before.as_str());
+    assert_eq!(label(cx, 1), before);
+
+    assert!(rename(cx, 5, None, "x").is_err());
+    assert!(rename(cx, 1, Some(3), "x").is_err());
+}

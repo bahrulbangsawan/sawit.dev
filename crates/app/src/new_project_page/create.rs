@@ -16,14 +16,10 @@ impl NewProjectPage {
         matches!(self.creating, Creating::Running { .. })
     }
 
-    /// Checks the create can start and marks it running, to open the project once made: the job
-    /// for the workspace to run, or why it can't start (also shown on the page).
-    pub fn begin_create(&mut self, cx: &mut Context<Self>) -> Result<CreateJob, String> {
-        self.begin_create_and(true, cx)
-    }
-
-    /// [`begin_create`](Self::begin_create), opening the project once made only when `open`.
-    pub(super) fn begin_create_and(
+    /// Checks the create can start and marks it running, to open the project once made when
+    /// `open` (Create Project; Create Project Only leaves it made): the job for the workspace to
+    /// run, or why it can't start (also shown on the page).
+    pub fn begin_create(
         &mut self,
         open: bool,
         cx: &mut Context<Self>,
@@ -76,7 +72,7 @@ impl NewProjectPage {
 
     /// Asks the workspace to run the create; the project opens once made when `open`.
     pub(super) fn create_and(&mut self, open: bool, cx: &mut Context<Self>) {
-        if let Ok(job) = self.begin_create_and(open, cx) {
+        if let Ok(job) = self.begin_create(open, cx) {
             cx.emit(NewProjectEvent::Create(job));
         }
     }

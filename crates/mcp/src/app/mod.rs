@@ -29,7 +29,8 @@ pub use panels::{
     ScriptArgs, SshConnectArgs,
 };
 pub use terminal::{
-    TerminalCloseArgs, TerminalInputArgs, TerminalReadArgs, TerminalRunArgs, TerminalSplitArgs,
+    TerminalCloseArgs, TerminalInputArgs, TerminalReadArgs, TerminalRenameArgs, TerminalRunArgs,
+    TerminalSplitArgs,
 };
 pub use window::{LayoutArgs, OpenArgs, PageArgs, PanelArgs, TabArgs, WindowArgs};
 

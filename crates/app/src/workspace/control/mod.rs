@@ -192,6 +192,10 @@ impl Workspace {
                     .update(cx, |t, cx| t.close_tab(tab, pane, window, cx))?;
                 done(json!({ "closed": tab }))
             }
+            Command::TerminalRename { tab, pane, name } => done(
+                self.terminal
+                    .update(cx, |t, cx| t.rename(tab, pane, &name, cx))?,
+            ),
             Command::RunList => {
                 let scripts = self.current().run_panel.read(cx).describe(cx)?;
                 done(json!({ "scripts": scripts }))
@@ -376,9 +380,11 @@ impl Workspace {
             }
             // The keymap is every window's: the caller answers it for the whole app.
             Command::Keymap { .. } => done(json!({})),
-            Command::NewProject { location, stack } => {
-                done(self.agent_new_project(location, stack, window, cx)?)
-            }
+            Command::NewProject {
+                location,
+                stack,
+                open,
+            } => done(self.agent_new_project(location, stack, open, window, cx)?),
         };
         cx.notify();
         result

@@ -117,6 +117,7 @@ const DESTRUCTIVE: &[&str] = &[
     "terminal_input",
     "terminal_close",
     "terminal_split",
+    "terminal_rename",
     "canvas_update",
     "canvas_delete",
     "canvas_clear",

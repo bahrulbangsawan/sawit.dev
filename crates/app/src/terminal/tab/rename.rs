@@ -32,6 +32,34 @@ impl TerminalTab {
         self.start_rename(Renamed::Tab, window, cx);
     }
 
+    /// Names `pane`, or the tab, as Enter in the rename field does (a blank name clears it), and
+    /// returns the name shown after: an agent's `terminal_rename`. As in
+    /// [`rename_pane`](Self::rename_pane), a tab of one pane is named itself. A rename field the
+    /// user has open stays open.
+    pub fn set_name(
+        &mut self,
+        pane: Option<PaneId>,
+        name: &str,
+        cx: &mut Context<Self>,
+    ) -> SharedString {
+        let shown = match pane.filter(|_| self.state.is_split()) {
+            Some(pane) => {
+                self.state.rename(pane, name);
+                match self.views.get(&pane) {
+                    Some(view) => self.pane_label(pane, view.read(cx)),
+                    None => SharedString::default(),
+                }
+            }
+            None => {
+                self.state.rename_tab(name);
+                self.label(cx)
+            }
+        };
+        cx.emit(TabEvent::Changed);
+        cx.notify();
+        shown
+    }
+
     /// Puts a field for a pane's name in its header, or for the tab's in the
     /// tab strip, filled with the name shown there and selected. Enter names
     /// the pane or the tab (an empty name clears it); Escape or leaving the

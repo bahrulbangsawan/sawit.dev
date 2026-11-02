@@ -217,6 +217,36 @@ impl TerminalPanel {
         Ok(ix)
     }
 
+    /// Names the tab at `ix`, or its pane at position `pane` (see
+    /// [`TerminalTab::set_name`](crate::terminal::tab::TerminalTab::set_name)):
+    /// `terminal_rename`'s answer, with the name the strip or the pane's header shows after.
+    pub fn rename(
+        &mut self,
+        ix: usize,
+        pane: Option<usize>,
+        name: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<serde_json::Value, String> {
+        let ix = self.tab_ix(Some(ix))?;
+        let id = match pane {
+            Some(_) => Some(self.pane_of(ix, pane, cx)?.0),
+            None => None,
+        };
+        let shown = self.tabs[ix].update(cx, |t, cx| t.set_name(id, name, cx));
+        cx.notify();
+        let named = if id.is_some() && self.tabs[ix].read(cx).state.is_split() {
+            "pane"
+        } else {
+            "tab"
+        };
+        Ok(serde_json::json!({
+            "terminal": ix,
+            "pane": pane,
+            "named": named,
+            "name": shown.to_string(),
+        }))
+    }
+
     /// Why an agent may not close the tab at `ix`, or only its pane at position `pane`, without
     /// saying it is sure (`terminal_close`'s `confirm`): closing would end what runs there (a
     /// command in the foreground or a live SSH session, as [`Self::running`] names them), or the

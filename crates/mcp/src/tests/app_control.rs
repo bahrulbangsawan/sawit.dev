@@ -90,6 +90,7 @@ fn the_terminal_line_tells_tabs_from_panes() {
             "terminal_close",
             "terminal_input",
             "terminal_read",
+            "terminal_rename",
             "terminal_split"
         ]
     );

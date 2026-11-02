@@ -1,5 +1,5 @@
 //! The terminal tools: run a command in Sawit's terminal, split a pane, read a pane's output, type
-//! into it and close it.
+//! into it, name it and close it.
 
 use std::time::Duration;
 
@@ -103,6 +103,23 @@ pub struct TerminalCloseArgs {
     )]
     #[serde(default)]
     pub confirm: bool,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct TerminalRenameArgs {
+    #[schemars(
+        description = "Terminal tab index, as terminal_run, app_run_script and app_ssh_connect return it (or from app_state)"
+    )]
+    pub tab: usize,
+    #[schemars(
+        description = "Pane within a split tab to name in its header (from app_state); default: the tab itself. A tab of one pane is named itself"
+    )]
+    pub pane: Option<usize>,
+    #[schemars(
+        description = "The name to show; an empty one clears it, back to the title the shell gives"
+    )]
+    pub name: String,
     pub project: Option<String>,
 }
 
@@ -256,6 +273,24 @@ impl Sawit {
             key: a.key,
         };
         self.app_tool(a.project, command).await
+    }
+
+    #[tool(
+        description = "Name a terminal tab in the tab strip, or one pane of a split tab in its header, as the user's Rename Tab and Rename Pane do: label the tab where your dev server or test watcher runs. An empty name clears it, back to the title the shell gives. Name the tab, and a pane, as terminal_run or app_state give them. Returns the tab, the pane, whether the tab or the pane was named, and the name shown. Needs the app running"
+    )]
+    pub(super) async fn terminal_rename(
+        &self,
+        Parameters(a): Parameters<TerminalRenameArgs>,
+    ) -> CallToolResult {
+        self.app_tool(
+            a.project,
+            Command::TerminalRename {
+                tab: a.tab,
+                pane: a.pane,
+                name: a.name,
+            },
+        )
+        .await
     }
 
     #[tool(

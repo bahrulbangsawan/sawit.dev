@@ -248,11 +248,29 @@ pub enum Command {
     Keymap {
         op: crate::keymap::KeymapOp,
     },
+    /// Names a terminal tab, or one pane of a split tab, as renaming it in the tab strip or the
+    /// pane's header does: a tab of one pane is named itself, as its pane's rename does there. A
+    /// blank name clears it, back to the title the shell gives.
+    TerminalRename {
+        tab: usize,
+        #[serde(default)]
+        pane: Option<usize>,
+        name: String,
+    },
     /// Creates a project with the New Project page, as Create Project does: the page shows
     /// `stack` (resolved, named by its `project_name`), runs its create in a terminal tab of its
-    /// own in `location`, and opens the project once it is made.
+    /// own in `location`, and opens the project once it is made, or, with `open` false (Create
+    /// Project Only), leaves it made, with the page's Open Project button.
     NewProject {
         location: PathBuf,
         stack: crate::stack_builder::Stack,
+        /// An op without it, from an older `sawit-mcp`, opens the project as before.
+        #[serde(default = "opens")]
+        open: bool,
     },
+}
+
+/// [`Command::NewProject`]'s `open` when the op leaves it out: Create Project's, which opens.
+fn opens() -> bool {
+    true
 }

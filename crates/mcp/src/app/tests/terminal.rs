@@ -13,7 +13,8 @@ use serde_json::json;
 use super::{fake_app_answering, native, said};
 use crate::app::terminal::{MAX_WAIT, run_wait};
 use crate::app::{
-    TerminalCloseArgs, TerminalInputArgs, TerminalReadArgs, TerminalRunArgs, TerminalSplitArgs,
+    TerminalCloseArgs, TerminalInputArgs, TerminalReadArgs, TerminalRenameArgs, TerminalRunArgs,
+    TerminalSplitArgs,
 };
 
 /// `terminal_run` waits as asked, within 0 to 120 s, whatever number the agent sends: a
@@ -235,6 +236,44 @@ async fn terminal_close_passes_its_confirm_on() {
             }
         );
     }
+}
+
+/// `terminal_rename` names the tab, or with a pane that pane, and passes the name on as given: a
+/// blank one clears it. Without a name it doesn't read, so the app isn't asked.
+#[tokio::test]
+async fn terminal_rename_names_the_tab_or_its_pane() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = native(dir.path());
+    let asked = fake_app_answering(
+        &server.paths,
+        vec![
+            json!({"terminal": 2, "pane": null, "named": "tab", "name": "dev server"}),
+            json!({"terminal": 2, "pane": 1, "named": "pane", "name": "zsh"}),
+        ],
+    );
+    for (args, tab, pane, name) in [
+        (
+            json!({"tab": 2, "name": "dev server"}),
+            2,
+            None,
+            "dev server",
+        ),
+        (json!({"tab": 2, "pane": 1, "name": ""}), 2, Some(1), ""),
+    ] {
+        let args: TerminalRenameArgs = serde_json::from_value(args).unwrap();
+        let r = server.terminal_rename(Parameters(args)).await;
+        assert_ne!(r.is_error, Some(true), "{}", said(&r));
+        let request = asked.recv_timeout(Duration::from_secs(5)).expect("asked");
+        assert_eq!(
+            request.command,
+            Command::TerminalRename {
+                tab,
+                pane,
+                name: name.into(),
+            }
+        );
+    }
+    assert!(serde_json::from_value::<TerminalRenameArgs>(json!({"tab": 2})).is_err());
 }
 
 /// MCP-4: `terminal_run` starts its shell in the folder it names, or not at all. The PTY

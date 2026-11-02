@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod naming_and_creating;
+
 #[test]
 fn round_trip() {
     let request = Request {
@@ -185,6 +187,7 @@ fn new_project_round_trips() {
         command: Command::NewProject {
             location: "/Users/me/Developer".into(),
             stack,
+            open: true,
         },
     };
     let bytes = encode(&create);

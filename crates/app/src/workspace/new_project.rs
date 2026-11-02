@@ -154,19 +154,20 @@ impl Workspace {
     }
 
     /// An agent's create: the page shows `stack` in `location` (the keyboard left where the
-    /// user has it) and creates it as Create Project does. Answers the folder it makes, the
-    /// command and the terminal it runs in.
+    /// user has it) and creates it as Create Project does, or, with `open` false, as Create
+    /// Project Only does. Answers the folder it makes, the command and the terminal it runs in.
     pub(super) fn agent_new_project(
         &mut self,
         location: PathBuf,
         stack: Stack,
+        open: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Value, String> {
         let page = self.show_new_project_page(false, window, cx);
         let job = page.update(cx, |page, cx| {
             page.set_stack(stack, location, window, cx);
-            page.begin_create(cx)
+            page.begin_create(open, cx)
         })?;
         let (dir, command) = (job.dir.clone(), job.command.clone());
         let (tab, pane) = self.start_new_project(&page, job, Origin::Agent, window, cx)?;
@@ -176,7 +177,11 @@ impl Workspace {
             "command": command,
             "terminal": tab,
             "pane": pane,
-            "note": "Sawit opens the folder as a project once it has a package.json. terminal_read shows the CLI's output; app_state lists the project when it is open.",
+            "note": if open {
+                "Sawit opens the folder as a project once it has a package.json. terminal_read shows the CLI's output; app_state lists the project when it is open."
+            } else {
+                "Sawit makes the project without opening it (Create Project Only): the page then shows Open Project. terminal_read shows the CLI's output; open it later with app_open."
+            },
         }))
     }
 }
