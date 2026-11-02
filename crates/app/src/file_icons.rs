@@ -2,6 +2,7 @@
 //! `assets/file_icons/LICENSE-material-icon-theme`), embedded as small SVGs
 //! and drawn in colour with `img()`.
 
+use std::borrow::Cow;
 use std::path::Path;
 
 use gpui_kit::assets::IconName as Lucide;
@@ -14,6 +15,15 @@ macro_rules! logos {
         const LOGOS: &[(&str, &[u8])] = &[
             $(($name, include_bytes!(concat!("../../../assets/file_icons/", $name, ".svg")))),*
         ];
+
+        /// The asset path of the logo `name` ([`PREFIX`]`<name>.svg`), spelled out at compile time
+        /// so that drawing a row doesn't format it.
+        fn asset_path(name: &str) -> Option<&'static str> {
+            match name {
+                $($name => Some(concat!("file_icons/", $name, ".svg")),)*
+                _ => None,
+            }
+        }
     };
 }
 
@@ -94,12 +104,12 @@ pub fn asset(path: &str) -> Option<&'static [u8]> {
 
 /// The logo for a file, if it has a recognisable language or kind.
 pub fn logo_for(path: &Path) -> Option<&'static str> {
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let by_name = match name.as_str() {
+    let name = lowercase(
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default(),
+    );
+    let by_name = match name.as_ref() {
         "dockerfile" | "containerfile" | ".dockerignore" => Some("docker"),
         "docker-compose.yml" | "docker-compose.yaml" | "compose.yml" | "compose.yaml" => {
             Some("docker")
@@ -116,12 +126,12 @@ pub fn logo_for(path: &Path) -> Option<&'static str> {
     if by_name.is_some() {
         return by_name;
     }
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    Some(match ext.as_str() {
+    let ext = lowercase(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default(),
+    );
+    Some(match ext.as_ref() {
         "ts" | "mts" | "cts" => "typescript",
         "tsx" => "react_ts",
         "js" | "mjs" | "cjs" => "javascript",
@@ -184,6 +194,15 @@ pub fn logo_for(path: &Path) -> Option<&'static str> {
     })
 }
 
+/// `text` in lowercase, copied only when it has a capital letter, which most file names don't.
+fn lowercase(text: &str) -> Cow<'_, str> {
+    if text.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(text.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
 /// Whether `path` is a file that opens on a canvas: a Sawit canvas file (`.sawit`) or an
 /// `.excalidraw` scene. It shows the canvas's own glyph, as its tab does.
 pub fn opens_on_canvas(path: &Path) -> bool {
@@ -200,8 +219,8 @@ pub fn file_icon(path: &Path, cx: &App) -> AnyElement {
             .text_color(cx.theme().muted_foreground)
             .into_any_element();
     }
-    match logo_for(path) {
-        Some(name) => img(SharedString::from(format!("{PREFIX}{name}.svg")))
+    match logo_for(path).and_then(asset_path) {
+        Some(asset) => img(SharedString::new_static(asset))
             .size(px(14.))
             .flex_none()
             .into_any_element(),
