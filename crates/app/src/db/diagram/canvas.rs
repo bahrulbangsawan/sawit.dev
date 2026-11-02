@@ -103,7 +103,7 @@ impl DiagramView {
             move |bounds, _, window, _| {
                 paint_grid(bounds, offset, zoom, dot, window);
                 for e in &edges {
-                    paint_edge(bounds.origin, e, zoom, window);
+                    paint_edge(bounds, e, zoom, window);
                 }
             },
         )
@@ -328,26 +328,33 @@ struct EdgeShape {
 
 /// One foreign key: a curve with a crow's foot ("many") on the referencing
 /// table and a bar ("one") on the referenced one; dashed when optional.
-fn paint_edge(origin: Point<Pixels>, e: &EdgeShape, zoom: f32, window: &mut Window) {
+/// Nothing is built for one wholly off the canvas `bounds`, which clips it anyway.
+fn paint_edge(bounds: Bounds<Pixels>, e: &EdgeShape, zoom: f32, window: &mut Window) {
     let z = zoom.clamp(0.4, 1.5);
-    let (a, b) = (origin + e.from, origin + e.to);
+    let (a, b) = (bounds.origin + e.from, bounds.origin + e.to);
     let stub = px(16. * z);
     let (a1, b1) = (
         point(a.x + stub * e.from_dir, a.y),
         point(b.x + stub * e.to_dir, b.y),
     );
     let reach = ((b1.x - a1.x).abs() / 2.).max(px(40. * z));
+    let (c1, c2) = (
+        point(a1.x + reach * e.from_dir, a1.y),
+        point(b1.x + reach * e.to_dir, b1.y),
+    );
+    let spread = px(6. * z);
+    // The curve stays within its control points' box; the crow's foot and the bar lie between
+    // its ends and the stubs, `spread` above and below.
+    if !edge_box(&[a, a1, c1, c2, b1, b], spread + px(e.width)).intersects(&bounds) {
+        return;
+    }
     let mut path = PathBuilder::stroke(px(e.width));
     if e.optional {
         path = path.dash_array(&[px(5.), px(4.)]);
     }
     path.move_to(a);
     path.line_to(a1);
-    path.cubic_bezier_to(
-        b1,
-        point(a1.x + reach * e.from_dir, a1.y),
-        point(b1.x + reach * e.to_dir, b1.y),
-    );
+    path.cubic_bezier_to(b1, c1, c2);
     path.line_to(b);
     if let Ok(path) = path.build() {
         window.paint_path(path, e.color);
@@ -361,7 +368,6 @@ fn paint_edge(origin: Point<Pixels>, e: &EdgeShape, zoom: f32, window: &mut Wind
         }
     };
     // Crow's foot: three prongs meeting a short way out from the card.
-    let spread = px(6. * z);
     let toe = point(a.x + px(10. * z) * e.from_dir, a.y);
     for dy in [-spread, px(0.), spread] {
         line(toe, point(a.x, a.y + dy), window);
@@ -373,6 +379,19 @@ fn paint_edge(origin: Point<Pixels>, e: &EdgeShape, zoom: f32, window: &mut Wind
         point(bar_x, b.y + spread),
         window,
     );
+}
+
+/// The box around `points`, `pad` wider on every side.
+fn edge_box(points: &[Point<Pixels>], pad: Pixels) -> Bounds<Pixels> {
+    let (mut min, mut max) = (points[0], points[0]);
+    for p in &points[1..] {
+        min = point(min.x.min(p.x), min.y.min(p.y));
+        max = point(max.x.max(p.x), max.y.max(p.y));
+    }
+    Bounds::from_corners(
+        point(min.x - pad, min.y - pad),
+        point(max.x + pad, max.y + pad),
+    )
 }
 
 /// A dot grid that moves with the canvas; hidden when too dense.
