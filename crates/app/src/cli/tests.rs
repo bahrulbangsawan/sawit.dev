@@ -2,7 +2,7 @@
 //! menus and their keys, and finding the app's bundle.
 
 use super::open::window_with_root;
-use super::server::{canvas_file_window, window_holding, window_naming};
+use super::server::{canvas_file_window, named_project, window_holding, window_naming};
 use super::{bundle_of, still_open};
 use gpui_kit::{KeyContext, MenuItem, OperatingSystem, OsAction, TestAppContext};
 use std::collections::HashSet;
@@ -73,6 +73,25 @@ fn a_canvas_files_op_goes_to_the_window_that_shows_or_holds_it() {
     );
     let elsewhere = Path::new("/elsewhere/home.sawit");
     assert_eq!(canvas_file_window(None, &windows, elsewhere), None);
+}
+
+/// An agent's canvas op that names a project draws on that project's canvas without making it
+/// the active project: the user's stays. Any other command's named project becomes active.
+#[test]
+fn a_canvas_op_leaves_the_active_project_as_it_is() {
+    let (shop, mine) = (PathBuf::from("/code/shop"), PathBuf::from("/code/blog/web"));
+    assert_eq!(
+        named_project(Some(shop.clone()), Some(mine.clone()), true),
+        (None, Some(shop.clone()))
+    );
+    assert_eq!(
+        named_project(Some(shop.clone()), Some(mine.clone()), false),
+        (Some(shop), Some(mine.clone()))
+    );
+    assert_eq!(
+        named_project(None, Some(mine.clone()), true),
+        (None, Some(mine))
+    );
 }
 
 /// SITE-1: ⌘Q, the app's own Quit (as the menu's Quit Sawit sends it), asks to save a file

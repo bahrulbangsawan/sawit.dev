@@ -1,7 +1,21 @@
 //! Canvas tabs: each project's canvas and any canvas file's, one tab per file, and telling each
 //! canvas whether it is on screen.
+//!
+//! The user reaches a canvas by showing it ([`Reach::Show`]); an agent's canvas op reaches it
+//! where it is ([`Reach::Quietly`]): the tab, the project and the layout the user has stay as they
+//! are, and a canvas not open yet opens in a tab behind the one on show. Its tab says agents are at
+//! work on it with a dot ([`crate::board::AgentActivity`]).
 
 use super::*;
+
+/// How a canvas tab is reached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Reach {
+    /// As the user goes to it: shown, with its project, the tab area on screen.
+    Show,
+    /// For an agent's op: nothing on screen changes.
+    Quietly,
+}
 
 impl Workspace {
     /// Opens the active project's brainstorming canvas (one tab per
@@ -32,9 +46,22 @@ impl Workspace {
         root: Option<PathBuf>,
         cx: &mut Context<Self>,
     ) -> Option<Entity<BoardView>> {
-        self.leave_welcome(CENTER_ONLY, cx);
-        if !self.layout.center {
-            self.layout.toggle(Area::Center);
+        self.canvas_of(root, Reach::Show, cx)
+    }
+
+    /// The canvas of the project at `root` (the app-wide one for `None`), reached as `reach`
+    /// says: [`Self::open_canvas_of`] for the user, quietly for an agent's op.
+    pub(super) fn canvas_of(
+        &mut self,
+        root: Option<PathBuf>,
+        reach: Reach,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<BoardView>> {
+        if reach == Reach::Show {
+            self.leave_welcome(CENTER_ONLY, cx);
+            if !self.layout.center {
+                self.layout.toggle(Area::Center);
+            }
         }
         let key: SharedString = match &root {
             Some(root) => format!("canvas\u{0}{}", root.display()).into(),
@@ -46,7 +73,9 @@ impl Workspace {
             .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
         {
             // With its project: another project's canvas file opened by its path, say.
-            self.activate_tab(ix, cx);
+            if reach == Reach::Show {
+                self.activate_tab(ix, cx);
+            }
             // The canvas is the tab's own view.
             let PaneItem::Other { view, .. } = &self.tabs[ix].item else {
                 return None;
@@ -55,17 +84,17 @@ impl Workspace {
         }
         let file = board_file(root.as_deref(), &AppPaths::default_macos().root);
         if let Some((ix, board)) = self.board_tab(&file, cx) {
-            self.activate_tab(ix, cx);
+            if reach == Reach::Show {
+                self.activate_tab(ix, cx);
+            }
             return Some(board);
         }
         let view = cx.new(|cx| BoardView::open(file.clone(), cx));
-        cx.subscribe(&view, |this, _, _: &ToggleCanvasMaximize, cx| {
-            this.toggle_canvas_maximized(cx)
-        })
-        .detach();
+        self.watch_board(&view, cx);
         self.boards.retain(|b| b.upgrade().is_some());
         self.boards.push(view.downgrade());
-        self.push_tab(
+        self.add_tab(
+            reach,
             PaneItem::Other {
                 view: view.clone().into(),
                 key,
@@ -94,32 +123,33 @@ impl Workspace {
         &mut self,
         path: PathBuf,
         kind: FileKind,
+        reach: Reach,
         cx: &mut Context<Self>,
     ) -> Option<Entity<BoardView>> {
         let file = store::bound_file(&path);
         let roots: Vec<Option<PathBuf>> = self.projects.iter().map(|p| p.root(cx)).collect();
         if let Some(root) = canvas_project(&file, roots, &AppPaths::default_macos().root) {
-            return self.open_canvas_of(root, cx);
+            return self.canvas_of(root, reach, cx);
         }
         if let Some((ix, board)) = self.board_tab(&file, cx) {
-            self.activate_tab(ix, cx);
+            if reach == Reach::Show {
+                self.activate_tab(ix, cx);
+            }
             return Some(board);
         }
         let view = cx.new(|cx| match kind {
             FileKind::Excalidraw => BoardView::import(path, cx),
             _ => BoardView::open(file.clone(), cx),
         });
-        cx.subscribe(&view, |this, _, _: &ToggleCanvasMaximize, cx| {
-            this.toggle_canvas_maximized(cx)
-        })
-        .detach();
+        self.watch_board(&view, cx);
         let title: SharedString = file
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default()
             .into();
         let group = self.group_of(&file, cx);
-        self.push_tab(
+        self.add_tab(
+            reach,
             PaneItem::Other {
                 view: view.clone().into(),
                 key: format!("file\u{0}{}", file.display()).into(),
@@ -132,6 +162,34 @@ impl Workspace {
         );
         cx.notify();
         Some(view)
+    }
+
+    /// Listens to a new canvas: its Maximize button, and its agents starting or stopping work,
+    /// which its tab's dot shows.
+    fn watch_board(&mut self, view: &Entity<BoardView>, cx: &mut Context<Self>) {
+        cx.subscribe(view, |this, _, _: &ToggleCanvasMaximize, cx| {
+            this.toggle_canvas_maximized(cx)
+        })
+        .detach();
+        cx.subscribe(view, |_, _, _: &crate::board::AgentActivity, cx| {
+            cx.notify()
+        })
+        .detach();
+    }
+
+    /// Adds a canvas's tab to its project's group: shown, for the user; behind the tab on show,
+    /// for an agent's op.
+    fn add_tab(
+        &mut self,
+        reach: Reach,
+        item: PaneItem,
+        group: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        match reach {
+            Reach::Show => self.push_tab(item, group, cx),
+            Reach::Quietly => self.push_tab_behind(item, group, cx),
+        }
     }
 
     /// Whether a canvas tab of this window shows the canvas of the canvas file at `path`

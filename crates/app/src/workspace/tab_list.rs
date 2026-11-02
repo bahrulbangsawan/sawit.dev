@@ -66,6 +66,28 @@ impl Workspace {
         self.activate_tab(at, cx);
     }
 
+    /// Adds a tab to the end of its project's group, behind the tab on show, which stays on show:
+    /// a canvas an agent's op opened.
+    pub(super) fn push_tab_behind(
+        &mut self,
+        item: PaneItem,
+        group: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let had_tabs = !self.tabs.is_empty();
+        let at = insert_index(&self.slots(), false, group.as_deref());
+        self.tabs.insert(
+            at,
+            Tab {
+                item,
+                pinned: false,
+                group,
+            },
+        );
+        self.active = active_after_insert(self.active, at, had_tabs);
+        cx.notify();
+    }
+
     /// Shows the tab at `ix` as the user's click on it or ⌃Tab does ([`Self::activate_tab`]): a
     /// canvas's takes the keyboard too, as the canvas the user went to ([`BoardView::take_keyboard`],
     /// CANVAS-UI-2).

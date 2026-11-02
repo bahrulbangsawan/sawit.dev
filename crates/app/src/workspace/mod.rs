@@ -43,7 +43,8 @@ use crate::ssh::{SshEvent, SshHostEvent, SshHostView, SshPanel, SshStore, SshSto
 use crate::states::Placeholder;
 use crate::tab_groups::{group_header, group_stripe, project_name};
 use crate::tabs::{
-    CloseOp, Drawn, Slot, TabFlags, active_after, active_after_move, insert_index, strip, to_close,
+    CloseOp, Drawn, Slot, TabFlags, active_after, active_after_insert, active_after_move,
+    insert_index, strip, to_close,
 };
 use crate::terminal::{Origin, TerminalPanel, ToggleMaximize};
 use crate::tools_page::{ToolsEvent, ToolsPage};

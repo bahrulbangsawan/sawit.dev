@@ -306,15 +306,15 @@ impl Workspace {
                 done(json!({ "tab": self.active }))
             }
             // The canvas of the agent's project ([`agent_project`]), or of the canvas file it
-            // names, brought forward with its project, as on a click on its tab, but with the
-            // keyboard left where the user has it. It answers at once, with the op's own reply:
-            // `{ok: false, error}` when it failed.
+            // names, where it is: the user's tab, project, layout and keyboard stay as they are,
+            // reads included, and a canvas not open yet opens behind the tab on show. It answers
+            // at once, with the op's own reply: `{ok: false, error}` when it failed.
             Command::Canvas { op, file } => {
                 let board = match file {
                     Some(file) => self.agent_canvas_file(file, cx)?,
                     None => {
                         let root = agent_project(&self.roots(cx), agent_folder, self.root(cx));
-                        let board = self.open_canvas_of(root, cx);
+                        let board = self.canvas_of(root, super::canvas::Reach::Quietly, cx);
                         board.ok_or("The canvas didn't open.")?
                     }
                 };

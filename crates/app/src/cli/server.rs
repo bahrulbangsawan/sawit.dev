@@ -278,8 +278,12 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
             (window, None, own)
         }
     };
-    // Commands act on the project asked for: make it the active one.
-    if let Some(project) = &project {
+    // Commands act on the project asked for: make it the active one. Not a canvas op's: agents'
+    // canvas ops leave the user's project, tab and view as they are, and reach the canvas of the
+    // project asked for as of the folder the agent works in.
+    let canvas = matches!(request.command, ControlCommand::Canvas { .. });
+    let (activate, own) = named_project(project, own, canvas);
+    if let Some(project) = &activate {
         workspace.update(cx, |w, cx| w.activate_project_of(project, cx));
     }
     let focus = request.command == ControlCommand::Focus;
@@ -299,6 +303,21 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
         cx.activate(true);
     }
     Ok(answer)
+}
+
+/// For a command that names the project `named` (as its window names it), sent by an agent working
+/// in `own`: the project to make the active one, and the folder the command is for. A canvas op's
+/// named project is its folder, and the user's active project stays; any other command's named
+/// project becomes the active one.
+pub(super) fn named_project(
+    named: Option<PathBuf>,
+    own: Option<PathBuf>,
+    canvas: bool,
+) -> (Option<PathBuf>, Option<PathBuf>) {
+    match (named, canvas) {
+        (Some(named), true) => (None, Some(named)),
+        (named, _) => (named, own),
+    }
 }
 
 /// The window an agent's op on the canvas file `file` goes to, of `windows` and each one's

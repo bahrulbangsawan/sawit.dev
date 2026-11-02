@@ -32,7 +32,8 @@ pub(super) fn browser_route(open: bool, shown: bool, shows_tab: bool) -> Browser
 /// project's dev server, the page's cookies, screenshots and exports are that project's
 /// (final-seams m1), and its canvas is that project's `.nyawit/canvas.sawit`, the one
 /// sawit-mcp edits while the app is closed (Q12). Else the active project's, which is the one it
-/// named, if it named one ([`crate::cli`] makes it active).
+/// named, if it named one ([`crate::cli`] makes it active); a canvas op's named project comes as
+/// its `agent_folder` instead, so that the user's active project stays.
 pub(super) fn agent_project(
     roots: &[PathBuf],
     agent_folder: Option<&Path>,
@@ -189,11 +190,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Result<Entity<BoardView>, String> {
         let kind = canvas_file_kind(&file)?;
-        self.leave_welcome(CENTER_ONLY, cx);
-        if !self.layout.center {
-            self.layout.toggle(Area::Center);
-        }
-        let board = self.open_board_file(file, kind, cx);
+        let board = self.open_board_file(file, kind, super::super::canvas::Reach::Quietly, cx);
         board.ok_or_else(|| "The canvas didn't open.".into())
     }
 

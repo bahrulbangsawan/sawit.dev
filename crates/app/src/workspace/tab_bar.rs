@@ -96,11 +96,21 @@ impl Workspace {
                         None,
                     ),
                 };
+                // A canvas with agents at work on it: a dot in the colour of the latest.
+                let agents = match &tab.item {
+                    PaneItem::Other { view, .. } => (view.clone().downcast::<BoardView>().ok())
+                        .and_then(|board| board.read(cx).agents_at_work(cx)),
+                    _ => None,
+                };
+                let label: SharedString = match agents {
+                    Some(_) => format!("{title}, agents at work").into(),
+                    None => title.clone().into(),
+                };
                 let weak = weak.clone();
                 h_flex()
                     .id(("pane-tab", ix))
                     .role(Role::Tab)
-                    .aria_label(title.clone())
+                    .aria_label(label)
                     .aria_selected(active)
                     .relative()
                     .flex_none()
@@ -130,6 +140,17 @@ impl Workspace {
                     })
                     .when(dirty, |el| {
                         el.child(div().size(px(6.)).rounded_full().bg(cx.theme().foreground))
+                    })
+                    .when_some(agents, |el, colour| {
+                        el.child(
+                            div()
+                                .debug_selector(|| "tab-agents-at-work".into())
+                                .size(px(7.))
+                                .rounded_full()
+                                .border_1()
+                                .border_color(gpui_kit::white())
+                                .bg(colour),
+                        )
                     })
                     .child(if pinned {
                         Button::new(("pin-tab", ix))

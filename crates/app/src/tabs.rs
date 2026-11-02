@@ -136,6 +136,15 @@ pub fn active_after_move(active: usize, from: usize, to: usize) -> usize {
     a
 }
 
+/// Where the active tab is once a tab is inserted at `at` without being shown: the same tab, one
+/// further along when the new one went before it. The first tab of all is the active one.
+pub fn active_after_insert(active: usize, at: usize, had_tabs: bool) -> usize {
+    match had_tabs && at <= active {
+        true => active + 1,
+        false => active,
+    }
+}
+
 /// The project holding `path`: the deepest root it is under.
 pub fn project_of(roots: &[PathBuf], path: &Path) -> Option<PathBuf> {
     roots
@@ -147,6 +156,19 @@ pub fn project_of(roots: &[PathBuf], path: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    /// A tab opened behind the one on show keeps that one on show (an agent's canvas).
+    #[test]
+    fn a_tab_opened_behind_keeps_the_one_on_show() {
+        assert_eq!(super::active_after_insert(2, 5, true), 2);
+        assert_eq!(super::active_after_insert(2, 2, true), 3);
+        assert_eq!(super::active_after_insert(2, 0, true), 3);
+        assert_eq!(
+            super::active_after_insert(0, 0, false),
+            0,
+            "the first tab of all"
+        );
+    }
+
     use std::path::{Path, PathBuf};
 
     use super::{

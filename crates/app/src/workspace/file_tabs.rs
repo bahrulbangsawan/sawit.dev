@@ -62,7 +62,7 @@ impl Workspace {
         // Canvas files open on a canvas (spec D14), which takes the keyboard, as a file editor
         // does once its file has loaded (CANVAS-UI-2).
         if matches!(kind, FileKind::Canvas | FileKind::Excalidraw) {
-            if let Some(board) = self.open_board_file(path, kind, cx) {
+            if let Some(board) = self.open_board_file(path, kind, super::canvas::Reach::Show, cx) {
                 board.update(cx, |board, cx| board.take_keyboard(cx));
             }
             return;
