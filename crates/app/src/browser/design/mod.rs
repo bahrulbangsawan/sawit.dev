@@ -11,7 +11,11 @@ mod colors;
 pub(crate) mod flow;
 mod fonts;
 mod inspect;
+mod rows;
 mod system;
+
+#[cfg(test)]
+mod tests;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -21,7 +25,6 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::*;
 use gpui_kit::*;
-use sawit_core::site_design::color::Rgba;
 use sawit_core::site_design::inspect::StyleInfo;
 use sawit_core::site_design::scan::{AssetKind, AssetRef};
 
@@ -472,158 +475,5 @@ fn copied_note(text: &str) -> String {
         Some((i, _)) => format!("Copied {}…", &line[..i]),
         None if more => format!("Copied {line} …"),
         None => format!("Copied {line}"),
-    }
-}
-
-/// A colour's swatch: the colour over the panel, framed so a colour close to the panel's
-/// still shows its edge.
-fn swatch(c: &Rgba, size: Pixels, cx: &App) -> Div {
-    div()
-        .size(size)
-        .flex_none()
-        .rounded(px(4.))
-        .border_1()
-        .border_color(cx.theme().border)
-        .bg(gpui_kit::rgba(colors::rgba_u32(c)))
-}
-
-/// `#132643`, and its opacity apart (`60%`) when it has one: a hex with alpha is hard to read.
-pub(super) fn hex_and_alpha(c: &Rgba) -> (String, Option<String>) {
-    let hex = format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b);
-    let alpha = (c.a < 0.995).then(|| format!("{}%", (f64::from(c.a) * 100.).round()));
-    (hex, alpha)
-}
-
-/// A row whose value copies on click: `label`, then `value`, with a copy mark that shows on
-/// hover. `copy` is what goes to the clipboard.
-fn copy_row(
-    id: impl Into<ElementId>,
-    label: impl Into<SharedString>,
-    value: impl IntoElement,
-    copy: String,
-    cx: &mut Context<DesignPanel>,
-) -> AnyElement {
-    copy_row_at(id, label, panel::LABEL_WIDTH, value, copy, cx)
-}
-
-/// [`copy_row`] with a label column `label_width` wide, for a section whose names run long
-/// (`primary-foreground`), so its values still start on one edge.
-fn copy_row_at(
-    id: impl Into<ElementId>,
-    label: impl Into<SharedString>,
-    label_width: f32,
-    value: impl IntoElement,
-    copy: String,
-    cx: &mut Context<DesignPanel>,
-) -> AnyElement {
-    let id = id.into();
-    let group: SharedString = format!("copy-{id:?}").into();
-    let theme = cx.theme();
-    h_flex()
-        .id(id)
-        .group(group.clone())
-        .min_h(px(24.))
-        .px_1()
-        .mx(px(-4.))
-        .gap_2()
-        .items_center()
-        .rounded(px(4.))
-        .text_xs()
-        .cursor_pointer()
-        .hover(|el| el.bg(theme.secondary))
-        // The label column, wider for a long name (`primary-foreground`) than for the rest.
-        .child(
-            div()
-                .min_w(px(label_width - 4.))
-                .max_w(px(180.))
-                .flex_none()
-                .truncate()
-                .text_color(theme.muted_foreground)
-                .child(label.into()),
-        )
-        .child(div().flex_1().min_w_0().child(value))
-        .child(
-            div()
-                .flex_none()
-                .invisible()
-                .group_hover(group, |s| s.visible())
-                .child(panel::glyph(Lucide::Copy, cx)),
-        )
-        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-            this.copy(copy.clone(), cx);
-        }))
-        .into_any_element()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{DesignPanel, Segment, copied_note, hex_and_alpha};
-    use crate::browser::panel::PANEL_WIDTH;
-    use gpui_kit::{TestAppContext, VisualTestContext, px, size};
-    use sawit_core::site_design::color;
-
-    /// The five tabs and the rescan button fit the panel's width side by side: none clipped,
-    /// none under another.
-    #[gpui_kit::test]
-    fn the_tabs_fit_the_panel(cx: &mut TestAppContext) {
-        cx.update(gpui_kit::init);
-        let window = cx.open_window(size(px(PANEL_WIDTH), px(600.)), |_, _| DesignPanel::new());
-        let mut cx = VisualTestContext::from_window(window.into(), cx);
-        cx.run_until_parked();
-        let mut right = px(0.);
-        for selector in [
-            "design-tab-inspect",
-            "design-tab-colors",
-            "design-tab-fonts",
-            "design-tab-assets",
-            "design-tab-system",
-        ] {
-            let tab = cx
-                .debug_bounds(selector)
-                .unwrap_or_else(|| panic!("{selector} isn't drawn"));
-            assert!(tab.left() >= right, "{selector} overlaps the tab before it");
-            right = tab.right();
-        }
-        let rescan = cx.debug_bounds("design-rescan").expect("no rescan button");
-        assert!(
-            right <= rescan.left(),
-            "the last tab runs under the rescan button"
-        );
-        assert!(
-            rescan.right() <= px(PANEL_WIDTH),
-            "the rescan button is clipped"
-        );
-    }
-
-    #[test]
-    fn segments_keep_their_order() {
-        let titles: Vec<&str> = Segment::ALL.iter().map(|s| s.title()).collect();
-        assert_eq!(titles, ["Inspect", "Colors", "Fonts", "Assets", "System"]);
-        assert_eq!(Segment::named("Colours"), Some(Segment::Colors));
-        assert_eq!(Segment::named(" system "), Some(Segment::System));
-        assert_eq!(Segment::named("layers"), None);
-        for s in Segment::ALL {
-            assert_eq!(Segment::named(s.name()), Some(s));
-        }
-    }
-
-    /// An alpha hex (`#13264399`) reads as the colour and its opacity apart.
-    #[test]
-    fn alpha_reads_apart_from_the_hex() {
-        let c = color::parse("#13264399").unwrap();
-        assert_eq!(hex_and_alpha(&c), ("#132643".into(), Some("60%".into())));
-        let c = color::parse("rgb(19, 38, 67)").unwrap();
-        assert_eq!(hex_and_alpha(&c), ("#132643".into(), None));
-    }
-
-    #[test]
-    fn the_footer_names_what_was_copied() {
-        assert_eq!(copied_note("#0071e3"), "Copied #0071e3");
-        assert_eq!(copied_note(".a {\n  color: red;\n}"), "Copied .a { …");
-        assert_eq!(
-            copied_note(&"x".repeat(60)),
-            format!("Copied {}…", "x".repeat(48))
-        );
-        assert_eq!(copied_note(""), "Copied");
     }
 }

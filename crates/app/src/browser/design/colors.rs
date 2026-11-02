@@ -9,7 +9,8 @@ use gpui_kit::*;
 use sawit_core::site_design::color::{self, Rgba};
 use sawit_core::site_design::scan::{ColorRole, Scan};
 
-use super::{DesignPanel, hex_and_alpha, swatch};
+use super::DesignPanel;
+use super::rows::{hex_and_alpha, swatch};
 use crate::browser::panel;
 
 /// The group order of the segment.

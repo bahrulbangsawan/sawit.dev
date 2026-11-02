@@ -1,6 +1,9 @@
 //! The Inspect tab: the hovered (or pinned) element's box model, type, colours, layout,
 //! border and effects, states and contrast. Every value copies on click.
 
+mod box_model;
+mod waiting;
+
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::*;
@@ -10,7 +13,10 @@ use sawit_core::site_design::color;
 use sawit_core::site_design::inspect::{StyleInfo, contrast, css_rule};
 use sawit_core::site_design::tailwind::classes;
 
-use super::{DesignEvent, DesignPanel, copy_row, hex_and_alpha, swatch};
+use self::box_model::box_model;
+use self::waiting::waiting;
+use super::rows::{copy_row, hex_and_alpha, swatch};
+use super::{DesignEvent, DesignPanel};
 use crate::browser::panel;
 
 /// `12`, `12.5`: no trailing zeros.
@@ -31,93 +37,6 @@ fn sides(v: &[f64; 4]) -> String {
 /// The ratio as the row shows it: `4.52:1`.
 fn ratio_text(ratio: f64) -> String {
     format!("{:.2}:1", (ratio * 100.).floor() / 100.)
-}
-
-/// The box model's layers, tinted as browsers' inspectors tint them, so the diagram reads
-/// at a glance next to the page's own overlay.
-const MARGIN: u32 = 0xf6b26b40;
-const BORDER: u32 = 0xffe59950;
-const PADDING: u32 = 0x93c47d40;
-const CONTENT: u32 = 0x6fa8dc40;
-
-/// A nested box of the diagram: its name in the corner, its four sides' numbers around `inner`.
-fn layer(title: &'static str, v: [f64; 4], tint: u32, inner: impl IntoElement, cx: &App) -> Div {
-    let muted = cx.theme().muted_foreground;
-    let n = move |x: f64| {
-        div()
-            .text_size(px(11.))
-            .line_height(px(14.))
-            .text_color(if x == 0. {
-                muted
-            } else {
-                cx.theme().foreground
-            })
-            .child(if x == 0. { "–".to_string() } else { num(x) })
-    };
-    v_flex()
-        .w_full()
-        .px_1p5()
-        .pb_1()
-        .gap_0p5()
-        .items_center()
-        .rounded(px(4.))
-        .bg(gpui_kit::rgba(tint))
-        .child(
-            h_flex()
-                .w_full()
-                .h(px(14.))
-                .child(
-                    div()
-                        .flex_1()
-                        .text_size(px(11.))
-                        .line_height(px(14.))
-                        .text_color(muted)
-                        .child(title),
-                )
-                .child(n(v[0]))
-                .child(div().flex_1()),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .gap_1p5()
-                .items_center()
-                .child(div().w(px(22.)).flex().justify_center().child(n(v[3])))
-                .child(div().flex_1().min_w_0().child(inner))
-                .child(div().w(px(22.)).flex().justify_center().child(n(v[1]))),
-        )
-        .child(n(v[2]))
-}
-
-fn box_model(info: &StyleInfo, cx: &App) -> impl IntoElement {
-    let content = div()
-        .w_full()
-        .h(px(26.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(3.))
-        .bg(gpui_kit::rgba(CONTENT))
-        .text_xs()
-        .child(format!(
-            "{} × {}",
-            num(info.rect.width),
-            num(info.rect.height)
-        ));
-    let b = &info.box_model;
-    layer(
-        "margin",
-        b.margin,
-        MARGIN,
-        layer(
-            "border",
-            b.border,
-            BORDER,
-            layer("padding", b.padding, PADDING, content, cx),
-            cx,
-        ),
-        cx,
-    )
 }
 
 /// A value with its colour's swatch: `■ #132643 60%`.
@@ -167,111 +86,6 @@ fn level(label: &'static str, pass: bool, cx: &App) -> impl IntoElement {
         .text_color(fg)
         .child(if pass { "✓" } else { "✕" })
         .child(label)
-}
-
-/// The tab with nothing inspected: how to start, the keys, and the element pinned last.
-fn waiting(
-    last: Option<&StyleInfo>,
-    inspecting: bool,
-    cx: &mut Context<DesignPanel>,
-) -> AnyElement {
-    let muted = cx.theme().muted_foreground;
-    let line = |keys: Vec<Div>, what: &'static str| {
-        h_flex()
-            .gap_1()
-            .items_center()
-            .text_xs()
-            .children(keys)
-            .child(div().pl_1().text_color(muted).child(what))
-    };
-    let action = (!inspecting).then(|| {
-        Button::new("design-inspect-again")
-            .outline()
-            .xsmall()
-            .icon(Lucide::MousePointer2)
-            .label("Inspect the page")
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.set_segment(super::Segment::Inspect, cx);
-            }))
-            .into_any_element()
-    });
-    v_flex()
-        .gap_4()
-        .child(panel::empty(
-            if inspecting {
-                "Point at an element"
-            } else {
-                "Inspecting is off"
-            },
-            if inspecting {
-                "Hover the page to read an element's box, type, colors and layout here. \
-                 Click it to keep it while you look."
-            } else {
-                "Esc stopped it. Inspect again to read elements as you hover them."
-            },
-            action,
-            cx,
-        ))
-        .children(last.map(|info| {
-            let selector = info.selector.clone();
-            let again = info.selector.clone();
-            panel::section(
-                "Pinned last",
-                None,
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_xs()
-                            .font_family(cx.theme().mono_font_family.clone())
-                            .child(info.label.clone()),
-                    )
-                    .child(
-                        Button::new("design-last-show")
-                            .ghost()
-                            .xsmall()
-                            .icon(Lucide::Eye)
-                            .label("Show")
-                            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
-                                cx.emit(DesignEvent::Flash(selector.clone()));
-                            })),
-                    )
-                    .child(
-                        Button::new("design-last-pin")
-                            .ghost()
-                            .xsmall()
-                            .icon(Lucide::Pin)
-                            .label("Pin")
-                            .disabled(!inspecting)
-                            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
-                                cx.emit(DesignEvent::Pin(again.clone()));
-                            })),
-                    ),
-                cx,
-            )
-        }))
-        .child(panel::section(
-            "Keys",
-            None,
-            v_flex()
-                .gap_1p5()
-                .child(line(vec![panel::key("Click", cx)], "Pin the element"))
-                .child(line(
-                    vec![panel::key("⌥", cx)],
-                    "Hold over another to measure the gap",
-                ))
-                .child(line(
-                    vec![panel::key("↑", cx), panel::key("↓", cx)],
-                    "Walk to the parent or back to the child",
-                ))
-                .child(line(vec![panel::key("Esc", cx)], "Stop inspecting")),
-            cx,
-        ))
-        .into_any_element()
 }
 
 pub(super) fn render(

@@ -2,17 +2,20 @@
 //! ramps and semantic colours, type, spacing, radius, shadows, breakpoints and the page's own
 //! variables. Every value copies on click.
 
-use gpui_kit::assets::IconName as Lucide;
-use gpui_kit::component::button::*;
-use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::progress::Progress;
+mod export;
+
+#[cfg(test)]
+mod tests;
+
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::site_design::tokens::Tokens;
 
+use self::export::export_block;
 use super::colors::rgba_u32;
-use super::{DesignEvent, DesignPanel, ExportShown, copy_row, copy_row_at, hex_and_alpha, swatch};
+use super::rows::{copy_row, copy_row_at, hex_and_alpha, swatch};
+use super::{DesignPanel, ExportShown};
 use crate::browser::panel;
 
 /// The largest size a type-scale line is drawn at.
@@ -23,149 +26,6 @@ const SEMANTIC_LABEL_WIDTH: f32 = 140.;
 const STEPS: [&str; 11] = [
     "50", "100", "200", "300", "400", "500", "600", "700", "800", "900", "950",
 ];
-
-/// What the export block says.
-pub(super) fn export_lines(e: &ExportShown) -> Vec<String> {
-    match &e.outcome {
-        None if e.total == 0 => vec!["Reading the page…".into()],
-        None => vec![format!("Downloading assets… {} / {}", e.done, e.total)],
-        Some(Err(err)) => vec![err.clone()],
-        Some(Ok(done)) => {
-            let mut lines = vec![format!(
-                "Exported {} file{} to {}",
-                done.files,
-                if done.files == 1 { "" } else { "s" },
-                e.folder.display()
-            )];
-            if done.failed > 0 {
-                lines.push(format!(
-                    "{} of {} assets couldn't be downloaded",
-                    done.failed,
-                    e.total.saturating_sub(done.skipped_videos)
-                ));
-            }
-            match done.skipped_videos {
-                0 => {}
-                1 => lines.push("1 video wasn't included".into()),
-                n => lines.push(format!("{n} videos weren't included")),
-            }
-            if let Some(err) = &done.screenshot_error {
-                lines.push(format!("No screenshot: {err}"));
-            }
-            lines
-        }
-    }
-}
-
-/// The export: what it writes, the button, its progress and where it went.
-fn export_block(
-    export: Option<&ExportShown>,
-    include_videos: bool,
-    cx: &mut Context<DesignPanel>,
-) -> impl IntoElement {
-    let theme = cx.theme();
-    let muted = theme.muted_foreground;
-    let running = export.is_some_and(|e| e.outcome.is_none());
-    let finished = export.and_then(|e| match &e.outcome {
-        Some(Ok(_)) => Some(e.folder.clone()),
-        _ => None,
-    });
-    let progress = export
-        .filter(|e| e.outcome.is_none() && e.total > 0)
-        .map(|e| e.done as f32 / e.total as f32 * 100.);
-    v_flex()
-        .gap_3()
-        .p_3()
-        .rounded(theme.radius)
-        .border_1()
-        .border_color(theme.border)
-        .child(
-            v_flex()
-                .gap_1()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child("Export the design system"),
-                )
-                .child(div().text_xs().text_color(muted).child(
-                    "DESIGN.md, DTCG tokens, a Tailwind v4 theme, shadcn/ui variables, sample \
-                     components and the assets, in the project's folder:",
-                ))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .font_family(theme.mono_font_family.clone())
-                        .child(".nyawit/design/<host>/"),
-                ),
-        )
-        .child(
-            h_flex()
-                .gap_3()
-                .items_center()
-                .child(
-                    Button::new("design-export")
-                        .primary()
-                        .small()
-                        .icon(Lucide::Download)
-                        .label(if running { "Exporting…" } else { "Export" })
-                        .loading(running)
-                        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
-                            cx.emit(DesignEvent::Export { include_videos });
-                        })),
-                )
-                .child(
-                    Checkbox::new("design-export-videos")
-                        .label("Include videos")
-                        .checked(include_videos)
-                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                            this.include_videos = *checked;
-                            cx.notify();
-                        })),
-                ),
-        )
-        .children(progress.map(|value| {
-            Progress::new("design-export-progress")
-                .value(value)
-                .accessibility_label("Export progress")
-        }))
-        .children(export.map(|e| {
-            v_flex().gap_0p5().children(
-                export_lines(e)
-                    .into_iter()
-                    .map(|l| div().text_xs().text_color(muted).child(l)),
-            )
-        }))
-        .when_some(finished, |el, folder| {
-            let reveal = folder.join("DESIGN.md");
-            let path = folder.display().to_string();
-            el.child(
-                h_flex()
-                    .gap_1()
-                    .child(
-                        Button::new("design-export-reveal")
-                            .outline()
-                            .xsmall()
-                            .icon(Lucide::FolderOpen)
-                            .label("Reveal in Finder")
-                            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
-                                cx.emit(DesignEvent::Reveal(reveal.clone()));
-                            })),
-                    )
-                    .child(
-                        Button::new("design-export-copy")
-                            .outline()
-                            .xsmall()
-                            .icon(Lucide::Copy)
-                            .label("Copy path")
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.copy(path.clone(), cx);
-                            })),
-                    ),
-            )
-        })
-}
 
 /// The radius a sample is drawn with, capped so a pill stays a pill in 28 px.
 fn sample_radius(value: &str) -> Pixels {
@@ -502,73 +362,4 @@ pub(super) fn render(
                 .into_any_element(),
             cx,
         ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{export_lines, sample_radius};
-    use crate::browser::design::{ExportDone, ExportShown};
-    use gpui_kit::px;
-    use std::path::PathBuf;
-
-    fn shown(
-        outcome: Option<Result<ExportDone, String>>,
-        done: usize,
-        total: usize,
-    ) -> ExportShown {
-        ExportShown {
-            folder: PathBuf::from("/p/.nyawit/design/a.dev"),
-            done,
-            total,
-            outcome,
-        }
-    }
-
-    #[test]
-    fn export_text_follows_the_job() {
-        assert_eq!(
-            export_lines(&shown(None, 18, 40)),
-            ["Downloading assets… 18 / 40"]
-        );
-        let done = ExportDone {
-            files: 30,
-            failed: 12,
-            skipped_videos: 0,
-            screenshot_error: Some("off screen".into()),
-        };
-        let lines = export_lines(&shown(Some(Ok(done)), 40, 40));
-        assert_eq!(lines[0], "Exported 30 files to /p/.nyawit/design/a.dev");
-        assert_eq!(lines[1], "12 of 40 assets couldn't be downloaded");
-        assert_eq!(lines[2], "No screenshot: off screen");
-        // Skipped videos are said apart, not counted as failures.
-        let done = ExportDone {
-            files: 30,
-            failed: 0,
-            skipped_videos: 3,
-            screenshot_error: None,
-        };
-        let lines = export_lines(&shown(Some(Ok(done)), 40, 40));
-        assert_eq!(lines[1..], ["3 videos weren't included"]);
-        let done = ExportDone {
-            files: 30,
-            failed: 2,
-            skipped_videos: 1,
-            screenshot_error: None,
-        };
-        let lines = export_lines(&shown(Some(Ok(done)), 40, 40));
-        assert_eq!(
-            lines[1..],
-            [
-                "2 of 39 assets couldn't be downloaded",
-                "1 video wasn't included"
-            ]
-        );
-    }
-
-    #[test]
-    fn radius_samples_stay_readable() {
-        assert_eq!(sample_radius("6px"), px(6.));
-        assert_eq!(sample_radius("980px"), px(14.));
-        assert_eq!(sample_radius("50%"), px(14.));
-    }
 }
