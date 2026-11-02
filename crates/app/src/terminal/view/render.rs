@@ -8,7 +8,7 @@ use gpui_kit::*;
 use sawit_core::terminal::{GridSize, MouseAction, MouseButton as TermButton};
 
 use super::mouse::{RightClick, pointer_moved_for_drop, right_click_target, to_term_button};
-use super::paint::{FONT_SIZE, Painter, cell_size, hsla, paint_snapshot};
+use super::paint::{FONT_SIZE, Painter, cell_size, hsla, paint_screen};
 use super::{PAD_X, TerminalEvent, TerminalView};
 use crate::files::DraggedFile;
 
@@ -19,6 +19,7 @@ impl Render for TerminalView {
         let session = self.session.clone();
         let palette = self.palette.clone();
         let layout = self.layout.clone();
+        let frame = self.frame.clone();
         let focused = self.focus.is_focused(window);
         if focused {
             self.keyboard_at = Some(Instant::now());
@@ -173,7 +174,6 @@ impl Render for TerminalView {
                                 let _ = this.update(cx, |this, cx| this.finish_selection(cx));
                             }
                         });
-                        let snap = session.snapshot(&palette);
                         window.paint_quad(fill(bounds, hsla(palette.background)));
                         let painter = Painter {
                             palette: &palette,
@@ -183,7 +183,7 @@ impl Render for TerminalView {
                             focused,
                             selection,
                         };
-                        paint_snapshot(&snap, &painter, window, cx);
+                        paint_screen(&mut frame.borrow_mut(), &session, &painter, window, cx);
                         if exited {
                             let note = "[process exited]";
                             let run = TextRun {

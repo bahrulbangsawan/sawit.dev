@@ -1,9 +1,15 @@
-//! The terminal's key bindings, and where its right-clicks go.
+//! The terminal's key bindings, where its right-clicks go, and how little a frame redoes.
+
+use std::time::{Duration, Instant};
 
 use gpui_kit::{
-    App, AppContext as _, Context, FocusHandle, IntoElement, KeyContext, KeyDownEvent, Keystroke,
-    ParentElement as _, Render, Styled as _, TestAppContext, Window, div, prelude::*,
+    App, AppContext as _, Bounds, Context, Entity, FocusHandle, IntoElement, KeyContext,
+    KeyDownEvent, Keystroke, ParentElement as _, Render, Styled as _, TestAppContext, Window,
+    WindowBounds, WindowOptions, div, prelude::*, px, size,
 };
+use sawit_core::terminal::{Command, GridSize, SelectKind, Session};
+
+use super::TerminalView;
 
 /// Keys a shell or TUI (Claude Code, vim, fzf, readline) needs.
 const SHELL_KEYS: &[&str] = &[
@@ -267,4 +273,68 @@ fn right_clicks_open_the_menu_unless_sent_to_the_pane() {
     assert!(matches!(right_click_target(true, false, true), Program));
     assert!(matches!(right_click_target(true, false, false), Nothing));
     assert!(matches!(right_click_target(true, true, true), Menu));
+}
+
+/// A terminal drawn again with its screen unchanged makes no row again (another pane's
+/// output redraws the window), and one whose selection moves makes again only the rows the
+/// selection left and reached.
+#[gpui_kit::test]
+fn a_frame_makes_again_only_the_rows_that_changed(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    cx.executor().allow_parking();
+    let cmd = Command {
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), "printf 'one\\ntwo\\nthree'; sleep 30".into()],
+        ..Command::default()
+    };
+    let grid = GridSize {
+        cols: 80,
+        rows: 10,
+        cell_width: 8,
+        cell_height: 17,
+    };
+    let (session, events) = Session::spawn(cmd, grid).unwrap();
+    let (_, view) = cx.update(|cx| {
+        let bounds = Bounds::centered(None, size(px(800.), px(400.)), cx);
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        };
+        gpui_kit::open_window(options, cx, |_, cx| {
+            cx.new(|cx| TerminalView::new(session, events, "rows", cx))
+        })
+        .unwrap()
+    });
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !cx.update(|cx| view.read(cx).text_tail(5).contains("three")) {
+        assert!(Instant::now() < deadline, "the text was never drawn");
+        std::thread::sleep(Duration::from_millis(20));
+        cx.run_until_parked();
+    }
+    let redraw = |cx: &mut TestAppContext, view: &Entity<TerminalView>, change: fn(&Session)| {
+        cx.update(|cx| {
+            view.update(cx, |v, cx| {
+                change(&v.session);
+                cx.notify();
+            })
+        });
+        cx.update(|cx| view.read(cx).frame.borrow().made)
+    };
+    let drawn = redraw(cx, &view, |_| {});
+    assert!(drawn > 0, "the screen was never drawn");
+    assert_eq!(
+        redraw(cx, &view, |_| {}),
+        drawn,
+        "an unchanged screen made rows again"
+    );
+    assert_eq!(
+        redraw(cx, &view, |s| s.select_start(0, 1, false, SelectKind::Line)),
+        drawn + 1,
+        "selecting a line made other rows again"
+    );
+    assert_eq!(
+        redraw(cx, &view, |s| s.select_start(0, 2, false, SelectKind::Line)),
+        drawn + 3,
+        "moving the selection a line down made other rows again"
+    );
 }

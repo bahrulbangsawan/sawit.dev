@@ -4,6 +4,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use alacritty_terminal::event::{Event, EventListener};
@@ -48,10 +49,12 @@ impl Session {
         let (tx, rx) = mpsc::unbounded();
         let pty_slot = Arc::new(OnceLock::new());
         let size_cell = Arc::new(FairMutex::new(size));
+        let changes = Arc::new(AtomicU64::new(0));
         let listener = Listener {
             events: tx,
             pty: pty_slot.clone(),
             size: size_cell.clone(),
+            changes: changes.clone(),
         };
 
         let mut env = cmd.env.clone();
@@ -104,6 +107,7 @@ impl Session {
                 term,
                 pty: sender,
                 size: size_cell,
+                changes,
                 #[cfg(unix)]
                 foreground,
             },
@@ -163,6 +167,8 @@ pub(super) struct Listener {
     events: mpsc::UnboundedSender<TermEvent>,
     pty: Arc<OnceLock<EventLoopSender>>,
     size: Arc<FairMutex<GridSize>>,
+    /// The session's count of screen changes, moved on for each batch of output.
+    changes: Arc<AtomicU64>,
 }
 
 impl Listener {
@@ -176,7 +182,12 @@ impl Listener {
 impl EventListener for Listener {
     fn send_event(&self, event: Event) {
         let forwarded = match event {
-            Event::Wakeup => Some(TermEvent::Wakeup),
+            Event::Wakeup => {
+                // The event loop says so once the output is on the grid: counted before the
+                // app hears of it, so the frame it draws reads the screen again.
+                self.changes.fetch_add(1, Ordering::AcqRel);
+                Some(TermEvent::Wakeup)
+            }
             Event::Title(t) => Some(TermEvent::Title(t)),
             Event::ResetTitle => Some(TermEvent::Title(String::new())),
             Event::Bell => Some(TermEvent::Bell),

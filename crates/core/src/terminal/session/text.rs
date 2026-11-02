@@ -39,6 +39,7 @@ impl Session {
             SelectKind::Line => SelectionType::Lines,
         };
         term.selection = Some(Selection::new(ty, point, side(right_half)));
+        self.changed();
     }
 
     /// Moves the end of the selection to screen cell (`col`, `row`).
@@ -47,11 +48,14 @@ impl Session {
         let point = grid_point(&term, col, row);
         if let Some(selection) = term.selection.as_mut() {
             selection.update(point, side(right_half));
+            self.changed();
         }
     }
 
     pub fn clear_selection(&self) {
-        self.term.lock().selection = None;
+        if self.term.lock().selection.take().is_some() {
+            self.changed();
+        }
     }
 
     /// The selected text, if anything is selected.

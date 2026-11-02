@@ -7,6 +7,7 @@ mod text;
 
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use alacritty_terminal::event::WindowSize;
 use alacritty_terminal::event_loop::{EventLoopSender, Msg};
@@ -59,6 +60,9 @@ pub struct Session {
     term: Arc<FairMutex<Term<Listener>>>,
     pty: EventLoopSender,
     size: Arc<FairMutex<GridSize>>,
+    /// What changed the screen, counted: output (by the listener), resizes, scrolls and
+    /// selections ([`Session::changes`]).
+    changes: Arc<AtomicU64>,
     /// The program's pid and a handle on the PTY master, to ask whether the
     /// program itself (not a job it started) is in the foreground.
     #[cfg(unix)]
@@ -66,6 +70,18 @@ pub struct Session {
 }
 
 impl Session {
+    /// A count that moves on whenever what [`Session::snapshot`] shows may have changed: the
+    /// program's output, a resize, a scroll or the selection. Read before a snapshot, it says
+    /// whether that snapshot is still the screen: while the count stays, so does the screen.
+    pub fn changes(&self) -> u64 {
+        self.changes.load(Ordering::Acquire)
+    }
+
+    /// Counts a change to what a snapshot shows, made here rather than by output.
+    fn changed(&self) {
+        self.changes.fetch_add(1, Ordering::AcqRel);
+    }
+
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
         let _ = self.pty.send(Msg::Input(bytes.into()));
     }
@@ -89,6 +105,7 @@ impl Session {
             *current = size;
         }
         self.term.lock().resize(size);
+        self.changed();
         let _ = self.pty.send(Msg::Resize(size.into()));
     }
 
@@ -99,10 +116,15 @@ impl Session {
     /// Scrolls the view into history (`delta > 0` goes up).
     pub fn scroll(&self, delta: i32) {
         self.term.lock().scroll_display(Scroll::Delta(delta));
+        self.changed();
     }
 
     pub fn scroll_to_bottom(&self) {
-        self.term.lock().scroll_display(Scroll::Bottom);
+        let mut term = self.term.lock();
+        if term.grid().display_offset() != 0 {
+            term.scroll_display(Scroll::Bottom);
+            self.changed();
+        }
     }
 
     /// Input-relevant modes, without building a full snapshot.

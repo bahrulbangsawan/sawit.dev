@@ -9,7 +9,7 @@ mod mouse;
 mod paint;
 mod render;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -23,7 +23,7 @@ use sawit_core::terminal::{
 
 pub(super) use keys::bindings;
 pub(super) use paint::cell_size;
-use paint::hsla;
+use paint::{FrameCache, hsla};
 
 /// How long the "Copied to clipboard" toast stays up.
 const TOAST: Duration = Duration::from_millis(1400);
@@ -72,6 +72,8 @@ pub struct TerminalView {
     pub send_right_clicks: bool,
     /// Grid origin and cell size from the last paint, for mouse mapping.
     layout: Rc<Cell<Option<GridLayout>>>,
+    /// What the last paint drew, to draw the next frame from.
+    frame: Rc<RefCell<FrameCache>>,
     pressed: Option<TermButton>,
     /// The left button is down and dragging extends the selection.
     selecting: bool,
@@ -157,6 +159,7 @@ impl TerminalView {
             job: None,
             send_right_clicks: false,
             layout: Rc::new(Cell::new(None)),
+            frame: Rc::default(),
             pressed: None,
             selecting: false,
             scroll: ScrollAccumulator::default(),
@@ -315,3 +318,5 @@ impl Focusable for TerminalView {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod timing;

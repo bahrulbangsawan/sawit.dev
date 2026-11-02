@@ -146,6 +146,54 @@ fn session_echoes_input_and_resizes() {
     assert_eq!((snap.cols, snap.lines.len()), (30, 6));
 }
 
+/// The change count moves on with output, a resize, a scroll and the selection, and stays as
+/// it is while none of them happens: a snapshot taken at a count is the screen until it moves.
+#[test]
+fn changes_count_what_a_snapshot_shows() {
+    let size = GridSize {
+        cols: 20,
+        rows: 4,
+        cell_width: 8,
+        cell_height: 16,
+    };
+    let cmd = Command {
+        program: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            "printf 'one\\ntwo\\nthree\\nfour\\nfive'; sleep 5".into(),
+        ],
+        ..Command::default()
+    };
+    let (session, _events) = Session::spawn(cmd, size).unwrap();
+    wait_for(&session, &Palette::default(), "five");
+    let output = session.changes();
+    assert!(output > 0, "the output wasn't counted");
+    session.scroll_to_bottom();
+    session.clear_selection();
+    session.resize(size);
+    assert_eq!(
+        session.changes(),
+        output,
+        "the count moved on with nothing changed"
+    );
+    let mut last = output;
+    let mut moves_on = |what: &str| {
+        let now = session.changes();
+        assert!(now > last, "{what} wasn't counted");
+        last = now;
+    };
+    session.select_start(0, 0, false, SelectKind::Line);
+    moves_on("a selection");
+    session.clear_selection();
+    moves_on("clearing the selection");
+    session.scroll(1);
+    moves_on("a scroll");
+    session.scroll_to_bottom();
+    moves_on("scrolling back down");
+    session.resize(GridSize { cols: 30, ..size });
+    moves_on("a resize");
+}
+
 #[test]
 fn session_reports_exit() {
     let size = GridSize {
