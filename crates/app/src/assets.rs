@@ -28,6 +28,10 @@ gpui_kit::assets::icon_assets!(
         FileText,
         FileSpreadsheet,
         Upload,
+        // The footer's Pages menu and the schema diagram's Auto Layout; GitHub repository rows.
+        LayoutGrid,
+        Archive,
+        GitFork,
         Eraser,
         Film,
         Minus,
@@ -383,5 +387,56 @@ impl AssetSource for AppAssets {
         all.sort();
         all.dedup();
         Ok(all)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::AssetSource as _;
+    use gpui_kit::assets::IconName;
+
+    use super::AppAssets;
+
+    /// Every icon the app's code names (`Lucide::…` or `IconName::…`) is one the app embeds: the
+    /// default set or the extras above. One that isn't draws nothing, and an icon-only button
+    /// with nothing drawn is a button nobody can see.
+    #[test]
+    fn every_icon_the_app_names_is_embedded() {
+        let mut names = std::collections::BTreeSet::new();
+        let mut dirs = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    for prefix in ["Lucide::", "IconName::"] {
+                        for (at, _) in text.match_indices(prefix) {
+                            let name: String = text[at + prefix.len()..]
+                                .chars()
+                                .take_while(|c| c.is_ascii_alphanumeric())
+                                .collect();
+                            if name.starts_with(|c: char| c.is_ascii_uppercase()) {
+                                names.insert(name);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            names.len() > 50,
+            "found the icons the code names: {}",
+            names.len()
+        );
+        let missing: Vec<_> = names
+            .iter()
+            .filter(|name| {
+                let icon = IconName::ALL.iter().find(|i| format!("{i:?}") == **name);
+                icon.is_some_and(|i| !matches!(AppAssets.load(&i.path()), Ok(Some(_))))
+            })
+            .collect();
+        assert!(missing.is_empty(), "named but not embedded: {missing:?}");
     }
 }
