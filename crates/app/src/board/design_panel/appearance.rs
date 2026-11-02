@@ -12,8 +12,8 @@ use gpui_kit::*;
 use sawit_board::design::{DesignSelection, Mixed};
 use serde_json::{Value, json};
 
+use super::controls::{icon_button, row, section};
 use super::number_field::NumberField;
-use super::{icon_button, row, section};
 use crate::board::BoardView;
 use crate::board::option_icons;
 

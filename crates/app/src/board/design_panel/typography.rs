@@ -23,8 +23,8 @@ use sawit_board::design::typography::{families, styles};
 use sawit_board::design::{DesignSelection, Mixed};
 use serde_json::{Value, json};
 
+use super::controls::{Choices, choice_menu, guarded, icon_button, on_click_edit, row, section};
 use super::number_field::{NumberField, Rule, TextField};
-use super::{Choices, choice_menu, guarded, icon_button, on_click_edit, row, section};
 use crate::board::BoardView;
 
 /// The font size field's picture.

@@ -19,8 +19,8 @@ use sawit_board::design::layout::{add_layout, align_cell, remove_layout};
 use sawit_board::design::{DesignSelection, Edit, Mixed};
 use serde_json::{Value, json};
 
+use super::controls::{icon_button, row, section, set_props};
 use super::number_field::NumberField;
-use super::{icon_button, row, section, set_props};
 use crate::board::BoardView;
 use crate::board::option_icons;
 
