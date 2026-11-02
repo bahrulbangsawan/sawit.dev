@@ -35,11 +35,11 @@ fn current_page_comes_first() {
         at("http://a/1", 2),
     ];
     assert_eq!(
-        group_order("http://a/2", &items),
+        group_order("http://a/2", items.iter().map(|a| a.url.as_str())),
         ["http://a/2", "http://a/1"]
     );
     assert_eq!(
-        group_order("http://a/9#x", &items),
+        group_order("http://a/9#x", items.iter().map(|a| a.url.as_str())),
         ["http://a/1", "http://a/2"]
     );
 }

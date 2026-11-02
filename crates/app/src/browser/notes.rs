@@ -66,7 +66,7 @@ impl BrowserView {
             ViewportMode::Fixed { name, .. } => name.clone(),
             ViewportMode::Responsive => None,
         };
-        let groups: Vec<PageGroup> = group_order(&url, &items)
+        let groups: Vec<PageGroup> = group_order(&url, items.iter().map(|a| a.url.as_str()))
             .into_iter()
             .map(|key| {
                 // Another page's title as it was when its first note was made.

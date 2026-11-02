@@ -184,12 +184,16 @@ pub(super) fn padded_rect(r: &Rect, viewport: (u32, u32), pad: f64) -> (f64, f64
     (x0, y0, x1 - x0, y1 - y0)
 }
 
-/// Page keys: `current` first, then in the order they were first annotated.
-pub(super) fn group_order(current: &str, items: &[Annotation]) -> Vec<String> {
+/// The page keys of the notes at `urls`: `current` first, then in the order they were first
+/// annotated.
+pub(super) fn group_order<'a>(
+    current: &str,
+    urls: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
     let current = page_key(current);
     let mut keys: Vec<String> = Vec::new();
-    for a in items {
-        let key = page_key(&a.url);
+    for url in urls {
+        let key = page_key(url);
         if !keys.iter().any(|k| k == key) {
             keys.push(key.to_string());
         }

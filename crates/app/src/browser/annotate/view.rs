@@ -8,7 +8,7 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sawit_core::annotations::{Annotation, page_key};
+use sawit_core::annotations::page_key;
 
 use super::{AnnotateEvent, AnnotatePanel, Picking, Row, group_order};
 use crate::browser::panel;
@@ -289,8 +289,8 @@ impl AnnotatePanel {
 
 impl Render for AnnotatePanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let items: Vec<Annotation> = self.rows.iter().map(|r| r.annotation.clone()).collect();
-        let groups = group_order(&self.current, &items);
+        let urls = self.rows.iter().map(|r| r.annotation.url.as_str());
+        let groups = group_order(&self.current, urls);
         let list = if self.rows.is_empty() {
             self.empty_state(window, cx).into_any_element()
         } else {
@@ -299,8 +299,8 @@ impl Render for AnnotatePanel {
                 let title = if key == page_key(&self.current) {
                     self.title.clone()
                 } else {
-                    items
-                        .iter()
+                    (self.rows.iter())
+                        .map(|r| &r.annotation)
                         .find(|a| page_key(&a.url) == key)
                         .map(|a| a.title.clone())
                         .unwrap_or_default()
