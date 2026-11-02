@@ -46,19 +46,15 @@ pub fn list_dir(dir: &Path) -> Result<Vec<Entry>> {
             if HIDDEN.contains(&name.as_str()) {
                 return None;
             }
-            let is_dir = e.file_type().ok()?.is_dir() || e.path().is_dir();
-            Some(Entry {
-                name,
-                path: e.path(),
-                is_dir,
-            })
+            let kind = e.file_type().ok()?;
+            let path = e.path();
+            // A link to a folder lists as a folder; nothing else needs following.
+            let is_dir = kind.is_dir() || (kind.is_symlink() && path.is_dir());
+            Some(Entry { name, path, is_dir })
         })
         .collect();
-    entries.sort_by(|a, b| {
-        b.is_dir
-            .cmp(&a.is_dir)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
+    // Each name lowercased once, not twice per comparison.
+    entries.sort_by_cached_key(|e| (!e.is_dir, e.name.to_lowercase()));
     Ok(entries)
 }
 
