@@ -81,11 +81,20 @@ pub const TOP_MENUS: &[&str] = &[
 /// under the policy as the module's docs describe. Checks follow the open file's view, so build
 /// it again when that changes.
 pub fn main_menu(s: &Session) -> Vec<MenuNode> {
+    let mut menu = MAIN_MENU.clone();
+    fill(s, &mut menu);
+    menu
+}
+
+/// The main menu as the catalog and the policy lay it out, the same on every canvas: worked out
+/// once, as that walks the whole catalog for each menu and submenu. [`main_menu`] fills in what
+/// its items are on a canvas.
+static MAIN_MENU: LazyLock<Vec<MenuNode>> = LazyLock::new(|| {
     TOP_MENUS
         .iter()
-        .filter_map(|top| submenu(s, top, top))
+        .filter_map(|top| submenu(top, top))
         .collect()
-}
+});
 
 /// The context menu: the spec's list for the layers selected in `s`, or for the empty canvas when
 /// none is. Show/Hide and Lock/Unlock say what the engine's toggles would do to the selection.
@@ -195,24 +204,44 @@ const ON_EMPTY_CANVAS: &[(&str, &str)] = &[
     ("view.toggleUi", "Show/Hide UI"),
 ];
 
-/// An item for command `id` called `label`, enabled while the command can run and applies to
-/// what the canvas holds now ([`applies`]).
-fn item(s: &Session, id: &'static str, label: &str) -> MenuNode {
+/// An item for command `id` called `label` as the menus lay it out: unchecked and disabled until
+/// [`fill`] says what it is on a canvas.
+fn item(id: &'static str, label: &str) -> MenuNode {
     MenuNode::Item {
         id,
         label: label.to_string(),
         shortcut: shortcut_label(id),
-        checked: checked(s, id),
-        enabled: available(id) && applies(s, id),
+        checked: None,
+        enabled: false,
     }
 }
 
-/// An item for each of the (id, label) pairs `entries`.
+/// An item for each of the (id, label) pairs `entries`, as it is on the canvas `s`.
 fn commands(s: &Session, entries: &[(&'static str, &str)]) -> Vec<MenuNode> {
-    entries
-        .iter()
-        .map(|&(id, label)| item(s, id, label))
-        .collect()
+    let mut items: Vec<MenuNode> = entries.iter().map(|&(id, label)| item(id, label)).collect();
+    fill(s, &mut items);
+    items
+}
+
+/// Gives each item among `nodes`, however deep, what it is on the canvas `s`: its check mark, and
+/// whether it is enabled, which it is while the command can run and applies to what the canvas
+/// holds now ([`applies`]).
+fn fill(s: &Session, nodes: &mut [MenuNode]) {
+    for node in nodes {
+        match node {
+            MenuNode::Item {
+                id,
+                checked: mark,
+                enabled,
+                ..
+            } => {
+                *mark = checked(s, id);
+                *enabled = available(id) && applies(s, id);
+            }
+            MenuNode::Submenu { children, .. } => fill(s, children),
+            MenuNode::Separator => {}
+        }
+    }
 }
 
 /// Whether every selected layer is shown, and whether every one is locked; `None` when no layer
@@ -238,7 +267,7 @@ fn selection_state(s: &Session) -> Option<(bool, bool)> {
 /// The submenu `label` of the catalog menu `path` (`Edit`, `Edit/Copy as`): the shown entries of
 /// that path and, where the first of each lies, the submenus below it. `None` when nothing in it
 /// is shown.
-fn submenu(s: &Session, path: &str, label: &str) -> Option<MenuNode> {
+fn submenu(path: &str, label: &str) -> Option<MenuNode> {
     let mut children = Vec::new();
     let mut nested: Vec<&str> = Vec::new();
     for entry in MENU
@@ -249,13 +278,13 @@ fn submenu(s: &Session, path: &str, label: &str) -> Option<MenuNode> {
             children.push(if entry.label == SEP {
                 MenuNode::Separator
             } else {
-                item(s, entry.id, entry.label)
+                item(entry.id, entry.label)
             });
         } else if let Some(name) = child_menu(path, entry.menu)
             && !nested.contains(&name)
         {
             nested.push(name);
-            children.extend(submenu(s, &format!("{path}/{name}"), name));
+            children.extend(submenu(&format!("{path}/{name}"), name));
         }
     }
     let children = collapse(children);
