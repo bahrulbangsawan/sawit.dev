@@ -111,6 +111,8 @@ impl Workspace {
                 )
                 .child(crate::catalog::divider(cx))
             })
+            .child(super::pages_menu::pages_button())
+            .child(crate::catalog::divider(cx))
             .when(!self.cli_status.read(cx).installed, |el| {
                 el.child(
                     Button::new("install-cli")

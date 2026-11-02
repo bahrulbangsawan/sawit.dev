@@ -14,9 +14,9 @@ sawitTest("launch: a project folder opens a project window", async (ctx) => {
   // The project is the title bar's active project, and its files are in the sidebar.
   const chip = await win.waitFor({ role: "radiobutton", name: "fixture-app", within: "Projects" });
   assert.equal(chip.value, true);
-  for (const page of ["Canvas", "Browser", "Tools", "MCP", "Skills", "Keymap Editor"]) {
-    await win.waitFor({ role: "button", name: page });
-  }
+  // The pages are in the footer's Pages menu (and under the account at the title bar's end).
+  await win.waitFor({ role: "button", name: "Pages" });
+  await win.waitFor({ role: "button", name: "Sign In to GitHub" });
   await win.waitFor({ name: "README.md", within: "Files" });
   await win.waitFor({ name: "src", within: "Files" });
 });

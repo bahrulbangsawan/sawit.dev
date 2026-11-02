@@ -3,11 +3,11 @@
 import assert from "node:assert/strict";
 
 import { sawitTest } from "../lib/harness.js";
-import { waitForTab } from "../lib/sawit.js";
+import { openPage, waitForTab } from "../lib/sawit.js";
 
 sawitTest("keymap: the editor lists the commands, and the filter narrows them", async (ctx) => {
   const { win } = ctx;
-  await win.click({ role: "button", name: "Keymap Editor" });
+  await openPage(ctx, "Keymap Editor");
   await waitForTab(ctx, "keymap");
   // A row per command, named "area: command" ("canvas: align left").
   await win.waitFor({ role: "row", within: "Keybindings" });

@@ -111,6 +111,10 @@ impl Render for Workspace {
                 }),
             )
             .on_action(cx.listener(|this, _: &OpenCanvas, _, cx| this.show_canvas(cx)))
+            .on_action(cx.listener(|this, _: &OpenBrowser, w, cx| {
+                this.open_browser(None, w, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenSkills, w, cx| this.open_skills_page(w, cx)))
             .on_action(cx.listener(|this, _: &OpenDevTools, w, cx| this.open_tools_page(w, cx)))
             .on_action(
                 cx.listener(|this, _: &OpenNewProject, w, cx| this.open_new_project_page(w, cx)),
@@ -164,7 +168,11 @@ impl Render for Workspace {
                             .child(self.render_project_switcher(cx))
                             .child(div().flex_1())
                             .child(self.render_layout_toggles(cx))
-                            .child(crate::git::account::account_control(&self.github, cx)),
+                            .child(crate::git::account::account_control(
+                                &self.github,
+                                super::pages_menu::pages,
+                                cx,
+                            )),
                     ),
             )
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))

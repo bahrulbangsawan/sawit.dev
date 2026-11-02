@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 
 import { sawitTest } from "../lib/harness.js";
-import { waitForTab } from "../lib/sawit.js";
+import { openPage, waitForTab } from "../lib/sawit.js";
 
 const COUNT = /^(\d+)–(\d+) of (\d+) \w+$/;
 
@@ -25,6 +25,7 @@ const tabTotal = (node) => Number(node.name.match(/(\d+)$/)[1]);
 const PAGES = [
   {
     button: "Tools",
+    item: "Dev Tools",
     kind: "tools",
     search: "Search tools",
     query: "claude",
@@ -33,6 +34,7 @@ const PAGES = [
   },
   {
     button: "MCP",
+    item: "MCP Servers",
     kind: "mcp",
     search: "Search servers",
     query: "figma",
@@ -44,7 +46,7 @@ const PAGES = [
 for (const page of PAGES) {
   sawitTest(`${page.button}: search narrows the list, and clearing it brings every row back`, async (ctx) => {
     const { win } = ctx;
-    await win.click({ role: "button", name: page.button });
+    await openPage(ctx, page.item);
     await waitForTab(ctx, page.kind);
     const all = await win.waitFor({ role: "switch", name: /^All \d+$/ });
     const before = await count(win);
@@ -64,7 +66,7 @@ for (const page of PAGES) {
 
   sawitTest(`${page.button}: a filter tab shows its rows only`, async (ctx) => {
     const { win } = ctx;
-    await win.click({ role: "button", name: page.button });
+    await openPage(ctx, page.item);
     await waitForTab(ctx, page.kind);
     // "Installed N": on a fresh home, what Homebrew put in /opt/homebrew (for Tools), or none.
     const installed = await win.waitFor({ role: "switch", name: /^Installed \d+$/ });
@@ -83,7 +85,7 @@ for (const page of PAGES) {
 
   sawitTest(`${page.button}: the rows-per-page picker shows 16 rows a page`, async (ctx) => {
     const { win } = ctx;
-    await win.click({ role: "button", name: page.button });
+    await openPage(ctx, page.item);
     await waitForTab(ctx, page.kind);
     const before = await count(win);
     assert.equal(before.last, Math.min(8, before.total), `8 rows a page at first: ${before.name}`);

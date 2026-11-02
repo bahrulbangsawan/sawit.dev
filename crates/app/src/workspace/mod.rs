@@ -68,6 +68,7 @@ mod file_tabs;
 mod keyboard;
 mod new_project;
 mod pages;
+mod pages_menu;
 mod panel_tabs;
 mod project;
 mod render;
@@ -115,8 +116,10 @@ actions!(
         ShowConfigFiles,
         ShowPrompts,
         OpenCanvas,
+        OpenBrowser,
         OpenDevTools,
         OpenMcp,
+        OpenSkills,
         OpenNewProject,
         OpenChangelog,
         InstallUpdate,
@@ -125,8 +128,9 @@ actions!(
 );
 
 /// Every workspace shortcut: Zed's defaults where Zed has the command; the
-/// pages in the title bar are on ⌃⌘, which nothing else here (inputs, the
-/// terminal, the canvas) uses. No two share a keystroke (see the tests).
+/// pages (listed in the account menu and the footer's Pages menu) are on ⌃⌘,
+/// which nothing else here (inputs, the terminal, the canvas) uses. No two
+/// share a keystroke (see the tests).
 fn bindings() -> Vec<KeyBinding> {
     let ctx = Some("Workspace");
     vec![

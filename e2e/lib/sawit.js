@@ -24,9 +24,18 @@ export async function waitForTab(ctx, kind, { timeoutMs = 15_000 } = {}) {
   );
 }
 
-/** Opens the canvas from the title bar and waits for its toolbar. */
+/**
+ * Opens a page ("Dev Tools", "MCP Servers", "Canvas"…) from the footer's Pages menu, as a click
+ * does. The account menu at the title bar's end lists the same pages.
+ */
+export async function openPage(ctx, item) {
+  await ctx.win.click({ role: "button", name: "Pages" });
+  await ctx.win.click({ role: "menuitem", name: item });
+}
+
+/** Opens the canvas from the Pages menu and waits for its toolbar. */
 export async function openCanvas(ctx) {
-  await ctx.win.click({ role: "button", name: "Canvas" });
+  await openPage(ctx, "Canvas");
   await waitForTab(ctx, "canvas");
   return ctx.win.waitFor({ role: "toolbar", name: "Canvas tools" });
 }

@@ -300,7 +300,7 @@ explained. A conflict on the same address can't be forced.
 
 <img src="docs/media/tools.png" alt="Dev Tools page: package managers such as Homebrew, nvm, pnpm, npm and uv, and runtimes such as Node.js, Bun and Deno, each with its install status, version and install command" width="100%">
 
-- Click **Tools** in the title bar for package managers (Homebrew, nvm, pnpm, npm, uv), languages and runtimes
+- Open **Dev Tools** (**Pages** menu) for package managers (Homebrew, nvm, pnpm, npm, uv), languages and runtimes
   (Node.js, Bun, Deno, Python, Rust), AI agents (Claude Code, Codex, OpenCode, Amp, …) and terminal apps (Zed,
   Starship, the Fly.io CLI, Cloudflare's `cf`, PureMac, …).
 - Each tool shows whether it's installed, its version and where it lives, and the exact command that installs it.
@@ -345,7 +345,7 @@ explained. A conflict on the same address can't be forced.
 
 ### Skills
 
-- Click **Skills** in the title bar for agent skills from their official sources:
+- Open **Skills** from the **Pages** menu for agent skills from their official sources:
   - **Interface Skills** and **Make Interfaces Feel Better** by Jakub Krehel ([jakub.kr/skills](https://jakub.kr/skills)):
     `better-ui`, `better-typography`, `interface-review`, `state-machine`, `teardown` and more, with the `skills` CLI
     (`npx skills add jakubkrehel/skills`).
@@ -387,8 +387,8 @@ explained. A conflict on the same address can't be forced.
 
 <img src="docs/media/new-project.png" alt="New Project page: the project name, location, command and stack on the left, and the stack's categories as cards on the right" width="100%">
 
-- **New** in the title bar (<kbd>⌃</kbd><kbd>⌘</kbd><kbd>N</kbd>), **New Project…** on the welcome screen or in the
-  File menu opens a page to start a TypeScript project with
+- **New Project** in the **Pages** menu (<kbd>⌃</kbd><kbd>⌘</kbd><kbd>N</kbd>), **New Project…** on the welcome
+  screen or in the File menu opens a page to start a TypeScript project with
   [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack)'s builder: one section of cards per
   category (web and native frontend, backend, runtime, API, database, ORM, database setup, web and server deploy,
   auth, payments, package manager, addons, examples, Git, install), with every option of
@@ -415,7 +415,7 @@ explained. A conflict on the same address can't be forced.
 
 <img src="docs/media/browser.png" alt="Browser tab showing the acme-store demo shop on localhost:3000, with the Annotate panel open beside it; the toolbar has back, forward, reload, the address field, the device menu, Annotate, Design, Open in Default Browser and the Web Inspector" width="100%">
 
-- Click **Browser** in the title bar for the project's web browser tab (WebKit; each project has its own). With
+- Open **Browser** from the **Pages** menu for the project's web browser tab (WebKit; each project has its own). With
   nothing typed, it opens the project's running dev server. The toolbar has back, forward, reload, an address
   field (text that isn't a URL is searched), the device menu, **Annotate**, **Design**, **Open in Default Browser**
   and the Web Inspector.
@@ -495,8 +495,8 @@ explained. A conflict on the same address can't be forced.
 
 <img src="docs/media/canvas.png" alt="Canvas: a Mermaid flowchart of the demo app turned into editable shapes, with boxes for the browser, acme-store, the checkout API, payments, acme-admin, an AI agent and the shop database" width="100%">
 
-- Click **Canvas** in the title bar, or press <kbd>⌃</kbd><kbd>⌘</kbd><kbd>C</kbd>, for a native whiteboard and
-  design canvas (its engine is [FigCraft](https://github.com/storytold/figcraft)). It saves by itself.
+- Open **Canvas** from the **Pages** menu, or press <kbd>⌃</kbd><kbd>⌘</kbd><kbd>C</kbd>, for a native whiteboard
+  and design canvas (its engine is [FigCraft](https://github.com/storytold/figcraft)). It saves by itself.
 - **Boards and design files**: the project's canvas is a board, for sticky notes, shapes with text, connectors,
   marker drawing, stamps and sections. A `.sawit` file opened from the **Files** tab gets its own canvas tab,
   as a board or as a design file (frames, vectors, auto layout and components), and saves back to the same file.
@@ -660,7 +660,8 @@ Agents that work on the canvas while Sawit is closed have no cursor: there is no
 - Until you sign in, the GitHub buttons are off and say why ("Sign in to GitHub to clone your repositories"),
   with Sign In to GitHub beside them, and the GitHub page shows the sign-in card. Signing in turns them all on at
   once, in every window; nothing signs in by itself.
-- Once signed in, the title bar shows your avatar and login. Its menu is where you **Sign Out**, which turns every
+- Once signed in, the title bar shows your avatar and login. Its menu shows your name and login, lists the pages
+  (as the footer's **Pages** menu does), and is where you **Sign Out**, which turns every
   GitHub feature off again. If GitHub stops accepting the sign-in (you revoked it, or it expired), Sawit signs you
   out everywhere and says so once.
 - The **GitHub** page: the repository's pull requests and issues with their timelines; comment, close, reopen and
@@ -806,7 +807,7 @@ local bindings there (KV, R2, D1, Durable Objects, Workflows, sent email), trigg
 <img src="docs/media/keymap.png" alt="Keymap Editor: each binding's action, arguments, keystrokes, context and source, with a filter field, Edit in JSON and Create Keybinding" width="100%">
 
 These are the defaults. Most shortcuts can be changed in the **Keymap Editor**
-(<kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd>, the keyboard button in the title bar,
+(<kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd>, **Keymap Editor** in the **Pages** menu,
 Sawit ▸ Keymap Editor, or an agent's `app_open_page` with `keymap`). It lists each binding of every
 feature, including the workspace, panels, editors, terminal, Git, inputs, and the native canvas's
 commands, with its action, arguments, keys, context and source. From it you can change, add, remove
@@ -1090,7 +1091,7 @@ host only with `replace: true`. Passwords never appear in a result. Every tool
 also carries MCP's hints (`readOnlyHint`, `destructiveHint`, `openWorldHint`), for clients that let read-only tools
 through or ask before destructive ones.
 
-Click **MCP** in the title bar to install it, along with a catalog of other servers: GitHub, AWS, Cloudflare, Neon,
+**MCP Servers** in the **Pages** menu installs it, along with a catalog of other servers: GitHub, AWS, Cloudflare, Neon,
 Postman, Figma, Mobbin, Exa and more. Search the catalog, narrow it with the **Installed**, **Not Installed** and **Needs
 Sign-In** tabs or by where a server runs (built in, remote, on this Mac), and sort it. **Show** under the list sets how
 many servers a page holds (8 to 64, or all), as on the Tools page, and Sawit remembers it. From the keyboard: ⌘F

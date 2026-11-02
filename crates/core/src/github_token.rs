@@ -20,7 +20,7 @@ use crate::github::TokenStore;
 pub const ENV: &str = "SAWIT_GITHUB_AUTHORIZATION";
 
 /// What a client reads when Sawit isn't signed in to GitHub (or the Keychain item is gone).
-pub const SIGNED_OUT: &str = "sawit: not signed in to GitHub. Sign in from Sawit (Sign In to GitHub in the title bar), then reconnect this MCP server.";
+pub const SIGNED_OUT: &str = "sawit: not signed in to GitHub. Sign in from Sawit (Sign In at the end of the title bar), then reconnect this MCP server.";
 
 /// `sawit github token …`: how the token is handed over.
 #[derive(Debug, Clone, PartialEq, Eq)]
