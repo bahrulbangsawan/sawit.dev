@@ -2,6 +2,8 @@
 //! it takes. Each is a JS file per section under `page/` (its opening comment in
 //! `page/<name>.js`, its sections in `page/<name>/`), put back together here, in order.
 
+use std::sync::LazyLock;
+
 /// The page agent; the app replaces [`TOKEN_PLACEHOLDER`] before injecting it. It is one
 /// strict-mode function, which the modules are spliced into.
 pub const AGENT_JS: &str = concat!(
@@ -60,10 +62,19 @@ pub const DESIGN_JS: &str = concat!(
 /// Where the agent takes its page modules.
 pub const MODULES_PLACEHOLDER: &str = "/*__SAWIT_MODULES__*/";
 
-/// The agent with its page modules spliced in and `token` set.
-pub fn page_script(token: &str) -> String {
+/// The page script around its token, made the first time: the agent with its page modules
+/// spliced in is the same for every page, and a page's script is these pieces joined by its
+/// token, as `replace` would set it.
+static AROUND_TOKEN: LazyLock<Vec<String>> = LazyLock::new(|| {
     let modules = [OVERLAY_JS, DESIGN_JS].join("\n");
     AGENT_JS
         .replace(MODULES_PLACEHOLDER, &modules)
-        .replace(TOKEN_PLACEHOLDER, token)
+        .split(TOKEN_PLACEHOLDER)
+        .map(str::to_string)
+        .collect()
+});
+
+/// The agent with its page modules spliced in and `token` set.
+pub fn page_script(token: &str) -> String {
+    AROUND_TOKEN.join(token)
 }

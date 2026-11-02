@@ -4,7 +4,9 @@
 use serde_json::json;
 
 use super::on_stand_in_page;
-use crate::browser::{AGENT_JS, MODULES_PLACEHOLDER, TOKEN_PLACEHOLDER, page_script};
+use crate::browser::{
+    AGENT_JS, DESIGN_JS, MODULES_PLACEHOLDER, OVERLAY_JS, TOKEN_PLACEHOLDER, page_script,
+};
 
 #[test]
 fn page_script_splices_the_modules() {
@@ -19,6 +21,19 @@ fn page_script_splices_the_modules() {
     assert!(s.find("sawit-overlay").unwrap() < s.find("const OPS").unwrap());
     assert!(s.contains("blocked_sheets"));
     assert!(s.find("blocked_sheets").unwrap() < s.find("const OPS").unwrap());
+}
+
+/// The page script is made once around its token: a page's is the agent with its modules
+/// spliced in and its token set, as `replace` sets it, whatever the token.
+#[test]
+fn page_script_sets_the_token_as_replace_would() {
+    let spliced = AGENT_JS.replace(MODULES_PLACEHOLDER, &[OVERLAY_JS, DESIGN_JS].join("\n"));
+    for token in ["T0K3N", "", TOKEN_PLACEHOLDER, "a\nb"] {
+        assert_eq!(
+            page_script(token),
+            spliced.replace(TOKEN_PLACEHOLDER, token)
+        );
+    }
 }
 
 /// A page script that patches the IPC handler's `postMessage` (on its prototype, which
