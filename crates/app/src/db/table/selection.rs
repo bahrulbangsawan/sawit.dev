@@ -70,9 +70,10 @@ impl TableView {
         self.selection.all || self.selection.rows.contains(key)
     }
 
-    /// Every row on this page is ticked.
+    /// Every row on this page is ticked. The grid's header asks on every frame: the keys are
+    /// read in place, not copied.
     pub(super) fn page_picked(&self) -> bool {
-        let keys = self.page_keys();
+        let keys = &self.shown_keys;
         !keys.is_empty() && keys.iter().all(|k| self.is_picked(k))
     }
 
