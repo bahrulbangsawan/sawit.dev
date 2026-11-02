@@ -134,7 +134,11 @@ impl BoardView {
             1.0
         };
         if let Some(wanted) = view::render_view(&ds.view, viewport, quality) {
-            let job = render_job(ds, self.composition.as_ref(), kind, wanted);
+            let mut job = render_job(ds, self.composition.as_ref(), kind, wanted);
+            // Text an agent just wrote shows a word at a time ([`presence`]).
+            if let Some(revealing) = self.agents.reveals.document(&job.doc, now) {
+                job.doc = revealing;
+            }
             let key = job_key(&job, ds.view.zoom, dark);
             let asked = (self.requested.as_ref())
                 .is_some_and(|(asked, of)| *asked == key && Arc::ptr_eq(of, &job.doc));
@@ -160,12 +164,14 @@ impl BoardView {
         })
         .unwrap_or_default();
         let ds = board.session.ds().ok()?;
-        let shown_view = ds.view.clone();
+        let (shown_view, doc) = (ds.view.clone(), ds.doc.clone());
         let font = &cx.theme().font_family;
+        // A frame an agent builds in has its name on the work's row instead ([`presence`]).
+        let shapes = self.agents.without_work_names(shapes, now);
         let (overlay, names) = overlay_paint::layout(shapes, font, &ds.doc, &ds.view, window);
         board.session.tool.labels = names;
         // Over it all, the agents at work on the page on show.
-        let agents = self.agents_paint(&shown_view, page, now, window, cx);
+        let agents = self.agents_paint(&doc, &shown_view, page, now, window, cx);
         let painting = Painting {
             page: screen_rgb,
             frame,

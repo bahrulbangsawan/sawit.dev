@@ -11,8 +11,9 @@ use serde_json::Value;
 
 use super::{GHOST_SIZE, MAX_OUTLINES};
 
-/// Where an agent's op landed on page `page`: what it added, changed or took off there, from the
-/// document `before` and `after` it, each layer once: a sticky drawn with its text is the sticky.
+/// Where an agent's op landed on page `page`: the top-right corner of what it added, else of what
+/// it changed or took off there, where its pointer rests, outside it. Found from the document
+/// `before` and `after` it, each layer once: a sticky drawn with its text is the sticky.
 /// Pages, and layers whose only change is what they hold (a frame given a new child), are left
 /// out. `None` when nothing on the page changed.
 ///
@@ -70,16 +71,16 @@ pub(super) fn target(before: &Document, after: &Document, page: NodeId) -> Optio
     if touched.len() > MAX_OUTLINES {
         touched = union(&touched).into_iter().collect();
     }
-    if let Some([x0, y0, _, _]) = union(&new) {
+    if let Some([_, y0, x1, _]) = union(&new) {
         return Some(Target {
-            point: (x0, y0),
+            point: (x1, y0),
             rects: touched,
         });
     }
     let gone = bounds(before, &removed);
-    let [x0, y0, x1, y1] = union(&touched).or_else(|| union(&gone))?;
+    let [_, y0, x1, _] = union(&touched).or_else(|| union(&gone))?;
     Some(Target {
-        point: ((x0 + x1) / 2.0, (y0 + y1) / 2.0),
+        point: (x1, y0),
         rects: touched,
     })
 }
@@ -112,7 +113,8 @@ fn held_by_another(doc: &Document, id: NodeId, all: &HashSet<NodeId>) -> bool {
     all.iter().any(|other| *other != id)
 }
 
-/// Where an op landed: the point its pointer goes to, and the layers to outline.
+/// Where an op landed: the point its pointer goes to (the top-right corner of what it touched), and
+/// the layers to outline.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::board) struct Target {
     pub point: (f64, f64),

@@ -1,55 +1,101 @@
-//! What is painted over the canvas for the agents: the layers they just touched, outlined, their
-//! slow ops' placeholders, and their pointers with a pill of their name and what they do.
+//! What is painted over the canvas for the agents, worked out from where they are and what they
+//! build: the layers a free op touched, outlined for a moment; each running work's skeleton and a
+//! failed one's dashed frame; slow ops' placeholders; and the pointers, with the free pointers'
+//! names ([`labels`](super::labels)), the most recent agent's on top.
 
 use std::time::Instant;
 
-use figcraft_doc::NodeId;
+use figcraft_doc::{Document, NodeId};
 use figcraft_engine::ViewState;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
 use sawit_core::agents as model;
+use sawit_core::agents::work::RowLook;
 
-use super::{
-    GhostState, PILL_AT, PILL_HEIGHT, PILL_PAD, PILL_TEXT, POINTER, Presence, SHIMMER, TOUCHED_TIME,
-};
+use super::labels::{self, Shaped};
+use super::{GhostState, Presence, SHIMMER, TIP_FROM_CORNER, TOUCHED_TIME, Work};
 use crate::board::BoardView;
 
 /// One thing painted for the agents, from the canvas's top-left (px).
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::board) enum Mark {
-    /// A layer an agent just touched, outlined in its colour.
+    /// A layer a free op just touched, outlined in its agent's colour.
     Outline {
         rect: [f64; 4],
         color: Hsla,
         alpha: f32,
     },
-    /// A slow op's placeholder, its shimmer at `phase` (none under reduced motion), or its error
-    /// mark once the op `failed`.
+    /// A failed work's frame, dashed in the colour of failure.
+    Failed { rect: [f64; 4] },
+    /// A bar of a running work's skeleton, its shimmer at `phase` (none under reduced motion).
+    Bar { rect: [f64; 4], phase: Option<f32> },
+    /// A slow op's placeholder, its shimmer at `phase`, or its error mark once the op `failed`.
     Ghost {
         rect: [f64; 4],
         color: Hsla,
         phase: Option<f32>,
         failed: bool,
     },
-    /// An agent's pointer, with its pill.
+    /// An agent's pointer.
     Cursor {
         tip: (f64, f64),
         color: Hsla,
+        alpha: f32,
+    },
+    /// A free pointer's name, beside its tip.
+    Pill {
+        tip: (f64, f64),
+        color: Hsla,
         label: SharedString,
-        doing: Option<SharedString>,
         alpha: f32,
     },
 }
 
+/// The skeleton's padding inside its frame, and its bars' heights and gap (page units).
+const SKELETON_PAD: f64 = 14.0;
+const TITLE_BAR: f64 = 16.0;
+const LINE_BAR: f64 = 10.0;
+const BAR_GAP: f64 = 10.0;
+const BUTTON_BAR: f64 = 26.0;
+
 impl Presence {
-    /// What to paint over page `page` shown as `view` at `now`, from the canvas's top-left.
-    pub fn marks(&self, view: &ViewState, page: NodeId, now: Instant, reduce: bool) -> Vec<Mark> {
+    /// What to paint over page `page` of `doc` shown as `view` at `now`, from the canvas's
+    /// top-left, back to front.
+    pub fn marks(
+        &self,
+        doc: &Document,
+        view: &ViewState,
+        page: NodeId,
+        now: Instant,
+        reduce: bool,
+    ) -> Vec<Mark> {
         let screen = |[x0, y0, x1, y1]: [f64; 4]| {
             let (a, b) = view.page_to_screen(x0, y0);
             let (c, d) = view.page_to_screen(x1, y1);
             [a, b, c, d]
         };
         let mut marks = Vec::new();
+        for work in self.works.iter().filter(|w| w.page == page) {
+            let Some(b) = doc.world_bounds(work.frame) else {
+                continue;
+            };
+            let frame = [b.x0, b.y0, b.x1, b.y1];
+            match work.row(now) {
+                RowLook::Working { stalled } => {
+                    let phase = work.shimmer(now, reduce || stalled);
+                    for bar in skeleton(doc, work.frame, frame) {
+                        marks.push(Mark::Bar {
+                            rect: screen(bar),
+                            phase,
+                        });
+                    }
+                }
+                RowLook::Failed => marks.push(Mark::Failed {
+                    rect: screen(frame),
+                }),
+                RowLook::Done { .. } | RowLook::Gone => {}
+            }
+        }
         for agent in &self.agents {
             let since = now.saturating_duration_since(agent.touched_at);
             if agent.touched_page != Some(page) || since >= TOUCHED_TIME {
@@ -78,7 +124,10 @@ impl Presence {
                 failed: matches!(ghost.state, GhostState::Failed { .. }),
             });
         }
-        for agent in &self.agents {
+        // The most recent agent last, on top.
+        let mut agents: Vec<_> = self.agents.iter().collect();
+        agents.sort_by_key(|a| a.seen);
+        for agent in agents {
             let idle = now.saturating_duration_since(agent.seen);
             let (Some(alpha), Some(point)) = (model::opacity(idle), agent.point(now, reduce))
             else {
@@ -88,23 +137,117 @@ impl Presence {
                 continue;
             }
             let (x, y) = view.page_to_screen(point.0, point.1);
-            marks.push(Mark::Cursor {
-                tip: (x, y),
-                color: agent.look.color,
-                label: agent.look.label.clone(),
-                doing: model::shows_action(idle).then(|| agent.doing.clone().into()),
-                alpha,
-            });
+            let tip = (x + TIP_FROM_CORNER.0, y + TIP_FROM_CORNER.1);
+            let color = agent.look.color;
+            marks.push(Mark::Cursor { tip, color, alpha });
+            let on_row = (agent.work.as_deref())
+                .and_then(|id| self.work(id))
+                .is_some_and(|work| work.page == page && names_agent(work, now));
+            let hovered = self.hovered.as_ref() == Some(&agent.look.id);
+            if !on_row && (agent.named(now) || hovered) {
+                let label = agent.look.label.clone();
+                marks.push(Mark::Pill {
+                    tip,
+                    color,
+                    label,
+                    alpha,
+                });
+            }
         }
         marks
     }
+
+    /// The agent whose pointer, painted over page `page` shown as `view`, is under `point` (px
+    /// from the canvas's top-left) at `now`: the most recent one, as it is on top.
+    pub fn pointer_at(
+        &self,
+        view: &ViewState,
+        page: NodeId,
+        point: (f64, f64),
+        now: Instant,
+    ) -> Option<SharedString> {
+        let mut agents: Vec<_> = self.agents.iter().collect();
+        agents.sort_by_key(|a| std::cmp::Reverse(a.seen));
+        agents.into_iter().find_map(|agent| {
+            let at = agent.at.filter(|at| at.page == page)?;
+            model::opacity(now.saturating_duration_since(agent.seen))?;
+            let (x, y) = view.page_to_screen(at.point.0, at.point.1);
+            let (dx, dy) = (
+                point.0 - x - TIP_FROM_CORNER.0,
+                point.1 - y - TIP_FROM_CORNER.1,
+            );
+            ((-3.0..=12.0).contains(&dx) && (-3.0..=16.0).contains(&dy))
+                .then(|| agent.look.id.clone())
+        })
+    }
 }
 
+/// Whether the row of `work` names its agent at `now`: while it runs or failed, and for a moment
+/// once it is done.
+pub(super) fn names_agent(work: &Work, now: Instant) -> bool {
+    matches!(
+        work.row(now),
+        RowLook::Working { .. } | RowLook::Failed | RowLook::Done { name: true, .. }
+    )
+}
+
+/// The bars of the skeleton in `frame` (page `[x0, y0, x1, y1]`), a frame of `doc`: a title, three
+/// lines and a button where they fit, each left out where what the agent drew already is.
+pub(super) fn skeleton(doc: &Document, frame: NodeId, [x0, y0, x1, y1]: [f64; 4]) -> Vec<[f64; 4]> {
+    let inner = (x1 - x0) - 2.0 * SKELETON_PAD;
+    if inner <= 8.0 || (y1 - y0) <= 2.0 * SKELETON_PAD + TITLE_BAR {
+        return Vec::new();
+    }
+    let (left, bottom) = (x0 + SKELETON_PAD, y1 - SKELETON_PAD);
+    let mut bars = vec![[
+        left,
+        y0 + SKELETON_PAD,
+        left + inner * 0.7,
+        y0 + SKELETON_PAD + TITLE_BAR,
+    ]];
+    let mut top = bars[0][3] + BAR_GAP + 2.0;
+    let button = if y1 - y0 > 140.0 {
+        BUTTON_BAR + BAR_GAP
+    } else {
+        0.0
+    };
+    for width in [0.88, 0.74, 0.6] {
+        if top + LINE_BAR > bottom - button {
+            break;
+        }
+        bars.push([left, top, left + inner * width, top + LINE_BAR]);
+        top += LINE_BAR + BAR_GAP;
+    }
+    if button > 0.0 {
+        bars.push([
+            left,
+            bottom - BUTTON_BAR,
+            left + (inner * 0.4).min(110.0),
+            bottom,
+        ]);
+    }
+    let drawn: Vec<[f64; 4]> = (doc.node(frame).map(|n| n.children.clone()))
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|child| doc.world_bounds(child))
+        .map(|b| [b.x0, b.y0, b.x1, b.y1])
+        .collect();
+    let meets =
+        |a: &[f64; 4], b: &[f64; 4]| a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+    bars.retain(|bar| !drawn.iter().any(|d| meets(bar, d)));
+    bars
+}
+
+/// [`Mark`]s ready to paint: their names shaped, and the names that would cover another left out.
+#[derive(Default)]
+pub(in crate::board) struct Painted(pub Vec<(Mark, Option<Shaped>)>);
+
 impl BoardView {
-    /// The agents' marks to paint over page `page` shown as `view`, their pills shaped, when
-    /// agents' cursors show; and the next frame asked for while something of them moves.
+    /// The agents' marks to paint over page `page` of `doc` shown as `view`, when agents' cursors
+    /// show; and the next frame asked for while something of them moves.
     pub(in crate::board) fn agents_paint(
         &self,
+        doc: &Document,
         view: &ViewState,
         page: NodeId,
         now: Instant,
@@ -119,216 +262,7 @@ impl BoardView {
             let view = cx.entity_id();
             window.on_next_frame(move |_, cx| cx.notify(view));
         }
-        let marks = self.agents.marks(view, page, now, reduce);
-        shape(marks, &cx.theme().font_family, window)
-    }
-}
-
-/// [`Mark`]s ready to paint: their text shaped.
-#[derive(Default)]
-pub(in crate::board) struct Painted(Vec<(Mark, Option<Box<ShapedLine>>)>);
-
-/// Shapes the pills' text of `marks` in the font `family`.
-pub(super) fn shape(marks: Vec<Mark>, family: &SharedString, window: &Window) -> Painted {
-    let painted = marks
-        .into_iter()
-        .map(|mark| {
-            let line = match &mark {
-                Mark::Cursor {
-                    label,
-                    doing,
-                    alpha,
-                    ..
-                } => Some(Box::new(pill_text(
-                    label,
-                    doing.as_ref(),
-                    *alpha,
-                    family,
-                    window,
-                ))),
-                _ => None,
-            };
-            (mark, line)
-        })
-        .collect();
-    Painted(painted)
-}
-
-/// The pill's line: the agent's name in semibold, then what it does in regular, both white.
-fn pill_text(
-    label: &SharedString,
-    doing: Option<&SharedString>,
-    alpha: f32,
-    family: &SharedString,
-    window: &Window,
-) -> ShapedLine {
-    let name = label.to_string();
-    let text: SharedString = match doing.filter(|d| !d.is_empty()) {
-        Some(doing) => format!("{name}  {doing}").into(),
-        None => name.clone().into(),
-    };
-    let mut bold = font(family.clone());
-    bold.weight = FontWeight::SEMIBOLD;
-    let regular = font(family.clone());
-    let white = |a: f32| hsla(0.0, 0.0, 1.0, a * alpha);
-    let run = |len: usize, font: Font, color: Hsla| TextRun {
-        len,
-        font,
-        color,
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    let mut runs = vec![run(name.len(), bold, white(1.0))];
-    if text.len() > name.len() {
-        runs.push(run(text.len() - name.len(), regular, white(0.9)));
-    }
-    window
-        .text_system()
-        .shape_line(text, px(PILL_TEXT), &runs, None)
-}
-
-/// Paints `painted` over the canvas whose top-left is at `origin`, back to front: outlines, then
-/// placeholders, then pointers.
-pub(in crate::board) fn paint(
-    origin: Point<Pixels>,
-    painted: Painted,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let at = |(x, y): (f64, f64)| point(origin.x + px(x as f32), origin.y + px(y as f32));
-    let rect_bounds = |[x0, y0, x1, y1]: [f64; 4]| {
-        Bounds::from_corners(at((x0.min(x1), y0.min(y1))), at((x0.max(x1), y0.max(y1))))
-    };
-    let white = |a: f32| hsla(0.0, 0.0, 1.0, a);
-    for (mark, line) in painted.0 {
-        match mark {
-            Mark::Outline { rect, color, alpha } => {
-                let bounds = rect_bounds(rect);
-                window.paint_quad(quad(
-                    bounds.dilate(px(3.0)),
-                    px(4.0),
-                    transparent_black(),
-                    px(1.0),
-                    white(0.7 * alpha),
-                    BorderStyle::Solid,
-                ));
-                window.paint_quad(quad(
-                    bounds.dilate(px(2.0)),
-                    px(3.0),
-                    transparent_black(),
-                    px(2.0),
-                    color.opacity(alpha),
-                    BorderStyle::Solid,
-                ));
-            }
-            Mark::Ghost {
-                rect,
-                color,
-                phase,
-                failed,
-            } => paint_ghost(rect_bounds(rect), color, phase, failed, window, cx),
-            Mark::Cursor {
-                tip, color, alpha, ..
-            } => {
-                let tip = at(tip);
-                let points: Vec<Point<Pixels>> = POINTER
-                    .iter()
-                    .map(|(x, y)| point(tip.x + px(*x), tip.y + px(*y)))
-                    .collect();
-                let mut edge = PathBuilder::stroke(px(3.0));
-                edge.add_polygon(&points, true);
-                if let Ok(path) = edge.build() {
-                    window.paint_path(path, white(alpha));
-                }
-                let mut body = PathBuilder::fill();
-                body.add_polygon(&points, true);
-                if let Ok(path) = body.build() {
-                    window.paint_path(path, color.opacity(alpha));
-                }
-                let Some(line) = line else { continue };
-                let size = size(line.width + px(PILL_PAD * 2.0), px(PILL_HEIGHT));
-                let pill = Bounds::new(point(tip.x + px(PILL_AT.0), tip.y + px(PILL_AT.1)), size);
-                window.paint_quad(quad(
-                    pill,
-                    px(PILL_HEIGHT / 2.0),
-                    color.opacity(alpha),
-                    px(1.5),
-                    white(alpha),
-                    BorderStyle::Solid,
-                ));
-                let text_at = point(pill.origin.x + px(PILL_PAD), pill.origin.y + px(2.0));
-                if let Err(err) = line.paint(text_at, px(16.0), TextAlign::Left, None, window, cx) {
-                    log::error!("an agent's name couldn't be painted: {err}");
-                }
-            }
-        }
-    }
-}
-
-/// A placeholder: a dashed frame in the agent's colour over a faint fill, with a lighter band
-/// sweeping across it (`phase`) while the op works; a failed one keeps its frame solid in the
-/// agent's colour with a "!" badge on its corner.
-fn paint_ghost(
-    bounds: Bounds<Pixels>,
-    color: Hsla,
-    phase: Option<f32>,
-    failed: bool,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let style = if failed {
-        BorderStyle::Solid
-    } else {
-        BorderStyle::Dashed
-    };
-    window.paint_quad(quad(
-        bounds,
-        px(6.0),
-        color.opacity(0.08),
-        px(1.5),
-        color.opacity(0.9),
-        style,
-    ));
-    if let Some(phase) = phase.filter(|_| !failed) {
-        let band = bounds.size.width * 0.35;
-        let left = bounds.origin.x - band + (bounds.size.width + band) * phase;
-        let sweep = Bounds::new(point(left, bounds.origin.y), size(band, bounds.size.height));
-        window.with_content_mask(Some(ContentMask { bounds }), |window| {
-            window.paint_quad(fill(sweep, color.opacity(0.12)).corner_radii(px(6.0)));
-        });
-    }
-    if failed {
-        let badge = Bounds::centered_at(
-            point(bounds.origin.x + bounds.size.width, bounds.origin.y),
-            size(px(18.0), px(18.0)),
-        );
-        window.paint_quad(quad(
-            badge,
-            px(9.0),
-            color,
-            px(1.5),
-            hsla(0.0, 0.0, 1.0, 1.0),
-            BorderStyle::Solid,
-        ));
-        let runs = [TextRun {
-            len: 1,
-            font: Font {
-                weight: FontWeight::BOLD,
-                ..font(window.text_style().font_family.clone())
-            },
-            color: hsla(0.0, 0.0, 1.0, 1.0),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        }];
-        let mark = window
-            .text_system()
-            .shape_line("!".into(), px(12.0), &runs, None);
-        let at = point(
-            badge.origin.x + (badge.size.width - mark.width) / 2.0,
-            badge.origin.y + px(1.0),
-        );
-        let _ = mark.paint(at, px(16.0), TextAlign::Left, None, window, cx);
+        let marks = self.agents.marks(doc, view, page, now, reduce);
+        labels::shape(marks, &cx.theme().font_family, window)
     }
 }

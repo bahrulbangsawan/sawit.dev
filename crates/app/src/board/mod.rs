@@ -28,9 +28,10 @@
 //! the sheet when they are open.
 //!
 //! Agents that drive the canvas through `sawit-mcp` show on it as other people do on a
-//! multiplayer canvas: a pointer in each one's colour with its name and what it does, the layers
-//! it touched outlined for a moment, and a placeholder where a slow op's result is about to land
-//! ([`presence`], [`BoardView::agent_op`]).
+//! multiplayer canvas: a small pointer in each one's colour with its name, and each component an
+//! agent builds with a skeleton, a row with its step and a progress badge; a roster in the top bar
+//! and chips at the edges for those off screen ([`presence`], [`BoardView::agent_op`]). They never
+//! move the user's tab, page or view.
 
 mod commands;
 mod context_bar;
@@ -328,6 +329,9 @@ pub struct BoardView {
 }
 
 impl EventEmitter<ToggleCanvasMaximize> for BoardView {}
+impl EventEmitter<AgentActivity> for BoardView {}
+
+pub use presence::AgentActivity;
 
 impl BoardView {
     /// The canvas file the canvas is bound to, and saves to.

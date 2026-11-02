@@ -622,21 +622,32 @@ A picture is an SVG the canvas imports as its own layers, drawn as Pele drew it.
 ### Agent cursors
 
 When AI agents drive the canvas or the browser through `sawit-mcp`, you see each one at work, the way a multiplayer
-canvas shows other people. Every agent has its own pointer in its own colour, with a pill that carries its name and
-what it is doing: "Claude Code  adding 3 stickies", "Codex  typing in Email". Several agents at once each get their
-own cursor.
+canvas shows other people. Every agent has its own pointer in its own colour (one of twelve), with its name. On the
+canvas each component an agent builds shows its progress on the component itself. Several agents at once each get
+their own cursor.
 
 - **Who is who.** Each `sawit-mcp` process is one agent session. Claude Code, Codex and Cursor each start their own
   per session, and a session's subagents share it. The session's name comes from the client (`clientInfo` in MCP
   `initialize`), and it keeps one colour and one label for as long as Sawit runs. A second session of the same
-  client is told apart by its project ("Codex · shop") or numbered ("Claude Code 2"). The pill always carries the
-  name, so colour is never the only way to tell agents apart. Ops from an older `sawit-mcp`, which doesn't say who
+  client is told apart by its project ("Codex · shop") or numbered ("Claude Code 2"). The name is always there to
+  read, so colour is never the only way to tell agents apart. Ops from an older `sawit-mcp`, which doesn't say who
   it is, show as "Agent".
-- **Canvas.** The pointer goes to where the op landed: the corner of what the agent added, or the middle of what it
-  changed (one layer, or several, as a selection's middle). It glides there, and the layers it touched are
-  outlined in its colour for a moment. An agent never takes your selection or your keyboard, and never moves your
-  view. When it works off screen, a chip in its colour sits at the canvas's edge pointing its way; click it to go
-  there. An op that takes a moment (a Mermaid diagram, an image or file brought in, a long `command.batch`) shows a
+- **Canvas.** The pointer is small (10 × 14 px) and rests just outside the top-right corner of what the agent works
+  on, so it never covers it: the component it builds, or what an op added or changed. It glides there; the most
+  recent agent is drawn on top. A free pointer's name shows in a pill while the agent works, for 2 s after and when
+  you point at it, and is left out where it would cover another.
+- **Components built live.** An agent that begins a component (`canvas_begin`) gets its frame on the canvas at once,
+  with a skeleton that gives way as content lands, and a row above it: the component's name and step ("Pricing
+  card · Writing copy"), the agent's name and a badge, a spinner while it runs, a check when done, "!" and the
+  reason when it failed, which stays until the agent retries or you dismiss it. A component with no word from its
+  agent for a minute shows as stalled, with a dismiss button. New text writes itself at reading speed. Everything
+  one component's agent did undoes as one step, while nothing else edits in between.
+- **Roster and edges.** The canvas's top bar sums up the agents ("3 building · 1 done · 1 failed", idle ones as
+  "+N"); click it for the list, and pick one to go there. Agents at work off screen share one chip per edge ("2
+  agents →"), clear of the toolbar, which lists them the same way.
+- **Your screen stays yours.** An agent never takes your tab, project, page, view, selection or keyboard: its canvas
+  ops work on the canvas where it is (a canvas not open yet opens behind your tab, whose dot says agents are at
+  work), and `view.*` and `page.select` are refused. An op that takes a moment (a Mermaid diagram, an image or file brought in, a long `command.batch`) shows a
   placeholder at once where its result will land, with a soft shimmer. The placeholder is replaced by the result,
   or shows an error mark for a moment if the op failed.
 - **Browser.** For `browser_click`, `browser_hover`, `browser_type`, `browser_select_option`, `browser_scroll` and
@@ -651,12 +662,14 @@ own cursor.
   or <kbd>⌃</kbd><kbd>⌘</kbd><kbd>A</kbd> turn them off or on for every window. Sawit remembers the choice in
   `agent-cursors.json` in its folder. Setting `"agent_cursors_in_screenshots": true` there keeps them in agents'
   screenshots.
-- **Motion and screen readers.** With Reduce motion on (System Settings ▸ Accessibility ▸ Display), pointers jump
-  instead of gliding, and nothing shimmers or ripples. The cursors are hidden from VoiceOver. Instead, the canvas
-  and the browser announce what agents did in a polite status line, such as "Claude Code added 3 stickies", at most
-  once every 2 seconds per agent.
+- **Motion and screen readers.** With Reduce motion on (System Settings ▸ Accessibility ▸ Display, or
+  `SAWIT_REDUCE_MOTION=1` for one run), pointers jump instead of gliding, and nothing shimmers, spins, ripples or
+  writes itself. The cursors are hidden from VoiceOver. Instead, the canvas announces each change of a component
+  ("Codex finished Sign-in form") and the browser what agents did, in a polite status line, queued so agents don't
+  talk over each other, and an agent's other ops at most once every 2 seconds.
 
-Agents that work on the canvas while Sawit is closed have no cursor: there is nothing on screen to show it on.
+Agents that work on the canvas while Sawit is closed have no cursor: there is nothing on screen to show it on. Their
+components' frames and content are saved; `canvas_progress` then says nothing shows it.
 
 ### Git
 

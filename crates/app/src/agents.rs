@@ -48,6 +48,11 @@ impl Look {
         }
     }
 
+    /// The subject of a sentence about it: its label, or "An agent".
+    pub fn subject(&self) -> &SharedString {
+        &self.subject
+    }
+
     /// The agent as the page's overlay takes it: `{id, name, color}`.
     pub fn page_json(&self) -> Value {
         json!({ "id": self.id, "name": self.label, "color": self.hex })
@@ -200,10 +205,12 @@ thread_local! {
     static SYSTEM_MOTION: Cell<Option<(Instant, bool)>> = const { Cell::new(None) };
 }
 
-/// Whether motion is reduced: GPUI's own setting, or the system's (Accessibility, Display, Reduce
-/// motion). Agents' cursors then jump rather than glide, and placeholders don't shimmer.
+/// Whether motion is reduced: GPUI's own setting, `SAWIT_REDUCE_MOTION=1` for this run, or the
+/// system's (Accessibility, Display, Reduce motion). Agents' cursors then jump rather than glide,
+/// skeletons and placeholders don't shimmer, badges don't spin and text shows whole.
 pub fn reduce_motion(cx: &App) -> bool {
     cx.reduce_motion()
+        || reduced_for_this_run()
         || SYSTEM_MOTION.with(|cell| match cell.get() {
             Some((at, reduced)) if at.elapsed() < MOTION_RECHECK => reduced,
             _ => {
@@ -212,6 +219,15 @@ pub fn reduce_motion(cx: &App) -> bool {
                 reduced
             }
         })
+}
+
+/// `SAWIT_REDUCE_MOTION` set (to anything but `0`) reduces motion for this run, as the Mac's
+/// setting does, so the canvas can be checked under it without changing the Mac's setting.
+fn reduced_for_this_run() -> bool {
+    static REDUCED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *REDUCED.get_or_init(|| {
+        std::env::var_os("SAWIT_REDUCE_MOTION").is_some_and(|v| !v.is_empty() && v != "0")
+    })
 }
 
 #[cfg(all(target_os = "macos", not(test)))]

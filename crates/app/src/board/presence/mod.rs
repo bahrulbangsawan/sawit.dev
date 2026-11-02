@@ -1,28 +1,43 @@
-//! Agents on the canvas, as a multiplayer canvas shows its other people: each agent's pointer in
-//! its colour with a pill of its name and what it does, the layers it just touched outlined in
-//! its colour for a moment, a placeholder where a slow op's result is about to land, and a chip
-//! at the canvas's edge for an agent at work off screen, which takes the view there when clicked.
+//! Agents on the canvas, as a multiplayer canvas shows its other people, and the components they
+//! build there.
 //!
-//! None of it is the user's: an agent's op leaves the user's selection and keyboard as they are
-//! (`sawit_board::ops`), and its cursor never moves the view. What the canvas paints for it is
-//! decorative to assistive technology; the canvas announces what agents did in a polite status
-//! line instead ([`Presence::announcement`]).
+//! - **The pointer**: 10 × 14 px in the agent's colour with a 1.5 px white edge, the same size at
+//!   every zoom ([`POINTER`]). It rests just outside the top-right corner of what the agent works
+//!   on: its component's frame, or for an op outside a component, what the op added, changed or
+//!   took off ([`target`](target::target)). It glides there for [`GLIDE`], eased out, and jumps
+//!   under reduced motion. The most recent agent draws on top.
+//! - **The name**: the agent's name only. On a component it is on the component's row; a free
+//!   pointer's is a pill beside it ([`labels`]), while the agent is at work and for
+//!   [`NAME_AFTER`] after, and while the user's pointer rests on it. A pill that would cover
+//!   another is left out.
+//! - **A component** an agent builds ([`work`]): a skeleton in its frame until content lands, a
+//!   row above it with its name and step, the agent's name and a badge ([`rows`]), "Stalled" after
+//!   a minute without word, "!" and the reason when it failed ([`Work`]).
+//! - **The roster** in the top bar ([`roster`]) and a chip per edge for agents at work off screen
+//!   ([`edges`]); both list the agents, and the user's click takes the view there.
+//! - **Text** an agent writes reveals at reading speed ([`reveal`]).
+//! - **Screen readers** hear one polite sentence per change, queued per agent ([`announce`]).
 //!
-//! The pointer goes to the op's target: the top-left corner of what it added, else the centre of
-//! what it changed (one layer's bounds, or the bounds of several, as a selection's centre), found
-//! by comparing the document before and after the op ([`target`](target::target)). It glides
-//! there for [`GLIDE`], eased out, and jumps under reduced motion.
+//! None of it is the user's: an agent's op leaves the user's selection, keyboard, view and page as
+//! they are (`sawit_board::ops`). What the canvas paints for it is decorative to assistive
+//! technology; the roster and the chips are buttons, and the status line speaks.
 //!
-//! An op that takes noticeable time (`sawit_core::agents::slow_canvas_op`: a Mermaid layout, an
-//! image or file brought in, a long `command.batch`) shows a placeholder at once where its result
-//! will land ([`ghost_rect`](target::ghost_rect)), and runs once that has been painted
-//! ([`PLACEHOLDER_LEAD`]). The placeholder goes when the render thread hands over the frame with
-//! the result, or, if the op failed, after a moment with an error mark.
+//! An op that takes noticeable time (`sawit_core::agents::slow_canvas_op`) shows a placeholder at
+//! once where its result will land ([`ghost_rect`](target::ghost_rect)), and runs once that has
+//! been painted ([`PLACEHOLDER_LEAD`]).
 
+mod announce;
 mod edges;
+mod labels;
 mod marks;
 mod ops;
+mod paint;
+mod reveal;
+mod roster;
+mod rows;
 mod target;
+mod work;
+mod work_ops;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -31,57 +46,53 @@ use std::time::{Duration, Instant};
 use figcraft_doc::{Document, NodeId};
 use futures::channel::oneshot;
 use gpui_kit::*;
+use sawit_core::agents::work::NAME_AFTER;
 use sawit_core::agents::{self as model, GONE_AFTER};
 use serde_json::Value;
 
-pub(super) use marks::{Painted, paint};
+pub(super) use marks::Painted;
+pub(super) use paint::paint;
+pub(super) use roster::render_roster;
 use target::Target;
+pub(super) use work::Work;
 
 use crate::agents::Look;
 
 /// How long a pointer glides to its new place.
 pub(super) const GLIDE: Duration = Duration::from_millis(180);
-/// How long the layers an agent touched stay outlined, fading out over the last half.
+/// How long the layers a free op touched stay outlined, fading out over the last half.
 const TOUCHED_TIME: Duration = Duration::from_millis(1200);
-/// How long a slow op's placeholder shows before the op runs: a few frames, so it is on screen
-/// before the op holds the UI thread.
+/// How long a slow op's placeholder shows before the op runs.
 pub(super) const PLACEHOLDER_LEAD: Duration = Duration::from_millis(50);
 /// How long a placeholder whose op is done waits at most for the frame with its result.
 const LANDING_TIME: Duration = Duration::from_millis(1500);
 /// How long a failed op's placeholder stays, with its error mark.
 const FAILED_TIME: Duration = Duration::from_millis(1600);
-/// How long one sweep of a placeholder's shimmer takes.
-const SHIMMER: Duration = Duration::from_millis(1100);
+/// How long one sweep of a placeholder's or a skeleton's shimmer takes.
+const SHIMMER: Duration = Duration::from_millis(1400);
 /// A placeholder's size when the op doesn't say how big its result is (page units).
 const GHOST_SIZE: (f64, f64) = (320.0, 200.0);
-/// How far right of what a page holds a diagram goes when its op names no place, as
-/// `sawit_board::ops` puts it there (page units).
+/// How far right of what a page holds a diagram goes when its op names no place (page units).
 const DIAGRAM_GAP: f64 = 100.0;
-/// How many layers an op may touch and have each outlined; more (a diagram's) are outlined as
-/// one box around them all, as a selection of many is.
+/// How many layers a free op may touch and have each outlined; more are outlined as one box.
 const MAX_OUTLINES: usize = 8;
-/// How far an off-screen agent's chip stays inside the canvas's edge (px).
+/// How far an off-screen chip stays inside the canvas's edge (px).
 const EDGE_INSET: f64 = 12.0;
-/// The chip's size (px), for placing it.
-pub(super) const EDGE_CHIP: (f64, f64) = (120.0, 24.0);
-/// How long after announcing what an agent did the canvas waits before announcing that agent
-/// again: a screen reader would otherwise read every op of a busy agent.
+/// How long after announcing what an agent did outside a component the canvas waits before
+/// announcing that agent's next op.
 const ANNOUNCE_GAP: Duration = Duration::from_secs(2);
-/// The pointer's outline, from its tip (px), as the page's overlay draws it too.
+/// The pointer's outline, from its tip (px): 7 × 11, which its 1.5 px white edge makes 10 × 14.
 const POINTER: [(f32, f32); 7] = [
     (0.0, 0.0),
-    (0.0, 16.0),
-    (4.4, 12.3),
-    (7.3, 18.6),
-    (9.9, 17.4),
-    (7.1, 11.2),
-    (12.6, 11.2),
+    (0.0, 9.6),
+    (2.4, 7.2),
+    (4.1, 11.0),
+    (5.5, 10.3),
+    (3.9, 6.6),
+    (7.0, 6.5),
 ];
-/// Where the pill goes from the pointer's tip (px), its height and its padding.
-const PILL_AT: (f32, f32) = (12.0, 17.0);
-const PILL_HEIGHT: f32 = 20.0;
-const PILL_PAD: f32 = 8.0;
-const PILL_TEXT: f32 = 11.0;
+/// Where the pointer's tip goes from the corner it rests at (px): just outside it.
+const TIP_FROM_CORNER: (f64, f64) = (3.0, 1.0);
 
 /// Where on the canvas an agent works: a point on a page.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -93,7 +104,7 @@ pub(super) struct Spot {
 /// One agent on this canvas.
 pub(super) struct Agent {
     pub look: Look,
-    /// Where its pointer goes, once an op of it had a target.
+    /// Where its pointer goes: the top-right corner of what it works on.
     pub at: Option<Spot>,
     /// Where its pointer glides from, and when it set off.
     from: Option<(f64, f64)>,
@@ -101,8 +112,11 @@ pub(super) struct Agent {
     /// What it does, in words ("adding 3 stickies"), and when it last did anything here.
     pub doing: String,
     pub seen: Instant,
-    /// The layers it touched last, as page rectangles on `touched_page`, outlined until
-    /// [`TOUCHED_TIME`] after `touched_at`.
+    /// The work its pointer rests on, when its last op was one of a work's: its name is on that
+    /// work's row, not on a pill.
+    pub work: Option<String>,
+    /// The layers a free op of it touched last, as page rectangles on `touched_page`, outlined
+    /// until [`TOUCHED_TIME`] after `touched_at`.
     touched: Vec<[f64; 4]>,
     touched_page: Option<NodeId>,
     touched_at: Instant,
@@ -117,6 +131,11 @@ impl Agent {
         };
         let t = model::glide(now.saturating_duration_since(self.moved), GLIDE);
         Some((from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t))
+    }
+
+    /// Whether it did something in the last [`NAME_AFTER`]: its name shows.
+    pub fn named(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.seen) < NAME_AFTER
     }
 }
 
@@ -149,26 +168,33 @@ pub(super) struct Waiting {
     pub reply: oneshot::Sender<Result<Value, String>>,
 }
 
-/// The agents on one canvas.
+/// The agents on one canvas, and the works they build there.
 #[derive(Default)]
 pub(super) struct Presence {
     pub agents: Vec<Agent>,
     pub ghosts: Vec<Ghost>,
+    pub works: Vec<Work>,
     /// Agents' ops in the order they came, while one of them waits for its placeholder to show.
     pub queue: VecDeque<Waiting>,
     /// The queue is to be run, once [`PLACEHOLDER_LEAD`] is over.
     pub draining: bool,
-    /// What the canvas last announced, read by a polite status line: "Claude Code added 3
-    /// stickies".
-    pub announcement: SharedString,
-    announced: Vec<(SharedString, Instant)>,
+    /// The polite status line's sentences, one at a time.
+    pub announcer: announce::Announcer,
+    /// The text agents' ops wrote, revealed at reading speed.
+    pub reveals: reveal::Reveals,
+    /// The agent whose pointer the user's pointer rests on: its name shows.
+    pub hovered: Option<SharedString>,
     next_ghost: u64,
     /// The canvas redraws every [`TICK`] while an agent shows, so they fade and go on time.
     pub ticking: bool,
+    /// Whether agents were at work when the canvas last told its tab ([`AgentActivity`]).
+    pub told_at_work: bool,
 }
 
 /// How often the canvas redraws while an agent shows and nothing moves.
 const TICK: Duration = Duration::from_millis(250);
+/// How often it redraws while only works show: their rows change by the second at most.
+const QUIET_TICK: Duration = Duration::from_secs(1);
 
 impl Presence {
     /// `look`'s agent did something here at `now`: `doing`, in words.
@@ -183,6 +209,7 @@ impl Presence {
                     moved: now,
                     doing: String::new(),
                     seen: now,
+                    work: None,
                     touched: Vec::new(),
                     touched_page: None,
                     touched_at: now,
@@ -198,8 +225,16 @@ impl Presence {
     }
 
     /// `look`'s agent's pointer goes to `target` on page `page`, gliding from where it was
-    /// (unless motion is `reduce`d), and the layers it touched are outlined.
-    pub fn point_at(&mut self, look: &Look, page: NodeId, target: Target, now: Instant) {
+    /// (unless motion is `reduce`d), and the layers it touched are outlined; `work` is the work
+    /// it is at, if any.
+    pub fn point_at(
+        &mut self,
+        look: &Look,
+        page: NodeId,
+        target: Target,
+        work: Option<&str>,
+        now: Instant,
+    ) {
         let agent = self.saw_quietly(look, now);
         agent.from = match agent.at {
             Some(at) if at.page == page => Some(agent.point(now, false).unwrap_or(at.point)),
@@ -210,6 +245,7 @@ impl Presence {
             point: target.point,
         });
         agent.moved = now;
+        agent.work = work.map(str::to_string);
         agent.touched = target.rects;
         agent.touched_page = Some(page);
         agent.touched_at = now;
@@ -236,10 +272,10 @@ impl Presence {
             state: GhostState::Waiting,
         });
         let corner = Target {
-            point: (rect[0], rect[1]),
+            point: (rect[2], rect[1]),
             rects: Vec::new(),
         };
-        self.point_at(look, page, corner, now);
+        self.point_at(look, page, corner, None, now);
         id
     }
 
@@ -264,26 +300,16 @@ impl Presence {
 
     /// The render thread handed over a frame of `doc`: the placeholders whose result it shows go.
     pub fn rendered(&mut self, doc: &Arc<Document>) {
+        let doc = self.reveals.source_of(doc);
         self.ghosts.retain(|g| match &g.state {
-            GhostState::Landed { doc: landed, .. } => !Arc::ptr_eq(landed, doc),
+            GhostState::Landed { doc: landed, .. } => !Arc::ptr_eq(landed, &doc),
             _ => true,
         });
     }
 
-    /// Says what `look`'s agent did, `done`, in the status line, unless that agent was announced
-    /// less than [`ANNOUNCE_GAP`] ago.
-    pub fn announce(&mut self, look: &Look, done: &str, now: Instant) {
-        self.announced
-            .retain(|(_, at)| now.saturating_duration_since(*at) < ANNOUNCE_GAP);
-        if self.announced.iter().any(|(id, _)| *id == look.id) {
-            return;
-        }
-        self.announced.push((look.id.clone(), now));
-        self.announcement = crate::agents::sentence(look, done);
-    }
-
     /// Lets go of what has had its time at `now`: agents quiet for 30 s, outlines that faded,
-    /// placeholders whose result came (or never will) and error marks. Whether anything shows.
+    /// placeholders whose result came (or never will) and error marks, works that are over, and
+    /// moves the announcements on. Whether anything still shows.
     pub fn prune(&mut self, now: Instant) -> bool {
         self.agents
             .retain(|a| now.saturating_duration_since(a.seen) < GONE_AFTER);
@@ -297,11 +323,26 @@ impl Presence {
             GhostState::Landed { at, .. } => now.saturating_duration_since(*at) < LANDING_TIME,
             GhostState::Failed { at } => now.saturating_duration_since(*at) < FAILED_TIME,
         });
-        !self.agents.is_empty() || !self.ghosts.is_empty()
+        self.prune_works(now);
+        self.announcer.tick(now);
+        !self.agents.is_empty()
+            || !self.ghosts.is_empty()
+            || !self.works.is_empty()
+            || self.announcer.pending()
     }
 
-    /// Whether something moves at `now`, so the canvas draws the next frame too: a pointer on
-    /// its way, an outline fading, a placeholder's shimmer.
+    /// How often the canvas redraws for its agents: every [`TICK`] while an agent shows, a
+    /// placeholder waits or a sentence is to be said; every [`QUIET_TICK`] while only works show,
+    /// which change no faster (a failed one may stay for hours).
+    pub fn tick_every(&self) -> Duration {
+        match self.agents.is_empty() && self.ghosts.is_empty() && !self.announcer.pending() {
+            true => QUIET_TICK,
+            false => TICK,
+        }
+    }
+
+    /// Whether something moves at `now`, so the canvas draws the next frame too: a pointer on its
+    /// way, an outline or a check fading, a shimmer, text being revealed.
     pub fn animating(&self, now: Instant, reduce: bool) -> bool {
         let gliding = |a: &Agent| !reduce && now.saturating_duration_since(a.moved) < GLIDE;
         let touched = |a: &Agent| {
@@ -314,6 +355,25 @@ impl Presence {
         };
         (self.agents.iter()).any(|a| gliding(a) || touched(a) || fading(a))
             || self.ghosts.iter().any(shimmer)
+            || self.works.iter().any(|w| w.animating(now, reduce))
+            || (!reduce && self.reveals.active(now))
+    }
+
+    /// The agent at work here most recently, while one is: its op in the last
+    /// [`model::FADE_AFTER`], or a work of its still running. Its colour is the canvas tab's dot.
+    pub fn at_work(&self, now: Instant) -> Option<&Look> {
+        let busy = |a: &&Agent| {
+            now.saturating_duration_since(a.seen) < model::FADE_AFTER
+                || self
+                    .works
+                    .iter()
+                    .any(|w| w.look.id == a.look.id && w.building(now))
+        };
+        self.agents
+            .iter()
+            .filter(busy)
+            .max_by_key(|a| a.seen)
+            .map(|a| &a.look)
     }
 
     /// Where `look`'s agent's pointer is going, on which page.
@@ -322,6 +382,9 @@ impl Presence {
         self.agents.iter().find(|a| a.look.id == id)?.at
     }
 }
+
+/// The canvas's agents started or stopped working: its tab shows a dot while they work.
+pub struct AgentActivity;
 
 #[cfg(test)]
 mod tests;

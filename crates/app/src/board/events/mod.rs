@@ -157,6 +157,7 @@ impl BoardView {
         if !self.dragging && self.pan.is_none() {
             self.send_pointer(PointerKind::Hover, event.position, event.modifiers, cx);
         }
+        self.hover_agents(event.position, cx);
     }
 
     /// A key went down on the canvas: Space, without modifiers and with no text edited, is held
@@ -334,6 +335,7 @@ impl BoardView {
     /// The pointer left the canvas: what hovering there showed goes, unless a drag on holds it
     /// until its release.
     fn pointer_left(&mut self, cx: &mut Context<Self>) {
+        self.agents.hovered = None;
         if self.dragging {
             return;
         }

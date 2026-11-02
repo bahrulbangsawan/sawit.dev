@@ -94,6 +94,7 @@ pub(super) fn render_top_bar(
             h_flex()
                 .flex_shrink_0()
                 .gap_1()
+                .children(super::presence::render_roster(view, cx))
                 .child(
                     Button::new("board-agent-cursors")
                         .ghost()

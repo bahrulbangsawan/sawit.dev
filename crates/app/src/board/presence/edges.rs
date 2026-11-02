@@ -1,21 +1,24 @@
-//! Agents at work off screen: a chip at the canvas's edge for each, which takes the view there
-//! when clicked; and the polite status line that says what agents did.
+//! Agents at work off screen: one chip per edge of the canvas for the agents past it ("2 agents
+//! →", with their colours), kept clear of the toolbar; a click lists them, and the user's choice
+//! takes the view to one. And the polite status line that says what agents did.
 
 use std::time::Instant;
 
 use figcraft_doc::NodeId;
 use figcraft_engine::ViewState;
 use gpui_kit::assets::IconName as Lucide;
-use gpui_kit::component::Icon;
-use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::button::*;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::*;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::agents as model;
 
-use super::{EDGE_CHIP, EDGE_INSET, Presence};
+use super::{EDGE_INSET, Presence, Spot};
 use crate::agents::Look;
 use crate::board::BoardView;
 
-/// Which way an off-screen agent is from the canvas.
+/// Which way off-screen agents are from the canvas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::board) enum Toward {
     Left,
@@ -24,56 +27,50 @@ pub(in crate::board) enum Toward {
     Down,
 }
 
-/// An off-screen agent's chip at the canvas's edge.
+/// The chip of the agents past one edge.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::board) struct Edge {
-    pub look: Look,
-    /// The chip's top-left from the canvas's top-left (px).
-    pub at: (f64, f64),
     pub toward: Toward,
-    /// Where the agent is on the page: the view goes there when the chip is clicked.
-    pub point: (f64, f64),
+    /// Where along the edge it sits: the middle of where its agents are past it, kept on the
+    /// canvas (px from the canvas's top or left).
+    pub along: f64,
+    /// Its agents, the most recent first, and where each works.
+    pub agents: Vec<(Look, Spot, String)>,
 }
 
-/// Where the chip of an agent whose pointer is at `point` (px from the canvas's top-left) goes on
-/// a canvas of `size`, and which way it points; `None` while the pointer is on the canvas.
-pub(super) fn edge_chip(point: (f64, f64), size: (f64, f64)) -> Option<((f64, f64), Toward)> {
-    let (x, y) = point;
-    let (w, h) = size;
+/// A chip's height, and its width for placing it along an edge (px).
+pub(super) const CHIP_HEIGHT: f64 = 24.0;
+const CHIP_ROOM: f64 = 140.0;
+/// How far above the canvas's bottom a chip for agents below stays: clear of the toolbar, which
+/// floats there.
+pub(super) const ABOVE_TOOLBAR: f64 = 16.0 + 44.0 + 8.0;
+
+/// The edge a point `point` (px from the canvas's top-left) is past on a canvas of `size`, and
+/// where along it the point is; `None` while it is on the canvas.
+pub(super) fn edge_of(point: (f64, f64), size: (f64, f64)) -> Option<(Toward, f64)> {
+    let ((x, y), (w, h)) = (point, size);
     if !(x.is_finite() && y.is_finite()) || (0.0..=w).contains(&x) && (0.0..=h).contains(&y) {
         return None;
     }
-    let (cx, cy) = (w / 2.0, h / 2.0);
-    let (dx, dy) = (x - cx, y - cy);
-    // The edge it leaves by: the side the pointer is furthest past, for the canvas's shape.
-    let toward = if dx.abs() * h >= dy.abs() * w {
-        if dx < 0.0 {
-            Toward::Left
-        } else {
-            Toward::Right
-        }
-    } else if dy < 0.0 {
-        Toward::Up
+    let (dx, dy) = (x - w / 2.0, y - h / 2.0);
+    // The edge it leaves by: the side the point is furthest past, for the canvas's shape.
+    Some(if dx.abs() * h >= dy.abs() * w {
+        (
+            if dx < 0.0 {
+                Toward::Left
+            } else {
+                Toward::Right
+            },
+            y,
+        )
     } else {
-        Toward::Down
-    };
-    let clamp = |v: f64, lo: f64, hi: f64| v.max(lo).min(hi.max(lo));
-    let left = clamp(
-        x - EDGE_CHIP.0 / 2.0,
-        EDGE_INSET,
-        w - EDGE_INSET - EDGE_CHIP.0,
-    );
-    let top = clamp(
-        y - EDGE_CHIP.1 / 2.0,
-        EDGE_INSET,
-        h - EDGE_INSET - EDGE_CHIP.1,
-    );
-    Some(((left, top), toward))
+        (if dy < 0.0 { Toward::Up } else { Toward::Down }, x)
+    })
 }
 
 impl Presence {
     /// The chips for the agents at work on page `page` whose pointer is off a canvas of `size`
-    /// (px) shown as `view`: each kept just inside the edge nearest it, with the way to it.
+    /// (px) shown as `view`: one per edge, in the order Left, Right, Up, Down.
     pub fn edges(
         &self,
         view: &ViewState,
@@ -81,47 +78,60 @@ impl Presence {
         size: (f64, f64),
         now: Instant,
     ) -> Vec<Edge> {
-        let mut edges = Vec::new();
-        for agent in &self.agents {
+        let mut agents: Vec<_> = self.agents.iter().collect();
+        agents.sort_by_key(|a| std::cmp::Reverse(a.seen));
+        let mut edges: Vec<(Edge, Vec<f64>)> = Vec::new();
+        for agent in agents {
             let idle = now.saturating_duration_since(agent.seen);
-            let (Some(at), Some(_)) = (agent.at, model::opacity(idle)) else {
+            let (Some(at), Some(_)) = (agent.at.filter(|at| at.page == page), model::opacity(idle))
+            else {
                 continue;
             };
-            if at.page != page {
+            let point = view.page_to_screen(at.point.0, at.point.1);
+            let Some((toward, along)) = edge_of(point, size) else {
                 continue;
-            }
-            let (x, y) = view.page_to_screen(at.point.0, at.point.1);
-            if let Some(edge) = edge_chip((x, y), size) {
-                edges.push(Edge {
-                    look: agent.look.clone(),
-                    at: edge.0,
-                    toward: edge.1,
-                    point: at.point,
-                });
+            };
+            let entry = (agent.look.clone(), at, agent.doing.clone());
+            match edges.iter_mut().find(|(e, _)| e.toward == toward) {
+                Some((edge, alongs)) => {
+                    edge.agents.push(entry);
+                    alongs.push(along);
+                }
+                None => edges.push((
+                    Edge {
+                        toward,
+                        along: 0.0,
+                        agents: vec![entry],
+                    },
+                    vec![along],
+                )),
             }
         }
-        edges
+        let order = [Toward::Left, Toward::Right, Toward::Up, Toward::Down];
+        edges.sort_by_key(|(e, _)| order.iter().position(|t| *t == e.toward));
+        (edges.into_iter())
+            .map(|(mut edge, alongs)| {
+                let middle = alongs.iter().sum::<f64>() / alongs.len() as f64;
+                let (room, length) = match edge.toward {
+                    Toward::Left | Toward::Right => (CHIP_HEIGHT, size.1 - ABOVE_TOOLBAR),
+                    Toward::Up | Toward::Down => (CHIP_ROOM, size.0),
+                };
+                let high = (length - EDGE_INSET - room).max(EDGE_INSET);
+                edge.along = (middle - room / 2.0).clamp(EDGE_INSET, high);
+                edge
+            })
+            .collect()
     }
 }
 
 impl BoardView {
-    /// Takes the view to `point` on the page, where an off-screen agent works: a click on its
-    /// chip. The zoom stays as it is.
-    fn go_to_agent(&mut self, point: (f64, f64), cx: &mut Context<Self>) {
-        if let Some(view) = self.view_mut() {
-            view.cx = point.0;
-            view.cy = point.1;
-            cx.notify();
-        }
-    }
-
-    /// Over the canvas: a chip at its edge for each agent at work off screen, which takes the
-    /// view there, and the polite status line that says what agents did.
+    /// Over the canvas: a chip at each edge with agents at work past it, and the polite status
+    /// line that says what agents did.
     pub(in crate::board) fn render_agents(&self, cx: &Context<Self>) -> Vec<AnyElement> {
         let status = div()
             .id("board-agent-activity")
             .role(Role::Status)
-            .aria_label(self.agents.announcement.clone())
+            .aria_label(self.agents.announcer.current.clone())
             .absolute()
             .top_0()
             .left_0()
@@ -140,52 +150,76 @@ impl BoardView {
             f64::from(self.bounds.size.height),
         );
         let now = cx.background_executor().now();
+        elements.extend(self.render_rows(&ds.doc, &ds.view, ds.page, now, cx));
         let this = cx.entity().downgrade();
-        let edges = self.agents.edges(&ds.view, ds.page, size, now);
-        for (ix, edge) in edges.into_iter().enumerate() {
-            let (icon, way) = match edge.toward {
-                Toward::Left => (Lucide::ArrowLeft, "to the left"),
-                Toward::Right => (Lucide::ArrowRight, "to the right"),
-                Toward::Up => (Lucide::ArrowUp, "above"),
-                Toward::Down => (Lucide::ArrowDown, "below"),
-            };
-            let name: SharedString =
-                format!("Go to {}, at work off screen {way}", edge.look.label).into();
-            let this = this.clone();
-            let point = edge.point;
-            elements.push(
-                div()
-                    .id(("board-agent-edge", ix))
-                    .role(Role::Button)
-                    .aria_label(name.clone())
-                    .tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx))
-                    .absolute()
-                    .left(px(edge.at.0 as f32))
-                    .top(px(edge.at.1 as f32))
-                    .h(px(EDGE_CHIP.1 as f32))
-                    .max_w(px(EDGE_CHIP.0 as f32))
-                    .px_2()
-                    .gap_1()
-                    .flex()
-                    .items_center()
-                    .rounded_full()
-                    .border_1()
-                    .border_color(white())
-                    .bg(edge.look.color)
-                    .text_color(white())
-                    .text_xs()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .shadow_md()
-                    .cursor_pointer()
-                    .occlude()
-                    .child(Icon::new(icon).size_3())
-                    .child(div().min_w_0().truncate().child(edge.look.label.clone()))
-                    .on_click(move |_, _, cx| {
-                        let _ = this.update(cx, |view, cx| view.go_to_agent(point, cx));
-                    })
-                    .into_any_element(),
-            );
+        for edge in self.agents.edges(&ds.view, ds.page, size, now) {
+            elements.push(edge_chip(edge, this.clone(), cx));
         }
         elements
     }
+}
+
+/// The chip of `edge`: its agents' colours, who they are, and the way to them; a click lists them.
+fn edge_chip(edge: Edge, view: WeakEntity<BoardView>, cx: &Context<BoardView>) -> AnyElement {
+    let (icon, way, id) = match edge.toward {
+        Toward::Left => (Lucide::ArrowLeft, "to the left", "board-agents-left"),
+        Toward::Right => (Lucide::ArrowRight, "to the right", "board-agents-right"),
+        Toward::Up => (Lucide::ArrowUp, "above", "board-agents-up"),
+        Toward::Down => (Lucide::ArrowDown, "below", "board-agents-down"),
+    };
+    let who: SharedString = match edge.agents.as_slice() {
+        [(look, ..)] => look.label.clone(),
+        agents => format!("{} agents", agents.len()).into(),
+    };
+    let name: SharedString = format!("{who} at work off screen {way}: list them").into();
+    let dots = h_flex().children(edge.agents.iter().enumerate().map(|(ix, (look, ..))| {
+        div()
+            .size(px(10.0))
+            .rounded_full()
+            .border_1()
+            .border_color(gpui_kit::white())
+            .bg(look.color)
+            .when(ix > 0, |dot| dot.ml(px(-3.0)))
+    }));
+    let agents = edge.agents.clone();
+    let chip = Button::new(id)
+        .small()
+        .rounded(ButtonRounded::Large)
+        .accessibility_label(name.clone())
+        .tooltip(name)
+        .child(
+            h_flex()
+                .gap_1p5()
+                .items_center()
+                .text_xs()
+                .text_color(rgb(0x3a414b))
+                .child(dots)
+                .child(div().max_w(px(120.0)).truncate().child(who))
+                .child(Icon::new(icon).size_3()),
+        )
+        .bg(gpui_kit::white())
+        .border_1()
+        .border_color(rgb(0xd5d9df))
+        .shadow_sm()
+        .dropdown_menu(move |mut menu: PopupMenu, _, _| {
+            for (look, spot, doing) in &agents {
+                let (view, spot) = (view.clone(), *spot);
+                let label = format!("{} · {doing}", look.label);
+                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                    let _ = view.update(cx, |view, cx| view.go_to(spot.page, spot.point, cx));
+                }));
+            }
+            menu
+        });
+    let _ = cx;
+    let at = div().absolute().occlude();
+    let at = match edge.toward {
+        Toward::Left => at.left(px(EDGE_INSET as f32)).top(px(edge.along as f32)),
+        Toward::Right => at.right(px(EDGE_INSET as f32)).top(px(edge.along as f32)),
+        Toward::Up => at.top(px(EDGE_INSET as f32)).left(px(edge.along as f32)),
+        Toward::Down => at
+            .bottom(px(ABOVE_TOOLBAR as f32))
+            .left(px(edge.along as f32)),
+    };
+    at.child(chip).into_any_element()
 }
