@@ -20,6 +20,7 @@ use sawit_core::github::{Item, Repo};
 use super::account::{self, GitHubAccount, SignIn};
 use super::store::GitStore;
 use super::thread::ThreadView;
+use crate::catalog;
 
 const ITEM_HEIGHT: f32 = 48.;
 
@@ -54,13 +55,20 @@ pub struct GitHubView {
     new_body: Entity<TextareaState>,
     repos: Load<Vec<Repo>>,
     repo_search: Entity<InputState>,
+    /// The filter tab Your Repositories shows.
+    repo_filter: repos::Filter,
+    /// The owner whose repositories it shows; every owner's when `None`.
+    repo_owner: Option<String>,
+    /// The order it lists them in.
+    repo_sort: repos::Sort,
+    /// The page of Your Repositories shown, and how many rows a page holds.
+    repo_paging: catalog::Paging,
     cloning: Option<String>,
     /// The sign-in code was just copied.
     code_copied: bool,
     working: bool,
     error: Option<String>,
     item_scroll: UniformListScrollHandle,
-    repo_scroll: UniformListScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -70,7 +78,7 @@ impl GitHubView {
         let new_body =
             cx.new(|cx| TextareaState::new(window, cx).placeholder("Description (Markdown)"));
         let repo_search =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Search your repositories"));
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search repositories"));
         let account = account::global(cx);
         let subscriptions = vec![
             cx.observe(&store, |this, _, cx| {
@@ -82,8 +90,10 @@ impl GitHubView {
                 this.ensure_loaded(cx);
                 cx.notify();
             }),
-            cx.subscribe(&repo_search, |_, _, e: &InputEvent, cx| {
+            // A new search starts the list from its first page.
+            cx.subscribe(&repo_search, |this, _, e: &InputEvent, cx| {
                 if matches!(e, InputEvent::Change) {
+                    this.repo_paging.page = 0;
                     cx.notify();
                 }
             }),
@@ -107,12 +117,15 @@ impl GitHubView {
             new_body,
             repos: Load::Idle,
             repo_search,
+            repo_filter: repos::Filter::All,
+            repo_owner: None,
+            repo_sort: repos::Sort::Pushed,
+            repo_paging: catalog::Paging::new("gh-repos", cx),
             cloning: None,
             code_copied: false,
             working: false,
             error: None,
             item_scroll: UniformListScrollHandle::new(),
-            repo_scroll: UniformListScrollHandle::new(),
             _subscriptions: subscriptions,
         };
         if this.store.read(cx).slug.is_none() {

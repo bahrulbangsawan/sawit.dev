@@ -67,8 +67,18 @@ pub async fn avatar(url: &str) -> Result<Vec<u8>> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Repo {
     pub full_name: String,
+    /// The account or organization it belongs to (`owner.login`).
+    pub owner: String,
     pub description: Option<String>,
     pub private: bool,
+    /// A fork of another repository.
+    pub fork: bool,
+    /// Archived on GitHub: read-only.
+    pub archived: bool,
+    /// The language GitHub found most of its code in.
+    pub language: Option<String>,
+    /// How many people starred it (`stargazers_count`).
+    pub stars: u64,
     pub clone_url: String,
     /// Unix seconds of the last push.
     pub pushed_at: i64,
@@ -79,13 +89,27 @@ pub fn parse_repos(v: &Value) -> Vec<Repo> {
         .into_iter()
         .flatten()
         .filter_map(|r| {
+            let full_name = r["full_name"].as_str()?;
             Some(Repo {
-                full_name: r["full_name"].as_str()?.to_string(),
+                full_name: full_name.to_string(),
+                // GitHub always says; else the name before the slash.
+                owner: r["owner"]["login"]
+                    .as_str()
+                    .or_else(|| full_name.split_once('/').map(|(owner, _)| owner))
+                    .unwrap_or_default()
+                    .to_string(),
                 description: r["description"]
                     .as_str()
                     .filter(|d| !d.is_empty())
                     .map(String::from),
                 private: r["private"].as_bool().unwrap_or(false),
+                fork: r["fork"].as_bool().unwrap_or(false),
+                archived: r["archived"].as_bool().unwrap_or(false),
+                language: r["language"]
+                    .as_str()
+                    .filter(|l| !l.is_empty())
+                    .map(String::from),
+                stars: r["stargazers_count"].as_u64().unwrap_or(0),
                 clone_url: r["clone_url"].as_str()?.to_string(),
                 pushed_at: r["pushed_at"].as_str().and_then(parse_time).unwrap_or(0),
             })

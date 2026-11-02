@@ -147,14 +147,45 @@ fn items_tell_pull_requests_from_issues() {
     assert!(!items[1].pull && !items[1].open);
 }
 
+/// A repository as `/user/repos` sends it: its owner, whether it is a fork or archived, its
+/// language and stars. Fields GitHub leaves out or sends empty read as none; a repository with
+/// no owner object belongs to the name before the slash.
 #[test]
 fn repos_and_comments_parse() {
-    let repos = parse_repos(
-        &json!([{"full_name": "a/b", "description": "", "private": true,
-            "clone_url": "https://github.com/a/b.git", "pushed_at": "1970-01-02T00:00:00Z"}]),
+    let repos = parse_repos(&json!([
+        {"full_name": "acme/site", "owner": {"login": "acme"}, "description": "The site",
+            "private": false, "fork": true, "archived": true, "language": "Rust",
+            "stargazers_count": 12, "clone_url": "https://github.com/acme/site.git",
+            "pushed_at": "1970-01-02T00:00:00Z"},
+        {"full_name": "a/b", "description": "", "private": true, "language": null,
+            "clone_url": "https://github.com/a/b.git", "pushed_at": null},
+        {"full_name": "no/clone-url"}
+    ]));
+    assert_eq!(
+        repos.len(),
+        2,
+        "a repository without a clone URL is left out"
     );
-    assert_eq!(repos[0].description, None);
-    assert_eq!(repos[0].pushed_at, 86400);
+    assert_eq!(
+        repos[0],
+        Repo {
+            full_name: "acme/site".into(),
+            owner: "acme".into(),
+            description: Some("The site".into()),
+            private: false,
+            fork: true,
+            archived: true,
+            language: Some("Rust".into()),
+            stars: 12,
+            clone_url: "https://github.com/acme/site.git".into(),
+            pushed_at: 86400,
+        }
+    );
+    let b = &repos[1];
+    assert_eq!(b.owner, "a");
+    assert_eq!(b.description, None);
+    assert!(b.private && !b.fork && !b.archived);
+    assert_eq!((b.language.as_deref(), b.stars, b.pushed_at), (None, 0, 0));
     let c = parse_comments(
         &json!([{"user": {"login": "ann"}, "body": "hi", "created_at": "2000-03-01T00:00:00Z"}]),
     );

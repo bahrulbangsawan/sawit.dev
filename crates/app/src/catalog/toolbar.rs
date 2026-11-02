@@ -60,12 +60,13 @@ pub fn tabs(
         )
 }
 
-/// A button that opens a menu of `options` with a check by the current one.
+/// A button that opens a menu of `options` (fixed words, or names that came with the data, such
+/// as owners) with a check by the current one.
 pub fn menu(
     id: &'static str,
     icon: Lucide,
     label: String,
-    options: Vec<&'static str>,
+    options: Vec<impl Into<SharedString> + Clone + 'static>,
     current: usize,
     on: impl Fn(&usize, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
@@ -79,7 +80,7 @@ pub fn menu(
             for (ix, option) in options.iter().enumerate() {
                 let on = on.clone();
                 menu = menu.item(
-                    PopupMenuItem::new(*option)
+                    PopupMenuItem::new(option.clone())
                         .checked(ix == current)
                         .on_click(move |_, window, cx| on(&ix, window, cx)),
                 );
