@@ -1,5 +1,6 @@
 //! Creating the project: the create checked and handed to the workspace to run in a terminal,
-//! watched until its job is over, then opened, or said to have failed.
+//! watched until its job is over, then opened (or, from Create Project Only, only made), or said
+//! to have failed.
 
 use std::time::Instant;
 
@@ -15,9 +16,18 @@ impl NewProjectPage {
         matches!(self.creating, Creating::Running { .. })
     }
 
-    /// Checks the create can start and marks it running: the job for the workspace to run,
-    /// or why it can't start (also shown on the page).
+    /// Checks the create can start and marks it running, to open the project once made: the job
+    /// for the workspace to run, or why it can't start (also shown on the page).
     pub fn begin_create(&mut self, cx: &mut Context<Self>) -> Result<CreateJob, String> {
+        self.begin_create_and(true, cx)
+    }
+
+    /// [`begin_create`](Self::begin_create), opening the project once made only when `open`.
+    pub(super) fn begin_create_and(
+        &mut self,
+        open: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<CreateJob, String> {
         if self.busy() {
             return Err("A project is being created already.".into());
         }
@@ -47,15 +57,26 @@ impl NewProjectPage {
             since: Instant::now(),
             seen: false,
             idle: None,
+            open,
         };
         self.keep(cx);
         cx.notify();
         Ok(job)
     }
 
-    /// Create Project: asks the workspace to run the create.
+    /// Create Project: asks the workspace to run the create, then opens the project.
     pub(super) fn create(&mut self, cx: &mut Context<Self>) {
-        if let Ok(job) = self.begin_create(cx) {
+        self.create_and(true, cx);
+    }
+
+    /// Create Project Only: the same create, leaving the project made but not opened.
+    pub(super) fn create_only(&mut self, cx: &mut Context<Self>) {
+        self.create_and(false, cx);
+    }
+
+    /// Asks the workspace to run the create; the project opens once made when `open`.
+    pub(super) fn create_and(&mut self, open: bool, cx: &mut Context<Self>) {
+        if let Ok(job) = self.begin_create_and(open, cx) {
             cx.emit(NewProjectEvent::Create(job));
         }
     }
@@ -92,6 +113,7 @@ impl NewProjectPage {
             since,
             seen,
             idle,
+            ..
         } = &mut self.creating
         else {
             return true;
@@ -110,18 +132,38 @@ impl NewProjectPage {
         true
     }
 
-    /// The create's job ended: opens the project when it was made, else says it failed.
+    /// The create's job ended: opens the project when it was made (and asked to), else says it
+    /// failed.
     fn finish(&mut self, cx: &mut Context<Self>) {
-        let Creating::Running { dir, .. } = &self.creating else {
+        let Creating::Running { dir, open, .. } = &self.creating else {
+            return;
+        };
+        let (dir, open) = (dir.clone(), *open);
+        if new_project::created(&dir) {
+            self.creating = Creating::Done {
+                dir: dir.clone(),
+                open,
+            };
+            if open {
+                cx.emit(NewProjectEvent::Open(dir));
+            }
+        } else {
+            self.creating = Creating::Failed { dir, open };
+        }
+        cx.notify();
+    }
+
+    /// Open Project, after Create Project Only: opens the project made.
+    pub(super) fn open_made(&mut self, cx: &mut Context<Self>) {
+        let Creating::Done { dir, open: false } = &self.creating else {
             return;
         };
         let dir = dir.clone();
-        if new_project::created(&dir) {
-            self.creating = Creating::Done(dir.clone());
-            cx.emit(NewProjectEvent::Open(dir));
-        } else {
-            self.creating = Creating::Failed { dir };
-        }
+        self.creating = Creating::Done {
+            dir: dir.clone(),
+            open: true,
+        };
+        cx.emit(NewProjectEvent::Open(dir));
         cx.notify();
     }
 }

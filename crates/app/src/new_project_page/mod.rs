@@ -77,13 +77,20 @@ enum Creating {
         since: Instant,
         seen: bool,
         idle: Option<Instant>,
+        /// Whether the project opens once made (Create Project), or is only made (Create Project
+        /// Only).
+        open: bool,
     },
-    /// Over without a project: the terminal says why.
+    /// Over without a project: the terminal says why. `open` as the create asked, for Try Again.
     Failed {
         dir: PathBuf,
+        open: bool,
     },
-    /// Made, and being opened.
-    Done(PathBuf),
+    /// Made: being opened when `open`, else made only, with a button to open it.
+    Done {
+        dir: PathBuf,
+        open: bool,
+    },
 }
 
 /// Every New Project page, with its window: what quitting and closing a window ask about
@@ -195,6 +202,7 @@ impl NewProjectPage {
             since: Instant::now(),
             seen: true,
             idle: None,
+            open: true,
         };
         Self::register(window, cx);
         page

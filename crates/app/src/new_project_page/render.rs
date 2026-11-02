@@ -31,6 +31,7 @@ impl NewProjectPage {
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let muted = cx.theme().muted_foreground;
         let page = cx.entity().downgrade();
+        let create_page = page.clone();
         let blocked = stack_builder::validate_project_name(&self.stack.project_name).is_some();
         h_flex()
             .gap_4()
@@ -90,15 +91,36 @@ impl NewProjectPage {
                             .on_click(cx.listener(|this, _, _, cx| this.reset(cx))),
                     )
                     .child(
-                        Button::new("new-project-create")
-                            .debug_selector(|| "new-project-create".into())
-                            .primary()
-                            .small()
-                            .icon(Lucide::FolderPlus)
-                            .label("Create Project")
-                            .loading(self.busy())
+                        // Create Project makes the project and opens it; its menu also offers
+                        // making it only.
+                        DropdownButton::new("new-project-create-split")
+                            .button(
+                                Button::new("new-project-create")
+                                    .debug_selector(|| "new-project-create".into())
+                                    .primary()
+                                    .small()
+                                    .icon(Lucide::FolderPlus)
+                                    .label("Create Project")
+                                    .tooltip("Create the Project and Open It in Sawit")
+                                    .loading(self.busy())
+                                    .on_click(cx.listener(|this, _, _, cx| this.create(cx))),
+                            )
                             .disabled(self.busy() || blocked)
-                            .on_click(cx.listener(|this, _, _, cx| this.create(cx))),
+                            .menu_accessibility_label("More Ways to Create")
+                            .dropdown_menu_with_anchor(Anchor::TopRight, {
+                                let page = create_page;
+                                move |menu, _, _| {
+                                    let page = page.clone();
+                                    menu.item(
+                                        PopupMenuItem::new("Create Project Only")
+                                            .icon(Lucide::FolderPlus)
+                                            .on_click(move |_, _, cx| {
+                                                let _ = page
+                                                    .update(cx, |this, cx| this.create_only(cx));
+                                            }),
+                                    )
+                                }
+                            }),
                     ),
             )
     }

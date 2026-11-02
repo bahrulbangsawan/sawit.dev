@@ -229,13 +229,32 @@ impl NewProjectPage {
                 theme.primary,
             )
             .into_any_element(),
-            (Creating::Done(dir), _) => catalog::pill(
+            (Creating::Done { dir, open: true }, _) => catalog::pill(
                 Mark::Icon(Lucide::CircleCheck),
                 format!("Created {}, opening it…", name(dir)),
                 theme.success,
             )
             .into_any_element(),
-            (Creating::Failed { .. }, _) => box_(theme.danger)
+            (Creating::Done { dir, open: false }, _) => box_(theme.success)
+                .items_center()
+                .child(
+                    Icon::new(Lucide::CircleCheck)
+                        .small()
+                        .text_color(theme.success),
+                )
+                .child(
+                    catalog::label("new-project-made", format!("Created {}", name(dir))).flex_1(),
+                )
+                .child(
+                    Button::new("new-project-open")
+                        .outline()
+                        .xsmall()
+                        .icon(Lucide::FolderOpen)
+                        .label("Open Project")
+                        .on_click(cx.listener(|this, _, _, cx| this.open_made(cx))),
+                )
+                .into_any_element(),
+            (Creating::Failed { open, .. }, _) => box_(theme.danger)
                 .child(
                     Icon::new(Lucide::TriangleAlert)
                         .small()
@@ -251,7 +270,10 @@ impl NewProjectPage {
                         .xsmall()
                         .icon(Lucide::RotateCcw)
                         .label("Try Again")
-                        .on_click(cx.listener(|this, _, _, cx| this.create(cx))),
+                        .on_click({
+                            let open = *open;
+                            cx.listener(move |this, _, _, cx| this.create_and(open, cx))
+                        }),
                 )
                 .into_any_element(),
             (Creating::Idle, Some(problem)) => box_(theme.warning)

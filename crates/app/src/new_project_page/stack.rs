@@ -111,7 +111,10 @@ impl NewProjectPage {
         self.stack = stack;
         self.note = note;
         self.problem = None;
-        if matches!(self.creating, Creating::Failed { .. } | Creating::Done(_)) {
+        if matches!(
+            self.creating,
+            Creating::Failed { .. } | Creating::Done { .. }
+        ) {
             self.creating = Creating::Idle;
         }
         self.keep(cx);
