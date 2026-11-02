@@ -69,32 +69,45 @@ impl Session {
         let term = self.term.lock();
         let grid = term.grid();
         let cols = grid.columns();
+        let top = -(grid.history_size() as i32);
+        let wraps = |row: i32| {
+            grid[Line(row)][Column(cols - 1)]
+                .flags
+                .contains(Flags::WRAPLINE)
+        };
+        // From the bottom up, so that only the rows asked for are read, not the whole history:
+        // a line ends on a row that doesn't wrap (or the last row) and takes the rows above it
+        // that wrap onto it.
         let mut lines: Vec<String> = Vec::new();
-        let mut current = String::new();
-        for row in -(grid.history_size() as i32)..grid.screen_lines() as i32 {
-            let row = &grid[Line(row)];
-            for col in 0..cols {
-                let cell = &row[Column(col)];
-                if !cell
-                    .flags
-                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-                {
-                    current.push(cell.c);
-                    current.extend(cell.zerowidth().into_iter().flatten());
+        let mut end = grid.screen_lines() as i32 - 1;
+        while end >= top && lines.len() < max_lines {
+            let mut start = end;
+            while start > top && wraps(start - 1) {
+                start -= 1;
+            }
+            let mut text = String::new();
+            for row in start..=end {
+                let row = &grid[Line(row)];
+                for col in 0..cols {
+                    let cell = &row[Column(col)];
+                    if !cell
+                        .flags
+                        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                    {
+                        text.push(cell.c);
+                        text.extend(cell.zerowidth().into_iter().flatten());
+                    }
                 }
             }
-            if !row[Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
-                lines.push(std::mem::take(&mut current).trim_end().to_string());
+            let text = text.trim_end();
+            // Blank lines below the last text are left out.
+            if !text.is_empty() || !lines.is_empty() {
+                lines.push(text.to_string());
             }
+            end = start - 1;
         }
-        if !current.is_empty() {
-            lines.push(current.trim_end().to_string());
-        }
-        while lines.last().is_some_and(|l| l.is_empty()) {
-            lines.pop();
-        }
-        let skip = lines.len().saturating_sub(max_lines);
-        lines[skip..].join("\n")
+        lines.reverse();
+        lines.join("\n")
     }
 }
 

@@ -80,3 +80,36 @@ fn snapshot_timing() {
     });
     println!("snapshot of a {cols}x{rows} screen: {time:?}");
 }
+
+#[test]
+#[ignore = "timing: run with --release -- --ignored --nocapture"]
+fn text_tail_timing() {
+    let size = GridSize {
+        cols: 120,
+        rows: 40,
+        cell_width: 8,
+        cell_height: 16,
+    };
+    // A full scrollback (10,000 lines) of numbered lines, some long enough to wrap.
+    let cmd = Command {
+        program: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            r#"seq 0 11999 | awk '{ printf "line %05d", $1; if ($1 % 7 == 0) printf " %0150d", 0; print "" }'; sleep 60"#
+                .into(),
+        ],
+        ..Command::default()
+    };
+    let (session, _events) = Session::spawn(cmd, size).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !session.text_tail(1).contains("line 11999") {
+        assert!(Instant::now() < deadline, "the lines were never printed");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    for lines in [50, 200] {
+        let time = median(200, || {
+            std::hint::black_box(session.text_tail(lines));
+        });
+        println!("the last {lines} lines of a full scrollback: {time:?}");
+    }
+}
