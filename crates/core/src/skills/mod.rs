@@ -5,10 +5,15 @@
 //! (`npx skills add owner/repo`, run with the package manager the user
 //! picks), a Claude Code plugin from a marketplace (`claude plugin
 //! marketplace add` and `claude plugin install`), or a copy of the skill's
-//! folder from a git clone. Removing deletes the pack's skill folders from
-//! the chosen agents' folders (`rm -rf` of `<folder>/<skill>`, a link or a
-//! copy), or uninstalls its plugin.
+//! folder from a git clone; a skill Sawit ships itself ([`bundled`]) is
+//! written out into Sawit's data folder and copied from there, and an agent's
+//! copy of it is compared with this Sawit's version. Removing deletes the
+//! pack's skill folders from the chosen agents' folders (`rm -rf` of
+//! `<folder>/<skill>`, a link or a copy; for a skill Sawit ships, only a copy
+//! whose SKILL.md is Sawit's), or uninstalls its plugin.
 
+mod backups;
+pub mod bundled;
 mod catalog;
 mod commands;
 mod installed;
@@ -16,8 +21,9 @@ mod targets;
 #[cfg(test)]
 mod tests;
 
+pub use backups::{backup, kept};
 pub use catalog::{PACKS, get};
-pub use commands::{Action, Env, Place, run, sample, script};
+pub use commands::{Action, Env, Failure, Place, removes_from, run, sample, script};
 pub use installed::{Installed, Report, Status, read_installed, report, status};
 pub use targets::{ClaudeHome, Target, find_targets, targets, targets_for};
 
@@ -70,6 +76,12 @@ pub enum Method {
         url: &'static str,
         path: &'static str,
     },
+    /// The skill `name` that Sawit ships (`skills/<name>` in its repository, built into it):
+    /// written out into Sawit's data folder (`bundled-skills/<name>`), then that folder copied
+    /// into the agents' skills folders, as a copy does. Nothing is downloaded, and what installs
+    /// is this Sawit's version. An agent's folder of that name counts only when its SKILL.md
+    /// names the skill, and only then is it replaced or removed.
+    Bundled { name: &'static str },
 }
 
 impl Method {
@@ -79,6 +91,7 @@ impl Method {
             Method::SkillsCli { .. } => "skills-cli",
             Method::Plugin { .. } => "plugin",
             Method::Copy { .. } => "copy",
+            Method::Bundled { .. } => "built-in",
         }
     }
 
@@ -87,6 +100,7 @@ impl Method {
             Method::SkillsCli { .. } => "skills CLI",
             Method::Plugin { .. } => "Claude Code plugin",
             Method::Copy { .. } => "Git clone & copy",
+            Method::Bundled { .. } => "Built In",
         }
     }
 
@@ -102,7 +116,7 @@ impl Method {
         match self {
             Method::SkillsCli { .. } => target.cli_agent.is_some(),
             Method::Plugin { .. } => target.claude.is_some(),
-            Method::Copy { .. } => true,
+            Method::Copy { .. } | Method::Bundled { .. } => true,
         }
     }
 
@@ -143,6 +157,14 @@ pub struct Pack {
 impl Pack {
     pub fn method(&self, id: &str) -> Option<Method> {
         self.methods.iter().copied().find(|m| m.id() == id)
+    }
+
+    /// The skill Sawit ships that it installs, when it installs one ([`Method::Bundled`]).
+    pub fn bundled(&self) -> Option<&'static str> {
+        self.methods.iter().find_map(|m| match m {
+            Method::Bundled { name } => Some(*name),
+            _ => None,
+        })
     }
 
     /// Its plugin, when it is one.

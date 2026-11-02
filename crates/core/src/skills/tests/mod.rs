@@ -1,22 +1,32 @@
 //! The Skills catalog's tests: the fixtures they share here, the tests by what they check.
 
+mod built_in;
 mod catalog;
 mod commands;
+mod shipped;
 mod targets;
+mod versions;
 
 use std::path::PathBuf;
 
 use super::*;
 use crate::mcp_clients::{self, Client};
 
+/// Held by each test that runs a pack's script: they take the pack's lock, which the others' runs
+/// would find held.
+static PACK_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn home() -> PathBuf {
     PathBuf::from("/Users/me")
 }
 
+/// The commands' setting on a Mac whose home folder is /Users/me, with Sawit's data folder where
+/// it is by default.
 fn env() -> Env {
     Env {
         home: home(),
         claude_config_dir_set: false,
+        bundled: home().join("Library/Application Support/sawit/bundled-skills"),
     }
 }
 

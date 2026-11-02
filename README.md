@@ -64,9 +64,9 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with device sizes and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (133 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (134 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 | 🌱 **New projects from a stack** | Pick a TypeScript stack from Better-T-Stack's builder (TanStack, Next.js, Hono, Convex, Drizzle, Better Auth, …); Sawit shows what doesn't fit and why, runs `create-better-t-stack` in its terminal and opens the project. |
-| ✨ **Agent skills** | Superpowers, shadcn's improve, Cloudflare's skills, MCP Apps, unslop and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
+| ✨ **Agent skills** | Sawit's own Canvas Design, Superpowers, shadcn's improve, Cloudflare's skills, MCP Apps, unslop and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
 ## Install
 
@@ -346,6 +346,18 @@ explained. A conflict on the same address can't be forced.
 ### Skills
 
 - Open **Skills** from the **Pages** menu for agent skills from their official sources:
+  - **Canvas Design** by Sawit ([skills/sawit-canvas-design](https://github.com/bahrulbangsawan/sawit.dev/tree/main/skills/sawit-canvas-design)):
+    Sawit's own design standard for interfaces made on its canvas, with a checklist to run before a design is done;
+    agents on Sawit's MCP server read the same text with `canvas_design_guide`, without installing anything.
+    It ships inside Sawit and installs **Built In**, offline: Sawit writes the `sawit-canvas-design` skill out into its
+    data folder (`bundled-skills/sawit-canvas-design`) and copies that folder into each agent's skills folder, so it
+    installs this Sawit's version. Its name isn't `canvas-design`, which is Anthropic's skill: an agent's folder counts
+    as Sawit's only when its `SKILL.md` names `sawit-canvas-design`, and Sawit never replaces or removes another.
+    An agent whose copy differs from this Sawit's version (edited there, or an update is available) shows
+    **Differs from Sawit**; installing or updating over it keeps that copy in Sawit's data folder, under
+    `skill-backups/<agent>/sawit-canvas-design` (replacing an older one), where no agent loads it as a second skill,
+    and says so. The commands stop before they remove anything
+    when the folder Sawit writes out isn't there, as when they're copied and run without Sawit.
   - **Interface Skills** and **Make Interfaces Feel Better** by Jakub Krehel ([jakub.kr/skills](https://jakub.kr/skills)):
     `better-ui`, `better-typography`, `interface-review`, `state-machine`, `teardown` and more, with the `skills` CLI
     (`npx skills add jakubkrehel/skills`).
@@ -568,9 +580,12 @@ explained. A conflict on the same address can't be forced.
   time. The `.excalidraw` file is never changed, and the canvas says what the import left out (the hand-drawn look
   doesn't carry over). An `.excalidraw` file in the Files tab opens the same way and saves as `<name>.sawit`
   beside it.
-- Agents draw on it through the `canvas_*` MCP tools. `canvas_add_diagram` (`canvas_add_mermaid` is its deprecated
-  old name) turns a diagram written in Mermaid syntax into **editable shapes**: boxes, connectors joined to them,
-  and labels. Pele, the renderer the rest of the app uses, lays the diagram out, and every type it draws comes in,
+- Agents draw on it through the `canvas_*` MCP tools. Before they design, build or review UI there, the server's
+  instructions and the tools that make UI send them to `canvas_design_guide`: Sawit's design standard, the text of the
+  [Canvas Design](#skills) skill, which they follow and whose checklist they run before they call a design done.
+  `canvas_add_diagram` (`canvas_add_mermaid` is its deprecated old name) turns a diagram written in Mermaid syntax
+  into **editable shapes**: boxes, connectors joined to them, and labels. Pele, the renderer the rest of the app
+  uses, lays the diagram out, and every type it draws comes in,
   each in the way that keeps it editable where editing makes sense (see the table below). Icons and text Pele turned
   (a lane's title, an axis's) come in as small pictures. The diagram is rendered off the UI thread, and one past
   Pele's limits (2,000 edges, 50,000 characters) is refused at once instead of stalling the window. `canvas_command` runs any
@@ -1039,7 +1054,7 @@ sawit github token --header                  # the GitHub sign-in as {"Authoriza
 
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 133 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 134 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
 the agent's project open (or the one `project` names), else the frontmost window. An agent's browser and canvas are
 its own project's, even while you look at another project of that window.
@@ -1070,12 +1085,12 @@ work in the last 30 seconds, with its `id`, `name` (its label on screen), `color
 | Dev tools | `list_dev_tools` (with newer releases, where each was found and its uninstall command), `install_dev_tools` (`package_manager`: npm, pnpm, bun or yarn for the tools npm installs globally), `upgrade_dev_tools` (with the package manager that installed the copy), `uninstall_dev_tools` (the copy its own installer, Homebrew or the package manager put in place) |
 | MCP servers | `list_mcp_servers`, `install_mcp_server` (`package_manager`: a local server and the remote bridge run with `npx -y`, `pnpm dlx`, `bunx` or `yarn dlx`; `github` is refused with "Sign in to GitHub in Sawit first" while Sawit is signed out, since agents can't sign in for you), `uninstall_mcp_server` |
 | New project | `stack_options` (every category, option and preset, and the default stack), `stack_check` (a stack by `create-better-t-stack`'s flag names, resolved: what the compatibility rules change, every disabled option and why, the command), `stack_create` (in `<location>/<name>`, never over a folder that exists; in a Sawit terminal that opens the project when the app runs, else here) |
-| Skills | `list_skills` (each pack, its skills, source and install commands per package manager, and the agents that have it), `install_skill` (into the agents given: the skills CLI with `package_manager`, a Claude Code plugin, or a clone and copy), `uninstall_skill` |
+| Skills | `list_skills` (each pack, its skills, source and install commands per package manager, and the agents that have it), `install_skill` (into the agents given: the skills CLI with `package_manager`, a Claude Code plugin, a clone and copy, or built in for the `sawit-canvas-design` skill Sawit ships, which installs this Sawit's version), `uninstall_skill` |
 | App control (app running) | `launch_app`, `app_state` (with `github: {signed_in, login}`), `app_open`, `app_focus`, `app_show_panel`, `app_layout`, `app_maximize_terminal`, `app_open_page` (canvas, browser, mcp, tools, skills, changelog, git_graph, github: the sign-in card while signed out, instance, keymap, new_project), `app_activate_tab`, `app_close_tab`, `app_run_list`, `app_run_script`, `app_stop_script`, `app_ssh_connect`, `app_open_table`, `app_open_sql` (with `run`), `app_open_diagram`, `app_open_prompt`, `app_instance` (select, start, stop, restart), `app_network_diagnose` |
 | Terminal (app running) | `terminal_run`, `terminal_split` (a pane split right or down, with a command in the new half), `terminal_read`, `terminal_input`, `terminal_close` (`terminal_run`, `terminal_split`, `app_run_script` and `app_ssh_connect` return the tab and `pane` they used; `terminal_input` needs the tab, and a split tab needs its pane; `app_state` names the coding agent running in each tab and pane, as `agent`: `claude-code`, `codex`, …) |
 | Keymap (app running) | `keymap_list` (every binding: what a key does, which key runs an action, what clashes), `keymap_bind`, `keymap_unbind` (with the Keymap Editor's checks; `restore` brings back a default) |
 | Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (the user's notes as Markdown: each element's selector, path, attributes, role, box, styles, neighbours, source file and screenshot), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`; replacing an earlier export needs `replace: true`) |
-| Canvas | `canvas_get` (the top-level layers of the page on show), `canvas_add_elements`, `canvas_add_diagram` (a diagram in Mermaid syntax as editable shapes; `canvas_add_mermaid` is its deprecated old name), `canvas_update`, `canvas_delete`, `canvas_clear` (the page on show), `canvas_load`, `canvas_export` (the page on show, as SVG or PNG), `canvas_command` (any command of the canvas engine, by id: `page.list` and `node.get` reach the other pages), `canvas_commands` (lists them; pass a `filter` to see what each takes). Each takes `file`, a `.sawit` file (a design file, say) or an `.excalidraw` file to work on instead of the project's canvas, in a canvas tab of its own. All of them work on the saved canvas file when the app is closed; then each call starts from that file, so no undo or selection carries over to the next: pass `canvas_command` the ids, or its steps in one `command.batch` |
+| Canvas | `canvas_design_guide` (Sawit's design standard for UI on the canvas, the text of the Canvas Design skill: agents read it before they design, build or review UI there, and run its checklist before they call a design done; `section` gives one section with the checklist), `canvas_get` (the top-level layers of the page on show), `canvas_add_elements`, `canvas_add_diagram` (a diagram in Mermaid syntax as editable shapes; `canvas_add_mermaid` is its deprecated old name), `canvas_update`, `canvas_delete`, `canvas_clear` (the page on show), `canvas_load`, `canvas_export` (the page on show, as SVG or PNG), `canvas_command` (any command of the canvas engine, by id: `page.list` and `node.get` reach the other pages), `canvas_commands` (lists them; pass a `filter` to see what each takes). The tools that make UI and the server's instructions send agents to `canvas_design_guide` first. Each of the others takes `file`, a `.sawit` file (a design file, say) or an `.excalidraw` file to work on instead of the project's canvas, in a canvas tab of its own. All of them work on the saved canvas file when the app is closed; then each call starts from that file, so no undo or selection carries over to the next: pass `canvas_command` the ids, or its steps in one `command.batch` |
 
 Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`,
 `uninstall_mcp_server`, `uninstall_skill`, `remove_connection`, `remove_ssh_host`, `delete_prompt` and

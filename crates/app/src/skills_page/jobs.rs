@@ -52,13 +52,13 @@ impl SkillsPage {
         self.running = Some(job.clone());
         let (tx, mut lines) = futures::channel::mpsc::unbounded::<String>();
         let (run, stop) = abortable({
-            let job = job.clone();
+            let (job, env) = (job.clone(), self.env.clone());
             async move {
-                skills::run(job.pack, &job.lines, move |line| {
+                skills::run(job.pack, job.action, &job.lines, &env, move |line| {
                     let _ = tx.unbounded_send(line);
                 })
                 .await
-                .map_err(|e| e.to_string())
+                .map_err(|e| (e.to_string(), e.started))
             }
         });
         self.stop = Some(stop);
@@ -88,13 +88,20 @@ impl SkillsPage {
             }
             let result = done
                 .await
-                .unwrap_or_else(|_| Some(Err("The script stopped.".into())));
+                .unwrap_or_else(|_| Some(Err(("The script stopped.".into(), true))));
             let _ = this.update(cx, |this, cx| this.finish(job, result, cx));
         })
         .detach();
     }
 
-    fn finish(&mut self, job: Job, result: Option<Result<(), String>>, cx: &mut Context<Self>) {
+    /// What ran (`None` when it was stopped); a failure says whether the shell had started on the
+    /// lines.
+    fn finish(
+        &mut self,
+        job: Job,
+        result: Option<Result<(), (String, bool)>>,
+        cx: &mut Context<Self>,
+    ) {
         self.running = None;
         self.stop = None;
         self.ended = None;
@@ -107,7 +114,13 @@ impl SkillsPage {
                 self.states.insert(id, State::Done(job.action));
                 self.expanded.remove(id);
             }
-            Some(Err(e)) => {
+            Some(Err((e, started))) => {
+                // It failed before the shell started (the pack's lock, writing the skill out):
+                // the lines the log shows as run never ran.
+                if !started {
+                    let lines = format!("Not run:\n{}", job.lines.join("\n"));
+                    self.logs.insert(id, vec![lines]);
+                }
                 self.states.insert(id, State::Failed(job.action, e));
                 self.expanded.insert(id);
             }

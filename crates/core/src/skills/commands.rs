@@ -3,12 +3,17 @@
 
 use std::path::{Path, PathBuf};
 
+use super::backups::backup;
+use super::bundled::{self, Held};
 use super::{ClaudeHome, Installed, Method, Pack, Target};
+use crate::instances::AppPaths;
 use crate::package_manager::{PackageManager, quote};
+use crate::{CoreError, dev_tools};
 
 /// How `method` installs `pack`, for a list: its commands, with `<agent>`
-/// where the chosen agents go.
-pub fn sample(pack: &Pack, method: Method, pm: PackageManager) -> String {
+/// where the chosen agents go, and for a skill Sawit ships the folder in
+/// `env`'s data folder it is copied from.
+pub fn sample(pack: &Pack, method: Method, pm: PackageManager, env: &Env) -> String {
     match method {
         Method::SkillsCli { source, all } => {
             let mut args = vec!["skills", "add", source];
@@ -35,6 +40,10 @@ pub fn sample(pack: &Pack, method: Method, pm: PackageManager) -> String {
                 path.trim_matches('/')
             )
         }
+        Method::Bundled { name } => format!(
+            "cp -R {} <agent's skills folder>/",
+            env.path(&env.bundled.join(name))
+        ),
     }
 }
 
@@ -66,14 +75,24 @@ pub struct Env {
     /// This process has `CLAUDE_CONFIG_DIR` set, so a command for the default
     /// Claude Code profile must unset it.
     pub claude_config_dir_set: bool,
+    /// Where the skills Sawit ships are written out for an install to copy,
+    /// one folder each: `bundled-skills` in Sawit's data folder.
+    pub bundled: PathBuf,
 }
 
 impl Env {
-    /// This process's.
+    /// This process's, with Sawit's data folder (`SAWIT_HOME`, else its
+    /// default).
     pub fn current() -> Env {
+        Env::with_data(&AppPaths::default_macos())
+    }
+
+    /// This process's, with the Sawit data folder `paths`.
+    pub fn with_data(paths: &AppPaths) -> Env {
         Env {
             home: PathBuf::from(std::env::var("HOME").unwrap_or_default()),
             claude_config_dir_set: std::env::var_os("CLAUDE_CONFIG_DIR").is_some(),
+            bundled: paths.bundled_skills_dir(),
         }
     }
 
@@ -179,22 +198,75 @@ pub fn script(
                 "trap 'rm -rf \"$tmp\"' EXIT".to_string(),
                 format!("git clone --depth 1 {} {clone}", quote(url)),
             ];
-            for (target, _) in places {
-                let dir = env.path(&target.dir);
-                lines.push(format!("mkdir -p {dir}"));
-                for skill in pack.skills {
-                    let into = env.path(&target.dir.join(skill));
-                    // What was there goes first, so an update leaves no old files.
-                    lines.push(format!("rm -rf {into}"));
-                    lines.push(format!(
-                        "cp -R \"$tmp/{name}/{path}/{skill}\" {dir}/",
-                        path = path.trim_matches('/')
-                    ));
-                }
-            }
+            let path = path.trim_matches('/');
+            let from: Vec<(&str, String)> = pack
+                .skills
+                .iter()
+                .map(|skill| (*skill, format!("\"$tmp/{name}/{path}/{skill}\"")))
+                .collect();
+            lines.extend(copy_lines(&from, places, env));
             lines
         }
+        Method::Bundled { name } => bundled_lines(name, places, env)?,
     })
+}
+
+/// Copies the skill `name` Sawit ships from the folder [`run`] writes it out into first, into
+/// each place: the lines stop before anything is removed when that folder isn't there (copied and
+/// run without Sawit); a copy that differs from this Sawit's version is kept in Sawit's data folder
+/// ([`backup`]), an older one replaced; a folder of that name that isn't Sawit's is never touched,
+/// so that place fails.
+fn bundled_lines(name: &str, places: &[Place], env: &Env) -> Result<Vec<String>, String> {
+    if let Some((target, _)) = places
+        .iter()
+        .find(|(_, i)| i.bundled.get(name) == Some(&Held::Other))
+    {
+        return Err(format!(
+            "{} has a {name} folder that isn't Sawit's skill (its SKILL.md names another, or none), and Sawit leaves it alone: move it away to install there.",
+            target.label
+        ));
+    }
+    let from = env.path(&env.bundled.join(name));
+    // Its messages are in double quotes, holding nothing the shell reads there.
+    let missing = "is missing: Sawit writes the skill out there as it installs it, so install it from Sawit (its Skills page, or install_skill).";
+    let mut lines = vec![format!(
+        "[ -d {from} ] || {{ echo {from} \"{missing}\" >&2; exit 1; }}"
+    )];
+    for (target, installed) in places {
+        let dir = env.path(&target.dir);
+        let at = env.path(&target.dir.join(name));
+        lines.push(format!("mkdir -p {dir}"));
+        if installed.bundled.get(name) == Some(&Held::Differs) {
+            let kept = backup(env, target, name);
+            let parent = env.path(kept.parent().unwrap_or(&kept));
+            let bak = env.path(&kept);
+            lines.push(format!("rm -rf {bak}"));
+            lines.push(format!("mkdir -p {parent}"));
+            lines.push(format!("mv {at} {bak}"));
+            let kept = "Kept the copy that differs from this Sawit's version as";
+            lines.push(format!("echo \"{kept}\" {bak}"));
+        } else {
+            lines.push(format!("rm -rf {at}"));
+        }
+        lines.push(format!("cp -R {from} {dir}/"));
+    }
+    Ok(lines)
+}
+
+/// Copies each skill folder of `from` (the skill, and its folder as the shell reads it) into the
+/// skills folder of every place, replacing what was there.
+fn copy_lines(from: &[(&str, String)], places: &[Place], env: &Env) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (target, _) in places {
+        let dir = env.path(&target.dir);
+        lines.push(format!("mkdir -p {dir}"));
+        for (skill, folder) in from {
+            // What was there goes first, so an update leaves no old files.
+            lines.push(format!("rm -rf {}", env.path(&target.dir.join(skill))));
+            lines.push(format!("cp -R {folder} {dir}/"));
+        }
+    }
+    lines
 }
 
 /// `skills add` for `places`: one run for the default Claude Code profile and
@@ -258,7 +330,8 @@ fn skills_cli_lines(
 
 /// Removes `pack` from `places` as it is there: its plugin uninstalled from a
 /// Claude Code profile that has it, and each of its skill folders (or links)
-/// deleted from the folder.
+/// deleted from the folder; a skill Sawit ships only where its SKILL.md is
+/// Sawit's, or a link to nothing is there.
 fn remove_script(pack: &Pack, places: &[Place], env: &Env) -> Result<Vec<String>, String> {
     let key = pack.plugin().and_then(|m| m.plugin_key());
     let mut lines = Vec::new();
@@ -273,10 +346,8 @@ fn remove_script(pack: &Pack, places: &[Place], env: &Env) -> Result<Vec<String>
             ));
         }
         for skill in pack.skills {
-            let at = target.dir.join(skill);
-            // A link whose folder is gone is there too.
-            if installed.folder.contains(*skill) || at.symlink_metadata().is_ok() {
-                lines.push(format!("rm -rf {}", env.path(&at)));
+            if removes(pack, skill, target, installed) {
+                lines.push(format!("rm -rf {}", env.path(&target.dir.join(skill))));
             }
         }
     }
@@ -286,6 +357,17 @@ fn remove_script(pack: &Pack, places: &[Place], env: &Env) -> Result<Vec<String>
             .map(|(t, _)| t.label.as_str())
             .collect::<Vec<_>>()
             .join(", ");
+        // A folder of its name that another skill has.
+        if let Some(name) = pack.bundled()
+            && let Some((t, _)) = places
+                .iter()
+                .find(|(_, i)| i.bundled.get(name) == Some(&Held::Other))
+        {
+            return Err(format!(
+                "The {name} folder in {} isn't Sawit's skill (its SKILL.md names another, or none): Sawit leaves it alone, so there's nothing to remove.",
+                t.label
+            ));
+        }
         // Its skills are there, but another pack's plugin brings them.
         if places
             .iter()
@@ -304,19 +386,83 @@ fn remove_script(pack: &Pack, places: &[Place], env: &Env) -> Result<Vec<String>
     Ok(lines)
 }
 
-/// Runs `lines` (from [`script`]) for `pack` in the login shell, as the Dev
-/// Tools page runs an installer, sending each line of output to `on_line`.
-/// One script per pack at a time, from the page, an agent or `sawit`.
+/// Why [`run`] failed, and whether its lines had started: taking the pack's lock and writing
+/// the skill out come before any of them runs.
+#[derive(Debug)]
+pub struct Failure {
+    pub error: CoreError,
+    /// The shell started on the lines.
+    pub started: bool,
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+/// Whether removing `pack` does anything in `place`: uninstalls its plugin there, or deletes a
+/// skill folder of its own ([`removes`]).
+pub fn removes_from(pack: &Pack, place: &Place) -> bool {
+    let (target, installed) = *place;
+    let key = pack.plugin().and_then(|m| m.plugin_key());
+    let plugin = target.claude.is_some() && key.is_some_and(|k| installed.plugins.contains(&k));
+    plugin
+        || pack
+            .skills
+            .iter()
+            .any(|s| removes(pack, s, target, installed))
+}
+
+/// Whether a removal of `pack` deletes its `skill` from `target`'s folder: a folder or link of
+/// that name (a link whose folder is gone too); for a skill Sawit ships, only a copy whose
+/// SKILL.md is Sawit's, or a link to nothing.
+fn removes(pack: &Pack, skill: &str, target: &Target, installed: &Installed) -> bool {
+    let at = target.dir.join(skill);
+    let dangling = at.symlink_metadata().is_ok() && at.metadata().is_err();
+    match pack.bundled() {
+        Some(_) => installed
+            .bundled
+            .get(skill)
+            .map_or(dangling, |held| *held != Held::Other),
+        None => installed.folder.contains(skill) || at.symlink_metadata().is_ok(),
+    }
+}
+
+/// Runs `lines` (from [`script`]) that do `action` with `pack` in the login
+/// shell, as the Dev Tools page runs an installer, sending each line of output
+/// to `on_line`. One script per pack at a time, from the page, an agent or
+/// `sawit`: the pack's lock is taken first and held through the script.
+/// Installing or updating a skill Sawit ships writes it out into
+/// `env.bundled` under that lock ([`bundled::write_out`]), where the lines
+/// copy it from, so no other run rewrites it while they do.
 pub async fn run(
     pack: &Pack,
+    action: Action,
     lines: &[String],
+    env: &Env,
     on_line: impl Fn(String) + Send + Sync,
-) -> crate::Result<()> {
-    crate::dev_tools::run_shell(
-        &format!("skill-{}", pack.id),
-        pack.name,
-        &lines.join("\n"),
-        on_line,
-    )
-    .await
+) -> Result<(), Failure> {
+    let before = |error| Failure {
+        error,
+        started: false,
+    };
+    let lock = dev_tools::lock(&format!("skill-{}", pack.id), pack.name).map_err(before)?;
+    if let Some(name) = pack.bundled()
+        && action != Action::Remove
+    {
+        bundled::write_out(name, &env.bundled).map_err(|e| {
+            before(CoreError::Config(format!(
+                "Sawit couldn't write out {} into {}: {e}",
+                pack.name,
+                env.bundled.display()
+            )))
+        })?;
+    }
+    dev_tools::run_shell_holding(&lock, pack.name, &lines.join("\n"), on_line)
+        .await
+        .map_err(|error| Failure {
+            error,
+            started: true,
+        })
 }

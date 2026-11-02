@@ -29,7 +29,53 @@ fn the_catalog_is_well_formed() {
             );
         }
         assert_eq!(get(pack.id), Some(pack));
+        // A built-in skill is one Sawit ships, and the pack's only one: the folder it copies. Its
+        // name is Sawit's own (another publisher's folder of a name is theirs), and its SKILL.md
+        // gives that name, by which an agent's copy counts as Sawit's.
+        for method in pack.methods {
+            if let Method::Bundled { name } = method {
+                assert!(bundled::files(name).is_some(), "{name} isn't built in");
+                assert_eq!(pack.skills, [*name], "{}", pack.id);
+                assert!(name.starts_with("sawit-"), "{name}");
+                let skill = bundled::text(name, "SKILL.md").unwrap();
+                assert_eq!(bundled::skill_name(skill), Some(*name));
+            }
+        }
     }
+}
+
+/// Canvas Design, Sawit's own design standard, is the first Design pack: built in, by Sawit, from
+/// its folder in Sawit's repository, and it says it installs this Sawit's version, offline. Its
+/// skill isn't `canvas-design`, the name of Anthropic's skill.
+#[test]
+fn canvas_design_ships_inside_sawit() {
+    let pack = get("sawit-canvas-design").unwrap();
+    assert_eq!(get("canvas-design"), None);
+    let design: Vec<&str> = PACKS
+        .iter()
+        .filter(|p| p.category == Category::Design)
+        .map(|p| p.id)
+        .collect();
+    assert_eq!(design[0], "sawit-canvas-design");
+    assert_eq!((pack.name, pack.by), ("Canvas Design", "Sawit"));
+    assert_eq!(pack.skills, ["sawit-canvas-design"]);
+    assert_eq!(
+        pack.methods,
+        [Method::Bundled {
+            name: "sawit-canvas-design"
+        }]
+    );
+    assert_eq!(pack.bundled(), Some("sawit-canvas-design"));
+    let folder =
+        "https://github.com/bahrulbangsawan/sawit.dev/tree/main/skills/sawit-canvas-design";
+    assert_eq!((pack.home, pack.repo), (folder, folder));
+    let note = pack.note.unwrap();
+    assert!(
+        note.contains("inside Sawit") && note.contains("offline"),
+        "{note}"
+    );
+    assert!(note.contains("installs this Sawit's version"), "{note}");
+    assert!(pack.about.contains("checklist"), "{}", pack.about);
 }
 
 /// The seven sources the user named are there, each installing the way its own docs say.
@@ -107,7 +153,7 @@ fn improve_installs_with_the_skills_cli_or_its_plugin() {
         ["npx -y skills add shadcn/improve --skill '*' -g -a claude-code -a codex -y"]
     );
     assert_eq!(
-        sample(pack, cli, PackageManager::Pnpm),
+        sample(pack, cli, PackageManager::Pnpm, &env()),
         "pnpm dlx skills add shadcn/improve --skill '*' -g -a <agent> -y"
     );
     assert_eq!(
@@ -214,7 +260,7 @@ fn improve_installs_with_the_skills_cli_or_its_plugin() {
     // Removing: the plugin where it's installed, the folder where it's a folder.
     let env_h = Env {
         home: h.to_path_buf(),
-        claude_config_dir_set: false,
+        ..env()
     };
     assert_eq!(
         script(

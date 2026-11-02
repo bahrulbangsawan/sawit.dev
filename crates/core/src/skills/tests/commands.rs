@@ -161,7 +161,7 @@ fn removing_deletes_only_what_is_there() {
     let dir = tempfile::tempdir().unwrap();
     let env = Env {
         home: dir.path().to_path_buf(),
-        claude_config_dir_set: false,
+        ..env()
     };
     let mut main = claude(None);
     main.dir = dir.path().join(".claude/skills");
@@ -227,16 +227,16 @@ fn removing_deletes_only_what_is_there() {
 fn a_sample_shows_each_way_with_the_package_manager() {
     let cf = get("cf-cli").unwrap();
     assert_eq!(
-        sample(cf, cf.methods[0], PackageManager::Bun),
+        sample(cf, cf.methods[0], PackageManager::Bun, &env()),
         "bunx skills add cloudflare/skills --skill cf-cli -g -a <agent> -y"
     );
     let animate = get("animate").unwrap();
     assert_eq!(
-        sample(animate, animate.methods[0], PackageManager::Npm),
+        sample(animate, animate.methods[0], PackageManager::Npm, &env()),
         "claude plugin marketplace add cth9191/animate && claude plugin install animate@animate"
     );
     assert_eq!(
-        sample(animate, animate.methods[1], PackageManager::Npm),
+        sample(animate, animate.methods[1], PackageManager::Npm, &env()),
         "git clone --depth 1 https://github.com/cth9191/animate && cp -R animate/plugins/animate/skills/<skill> <agent's skills folder>/"
     );
 }
@@ -266,6 +266,10 @@ fn every_script_is_valid_shell() {
             .iter()
             .filter_map(|p| p.plugin()?.plugin_key())
             .collect(),
+        // Sawit's skills there, edited: an install keeps each in Sawit's data folder.
+        bundled: bundled::names()
+            .map(|name| (name.to_string(), bundled::Held::Differs))
+            .collect(),
         ..Default::default()
     };
     let none = Installed::default();
@@ -281,12 +285,15 @@ fn every_script_is_valid_shell() {
     let mut checked = 0;
     for pack in PACKS {
         for method in pack.methods {
-            let places: Vec<Place> = [&main, &work, &odd]
+            for (pm, has) in PackageManager::ALL
                 .into_iter()
-                .filter(|t| method.reaches(t))
-                .map(|t| (t, &none))
-                .collect();
-            for pm in PackageManager::ALL {
+                .zip([&none, &has_all].repeat(2))
+            {
+                let places: Vec<Place> = [&main, &work, &odd]
+                    .into_iter()
+                    .filter(|t| method.reaches(t))
+                    .map(|t| (t, has))
+                    .collect();
                 for action in [Action::Install, Action::Update] {
                     let lines = script(pack, *method, action, &places, pm, &set).unwrap();
                     let ok = std::process::Command::new("/bin/sh")

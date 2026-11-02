@@ -3,6 +3,9 @@
 //! Apps, Cloudflare's), installed into the agents found on this Mac the way
 //! each source documents: the `skills` CLI run with the package manager picked
 //! (npx, pnpm dlx, bunx, yarn dlx), a Claude Code plugin, or a clone and copy.
+//! Sawit's own Canvas Design installs Built In: a copy of the folder Sawit
+//! ships, written out into its data folder; an agent's copy that differs from
+//! this Sawit's version says so, and is kept in Sawit's data folder (`skill-backups/<agent>/<skill>`) when replaced.
 //! A pack's sheet picks the agents and shows the exact commands before they
 //! run; they run one pack at a time in the login shell, as the Dev Tools
 //! page's installers do, with their output under the row. Removing deletes the
@@ -164,14 +167,16 @@ pub struct SkillsPage {
     _search: Option<Subscription>,
 }
 
-/// A pack's tile: its publisher's logo when there is one, else its
-/// category's icon.
+/// A pack's tile: its publisher's logo when there is one (Sawit's mark for
+/// the skill it ships), else its category's icon.
 fn pack_logo(pack: &Pack, cx: &App) -> AnyElement {
-    if pack.by == "Cloudflare" {
-        return img("agent_logos/cloudflare-color.svg")
-            .size(px(22.))
-            .flex_none()
-            .into_any_element();
+    let logo = match pack.by {
+        "Cloudflare" => Some("agent_logos/cloudflare-color.svg"),
+        "Sawit" => Some(crate::assets::LOGO_MARK),
+        _ => None,
+    };
+    if let Some(logo) = logo {
+        return img(logo).size(px(22.)).flex_none().into_any_element();
     }
     let icon = match pack.category {
         Category::Design => Lucide::Palette,

@@ -78,6 +78,8 @@ fn open_at(
                     page.env = skills::Env {
                         home: "/Users/me".into(),
                         claude_config_dir_set: false,
+                        bundled: "/Users/me/Library/Application Support/sawit/bundled-skills"
+                            .into(),
                     };
                     page.pms = [PackageManager::Npm, PackageManager::Bun]
                         .into_iter()
@@ -189,6 +191,79 @@ fn improve_opens_on_the_skills_cli_its_readme_documents(cx: &mut TestAppContext)
     );
     assert!(page.read_with(cx, |page, _| page.running.is_none()
         && page.queue.is_empty()));
+}
+
+/// Canvas Design, the skill Sawit ships, opens on Built In: its sheet shows the copy of the folder
+/// Sawit writes out into each agent ticked, first making sure it's there, and needs no package
+/// manager, `claude` or `git`.
+#[gpui_kit::test]
+fn canvas_design_installs_built_in(cx: &mut TestAppContext) {
+    let (page, cx) = open(cx, |page| {
+        (page.pm, page.claude, page.git) = (None, false, false);
+    });
+    let pack = skills::get("sawit-canvas-design").unwrap();
+    cx.update(|window, cx| page.update(cx, |page, cx| page.open_sheet(pack, window, cx)));
+    cx.run_until_parked();
+    page.update(cx, |page, _| {
+        page.sheet.as_mut().unwrap().selected = [0, 1].into();
+    });
+    let from = "\"$HOME/Library/Application Support/sawit/bundled-skills/sawit-canvas-design\"";
+    page.read_with(cx, |page, _| {
+        let method = page.sheet.as_ref().unwrap().method;
+        assert_eq!(
+            method,
+            skills::Method::Bundled {
+                name: "sawit-canvas-design"
+            }
+        );
+        assert_eq!(page.blocked(method), None);
+        let lines = page
+            .sheet_script(Action::Install, &page.picked(super::Pick::Install))
+            .unwrap();
+        assert!(lines[0].starts_with(&format!("[ -d {from} ] || {{ echo ")));
+        assert_eq!(
+            lines[1..],
+            [
+                "mkdir -p \"$HOME/.claude/skills\"".to_string(),
+                "rm -rf \"$HOME/.claude/skills/sawit-canvas-design\"".to_string(),
+                format!("cp -R {from} \"$HOME/.claude/skills\"/"),
+                "mkdir -p \"$HOME/.agents/skills\"".to_string(),
+                "rm -rf \"$HOME/.agents/skills/sawit-canvas-design\"".to_string(),
+                format!("cp -R {from} \"$HOME/.agents/skills\"/"),
+            ]
+        );
+        assert!(page.running.is_none() && page.queue.is_empty());
+    });
+}
+
+/// An agent whose copy of the skill Sawit ships differs from this Sawit's version has it: the
+/// sheet ticks it, Update (not Install) acts on it, and the update keeps that copy in Sawit's
+/// data folder.
+#[gpui_kit::test]
+fn a_copy_that_differs_is_updated_and_kept(cx: &mut TestAppContext) {
+    let (page, cx) = open(cx, |page| {
+        page.report.installed[0].bundled =
+            [("sawit-canvas-design".into(), skills::bundled::Held::Differs)].into();
+    });
+    let pack = skills::get("sawit-canvas-design").unwrap();
+    cx.update(|window, cx| page.update(cx, |page, cx| page.open_sheet(pack, window, cx)));
+    page.read_with(cx, |page, _| {
+        assert_eq!(page.status(pack, 0), skills::Status::Differs);
+        assert_eq!(page.picked(super::Pick::Update), [0]);
+        assert_eq!(page.picked(super::Pick::Remove), [0]);
+        assert!(page.picked(super::Pick::Install).is_empty());
+        let lines = page.sheet_script(Action::Update, &[0]).unwrap();
+        let kept_in = "\"$HOME/Library/Application Support/sawit/skill-backups/claude-code\"";
+        let bak = "\"$HOME/Library/Application Support/sawit/skill-backups/claude-code/sawit-canvas-design\"";
+        assert_eq!(
+            lines[2..5],
+            [
+                format!("rm -rf {bak}"),
+                format!("mkdir -p {kept_in}"),
+                format!("mv \"$HOME/.claude/skills/sawit-canvas-design\" {bak}")
+            ]
+        );
+    });
 }
 
 /// The sheet opens with the agents that have the pack ticked: Update and Remove act on them,

@@ -89,6 +89,11 @@ impl AppPaths {
     pub fn cache_dir(&self) -> PathBuf {
         self.root.join("cache")
     }
+
+    /// The skills Sawit ships, written out for an install to copy, one folder each.
+    pub fn bundled_skills_dir(&self) -> PathBuf {
+        self.root.join("bundled-skills")
+    }
 }
 
 /// Moves the data directory of PG Desk (Sawit's former name) to `root` and

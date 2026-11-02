@@ -42,9 +42,29 @@ const CLOUDFLARE: &[&str] = &[
     "wrangler",
 ];
 
+/// Where the skill Sawit ships lives in its repository.
+const CANVAS_DESIGN_HOME: &str =
+    "https://github.com/bahrulbangsawan/sawit.dev/tree/main/skills/sawit-canvas-design";
+
 /// The catalog. Each pack's commands are the ones its source documents
 /// (README, docs page); see `home` and `repo`.
 pub const PACKS: &[Pack] = &[
+    // Not `canvas-design`: Anthropic's skills (and their example-skills plugin) have a skill of
+    // that name, and a folder of it is theirs.
+    Pack {
+        id: "sawit-canvas-design",
+        name: "Canvas Design",
+        by: "Sawit",
+        about: "Sawit's design standard for interfaces made on its canvas: layout, type, colour, spacing, copy, components, states, accessibility, motion and polish, with a checklist to run before a design is done.",
+        category: Category::Design,
+        skills: &["sawit-canvas-design"],
+        home: CANVAS_DESIGN_HOME,
+        repo: CANVAS_DESIGN_HOME,
+        methods: &[Method::Bundled {
+            name: "sawit-canvas-design",
+        }],
+        note: Some("Ships inside Sawit: installs this Sawit's version, offline."),
+    },
     Pack {
         id: "interfaces",
         name: "Interface Skills",

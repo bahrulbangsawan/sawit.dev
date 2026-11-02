@@ -1,8 +1,8 @@
 //! The Skills page: the catalog of agent skill packs (from their official
 //! sources), the agents' skills folders on this Mac and which packs each has,
 //! and installing, updating or removing a pack there, through the `skills`
-//! CLI (with the package manager picked), a Claude Code plugin, or a copy
-//! from a git clone.
+//! CLI (with the package manager picked), a Claude Code plugin, a copy from a
+//! git clone, or a copy of a skill Sawit ships (Built In).
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -21,7 +21,7 @@ pub struct InstallSkillArgs {
     )]
     pub agents: Vec<String>,
     #[schemars(
-        description = "How to install, from the pack's ways in list_skills: \"skills-cli\" (npx skills add), \"plugin\" (Claude Code plugin; Claude Code profiles only) or \"copy\" (git clone and copy). Default: the pack's first way that reaches every agent given"
+        description = "How to install, from the pack's ways in list_skills: \"skills-cli\" (npx skills add), \"plugin\" (Claude Code plugin; Claude Code profiles only), \"copy\" (git clone and copy) or \"built-in\" (a skill Sawit ships, copied from its data folder: no download). Default: the pack's first way that reaches every agent given"
     )]
     pub method: Option<String>,
     #[schemars(
@@ -29,7 +29,7 @@ pub struct InstallSkillArgs {
     )]
     pub package_manager: Option<String>,
     #[schemars(
-        description = "Must be true: installing downloads the skills (and runs the skills CLI or Claude Code's plugin install) from the internet"
+        description = "Must be true: installing replaces the pack's skill folders in those agents' folders and, unless the pack is built in, downloads the skills (and runs the skills CLI or Claude Code's plugin install) from the internet"
     )]
     pub confirm: bool,
 }
@@ -48,9 +48,19 @@ fn status_text(status: Status) -> String {
     match status {
         Status::Installed { plugin: true } => "installed (plugin)".into(),
         Status::Installed { plugin: false } => "installed".into(),
+        Status::Differs => {
+            "differs from this Sawit's version: edited, or an update is available".into()
+        }
         Status::Partial { have, of } => format!("{have} of {of} skills"),
         Status::Missing => "not installed".into(),
     }
+}
+
+/// The lines of a run, as having run or, when it failed before the shell started on them (the
+/// pack's lock, writing the skill out), as not run.
+fn commands(lines: &[String], started: bool) -> String {
+    let label = if started { "Ran" } else { "Not run" };
+    format!("{label}:\n{}", lines.join("\n"))
 }
 
 fn pick(skill: &str) -> Result<&'static Pack, String> {
@@ -91,8 +101,14 @@ fn method_for(
 }
 
 impl Sawit {
+    /// What the commands are written for: this process's home folder, and this server's data
+    /// folder, where a skill Sawit ships is written out.
+    fn skills_env(&self) -> skills::Env {
+        skills::Env::with_data(&self.paths)
+    }
+
     pub async fn list_skills_tool(&self) -> CallToolResult {
-        let paths = self.paths.clone();
+        let (paths, env) = (self.paths.clone(), self.skills_env());
         let available = package_manager::detect().await;
         let text = tri!(
             blocking(move || {
@@ -151,19 +167,19 @@ impl Sawit {
                                     "  {} ({}): {}",
                                     method.id(),
                                     pm.id(),
-                                    skills::sample(pack, *method, pm)
+                                    skills::sample(pack, *method, pm, &env)
                                 ));
                             }
                         } else {
-                            let only = if matches!(method, Method::Plugin { .. }) {
-                                " (Claude Code profiles only)"
-                            } else {
-                                ""
+                            let only = match method {
+                                Method::Plugin { .. } => " (Claude Code profiles only)",
+                                Method::Bundled { .. } => " (ships inside Sawit, no download)",
+                                _ => "",
                             };
                             out.push(format!(
                                 "  {}{only}: {}",
                                 method.id(),
-                                skills::sample(pack, *method, PackageManager::Npm)
+                                skills::sample(pack, *method, PackageManager::Npm, &env)
                             ));
                         }
                     }
@@ -197,7 +213,7 @@ impl Sawit {
     pub async fn install_skill_tool(&self, a: InstallSkillArgs) -> CallToolResult {
         if !a.confirm {
             return fail(
-                "Refused: installing downloads the skills and runs the skills CLI or Claude Code's plugin install. Pass confirm=true.",
+                "Refused: installing replaces the pack's skill folders in the agents' folders and, unless the pack is built in, downloads the skills and runs the skills CLI or Claude Code's plugin install. Pass confirm=true.",
             );
         }
         let pack = tri!(pick(&a.skill));
@@ -244,9 +260,7 @@ impl Sawit {
         } else {
             PackageManager::Npm
         };
-        let all_there = picked
-            .iter()
-            .all(|&t| matches!(report.status(pack, t), Status::Installed { .. }));
+        let all_there = picked.iter().all(|&t| report.status(pack, t).full());
         let action = if all_there {
             Action::Update
         } else {
@@ -256,15 +270,13 @@ impl Sawit {
             .iter()
             .map(|&t| (&report.targets[t], &report.installed[t]))
             .collect();
-        let lines = tri!(skills::script(
-            pack,
-            method,
-            action,
-            &places,
-            pm,
-            &skills::Env::current()
-        ));
-        let result = skills::run(pack, &lines, |_| {}).await;
+        let env = self.skills_env();
+        let lines = tri!(skills::script(pack, method, action, &places, pm, &env));
+        let kept: Vec<String> = skills::kept(pack, &places, &env)
+            .iter()
+            .map(|b| tilde(b))
+            .collect();
+        let result = skills::run(pack, action, &lines, &env, |_| {}).await;
         let after = tri!(blocking(skills::report).await);
         let states: Vec<String> = picked
             .iter()
@@ -276,10 +288,9 @@ impl Sawit {
                 )
             })
             .collect();
-        let ran = format!("Ran:\n{}", lines.join("\n"));
         match result {
             Ok(()) => ok(format!(
-                "{} {} ({}). {}.\n{ran}\nStart a new session of those agents to pick it up.",
+                "{} {} ({}). {}.{}\n{}\nStart a new session of those agents to pick it up.",
                 if action == Action::Update {
                     "Updated"
                 } else {
@@ -287,9 +298,21 @@ impl Sawit {
                 },
                 pack.id,
                 method.label(),
-                states.join("; ")
+                states.join("; "),
+                match kept.is_empty() {
+                    true => String::new(),
+                    false => format!(
+                        " The copy that differed from this Sawit's version is kept beside it: {}.",
+                        kept.join(", ")
+                    ),
+                },
+                commands(&lines, true)
             )),
-            Err(e) => fail(format!("{} failed: {e}\n{ran}", pack.id)),
+            Err(e) => fail(format!(
+                "{} failed: {e}\n{}",
+                pack.id,
+                commands(&lines, e.started)
+            )),
         }
     }
 
@@ -310,31 +333,32 @@ impl Sawit {
             .iter()
             .map(|&t| (&report.targets[t], &report.installed[t]))
             .collect();
-        let lines = match skills::script(
-            pack,
-            pack.methods[0],
-            Action::Remove,
-            &places,
-            PackageManager::Npm,
-            &skills::Env::current(),
-        ) {
+        let (env, remove) = (self.skills_env(), Action::Remove);
+        let npm = PackageManager::Npm;
+        let lines = match skills::script(pack, pack.methods[0], remove, &places, npm, &env) {
             Ok(lines) => lines,
             // Nothing of it there: nothing to do, not a failure.
             Err(why) => return ok(why),
         };
-        let result = skills::run(pack, &lines, |_| {}).await;
-        let ran = format!("Ran:\n{}", lines.join("\n"));
+        // Where it had something to remove: not where only another skill of its name is.
+        let from: Vec<&str> = places
+            .iter()
+            .filter(|place| skills::removes_from(pack, place))
+            .map(|(t, _)| t.label.as_str())
+            .collect();
+        let result = skills::run(pack, remove, &lines, &env, |_| {}).await;
         match result {
             Ok(()) => ok(format!(
-                "Removed {} from {}.\n{ran}",
+                "Removed {} from {}.\n{}",
                 pack.id,
-                picked
-                    .iter()
-                    .map(|&t| report.targets[t].label.as_str())
-                    .collect::<Vec<_>>()
-                    .join("; ")
+                from.join("; "),
+                commands(&lines, true)
             )),
-            Err(e) => fail(format!("Removing {} failed: {e}\n{ran}", pack.id)),
+            Err(e) => fail(format!(
+                "Removing {} failed: {e}\n{}",
+                pack.id,
+                commands(&lines, e.started)
+            )),
         }
     }
 }
@@ -342,14 +366,14 @@ impl Sawit {
 #[tool_router(router = skills_router, vis = "pub(crate)")]
 impl Sawit {
     #[tool(
-        description = "List the agent skill packs of Sawit's Skills page (Superpowers, shadcn's improve, Interface Skills, unslop, Animate, MCP Apps, Cloudflare's cf CLI, …): who publishes each, its skills, its source, the exact install command for each way it installs (the skills CLI per package manager: npx, pnpm dlx, bunx, yarn dlx; a Claude Code plugin; a git clone and copy), and which agents on this Mac have it (Claude Code per profile, Codex, Cursor, …, by skills folder). Works without the app"
+        description = "List the agent skill packs of Sawit's Skills page (Sawit's own Canvas Design, Superpowers, shadcn's improve, Interface Skills, unslop, Animate, MCP Apps, Cloudflare's cf CLI, …): who publishes each, its skills, its source, the exact install command for each way it installs (the skills CLI per package manager: npx, pnpm dlx, bunx, yarn dlx; a Claude Code plugin; a git clone and copy; built in: a copy of the skill Sawit ships), and which agents on this Mac have it (Claude Code per profile, Codex, Cursor, …, by skills folder). Works without the app"
     )]
     async fn list_skills(&self) -> CallToolResult {
         self.list_skills_tool().await
     }
 
     #[tool(
-        description = "Install (or update, when every agent given has it) a skill pack from list_skills into the agents given, the way its source documents: the skills CLI run with the package manager picked (package_manager: npm, pnpm, bun or yarn), a Claude Code plugin (Claude Code profiles only), or a git clone and copy. Downloads from the internet: needs confirm=true. Returns the commands it ran and each agent's state after. Works without the app"
+        description = "Install (or update, when every agent given has it) a skill pack from list_skills into the agents given, the way its source documents: the skills CLI run with the package manager picked (package_manager: npm, pnpm, bun or yarn), a Claude Code plugin (Claude Code profiles only), a git clone and copy, or built in for a skill Sawit ships (sawit-canvas-design: written out into Sawit's data folder and copied from there, installing this Sawit's version with no download; a copy there that differs is kept in Sawit's data folder (skill-backups/<agent>/<skill>, out of the agents' reach), and a folder of that name that isn't Sawit's is left alone). Replaces the pack's skill folders and, unless the pack is built in, downloads from the internet: needs confirm=true. Returns the commands it ran and each agent's state after. Works without the app"
     )]
     async fn install_skill(&self, Parameters(a): Parameters<InstallSkillArgs>) -> CallToolResult {
         self.install_skill_tool(a).await
@@ -367,105 +391,4 @@ impl Sawit {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn said(result: &CallToolResult) -> String {
-        let texts = result.content.iter().filter_map(|c| c.as_text());
-        texts.map(|t| t.text.clone()).collect::<Vec<_>>().join("\n")
-    }
-
-    fn sawit() -> Sawit {
-        Sawit::new(sawit_core::instances::AppPaths {
-            root: std::env::temp_dir(),
-        })
-    }
-
-    /// Nothing is read, let alone run, until the agent confirms and names a pack of the catalog
-    /// and a package manager there is.
-    #[tokio::test]
-    async fn installs_and_removals_refuse_before_anything_runs() {
-        let sawit = sawit();
-        let install = |skill: &str, pm: Option<&str>, confirm: bool| {
-            sawit.install_skill_tool(InstallSkillArgs {
-                skill: skill.into(),
-                agents: vec!["Claude Code".into()],
-                method: None,
-                package_manager: pm.map(String::from),
-                confirm,
-            })
-        };
-        let r = install("superpowers", None, false).await;
-        assert_eq!(r.is_error, Some(true));
-        assert!(said(&r).contains("confirm=true"), "{}", said(&r));
-        let r = install("sawit-palsu", None, true).await;
-        assert!(said(&r).contains("Unknown skill pack"), "{}", said(&r));
-        let r = install("cf-cli", Some("deno"), true).await;
-        assert!(said(&r).contains("isn't a package manager"), "{}", said(&r));
-        let r = sawit
-            .uninstall_skill_tool(UninstallSkillArgs {
-                skill: "superpowers".into(),
-                agents: vec!["Claude Code".into()],
-                confirm: "yes".into(),
-            })
-            .await;
-        assert_eq!(r.is_error, Some(true));
-        assert!(said(&r).contains("confirm=\"superpowers\""), "{}", said(&r));
-    }
-
-    /// The way is the one named when the pack has it, else its first that reaches every agent:
-    /// a plugin never goes to an agent other than Claude Code.
-    #[test]
-    fn the_way_reaches_every_agent_given() {
-        let claude = skills::Target {
-            label: "Claude Code".into(),
-            clients: vec![],
-            dir: "/h/.claude/skills".into(),
-            claude: Some(skills::ClaudeHome {
-                dir: "/h/.claude".into(),
-                profile_dir: None,
-            }),
-            cli_agent: Some("claude-code"),
-        };
-        let cursor = skills::Target {
-            label: "Cursor".into(),
-            clients: vec![],
-            dir: "/h/.cursor/skills".into(),
-            claude: None,
-            cli_agent: Some("cursor"),
-        };
-        let mcp_apps = skills::get("mcp-apps").unwrap();
-        assert_eq!(
-            method_for(mcp_apps, None, &[&claude]).unwrap().id(),
-            "plugin"
-        );
-        assert_eq!(
-            method_for(mcp_apps, None, &[&claude, &cursor])
-                .unwrap()
-                .id(),
-            "skills-cli"
-        );
-        assert_eq!(
-            method_for(mcp_apps, Some("skills-cli"), &[&claude])
-                .unwrap()
-                .id(),
-            "skills-cli"
-        );
-        assert!(method_for(mcp_apps, Some("copy"), &[&claude]).is_err());
-        let superpowers = skills::get("superpowers").unwrap();
-        assert!(method_for(superpowers, None, &[&cursor]).is_err());
-    }
-
-    #[test]
-    fn args_parse() {
-        let a: InstallSkillArgs = serde_json::from_str(
-            r#"{"skill":"cf-cli","agents":["codex"],"package_manager":"bun","confirm":true}"#,
-        )
-        .unwrap();
-        assert_eq!(a.package_manager.as_deref(), Some("bun"));
-        assert!(a.method.is_none());
-        assert!(
-            serde_json::from_str::<UninstallSkillArgs>(r#"{"skill":"x","agents":[]}"#).is_err()
-        );
-    }
-}
+mod tests;

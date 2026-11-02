@@ -28,7 +28,12 @@ impl SkillsPage {
         let having = self.having(pack);
         let full = having
             .iter()
-            .filter(|&&t| matches!(self.status(pack, t), Status::Installed { .. }))
+            .filter(|&&t| self.status(pack, t).full())
+            .count();
+        // Where its copy of the skill Sawit ships isn't this Sawit's version.
+        let differs = having
+            .iter()
+            .filter(|&&t| self.status(pack, t) == Status::Differs)
             .count();
         let busy = self.busy(id);
 
@@ -52,6 +57,14 @@ impl SkillsPage {
             _ if full == 0 => (
                 Mark::Icon(Lucide::CircleAlert),
                 format!("Some skills · {} of {total}", having.len()),
+                theme.warning,
+            ),
+            _ if differs > 0 => (
+                Mark::Icon(Lucide::CircleAlert),
+                format!(
+                    "Installed · {} of {total} · Differs in {differs}",
+                    having.len()
+                ),
                 theme.warning,
             ),
             _ => (

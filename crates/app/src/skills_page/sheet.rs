@@ -10,7 +10,7 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::package_manager::{PackageManager, Use};
-use sawit_core::skills::{self, Action, Pack, Status};
+use sawit_core::skills::{self, Action, Method, Pack, Status};
 
 use super::{Pick, Sheet, SkillsPage, pack_logo, plural};
 use crate::catalog::tilde;
@@ -60,12 +60,11 @@ impl SkillsPage {
             .filter(|&t| t < self.report.targets.len())
             .filter(|&t| {
                 let reaches = sheet.method.reaches(&self.report.targets[t]);
-                match (pick, self.status(sheet.pack, t)) {
-                    (Pick::Install, Status::Installed { .. }) => false,
-                    (Pick::Install, _) => reaches,
-                    (Pick::Update, Status::Installed { .. }) => reaches,
-                    (Pick::Update, _) => false,
-                    (Pick::Remove, status) => status.any(),
+                let status = self.status(sheet.pack, t);
+                match pick {
+                    Pick::Install => !status.full() && reaches,
+                    Pick::Update => status.full() && reaches,
+                    Pick::Remove => status.any(),
                 }
             })
             .collect();
@@ -152,6 +151,8 @@ impl SkillsPage {
                     ("Installed (plugin)".to_string(), theme.success)
                 }
                 Status::Installed { plugin: false } => ("Installed".to_string(), theme.success),
+                // Sawit's skill, edited there or another Sawit's version.
+                Status::Differs => ("Differs from Sawit".to_string(), theme.warning),
                 Status::Partial { have, of } => (format!("{have} of {of} skills"), theme.warning),
                 Status::Missing if !reaches => ("Not with this way".to_string(), muted),
                 Status::Missing => ("Not installed".to_string(), muted),
@@ -194,7 +195,7 @@ impl SkillsPage {
                 .child(
                     h_flex()
                         .gap_1()
-                        .w(px(132.))
+                        .w(px(148.))
                         .flex_none()
                         .text_xs()
                         .text_color(color)
@@ -377,7 +378,12 @@ impl SkillsPage {
                             .small()
                             .icon(Lucide::RefreshCw)
                             .label(format!("Update {}", update.len()))
-                            .tooltip("Fetch the Latest Where It's Installed")
+                            .tooltip(match method {
+                                Method::Bundled { .. } => {
+                                    "Copy This Sawit's Version Where It's Installed"
+                                }
+                                _ => "Fetch the Latest Where It's Installed",
+                            })
                             .disabled(update.is_empty() || busy || blocked.is_some())
                             .on_click(
                                 cx.listener(|this, _, _, cx| this.run_sheet(Action::Update, cx)),

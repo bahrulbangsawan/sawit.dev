@@ -1,11 +1,12 @@
 //! What each skills folder has (its skill folders, and a Claude Code profile's plugins and
 //! marketplaces), and a pack's state there.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde_json::Value;
 
+use super::bundled::{self, Held};
 use super::{Pack, Target, targets};
 
 /// What one target has: the skills in its folder, and for a Claude Code
@@ -21,6 +22,8 @@ pub struct Installed {
     pub plugins: HashSet<String>,
     /// The marketplaces the profile has added.
     pub marketplaces: HashSet<String>,
+    /// What the folder holds where each skill Sawit ships goes, by its name, when anything.
+    pub bundled: HashMap<String, Held>,
 }
 
 impl Installed {
@@ -45,6 +48,14 @@ fn skills_in(dir: &Path) -> HashSet<String> {
 pub fn read_installed(target: &Target) -> Installed {
     let mut installed = Installed {
         folder: skills_in(&target.dir),
+        bundled: bundled::names()
+            .filter_map(|name| {
+                Some((
+                    name.to_string(),
+                    bundled::held(name, &target.dir.join(name))?,
+                ))
+            })
+            .collect(),
         ..Default::default()
     };
     let Some(claude) = &target.claude else {
@@ -93,6 +104,9 @@ pub enum Status {
     Installed {
         plugin: bool,
     },
+    /// The skill Sawit ships that it installs is there, Sawit's own, but differs from this
+    /// Sawit's version: edited there, or another Sawit's version (an update is available).
+    Differs,
     /// Some of its skills are there.
     Partial {
         have: usize,
@@ -106,10 +120,23 @@ impl Status {
     pub fn any(self) -> bool {
         self != Status::Missing
     }
+
+    /// Every skill of the pack is there: installed, or in a version that differs.
+    pub fn full(self) -> bool {
+        matches!(self, Status::Installed { .. } | Status::Differs)
+    }
 }
 
-/// `pack`'s state in a target that has `installed`.
+/// `pack`'s state in a target that has `installed`. A skill Sawit ships counts only as a folder
+/// whose SKILL.md is Sawit's, compared with this Sawit's version.
 pub fn status(pack: &Pack, installed: &Installed) -> Status {
+    if let Some(name) = pack.bundled() {
+        return match installed.bundled.get(name) {
+            Some(Held::Same) => Status::Installed { plugin: false },
+            Some(Held::Differs) => Status::Differs,
+            Some(Held::Other) | None => Status::Missing,
+        };
+    }
     if pack
         .plugin()
         .and_then(|m| m.plugin_key())

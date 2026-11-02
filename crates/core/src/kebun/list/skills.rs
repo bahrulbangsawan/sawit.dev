@@ -5,7 +5,8 @@ use crate::kebun::ink::{Ink, clip, tilde};
 
 /// `sawit list skills`: the Skills page's packs, how each installs (the
 /// skills CLI with the package manager picked last, a Claude Code plugin, a
-/// clone and copy) and the agents that have it.
+/// clone and copy, or Built In from Sawit's data folder) and the agents that
+/// have it.
 pub(super) async fn list_skills(ink: &Ink, paths: &AppPaths) {
     use crate::package_manager::{self, PackageManager, Use};
     use crate::skills::{self, Status};
@@ -18,6 +19,7 @@ pub(super) async fn list_skills(ink: &Ink, paths: &AppPaths) {
     )
     .unwrap_or(PackageManager::Npm);
     let report = skills::report();
+    let env = skills::Env::with_data(paths);
     ink.section("🌱 Bibit (skills)");
     if report.targets.is_empty() {
         ink.empty("belum ada agen dengan folder skills di Mac ini.");
@@ -38,7 +40,10 @@ pub(super) async fn list_skills(ink: &Ink, paths: &AppPaths) {
         );
         let pad = " ".repeat(28);
         for method in pack.methods {
-            println!("  {pad} {}", ink.gray(&skills::sample(pack, *method, pm)));
+            println!(
+                "  {pad} {}",
+                ink.gray(&skills::sample(pack, *method, pm, &env))
+            );
         }
         let have: Vec<String> = (0..report.targets.len())
             .filter_map(|t| {
@@ -46,6 +51,7 @@ pub(super) async fn list_skills(ink: &Ink, paths: &AppPaths) {
                 match report.status(pack, t) {
                     Status::Installed { plugin: true } => Some(format!("{label} (plugin)")),
                     Status::Installed { plugin: false } => Some(label.clone()),
+                    Status::Differs => Some(format!("{label} (beda dari versi Sawit ini)")),
                     Status::Partial { have, of } => Some(format!("{label} ({have}/{of})")),
                     Status::Missing => None,
                 }
@@ -60,7 +66,7 @@ pub(super) async fn list_skills(ink: &Ink, paths: &AppPaths) {
     println!(
         "  {}",
         ink.gray(&format!(
-            "Pasang dari halaman Skills di app (skills CLI lewat {}); agen pakai `install_skill`.",
+            "Pasang dari halaman Skills di app; agen pakai `install_skill`. Tiap paket terpasang dengan caranya di atas: skills CLI (lewat {}), plugin Claude Code, clone lalu salin, atau Built In dari Sawit.",
             pm.runner()
         ))
     );

@@ -18,7 +18,7 @@ pub use removal::{
     Impact, Removal, Uninstall, impact, in_terminal, installed_outside, installed_with,
     needed_by_warning, uninstall_command, uninstall_plan,
 };
-pub use script::{install, run, run_shell, uninstall};
+pub use script::{Lock, install, lock, run, run_shell, run_shell_holding, uninstall};
 pub use versions::{is_newer, latest_versions, newer, upgrade_plan};
 
 use crate::package_manager::PackageManager;

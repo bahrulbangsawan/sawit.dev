@@ -82,6 +82,27 @@ pub async fn run_shell(
     run_locked(id, name, command, on_line).await
 }
 
+/// The lock `id` ([`run_shell`]'s), held until dropped.
+pub struct Lock {
+    _file: std::fs::File,
+}
+
+/// Takes the lock `id` that [`run_shell`] runs under, for work that must happen under it before
+/// the script ([`run_shell_holding`]); fails at once when it's held, saying `name` is busy.
+pub fn lock(id: &str, name: &str) -> Result<Lock> {
+    lock_tool(id, name).map(|file| Lock { _file: file })
+}
+
+/// [`run_shell`] under `lock`, which the caller took first ([`lock`]) and holds through it.
+pub async fn run_shell_holding(
+    _lock: &Lock,
+    name: &str,
+    command: &str,
+    on_line: impl Fn(String) + Send + Sync,
+) -> Result<()> {
+    run_script(name, command, on_line).await
+}
+
 /// Holds tool `id`'s lock until dropped; fails at once when it's held.
 fn lock_tool(id: &str, name: &str) -> Result<std::fs::File> {
     use std::os::fd::AsRawFd as _;
