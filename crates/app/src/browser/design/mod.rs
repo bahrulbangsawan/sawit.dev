@@ -196,6 +196,7 @@ impl DesignPanel {
             self.thumbs.clear();
         }
         self.scan = scan;
+        self.cache.scan_changed();
         self.request_thumbnails(cx);
         cx.notify();
     }
@@ -422,7 +423,10 @@ impl DesignPanel {
             ScanState::Ready(ready) => {
                 let ready = ready.clone();
                 match self.segment {
-                    Segment::Colors => colors::render(&ready.scan, cx).into_any_element(),
+                    Segment::Colors => {
+                        let palette = self.palette(&ready.scan);
+                        colors::render(&palette, cx).into_any_element()
+                    }
                     Segment::Assets => {
                         let kind = self
                             .asset_kind

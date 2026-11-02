@@ -1,15 +1,20 @@
-//! What the tabs keep between frames instead of working it out on every one: the font families
-//! this Mac has, for the specimens of the Fonts and Inspect tabs.
+//! What the tabs keep between frames instead of working it out on every one: the Colors tab of
+//! the scan on show, and the font families this Mac has, for the Fonts and Inspect tabs.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui_kit::*;
+use sawit_core::site_design::scan::Scan;
 
 use super::DesignPanel;
+use super::colors::Palette;
 
 /// What the panel keeps between frames.
 #[derive(Default)]
 pub(super) struct Cache {
+    /// The Colors tab of the scan on show; it goes with the scan ([`Cache::scan_changed`]).
+    palette: Option<Rc<Palette>>,
     /// The font families this Mac has: read on the first frame that shows a specimen, and again
     /// whenever the Mac's fonts change ([`DesignPanel::fonts_changed`]).
     faces: Option<Arc<Vec<String>>>,
@@ -19,7 +24,22 @@ pub(super) struct Cache {
     read_faces_again: bool,
 }
 
+impl Cache {
+    /// Another scan is on show: what was worked out of the last one goes.
+    pub(super) fn scan_changed(&mut self) {
+        self.palette = None;
+    }
+}
+
 impl DesignPanel {
+    /// The Colors tab of `scan`, the scan on show: worked out on its first frame, not on every
+    /// one, as it reads every colour and every variable the page has.
+    pub(super) fn palette(&mut self, scan: &Scan) -> Rc<Palette> {
+        (self.cache.palette)
+            .get_or_insert_with(|| Rc::new(Palette::of(scan)))
+            .clone()
+    }
+
     /// The font families this Mac has. CoreText takes tens of milliseconds to list them, too long
     /// for every frame: they are read once, then again, off the UI thread, when fonts are
     /// installed or removed.

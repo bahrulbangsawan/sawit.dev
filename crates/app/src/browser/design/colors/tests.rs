@@ -1,6 +1,6 @@
 //! The Colors tab's tests: colours grouped by role, the forms they copy as, and contrast.
 
-use super::{contrast_pairs, group_colors, rgb_css, rgba_u32, role_class, variable_line};
+use super::{Palette, contrast_pairs, group_colors, rgb_css, rgba_u32, role_class, variable_lines};
 use sawit_core::site_design::color;
 use sawit_core::site_design::scan::{ColorRole, ColorUse, Scan};
 
@@ -59,7 +59,7 @@ fn copy_formats() {
         ..Scan::default()
     };
     assert_eq!(
-        variable_line(&scan, &c).as_deref(),
+        variable_lines(&scan).get(&c.to_hex()).map(String::as_str),
         Some("--brand: rgb(0, 113, 227);")
     );
     assert_eq!(rgba_u32(&c), 0x0071e3ff);
@@ -91,4 +91,54 @@ fn text_colours_are_checked_on_the_background() {
     let on_black = contrast_pairs(&scan);
     assert_eq!(on_black.len(), 1);
     assert_eq!(on_black[0].text.to_hex(), "#767676");
+}
+
+/// A colour's menu offers the first variable the page defines for it, written in any syntax;
+/// a name that isn't a custom property is left out.
+#[test]
+fn the_first_variable_holding_a_colour_is_offered() {
+    let scan = Scan {
+        variables: vec![
+            ("color".into(), "#0071e3".into()),
+            ("--brand".into(), "rgb(0, 113, 227)".into()),
+            ("--link".into(), "#0071E3".into()),
+            ("--space".into(), "4px".into()),
+        ],
+        ..Scan::default()
+    };
+    let lines = variable_lines(&scan);
+    assert_eq!(
+        lines.get("#0071e3").map(String::as_str),
+        Some("--brand: rgb(0, 113, 227);")
+    );
+    assert_eq!(lines.len(), 1);
+}
+
+/// A palette holds what each row shows and copies: its hex for a click, every form for its
+/// menu, the page's variable and the role's Tailwind class among them.
+#[test]
+fn a_palette_holds_what_each_row_copies() {
+    let scan = Scan {
+        colors: vec![use_of("rgb(0, 113, 227)", ColorRole::Text, 3)],
+        variables: vec![("--brand".into(), "#0071e3".into())],
+        ..Scan::default()
+    };
+    let palette = Palette::of(&scan);
+    let (role, swatches) = &palette.groups[0];
+    assert_eq!(*role, ColorRole::Text);
+    assert_eq!((swatches[0].hex.as_str(), swatches[0].uses), ("#0071e3", 3));
+    let copies: Vec<(&str, &str)> = (swatches[0].copies.iter())
+        .map(|(label, text)| (*label, text.as_str()))
+        .collect();
+    assert_eq!(
+        copies,
+        [
+            ("Copy hex", "#0071e3"),
+            ("Copy rgb()", "rgb(0, 113, 227)"),
+            ("Copy oklch()", swatches[0].rgba.oklch_css().as_str()),
+            ("Copy CSS variable", "--brand: #0071e3;"),
+            ("Copy Tailwind class", "text-[#0071e3]"),
+        ]
+    );
+    assert_eq!(palette.pairs.len(), 1);
 }

@@ -4,6 +4,9 @@
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
@@ -38,17 +41,24 @@ pub(super) fn group_colors(scan: &Scan) -> Vec<(ColorRole, Vec<(Rgba, u32)>)> {
     ROLES
         .into_iter()
         .filter_map(|role| {
-            let mut merged: Vec<(Rgba, u32)> = Vec::new();
+            // Each colour with its hex, which merges and orders them, written once.
+            let mut merged: Vec<(Rgba, u32, String)> = Vec::new();
+            let mut by_hex: HashMap<String, usize> = HashMap::new();
             for c in scan.colors.iter().filter(|c| c.role == role) {
                 let Some(rgba) = color::parse(&c.value) else {
                     continue;
                 };
-                match merged.iter_mut().find(|(r, _)| r.to_hex() == rgba.to_hex()) {
-                    Some((_, n)) => *n += c.count,
-                    None => merged.push((rgba, c.count)),
+                let hex = rgba.to_hex();
+                match by_hex.get(&hex) {
+                    Some(&at) => merged[at].1 += c.count,
+                    None => {
+                        by_hex.insert(hex.clone(), merged.len());
+                        merged.push((rgba, c.count, hex));
+                    }
                 }
             }
-            merged.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_hex().cmp(&b.0.to_hex())));
+            merged.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
+            let merged: Vec<(Rgba, u32)> = merged.into_iter().map(|(c, n, _)| (c, n)).collect();
             (!merged.is_empty()).then_some((role, merged))
         })
         .collect()
@@ -89,16 +99,18 @@ pub(super) fn role_class(role: ColorRole, hex: &str) -> Option<String> {
     Some(format!("{prefix}-[{hex}]"))
 }
 
-/// The page's own custom property that holds this color, as a declaration. Only a variable the
-/// page defines is offered.
-pub(super) fn variable_line(scan: &Scan, c: &Rgba) -> Option<String> {
-    let hex = c.to_hex();
-    scan.variables
-        .iter()
-        .find(|(name, value)| {
-            name.starts_with("--") && color::parse(value).is_some_and(|p| p.to_hex() == hex)
-        })
-        .map(|(name, value)| format!("{name}: {value};"))
+/// The page's own custom properties that hold colours, as declarations, by the colour's hex: the
+/// first one the page defines for each. Only a variable the page defines is offered.
+pub(super) fn variable_lines(scan: &Scan) -> HashMap<String, String> {
+    let mut lines = HashMap::new();
+    for (name, value) in scan.variables.iter().filter(|(n, _)| n.starts_with("--")) {
+        if let Some(c) = color::parse(value) {
+            lines
+                .entry(c.to_hex())
+                .or_insert_with(|| format!("{name}: {value};"));
+        }
+    }
+    lines
 }
 
 /// One text colour on the page's background: the pair, its ratio and whether body text in it
@@ -143,9 +155,75 @@ pub(super) fn contrast_pairs(scan: &Scan) -> Vec<Pair> {
         .collect()
 }
 
-pub(super) fn render(scan: &Scan, cx: &mut Context<DesignPanel>) -> impl IntoElement {
-    let groups = group_colors(scan);
-    if groups.is_empty() {
+/// The Colors tab of one scan, worked out once ([`DesignPanel::palette`]): its colours by role,
+/// with what each one's menu copies, and the most used text colours on the page's background.
+pub(super) struct Palette {
+    groups: Vec<(ColorRole, Vec<Swatch>)>,
+    pairs: Vec<Pair>,
+}
+
+/// A colour of a role: how often the page uses it, and what its row and its menu copy.
+struct Swatch {
+    rgba: Rgba,
+    uses: u32,
+    /// `#0071e3`, which a click on the row copies.
+    hex: String,
+    copies: Rc<[(&'static str, String)]>,
+}
+
+impl Palette {
+    pub(super) fn of(scan: &Scan) -> Self {
+        let variables = variable_lines(scan);
+        let groups = group_colors(scan)
+            .into_iter()
+            .map(|(role, colors)| {
+                let swatches = colors
+                    .into_iter()
+                    .map(|(rgba, uses)| {
+                        let hex = rgba.to_hex();
+                        let copies = copies(role, &rgba, &hex, &variables);
+                        Swatch {
+                            rgba,
+                            uses,
+                            hex,
+                            copies,
+                        }
+                    })
+                    .collect();
+                (role, swatches)
+            })
+            .collect();
+        Self {
+            groups,
+            pairs: contrast_pairs(scan),
+        }
+    }
+}
+
+/// What a colour's menu copies it as: its hex, `rgb()` and `oklch()`, the page's own variable
+/// that holds it, and its role's Tailwind class.
+fn copies(
+    role: ColorRole,
+    rgba: &Rgba,
+    hex: &str,
+    variables: &HashMap<String, String>,
+) -> Rc<[(&'static str, String)]> {
+    let mut items = vec![
+        ("Copy hex", hex.to_string()),
+        ("Copy rgb()", rgb_css(rgba)),
+        ("Copy oklch()", rgba.oklch_css()),
+    ];
+    if let Some(line) = variables.get(hex) {
+        items.push(("Copy CSS variable", line.clone()));
+    }
+    if let Some(class) = role_class(role, hex) {
+        items.push(("Copy Tailwind class", class));
+    }
+    items.into()
+}
+
+pub(super) fn render(palette: &Palette, cx: &mut Context<DesignPanel>) -> impl IntoElement {
+    if palette.groups.is_empty() {
         return panel::empty(
             "No colors on this page",
             "Text, backgrounds, borders and SVG fills show here once the page sets them.",
@@ -157,9 +235,10 @@ pub(super) fn render(scan: &Scan, cx: &mut Context<DesignPanel>) -> impl IntoEle
     let weak = cx.entity().downgrade();
     let mut sections: Vec<AnyElement> = Vec::new();
 
-    let pairs = contrast_pairs(scan);
-    if !pairs.is_empty() {
-        let rows = pairs.iter().map(|p| pair_row(p, cx)).collect::<Vec<_>>();
+    if !palette.pairs.is_empty() {
+        let rows = (palette.pairs.iter())
+            .map(|p| pair_row(p, cx))
+            .collect::<Vec<_>>();
         sections.push(
             panel::section(
                 "Main text colors on the page background",
@@ -171,16 +250,14 @@ pub(super) fn render(scan: &Scan, cx: &mut Context<DesignPanel>) -> impl IntoEle
         );
     }
 
-    for (gi, (role, colors)) in groups.into_iter().enumerate() {
-        let count = colors.len();
-        let rows: Vec<AnyElement> = colors
-            .into_iter()
-            .enumerate()
-            .map(|(ci, (rgba, uses))| color_row(scan, role, (gi, ci), rgba, uses, &weak, cx))
+    for (gi, (role, swatches)) in palette.groups.iter().enumerate() {
+        let count = swatches.len();
+        let rows: Vec<AnyElement> = (swatches.iter().enumerate())
+            .map(|(ci, swatch)| color_row(swatch, (gi, ci), &weak, cx))
             .collect();
         sections.push(
             panel::section(
-                role_title(role),
+                role_title(*role),
                 Some(
                     div()
                         .text_xs()
@@ -255,34 +332,21 @@ fn pair_row(p: &Pair, cx: &App) -> AnyElement {
 /// A colour: its swatch, hex and opacity, how often it is used; click copies the hex, the
 /// menu (on hover, or a right-click) copies it in other forms.
 fn color_row(
-    scan: &Scan,
-    role: ColorRole,
+    s: &Swatch,
     at: (usize, usize),
-    rgba: Rgba,
-    uses: u32,
     weak: &WeakEntity<DesignPanel>,
     cx: &mut Context<DesignPanel>,
 ) -> AnyElement {
     let theme = cx.theme();
     let muted = theme.muted_foreground;
-    let (hex, alpha) = hex_and_alpha(&rgba);
-    let css_hex = rgba.to_hex();
-    let mut menu_items: Vec<(&'static str, String)> = vec![
-        ("Copy hex", css_hex.clone()),
-        ("Copy rgb()", rgb_css(&rgba)),
-        ("Copy oklch()", rgba.oklch_css()),
-    ];
-    if let Some(line) = variable_line(scan, &rgba) {
-        menu_items.push(("Copy CSS variable", line));
-    }
-    if let Some(class) = role_class(role, &css_hex) {
-        menu_items.push(("Copy Tailwind class", class));
-    }
+    let (hex, alpha) = hex_and_alpha(&s.rgba);
+    let css_hex = s.hex.clone();
+    let uses = s.uses;
     let group: SharedString = format!("design-color-{}-{}", at.0, at.1).into();
-    let menu = |weak: WeakEntity<DesignPanel>, items: Vec<(&'static str, String)>| {
+    let menu = |weak: WeakEntity<DesignPanel>, items: Rc<[(&'static str, String)]>| {
         move |menu: PopupMenu, _: &mut Window, _: &mut Context<PopupMenu>| {
             let mut menu = menu;
-            for (label, text) in items.clone() {
+            for (label, text) in items.iter().cloned() {
                 let weak = weak.clone();
                 menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
                     let _ = weak.update(cx, |this, cx| this.copy(text.clone(), cx));
@@ -303,7 +367,7 @@ fn color_row(
         .rounded(px(4.))
         .cursor_pointer()
         .hover(|el| el.bg(theme.secondary))
-        .child(swatch(&rgba, px(20.), cx))
+        .child(swatch(&s.rgba, px(20.), cx))
         .child(
             h_flex()
                 .flex_1()
@@ -340,14 +404,14 @@ fn color_row(
                         .accessibility_label(format!("Copy {css_hex} as…"))
                         .dropdown_menu_with_anchor(
                             Anchor::TopRight,
-                            menu(weak.clone(), menu_items.clone()),
+                            menu(weak.clone(), s.copies.clone()),
                         ),
                 ),
         )
         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
             this.copy(copy_hex.clone(), cx);
         }))
-        .context_menu(menu(weak.clone(), menu_items))
+        .context_menu(menu(weak.clone(), s.copies.clone()))
         .into_any_element()
 }
 
