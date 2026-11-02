@@ -150,6 +150,7 @@ impl BrowserView {
         // A menu left open goes with the toolbar that drew it, which says nothing then.
         if !visible {
             self.menu_open = false;
+            self.forget_cover();
         }
         self.show_page(was);
     }
@@ -168,13 +169,14 @@ impl BrowserView {
         cx.notify();
     }
 
-    /// Whether the webview shows: its tab is on screen, and no menu is open over it.
+    /// Whether the webview shows: its tab is on screen, and no menu is open over it, nor
+    /// anything else GPUI draws ([`super::cover`]).
     pub(super) fn page_shown(&self) -> bool {
-        self.visible && !self.menu_open
+        self.visible && !self.menu_open && !self.frozen.hidden
     }
 
     /// Shows or hides the webview, when [`Self::page_shown`] is no longer `was`.
-    fn show_page(&self, was: bool) {
+    pub(super) fn show_page(&self, was: bool) {
         let shown = self.page_shown();
         if shown == was {
             return;
@@ -232,7 +234,7 @@ pub(super) fn caption(name: Option<&str>, width: u32, height: u32, scale: f64) -
     parts.join(" · ")
 }
 
-fn frame(bounds: Bounds<Pixels>) -> Frame {
+pub(super) fn frame(bounds: Bounds<Pixels>) -> Frame {
     Frame {
         x: f32::from(bounds.origin.x),
         y: f32::from(bounds.origin.y),

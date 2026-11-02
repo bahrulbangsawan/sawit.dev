@@ -335,12 +335,31 @@ impl BoardView {
             .unwrap_or_default()
     }
 
-    /// Whether a menu, a flyout or a picker is open over the canvas: the live view, which draws
-    /// above GPUI, hides meanwhile.
+    /// Whether a menu, a flyout or a picker is open over the canvas, or anything from outside it
+    /// covers it ([`Self::web_covered`]): the live view, which draws above GPUI, hides meanwhile.
     fn menus_open(&self) -> bool {
         self.menus.any_open()
             || self.open_flyout.is_some()
             || self.picker.is_some()
             || self.routes_ui.dialog.is_some()
+            || self.web_cover.covered
+    }
+
+    /// Something drawn over the whole canvas tab came or went. The live view snapshots and steps
+    /// back as for a menu of the canvas's own ([`Self::menus_open`]), at the next frame; Preview's
+    /// view, which has no picture, hides until nothing covers it.
+    pub(in crate::board) fn web_covered(
+        &mut self,
+        covered: bool,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(preview) = self.screen_ui.preview.as_ref()
+            && preview.placed.is_some()
+            && let Some(engine) = preview.engine.as_ref()
+        {
+            engine.set_visible(!covered);
+        }
+        cx.notify();
     }
 }

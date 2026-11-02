@@ -329,6 +329,10 @@ pub struct BoardView {
     /// Web frames ([`web`]): UI screens, and route frames of a dev server's pages. `None` only in
     /// a view made without them.
     web: Option<web::WebFrames>,
+    /// Whether a menu, popover, dialog or notification from outside the canvas (the account
+    /// menu, the footer's Pages menu, a tab's menu) covers it: its web views, which draw above
+    /// GPUI, step back meanwhile ([`crate::native_cover`]).
+    web_cover: crate::native_cover::Cover,
     /// UI screens' bar, Preview and Send to Agent ([`screens`]).
     screen_ui: screens::ScreenUi,
     /// Add Routes from Dev Server, the route frames' bar, and agents' routes works ([`routes`]).

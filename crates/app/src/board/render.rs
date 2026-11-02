@@ -108,6 +108,13 @@ impl BoardView {
         let tools = chrome.then(|| toolbar::render_toolbar(self, window, cx));
         let toast = self.render_toast(chrome, cx);
         let agents = self.render_agents(cx);
+        // Last, so the canvas's own chrome is under it: only what is drawn over the whole canvas
+        // tab (a menu, a dialog, a notification) covers its web views.
+        let cover = crate::native_cover::watch(
+            cx.entity().downgrade(),
+            |this: &mut Self| &mut this.web_cover,
+            Self::web_covered,
+        );
         div()
             .id("board-canvas")
             .role(Role::Canvas)
@@ -159,6 +166,7 @@ impl BoardView {
             .children(tools)
             .children(preview)
             .children(toast)
+            .child(cover)
     }
 
     /// Settles the chrome before it is drawn. A flyout or the picker that is open closes while

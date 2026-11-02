@@ -16,6 +16,7 @@ mod keymap;
 mod layout;
 mod local_explorer;
 mod mcp_page;
+mod native_cover;
 mod network;
 mod new_project_page;
 mod package_managers;

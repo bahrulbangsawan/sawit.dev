@@ -185,6 +185,7 @@ impl BoardView {
             gave_keyboard: false,
             agents: presence::Presence::default(),
             web: Some(web),
+            web_cover: Default::default(),
             screen_ui: screens::ScreenUi::default(),
             routes_ui: routes::RoutesUi::default(),
             _frames: frames,

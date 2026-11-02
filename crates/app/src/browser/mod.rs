@@ -12,6 +12,7 @@
 
 mod agents;
 mod annotate;
+mod cover;
 mod design;
 pub(crate) mod engine;
 mod events;
@@ -171,6 +172,10 @@ pub struct BrowserView {
     /// The device menu is open, over the page: the webview is hidden meanwhile
     /// ([`Self::set_menu_open`]).
     menu_open: bool,
+    /// Whether a menu, popover, dialog or notification covers the page, and the page's picture
+    /// in its place meanwhile ([`cover`]).
+    cover: crate::native_cover::Cover,
+    frozen: cover::Frozen,
     address: Entity<InputState>,
     url: String,
     /// WebKit's address as the toolbar was last drawn with it (the Explorer button and Open in
@@ -312,6 +317,8 @@ impl BrowserView {
             bounds: None,
             visible: false,
             menu_open: false,
+            cover: Default::default(),
+            frozen: Default::default(),
             address,
             url: url.unwrap_or_else(|| "about:blank".into()),
             drawn_url: None,
@@ -352,6 +359,10 @@ impl BrowserView {
             "pick_mode": self.pick.as_str(),
             "last_pick": self.last_pick,
             "mesurer": self.mesurer_describe(),
+            // Whether a menu, popover, dialog or notification covers the page, and whether the
+            // webview is up (it steps back while something covers it).
+            "covered": self.cover.covered,
+            "page_shown": self.page_shown(),
         })
     }
 
@@ -419,15 +430,17 @@ impl Render for BrowserView {
             } => Some(caption(name.as_deref(), *width, *height, self.scale())),
             ViewportMode::Responsive => None,
         };
+        let frozen = self.frozen_paint();
         let page = div()
             .flex_1()
             .min_w_0()
             .h_full()
             .relative()
             // The page hidden under the device menu leaves the same backdrop as a device's.
-            .when(device.is_some() || self.menu_open, |d| {
-                d.bg(cx.theme().muted)
-            })
+            .when(
+                device.is_some() || self.menu_open || self.frozen.hidden,
+                |d| d.bg(cx.theme().muted),
+            )
             .children(device.map(|text| {
                 div()
                     .absolute()
@@ -447,10 +460,11 @@ impl Render for BrowserView {
                     move |bounds, window, cx| {
                         let _ = this.update(cx, |this, cx| this.place(bounds, window, cx));
                     },
-                    |_, _, _, _| {},
+                    move |bounds, _, window, _| frozen.paint(bounds, window),
                 )
                 .size_full(),
-            );
+            )
+            .child(Self::cover_watch(cx));
         let side = self.panel.map(|panel| self.side_panel(panel, cx));
         v_flex()
             .key_context(self.mesurer_key_context(window))

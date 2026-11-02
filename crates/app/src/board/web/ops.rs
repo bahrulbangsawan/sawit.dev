@@ -97,7 +97,8 @@ impl BoardView {
         json!({"ok": true, "config": format!("{:?}", web.config), "frames": frames,
             "live": web.live.as_ref().map(|live| json!({"id": live.id.0, "placed": live.placed.map(|(f, z)| json!([f.x, f.y, f.width, f.height, z])), "hidden": live.hidden})),
             "canvas": [f32::from(canvas.origin.x), f32::from(canvas.origin.y), f32::from(canvas.size.width), f32::from(canvas.size.height)],
-            "view": view, "bench_running": web.bench.is_some(), "last_bench": web.last_bench,
+            "view": view, "covered": self.web_cover.covered,
+            "bench_running": web.bench.is_some(), "last_bench": web.last_bench,
             "log_len": web.log.len(), "log": web.log.iter().skip(since).collect::<Vec<_>>()})
     }
 
