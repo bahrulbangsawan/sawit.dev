@@ -16,6 +16,8 @@
 mod flyouts;
 mod picker;
 
+use std::sync::LazyLock;
+
 use figcraft_engine::{ToolId, guard};
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
@@ -67,7 +69,7 @@ pub(super) fn tool_icon(icon: ToolIcon) -> Lucide {
 /// What the toolbar shows this frame, as the model gives it.
 #[derive(Default)]
 struct Shown {
-    groups: Vec<ToolGroup>,
+    groups: &'static [ToolGroup],
     /// The session's tool, whose button is marked.
     active: Option<ToolId>,
     /// The flyout that is open, and its items.
@@ -99,13 +101,25 @@ fn read_shown(view: &BoardView) -> Shown {
     let session = &board.session;
     guard::run("ui.toolbar", || {
         Ok(Shown {
-            groups: model::groups(kind),
+            groups: groups(kind),
             active: Some(model::active(session)),
             flyout: view.open_flyout.map(|f| (f, model::flyout(session, f))),
             board: kind == DocKind::Board,
         })
     })
     .unwrap_or_default()
+}
+
+/// The tool groups of the toolbar of a file of `kind` (`sawit_board::toolbar::groups`), made the
+/// first time they are asked for and kept: they never change, and making them looks up each
+/// tool's key in the shortcut tables, too slow to do on every frame.
+fn groups(kind: DocKind) -> &'static [ToolGroup] {
+    static BOARD: LazyLock<Vec<ToolGroup>> = LazyLock::new(|| model::groups(DocKind::Board));
+    static DESIGN: LazyLock<Vec<ToolGroup>> = LazyLock::new(|| model::groups(DocKind::Design));
+    match kind {
+        DocKind::Board => &BOARD,
+        DocKind::Design => &DESIGN,
+    }
 }
 
 /// The toolbar of `view`'s canvas, centred [`BOTTOM`] off its bottom edge. It takes the pointer:
@@ -125,14 +139,14 @@ pub(super) fn render_toolbar(
     let picker = view.picker.clone();
     // The buttons each group shows: all its tools, or for a group whose flyout lists them the one
     // in use or used last.
-    let buttons: Vec<Vec<ToolButton>> = (shown.groups.iter())
+    let buttons: Vec<Vec<&ToolButton>> = (shown.groups.iter())
         .map(|group| match group.flyout {
             Some(Flyout::Tools(_)) => {
                 let active = shown.active.unwrap_or_default();
                 let last = view.last_tools.get(group.key).copied();
-                vec![model::shown_tool(group, active, last).clone()]
+                vec![model::shown_tool(group, active, last)]
             }
-            _ => group.tools.clone(),
+            _ => group.tools.iter().collect(),
         })
         .collect();
     // Each button's keys, and those of the open flyout's tools, as the keymap binds them now.
