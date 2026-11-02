@@ -5,14 +5,15 @@
 import assert from "node:assert/strict";
 
 import { sawitTest } from "../lib/harness.js";
-import { waitForTab } from "../lib/sawit.js";
+import { openPage, waitForTab } from "../lib/sawit.js";
 
 /** What the menu may offer: the managers installed on this Mac, each with the command it runs. */
 const MANAGERS = /^(npm \(npx\)|pnpm \(pnpm dlx\)|bun \(bunx\)|yarn \(yarn dlx\))$/;
 
 sawitTest("skills: the page lists ten packs, and an install sheet picks its package manager", async (ctx) => {
   const { win } = ctx;
-  await win.click({ role: "button", name: "Skills" });
+  // The footer's Pages menu opens it (there is no Skills button of its own any more).
+  await openPage(ctx, "Skills");
   await waitForTab(ctx, "skills");
   await win.waitFor({ role: "textfield", name: "Search skills" });
   const all = await win.waitFor({ role: "switch", name: /^All \d+$/ });
