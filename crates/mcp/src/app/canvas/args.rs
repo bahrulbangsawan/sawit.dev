@@ -1,0 +1,126 @@
+//! The canvas tools' arguments, and what their `file` and `project` name.
+
+use rmcp::schemars;
+use serde_json::Value;
+
+/// What a canvas tool's `file` names: a canvas file to work on instead of the project's canvas
+/// ([`canvas_file`](super::files::canvas_file)).
+const CANVAS_FILE: &str = "A canvas file to work on instead of the project's canvas: an absolute path (or ~/…) to a .sawit file (a design file or a board; one not there yet, in a folder that is, starts as a new board) or to an .excalidraw file, imported once into the .sawit file of its name beside it (flow.sawit for flow.excalidraw) and left as it is. With the app running the op runs on that file's canvas tab, opened if need be without taking the user's keyboard; with it closed, on the file itself. Its backups go beside it (home.sawit.bak and home.sawit.del.bak for home.sawit): in a repository they show in git status, and staging everything would commit them";
+
+/// What a canvas tool's `project` names: the project whose canvas it uses ([`crate::agent_project`]).
+const CANVAS_PROJECT: &str = "Project folder whose canvas (.nyawit/canvas.sawit) to use, in the window that has it open. Default: the project your working folder is in (with the app closed: within its git repository, the nearest folder up from it whose .nyawit/ holds a canvas, else the repository's root; outside a repository, the folder itself)";
+
+/// canvas_get's and canvas_clear's arguments: which canvas.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasTargetArgs {
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasElementsArgs {
+    #[schemars(
+        description = "Element skeletons, e.g. {\"type\":\"rectangle\",\"id\":\"a\",\"x\":0,\"y\":0,\"width\":160,\"height\":60,\"label\":{\"text\":\"API\"}}, {\"type\":\"arrow\",\"x\":160,\"y\":30,\"start\":{\"id\":\"a\"},\"end\":{\"id\":\"b\"}}, {\"type\":\"text\",\"x\":0,\"y\":-40,\"text\":\"Title\"}. Types: rectangle, ellipse, diamond, sticky, text, arrow, line, frame. With no colour given, shapes and stickies are sticky yellow (#FFE78A): pass backgroundColor for another, \"transparent\" for no fill. A line through more than two points is drawn as ink, #1E1E1E unless strokeColor names another. Arrows and lines run straight"
+    )]
+    pub elements: Vec<Value>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
+/// The arguments of `canvas_add_diagram`, and of `canvas_add_mermaid`, its old name.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasMermaidArgs {
+    #[schemars(
+        description = "The diagram in Mermaid syntax, starting with its type: flowchart, sequenceDiagram, architecture-beta, C4Context, venn-beta, … (any type Pele draws)"
+    )]
+    pub source: String,
+    #[schemars(description = "Where to put it; default right of the existing content")]
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasUpdateArgs {
+    #[schemars(
+        description = "Changes per element: {\"id\":\"a\", \"x\":10, \"text\":\"New label\", \"strokeColor\":\"#e03131\", \"backgroundColor\":\"#ffc9c9\", ...}"
+    )]
+    pub elements: Vec<Value>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasDeleteArgs {
+    #[schemars(description = "Element ids (from canvas_get)")]
+    pub ids: Vec<String>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasLoadArgs {
+    #[schemars(
+        description = "A .sawit file to load, or an .excalidraw file to import (replaces the board). A backup Sawit keeps loads too: beside the canvas file, <file>.bak holds the board the last clear or load took off, and <file>.del.bak the board the last deletion took layers off (canvas.sawit.bak and canvas.sawit.del.bak for the project's canvas), with the ones before them in .bak.1 to .bak.4 and .del.bak.1 to .del.bak.4"
+    )]
+    pub path: Option<String>,
+    #[schemars(description = "Or the .excalidraw scene JSON itself")]
+    pub scene: Option<Value>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasCommandArgs {
+    #[schemars(
+        description = "Command id, as canvas_commands lists them: board.sticky, node.set, align.left, edit.undo, ..."
+    )]
+    pub command: String,
+    #[schemars(
+        description = "The command's parameters as an object, e.g. {\"x\": 0, \"y\": 0, \"text\": \"Idea\"} for board.sticky"
+    )]
+    pub params: Option<Value>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasCommandsArgs {
+    #[schemars(
+        description = "Only the commands whose id or label contains this text (any case), such as board. or align, each with the parameters it takes. Without it: every command's id and label"
+    )]
+    pub filter: Option<String>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasExportArgs {
+    #[schemars(description = "svg (default) or png")]
+    pub format: Option<String>,
+    #[schemars(
+        description = "Absolute path (or ~/…) to write the file to; default the project's .nyawit/exports folder (Sawit's cache folder outside a project)"
+    )]
+    pub output_path: Option<String>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
