@@ -51,15 +51,16 @@ fn replace_with_solid_turns_an_image_or_a_pattern_into_the_default_colour() {
     let source = rectangle(&mut board, "Tile", 300.0);
     let r = rectangle(&mut board, "R", 600.0);
     let image_paint = read(&board, &[image]).get("fills");
-    let Mixed::Same(image_paints) = image_paint else {
+    let Mixed::Same(mut image_paints) = image_paint else {
         panic!("{image_paint:?}");
     };
+    whole_numbers(&mut image_paints);
     node_set(
         &mut board,
         &[r],
         json!({
             "fills": [{"type": "pattern", "source": source, "opacity": 0.5}, "#112233"],
-            "strokes": whole_numbers(image_paints),
+            "strokes": image_paints,
         }),
     );
 

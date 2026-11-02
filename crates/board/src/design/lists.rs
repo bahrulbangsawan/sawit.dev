@@ -21,7 +21,10 @@ const MAX_WHOLE: f64 = 9_007_199_254_740_992.0;
 /// empty selection.
 pub(super) fn rows(sel: &DesignSelection, key: &str) -> Option<Vec<Value>> {
     match sel.get(key) {
-        Mixed::Same(Value::Array(rows)) => Some(rows.into_iter().map(whole_numbers).collect()),
+        Mixed::Same(Value::Array(mut rows)) => {
+            rows.iter_mut().for_each(whole_numbers);
+            Some(rows)
+        }
         Mixed::Absent => Some(Vec::new()),
         Mixed::Same(_) | Mixed::Mixed => None,
     }
@@ -88,27 +91,25 @@ pub(super) fn refused() -> Edit {
     }
 }
 
-/// `value` with each number that is whole held as an integer. The engine's integer fields (an image
-/// paint's `rotation`, a pattern's `source`) refuse `0.0` and `3.0`, while its float fields take
-/// `0` and `3` as well as `0.0` and `3.0`. [`DesignSelection::read`] holds every number as an `f64`
-/// so that equal values compare equal, which turns those integers into floats; a row sent back as
-/// it was read would be refused.
-pub(super) fn whole_numbers(value: Value) -> Value {
+/// Holds each number in `value` that is whole as an integer, changing the numbers where they are.
+/// The engine's integer fields (an image paint's `rotation`, a pattern's `source`) refuse `0.0` and
+/// `3.0`, while its float fields take `0` and `3` as well as `0.0` and `3.0`.
+/// [`DesignSelection::read`] holds every number as an `f64` so that equal values compare equal,
+/// which turns those integers into floats; a row sent back as it was read would be refused.
+pub(super) fn whole_numbers(value: &mut Value) {
     match value {
-        Value::Number(number) => match number.as_f64() {
-            Some(float) if number.is_f64() && float.fract() == 0.0 && float.abs() < MAX_WHOLE => {
-                Value::from(float as i64)
+        Value::Number(number) => {
+            if let Some(float) = number.as_f64()
+                && number.is_f64()
+                && float.fract() == 0.0
+                && float.abs() < MAX_WHOLE
+            {
+                *value = Value::from(float as i64);
             }
-            _ => Value::Number(number),
-        },
-        Value::Array(items) => Value::Array(items.into_iter().map(whole_numbers).collect()),
-        Value::Object(fields) => Value::Object(
-            fields
-                .into_iter()
-                .map(|(key, value)| (key, whole_numbers(value)))
-                .collect(),
-        ),
-        other => other,
+        }
+        Value::Array(items) => items.iter_mut().for_each(whole_numbers),
+        Value::Object(fields) => fields.values_mut().for_each(whole_numbers),
+        _ => {}
     }
 }
 
@@ -240,7 +241,7 @@ mod tests {
 
     #[test]
     fn whole_numbers_become_integers_and_nothing_else_changes() {
-        let rows = json!([{
+        let mut rows = json!([{
             "rotation": 0.0,
             "source": 3.0,
             "scale": 1.5,
@@ -253,8 +254,9 @@ mod tests {
             "minus zero": -0.0,
             "huge": 1e300,
         }]);
+        whole_numbers(&mut rows);
         assert_eq!(
-            whole_numbers(rows),
+            rows,
             json!([{
                 "rotation": 0,
                 "source": 3,
