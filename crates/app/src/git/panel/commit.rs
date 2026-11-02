@@ -8,7 +8,7 @@ use gpui_kit::component::input::Textarea;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sawit_core::git;
+use sawit_core::git::{self, Status};
 
 use super::GitPanel;
 
@@ -74,7 +74,8 @@ impl GitPanel {
 
     pub(super) fn render_commit_box(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let store = self.store.read(cx);
-        let status = store.status.clone().unwrap_or_default();
+        let no_status = Status::default();
+        let status = store.status.as_ref().unwrap_or(&no_status);
         let busy = store.busy.is_some();
         let staged = status.staged().count();
         let changed = status.unstaged().count();

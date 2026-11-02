@@ -27,7 +27,7 @@ pub(super) enum Section {
 }
 
 impl GitPanel {
-    pub(super) fn rows(&self, cx: &App) -> Vec<Row> {
+    pub(super) fn build_rows(&self, cx: &App) -> Vec<Row> {
         let Some(status) = &self.store.read(cx).status else {
             return Vec::new();
         };

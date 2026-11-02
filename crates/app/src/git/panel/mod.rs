@@ -5,6 +5,8 @@ mod branches;
 mod commit;
 mod files;
 
+use std::rc::Rc;
+
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState, TextareaState};
@@ -18,6 +20,7 @@ use super::account::{self, GitHubAccount};
 use super::store::GitStore;
 use crate::states::{Banner, Placeholder};
 pub(super) use commit::commit_placeholder;
+use files::Row;
 
 pub enum GitPanelEvent {
     Diff { file: FileChange, staged: bool },
@@ -35,6 +38,9 @@ pub struct GitPanel {
     creating_branch: bool,
     amend: bool,
     scroll: UniformListScrollHandle,
+    /// The file list, built from the store's status whenever the store changes rather than on
+    /// every render: each keystroke in the commit box renders the panel again.
+    rows: Rc<Vec<Row>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -45,7 +51,10 @@ impl GitPanel {
         let new_branch = cx.new(|cx| InputState::new(window, cx).placeholder("New branch name"));
         let account = account::global(cx);
         let subscriptions = vec![
-            cx.observe(&store, |_, _, cx| cx.notify()),
+            cx.observe(&store, |this, _, cx| {
+                this.rows = Rc::new(this.build_rows(cx));
+                cx.notify()
+            }),
             // Clone from GitHub turns on and off with the one sign-in.
             cx.observe(&account, |_, _, cx| cx.notify()),
             cx.subscribe_in(
@@ -79,7 +88,7 @@ impl GitPanel {
                 },
             ),
         ];
-        Self {
+        let mut this = Self {
             store,
             account,
             message,
@@ -87,8 +96,11 @@ impl GitPanel {
             creating_branch: false,
             amend: false,
             scroll: UniformListScrollHandle::new(),
+            rows: Rc::default(),
             _subscriptions: subscriptions,
-        }
+        };
+        this.rows = Rc::new(this.build_rows(cx));
+        this
     }
 }
 
@@ -203,10 +215,9 @@ impl Render for GitPanel {
             };
             state.into_any_element()
         } else {
-            // Built once per render and shared with the virtual list.
-            let rows = std::rc::Rc::new(self.rows(cx));
-            let count = rows.len();
-            let list_rows = rows.clone();
+            // Built when the store changed, and shared with the virtual list.
+            let list_rows = self.rows.clone();
+            let count = list_rows.len();
             let merging = store.status.as_ref().is_some_and(|s| s.merging);
             let busy = store.busy;
             let message = store

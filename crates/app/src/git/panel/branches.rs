@@ -7,7 +7,7 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sawit_core::git;
+use sawit_core::git::{self, Status};
 
 use super::GitPanel;
 
@@ -50,18 +50,17 @@ impl GitPanel {
 
     pub(super) fn render_branch_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let store = self.store.read(cx);
-        let status = store.status.clone().unwrap_or_default();
+        let no_status = Status::default();
+        let status = store.status.as_ref().unwrap_or(&no_status);
         let busy = store.busy.is_some();
         let branch_label = status
             .branch
             .clone()
             .or_else(|| status.head.clone().map(|h| format!("{h} (detached)")))
             .unwrap_or_else(|| "main".into());
-        let branches = store.branches.clone();
-        let current = status.branch.clone();
         let weak = cx.entity().downgrade();
-        let menu_branches = branches.clone();
-        let menu_current = current.clone();
+        let menu_branches = store.branches.clone();
+        let menu_current = status.branch.clone();
         let branch_button = Button::new("git-branch")
             .ghost()
             .xsmall()
