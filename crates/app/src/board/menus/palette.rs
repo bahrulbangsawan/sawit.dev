@@ -14,11 +14,17 @@ use super::{
 use crate::board::BoardView;
 
 impl Palette {
-    /// The commands that match the query, best first: [`PALETTE_RESULTS`] at most.
-    fn matches(&self, cx: &App) -> Vec<ActionItem> {
+    /// The commands that match the query, best first: [`PALETTE_RESULTS`] at most. They are
+    /// searched for again only once the query is another than the last time, not for each frame
+    /// drawn and each key that moves the highlight.
+    fn matches(&mut self, cx: &App) -> &[ActionItem] {
         let query = self.query.read(cx).value();
-        let mut found = actions::search(&self.actions, &query);
-        found.truncate(PALETTE_RESULTS);
+        let searched = (self.searched.take()).filter(|(searched, _)| searched.as_str() == &*query);
+        let (_, found) = self.searched.insert(searched.unwrap_or_else(|| {
+            let mut found = actions::search(&self.actions, &query);
+            found.truncate(PALETTE_RESULTS);
+            (query.to_string(), found)
+        }));
         found
     }
 }
@@ -53,13 +59,15 @@ impl BoardView {
                 query,
                 keyboard,
                 actions,
+                searched: None,
                 highlight: 0,
                 _query_changed: query_changed,
             });
         }
-        let palette = self.menus.palette.as_ref()?;
+        let palette = self.menus.palette.as_mut()?;
+        let highlight = palette.highlight;
         let rows: Vec<AnyElement> = (palette.matches(cx).iter().enumerate())
-            .map(|(index, item)| palette_row(index, item, index == palette.highlight, cx))
+            .map(|(index, item)| palette_row(index, item, index == highlight, cx))
             .collect();
         let theme = cx.theme();
         let list = if rows.is_empty() {
@@ -149,7 +157,7 @@ impl BoardView {
 
     /// Moves the palette's highlight by `step` matches, stopping at the first and the last.
     fn move_palette_highlight(&mut self, step: isize, cx: &mut Context<Self>) {
-        let Some(palette) = &self.menus.palette else {
+        let Some(palette) = &mut self.menus.palette else {
             return;
         };
         let last = palette.matches(cx).len().saturating_sub(1);
@@ -160,7 +168,7 @@ impl BoardView {
     /// Runs the palette's match `index` as from the main menu ([`Self::run_menu`]), which closes
     /// the palette.
     fn run_palette_match(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let chosen = (self.menus.palette.as_ref())
+        let chosen = (self.menus.palette.as_mut())
             .and_then(|palette| palette.matches(cx).get(index).map(|item| item.id));
         if let Some(id) = chosen {
             self.run_menu(id, window, cx);

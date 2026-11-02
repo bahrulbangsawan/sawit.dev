@@ -108,6 +108,8 @@ struct Palette {
     keyboard: FocusHandle,
     /// The main menu's commands, as they were when the palette opened.
     actions: Vec<ActionItem>,
+    /// The query last searched for, and its best matches ([`Palette::matches`]).
+    searched: Option<(String, Vec<ActionItem>)>,
     /// The match Enter runs: the best one, after each change of the query.
     highlight: usize,
     _query_changed: Subscription,
