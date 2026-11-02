@@ -69,6 +69,9 @@ pub struct ThreadView {
     more: bool,
     loading_more: bool,
     diff: Option<Load<Option<Entity<DiffState>>>>,
+    /// Counts the reloads: a diff that comes back after a reload began is dropped, so the
+    /// reload's own request shows the pull request as it is now.
+    diff_gen: u64,
     comment: Entity<TextareaState>,
     working: bool,
     error: Option<String>,
@@ -115,6 +118,7 @@ impl ThreadView {
             more: false,
             loading_more: false,
             diff: None,
+            diff_gen: 0,
             comment,
             working: false,
             error: None,
@@ -151,6 +155,7 @@ impl ThreadView {
         self.regroup();
         self.pages = 0;
         self.diff = None;
+        self.diff_gen += 1;
         cx.notify();
         let rx = rt::spawn(cx, async move {
             let state = if pull {
@@ -226,6 +231,7 @@ impl ThreadView {
             return;
         }
         let (token, owner, name, number) = self.api();
+        let generation = self.diff_gen;
         self.diff = Some(Load::Loading);
         cx.notify();
         // Parsing a big pull request's diff takes long enough to freeze the UI, so it happens
@@ -244,6 +250,9 @@ impl ThreadView {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
+                if this.diff_gen != generation {
+                    return;
+                }
                 this.diff = Some(match result {
                     Ok(Ok(files)) if files.is_empty() => Load::Ready(None),
                     Ok(Ok(files)) => Load::Ready(Some(cx.new(|cx| DiffState::new(files, cx)))),
