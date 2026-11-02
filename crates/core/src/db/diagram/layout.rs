@@ -74,6 +74,8 @@ pub fn layout(sizes: &[(f32, f32)], edges: &[(usize, usize)]) -> Vec<(f32, f32)>
     // Lay out each group on its own, at (0, 0).
     let mut local = vec![(0f32, 0f32); n];
     let mut boxes: Vec<(usize, f32, f32)> = Vec::new(); // (group, width, height)
+    // Each group numbers its own tables before it reads their slots, so one buffer serves all.
+    let mut slot = vec![0f32; n];
     for (g, members) in groups.iter().enumerate() {
         let ranks = members.iter().map(|&t| rank[t]).max().unwrap_or(0) + 1;
         let mut cols: Vec<Vec<usize>> = vec![Vec::new(); ranks];
@@ -82,7 +84,6 @@ pub fn layout(sizes: &[(f32, f32)], edges: &[(usize, usize)]) -> Vec<(f32, f32)>
         }
         // Order each column by the average slot of its neighbours, a few
         // sweeps each way, so edges cross less.
-        let mut slot = vec![0f32; n];
         let renumber = |cols: &Vec<Vec<usize>>, slot: &mut Vec<f32>| {
             for col in cols {
                 for (i, &t) in col.iter().enumerate() {
