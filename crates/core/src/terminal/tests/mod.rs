@@ -4,3 +4,4 @@ mod input;
 mod layout;
 mod session;
 mod tab;
+mod timing;

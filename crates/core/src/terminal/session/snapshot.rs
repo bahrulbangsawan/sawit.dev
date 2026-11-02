@@ -1,9 +1,10 @@
 //! Snapshots of the visible screen, as cells with their colours resolved, for the UI to draw.
 
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::Point;
+use alacritty_terminal::grid::{Dimensions, Indexed};
+use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::TermMode;
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::term::color::COUNT;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 
 use super::{Session, modes_of};
@@ -69,110 +70,50 @@ impl Session {
         let content = term.renderable_content();
         let cols = term.columns();
         let rows = term.screen_lines();
-        let colors = content.colors;
-        let resolve = |color: Color, is_fg: bool| -> Rgb {
-            let from_term = |ix: usize| {
-                colors[ix].map(|c| Rgb {
-                    r: c.r,
-                    g: c.g,
-                    b: c.b,
-                })
-            };
+        // Every colour a cell can name, worked out once rather than for each cell: the one the
+        // program set, else the palette's.
+        let colors: [Rgb; COUNT] = std::array::from_fn(|ix| match content.colors[ix] {
+            Some(c) => Rgb {
+                r: c.r,
+                g: c.g,
+                b: c.b,
+            },
+            None => default_color(palette, ix),
+        });
+        let resolve = |color: Color| -> Rgb {
             match color {
                 Color::Spec(c) => Rgb {
                     r: c.r,
                     g: c.g,
                     b: c.b,
                 },
-                Color::Indexed(ix) => from_term(ix as usize).unwrap_or_else(|| palette.indexed(ix)),
-                Color::Named(named) => {
-                    let ix = named as usize;
-                    from_term(ix).unwrap_or_else(|| match named {
-                        NamedColor::Foreground
-                        | NamedColor::BrightForeground
-                        | NamedColor::DimForeground => palette.foreground,
-                        NamedColor::Background => palette.background,
-                        NamedColor::Cursor => palette.cursor,
-                        n if (n as usize) < 16 => palette.ansi[n as usize],
-                        // Dim variants map onto the normal colors.
-                        n => {
-                            let base = (n as usize).saturating_sub(NamedColor::DimBlack as usize);
-                            if base < 8 {
-                                palette.ansi[base]
-                            } else if is_fg {
-                                palette.foreground
-                            } else {
-                                palette.background
-                            }
-                        }
-                    })
-                }
+                Color::Indexed(ix) => colors[ix as usize],
+                Color::Named(named) => colors[named as usize],
             }
         };
 
-        let blank = CellView {
-            ch: ' ',
-            fg: palette.foreground,
-            bg: palette.background,
-            bold: false,
-            italic: false,
-            underline: false,
-            strikeout: false,
-            spacer: false,
-            selected: false,
-        };
         let selection = content.selection;
         let cursor_at = content.cursor.point;
         let cursor_shape = content.cursor.shape;
-        let mut lines = vec![vec![blank; cols]; rows];
         let offset = content.display_offset as i32;
-        for indexed in content.display_iter {
-            let row = indexed.point.line.0 + offset;
-            let col = indexed.point.column.0;
-            if row < 0 || row as usize >= rows || col >= cols {
-                continue;
-            }
-            let selected =
-                selection.is_some_and(|s| s.contains_cell(&indexed, cursor_at, cursor_shape));
-            let cell = indexed.cell;
-            let flags = cell.flags;
-            let mut fg = resolve(cell.fg, true);
-            let mut bg = resolve(cell.bg, false);
-            if flags.contains(Flags::BOLD)
-                && let Color::Named(n) = cell.fg
-                && (n as usize) < 8
-            {
-                fg = palette.ansi[n as usize + 8];
-            }
-            if flags.contains(Flags::INVERSE) {
-                std::mem::swap(&mut fg, &mut bg);
-            }
-            if flags.contains(Flags::DIM) {
-                fg = Rgb {
-                    r: fg.r / 3 * 2,
-                    g: fg.g / 3 * 2,
-                    b: fg.b / 3 * 2,
-                };
-            }
-            if flags.contains(Flags::HIDDEN) {
-                fg = bg;
-            }
-            lines[row as usize][col] = CellView {
-                ch: if cell.c == '\0' || cell.c == '\t' {
-                    ' '
-                } else {
-                    cell.c
-                },
-                fg,
-                bg,
-                bold: flags.contains(Flags::BOLD),
-                italic: flags.contains(Flags::ITALIC),
-                underline: flags.intersects(Flags::ALL_UNDERLINES),
-                strikeout: flags.contains(Flags::STRIKEOUT),
-                spacer: flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER),
-                selected,
-            };
-        }
+        let grid = term.grid();
+        // Row by row: the grid's own iterator looks each cell's row up again.
+        let lines = (0..rows as i32)
+            .map(|row| {
+                let line = Line(row - offset);
+                grid[line][..Column(cols)]
+                    .iter()
+                    .enumerate()
+                    .map(|(col, cell)| {
+                        let point = Point::new(line, Column(col));
+                        let selected = selection.is_some_and(|s| {
+                            s.contains_cell(&Indexed { point, cell }, cursor_at, cursor_shape)
+                        });
+                        cell_view(cell, selected, resolve, palette)
+                    })
+                    .collect()
+            })
+            .collect();
 
         let mode = content.mode;
         let cursor_point: Point = content.cursor.point;
@@ -202,5 +143,65 @@ impl Session {
             modes,
             display_offset: content.display_offset,
         }
+    }
+}
+
+/// What `cell` shows, its colours resolved by `resolve`.
+fn cell_view(
+    cell: &Cell,
+    selected: bool,
+    resolve: impl Fn(Color) -> Rgb,
+    palette: &Palette,
+) -> CellView {
+    let flags = cell.flags;
+    let mut fg = resolve(cell.fg);
+    let mut bg = resolve(cell.bg);
+    if flags.contains(Flags::BOLD)
+        && let Color::Named(n) = cell.fg
+        && (n as usize) < 8
+    {
+        fg = palette.ansi[n as usize + 8];
+    }
+    if flags.contains(Flags::INVERSE) {
+        std::mem::swap(&mut fg, &mut bg);
+    }
+    if flags.contains(Flags::DIM) {
+        fg = Rgb {
+            r: fg.r / 3 * 2,
+            g: fg.g / 3 * 2,
+            b: fg.b / 3 * 2,
+        };
+    }
+    if flags.contains(Flags::HIDDEN) {
+        fg = bg;
+    }
+    CellView {
+        ch: if cell.c == '\0' || cell.c == '\t' {
+            ' '
+        } else {
+            cell.c
+        },
+        fg,
+        bg,
+        bold: flags.contains(Flags::BOLD),
+        italic: flags.contains(Flags::ITALIC),
+        underline: flags.intersects(Flags::ALL_UNDERLINES),
+        strikeout: flags.contains(Flags::STRIKEOUT),
+        spacer: flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER),
+        selected,
+    }
+}
+
+/// The palette's colour for terminal colour `ix`, for one the program didn't set: the 256
+/// indexed colours, then the named foreground, background and cursor, the dim colours (onto
+/// the normal ones) and the bright and dim foregrounds.
+fn default_color(palette: &Palette, ix: usize) -> Rgb {
+    let dim = NamedColor::DimBlack as usize..=NamedColor::DimWhite as usize;
+    match ix {
+        0..=255 => palette.indexed(ix as u8),
+        _ if ix == NamedColor::Background as usize => palette.background,
+        _ if ix == NamedColor::Cursor as usize => palette.cursor,
+        _ if dim.contains(&ix) => palette.ansi[ix - NamedColor::DimBlack as usize],
+        _ => palette.foreground,
     }
 }
