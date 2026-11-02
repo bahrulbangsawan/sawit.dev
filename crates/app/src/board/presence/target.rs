@@ -2,6 +2,9 @@
 //! document before and after it ([`target`]), and where a slow op's placeholder goes
 //! ([`ghost_rect`]).
 
+use std::cmp::Ordering;
+use std::collections::HashSet;
+
 use figcraft_doc::{Document, NodeId};
 use serde::Deserialize as _;
 use serde_json::Value;
@@ -12,35 +15,45 @@ use super::{GHOST_SIZE, MAX_OUTLINES};
 /// document `before` and `after` it, each layer once: a sticky drawn with its text is the sticky.
 /// Pages, and layers whose only change is what they hold (a frame given a new child), are left
 /// out. `None` when nothing on the page changed.
+///
+/// Both documents list their layers in the order of their ids, so they are walked side by side:
+/// a layer only `after` holds was added, one only `before` holds was taken off, and one both hold
+/// changed unless they share it. Only those are looked for on the page, never a layer the op left
+/// alone, so an op costs about what it changed and a walk of the layers, not a walk up the page
+/// from each of them.
 pub(super) fn target(before: &Document, after: &Document, page: NodeId) -> Option<Target> {
     let on_page = |doc: &Document, id: NodeId| {
         doc.node(id).is_some_and(|n| !n.is_page()) && doc.page_of(id) == Some(page)
     };
     let mut added = Vec::new();
     let mut changed = Vec::new();
-    for node in after.nodes() {
-        if !on_page(after, node.id) {
-            continue;
-        }
-        match before.node(node.id) {
-            None => added.push(node.id),
-            Some(old) if !std::ptr::eq(old, node) && !only_children_differ(old, node) => {
-                changed.push(node.id);
+    let mut removed = Vec::new();
+    let (mut olds, mut news) = (before.nodes().peekable(), after.nodes().peekable());
+    loop {
+        let order = match (olds.peek(), news.peek()) {
+            (None, None) => break,
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (Some(old), Some(new)) => old.id.cmp(&new.id),
+        };
+        let old = olds.next_if(|_| order.is_le());
+        let new = news.next_if(|_| order.is_ge());
+        match (old, new) {
+            (Some(old), None) if on_page(before, old.id) => removed.push(old.id),
+            (None, Some(new)) if on_page(after, new.id) => added.push(new.id),
+            (Some(old), Some(new))
+                if !std::ptr::eq(old, new)
+                    && on_page(after, new.id)
+                    && !only_children_differ(old, new) =>
+            {
+                changed.push(new.id);
             }
-            Some(_) => {}
+            _ => {}
         }
     }
-    let removed: Vec<NodeId> = before
-        .nodes()
-        .filter(|n| on_page(before, n.id) && after.node(n.id).is_none())
-        .map(|n| n.id)
-        .collect();
     // The outermost of what changed: a layer inside one added or changed with it is part of it.
-    let all: Vec<NodeId> = added.iter().chain(&changed).copied().collect();
-    let outermost = |id: &NodeId| {
-        !all.iter()
-            .any(|other| other != id && after.is_ancestor(*other, *id))
-    };
+    let all: HashSet<NodeId> = added.iter().chain(&changed).copied().collect();
+    let outermost = |id: &NodeId| !held_by_another(after, *id, &all);
     added.retain(outermost);
     changed.retain(outermost);
     let bounds = |doc: &Document, ids: &[NodeId]| -> Vec<[f64; 4]> {
@@ -80,6 +93,23 @@ fn only_children_differ(old: &figcraft_doc::Node, new: &figcraft_doc::Node) -> b
     old.children.clear();
     new.children.clear();
     old == new
+}
+
+/// Whether a layer of `all` other than `id` holds `id`, as `Document::is_ancestor` finds the
+/// layers that hold one: up its parents, where a chain of more of them than the document has is a
+/// loop, which every layer holds.
+fn held_by_another(doc: &Document, id: NodeId, all: &HashSet<NodeId>) -> bool {
+    let mut at = Some(id);
+    for _ in 0..=doc.node_count() {
+        let Some(layer) = at else {
+            return false;
+        };
+        if layer != id && all.contains(&layer) {
+            return true;
+        }
+        at = doc.node(layer).and_then(|node| node.parent);
+    }
+    all.iter().any(|other| *other != id)
 }
 
 /// Where an op landed: the point its pointer goes to, and the layers to outline.
