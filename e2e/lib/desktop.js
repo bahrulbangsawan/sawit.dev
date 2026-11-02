@@ -377,9 +377,17 @@ function guard(node) {
   }
 }
 
-/** The `press` combo that types `ch`. */
+/** The `press` combo that types `ch` (on a US layout, as `minus` and `slash` assume too). */
 function keyFor(ch) {
-  const named = { " ": "space", "-": "minus", ".": "period", "/": "slash", ",": "comma", "\n": "return" };
+  const named = {
+    " ": "space",
+    "-": "minus",
+    ".": "period",
+    "/": "slash",
+    ",": "comma",
+    "&": "shift+7",
+    "\n": "return",
+  };
   if (named[ch]) return named[ch];
   if (/^[a-z0-9]$/.test(ch)) return ch;
   if (/^[A-Z]$/.test(ch)) return ch; // agent-desktop adds Shift to a bare capital

@@ -141,10 +141,6 @@ measured, because each rebuilds gpui or the whole FigCraft stack:
   (the whole test 111 ms instead of 353 ms on a quiet machine).
 - Under heavy load (load average 60 and up), `download::tests::existing_install_is_reused_without_network` and
   `mcp_clients::tests::a_cli_finds_the_node_nvm_keeps_elsewhere` can hit their 10 s stubs.
-- The e2e test `terminal: app_state names the coding agent running in a tab, until it exits` (added with a3737d5)
-  types `&`, which `keyFor` in `e2e/lib/desktop.js` has no key for, so it fails before the app sees a key. Driven
-  over the control socket instead, the same scenario passes: `sleep` run as `claude` is named `claude-code` in
-  `app_state`, and nothing is once it ends.
 - The first e2e test of a run can fail its first `set-value` while a freshly built app is still starting
   (agent-desktop's window move and resize time out just before): `browser: loads the fixture site…` failed that way
   once, then passed twice in a row.
