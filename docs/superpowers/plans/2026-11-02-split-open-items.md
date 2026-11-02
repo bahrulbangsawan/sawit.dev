@@ -31,11 +31,14 @@ but didn't change.
   given an op larger than the socket buffer holds the call instead of timing out. The code before had the same
   exposure for every op that names no file.
 
-## Found while checking, as they were before the split
+## By design, noted while checking
 
-- **`stop_processes` and `sawit bakar ports` leave alone any job whose command line says `claude`**, as they leave a
-  coding agent: a dev server started from a folder whose path contains the word (`/tmp/claude-501/…`) counts as
-  one and is reported as protected. The same server started elsewhere is stopped.
+- **`stop_processes` and `sawit bakar ports` leave alone any job whose command line contains a protected word**
+  (`claude`, `mcp-server`, `language-server`, `tsserver`, `copilot`, `code helper`, `orca`, `electron`: the same
+  list as the `kill-dev` script), anywhere in it. That is what keeps a coding agent run through Node
+  (`node …/claude-code/cli.js`) safe. A dev server started from a folder whose path holds one of the words
+  (`/tmp/claude-501/…`) is left running too, and is reported as protected; a narrower match would stop it, but
+  could also stop an agent the list is there for. Unchanged since before the split.
 
 ## Dropped after review
 
