@@ -165,3 +165,36 @@ fn an_agents_deletion_keeps_the_board_it_took_layers_off(cx: &mut TestAppContext
         "the cleared sticky isn't in the newest backup"
     );
 }
+
+/// An agent's load of the backup a clear just kept (`canvas_load` of `canvas.sawit.bak`, at
+/// once after its `canvas_clear`) loads the board the clear took off: the load waits for the
+/// saves queued before it, and the backup one keeps, to be on disk before it reads the file, as
+/// with the app closed. It read the backup from before, or none, while they were still queued.
+#[gpui_kit::test]
+fn a_load_of_the_backup_a_clear_just_kept_gets_that_board(cx: &mut TestAppContext) {
+    let tmp = Scratch::new("load-backup");
+    let path = tmp.0.join("canvas.sawit");
+    write_board(&path, &board_with(&["the user's"]));
+    let view = open(cx, &path);
+    let ask = |op: Value, cx: &mut TestAppContext| {
+        let reply = run_op(&view, op, cx);
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+    };
+    let sticky =
+        json!({"op": "add", "elements": [{"type": "sticky", "x": 400, "y": 0, "text": "added"}]});
+    ask(sticky, cx);
+    ask(json!({"op": "clear"}), cx);
+    let backup = tmp.0.join("canvas.sawit.bak");
+    ask(json!({"op": "replace", "path": backup}), cx);
+    let got = run_op(&view, json!({"op": "get"}), cx);
+    let texts: Vec<&str> = got["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["text"].as_str())
+        .collect();
+    assert!(
+        texts.contains(&"the user's") && texts.contains(&"added"),
+        "the load got {texts:?}"
+    );
+}

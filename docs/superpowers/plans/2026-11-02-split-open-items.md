@@ -33,10 +33,6 @@ but didn't change.
 
 ## Found while checking, as they were before the split
 
-- **`canvas_load` of the backup `canvas_clear` just kept, with the app running**, reads the backup from before:
-  the app writes the new `.bak` after it replies. Eight rounds of add, clear and load at once gave the previous
-  backup (or, the first time, no file) in every round, in the baseline build and the final one alike. With the app
-  closed the backup is there at once.
 - **`stop_processes` and `sawit bakar ports` leave alone any job whose command line says `claude`**, as they leave a
   coding agent: a dev server started from a folder whose path contains the word (`/tmp/claude-501/…`) counts as
   one and is reported as protected. The same server started elsewhere is stopped.

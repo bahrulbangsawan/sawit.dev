@@ -82,6 +82,12 @@ impl BoardView {
         if can_take_layers_off(op) {
             // A refusal (images the file holds) is the autosave's to show.
             let _ = self.queue_save();
+            // A load reads its file at once, and that may be the backup an agent's clear just
+            // kept (`canvas_load` of `<file>.bak` right after `canvas_clear`): what is queued,
+            // and the backup it keeps, goes to disk first, as with the app closed.
+            if loads_a_file(op) {
+                self.writer.flush();
+            }
         }
         let before = self.document();
         let reply = match self.board_mut() {
@@ -268,4 +274,10 @@ fn can_take_layers_off(op: &Value) -> bool {
         op.get("op").and_then(Value::as_str),
         Some("clear" | "delete" | "replace" | "command")
     )
+}
+
+/// Whether `op` loads a file in place of the board: a `replace` with a `path`, which it reads
+/// as it runs ([`BoardView::run_op`]).
+fn loads_a_file(op: &Value) -> bool {
+    op.get("op").and_then(Value::as_str) == Some("replace") && op.get("path").is_some()
 }
