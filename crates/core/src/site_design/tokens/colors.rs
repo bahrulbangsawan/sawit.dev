@@ -1,6 +1,9 @@
 //! The palette and the semantic colors: the page's colors merged, clustered and ranked by use,
 //! and the roles they take.
 
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+
 use super::Ramp;
 use crate::site_design::color::{self, Rgba, ramp};
 use crate::site_design::scan::{ColorRole, ColorUse, Scan};
@@ -29,7 +32,9 @@ fn hue_gap(a: Rgba, b: Rgba) -> f64 {
 
 /// Parsed, fully transparent values dropped, exact duplicates merged; most-used first.
 fn merged<'a>(uses: impl Iterator<Item = &'a ColorUse>) -> Vec<Seen> {
-    let mut out: Vec<(String, Seen)> = Vec::new();
+    let mut out: Vec<Seen> = Vec::new();
+    // Where each hex value is in `out`.
+    let mut at: HashMap<u64, usize> = HashMap::new();
     for u in uses {
         let Some(color) = color::parse(&u.value) else {
             continue;
@@ -47,27 +52,32 @@ fn merged<'a>(uses: impl Iterator<Item = &'a ColorUse>) -> Vec<Seen> {
         } else {
             0
         };
-        let hex = color.to_hex();
-        match out.iter_mut().find(|(h, _)| *h == hex) {
-            Some((_, s)) => {
+        match at.entry(hex_key(color)) {
+            Entry::Occupied(i) => {
+                let s = &mut out[*i.get()];
                 s.count += u.count;
                 s.button_bg += button_bg;
                 s.link_text += link_text;
             }
-            None => out.push((
-                hex,
-                Seen {
+            Entry::Vacant(slot) => {
+                slot.insert(out.len());
+                out.push(Seen {
                     color,
                     count: u.count,
                     button_bg,
                     link_text,
-                },
-            )),
+                });
+            }
         }
     }
-    let mut out: Vec<Seen> = out.into_iter().map(|(_, s)| s).collect();
     out.sort_by_key(|a| std::cmp::Reverse(a.count));
     out
+}
+
+/// `to_hex` as a number: two colors have the same key when they have the same hex.
+fn hex_key(c: Rgba) -> u64 {
+    let alpha = if c.a < 1.0 { u64::from(alpha8(c)) } else { 256 };
+    u64::from(c.r) << 32 | u64::from(c.g) << 24 | u64::from(c.b) << 16 | alpha
 }
 
 /// Alpha as a byte, the precision `to_hex` keeps.
@@ -83,16 +93,24 @@ fn opaque(c: Rgba) -> bool {
 /// Merges colors of equal alpha within ΔE_OK < 0.02 into the most-used one; most-used first.
 fn clustered(seen: Vec<Seen>) -> Vec<Seen> {
     let mut out: Vec<Seen> = Vec::new();
+    // Each color of `out` as its alpha byte and in OKLab, worked out once.
+    let mut keys: Vec<(u8, (f64, f64, f64))> = Vec::new();
     for s in seen {
-        match out.iter_mut().find(|c| {
-            alpha8(c.color) == alpha8(s.color) && color::delta_e(c.color, s.color) < CLUSTER
-        }) {
-            Some(c) => {
+        let (alpha, lab) = (alpha8(s.color), s.color.oklab());
+        let near = keys
+            .iter()
+            .position(|(a, l)| *a == alpha && color::lab_distance(*l, lab) < CLUSTER);
+        match near {
+            Some(i) => {
+                let c = &mut out[i];
                 c.count += s.count;
                 c.button_bg += s.button_bg;
                 c.link_text += s.link_text;
             }
-            None => out.push(s),
+            None => {
+                keys.push((alpha, lab));
+                out.push(s);
+            }
         }
     }
     out.sort_by_key(|a| std::cmp::Reverse(a.count));

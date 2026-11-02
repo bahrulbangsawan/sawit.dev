@@ -90,7 +90,7 @@ impl Rgba {
         }
     }
 
-    fn oklab(&self) -> (f64, f64, f64) {
+    pub(super) fn oklab(&self) -> (f64, f64, f64) {
         lin_to_oklab(
             to_linear(self.r as f64 / 255.0),
             to_linear(self.g as f64 / 255.0),
@@ -330,8 +330,11 @@ fn parse_hue(s: &str) -> Option<f64> {
 // ---------- metrics ----------
 
 pub fn delta_e(a: Rgba, b: Rgba) -> f64 {
-    let (l1, a1, b1) = a.oklab();
-    let (l2, a2, b2) = b.oklab();
+    lab_distance(a.oklab(), b.oklab())
+}
+
+/// [`delta_e`] of two colors already in OKLab.
+pub(super) fn lab_distance((l1, a1, b1): (f64, f64, f64), (l2, a2, b2): (f64, f64, f64)) -> f64 {
     ((l1 - l2).powi(2) + (a1 - a2).powi(2) + (b1 - b2).powi(2)).sqrt()
 }
 
