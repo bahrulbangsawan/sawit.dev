@@ -307,15 +307,22 @@ impl ConnProfile {
     /// Where it points, for tooltips: the connection string, or the file, or the remote D1
     /// database and its project.
     pub fn location(&self) -> String {
-        let lite = self.lite.clone().unwrap_or_default();
+        let lite = self.lite.as_ref();
         match self.kind {
             DbKind::Postgres => self.connection_string(),
             DbKind::D1Remote => format!(
                 "{} on Cloudflare, through Wrangler in {}",
-                lite.database_name.unwrap_or_default(),
-                lite.project.unwrap_or_default().display()
+                lite.and_then(|l| l.database_name.as_deref())
+                    .unwrap_or_default(),
+                lite.and_then(|l| l.project.as_deref())
+                    .unwrap_or(Path::new(""))
+                    .display()
             ),
-            DbKind::D1Local | DbKind::Sqlite => lite.file.unwrap_or_default().display().to_string(),
+            DbKind::D1Local | DbKind::Sqlite => lite
+                .and_then(|l| l.file.as_deref())
+                .unwrap_or(Path::new(""))
+                .display()
+                .to_string(),
         }
     }
 

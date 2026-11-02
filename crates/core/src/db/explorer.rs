@@ -18,6 +18,7 @@ use std::time::Instant;
 
 use serde_json::Value;
 
+use super::percent_encode;
 use super::query::{QueryOutcome, ResultSet};
 use crate::cloudflare::explorer::{self as cf, Method};
 use crate::{CoreError, Result};
@@ -39,17 +40,6 @@ fn api_error(status: u16, body: &[u8]) -> CoreError {
         })
         .unwrap_or_else(|| format!("The Local Explorer answered {status}."));
     CoreError::Sql(message)
-}
-
-fn percent_encode(s: &str) -> String {
-    s.bytes()
-        .map(|b| match b {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
 }
 
 /// The ids of the D1 databases the explorer at `addr` reaches (its own first, then its

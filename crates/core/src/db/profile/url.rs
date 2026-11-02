@@ -3,6 +3,7 @@
 
 use super::fields::{Fields, parse_error};
 use super::{ChannelBinding, ConnProfile, SessionAttrs, SslMode};
+use crate::db::percent_encode;
 use crate::{CoreError, Result};
 
 impl ConnProfile {
@@ -103,17 +104,6 @@ fn percent_decode(s: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
-}
-
-fn percent_encode(s: &str) -> String {
-    s.bytes()
-        .map(|b| match b {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
 }
 
 /// What people paste from cloud consoles, reduced to the connection string:
