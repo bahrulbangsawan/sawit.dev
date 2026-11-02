@@ -138,8 +138,7 @@ impl FileEditor {
         // set_value doesn't emit Change: the unsaved mark and the preview follow here.
         self.dirty = text != self.saved_text;
         self.discarded = false;
-        self.preview = text.into();
-        self.refresh_diagrams(cx);
+        self.set_preview(&text, cx);
         if let Err(e) = std::fs::remove_file(from) {
             log::warn!("{} stays: {e}", from.display());
         }

@@ -294,8 +294,7 @@ impl FileEditor {
                 }
             }),
         ];
-        self.preview = text.clone().into();
-        self.refresh_diagrams(cx);
+        self.set_preview(&text, cx);
         self.saved_text = text;
         state.update(cx, |s, cx| s.focus(window, cx));
         self.state = Some(state);
@@ -342,6 +341,15 @@ impl FileEditor {
             s.set_cursor_position(Position::new(line, column.saturating_sub(1)), window, cx);
         });
         cx.notify();
+    }
+
+    /// Puts `text` in the preview and draws its diagrams again. Only a file that has a preview
+    /// keeps that copy of its text.
+    fn set_preview(&mut self, text: &str, cx: &mut Context<Self>) {
+        if self.previewable() {
+            self.preview = SharedString::new(text);
+            self.refresh_diagrams(cx);
+        }
     }
 
     fn schedule_preview(&mut self, cx: &mut Context<Self>) {

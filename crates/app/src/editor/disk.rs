@@ -100,8 +100,7 @@ impl FileEditor {
                     s.set_cursor_position(Position::new(pos.line, pos.character), window, cx);
                 });
                 // set_value doesn't emit Change, so refresh the preview here.
-                this.preview = file.text.clone().into();
-                this.refresh_diagrams(cx);
+                this.set_preview(&file.text, cx);
                 this.saved_text = file.text;
                 this.dirty = false;
                 this.disk_warning = None;
