@@ -196,6 +196,8 @@ pub struct BrowserView {
     /// The agents at work in the browser ([`presence`]).
     agents: presence::Agents,
     _ipc: Task<()>,
+    /// Hands the Mac's font changes to the Design panel ([`engine::font_changes`]).
+    _fonts: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -258,6 +260,18 @@ impl BrowserView {
                 }
             }
         });
+        // Fonts installed or removed: the Design panel reads the Mac's families again.
+        let mut font_changes = engine::font_changes();
+        let fonts = cx.spawn(async move |this, cx| {
+            while font_changes.next().await.is_some() {
+                let alive = this.update(cx, |this, cx| {
+                    (this.design_panel).update(cx, |panel, cx| panel.fonts_changed(cx))
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        });
         let navigated = url.is_some();
         if !navigated && let Some(project) = project.clone() {
             let jobs = rt::spawn(cx, probe::listening_jobs());
@@ -304,6 +318,7 @@ impl BrowserView {
             external: ExternalGate::default(),
             agents: presence::Agents::new(crate::agents::shown(cx)),
             _ipc: ipc,
+            _fonts: fonts,
             _subscriptions: subscriptions,
         }
     }

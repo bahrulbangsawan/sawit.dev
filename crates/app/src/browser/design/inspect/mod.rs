@@ -93,6 +93,7 @@ pub(super) fn render(
     pinned: bool,
     last: Option<&StyleInfo>,
     inspecting: bool,
+    installed: &[String],
     cx: &mut Context<DesignPanel>,
 ) -> impl IntoElement {
     let Some(info) = info else {
@@ -106,11 +107,10 @@ pub(super) fn render(
     let html_selector = info.selector.clone();
     let css = css_rule(info);
     let tailwind = classes(info).join(" ");
-    let installed = cx.text_system().all_font_names();
     let family = t.used_family.clone().unwrap_or_else(|| t.family.clone());
     let face = super::fonts::face_for(
         &family,
-        &installed,
+        installed,
         &cx.theme().font_family,
         &cx.theme().mono_font_family,
     );

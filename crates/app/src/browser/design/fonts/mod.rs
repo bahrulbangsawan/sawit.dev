@@ -196,10 +196,10 @@ pub(super) fn render(
     scan: &Scan,
     tokens: &Tokens,
     expanded: &HashSet<String>,
+    installed: &[String],
     cx: &mut Context<DesignPanel>,
 ) -> impl IntoElement {
     let groups = group_fonts(scan);
-    let installed = cx.text_system().all_font_names();
     if groups.is_empty() {
         return panel::empty(
             "No text on this page",
@@ -221,7 +221,7 @@ pub(super) fn render(
             ix,
             g,
             &roles,
-            &installed,
+            installed,
             expanded.contains(&g.family),
             cx,
         ));

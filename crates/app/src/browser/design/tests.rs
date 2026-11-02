@@ -70,3 +70,36 @@ fn the_footer_names_what_was_copied() {
     );
     assert_eq!(copied_note(""), "Copied");
 }
+
+/// The font families this Mac has are read once, not on every frame, and read again, in the
+/// background, when the Mac's fonts change; a change before they were ever read waits for the
+/// first frame that needs them.
+#[gpui_kit::test]
+fn the_font_families_are_read_once_then_when_fonts_change(cx: &mut TestAppContext) {
+    use gpui_kit::AppContext as _;
+    cx.update(gpui_kit::init);
+    let cx = cx.add_empty_window();
+    let panel = cx.update(|_, cx| cx.new(|_| DesignPanel::new()));
+    let read = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| panel.update(cx, |p, cx| p.installed_fonts(cx)))
+    };
+    let changed = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| panel.update(cx, |p, cx| p.fonts_changed(cx)))
+    };
+    let reading = |cx: &mut VisualTestContext| cx.update(|_, cx| panel.read(cx).reading_fonts());
+    changed(cx);
+    assert!(!reading(cx), "nothing read yet");
+    let first = read(cx);
+    assert!(
+        std::sync::Arc::ptr_eq(&first, &read(cx)),
+        "kept between frames"
+    );
+    changed(cx);
+    assert!(reading(cx), "read again in the background");
+    assert!(
+        std::sync::Arc::ptr_eq(&first, &read(cx)),
+        "drawn at once meanwhile"
+    );
+    cx.run_until_parked();
+    assert!(!reading(cx));
+}

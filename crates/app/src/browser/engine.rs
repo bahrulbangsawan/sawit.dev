@@ -1,10 +1,16 @@
-//! The web view behind the browser tab. This is the only file that names
-//! wry, objc2 or block2; the rest of the tab talks to [`Engine`].
+//! The web view behind the browser tab, and news of the Mac's fonts ([`font_changes`]). This is
+//! the only file that names wry, objc2 or block2; the rest of the tab talks to [`Engine`].
 
+use std::ffi::c_void;
 use std::sync::Mutex;
 
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures::channel::oneshot;
 use gpui_kit::Window;
+use objc2_core_foundation::{
+    CFDictionary, CFNotificationCenter, CFNotificationName, CFNotificationSuspensionBehavior,
+    CFString,
+};
 use serde_json::{Value, json};
 use wry::dpi::{LogicalPosition, LogicalSize};
 use wry::{NewWindowResponse, PageLoadEvent, Rect, WebView, WebViewBuilder};
@@ -316,6 +322,58 @@ fn at_1x(png: Vec<u8>, width: u32) -> Result<(Vec<u8>, u32, u32), String> {
     Ok((out.into_inner(), width, height))
 }
 
+/// Who hears of the Mac's font changes ([`font_changes`]).
+static FONT_LISTENERS: Mutex<Vec<UnboundedSender<()>>> = Mutex::new(Vec::new());
+
+/// A message each time fonts are installed on this Mac or removed from it: CoreText's
+/// `kCTFontManagerRegisteredFontsChangedNotification`, observed once for the whole app on the
+/// local notification center. A listener whose receiver went is dropped as the next listener
+/// comes or the fonts next change.
+pub fn font_changes() -> UnboundedReceiver<()> {
+    static OBSERVED: std::sync::Once = std::sync::Once::new();
+    OBSERVED.call_once(|| {
+        let Some(center) = CFNotificationCenter::local_center() else {
+            return;
+        };
+        // SAFETY: the observer stands for the listeners' list, a static; the callback reads
+        // nothing else, and the name is CoreText's own.
+        unsafe {
+            center.add_observer(
+                (&raw const FONT_LISTENERS).cast(),
+                Some(fonts_changed),
+                Some(kCTFontManagerRegisteredFontsChangedNotification),
+                std::ptr::null(),
+                CFNotificationSuspensionBehavior::DeliverImmediately,
+            );
+        }
+    });
+    let (tx, rx) = unbounded();
+    let mut listeners = FONT_LISTENERS.lock().unwrap_or_else(|e| e.into_inner());
+    // Closed browser tabs' listeners don't pile up until the fonts change.
+    listeners.retain(|tx| !tx.is_closed());
+    listeners.push(tx);
+    rx
+}
+
+#[link(name = "CoreText", kind = "framework")]
+unsafe extern "C" {
+    /// Posted to the local notification center when fonts are added to the font registry or
+    /// removed from it.
+    static kCTFontManagerRegisteredFontsChangedNotification: &'static CFString;
+}
+
+/// CoreText says the fonts changed, on whichever thread posted it: every listener hears of it.
+unsafe extern "C-unwind" fn fonts_changed(
+    _: *mut CFNotificationCenter,
+    _: *mut c_void,
+    _: *const CFNotificationName,
+    _: *const c_void,
+    _: *const CFDictionary,
+) {
+    let mut listeners = FONT_LISTENERS.lock().unwrap_or_else(|e| e.into_inner());
+    listeners.retain(|tx| tx.unbounded_send(()).is_ok());
+}
+
 #[cfg(test)]
 mod tests {
     use super::{EngineEvent, at_1x, is_web, navigation};
@@ -361,5 +419,26 @@ mod tests {
         let (small, w, h) = at_1x(png.into_inner(), 100).unwrap();
         assert_eq!((w, h), (100, 50));
         assert_eq!(image::load_from_memory(&small).unwrap().width(), 100);
+    }
+
+    /// A change to the Mac's fonts, as CoreText posts it, reaches every listener; one that went
+    /// is left out.
+    #[test]
+    fn font_changes_reach_every_listener() {
+        let mut first = super::font_changes();
+        let mut second = super::font_changes();
+        drop(super::font_changes());
+        let center = objc2_core_foundation::CFNotificationCenter::local_center().unwrap();
+        // SAFETY: CoreText's own name, with no object and no user info.
+        unsafe {
+            center.post_notification(
+                Some(super::kCTFontManagerRegisteredFontsChangedNotification),
+                std::ptr::null(),
+                None,
+                true,
+            )
+        };
+        assert_eq!(first.try_recv(), Ok(()));
+        assert_eq!(second.try_recv(), Ok(()));
     }
 }

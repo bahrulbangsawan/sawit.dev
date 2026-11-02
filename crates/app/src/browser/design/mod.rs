@@ -7,6 +7,7 @@
 //! say what is missing and what to do.
 
 mod assets;
+mod cache;
 mod colors;
 pub(crate) mod flow;
 mod fonts;
@@ -150,6 +151,8 @@ pub struct DesignPanel {
     expanded: HashSet<String>,
     note: Option<SharedString>,
     _note_timer: Option<Task<()>>,
+    /// What the tabs keep between frames ([`cache`]).
+    cache: cache::Cache,
 }
 
 impl EventEmitter<DesignEvent> for DesignPanel {}
@@ -170,6 +173,7 @@ impl DesignPanel {
             expanded: HashSet::new(),
             note: None,
             _note_timer: None,
+            cache: Default::default(),
         }
     }
 
@@ -373,11 +377,17 @@ impl DesignPanel {
         if self.segment == Segment::Inspect {
             let pinned = self.pinned.is_some();
             let info = self.pinned.clone().or_else(|| self.hovered.clone());
+            // Only an element's face asks for the families.
+            let installed = match info {
+                Some(_) => self.installed_fonts(cx),
+                None => Default::default(),
+            };
             return inspect::render(
                 info.as_ref(),
                 pinned,
                 self.last_pinned.as_ref(),
                 self.inspecting,
+                &installed,
                 cx,
             )
             .into_any_element();
@@ -425,8 +435,11 @@ impl DesignPanel {
                         system::render(&ready.tokens, export.as_ref(), self.include_videos, cx)
                             .into_any_element()
                     }
-                    _ => fonts::render(&ready.scan, &ready.tokens, &self.expanded, cx)
-                        .into_any_element(),
+                    _ => {
+                        let installed = self.installed_fonts(cx);
+                        fonts::render(&ready.scan, &ready.tokens, &self.expanded, &installed, cx)
+                            .into_any_element()
+                    }
                 }
             }
         }
