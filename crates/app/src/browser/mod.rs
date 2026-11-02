@@ -159,6 +159,9 @@ pub struct BrowserView {
     menu_open: bool,
     address: Entity<InputState>,
     url: String,
+    /// WebKit's address as the toolbar was last drawn with it (the Explorer button and Open in
+    /// Default Browser follow it); none before the first frame.
+    drawn_url: Option<String>,
     title: String,
     loading: bool,
     /// Something was opened (by the user or an agent); the dev server
@@ -249,7 +252,6 @@ impl BrowserView {
             while let Some(message) = from_page.next().await {
                 let alive = this.update_in(cx, |this, window, cx| {
                     this.receive(message, window, cx);
-                    cx.notify();
                 });
                 if alive.is_err() {
                     break;
@@ -281,6 +283,7 @@ impl BrowserView {
             menu_open: false,
             address,
             url: url.unwrap_or_else(|| "about:blank".into()),
+            drawn_url: None,
             title: String::new(),
             loading: false,
             navigated,
@@ -371,6 +374,8 @@ impl Render for BrowserView {
                 .detail(error.clone())
                 .into_any_element();
         }
+        let url = self.current_url();
+        self.drawn_url = Some(url.clone());
         let this = cx.entity().downgrade();
         let device = match &self.viewport {
             ViewportMode::Fixed {
@@ -420,7 +425,7 @@ impl Render for BrowserView {
                 this.annotate_key(cx);
             }))
             .size_full()
-            .child(self.toolbar(window, cx))
+            .child(self.toolbar(&url, window, cx))
             .child(
                 h_flex()
                     .flex_1()

@@ -25,6 +25,11 @@ impl BrowserView {
         if self.error.is_some() {
             return;
         }
+        // This frame drew the caption with the zoom of the last bounds, and a notify during a
+        // draw is lost: the view draws again once the frame is over.
+        if caption_moves(self.bounds, bounds, &self.viewport) {
+            cx.defer_in(window, |_, _, cx| cx.notify());
+        }
         if self.engine.is_none() {
             match self.build(bounds, window) {
                 Ok(engine) => {
@@ -202,6 +207,16 @@ pub(super) fn page_frame(bounds: Frame, mode: &ViewportMode) -> (Frame, f64) {
         height: fit.height,
     };
     (frame, fit.scale)
+}
+
+/// Whether placing the page at `new` (it was at `old`) changes what the view draws: a device's
+/// caption says the zoom its page area gives it, which follows the area.
+pub(super) fn caption_moves(
+    old: Option<Bounds<Pixels>>,
+    new: Bounds<Pixels>,
+    mode: &ViewportMode,
+) -> bool {
+    old != Some(new) && matches!(mode, ViewportMode::Fixed { .. })
 }
 
 /// `iPhone 15 · 393 × 852 · 75%`: no name when there is none, no percentage

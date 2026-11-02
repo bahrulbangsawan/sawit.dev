@@ -1,5 +1,6 @@
 //! The browser tab's tests, by what they test, with the tab in a test window that they share.
 
+mod events;
 mod keyboard;
 mod navigation;
 mod notes;

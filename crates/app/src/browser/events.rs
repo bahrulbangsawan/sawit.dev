@@ -14,12 +14,21 @@ use super::picking::{pick_mode, pick_wanted, rearm_ops, theme_op};
 use super::{BrowserEvent, BrowserView, FromPage, Panel, PickMode};
 
 impl BrowserView {
+    /// Takes a message from the page or the engine, and draws the view again when it may look
+    /// different. The page's console and network entries and its hovers change nothing the view
+    /// draws (the panels draw themselves again when they change), so a page that logs or fetches
+    /// all the time, or a pointer moving over it, doesn't keep the window redrawing; unless
+    /// WebKit's address moved since the toolbar was drawn ([`Self::address_moved`]).
     pub(super) fn receive(
         &mut self,
         message: FromPage,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let quiet = matches!(
+            message,
+            FromPage::Event(PageEvent::Console(_) | PageEvent::Network(_) | PageEvent::Hovered(_))
+        );
         match message {
             FromPage::Event(PageEvent::Console(entry)) => {
                 let error = entry.level == "error";
@@ -89,10 +98,12 @@ impl BrowserView {
                 self.sync_page_info(&url, cx);
                 self.sync_markers(cx);
             }
+            // The message the page sent says whether to draw again.
             FromPage::Engine(EngineEvent::Ipc(body)) => {
                 if let Some(event) = parse_ipc(&body, &self.token) {
                     self.receive(FromPage::Event(event), window, cx);
                 }
+                return;
             }
             FromPage::Engine(EngineEvent::Load { started, url }) => {
                 self.loading = started;
@@ -143,6 +154,17 @@ impl BrowserView {
             FromPage::Engine(EngineEvent::External(url)) => self.open_external(url, window, cx),
             FromPage::Shoot { rect, reply } => self.shoot(rect, reply, cx),
         }
+        if !quiet || self.address_moved() {
+            cx.notify();
+        }
+    }
+
+    /// Whether WebKit's address is no longer the one the toolbar was last drawn with. A load that
+    /// fails before its page commits (a port nobody serves, a download) takes it back to the page
+    /// with no event, as wry tells only of commits and finishes: a quiet message then draws the
+    /// view again, for one read of the address instead of a redraw each time.
+    fn address_moved(&self) -> bool {
+        (self.drawn_url.as_ref()).is_some_and(|drawn| *drawn != self.current_url())
     }
 
     /// Ops to run when a page has loaded: its agent starts fresh, so the overlay takes

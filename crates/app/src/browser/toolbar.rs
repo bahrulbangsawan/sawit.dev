@@ -17,7 +17,13 @@ use super::viewport::{caption, device_of, rotated};
 use super::{BrowserView, Panel, TOOLBAR_HEIGHT};
 
 impl BrowserView {
-    pub(super) fn toolbar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The toolbar, for the page WebKit has at `url` as this frame is drawn.
+    pub(super) fn toolbar(
+        &self,
+        url: &str,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let loading = self.loading;
         let waiting = self.pick_waiting;
         let tip = |panel: Panel, text: SharedString| {
@@ -28,7 +34,7 @@ impl BrowserView {
             }
         };
         let weak = cx.entity().downgrade();
-        let explorer = crate::local_explorer::for_page(&self.current_url(), cx)
+        let explorer = crate::local_explorer::for_page(url, cx)
             .map(|(e, origin)| (e.port, origin.on_explorer));
         h_flex()
             .h(px(TOOLBAR_HEIGHT))
@@ -136,7 +142,7 @@ impl BrowserView {
                     .icon(Lucide::ExternalLink)
                     .accessibility_label("Open in Default Browser")
                     .tooltip("Open in Default Browser")
-                    .disabled(self.current_url() == "about:blank")
+                    .disabled(url == "about:blank")
                     .on_click(cx.listener(|this, _, _, cx| {
                         cx.open_url(&this.current_url());
                     })),
