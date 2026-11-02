@@ -22,7 +22,7 @@ impl Workspace {
     /// [`Self::open_browser`] opens the active project's, with its project, as a click on its
     /// tab shows it: an agent's browser is the browser of the project it works in, which may not
     /// be the one shown.
-    pub(super) fn open_browser_of(
+    pub(crate) fn open_browser_of(
         &mut self,
         root: Option<PathBuf>,
         url: Option<String>,

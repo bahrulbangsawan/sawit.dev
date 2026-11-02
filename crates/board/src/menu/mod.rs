@@ -11,6 +11,8 @@
 //!   so is a submenu with nothing left in it (View ▸ Theme).
 //! - Only [`TOP_MENUS`] are shown: Plugins, Libraries and Tools never are. Help keeps one item,
 //!   Keyboard shortcuts, because the policy hides the others.
+//! - Sawit's own commands go where [`crate::policy::SAWIT_COMMANDS`] says: Add Routes from Dev
+//!   Server… after Place image… in File.
 //!
 //! An item is enabled when the engine has its command or Sawit carries it out itself
 //! ([`crate::policy::UI_COMMANDS`]), and the command applies to what the canvas holds now
@@ -28,7 +30,7 @@ use figcraft_engine::catalog::{MENU, SEP};
 use figcraft_engine::cmd::view::checked;
 use figcraft_engine::keymap::{self, Platform};
 
-use crate::policy::is_hidden;
+use crate::policy::{SAWIT_COMMANDS, is_hidden};
 use crate::shortcuts::owned_by_sawit;
 
 mod enabled;
@@ -90,11 +92,30 @@ pub fn main_menu(s: &Session) -> Vec<MenuNode> {
 /// once, as that walks the whole catalog for each menu and submenu. [`main_menu`] fills in what
 /// its items are on a canvas.
 static MAIN_MENU: LazyLock<Vec<MenuNode>> = LazyLock::new(|| {
-    TOP_MENUS
+    let mut menu: Vec<MenuNode> = TOP_MENUS
         .iter()
         .filter_map(|top| submenu(top, top))
-        .collect()
+        .collect();
+    for &(id, label, top, after) in SAWIT_COMMANDS {
+        add_after(&mut menu, top, after, item(id, label));
+    }
+    menu
 });
+
+/// Puts `new` in menu `top` of `menu`, right after the item `after` (at its end without it).
+fn add_after(menu: &mut [MenuNode], top: &str, after: &str, new: MenuNode) {
+    let children = menu.iter_mut().find_map(|node| match node {
+        MenuNode::Submenu { label, children } if label == top => Some(children),
+        _ => None,
+    });
+    let Some(children) = children else {
+        return;
+    };
+    let at = (children.iter())
+        .position(|node| matches!(node, MenuNode::Item { id, .. } if *id == after))
+        .map_or(children.len(), |at| at + 1);
+    children.insert(at, new);
+}
 
 /// The context menu: the spec's list for the layers selected in `s`, or for the empty canvas when
 /// none is. Show/Hide and Lock/Unlock say what the engine's toggles would do to the selection.

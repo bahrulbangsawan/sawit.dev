@@ -12,6 +12,8 @@
 //!   ([`BoardView::export_selection`]).
 //! - **Copy as** text, CSS, SVG and PNG put the selection on the system clipboard, or for SVG and
 //!   PNG the page when nothing is selected (`sawit_board::ops::copy_as`).
+//! - **Add Routes from Dev Server…**, Sawit's own, lays the project's dev server's routes out as
+//!   live frames (`super::routes`).
 //!
 //! A dialog that is cancelled changes nothing and says nothing. Whatever fails says why in a
 //! toast. Save, Save as and Copy as say so when they go through; an export shows its first file
@@ -65,6 +67,7 @@ pub(super) fn run_ui(
         "edit.copyAsText" | "edit.copyAsCss" | "edit.copyAsSvg" | "edit.copyAsPng" => {
             copy_as(view, id, cx);
         }
+        sawit_board::policy::ADD_ROUTES => view.open_routes_dialog(cx),
         // An id the policy might add before the canvas carries it out.
         _ => {
             log::debug!("the canvas doesn't carry out {id} yet");

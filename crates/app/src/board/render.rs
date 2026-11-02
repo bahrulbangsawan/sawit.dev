@@ -4,7 +4,7 @@
 use gpui_kit::*;
 
 use super::{
-    BoardView, context_bar, design_panel, events, layers_panel, paint, screens, text_input,
+    BoardView, context_bar, design_panel, events, layers_panel, paint, routes, screens, text_input,
     toolbar, top_bar,
 };
 use crate::states::Placeholder;
@@ -41,6 +41,7 @@ impl Render for BoardView {
             .then(|| design_panel::render_design_panel(self, window, cx));
         // Over all of it, whether the UI is hidden or not (ruling P6-C6).
         let menus = self.render_menus(window, cx);
+        let add_routes = routes::render_routes_dialog(self, window, cx);
         // A colour picker whose swatch this frame left out ends its scrub.
         self.settle_colour_scrub(cx);
         div()
@@ -70,6 +71,7 @@ impl Render for BoardView {
                     .children(design),
             )
             .children(menus)
+            .children(add_routes)
             .into_any_element()
     }
 }
@@ -89,13 +91,19 @@ impl BoardView {
         let this = cx.entity().downgrade();
         let painted = this.clone();
         let cursor = self.cursor();
-        // A screen selected alone has its own bar, with Preview, the downloads and Send to Agent.
+        // A screen selected alone has its own bar, with Preview, the downloads and Send to Agent;
+        // a route frame its own, with Live, Reload and Open in Browser.
         let screen_bar = chrome
             .then(|| screens::render_screen_bar(self, cx))
             .flatten();
-        let over_selection = (chrome && screen_bar.is_none())
+        let route_bar = (chrome && screen_bar.is_none())
+            .then(|| routes::render_route_bar(self, cx))
+            .flatten();
+        let over_selection = (chrome && screen_bar.is_none() && route_bar.is_none())
             .then(|| context_bar::render_context_bar(self, window, cx))
             .flatten();
+        // What each route frame waits for, over its picture.
+        let web_status = self.render_web_status(cx);
         let preview = screens::render_preview(self, cx);
         let tools = chrome.then(|| toolbar::render_toolbar(self, window, cx));
         let toast = self.render_toast(chrome, cx);
@@ -143,8 +151,10 @@ impl BoardView {
                 )
                 .size_full(),
             )
+            .children(web_status)
             .children(agents)
             .children(screen_bar)
+            .children(route_bar)
             .children(over_selection)
             .children(tools)
             .children(preview)

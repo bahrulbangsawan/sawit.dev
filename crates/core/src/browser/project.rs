@@ -49,6 +49,40 @@ pub fn dev_servers<'a>(jobs: &'a [PortJob], folder: &Path) -> Vec<&'a PortJob> {
         .collect()
 }
 
+/// A dev server running from inside a project, as the canvas's Add Routes lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DevServer {
+    /// Where the browser opens it ([`dev_server_url`]).
+    pub url: String,
+    /// The folder it runs in: its app's own, whose files say its routes.
+    pub folder: std::path::PathBuf,
+    /// What started it: `npm run dev`.
+    pub label: String,
+}
+
+/// The dev servers running from inside `folder` ([`dev_servers`]), lowest port first.
+pub fn dev_server_list(jobs: &[PortJob], folder: &Path) -> Vec<DevServer> {
+    let mut found: Vec<(u16, DevServer)> = dev_servers(jobs, folder)
+        .into_iter()
+        .filter_map(|job| {
+            let port = job.ports.iter().map(|(p, _)| *p).min()?;
+            Some((
+                port,
+                DevServer {
+                    url: dev_server_url(job)?,
+                    folder: job
+                        .cwd
+                        .as_deref()
+                        .map_or_else(|| folder.to_path_buf(), Into::into),
+                    label: job.label.clone(),
+                },
+            ))
+        })
+        .collect();
+    found.sort_by_key(|(port, _)| *port);
+    found.into_iter().map(|(_, server)| server).collect()
+}
+
 /// Where the browser opens `job`, a dev server: its lowest port on localhost.
 pub fn dev_server_url(job: &PortJob) -> Option<String> {
     let port = job.ports.iter().map(|(p, _)| *p).min()?;

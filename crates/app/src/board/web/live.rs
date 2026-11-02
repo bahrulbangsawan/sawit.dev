@@ -151,7 +151,7 @@ impl WebFrames {
 impl BoardView {
     /// Makes frame `id` live. A frame whose view isn't built or settled yet becomes live once it
     /// has its texture. What happened, for the `web` op.
-    pub(super) fn web_enter(
+    pub(in crate::board) fn web_enter(
         &mut self,
         id: NodeId,
         cx: &mut Context<Self>,
@@ -288,9 +288,9 @@ impl BoardView {
         clicks: usize,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(urls) = self.web.as_ref().map(|web| web.config.urls) else {
+        if self.web.is_none() {
             return false;
-        };
+        }
         self.web_exit(cx);
         if clicks != 2 {
             return false;
@@ -302,12 +302,9 @@ impl BoardView {
         let (x, y) = ds
             .view
             .screen_to_page(f64::from(local.x), f64::from(local.y));
-        let hit = web_nodes(&ds.doc, ds.page, urls)
-            .into_iter()
-            .rev()
-            .find(|node| {
-                x >= node.rect[0] && x <= node.rect[2] && y >= node.rect[1] && y <= node.rect[3]
-            });
+        let hit = web_nodes(&ds.doc, ds.page).into_iter().rev().find(|node| {
+            x >= node.rect[0] && x <= node.rect[2] && y >= node.rect[1] && y <= node.rect[3]
+        });
         match hit {
             Some(node) => self.web_enter(node.id, cx).is_ok(),
             None => false,

@@ -1,6 +1,7 @@
 //! Web frames on the canvas: UI screens, HTML pages kept in the project
-//! ([`sawit_board::screens`]), on by default; and frames of a localhost page's URL, a spike of
-//! approach C of the live-browser investigation, behind `SAWIT_WEB_FRAMES=1`.
+//! ([`sawit_board::screens`]), and route frames, a dev server's pages on this Mac
+//! ([`sawit_board::routes`]). A route frame of a page elsewhere is refused for now: it shows why,
+//! and loads nothing.
 //!
 //! A screen is an ordinary FigCraft frame whose plugin data `"sawit.screen"` names its folder; a
 //! URL frame's `"sawit.web"` holds `{"url": …, "viewport": {"w": …, "h": …}}`. At rest the canvas
@@ -12,6 +13,12 @@
 //! snapshotted and hidden again. A screen's folder is watched ([`watch`]): what an agent or the user
 //! changes in it reloads the page, which settles and is snapshotted again.
 //!
+//! A route frame stays current by its page's own news ([`fresh`]): the page agent says its DOM
+//! changed (a hot update) and the frame settles and is snapshotted again; a reload settles it too.
+//! A frame that refreshes too often pauses a while ([`storm`]). Each frame's server is checked now
+//! and then ([`servers`]): while it is stopped its frames keep their last picture and say so, and
+//! they load again once it is back. Each says what it waits for over its picture ([`status`]).
+//!
 //! Double-click or Enter moves a frame's view onto it, sized node × zoom and scaled by zoom
 //! (WebKit's view scale), and gives it the keyboard; Escape or a click outside snapshots it and
 //! puts the texture back ([`live`]). Preview shows a screen full size, at a device's size
@@ -22,10 +29,14 @@
 mod bench;
 mod config;
 mod engines;
+mod fresh;
 mod live;
 mod ops;
 mod pool;
+mod servers;
 mod settle;
+mod status;
+mod storm;
 #[cfg(test)]
 mod tests;
 mod watch;
@@ -43,8 +54,7 @@ use futures::channel::mpsc::{UnboundedSender, unbounded};
 use gpui_kit::*;
 use objc2_core_foundation::CFRetained;
 use objc2_core_graphics::CGColorSpace;
-use sawit_board::screens;
-use serde::Deserialize;
+use sawit_board::{routes, screens};
 use serde_json::Value;
 
 use super::BoardView;
@@ -53,52 +63,51 @@ use crate::browser::engine::{Engine, EngineEvent, Frame as ViewFrame};
 pub(super) use bench::{Painted, paint};
 pub(super) use config::{Config, LiveScale, Settle};
 pub(in crate::board) use settle::INIT;
+pub(in crate::board) use status::{FrameStatus, frame_status};
 #[cfg(test)]
 pub(in crate::board) use watch::screens_of;
 
-/// The plugin data key of a URL frame.
-pub(super) const KEY: &str = "sawit.web";
 /// Most measurements the `web` op's status keeps.
 const KEPT: usize = 400;
 
-/// Whether frames of a URL are on: `SAWIT_WEB_FRAMES=1`. Screens always are.
-pub(super) fn urls_enabled() -> bool {
-    std::env::var("SAWIT_WEB_FRAMES").is_ok_and(|v| v == "1")
-}
-
 /// Where a web frame's page comes from.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum Source {
-    /// A localhost page.
+pub(in crate::board) enum Source {
+    /// A page of this Mac.
     Url(String),
+    /// A page elsewhere, which isn't loaded ([`routes::refused`]).
+    Remote(String),
     /// A screen's folder, by its name.
     Screen(String),
 }
 
+impl Source {
+    /// The page's address, for a route frame.
+    pub(in crate::board) fn url(&self) -> Option<&str> {
+        match self {
+            Source::Url(url) | Source::Remote(url) => Some(url),
+            Source::Screen(_) => None,
+        }
+    }
+}
+
 /// What a web frame shows: its page, and the CSS viewport the page is laid out in.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct Spec {
+pub(in crate::board) struct Spec {
     pub source: Source,
     pub viewport: Viewport,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
-pub(super) struct Viewport {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::board) struct Viewport {
     pub w: f64,
     pub h: f64,
 }
 
-/// A URL frame's plugin data.
-#[derive(Deserialize)]
-struct UrlData {
-    url: String,
-    viewport: Viewport,
-}
-
-/// The web frame `node` is, if it is one: a screen, or with `urls` a frame of a localhost page
-/// whose viewport is a point or more. A screen's viewport is its frame's size, which
-/// [`web_nodes`] reads.
-pub(super) fn spec(node: &Node, urls: bool) -> Option<Spec> {
+/// The web frame `node` is, if it is one: a screen, or a route frame whose viewport is a point or
+/// more, of a page on this Mac ([`routes::localhost`]) or, refused, of one elsewhere. A screen's
+/// viewport is its frame's size, which [`web_nodes`] reads.
+pub(in crate::board) fn spec(node: &Node) -> Option<Spec> {
     if let Some(screen) = screens::screen_of(node) {
         let made = screen.viewport;
         return Some(Spec {
@@ -109,39 +118,24 @@ pub(super) fn spec(node: &Node, urls: bool) -> Option<Spec> {
             },
         });
     }
-    if !urls {
-        return None;
-    }
-    let data: UrlData = serde_json::from_str(node.plugin_data.get(KEY)?).ok()?;
+    let data = routes::web_of(node)?;
     let sized = data.viewport.w >= 1.0 && data.viewport.h >= 1.0;
-    (sized && localhost(&data.url)).then_some(Spec {
-        source: Source::Url(data.url),
-        viewport: data.viewport,
-    })
-}
-
-/// Whether `url` is a page of this Mac: `http(s)://localhost` or `127.0.0.1`, any port.
-pub(super) fn localhost(url: &str) -> bool {
-    let Some(rest) = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))
-    else {
-        return false;
+    let source = match routes::localhost(&data.url) {
+        true => Source::Url(data.url),
+        false => Source::Remote(data.url),
     };
-    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    let name = host.rsplit_once(':').map_or(host, |(name, port)| {
-        if port.chars().all(|c| c.is_ascii_digit()) {
-            name
-        } else {
-            host
-        }
-    });
-    matches!(name, "localhost" | "127.0.0.1")
+    sized.then_some(Spec {
+        source,
+        viewport: Viewport {
+            w: data.viewport.w,
+            h: data.viewport.h,
+        },
+    })
 }
 
 /// A web frame on the page on show: where it is on the page, and its corners.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct WebNode {
+pub(in crate::board) struct WebNode {
     pub id: NodeId,
     pub spec: Spec,
     /// Page coordinates: x0, y0, x1, y1.
@@ -150,16 +144,17 @@ pub(super) struct WebNode {
 }
 
 /// The web frames on `page`, by id. A screen's viewport is its frame's size, in whole CSS px.
-pub(super) fn web_nodes(doc: &Document, page: NodeId, urls: bool) -> Vec<WebNode> {
+pub(in crate::board) fn web_nodes(doc: &Document, page: NodeId) -> Vec<WebNode> {
     let mut nodes: Vec<WebNode> = doc
         .nodes()
         .filter(|node| node.visible)
         .filter(|node| {
-            node.plugin_data.contains_key(screens::SCREEN_KEY) || node.plugin_data.contains_key(KEY)
+            let data = &node.plugin_data;
+            data.contains_key(screens::SCREEN_KEY) || data.contains_key(routes::WEB_KEY)
         })
         .filter(|node| doc.page_of(node.id) == Some(page))
         .filter_map(|node| {
-            let mut spec = spec(node, urls)?;
+            let mut spec = spec(node)?;
             let r = doc.world_bounds(node.id)?;
             if matches!(spec.source, Source::Screen(_)) {
                 spec.viewport = Viewport {
@@ -222,6 +217,11 @@ pub(super) struct WebFrame {
     pub reload_after: bool,
     /// A screen has a page to show (`index.html`); a URL frame always does.
     pub has_page: bool,
+    /// How often its page refreshed itself lately, and the pause that follows too many.
+    pub storm: storm::Storm,
+    /// A refresh it was due while paused, or while its server was stopped: it comes once that is
+    /// over.
+    pub owed: bool,
 }
 
 /// The frame live now.
@@ -251,6 +251,8 @@ pub(super) enum WebMsg {
     Probe(NodeId, String),
     /// Files of these screens changed on disk ([`watch`]).
     Changed(Vec<String>),
+    /// Whether the server of these pages answers ([`servers`]).
+    Server(String, bool),
     /// What Preview's view or page says.
     Preview(EngineEvent),
 }
@@ -291,6 +293,8 @@ pub(super) struct WebFrames {
     /// Screens Sawit itself just wrote and reloaded, with when the watcher's news of that write
     /// stops being taken as a change of its own.
     pub quiet: HashMap<String, Instant>,
+    /// The route frames' servers, by their origin, and whether each answers ([`servers`]).
+    pub servers: HashMap<String, servers::Server>,
     _messages: Task<()>,
 }
 
@@ -335,6 +339,7 @@ impl WebFrames {
             dirty: HashSet::new(),
             flushing: false,
             quiet: HashMap::new(),
+            servers: HashMap::new(),
             _messages: task,
         }
     }

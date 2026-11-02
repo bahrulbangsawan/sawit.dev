@@ -49,6 +49,7 @@ mod overlay_paint;
 mod paint;
 mod presence;
 mod render;
+mod routes;
 mod run;
 mod save;
 mod screens;
@@ -325,11 +326,13 @@ pub struct BoardView {
     /// The agents at work on the canvas, their placeholders and their ops waiting to run
     /// ([`presence`]).
     agents: presence::Presence,
-    /// Web frames ([`web`]): UI screens, and URL frames behind `SAWIT_WEB_FRAMES=1`. `None` only
-    /// in a view made without them.
+    /// Web frames ([`web`]): UI screens, and route frames of a dev server's pages. `None` only in
+    /// a view made without them.
     web: Option<web::WebFrames>,
     /// UI screens' bar, Preview and Send to Agent ([`screens`]).
     screen_ui: screens::ScreenUi,
+    /// Add Routes from Dev Server, the route frames' bar, and agents' routes works ([`routes`]).
+    routes_ui: routes::RoutesUi,
     _frames: Task<()>,
     _quit: Subscription,
     _release: Subscription,

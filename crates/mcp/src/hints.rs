@@ -162,6 +162,7 @@ const ADDS: &[&str] = &[
     "canvas_add_mermaid",
     "canvas_begin",
     "canvas_progress",
+    "canvas_add_routes",
 ];
 
 /// The tools that reach past this Mac's own state: the internet, a remote host, a database that

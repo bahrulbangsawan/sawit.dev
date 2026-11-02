@@ -16,9 +16,10 @@ pub const WORK_STEPS_KEY: &str = "sawit.work.steps";
 /// The plugin data key on a work's frame that holds its kind (`component`).
 pub const WORK_KIND_KEY: &str = "sawit.work.kind";
 
-/// The kinds of work an agent can begin: a component it draws with the canvas tools, or a UI
-/// screen it writes as HTML (`canvas_screen_write`).
-pub const WORK_KINDS: [&str; 2] = ["component", "screen"];
+/// The kinds of work an agent can begin: a component it draws with the canvas tools, a UI screen
+/// it writes as HTML (`canvas_screen_write`), or a dev server's routes laid out as live frames in a
+/// section (`canvas_add_routes` begins those itself).
+pub const WORK_KINDS: [&str; 3] = ["component", "screen", "routes"];
 
 /// How long a work that is still running may go without an op or a progress of its agent before
 /// it shows as stalled: its agent may have crashed, or forgotten to say it is done.

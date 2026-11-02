@@ -35,6 +35,16 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// At most this much of an API answer is read; the rest is cut and said to be.
 pub const BODY_LIMIT: usize = 8 << 20;
 
+/// `GET path` from the dev server at `addr` (loopback only), the page read up to 4 MiB: what the
+/// canvas's route crawl fetches (`crate::browser::routes`).
+pub async fn loopback_get(
+    addr: SocketAddr,
+    path: &str,
+    wait: Duration,
+) -> Result<Response, String> {
+    http::http(addr, "GET", path, None, wait, 4 << 20).await
+}
+
 /// A running Local Explorer: a dev server that answered the probe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Explorer {

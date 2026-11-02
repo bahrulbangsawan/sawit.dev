@@ -18,6 +18,7 @@ mod ops;
 mod page;
 mod project;
 mod redact;
+pub mod routes;
 mod viewport;
 
 #[cfg(test)]
@@ -33,7 +34,8 @@ pub use page::{
     AGENT_JS, DESIGN_JS, MODULES_PLACEHOLDER, OVERLAY_JS, TOKEN_PLACEHOLDER, page_script,
 };
 pub use project::{
-    data_store_id, dev_server_url, dev_servers, front_project, pick_dev_server, project_holding,
+    DevServer, data_store_id, dev_server_list, dev_server_url, dev_servers, front_project,
+    pick_dev_server, project_holding,
 };
 pub use redact::REDACTED;
 pub(crate) use redact::redact_url;

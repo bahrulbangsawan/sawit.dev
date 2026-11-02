@@ -37,6 +37,8 @@ impl WebFrame {
             pid: 0,
             probe: None,
             refresh: false,
+            storm: super::storm::Storm::default(),
+            owed: false,
         }
     }
 }
@@ -61,7 +63,7 @@ impl BoardView {
         let Some(web) = self.web.as_mut() else {
             return Painted::default();
         };
-        let nodes = web_nodes(&doc, page, web.config.urls);
+        let nodes = web_nodes(&doc, page);
         web.canvas = bounds;
         web.window_width = f32::from(window.viewport_size().width);
         web.zoom = view.zoom;
@@ -81,6 +83,7 @@ impl BoardView {
         }
         web.sync(&nodes);
         web.keep_watching(&nodes);
+        let servers = web.servers_due(Instant::now());
         web.build_next(&nodes, &view, window);
         let now = Instant::now();
         let placed = web.place_live(&nodes, &view, bounds, menus, now);
@@ -110,6 +113,8 @@ impl BoardView {
         if let Some(wait) = placed.wake_in {
             self.web_wake_in(wait, cx);
         }
+        self.web_check_servers(servers, cx);
+        self.routes_rendered(cx);
         painted
     }
 
@@ -140,6 +145,7 @@ impl BoardView {
                 }
             }
             WebMsg::Changed(names) => self.web_files_changed(names, cx),
+            WebMsg::Server(origin, up) => self.web_server(origin, up, cx),
             WebMsg::Preview(EngineEvent::Ipc(body)) if body == "sawit-web:escape" => {
                 self.close_preview(cx);
             }
@@ -156,6 +162,8 @@ impl BoardView {
         } else if let Some(token) = body.strip_prefix("sawit-web:settled:") {
             let token = token.parse().unwrap_or(u32::MAX);
             self.web_settled(id, token, "settled", cx);
+        } else if body == "sawit-web:dirty" {
+            self.web_dirty(id, cx);
         } else if body == "sawit-web:changed" {
             let live = (self.web.as_ref())
                 .and_then(|web| web.live.as_ref())
@@ -297,6 +305,8 @@ impl BoardView {
                 .menu_since
                 .map(|_| Instant::now() - super::live::MENU_WAIT);
         }
+        // A refresh it was owed while it was busy (its page changed, or reloaded itself).
+        let owed = !reload && !live && !again && frame.owed;
         if reload {
             web.reload(id);
         }
@@ -308,6 +318,8 @@ impl BoardView {
             self.web_snapshot(id, "repeat", cx);
         } else if wanted {
             let _ = self.web_enter(id, cx);
+        } else if owed {
+            self.web_refresh(id, "owed", cx);
         }
     }
 
@@ -326,6 +338,9 @@ impl BoardView {
     /// Whether a menu, a flyout or a picker is open over the canvas: the live view, which draws
     /// above GPUI, hides meanwhile.
     fn menus_open(&self) -> bool {
-        self.menus.any_open() || self.open_flyout.is_some() || self.picker.is_some()
+        self.menus.any_open()
+            || self.open_flyout.is_some()
+            || self.picker.is_some()
+            || self.routes_ui.dialog.is_some()
     }
 }

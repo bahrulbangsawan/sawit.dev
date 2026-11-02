@@ -131,6 +131,7 @@ impl WebFrames {
                 self.frames.get(&node.id).is_some_and(|frame| {
                     frame.phase == Phase::Cold
                         && frame.has_page
+                        && self.server_up(&frame.spec.source)
                         && (frame.texture.is_none()
                             || frame.refresh
                             || self.want_live == Some(node.id))
@@ -158,6 +159,7 @@ impl WebFrames {
         let parking = self.parking(frame.spec.viewport);
         let (url, screen) = match &frame.spec.source {
             Source::Url(url) => (url.clone(), None),
+            Source::Remote(_) => return,
             Source::Screen(name) => {
                 let folder = self.folder(name);
                 let screen = ScreenSource {
@@ -315,10 +317,12 @@ pub(super) fn frame_of(bounds: Bounds<Pixels>) -> ViewFrame {
     }
 }
 
-/// Whether `source` has a page to show: a screen once its folder has an `index.html`.
+/// Whether `source` has a page to show: a screen once its folder has an `index.html`, a page of
+/// this Mac always, and one elsewhere never (for now).
 pub(super) fn has_page(dir: &std::path::Path, source: &Source) -> bool {
     match source {
         Source::Url(_) => true,
+        Source::Remote(_) => false,
         Source::Screen(name) => screens::folder(dir, name).join(screens::INDEX).is_file(),
     }
 }

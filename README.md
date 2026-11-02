@@ -64,7 +64,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with device sizes and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (141 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (142 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 | 🌱 **New projects from a stack** | Pick a TypeScript stack from Better-T-Stack's builder (TanStack, Next.js, Hono, Convex, Drizzle, Better Auth, …); Sawit shows what doesn't fit and why, runs `create-better-t-stack` in its terminal and opens the project. |
 | ✨ **Agent skills** | Sawit's own Canvas Design, Superpowers, shadcn's improve, Cloudflare's skills, MCP Apps, unslop and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
@@ -795,8 +795,33 @@ stay vector.
   closed they work on the files and the saved canvas, and say that nothing is rendered.
 - **Exports.** `canvas_export` and the PNG and SVG exports agents run paint each screen's latest picture in its
   frame.
-- **Frames of a URL** (a route of your dev server, say) are still an experiment, off unless Sawit starts with
-  `SAWIT_WEB_FRAMES=1`.
+
+### Live routes
+
+Your running app's pages, live on the canvas: each route of your dev server at the viewports you pick, side by side,
+rendered by WebKit (the Browser tab's engine) and kept current as you edit.
+
+- **Add Routes from Dev Server…** (**File** menu, or the Actions palette, <kbd>⌘K</kbd>) finds the dev server running
+  in the project, as the Ports panel lists it (a choice when several run), and its routes: from the app's own files
+  for Next.js (app and pages), TanStack Router and Start (`src/routes`), SvelteKit, Remix, React Router (flat
+  routes), Nuxt and Astro, and otherwise by following the site's links from `/` (30 pages and 15 s at most). Untick
+  the routes you don't want and pick the viewports (1440, 768 and 390 wide at first), then **Add**. Each route gets a
+  row, a frame per viewport named `<route> / <viewport>`, in a section named for the server (`localhost:5173`).
+- **Dynamic routes** (`/blog/[slug]`, `$postId`) need a value: each is added with the first of its pages the site
+  links to (`/blog/hello`), and the dialog names those it skipped for want of one.
+- **Staying current.** A frame's page keeps running out of sight. A hot update that changes its DOM, or the page
+  reloading itself, has that frame alone settle again and take a new picture. A frame whose page refreshes more than
+  four times in a second pauses for 8 s, keeping its picture and saying "Paused: reloading too often", then takes
+  the refresh it missed. When the server stops, the frames keep their last pictures and say "Server stopped"; they
+  load again once it is back.
+- **Live, Reload, Open in Browser.** Select a route frame for its bar: **Live** (or a double-click, or <kbd>↩</kbd>)
+  puts the page itself on the frame, as with a screen; **Reload** loads it again; **Open in Browser** opens the route
+  in the project's Browser tab.
+- **Only this Mac's pages load**: `localhost`, `127.0.0.1` and `[::1]`. A frame of any other address (one an agent
+  wrote, or a canvas file someone shared) loads nothing and says so.
+- **Agents** add routes with `canvas_add_routes {url?, routes?, viewports?}`: the canvas shows it as the agent's
+  work, the section with its steps (Finding routes, Adding frames, Rendering) and a skeleton in each frame until its
+  picture is in. With Sawit closed the section and frames are saved, and render when the app opens the canvas.
 
 ### Agent cursors
 
@@ -1249,7 +1274,7 @@ sawit github token --header                  # the GitHub sign-in as {"Authoriza
 
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 141 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 142 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
 the agent's project open (or the one `project` names), else the frontmost window. An agent's browser and canvas are
 its own project's, even while you look at another project of that window.
@@ -1285,7 +1310,7 @@ work in the last 30 seconds, with its `id`, `name` (its label on screen), `color
 | Terminal (app running) | `terminal_run`, `terminal_split` (a pane split right or down, with a command in the new half), `terminal_read`, `terminal_input`, `terminal_close` (`terminal_run`, `terminal_split`, `app_run_script` and `app_ssh_connect` return the tab and `pane` they used; `terminal_input` needs the tab, and a split tab needs its pane; `app_state` names the coding agent running in each tab and pane, as `agent`: `claude-code`, `codex`, …) |
 | Keymap (app running) | `keymap_list` (every binding: what a key does, which key runs an action, what clashes), `keymap_bind`, `keymap_unbind` (with the Keymap Editor's checks; `restore` brings back a default) |
 | Browser (app running) | `browser_navigate` (with no URL: the project's dev server), `browser_snapshot`, `browser_click`, `browser_type`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_wait_for`, `browser_evaluate`, `browser_console`, `browser_network`, `browser_screenshot`, `browser_resize` (a device or a size), `browser_annotations` (the user's notes as Markdown: each element's selector, path, attributes, role, box, styles, neighbours, source file and screenshot), `browser_inspect` (one element's design), `browser_design` (the page's colors, fonts, assets and tokens), `browser_export_design` (to `.nyawit/design/<host>/`; replacing an earlier export needs `replace: true`) |
-| Canvas | `canvas_design_guide` (Sawit's design standard for UI on the canvas, the text of the Canvas Design skill: agents read it before they design, build or review UI there, and run its checklist before they call a design done; `section` gives one section with the checklist), `canvas_get` (the top-level layers of the page on show), `canvas_add_elements`, `canvas_add_diagram` (a diagram in Mermaid syntax as editable shapes; `canvas_add_mermaid` is its deprecated old name), `canvas_update`, `canvas_delete`, `canvas_clear` (the page on show), `canvas_load`, `canvas_export` (the page on show, as SVG or PNG), `canvas_command` (any command of the canvas engine, by id: `page.list` and `node.get` reach the other pages), `canvas_commands` (lists them; pass a `filter` to see what each takes), `canvas_begin` (a component's named frame, made at once, which the canvas shows the agent building: a skeleton, its name and step, the agent and a progress badge; the other tools' `work` puts their ops inside it; `kind: "screen"` makes an HTML screen's frame and folder), `canvas_progress` (the step running, done or failed), `canvas_screen_write` (a screen's page, edits to it or its other files, rendered again at each write), `canvas_screen_get` (a screen's HTML, files and a PNG of it; without a screen, the list) and `canvas_screen_export` (a screen as one HTML file or a React component, at a path). Agents never move the user's tab, page or view: `view.*` and `page.select` are refused. The tools that make UI and the server's instructions send agents to `canvas_design_guide` first. Each of the others takes `file`, a `.sawit` file (a design file, say) or an `.excalidraw` file to work on instead of the project's canvas, in a canvas tab of its own. All of them work on the saved canvas file when the app is closed; then each call starts from that file, so no undo or selection carries over to the next: pass `canvas_command` the ids, or its steps in one `command.batch` |
+| Canvas | `canvas_design_guide` (Sawit's design standard for UI on the canvas, the text of the Canvas Design skill: agents read it before they design, build or review UI there, and run its checklist before they call a design done; `section` gives one section with the checklist), `canvas_get` (the top-level layers of the page on show), `canvas_add_elements`, `canvas_add_diagram` (a diagram in Mermaid syntax as editable shapes; `canvas_add_mermaid` is its deprecated old name), `canvas_update`, `canvas_delete`, `canvas_clear` (the page on show), `canvas_load`, `canvas_export` (the page on show, as SVG or PNG), `canvas_command` (any command of the canvas engine, by id: `page.list` and `node.get` reach the other pages), `canvas_commands` (lists them; pass a `filter` to see what each takes), `canvas_begin` (a component's named frame, made at once, which the canvas shows the agent building: a skeleton, its name and step, the agent and a progress badge; the other tools' `work` puts their ops inside it; `kind: "screen"` makes an HTML screen's frame and folder), `canvas_progress` (the step running, done or failed), `canvas_screen_write` (a screen's page, edits to it or its other files, rendered again at each write), `canvas_screen_get` (a screen's HTML, files and a PNG of it; without a screen, the list), `canvas_screen_export` (a screen as one HTML file or a React component, at a path) and `canvas_add_routes` (the dev server's routes as live frames at chosen viewports, in a section named for the server, found in the app's files or its links; shown as the agent's work while it runs). Agents never move the user's tab, page or view: `view.*` and `page.select` are refused. The tools that make UI and the server's instructions send agents to `canvas_design_guide` first. Each of the others takes `file`, a `.sawit` file (a design file, say) or an `.excalidraw` file to work on instead of the project's canvas, in a canvas tab of its own. All of them work on the saved canvas file when the app is closed; then each call starts from that file, so no undo or selection carries over to the next: pass `canvas_command` the ids, or its steps in one `command.batch` |
 
 Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`,
 `uninstall_mcp_server`, `uninstall_skill`, `remove_connection`, `remove_ssh_host`, `delete_prompt` and

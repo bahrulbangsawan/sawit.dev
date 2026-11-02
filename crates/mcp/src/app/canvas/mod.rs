@@ -7,6 +7,7 @@ mod args;
 mod dispatch;
 mod files;
 mod guide;
+mod routes;
 mod screens;
 mod stored;
 #[cfg(test)]
@@ -21,7 +22,7 @@ use sawit_board::store;
 use serde_json::{Value, json};
 
 pub use args::{
-    CanvasBeginArgs, CanvasCommandArgs, CanvasCommandsArgs, CanvasDeleteArgs,
+    CanvasAddRoutesArgs, CanvasBeginArgs, CanvasCommandArgs, CanvasCommandsArgs, CanvasDeleteArgs,
     CanvasDesignGuideArgs, CanvasElementsArgs, CanvasExportArgs, CanvasLoadArgs, CanvasMermaidArgs,
     CanvasProgressArgs, CanvasScreenExportArgs, CanvasScreenGetArgs, CanvasScreenWriteArgs,
     CanvasTargetArgs, CanvasUpdateArgs,
@@ -328,6 +329,16 @@ impl Sawit {
         Parameters(a): Parameters<CanvasScreenExportArgs>,
     ) -> CallToolResult {
         self.canvas_screen_export_tool(a).await
+    }
+
+    #[tool(
+        description = "Lay a dev server's routes out on the canvas as live frames: a row per route, a frame per viewport (1440, 768 and 390 wide by default), named \"<route> / <viewport>\", in a section named for the server. Each frame shows the page itself, rendered by WebKit as the Browser tab renders it: it refreshes when the page changes (a hot update or a reload), keeps its last picture and says \"Server stopped\" while the server is down, and the user can use it live. The server is the one running in the project (as list_ports finds it), or `url` on this Mac (localhost, 127.0.0.1, [::1]; other hosts are refused for now). The routes are found in the app's files (Next.js app and pages, TanStack Router or Start, SvelteKit, Remix, React Router, Nuxt, Astro) or by following the site's links; a dynamic route (/blog/[slug]) is added with a page of it the site links to, else skipped and named in the answer. While it runs the canvas shows it as your work, with its steps. Answers the section, each frame's id, route and URL, and the routes skipped. With the app closed the frames are saved and nothing renders"
+    )]
+    async fn canvas_add_routes(
+        &self,
+        Parameters(a): Parameters<CanvasAddRoutesArgs>,
+    ) -> CallToolResult {
+        self.canvas_add_routes_tool(a).await
     }
 
     #[tool(

@@ -16,6 +16,8 @@ mod overlay;
 mod presence;
 mod project;
 mod redact;
+mod routes;
+mod routes_crawl;
 mod viewport;
 
 use serde_json::Value;

@@ -6,6 +6,7 @@ mod export;
 mod files;
 mod guide;
 mod load;
+mod routes;
 mod running;
 mod saves;
 mod screens;

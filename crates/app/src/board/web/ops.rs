@@ -15,6 +15,8 @@
 //!   pagezoom) from now on.
 //! - `bench`: `kind` pan, zoom or still, for `frames` frames at `speed`; `textures` false paints
 //!   the canvas alone; `marker` paints a bar beside the live view.
+//! - `routes`: Add Routes from Dev Server's dialog: `do` open (as its menu item does), add (as its
+//!   Add button does), close, or nothing (its state); `untick` leaves those routes out.
 
 use figcraft_doc::NodeId;
 use gpui_kit::*;
@@ -27,7 +29,7 @@ impl BoardView {
     /// Runs a `web` op, answered at once; what happens later goes to the log `status` reads.
     pub(in crate::board) fn web_op(&mut self, op: &Value, cx: &mut Context<Self>) -> Value {
         if self.web.is_none() {
-            return json!({"ok": false, "error": "web frames are off (SAWIT_WEB_FRAMES=1)"});
+            return json!({"ok": false, "error": "this canvas has no web frames"});
         }
         let action = op.get("action").and_then(Value::as_str).unwrap_or("status");
         let id = self.web_target(op);
@@ -40,6 +42,7 @@ impl BoardView {
             ("view", _) => self.web_view(op, cx),
             ("bench", _) => self.web_bench(op, cx),
             ("config", _) => self.web_config(op),
+            ("routes", _) => Ok(self.web_routes_dialog(op, cx)),
             (_, None) => Err("no web frame on this page".to_string()),
             ("enter", Some(id)) => self.web_enter(id, cx).map(|state| json!(state)),
             ("snapshot", Some(id)) => self.web_snap_op(op, id, cx),
@@ -57,8 +60,7 @@ impl BoardView {
     /// The frame an op names by `id` (a node id or an agent's id), else the first on the page.
     fn web_target(&self, op: &Value) -> Option<NodeId> {
         let ds = self.board()?.session.ds().ok()?;
-        let urls = self.web.as_ref().is_some_and(|web| web.config.urls);
-        let nodes = web_nodes(&ds.doc, ds.page, urls);
+        let nodes = web_nodes(&ds.doc, ds.page);
         let named = match op.get("id") {
             Some(Value::Number(n)) => n.as_u64().map(NodeId),
             Some(Value::String(s)) => sawit_board::skeleton::resolve(&ds.doc, s),
@@ -97,6 +99,38 @@ impl BoardView {
             "canvas": [f32::from(canvas.origin.x), f32::from(canvas.origin.y), f32::from(canvas.size.width), f32::from(canvas.size.height)],
             "view": view, "bench_running": web.bench.is_some(), "last_bench": web.last_bench,
             "log_len": web.log.len(), "log": web.log.iter().skip(since).collect::<Vec<_>>()})
+    }
+
+    /// The `routes` action: drives Add Routes from Dev Server's dialog, and says where it is.
+    fn web_routes_dialog(&mut self, op: &Value, cx: &mut Context<Self>) -> Value {
+        match op.get("do").and_then(Value::as_str) {
+            Some("open") => self.open_routes_dialog(cx),
+            Some("add") => return self.add_chosen_routes(cx),
+            Some("close") => self.close_routes_dialog(cx),
+            _ => {}
+        }
+        let Some(dialog) = self.routes_ui.dialog.as_mut() else {
+            return json!({"open": false});
+        };
+        for path in (op
+            .get("untick")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten())
+        .filter_map(Value::as_str)
+        {
+            dialog.left_out.insert(path.to_string());
+        }
+        cx.notify();
+        let found = dialog.found.as_ref();
+        json!({
+            "open": true, "step": format!("{:?}", dialog.step),
+            "servers": dialog.servers.iter().map(|s| &s.url).collect::<Vec<_>>(),
+            "framework": found.and_then(|f| f.framework).map(|f| f.name()),
+            "routes": found.map(|f| f.routes.iter().map(|r| &r.path).collect::<Vec<_>>()),
+            "skipped": found.map(|f| f.skipped.iter().map(|s| &s.route).collect::<Vec<_>>()),
+            "chosen": dialog.chosen(), "widths": dialog.chosen_widths(),
+        })
     }
 
     fn web_view(&mut self, op: &Value, cx: &mut Context<Self>) -> Result<Value, String> {

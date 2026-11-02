@@ -23,8 +23,6 @@ pub(in crate::board) struct Config {
     /// (its fonts ready, its animations finished, two frames drawn) before it is snapshotted
     /// anyway (default 3000).
     pub settle_ms: u64,
-    /// `SAWIT_WEB_FRAMES=1`: frames of a localhost page's URL load too. Screens always do.
-    pub urls: bool,
     /// `SAWIT_WEB_POOL`: most web views kept (default 6); loads beyond it wait.
     pub pool: usize,
     /// `SAWIT_WEB_COLOR`: srgb (default: the snapshot's own bytes, which GPUI's layer shows as
@@ -64,7 +62,6 @@ impl Config {
             settle_ms: var("SAWIT_WEB_SETTLE_MS")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(3000),
-            urls: super::urls_enabled(),
             pool: var("SAWIT_WEB_POOL")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(6)

@@ -91,6 +91,20 @@ pub const UI_COMMANDS: &[&str] = &[
     "edit.copyAsPng",
 ];
 
+/// Add Routes from Dev Server…: lays the project's dev server's routes out as live frames. Sawit's
+/// own command, which the app carries out.
+pub const ADD_ROUTES: &str = "sawit.addRoutes";
+
+/// Commands of Sawit's own, not FigCraft's, that the main menu (and so the Actions palette) holds,
+/// and the app carries out: their id, their label, the menu they are in and the item they follow
+/// there.
+pub const SAWIT_COMMANDS: &[(&str, &str, &str, &str)] = &[(
+    ADD_ROUTES,
+    "Add Routes from Dev Server…",
+    "File",
+    "file.placeImage",
+)];
+
 /// Copy, cut and paste. The engine runs them on its own copy of the layers, but each canvas tab
 /// has its own session, and the system clipboard is Sawit's to read and write, so Sawit carries
 /// them out around the engine ([`crate::clipboard`]): what one tab copies pastes in another, and a
@@ -127,9 +141,10 @@ pub fn is_hidden(id: &str) -> bool {
     HIDDEN.contains(&id) || HIDDEN_PREFIXES.iter().any(|prefix| id.starts_with(prefix))
 }
 
-/// Whether Sawit carries out command `id` itself instead of running it in the engine.
+/// Whether Sawit carries out command `id` itself instead of running it in the engine: one of
+/// [`UI_COMMANDS`], or of Sawit's own ([`SAWIT_COMMANDS`]).
 pub fn is_ui(id: &str) -> bool {
-    UI_COMMANDS.contains(&id)
+    UI_COMMANDS.contains(&id) || SAWIT_COMMANDS.iter().any(|(own, ..)| *own == id)
 }
 
 /// Whether command `id` copies or pastes, which Sawit carries out around the engine
@@ -162,6 +177,7 @@ mod tests {
         assert!(is_hidden("plugins.manage"));
         assert!(!is_hidden("edit.copy"));
         assert!(is_ui("file.export"));
+        assert!(is_ui(ADD_ROUTES) && !is_hidden(ADD_ROUTES));
     }
 
     #[test]

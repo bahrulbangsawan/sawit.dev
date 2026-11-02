@@ -87,11 +87,19 @@ impl Presence {
                 RowLook::Working { .. } if pictured.contains(&work.frame) => {}
                 RowLook::Working { stalled } => {
                     let phase = work.shimmer(now, reduce || stalled);
-                    for bar in skeleton(doc, work.frame, frame) {
-                        marks.push(Mark::Bar {
-                            rect: screen(bar),
-                            phase,
-                        });
+                    // A routes work's section: a skeleton in each of its frames until it is
+                    // pictured, once it has frames.
+                    let mut parts = route_frames(doc, work.frame);
+                    if parts.is_empty() {
+                        parts.push((work.frame, frame));
+                    }
+                    for (part, rect) in parts.into_iter().filter(|(p, _)| !pictured.contains(p)) {
+                        for bar in skeleton(doc, part, rect) {
+                            marks.push(Mark::Bar {
+                                rect: screen(bar),
+                                phase,
+                            });
+                        }
                     }
                 }
                 RowLook::Failed => marks.push(Mark::Failed {
@@ -193,6 +201,25 @@ pub(super) fn names_agent(work: &Work, now: Instant) -> bool {
         work.row(now),
         RowLook::Working { .. } | RowLook::Failed | RowLook::Done { name: true, .. }
     )
+}
+
+/// The route frames in `section`, with their places on the page.
+fn route_frames(doc: &Document, section: NodeId) -> Vec<(NodeId, [f64; 4])> {
+    let children = doc
+        .node(section)
+        .map(|n| n.children.clone())
+        .unwrap_or_default();
+    (children.into_iter())
+        .filter(|id| {
+            doc.node(*id)
+                .and_then(sawit_board::routes::web_of)
+                .is_some()
+        })
+        .filter_map(|id| {
+            let b = doc.world_bounds(id)?;
+            Some((id, [b.x0, b.y0, b.x1, b.y1]))
+        })
+        .collect()
 }
 
 /// The bars of the skeleton in `frame` (page `[x0, y0, x1, y1]`), a frame of `doc`: a title, three

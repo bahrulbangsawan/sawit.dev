@@ -19,6 +19,7 @@ mod import;
 mod input_ops;
 mod reads;
 mod replace;
+mod routes;
 mod scenes;
 mod screen;
 mod update;

@@ -70,6 +70,7 @@ mod gesture;
 mod input_ops;
 mod refusal;
 mod replace;
+mod routes;
 mod screen;
 #[cfg(test)]
 mod tests;
@@ -85,6 +86,7 @@ use replace::replace;
 
 pub use diagram::{PreparedDiagram, prepare_diagram, run_prepared};
 pub use files::{engine_name, is_canvas_file, is_sawit_file};
+pub use routes::{STEPS as ROUTE_STEPS, viewports as route_viewports};
 pub use screen::{SCREEN_SIZE, export_with_pictures};
 pub use work::{PROGRESS_UNSHOWN, WORK_SIZE, agent_refusal, work_frame, work_of, work_steps};
 
@@ -182,10 +184,17 @@ const BATCH: &str = "command.batch";
 ///   text added to the end of a layer's. A `begin` with `kind: "screen"` makes a UI screen's frame
 ///   (1440 × 900 when the frame names no size), its folder's name free of the op's `taken`, and
 ///   answers `screen` and `viewport` too; `screen` (`{work?, screen?}`) finds a screen by the work
-///   that made it or by name ([`screen`]). Their files are the caller's ([`crate::screens`]).
+///   that made it or by name ([`screen`]). Their files are the caller's ([`crate::screens`]). A
+///   `begin` with `kind: "routes"` makes a section instead, right of what the page holds when the
+///   frame names no place.
+/// - `routes` (`{server, routes, viewports?, name?, x?, y?, work?}`) lays a dev server's routes
+///   out as route frames, a row per route and a frame per viewport, in a section named for the
+///   server (a routes work's, with `work`), in one undo step, and answers `{ok, section, page,
+///   name, server, frames}`; a page that isn't on this Mac is refused ([`routes`],
+///   [`crate::routes`]).
 ///
 /// While the user holds a drag on the canvas, every op that changes the document (`add`,
-/// `update`, `delete`, `clear`, `replace`, `mermaid`, `begin` and `command`) answers
+/// `update`, `delete`, `clear`, `replace`, `mermaid`, `begin`, `routes` and `command`) answers
 /// "<op>: finish the drag on the canvas first" and changes nothing, and while the Pen draws a path
 /// "<op>: finish the path the Pen draws on the canvas first" ([`waits_for_the_drag`]).
 pub fn run(board: &mut BoardDoc, op: &Value) -> Value {
@@ -217,6 +226,7 @@ fn run_unguarded(board: &mut BoardDoc, op: &Value) -> Value {
         Some("begin") => work::begin(board, op),
         Some("progress") => work::progress(board, op),
         Some("screen") => screen::screen(board, op),
+        Some("routes") => routes::routes(board, op),
         _ => work::in_work(board, op, run_named),
     }
 }

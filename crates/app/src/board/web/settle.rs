@@ -17,11 +17,19 @@ use super::{BoardView, Phase, Settle, WebMsg, ms};
 ///   endless spinner doesn't count; at most 2 s), then for two animation frames, and posts
 ///   `sawit-web:settled:<token>`;
 /// - a change the user makes in a live page (typing, a click, a scroll, a change of its DOM) posts
-///   `sawit-web:changed` once things are quiet for 250 ms, so its picture stays up to date.
+///   `sawit-web:changed` once things are quiet for 250 ms, so its picture stays up to date;
+/// - a change of its DOM at rest (a hot update), or a dev server's update or reload message on its
+///   hot-update socket, posts `sawit-web:dirty` once things are quiet for 300 ms (1.5 s at most
+///   after the first change). What the canvas itself sets off is let be: the DOM changing while it
+///   settles, and for a moment after it is shown or hidden.
 pub(in crate::board) const INIT: &str = r#"(() => {
   const post = (m) => { if (window.ipc) window.ipc.postMessage(m); };
   addEventListener('keydown', e => { if (e.key === 'Escape') post('sawit-web:escape'); }, true);
+  let hush = 0;
+  const hushFor = (ms) => { hush = Math.max(hush, Date.now() + ms); };
+  addEventListener('visibilitychange', () => hushFor(600), true);
   window.__sawitSettle = async (token) => {
+    hushFor(60000);
     try { await document.fonts.ready; } catch (_) {}
     const ending = (document.getAnimations ? document.getAnimations() : []).filter(a => {
       const t = a.effect && a.effect.getComputedTiming ? a.effect.getComputedTiming() : null;
@@ -31,12 +39,32 @@ pub(in crate::board) const INIT: &str = r#"(() => {
     await Promise.race([ended, new Promise(r => setTimeout(r, 2000))]);
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     post('sawit-web:settled:' + token);
+    hush = Date.now() + 400;
   };
   let quiet = 0;
   const changed = () => { clearTimeout(quiet); quiet = setTimeout(() => post('sawit-web:changed'), 250); };
   for (const type of ['input', 'change', 'click', 'keyup', 'scroll', 'transitionend', 'animationend'])
     addEventListener(type, changed, true);
-  new MutationObserver(changed).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+  let dirtyAt = 0, first = 0;
+  const dirty = () => {
+    const now = Date.now();
+    if (now < hush) return;
+    if (!first) first = now;
+    clearTimeout(dirtyAt);
+    dirtyAt = setTimeout(() => { first = 0; if (Date.now() >= hush) post('sawit-web:dirty'); },
+      Math.max(0, Math.min(300, first + 1500 - now)));
+  };
+  new MutationObserver(() => { changed(); dirty(); }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+  const Socket = window.WebSocket;
+  if (Socket) window.WebSocket = class extends Socket {
+    constructor(url, protocols) {
+      super(url, protocols);
+      if (/hmr|vite|webpack|turbopack|_next|reload/i.test(String(url) + ' ' + String(protocols || '')))
+        this.addEventListener('message', e => {
+          if (typeof e.data === 'string' && /update|reload|built|sync/i.test(e.data)) setTimeout(dirty, 150);
+        });
+    }
+  };
 })();"#;
 /// Read before each settled snapshot: what ran in the page (the test pages' `__probe`).
 pub(super) const PROBE: &str = "JSON.stringify(Object.assign({visibility: document.visibilityState, \
@@ -60,13 +88,25 @@ impl BoardView {
         let now = Instant::now();
         frame.loaded = Some(now);
         frame.pid = engine.web_process();
+        // A load Sawit asked for (a view built, a reload) finds the frame loading; any other is the
+        // page's own doing.
+        let asked = frame.phase == Phase::Loading;
         let load_ms = frame.built.map(|built| ms(now - built));
         let entry = json!({"event": "loaded", "id": id.0, "source": format!("{:?}", frame.spec.source),
-                           "pid": frame.pid, "build_to_load_ms": load_ms, "live": live});
-        if live {
-            web.note(entry);
+                           "pid": frame.pid, "build_to_load_ms": load_ms, "live": live, "asked": asked});
+        web.note(entry);
+        if live || (!asked && !self.web_reloaded_itself(id, cx)) {
             return;
         }
+        let Some(web) = self.web.as_mut() else {
+            return;
+        };
+        let Some(frame) = web.frames.get_mut(&id) else {
+            return;
+        };
+        let Some(engine) = &frame.engine else {
+            return;
+        };
         frame.phase = Phase::Settling;
         frame.settle = frame.settle.wrapping_add(1);
         let token = frame.settle;
@@ -76,7 +116,6 @@ impl BoardView {
         engine.eval(&format!(
             "window.__sawitSettle && window.__sawitSettle({token})"
         ));
-        web.note(entry);
         self.web_settle_later(id, token, config.settle_ms, cx);
     }
 

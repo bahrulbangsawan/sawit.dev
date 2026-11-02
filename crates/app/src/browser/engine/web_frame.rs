@@ -1,4 +1,4 @@
-//! What the canvas's web frames ask of a web view (spike, `SAWIT_WEB_FRAMES=1`): a snapshot as a
+//! What the canvas's web frames (screens and route frames) ask of a web view: a snapshot as a
 //! `CGImage`, drawn into BGRA off the main thread ([`to_bgra`]); a placement in a clipping
 //! [`Host`] view, to the fraction of a point; and the web content process's id, for CPU readings.
 

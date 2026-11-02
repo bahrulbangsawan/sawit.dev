@@ -148,6 +148,7 @@ fn every_tool_is_routed() {
         "canvas_command",
         "canvas_commands",
         "canvas_begin",
+        "canvas_add_routes",
         "canvas_progress",
         "canvas_screen_write",
         "canvas_screen_get",

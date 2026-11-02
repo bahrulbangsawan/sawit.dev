@@ -15,6 +15,7 @@ use sawit_core::agents::work::{
 };
 use serde_json::{Map, Value, json};
 
+use super::routes::{SECTION_SIZE, STEPS, beside_content, new_section};
 use super::screen::{SCREEN_SIZE, new_screen};
 use super::{BATCH, failure};
 use crate::doc::BoardDoc;
@@ -80,7 +81,9 @@ fn begin_work(board: &mut BoardDoc, op: &Value) -> Result<Value, String> {
         .filter(|name| !name.is_empty())
         .ok_or("it needs the component's `name`, like \"Pricing card\"")?;
     let kind = check_kind(op.get("kind").and_then(Value::as_str))?;
+    let routes = kind == "routes";
     let steps: Vec<String> = match op.get("steps") {
+        None | Some(Value::Null) if routes => STEPS.map(str::to_string).to_vec(),
         None | Some(Value::Null) => Vec::new(),
         Some(Value::Array(steps)) => (steps.iter())
             .map(|step| step.as_str().map(str::trim).map(str::to_string))
@@ -91,8 +94,19 @@ fn begin_work(board: &mut BoardDoc, op: &Value) -> Result<Value, String> {
     let doc = board.doc().map_err(|e| e.to_string())?;
     let shown = board.session.page().map_err(|e| e.to_string())?;
     let screen = kind == "screen";
-    let size = if screen { SCREEN_SIZE } else { WORK_SIZE };
-    let (page, [x, y, width, height]) = place(&doc, shown, op.get("frame"), size)?;
+    let size = match kind {
+        "screen" => SCREEN_SIZE,
+        "routes" => SECTION_SIZE,
+        _ => WORK_SIZE,
+    };
+    let (page, [x, y, width, height]) = match op.get("frame") {
+        // A routes work's section goes right of what the page holds when nothing says where.
+        None | Some(Value::Null) if routes => {
+            let (x, y) = beside_content(&doc, shown);
+            (shown, [x, y, size.0, size.1])
+        }
+        frame => place(&doc, shown, frame, size)?,
+    };
     let work = new_work_id(seed());
     let mut data = json!({
         (WORK_KEY): work,
@@ -103,12 +117,21 @@ fn begin_work(board: &mut BoardDoc, op: &Value) -> Result<Value, String> {
     if let Some((_, value)) = &made_screen {
         data[crate::screens::SCREEN_KEY] = json!(value);
     }
-    let args = json!({
-        "x": x, "y": y, "width": width, "height": height, "name": name,
-        "parent": page, "select": false, "props": {"pluginData": data},
-    });
-    let made = on_page(board, page, |board| board.execute("frame.create", &args))
-        .map_err(|e| e.to_string())?;
+    let (command, args) = match routes {
+        true => (
+            "node.create",
+            new_section(page, name, [x, y, width, height], data),
+        ),
+        false => (
+            "frame.create",
+            json!({
+                "x": x, "y": y, "width": width, "height": height, "name": name,
+                "parent": page, "select": false, "props": {"pluginData": data},
+            }),
+        ),
+    };
+    let made =
+        on_page(board, page, |board| board.execute(command, &args)).map_err(|e| e.to_string())?;
     let frame = made.get("id").and_then(figcraft_engine::params::id_of);
     let frame = frame.ok_or("the frame wasn't made")?;
     let mut reply = json!({
@@ -290,7 +313,11 @@ pub(super) const INTO_FRAME: &str = "intoFrame";
 
 /// Runs `f` with page `page` on show in `board`'s session, then puts back the page that was:
 /// an agent's op on a work on another page than the user's changes nothing they see.
-fn on_page<T>(board: &mut BoardDoc, page: NodeId, f: impl FnOnce(&mut BoardDoc) -> T) -> T {
+pub(super) fn on_page<T>(
+    board: &mut BoardDoc,
+    page: NodeId,
+    f: impl FnOnce(&mut BoardDoc) -> T,
+) -> T {
     let shown = board.session.ds().ok().map(|ds| ds.page);
     let swap = shown.is_some_and(|shown| shown != page);
     if swap && let Ok(ds) = board.session.ds_mut() {

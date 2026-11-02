@@ -14,7 +14,7 @@ use sawit_board::{BoardDoc, BoardError, DocKind};
 
 use super::toast::hide_toast_later;
 use super::worker::Worker;
-use super::{BoardView, design_panel, layers_panel, menus, presence, screens, web};
+use super::{BoardView, design_panel, layers_panel, menus, presence, routes, screens, web};
 
 /// The system's fonts are being read, or were ([`read_system_fonts`]).
 pub(super) struct SystemFonts;
@@ -186,6 +186,7 @@ impl BoardView {
             agents: presence::Presence::default(),
             web: Some(web),
             screen_ui: screens::ScreenUi::default(),
+            routes_ui: routes::RoutesUi::default(),
             _frames: frames,
             // ⌘Q quits without dropping the views: what isn't on disk yet is written first.
             _quit: cx.on_app_quit(|this, _| {

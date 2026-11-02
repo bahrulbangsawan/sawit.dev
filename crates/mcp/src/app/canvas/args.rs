@@ -260,3 +260,24 @@ pub struct CanvasScreenExportArgs {
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
+
+/// `canvas_add_routes`'s arguments: which dev server, which of its routes, at which viewports.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasAddRoutesArgs {
+    #[schemars(
+        description = "The dev server, on this Mac: \"http://localhost:5173\" (localhost, 127.0.0.1 or [::1]; other hosts are refused for now). Default: the dev server running in the project, as list_ports finds it"
+    )]
+    pub url: Option<String>,
+    #[schemars(
+        description = "The routes to add, as paths: [\"/\", \"/pricing\", \"/blog/hello\"]. Default: the routes found in the app's files (Next.js app and pages, TanStack Router or Start, SvelteKit, Remix, React Router, Nuxt, Astro), dynamic ones with a page the site links to, else the pages found by following its links; 24 at most"
+    )]
+    pub routes: Option<Vec<String>>,
+    #[schemars(
+        description = "The viewports, as widths or sizes: [1440, 768, 390] (the default), [{\"w\": 1280, \"h\": 720}]. A width alone takes its device's height (1440 × 900, 768 × 1024, 390 × 844)"
+    )]
+    pub viewports: Option<Vec<Value>>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
