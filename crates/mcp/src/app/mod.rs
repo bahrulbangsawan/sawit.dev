@@ -81,21 +81,34 @@ impl Sawit {
         command: Command,
     ) -> Result<Value, String> {
         let paths = self.paths.clone();
+        let request = self.request_for(project)(command);
+        tokio::task::spawn_blocking(move || app_control::send(&paths, &request, REPLY_TIMEOUT))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    /// What makes a request to the app of a command: what goes with every command, found here,
+    /// before any connection is made. That is the project named, as the app names the projects it
+    /// opens ([`project_path`]), else the folder the agent works in, and the agent session.
+    /// Finding them can read the disk, while the app takes one connection at a time and drops
+    /// one that sends nothing for 5 s: a connection is made only once its request is ready.
+    pub(crate) fn request_for(
+        &self,
+        project: Option<String>,
+    ) -> impl FnOnce(Command) -> Request + Send + use<> {
         let project = project_path(project);
         // Without a project, the app uses the window that has the agent's folder open.
         let agent_folder = match project {
             Some(_) => None,
             None => crate::project_dir(None),
         };
-        let request = Request {
+        let agent = Some(self.agent.identity());
+        move |command| Request {
             project,
             agent_folder,
-            agent: Some(self.agent.identity()),
+            agent,
             command,
-        };
-        tokio::task::spawn_blocking(move || app_control::send(&paths, &request, REPLY_TIMEOUT))
-            .await
-            .map_err(|e| e.to_string())?
+        }
     }
 
     async fn app_tool(&self, project: Option<String>, command: Command) -> CallToolResult {

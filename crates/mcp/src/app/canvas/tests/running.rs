@@ -2,6 +2,8 @@
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixListener;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -208,4 +210,112 @@ fn a_failed_reply_is_an_error_and_any_other_is_the_answer() {
     let old = json!({"count": 2, "elements": []});
     assert_eq!(op_reply(old.clone()), Ok(old));
     assert_eq!(op_reply(Value::Null), Ok(Value::Null));
+}
+
+/// A stand-in for the running app that answers every request `{ok: true}`, and the count of the
+/// connections it has taken, those that sent nothing too.
+fn counting_app(paths: &AppPaths) -> Arc<AtomicUsize> {
+    std::fs::create_dir_all(&paths.root).unwrap();
+    let listener = UnixListener::bind(paths.cli_socket()).unwrap();
+    let taken = Arc::new(AtomicUsize::new(0));
+    let count = taken.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            count.fetch_add(1, Ordering::SeqCst);
+            let mut bytes = Vec::new();
+            let _ = stream.read_to_end(&mut bytes);
+            let answer = json!({"ok": true, "elements": []});
+            let line = format!("{}\n", app_control::reply_ok(&answer));
+            let _ = stream.write_all(line.as_bytes());
+        }
+    });
+    taken
+}
+
+/// A canvas tool sends its op to the running app on the connection that found the app running:
+/// one connection a call, and none that the app takes, reads and answers only for the tool to
+/// learn that it runs (canvas_get took three).
+#[tokio::test]
+async fn a_canvas_tool_takes_one_connection_to_the_app() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = native(dir.path());
+    let project = project_in(dir.path());
+    let taken = counting_app(&server.paths);
+
+    let got = server
+        .canvas_get_tool(CanvasTargetArgs {
+            file: None,
+            project: project_arg(&project),
+        })
+        .await;
+    assert_ne!(got.is_error, Some(true), "{}", said(&got));
+    assert_eq!(taken.load(Ordering::SeqCst), 1);
+    let added = server
+        .canvas_add_elements(Parameters(CanvasElementsArgs {
+            elements: vec![json!({"type": "sticky", "x": 0, "y": 0, "text": "a"})],
+            file: None,
+            project: project_arg(&project),
+        }))
+        .await;
+    assert_ne!(added.is_error, Some(true), "{}", said(&added));
+    assert_eq!(taken.load(Ordering::SeqCst), 2);
+}
+
+/// A stand-in for the app's socket that takes connections one at a time and, as `cli::serve` does
+/// after 5 s, drops one that hasn't sent its request within `wait`, unanswered. It answers a
+/// request `{ok: true}`; the count is of the requests it answered.
+fn impatient_app(paths: &AppPaths, wait: Duration) -> Arc<AtomicUsize> {
+    std::fs::create_dir_all(&paths.root).unwrap();
+    let listener = UnixListener::bind(paths.cli_socket()).unwrap();
+    let answered = Arc::new(AtomicUsize::new(0));
+    let count = answered.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let _ = stream.set_read_timeout(Some(wait));
+            let mut bytes = Vec::new();
+            if stream.read_to_end(&mut bytes).is_err() || bytes.is_empty() {
+                continue;
+            }
+            count.fetch_add(1, Ordering::SeqCst);
+            let answer = json!({"ok": true, "elements": []});
+            let line = format!("{}\n", app_control::reply_ok(&answer));
+            let _ = stream.write_all(line.as_bytes());
+        }
+    });
+    answered
+}
+
+/// A canvas tool opens its connection to the app only once its request is made, and sends it at
+/// once. The app takes one connection at a time and drops one that sends nothing for 5 s: one
+/// opened before work that can wait (a file or a project on a slow volume, a busy pool of blocking
+/// threads) failed the call, and held up every other client meanwhile. Here the only blocking
+/// thread is busy for longer than the app waits.
+#[test]
+fn a_canvas_tool_connects_only_when_its_request_is_ready() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = native(dir.path());
+    let project = project_in(dir.path());
+    let answered = impatient_app(&server.paths, Duration::from_millis(200));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    let got = runtime.block_on(async {
+        let busy = tokio::task::spawn_blocking(|| {
+            std::thread::sleep(Duration::from_millis(600));
+        });
+        let got = server
+            .canvas_get_tool(CanvasTargetArgs {
+                file: None,
+                project: project_arg(&project),
+            })
+            .await;
+        busy.await.unwrap();
+        got
+    });
+    assert_ne!(got.is_error, Some(true), "{}", said(&got));
+    assert_eq!(answered.load(Ordering::SeqCst), 1);
 }

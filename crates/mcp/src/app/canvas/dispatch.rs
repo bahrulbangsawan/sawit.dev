@@ -1,18 +1,20 @@
 //! Where a canvas op runs: on the canvas of the running app, or with the app closed on the stored
 //! canvas file; and what the tools that read the canvas answer.
 
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
 use rmcp::model::CallToolResult;
 use sawit_board::store;
-use sawit_core::app_control::{self, Command};
+use sawit_core::app_control::{self, Command, Request};
+use sawit_core::instances::AppPaths;
 use sawit_core::update::Version;
 use serde_json::{Value, json};
 
 use super::files::{canvas_file, with_files_resolved};
 use super::stored::{CANVAS_LOCK, headless};
 use super::{CanvasCommandArgs, CanvasMermaidArgs, CanvasTargetArgs};
-use crate::app::pretty;
+use crate::app::{REPLY_TIMEOUT, pretty};
 use crate::{Sawit, blocking, fail, ok};
 
 /// The first version of the app that runs a canvas op on the canvas file it names
@@ -21,12 +23,20 @@ use crate::{Sawit, blocking, fail, ok};
 /// off the project's board, whose ids the design file's can match ([`app_reads_canvas_files`]).
 pub(super) const APP_WITH_CANVAS_FILES: Version = Version(0, 0, 8);
 
+/// What became of a canvas op offered to the app ([`offer`]).
+enum Offered {
+    /// The app is running, and this is its answer.
+    Answered(Result<Value, String>),
+    /// No app is listening: the op and its canvas file, unsent, for the stored canvas.
+    NotRunning(Value, Option<PathBuf>),
+}
+
 impl Sawit {
     /// Runs canvas op `op` on the canvas of `project`, or on the canvas file that `file` names
     /// ([`canvas_file`]), and answers it. A running app answers every canvas tool, as it always
-    /// has, on that canvas's tab. With no app running, the op runs on the stored canvas file itself
-    /// ([`headless`]), which is how an agent edits a canvas while Sawit is closed. The two are
-    /// never both at work, so the app's autosave and the file never race.
+    /// has, on that canvas's tab ([`offer`]). With no app running, the op runs on the stored
+    /// canvas file itself ([`headless`]), which is how an agent edits a canvas while Sawit is
+    /// closed. The two are never both at work, so the app's autosave and the file never race.
     pub(super) async fn canvas(
         &self,
         project: Option<String>,
@@ -34,38 +44,32 @@ impl Sawit {
         op: Value,
     ) -> Result<Value, String> {
         let file = canvas_file(file.as_deref())?;
-        if !app_control::is_running(&self.paths) {
-            let named = match file {
-                Some(file) => file,
-                None => self.canvas_board_file(project.as_deref())?,
-            };
-            let lock = self.paths.root.join(CANVAS_LOCK);
-            return blocking(move || headless(&named, &lock, &op)).await?;
-        }
-        if let Some(file) = &file {
-            self.refuse_an_app_without_canvas_files(file).await?;
-        }
-        op_reply(self.app_call(project, Command::Canvas { op, file }).await?)
+        let (op, file) = match self.offer_to_app(project.clone(), file, op).await? {
+            Offered::Answered(reply) => return op_reply(reply?),
+            Offered::NotRunning(op, file) => (op, file),
+        };
+        let named = match file {
+            Some(file) => file,
+            None => self.canvas_board_file(project.as_deref())?,
+        };
+        let lock = self.paths.root.join(CANVAS_LOCK);
+        blocking(move || headless(&named, &lock, &op)).await?
     }
 
-    /// Refuses an op on the canvas file `file`, before it is sent, when the running app is older
-    /// than one that runs it there ([`app_reads_canvas_files`]): it would run the op on the
-    /// project's canvas. The app's version is the one app_state answers with. An app updated on
-    /// disk runs its old version until it restarts, while an agent started since runs the new
-    /// sawit-mcp.
-    async fn refuse_an_app_without_canvas_files(&self, file: &Path) -> Result<(), String> {
-        let state = self.app_call(None, Command::State).await?;
-        let version = state["version"].as_str().unwrap_or("an unknown version");
-        if app_reads_canvas_files(version) {
-            return Ok(());
-        }
-        Err(format!(
-            "Nothing was changed: the Sawit app that is running ({version}) is older than this \
-             sawit-mcp ({}), and would run the op on the project's canvas instead of {}. Quit \
-             Sawit and open it again, so that it runs the version installed, then call again.",
-            env!("CARGO_PKG_VERSION"),
-            file.display()
-        ))
+    /// [`offer`]s canvas op `op` to the running app, for the canvas of `project` or of the canvas
+    /// file `file`, off the async threads, once the requests it may send are made.
+    async fn offer_to_app(
+        &self,
+        project: Option<String>,
+        file: Option<PathBuf>,
+        op: Value,
+    ) -> Result<Offered, String> {
+        let request = self.request_for(project);
+        let state = file
+            .is_some()
+            .then(|| self.request_for(None)(Command::State));
+        let paths = self.paths.clone();
+        blocking(move || offer(&paths, request, state, op, file)).await
     }
 
     /// The file `project`'s canvas is saved in while the app is closed: its
@@ -103,12 +107,15 @@ impl Sawit {
     }
 
     pub async fn canvas_get_tool(&self, a: CanvasTargetArgs) -> CallToolResult {
-        let reply = if app_control::is_running(&self.paths) {
-            self.canvas(a.project, a.file, json!({ "op": "get" })).await
-        } else {
-            self.canvas_get_stored(a.project, a.file).await
+        let got = async {
+            let file = canvas_file(a.file.as_deref())?;
+            let get = json!({ "op": "get" });
+            match self.offer_to_app(a.project.clone(), file, get).await? {
+                Offered::Answered(reply) => op_reply(reply?),
+                Offered::NotRunning(..) => self.canvas_get_stored(a.project, a.file).await,
+            }
         };
-        match reply {
+        match got.await {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
         }
@@ -180,6 +187,62 @@ impl Sawit {
             json!({ "count": elements.len(), "elements": elements, "source": "file (Sawit isn't running)" }),
         )
     }
+}
+
+/// Offers canvas op `op` to the app that listens in `paths`, for the canvas of the project the
+/// requests `request` makes name, or of the canvas file `file`: the app's answer, or, with no app
+/// listening, the op back, unsent. The requests are made before. The app takes one connection at
+/// a time, reading it to its end before it takes the next, and drops one that sends nothing for
+/// 5 s: a connection is made here right before its request goes on it, with nothing that can wait
+/// on the disk or on a thread in between. The op goes on the connection that found the app
+/// running. With `file`, the app's version (`state`) goes on it first, and the op on a second
+/// ([`refuse_an_app_without_canvas_files`]).
+fn offer(
+    paths: &AppPaths,
+    request: impl FnOnce(Command) -> Request,
+    state: Option<Request>,
+    op: Value,
+    file: Option<PathBuf>,
+) -> Offered {
+    let Some(app) = app_control::connect(paths) else {
+        return Offered::NotRunning(op, file);
+    };
+    let app = match (&file, &state) {
+        (Some(named), Some(state)) => match refuse_an_app_without_canvas_files(app, state, named) {
+            Ok(()) => None,
+            Err(refused) => return Offered::Answered(Err(refused)),
+        },
+        _ => Some(app),
+    };
+    let request = request(Command::Canvas { op, file });
+    Offered::Answered(match app {
+        Some(app) => app_control::exchange(app, &request, REPLY_TIMEOUT),
+        None => app_control::send(paths, &request, REPLY_TIMEOUT),
+    })
+}
+
+/// Refuses an op on the canvas file `file`, before it is sent, when the running app is older
+/// than one that runs it there ([`app_reads_canvas_files`]): it would run the op on the
+/// project's canvas. The app's version is the one app_state answers with: `state`, asked on `app`,
+/// a connection to the app. An app updated on disk runs its old version until it restarts,
+/// while an agent started since runs the new sawit-mcp.
+fn refuse_an_app_without_canvas_files(
+    app: UnixStream,
+    state: &Request,
+    file: &Path,
+) -> Result<(), String> {
+    let state = app_control::exchange(app, state, REPLY_TIMEOUT)?;
+    let version = state["version"].as_str().unwrap_or("an unknown version");
+    if app_reads_canvas_files(version) {
+        return Ok(());
+    }
+    Err(format!(
+        "Nothing was changed: the Sawit app that is running ({version}) is older than this \
+         sawit-mcp ({}), and would run the op on the project's canvas instead of {}. Quit \
+         Sawit and open it again, so that it runs the version installed, then call again.",
+        env!("CARGO_PKG_VERSION"),
+        file.display()
+    ))
 }
 
 /// Whether the app of `version` (as app_state gives it) runs a canvas op on the canvas file it

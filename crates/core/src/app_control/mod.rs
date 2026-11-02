@@ -100,15 +100,32 @@ fn parse_reply(line: &str) -> Result<Value, String> {
 
 /// Whether the app is running and listening.
 pub fn is_running(paths: &AppPaths) -> bool {
-    UnixStream::connect(paths.cli_socket()).is_ok()
+    connect(paths).is_some()
+}
+
+/// A connection to the running app, or `None` when no app is listening. Nothing goes over it until
+/// [`exchange`] sends a request on it: a caller that has to know whether the app runs before it
+/// knows what to send sends it here, rather than open a connection to ask and another to send.
+pub fn connect(paths: &AppPaths) -> Option<UnixStream> {
+    UnixStream::connect(paths.cli_socket()).ok()
 }
 
 /// Sends `request` to the running app and waits for its reply. Blocking;
 /// call it off async executors' worker threads.
 pub fn send(paths: &AppPaths, request: &Request, timeout: Duration) -> Result<Value, String> {
-    let mut stream = UnixStream::connect(paths.cli_socket()).map_err(|_| {
+    let stream = connect(paths).ok_or_else(|| {
         "Sawit isn't running. Start it with the launch_app tool, or open Sawit.app.".to_string()
     })?;
+    exchange(stream, request, timeout)
+}
+
+/// Sends `request` on `stream`, a connection to the app from [`connect`], and waits for its reply,
+/// as [`send`] does. Blocking; call it off async executors' worker threads.
+pub fn exchange(
+    mut stream: UnixStream,
+    request: &Request,
+    timeout: Duration,
+) -> Result<Value, String> {
     let _ = stream.set_read_timeout(Some(timeout));
     stream
         .write_all(&encode(request))
