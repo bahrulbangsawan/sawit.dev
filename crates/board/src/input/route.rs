@@ -214,7 +214,9 @@ fn route(
     })? {
         return Ok(KeyOutcome::Handled);
     }
-    if let Some(id) = shortcut(platform, Context::Canvas, key, mods).filter(|_| shortcuts) {
+    // Looked up only when it counts: searching the keymap is most of what a key the app's
+    // bindings left costs here.
+    if shortcuts && let Some(id) = shortcut(platform, Context::Canvas, key, mods) {
         return shortcut_command(board, id);
     }
     let Some((name, _)) = keymap::normalize(key) else {

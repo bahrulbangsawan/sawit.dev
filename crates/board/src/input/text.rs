@@ -26,8 +26,10 @@ pub(super) fn text_key(
     mods: Mods,
     shortcuts: bool,
 ) -> Result<KeyOutcome, BoardError> {
-    if let Some(id) = shortcut(platform, Context::Text, key, mods)
-        .filter(|_| shortcuts && (mods.cmd || mods.alt || mods.ctrl))
+    // The keymap is searched only when its answer counts, not for every character typed.
+    if shortcuts
+        && (mods.cmd || mods.alt || mods.ctrl)
+        && let Some(id) = shortcut(platform, Context::Text, key, mods)
     {
         return run(board, id);
     }
@@ -50,8 +52,9 @@ pub(super) fn text_key(
             // Other canvas shortcuts (select all layers, duplicate, group…) wait until the edit
             // ends.
             _ if key.chars().count() == 1 => {
-                let clipboard = shortcut(platform, Context::Canvas, key, mods)
-                    .filter(|id| shortcuts && TEXT_CLIPBOARD.contains(id));
+                let clipboard = (shortcuts.then(|| shortcut(platform, Context::Canvas, key, mods)))
+                    .flatten()
+                    .filter(|id| TEXT_CLIPBOARD.contains(id));
                 return Ok(clipboard.map_or(KeyOutcome::Unhandled, KeyOutcome::Ui));
             }
             _ => {}
